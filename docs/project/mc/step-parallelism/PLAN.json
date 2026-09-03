@@ -9,7 +9,7 @@
   ],
   "contract": [
     "**The gate stays serial.** Whatever the lane count becomes, one gate round at a time on this machine is not up for negotiation — the flakiness it absorbs is the 55 → 57 → 55 the red floor exists for. What may change is that a second round **waits** instead of being refused, so a wider lane count cannot throw away finished work.",
-    "**Step 4 does not start until step 3's numbers are read.** It is `blocked` on that decision in this plan, not merely sequenced after it. If step 3 shows the lane count is still not the bottleneck, the right outcome is that step 4 is rewritten or dropped — not that it runs anyway. Step 2 (the gate lock queues) depends on no number and runs first: Martin, 2026-09-03, on the evening mc-cut closed — *\"ska vi aktivera parallellism-projektet nu\"* — and a lock that waits is worth having at two lanes.",
+    "**Step 4 reads step 3 before it builds.** The steps are an order — lock, measurement, count — and a step-4 session that finds the measurement says the count is not the bottleneck stops and blocks itself rather than building it. Martin, 2026-09-03, on the window that gated this: *\"20 är bara taget ur luften. Det tar för lång tid allt. Slå på projekten nu.\"*",
     "**mc is symlinked into its own working tree.** `/opt/homebrew/bin/mc` resolves to `/Users/martinforsberg/memoro-cli/src/mc-cli.js`. A change to how the runner or a session behaves lands through the gate and reaches the running runner by `mc run --update` (or STOP and start) — nobody edits `~/memoro-cli` by hand, and no step of this project edits `src/` in that checkout.",
     "**Nothing changes what a step session may write.** The trespass check in `run.js` and the four fields a step owns (`status`, `pr`, `comments`, `met`) are not this project's to loosen.",
     "**One step, one PR.** `mc` prints the page and `mc run --rounds 1` completes a round after each. A step that cannot keep both working stops and says so. No force-push, no rewritten history."
@@ -44,7 +44,7 @@
     },
     {
       "met": false,
-      "criterion": "A step session under the launch step 1 lands uses fewer turns and fewer test runs than the baseline: median turns and test-class commands per session, over at least 20 sessions after the change, against 76 turns and 11 test commands.",
+      "criterion": "A step session under the launch step 1 lands uses fewer turns and fewer test runs than the baseline: median turns and test-class commands per session, over the step sessions since the change, against 76 turns and 11 test commands.",
       "check": "`measure.py --since <landing day>` in `measurements.md` § *After* (step 3), with the session count stated. A drop of less than a quarter in either number is reported as such, not rounded up to a win."
     },
     {
@@ -142,27 +142,24 @@
     },
     {
       "title": "Measure again, and say whether the count is worth raising",
-      "status": "blocked",
+      "status": "ready",
       "done_when": "`measurements.md` § *After* holds the same table as the baseline for at least 20 step sessions started after step 1 landed, and ends with one recommendation: raise the lane count, or not, and why.",
       "instruction": [
-        "**Wait for the window.** This step is `blocked` on decision `step-parallelism-window` until `runs.tsv` has 20 step rows after step 1's landing — a planning session flips it. If it is flipped early, the count in the table is what it is; say it and do not pad it.",
+        "**Measure what exists.** Martin, 2026-09-03: *\"20 är bara taget ur luften. Det tar för lång tid allt. Slå på projekten nu.\"* — so this step runs as soon as step 2 has landed, over every step session started after step 1 landed (2026-09-03 19:35Z). State the session count in the table; a small count is reported as small, not padded.",
         "**Run `measure.py`** with `--since` the day step 1 landed and `--until` today, and paste the output under a `## After` heading in `measurements.md`, beside the baseline. Compare median turns, test-class commands per session, Bash-versus-native calls, the poll/wait share and session wall-clock. State the session count.",
         "**Read `runner.log` for the lanes.** Count `memoro-cli: round N done` lines that fall between a memoro `step starting` and its `step done`; that is the independence step 1 built, and criterion 6 wants a day's worth of it. Count `another gate round is running` in `gate-rounds.jsonl` since the landing; that is the base rate step 4 cares about — step 2 (the queueing lock) lands before this measurement, so count refusals before and after its landing separately.",
         "**End with one recommendation**, written for Martin: whether four lanes in memoro would now buy wall-clock, what it would cost in gate contention, and whether the queueing lock (step 2) has changed the refusal picture. If the honest answer is that the count is still not the bottleneck, say so — the contract says dropping step 4 is a legitimate outcome."
       ],
       "comments": [],
       "pr": null,
-      "blocked_by": {
-        "kind": "decision",
-        "name": "step-parallelism-window"
-      }
+      "blocked_by": null
     },
     {
       "title": "The lane count is a setting, and `mc step` is how it is set",
-      "status": "blocked",
+      "status": "ready",
       "done_when": "`mc step <n>` sets how many steps may run at once per repository, `mc step` prints the current value, the setting survives a restart, and a round with it above 1 runs several steps in one repository at once without losing work to the gate.",
       "instruction": [
-        "**Do not start until step 2's numbers are read and step 3 has landed.** Raising the lane count while a refused gate still throws work away is the failure this plan is ordered to avoid.",
+        "**Read step 3's recommendation first** — it is in that step's `comments` and in `measurements.md` § *After*. If it says the lane count is not the bottleneck, do not build the count anyway: set this step `blocked` on decision `step-parallelism-count` with the reason, and stop. Otherwise go on; step 2 has made a refused gate a wait, so a wider count no longer throws work away.",
         "**What has to change structurally.** After step 1 the unattended loop in `runLoop` (`src/mc/run.js`) runs one `lane(repo)` loop per repository, each calling `round({ only: repo.name })`, which walks that repository's names serially in `runLane`. A count above one means several steps in flight within one repository's lane; decide the shape and say why in the PR. Note that `runLane` re-reads `queue({ only: repo })` after a merge so a plan advanced by one step is seen by the next — whatever shape is chosen has to keep that true, and two steps in one repository make it harder, not easier.",
         "**Two things a second step in the same repository must not break.** Each step already gets its own workarea and worktree, so the checkouts do not collide. What is shared is the repository's `git fetch` in `queue()` and the `inFlight` rule that stops a project being started while it has an open pull request (`project-prs.js`). Two steps in one repository must not both start the same project, and must not both be mid-`fetch` in the same repository directory.",
         "**Where the setting lives.** `mc` reads its own state under `~/.memoro/mc/` (`src/mc/paths.js`, `mcHome()`), which is where `gate-running.json` and the lease files already are. Follow whatever the nearest existing setting does rather than inventing a new configuration mechanism; if there is no precedent for a persisted user setting, the smallest honest thing is a single JSON file written with `writeJsonAtomic` (`src/mc/atomic-write.js`), the way the gate lock is written.",
@@ -172,10 +169,7 @@
       ],
       "comments": [],
       "pr": null,
-      "blocked_by": {
-        "kind": "decision",
-        "name": "step-parallelism-measurements"
-      }
+      "blocked_by": null
     }
   ]
 }
