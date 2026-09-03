@@ -137,7 +137,7 @@
         "**One file outside the two the step names was edited, deliberately.** `docs/mc-command-matrix.md`'s bare-`mc` row described a page that never moved, which is now false about the command it indexes; it gained one clause for the refresh, one for the piped page, and a link to `mc-ui.md`. Nothing else on that row was touched — note that it still calls the sections \"NOW, QUEUE, DECISIONS, INTAKE, PROJECTS\", which they have not been since mc-ui landed. That staleness is older than this project and is left for whoever owns that file next.",
         "**How the done_when was verified.** `docs/technical/mc-ui.md` describes the live surface — the interval, the four frame cases as a table, what is written and what is not, the scrollback and the prompt, the growth reprint and why `CSI L` was rejected, a terminal shorter than the page (`rows - 1` bounds the reach; rows scrolled off are never rewritten), a terminal narrower than 60 columns (not live, `plainReader`), resize, a held frame on a failed collect, raw mode and the `PENDIN` read on the way out, and what the pty check did and did not cover. `docs/project/project_log.md` has the row: parsed back with `rowFor(text, 'mc-live-page')` from `archive-plan.js`, which is the reader the runner's archive uses to decide it need not write a second one — date 2026-09-03, outcome `delivered`, doc `docs/technical/mc-ui.md`, pointing at #544, #546 and #547. `node --test` over `page.test.js`, `page-frame.test.js`, `page-live.test.js` and `front-door.test.js`: 87 tests, all passing, including the one that reads the palette tables out of `mc-ui.md` and compares them with `page-render.js`."
       ],
-      "pr": null,
+      "pr": 548,
       "blocked_by": null
     }
   ]
