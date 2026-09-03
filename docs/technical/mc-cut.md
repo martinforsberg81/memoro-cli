@@ -175,11 +175,16 @@ its subject.
   gone** — it drives `mc auth status`, `mc tool-switch`, `mc new`,
   `mc resume` and `mc fanout` — and `npm run smoke:mc` still points at it.
   Nothing this project deleted broke it; it was already dead.
-- **`npm test` is not green, and was not green before this project.** Ruling
-  `mc-test-1` says the cause is this repository's uncapped test concurrency
-  and must be re-measured before the standing red set is believed. Every step
-  ran the selection `scripts/affected-tests.js` chose for its own diff and
-  said so; the gate is the measurement.
+Not on that list, because the cut fixed it: **`npm test` is green.** Measured
+on the close-out branch, 2026-09-03 — 1 534 tests, 1 525 passing, 9 skipped,
+0 failing, 64 s. The suite was ~2 100 tests and carried a standing red set
+before this project, and the six files still failing after step 4 were tests
+of verbs that had left the router and of a C1 source closure whose pinned
+digests no longer matched `main`; they went with step 5. Ruling `mc-test-1`
+still stands on the cause of the load-flakiness — this repository runs
+`node --test` with no `--test-concurrency` cap — but there is no standing red
+set left to attribute to it. One run is evidence of one run; the gate is the
+measurement.
 
 ## What it took
 

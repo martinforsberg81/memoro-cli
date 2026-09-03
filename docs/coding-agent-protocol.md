@@ -287,13 +287,15 @@ one does.
 - `mc merge <repo> <pr> --docs` — a pull request whose every file is under
   `docs/`: no suite, no lease, no worktree, no model. The session that opened
   it lands it itself.
-- `npm test` locally is the fast loop, but it runs the whole suite with no
-  `--test-concurrency` cap and is load-flaky on this machine — ruling
-  `mc-test-1` ([`docs/project/mc/rulings.md`](project/mc/rulings.md) §4) says
-  that is the cause of the standing red set and must be re-measured before it
-  is believed. `npm run test:affected` selects the files a diff actually
-  touches and is what a step session runs. A local red is worth re-running
-  before it is worth reporting; the gate's verdict is the one that counts.
+- `npm test` locally is the fast loop and it is green: 1 534 tests, 1 525
+  passing, 9 skipped, 0 failing in 64 s, measured 2026-09-03 after mc-cut took
+  out the tests of the deleted machinery. There is no standing red set left.
+  It still runs with no `--test-concurrency` cap, which ruling `mc-test-1`
+  ([`docs/project/mc/rulings.md`](project/mc/rulings.md) §4) names as the
+  cause of the load-flakiness, so a local red is worth re-running before it is
+  worth reporting. `npm run test:affected` selects the files a diff actually
+  touches and is what a step session runs; the gate's verdict is the one that
+  counts.
 
 **The runner lands through the same door.** `mc run` has no `gh pr merge` in
 it: a finished step's pull request goes through `runMergeRound`
