@@ -33,6 +33,12 @@ its gate runs the selection again on the merged tree, so the gate is the
 measurement and your run is the check that you are not handing it something
 red. Decide from the code and say what you decided; there is nobody to ask.
 
+Stay on the branch you were given — `<project>` or `<project>-N`, the one
+the worktree stands on — and open the PR from it. The runner knows a project's
+pull requests by that name: a PR from a branch you named yourself is one it
+neither lands nor sees as in flight, and it will run the next step on top of
+your unlanded work.
+
 How you spend your turns is most of what a step costs. Measured over 59 step
 sessions (2026-09-01..03): a median step was 72 turns and 12 minutes, the long
 ones 250–350 turns and an hour, and half of that was not the work —

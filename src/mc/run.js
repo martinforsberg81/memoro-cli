@@ -1071,7 +1071,18 @@ export function createRunner({
     let openNow = [];
     try {
       if (!asked.ok) throw new Error(lastLine(asked));
-      openNow = openPrsFor({ prs: JSON.parse(asked.stdout || '[]'), name, names: plans.map((p) => p.project) });
+      const all = JSON.parse(asked.stdout || '[]');
+      openNow = openPrsFor({ prs: all, name, names: plans.map((p) => p.project) });
+      // The branch the worktree stands on is this project's whatever it is
+      // called. A session that made its own branch (`mc-test`'s sessions
+      // opened three PRs from `test-architecture-*`, 2026-09-03) left work the
+      // runner could neither land nor see as in flight, and ran the project's
+      // next step on top of it.
+      const own = all.find((item) => item.headRefName === branch);
+      if (own && !openNow.some((item) => item.number === own.number)) {
+        say(`${name}: #${own.number} is on ${branch}, not a branch named after the project — landing it anyway`);
+        openNow = [own, ...openNow];
+      }
     } catch (error) {
       say(`${name}: GitHub could not be asked what this project has open (${error?.message || error}) — nothing is landed this round`);
     }
