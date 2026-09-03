@@ -166,21 +166,23 @@ describe('what a conversation is told', () => {
 });
 
 describe('reserved names', () => {
+  // One name, and it points at its own door. `pm` and `pm-helper` were
+  // reserved beside it for a pair of roles that no longer exist; they are
+  // ordinary names again, and `mc work pm` makes an ordinary workarea.
   it('is the fixed set, each pointing at its own door', () => {
-    assert.deepEqual([...RESERVED_ROLE_NAMES], ['pm', 'pm-helper', 'helper']);
+    assert.deepEqual([...RESERVED_ROLE_NAMES], ['helper']);
     for (const name of RESERVED_ROLE_NAMES) assert.equal(reservedRoleName(name), true);
     assert.equal(reservedRoleName('worker-1'), false);
-    assert.match(reservedRoleHint('pm'), /mc pm\)/u);
-    assert.match(reservedRoleHint('pm-helper'), /mc pm-helper\)/u);
-    // `helper` pointed at `mc pm-helper` until `mc helper` grew a door of its
-    // own: the bare verb owns `~/mc/helper/`, so that is the command to name.
+    assert.equal(reservedRoleName('pm'), false);
+    assert.equal(reservedRoleName('pm-helper'), false);
+    // The bare verb owns `~/mc/helper/`, so that is the command to name.
     assert.match(reservedRoleHint('helper'), /mc helper\)/u);
   });
 
   it('guards case-insensitively — the filesystems mostly are', () => {
-    for (const name of ['PM', 'Pm', 'Helper', 'PM-HELPER']) {
+    for (const name of ['Helper', 'HELPER']) {
       assert.equal(reservedRoleName(name), true, name);
     }
-    assert.match(reservedRoleHint('PM'), /mc pm\)/u);
+    assert.match(reservedRoleHint('HELPER'), /mc helper\)/u);
   });
 });

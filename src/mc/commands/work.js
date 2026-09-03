@@ -310,7 +310,7 @@ export async function startSomething({ stdout, stderr }) {
  */
 export async function openArea(name, opts, deps) {
   const { stdout, stderr } = deps;
-  // The role workspaces have their own doors (`mc pm`, `mc pm-helper`);
+  // The role workspace has its own door (`mc helper`);
   // opening them here would start a conversation without the role's overlay
   // and semantics, wearing the role's name. Designed difference, not
   // convention — so it refuses by name before anything is created. The one

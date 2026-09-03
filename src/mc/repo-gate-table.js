@@ -67,6 +67,14 @@ export const UNKNOWN = 'unknown';
 /**
  * The declarations mc ships with.
  *
+ * `merge_log` sits beside `runs.tsv` in `runner/log/`, one file per
+ * repository. It used to be two arbitrary places: memoro's in
+ * `pm/decisions/merge-log.md`, from when a resident PM kept the record, and
+ * memoro-cli's in `large-scale-llm-project/merge-log.md` — a *workarea*, which
+ * `mc run` is free to close. mc writing its own records into somebody's role
+ * home and into a folder it can remove is the same mistake twice; the merge
+ * log is a record of rounds, and rounds are logged under `runner/log/`.
+ *
  * Data, not logic. Each entry says three things: what has to happen before the
  * suite can be believed, which gates beyond the suite the repository requires,
  * and where its merges are written down. `prepare: null` is a claim — that the
@@ -100,7 +108,7 @@ export const SHIPPED = Object.freeze({
       + '241 tests in 25 s, against 2,353 tests in ~100 s for the whole suite — twice, once a side. '
       + 'It fails closed to the full suite whenever a changed path is not source it can trace',
     extra_gates: Object.freeze([]),
-    merge_log: Object.freeze({ under: 'work-root', path: 'large-scale-llm-project/merge-log.md' }),
+    merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
     // The flag its own `test` script gives node, stated rather than parsed.
     pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs']),
   }),
@@ -133,9 +141,7 @@ export const SHIPPED = Object.freeze({
     // gate-consolidation plan says the same thing from its end — the contract
     // suite belongs inside `npm run ci`, not beside it.
     extra_gates: Object.freeze([]),
-    // The PM's decisions log, under the work root — where memoro's merges
-    // have been written since the operator table declared it.
-    merge_log: Object.freeze({ under: 'work-root', path: 'pm/decisions/merge-log.md' }),
+    merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro.md' }),
     // Measured 2026-08-23: memoro's runner (scripts/testing/runner.mjs) runs
     // `node --test --import ./tests/_helpers/browser-paths.mjs`, which
     // rewrites `/js/…` imports; 3 of 1962 test files import that way. The

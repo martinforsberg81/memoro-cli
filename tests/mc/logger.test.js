@@ -71,15 +71,15 @@ describe('an invocation is recorded as shape, never as content', () => {
     assert.ok(!shape.args.includes('origin/main'), 'a flag value is not a positional');
   });
 
-  it('never records the text of a message', () => {
-    const shape = invocationShape(['work', 'send', 'icon-assets', 'fixa detta tack', '--wake']);
-    assert.deepEqual(shape, { verb: 'work', sub: 'send', args: [], flags: ['--wake'], argc: 5 });
+  it('never records prose a person typed', () => {
+    const shape = invocationShape(['repo', 'claim', 'memoro', 'fixa detta tack', '--force']);
+    assert.deepEqual(shape, { verb: 'repo', sub: 'claim', args: [], flags: ['--force'], argc: 5 });
   });
 
-  it('drops a one-word message too — the verb list, not just the filter', () => {
+  it('drops a one-word tail too — the verb list, not just the filter', () => {
     // A single word passes the identifier filter, which is exactly why the
     // free-text verbs drop their positionals outright rather than trusting it.
-    const shape = invocationShape(['work', 'send', 'icon-assets', 'stop']);
+    const shape = invocationShape(['repo', 'claim', 'memoro', 'stop']);
     assert.deepEqual(shape.args, []);
   });
 

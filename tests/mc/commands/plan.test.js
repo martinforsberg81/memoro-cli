@@ -228,8 +228,10 @@ describe('what it refuses', () => {
   });
 
   it('refuses a reserved role name and the retired --repo', async () => {
+    // `helper` is the one reserved name left: `mc helper` owns `~/mc/helper/`
+    // outright, and a programme of that name would live in the same directory.
     const reserved = sink();
-    assert.equal(await run(['pm'], { stdout: sink(), stderr: reserved, repos: REPOS }), 1);
+    assert.equal(await run(['helper'], { stdout: sink(), stderr: reserved, repos: REPOS }), 1);
     assert.match(reserved.out.text, /reserved for a role/u);
 
     const repo = sink();

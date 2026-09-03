@@ -207,7 +207,7 @@ describe('declarations, shipped and overridden', () => {
       assert.equal(answer.source, 'declared');
       assert.equal(answer.declaration.prepare, SHIPPED['memoro-cli'].prepare);
       assert.deepEqual(answer.declaration.extra_gates, [], 'an extra gate appeared where there was none');
-      assert.match(answer.declaration.merge_log, /large-scale-llm-project\/merge-log\.md$/u);
+      assert.match(answer.declaration.merge_log, /runner\/log\/merge-memoro-cli\.md$/u);
     } finally { fx.cleanup(); }
   });
 
@@ -230,7 +230,7 @@ describe('declarations, shipped and overridden', () => {
       // How memoro says what a change reaches. Its presence is what turns the
       // round from two full suites into the reached files, measured on both.
       assert.match(answer.declaration.select, /ci\.mjs --list --json/u);
-      assert.match(answer.declaration.merge_log, /pm\/decisions\/merge-log\.md$/u);
+      assert.match(answer.declaration.merge_log, /runner\/log\/merge-memoro\.md$/u);
     } finally { fx.cleanup(); }
   });
 
@@ -344,7 +344,7 @@ describe('a repository that declares itself in .mc/test.json', () => {
         select: SHIPPED['memoro-cli'].select,
         select_why: SHIPPED['memoro-cli'].select_why,
         extra_gates: [],
-        merge_log: join(fx.root, 'work', 'large-scale-llm-project/merge-log.md'),
+        merge_log: join(fx.root, 'work', 'runner/log/merge-memoro-cli.md'),
         pr_tests_flags: ['--import', './tests/_isolate-home.mjs'],
         affected: null,
         serial_paths: null,
@@ -380,7 +380,7 @@ describe('a repository that declares itself in .mc/test.json', () => {
       const answer = fx.ask();
       assert.deepEqual(answer.declaration.pr_tests_flags, ['--import', './tests/_isolate-home.mjs', '--no-warnings']);
       assert.equal(answer.declaration.select, SHIPPED['memoro-cli'].select, 'the shipped select fell out of a partial file');
-      assert.match(answer.declaration.merge_log, /large-scale-llm-project\/merge-log\.md$/u);
+      assert.match(answer.declaration.merge_log, /runner\/log\/merge-memoro-cli\.md$/u);
       assert.deepEqual(answer.shadowed, []);
       assert.equal(answer.sources.pr_tests_flags, 'repository');
       assert.equal(answer.sources.merge_log, 'shipped');

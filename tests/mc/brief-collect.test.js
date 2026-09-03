@@ -26,8 +26,6 @@ function workRoot() {
   // decision. Nothing reads it here — it is written by a merge round — but it
   // is in the fixture so a collect run over this root is measured against a
   // tree that still has it.
-  mkdirSync(join(root, 'pm', 'decisions'), { recursive: true });
-  writeFileSync(join(root, 'pm', 'decisions', 'merge-log.md'), '## 2026-08-15 — PR #344\n- landed\n');
   mkdirSync(join(root, 'runner', 'log'), { recursive: true });
   writeFileSync(join(root, 'runner', 'log', 'runs.tsv'), [
     'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
