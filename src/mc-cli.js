@@ -103,9 +103,13 @@ async function routeV1Command(args) {
     return runModule('./mc/commands/home.js', args);
   }
   if (command === 'list') return moved('mc list');
+  // The surface, and nothing beside it. `mc doctor` and `mc migrate` went on
+  // 2026-09-03: both answer questions about the V1 session store — session
+  // homes, generation journals, the pre-V1 move — and that store is what
+  // `mc-cut` is removing. A verb that reports on machinery nobody runs is a
+  // second product's front door left standing in this one's hallway.
   const modules = {
     status: './cli/status.js',
-    doctor: './mc/commands/doctor.js',
     work: './mc/commands/work.js',
     repo: './mc/commands/repo.js',
     merge: './mc/commands/merge.js',
@@ -117,7 +121,6 @@ async function routeV1Command(args) {
     run: './mc/commands/run.js',
     roles: './mc/commands/roles.js',
     log: './mc/commands/log.js',
-    migrate: './mc/commands/migrate.js',
   };
   return Object.hasOwn(modules, command)
     ? runModule(modules[command], args.slice(1))

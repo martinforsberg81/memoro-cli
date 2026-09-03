@@ -2,16 +2,14 @@
 /**
  * mc — capability dispatch.
  *
- * `src/mc-cli.js` owns the session verbs. Everything else — auth, vault,
- * connections, GitHub, dev services — routes through here.
+ * `src/mc-cli.js` owns the page and the verbs. What is left here is `mc
+ * vault` and the two answers a router owes anyone else: the version, and that
+ * a word is not a command.
  *
  * This file used to be the whole product: it wrapped a coding tool in a PTY
  * this process owned, registered the session in a global registry, and talked
- * to a global broker. That path is gone. A session is created with `mc new`
- * and entered with `mc open`, both of which own their own runtime, and
- * neither is gated on being inside a Git repository — mc manages sessions on
- * a machine, and a repository is one thing a session's workspace may happen
- * to be.
+ * to a global broker. Then it was the capability dispatcher, and fourteen
+ * verbs hung off it. Both of those are what `mc-cut` is taking out.
  */
 
 import { readFileSync } from 'node:fs';
@@ -27,22 +25,18 @@ import {
   resolveLocalAuthModeFromArgv,
 } from './mc/local-auth-mode.js';
 
-// Capability subcommands, lazy-loaded so cold start stays cheap.
+// The one capability that is still a verb, lazy-loaded so cold start stays
+// cheap.
+//
+// Thirteen others stood here until 2026-09-03 — `setup`, `install-shell`,
+// `auth`, `tool-auth`, `connections`, `github`, `coding-profile`, `dev`,
+// `deps`, `cloud-session`, `cloud-runtime`, `security`, `migrate`. Not one of
+// them is reached by the page or by any verb that survives it: they are the
+// doors into the session manager, the managed providers and the cloud
+// runtimes that `mc-cut` removes. `mc vault` stays by the project's contract,
+// deliberately and against what reachability says about parts of it.
 const CAPABILITIES = {
-  'install-shell': () => import('./cli/install-shell.js'),
-  auth:          () => import('./cli/auth.js'),
-  connections:   () => import('./cli/connections.js'),
-  github:        () => import('./cli/github.js'),
-  setup:         () => import('./cli/setup.js'),
-  vault:         () => import('./cli/vault.js'),
-  'tool-auth':   () => import('./cli/tool-auth.js'),
-  'coding-profile': () => import('./cli/coding-profile.js'),
-  dev:           () => import('./cli/dev.js'),
-  deps:          () => import('./cli/deps.js'),
-  migrate:       () => import('./mc/commands/migrate.js'),
-  'cloud-session': () => import('./cli/cloud-session.js'),
-  'cloud-runtime': () => import('./cli/cloud-runtime.js'),
-  security:      () => import('./cli/security.js'),
+  vault: () => import('./cli/vault.js'),
 };
 
 export async function main() {
