@@ -65,6 +65,10 @@ function fixture({
   changed = [],
   ownRed = [],
   ownFinished = true,
+  // What `git ls-remote origin refs/heads/<head>` answers: the branch as
+  // pushed, which for some seconds after a push is ahead of what GitHub's
+  // API says the pull request's head is.
+  pushed = '',
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-repo-gate-'));
   const repoPath = join(root, 'repo');
@@ -102,6 +106,7 @@ function fixture({
       return { status: 0, stdout: `${opts.cwd === repoPath ? 'base1111' : 'cand2222'}\n`, stderr: '' };
     }
     if (args[0] === 'symbolic-ref') return { status: 0, stdout: 'origin/main\n', stderr: '' };
+    if (args[0] === 'ls-remote') return { status: 0, stdout: pushed ? `${pushed}\t${args[2]}\n` : '', stderr: '' };
     return { status: 0, stdout: '', stderr: '' };
   };
 
@@ -1379,5 +1384,30 @@ describe('a verdict says how far it reached', () => {
   it('a round with no selection says nothing extra, because its reach is what a reader assumes', () => {
     assert.equal(verdictHeadline({ selection: null, pr: { base: 'main' } }), 'GREEN — the test gate passes');
     assert.equal(verdictPhrase({ selection: null }), 'gate green');
+  });
+});
+
+/**
+ * For some seconds after a push GitHub's API still names the previous commit
+ * as the pull request's head. On 2026-09-03 three rounds in a row measured
+ * the tree a push had just replaced and went red on the fix that was not in
+ * it. The remote itself is asked, and its answer is the one measured.
+ */
+describe('the round measures the branch as pushed, not as GitHub remembers it', () => {
+  it('prefers the remote head when it differs from headRefOid, and says so', async () => {
+    const fx = fixture({ pushed: 'f'.repeat(40) });
+    const progress = [];
+    await fx.run({ onProgress: (line) => progress.push(line) });
+    const checkout = fx.ran('git').find((call) => call.args[0] === 'worktree' && call.args[1] === 'add' && call.args.includes('--detach'));
+    assert.ok(checkout, 'the candidate worktree was built');
+    assert.equal(checkout.args.at(-1), 'f'.repeat(40), 'the candidate is the pushed head');
+    assert.ok(progress.some((line) => /GitHub still says abc1234, origin\/feature is at fffffff: measuring the branch as pushed/u.test(line)), progress.join('\n'));
+  });
+
+  it('keeps GitHub\'s word when the remote does not answer', async () => {
+    const fx = fixture();
+    await fx.run();
+    const checkout = fx.ran('git').find((call) => call.args[0] === 'worktree' && call.args[1] === 'add' && call.args.includes('--detach'));
+    assert.equal(checkout.args.at(-1), 'abc1234');
   });
 });

@@ -298,7 +298,7 @@ export async function runGate({
     // is aimed at all come from the forge.
     const all = [];
     for (const number of numbers) {
-      const facts = prFacts({ gh: askGh, repoPath, pr: number });
+      const facts = prFacts({ gh: askGh, git: askGit, repoPath, pr: number, say });
       if (!facts.ok) return finish('pr', facts.reason);
       all.push(facts.pr);
       say(`#${facts.pr.number} — ${facts.pr.head} into ${facts.pr.base}`);
@@ -841,7 +841,7 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
  * measures nothing, and the answer it would give — green — is the one most
  * likely to be acted on.
  */
-function prFacts({ gh, repoPath, pr }) {
+function prFacts({ gh, git = null, repoPath, pr, say = () => {} }) {
   const asked = gh(
     ['pr', 'view', String(pr), '--json', 'number,headRefName,baseRefName,headRefOid,state,title'],
     { cwd: repoPath },
@@ -856,13 +856,29 @@ function prFacts({ gh, repoPath, pr }) {
   if (raw.state && raw.state !== 'OPEN') {
     return { ok: false, reason: `#${pr} is ${String(raw.state).toLowerCase()}, so there is nothing to gate` };
   }
+  // The head as the branch actually stands, not as GitHub's API remembers
+  // it. For some seconds after a push `headRefOid` is still the previous
+  // commit, and a round started in that window measures the tree the push
+  // replaced: on 2026-09-03 #11274, #11276 and #11275 each went red the
+  // first time — the fix pushed a minute earlier was not in the candidate —
+  // and green on the next round with nothing changed. `ls-remote` asks the
+  // remote itself; an empty or failed answer leaves GitHub's word standing.
+  let headSha = raw.headRefOid;
+  if (git) {
+    const remote = git(['ls-remote', 'origin', `refs/heads/${raw.headRefName}`], { cwd: repoPath });
+    const sha = remote.status === 0 ? String(remote.stdout || '').trim().split(/\s+/u)[0] : '';
+    if (/^[0-9a-f]{40}$/u.test(sha) && sha !== headSha) {
+      say(`#${pr} — GitHub still says ${headSha.slice(0, 7)}, origin/${raw.headRefName} is at ${sha.slice(0, 7)}: measuring the branch as pushed`);
+      headSha = sha;
+    }
+  }
   return {
     ok: true,
     pr: {
       number: raw.number ?? Number(pr),
       head: raw.headRefName,
       base: raw.baseRefName,
-      head_sha: raw.headRefOid,
+      head_sha: headSha,
       title: raw.title ?? null,
     },
   };
