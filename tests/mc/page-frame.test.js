@@ -36,9 +36,9 @@ const frame = (ageSeconds) => renderPageLines(emptyPage(ageSeconds), { columns: 
 describe('the difference between two frames', () => {
   it('writes nothing at all when the frame has not changed', () => {
     const lines = frame(7200);
-    assert.equal(frameWrites(lines, frame(7200), { above: 24 }), '');
+    assert.equal(frameWrites(lines, frame(7200), { above: 23 }), '');
     // The same array, and an empty page, are the same answer.
-    assert.equal(frameWrites(lines, lines, { above: 24 }), '');
+    assert.equal(frameWrites(lines, lines, { above: 23 }), '');
     assert.equal(frameWrites([], [], { above: 0 }), '');
   });
 
@@ -49,11 +49,11 @@ describe('the difference between two frames', () => {
     const changed = before.reduce((all, line, index) => (line === after[index] ? all : [...all, index]), []);
     assert.deepEqual(changed, [18]);
 
-    // The page's first line sits 24 rows above the cursor: 19 rows of page,
-    // then the blank, the two key lines and the blank the menu prints, then
-    // the prompt the cursor is sitting on.
-    const writes = frameWrites(before, after, { above: 24 });
-    assert.equal(writes, `\r\x1b[6A\x1b[2K${after[18]}\r\x1b[6B`);
+    // The page's first line sits 23 rows above the cursor: the 19 rows of the
+    // page, then the blank, the two key lines and the blank the menu prints,
+    // then the prompt row the cursor is sitting on — `lines.length + 4`.
+    const writes = frameWrites(before, after, { above: 23 });
+    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[18]}\r\x1b[5B`);
 
     // Said as the criterion says it: the cursor is positioned once, one row is
     // written, and the writes return to where they started.
@@ -101,15 +101,15 @@ describe('the difference between two frames', () => {
     const after = [...frame(10800)];
     after[2] = '  a row nobody can see any more';
     // A terminal ten rows tall: the cursor is on the last of them, so nine
-    // rows above it can be addressed. Row 18 is six up and is rewritten; row 2
-    // is twenty-two up, off the screen, and is not.
-    const writes = frameWrites(before, after, { above: 24, rows: 10 });
-    assert.equal(writes, `\r\x1b[6A\x1b[2K${after[18]}\r\x1b[6B`);
+    // rows above it can be addressed. Row 18 is five up and is rewritten; row 2
+    // is twenty-one up, off the screen, and is not.
+    const writes = frameWrites(before, after, { above: 23, rows: 10 });
+    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[18]}\r\x1b[5B`);
     assert.equal(writes.includes(after[2]), false);
     // With nothing left to say on screen, that is no bytes at all.
     const hidden = [...before];
     hidden[2] = '  a row nobody can see any more';
-    assert.equal(frameWrites(before, hidden, { above: 24, rows: 10 }), '');
+    assert.equal(frameWrites(before, hidden, { above: 23, rows: 10 }), '');
   });
 
   it('reprints a grown frame from the first row it can still reach', () => {
