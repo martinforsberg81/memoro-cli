@@ -17,7 +17,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "The verb list in `src/mc-cli.js`'s `modules` map and `src/bin-mc.js`'s `CAPABILITIES` is the surface `mc --help` describes, and nothing else. Today they hold 29 and 16 entries against a page that names eight.",
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     },
@@ -91,12 +91,21 @@
     },
     {
       "title": "The verb list",
-      "status": "ready",
+      "status": "done",
       "done_when": "Not stated in the plan as written — when this step is finished is for the plan review to settle.",
       "instruction": [
         "**The verb list.** Decide the surviving set and remove the rest from the `modules` map, `CAPABILITIES`, `src/mc/help-text.js` and `docs/mc-command-matrix.md`. **Nothing is deleted from `src/` in this step** — it is the step that makes step 4 mechanical and each cut reversible by one revert. Re-run `reach.mjs`; its output is the work-list for step 4."
       ],
-      "pr": null,
+      "comments": [
+        "**What survived, and why.** `src/mc-cli.js` keeps twelve verbs — `status`, `work`, `repo`, `merge`, `test`, `worker`, `brief`, `helper`, `plan`, `run`, `roles`, `log` — and `src/bin-mc.js` keeps one, `mc vault`. The rule was the one the plan's first success criterion states: a verb stays if the page or another surviving verb reaches its implementation. `doctor` reaches `dev-servers.js`, `enforcement.js` and `session-maintenance-v1.js`; `migrate` reaches `session-cutover.js` and `session-home-lock.js`; every capability verb reaches `src/cli/`, `src/capabilities/` or `src/adapters/`. All of those are on step 4's list, so keeping their doors would have meant keeping the rooms. `mc log` was the one judgement call in the other direction: it is not in `reach.mjs`'s original seed list but the help names it, `mc-cli.js` writes an `mc.start`/`mc.end` pair on **every** invocation, and `mc log --open` is how a gate round that died is found. It reaches only `src/mc/` files that nothing else on step 4's list touches, so it costs the cut nothing.",
+        "**The two tables were 14 and 14, not 29 and 16.** The plan's numbers were measured on 2026-08-29 and PRs #538, #539 and #540 shrank both tables in between. Twenty-eight became thirteen here.",
+        "**`src/cli/status.js` is a trap for step 4.** It is the target of the surviving `status` verb, and step 4's instruction says to delete `src/cli/`. It is a 42-line shim now — it prints where the page went and hands a named project to `mc/commands/status-project.js`; the v1 world it used to pull in is gone. So step 4 must either keep it beside `cli/vault.js`, or fold its message into `mc-cli.js`'s own `moved()` and delete it. `reach.mjs` now seeds it by name so it does not appear on the work-list as dead.",
+        "**`src/bin.js` is a second one.** It is unreached and 117 lines, so `reach.mjs` lists it — but `package.json`'s `bin` maps both `memoro` and `memoro-cli` to it. Deleting it is deleting two of the three installed commands. That is a decision, not a cleanup, and step 4 should leave it alone or raise it.",
+        "**What `reach.mjs` says now.** 274 files / 79 126 lines in `src/`; 90 files / 20 938 lines reached by the page and its verbs; 103 / 25 562 with `bin-mc.js` and `cli/vault.js` added; **171 files / 53 564 lines unreached — 68 % of `src/`**. Before this step: 178 / 54 784, 69 %. The two that moved into the unreached set are exactly `src/mc/commands/doctor.js` and `src/mc/commands/migrate.js`. The seed list was rewritten to the surviving table, and the page's own reach now stops at `bin-mc.js`: `mc-cli.js` falls through to it, so crossing that edge folded the contract's vault cost into the page's number and printed the same figure on both rows.",
+        "**How this was verified.** The 25 test files `scripts/affected-tests.js` selects for this diff: 336 tests, 336 passing. `mc` prints the page. `mc run --rounds 1 --no-merge --no-caffeinate` completes a round against a temporary `MC_WORK_ROOT` — isolated on purpose, because the real runner was live and a second one writing `runner.json` would have claimed work. The full 246-file `npm test` was **not** run: main carries a standing red set, and ruling `mc-test-1` says the cause is this repository's uncapped concurrency and must be re-measured before it is trusted.",
+        "**One pre-existing red found on the way.** `tests/mc/commands/dormant.test.js` still asserts that `mc pm` and `mc pm-helper` print a dormant line; #540 removed both verbs, so the router answers `unknown command` and the file fails on `main` today. It is not in this diff's affected set. It belongs to step 5 — the tests that only covered deleted code — and it is named here so step 5 does not have to find it twice."
+      ],
+      "pr": "memoro-cli#543",
       "blocked_by": null
     },
     {
