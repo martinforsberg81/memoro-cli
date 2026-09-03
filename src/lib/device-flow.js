@@ -1,7 +1,10 @@
 /**
  * OAuth Device Flow (RFC 8628) — client side.
  *
- * Plan reference: docs/plans/worktree-lifecycle.md §14c + §14f.
+ * Its plan, docs/plans/worktree-lifecycle.md §14c + §14f, was removed by
+ * mc-cut; this file is the record of the flow now. Per-device tokens are
+ * `api-tokens` with scope `device` on the Memoro side — not a table of
+ * their own.
  *
  * Two phases:
  *   1. `needsDeviceAuth(deps)` — gate predicate for the top of bin-mc.js's

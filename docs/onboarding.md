@@ -241,5 +241,7 @@ If anything in this file disagrees with what `mc setup` /
 `mc auth status` prints on your machine — believe the CLI. The
 checklist is generated from live probes against your actual
 installation; this document is a longer-form rationale around it.
-The plan in [`docs/plans/worktree-lifecycle.md`](./plans/worktree-lifecycle.md)
-is the authoritative design source.
+The design source it used to name, `docs/plans/worktree-lifecycle.md`, was
+removed by mc-cut along with most of the verbs described above. Believe the
+CLI, and see [`docs/coding-agent-protocol.md`](./coding-agent-protocol.md) for
+what mc is now.

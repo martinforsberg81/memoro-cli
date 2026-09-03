@@ -1,8 +1,22 @@
-# Account custody — Phase 1 design (V1 foundation)
+# Account custody — the design `mc vault` is built on
 
-**Status:** proposed design · 2026-07-25 · Phase 1 of the V1 plan under
-[`mc-contract.md`](mc-contract.md) §2/§4. Everything else in V1 materialises
-from this; build it first.
+**Status:** shipped for S1–S3 · 2026-07-25 · **the last plan standing in this
+directory, kept because it is the only record of why `src/vault/` looks the way
+it does.** The mc-cut project (`docs/project/mc/mc-cut/`) removed the rest of
+`docs/plans/` with the session manager it described. What survives here is the
+custody design that `mc vault` implements today: S1 (the CRK/DEK envelope,
+`src/vault/engine/custody-crypto.js`), S2 (per-device unlock, `key-cache.js`),
+and S3 (`mc vault adopt`, `tool-auth.js`). S4 (recovery + rotation) is
+`mc vault recovery|recover|change-password`.
+
+Read the rest as history. `mc-contract.md`, `connected-capabilities.md` and
+`mc-v2-cloud.md` are named below and no longer exist — the trust model they
+carried is restated in
+[`docs/coding-agent-protocol.md`](../coding-agent-protocol.md) §*Credential
+boundary (normative)*, which is the normative copy. The "isolated credential
+domain", "typed adapter" and cloud-grant topologies this document plans for
+were never finished and their code is gone; `mc vault` is a trusted CLI
+subsystem the model does not call, not a capability broker.
 
 ## Purpose
 

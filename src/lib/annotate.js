@@ -4,7 +4,8 @@
  * Deterministic enrichment built during every session upload. Zero LLM.
  * Purpose: add bounded diagnostics to the explicit uploaded session record.
  *
- * See docs/plans/coding-profile.md.
+ * (It named docs/plans/coding-profile.md, which this repository has never
+ * carried; the Coding Profile is server-owned. See `mc coding-profile`.)
  */
 
 import { readFileSync, existsSync, statSync } from 'node:fs';

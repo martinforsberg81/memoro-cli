@@ -37,7 +37,7 @@
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`docs/plans/` no longer describes machinery that does not exist.",
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     },
@@ -145,13 +145,21 @@
     },
     {
       "title": "`docs/plans/`",
-      "status": "ready",
+      "status": "done",
       "done_when": "Not stated in the plan as written — when this step is finished is for the plan review to settle.",
       "instruction": [
         "**`docs/plans/`** — 34 files describing the dismantled world. Read before deleting: some are the only record of why something was built."
       ],
-      "pr": null,
-      "blocked_by": null
+      "pr": 564,
+      "blocked_by": null,
+      "comments": [
+        "**All 34 were read in full before anything was deleted, and the rule was the criterion's own words.** A file stays only if its subject is machinery that still exists. Two do: `mc-custody.md`, whose S1–S3 are `src/vault/engine/custody-crypto.js`, `key-cache.js` and `tool-auth.js` as shipped and which four source files and four test files already cite by name; and `vault-import.md`, whose `scan`/`import`/`bindings` verbs are still in `src/cli/vault.js`'s `VERBS` map. Thirty-two go — 12 603 of 13 048 lines. Both survivors got a status header saying what is live and what was withdrawn, because neither is wholly true any more: `vault-import.md` plans a materialise-at-launch lifecycle that `mc vault bind` and `mc vault get` now refuse outright, and `mc-custody.md` plans an isolated credential domain and typed adapters that were never built.",
+        "**The three documents `docs/coding-agent-protocol.md` called normative were all deleted, and one of them had to survive as prose.** `credential-blind-capabilities.md`'s rule — no vault secret in plaintext to an LLM-controlled process — is live and enforced by the two refusing verbs, so the protocol bullet now states it inline and says it is the normative copy. `connected-capabilities.md` and `github-app-capability.md` (1 507 lines) described a connection registry, broker grants and a GitHub App capability that step 4 deleted whole; their bullets went with them. Same for the `mc-v2-workload-allowlist.md` bullet: it governed cloud workload routes in a runtime that no longer exists here.",
+        "**What the protocol still gets wrong, which is not this step's to fix.** `docs/coding-agent-protocol.md` § *GitHub interaction in coding sessions* still describes `mc github` as canonical, a session-scoped `gh` shim, `github-op-v1` broker operations and `MC_HOST_CAPABILITIES` — none of which exist after step 4. `docs/onboarding.md` is worse: the whole file walks `mc setup`, `mc auth status`, `mc install-shell`, `mc new` and `mc end`. Both are outside `docs/plans/`, so this step only re-anchored their dangling links and left the substance alone. The close-out step is where that belongs, or its own project.",
+        "**Two live source files cited a deleted plan as their design source, and one thing lost its only record.** `src/lib/device-flow.js` pointed at `worktree-lifecycle.md` §14c/§14f and `src/cli/vault.js` at §12k.1; both comments now say the plan was removed and carry the one fact worth keeping (per-device tokens are `api-tokens` with scope `device`, not a table of their own). §14's device-flow design is now documented nowhere but that file. `src/lib/annotate.js` and its test pointed at `docs/plans/coding-profile.md`, which this repository has never carried — that link was already dangling on main.",
+        "**`npm run security:credential-boundary` outlives its plan.** `scripts/security/credential-boundary-probe.mjs` survives (step 4 kept it because its subject `src/adapters/managed-runtime/codex-managed.js` is one of the files vault drags in), but `mc-v2-local-codex-containment.md`, which is the record of what that containment was and its two-generation validation, is deleted: the launch owner it describes — `--managed-portable`, broker protocol v3, per-session credential domains, the exclusive lease — is gone from `src/`. The probe now has no document behind it. I did not run it.",
+        "**How this was verified.** `docs/plans/` holds two files, both about the vault. Every `docs/plans/...` reference in the repository was re-checked: no markdown link points at a missing file, and the five remaining bare mentions are either prose that names a file as removed, or the memoro repository's own `msr-*`/`sql-readiness` plans in a test fixture and in `utredning-2026-08-24.md`. `scripts/affected-tests.js` selects **61 files** for this diff — far more than the diff's size suggests, because the selector is documentation-aware and most `tests/mc/` files declare a read of `docs/coding-agent-protocol.md` and `docs/onboarding.md`, both of which this step edits, while the vault suites `pin` `docs/plans/mc-custody.md` by name. 851 tests, 842 passing, 0 failing, 9 skipped. `mc` prints the page. The full `npm test` was not run — main carries a standing red set and ruling `mc-test-1` says its cause must be re-measured first — and `mc run --rounds 1` was not run: this diff is documentation only, it touches no file `mc run` loads, and step 4's comment records that a round cannot be isolated from the real repositories."
+      ]
     },
     {
       "title": "Close-out",
