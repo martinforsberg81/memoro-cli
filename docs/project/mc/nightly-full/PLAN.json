@@ -89,7 +89,7 @@
         "**Two smaller decisions inside the step.** The report now names the npm script behind an npm command (`npm test  (node --test …)`, `npm run test:full  (node scripts/testing/run.mjs --profile full)`), because `npm run test:full` and `npm test` read identically and differ by 2,015 files — this also keeps memoro-cli's `command` line byte-identical to what it printed before. And `full_suite` on the report is a *different field* from `selection.full_suite`: the first is which command a whole-suite round ran, the second is the selector's admission that it could not narrow a change. They are never both set, because the first exists only when no selection ran.",
         "**Worth knowing for step 2.** memoro's `npm run test:full` runs three sequential `node --test` processes (standard/sqlite/heavy) and prints one TAP summary each; `tapTotals` sums them, which it was already built to do. `prepare` for memoro is `npm ci` and cost 8.9 s here, not the minutes the tree size suggests. So a scheduled round is about 300 s of gate lock for memoro and about 70 s for memoro-cli — the numbers the tick's skip policy has to be sized against."
       ],
-      "pr": "PR_PLACEHOLDER",
+      "pr": 549,
       "blocked_by": null
     },
     {
