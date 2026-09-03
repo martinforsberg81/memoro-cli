@@ -83,7 +83,7 @@
         "The handover is the one path that must keep working. `runLoop` clears `runner.json` before starting the successor precisely so the two never race for the file (`run.js`, the `updateRequested()` branch, with the `handedOver` flag that keeps the `finally` from clearing it). The new runner therefore sees no holder and must not be refused — assert that, because it is the failure this guard could plausibly introduce.",
         "Where the refusal is written matters for `--once`: `mc run --once` is a person watching one step. Say whether it is subject to the same refusal and why."
       ],
-      "pr": null,
+      "pr": 554,
       "blocked_by": null,
       "comments": [
         "The refusal is `readRunner` called from `runLoop`, immediately after the STOP refusal and before `markRunner()` — the same function `mc run start` and `requestUpdate` already use, not a second read of the file. That reuse is the point: the reason a bare `mc run` and `mc run start` disagreed about whether a runner was running is that only one of them asked. It needed one new dependency, `alive: pidAlive` on `realDeps` — the runner had no liveness test of its own at all, which is the shape of the fault in one line.",
