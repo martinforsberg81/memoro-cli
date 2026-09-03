@@ -545,13 +545,16 @@ where `new-user` sat for a day.
 
 ## What runs beside it
 
-`~/mc/bin/runner-loop.sh` is a small shell supervisor, and it exists for a
-reason this project cannot fix from inside: `mc run` executes from
-`~/memoro-cli`, which nothing fast-forwards, and node caches its module graph
-at process start — so a runner that merges an improvement to itself keeps
-running the old code for the rest of the round. The supervisor closes that at
-the round boundary. Owned by
-`~/mc/proposals/2026-08-29-runner-runs-stale-code.md`.
+Nothing, and that is the point. There was a shell supervisor — it fetched,
+fast-forwarded `~/memoro-cli`, ran `mc run --rounds 1` and slept — written on
+2026-08-29 because `mc run` had no way of its own to pick up a merge of its
+own code. It has one now: **`mc run --update`**, read at a round boundary,
+which fast-forwards that same checkout and hands over to a fresh process. See
+*The switch* for what it does and why node's module graph makes it necessary.
+The script was deleted on 2026-09-03 with nothing running it — no process, no
+tmux server, no reference in `src/`. A supervisor outside the product is a
+second thing to start, stop and remember, and mc's own state files know
+nothing about it.
 
 ## How it is tested
 
