@@ -86,6 +86,18 @@ MAINTENANCE
                                     for the price of a file read
   mc repo watch stop               Stop it; the last snapshot stays and ages
   mc repo watch status [--json]    Whether it is running and when it last wrote
+  mc repo nightly start [--interval <seconds>]
+                                    The whole suite of every repository, on an
+                                    interval, with nobody asking: the same
+                                    round mc test --full runs, once a day by
+                                    default, written to a log under mc's home.
+                                    A tick that finds a gate round running
+                                    skips it and says whose round it was — it
+                                    never queues behind one, and nothing it
+                                    finds refuses a merge or delays a round
+  mc repo nightly stop             Stop it; a round in flight ends with it
+  mc repo nightly status [--json]  Whether it is running, how often, and where
+                                    it writes
   mc repo claim <repo> "<what for>"
                                     Say you are holding a round on it: verify,
                                     merge, deploy. mc refuses a second claim

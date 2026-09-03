@@ -103,6 +103,36 @@ export function renderWatchLines(state, { colour = false, now = Date.now() } = {
   return lines;
 }
 
+/**
+ * The nightly, in four lines: whether it is running, how often, and where it
+ * writes.
+ *
+ * What it *found* is not here. That is a reading of a history of runs and it
+ * belongs on the page that says what a repository's state is, beside main and
+ * the open pull requests — not behind a verb somebody has to know to type.
+ */
+export function renderNightlyLines(state, { colour = false } = {}) {
+  const c = painter(colour);
+  const lines = [''];
+  if (state.running) {
+    lines.push(`  ${c('running', 'green')}  pid ${state.pid}  a full run of every repository every ${hours(state.interval_ms)}`);
+    if (state.started_at) lines.push(`  ${c('since', 'grey')}  ${state.started_at}`);
+  } else if (state.abandoned) {
+    lines.push(`  ${c('not running', 'yellow')}  ${c('— a pid file was left behind; mc repo nightly stop clears it', 'grey')}`);
+  } else {
+    lines.push(`  ${c('not running', 'grey')}  ${c('— mc repo nightly start', 'grey')}`);
+  }
+  lines.push(`  ${c('log', 'grey')}  ${c(state.log, 'grey')}`);
+  lines.push('');
+  return lines;
+}
+
+function hours(ms) {
+  const value = Number(ms) || 0;
+  if (value < 3_600_000) return `${Math.round(value / 1000)}s`;
+  return `${Math.round((value / 3_600_000) * 10) / 10}h`;
+}
+
 /** The label is written once; the rows below it line up under the first. */
 function section(c, wide, label, rows) {
   if (rows.length === 0) return [];
