@@ -20,7 +20,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A row that changes is rewritten in place, and no other row on the screen is written to at all.",
       "check": "A unit test over the frame differ: two `renderPageLines` results differing in one row produce a byte sequence that positions the cursor once, writes that row, and returns — asserted on the bytes, with no terminal involved."
     },
@@ -54,7 +54,7 @@
   "steps": [
     {
       "title": "The difference between two frames",
-      "status": "ready",
+      "status": "done",
       "done_when": "A pure function turns a previous and a next array of lines into the writes that make the terminal show the second, and a test asserts the bytes for an unchanged frame, a one-row change, a shorter frame and a longer one.",
       "instruction": [
         "A new module beside `page-render.js` — it knows about terminals, and `page-render.js` deliberately does not. Input: the previous lines, the next lines, and where the page starts relative to the cursor. Output: a string of writes, empty when nothing changed.",
@@ -71,9 +71,13 @@
         "That is a real problem and it is not this project's (see *Out of scope*). What it forces here is the shape: the refresh cannot be a blocking call in the loop that owns the terminal, and a frame that arrives late must not queue a second one behind it.",
         "**The menu blocks, and that is the thing in the way**",
         "**The menu blocks, and that is the thing in the way.** `menu()` (`src/mc/commands/home.js:121`) is `for (;;) { … await ask(…) }`: it renders, then waits on a line of input, and nothing else can happen in between. A live page needs the reading and the redrawing to be concurrent, with the redraw writing only above the prompt and putting the cursor back where the person left it. That is the whole engineering problem — the differ is arithmetic by comparison.",
-        "The page is 87 lines at the current `~/mc`, which is taller than many terminals. So the cursor arithmetic cannot assume the whole page is on screen: only the rows still visible can be addressed, and what has scrolled off is not rewritten and not scrolled back to."
+        "The page is 87 lines at the current `~/mc`, which is taller than many terminals. So the cursor arithmetic cannot assume the whole page is on screen: only the rows still visible can be addressed, and what has scrolled off is not rewritten and not scrolled back to.",
+        "**What the growth case was decided to be, and what it obliges the loop to do.** A frame with more rows than the last one has grown past the footprint it was printed in, and everything below its last row belongs to somebody else — the menu, the blank lines, the prompt — so there is no in-place write that can be right. `frameWrites` answers it with a reprint: up to the page's first row that is still on screen, `CSI 0J` to erase from there to the bottom, then the frame as ordinary lines. The terminal then scrolls at the bottom exactly as the first print of the page scrolled it, which is the only way a line reaches the scrollback once and intact; `CSI L` (insert line) was rejected for the opposite reason — it shifts the region down without scrolling anything into the scrollback and silently drops the bottom row of the screen. The price is on the loop: after a growth frame the cursor is at the end of the last page row, everything below has been erased, and the caller must reprint its own rows and recompute `above`. Every other case comes back to the row it started on.",
+        "**The contract, in the two numbers it takes.** `above` is how many rows above the cursor the page's first line sits — with the menu as it stands today that is `lines.length + 4` when the cursor is on the prompt (a blank, the two key lines, a blank). `rows` is the terminal's height and bounds how far up the writes reach: the cursor is assumed to be on the last row of the screen, so `rows - 1` rows above it are addressable and a changed row further up than that is not written at all. That assumption is what keeps a page taller than the terminal safe — a move up past the top row of the screen stops there, so a write meant for a row that has scrolled off would land on a visible one. Left out, `rows` skips nothing, which is right for a test and wrong for a real terminal: the loop should pass it.",
+        "**Two things the loop has to carry that the differ cannot.** The column is one: vertical moves keep the column, so the writes return to the row they started on at column 0, and the column a person's half-typed input sits in is only recoverable with a save and a restore around the call. The other is width — `columnsFor` clamps the page to 60 columns minimum, so in a terminal narrower than 60 every page row wraps onto two screen rows and all of this row arithmetic is off by the number of wrapped rows above the cursor. Nothing here detects that; the loop is where it would have to be decided.",
+        "A shrinking frame keeps its footprint: the surplus rows are cleared where they stand, so a page that loses rows leaves blank rows above the menu until some later frame grows and reprints. That is deliberate — pulling the rows up with `CSI M` would move the menu and the prompt, which the page does not own — but it is visible, and it is the one place a reader of the finished page might wonder why there is a gap."
       ],
-      "pr": null,
+      "pr": 544,
       "blocked_by": null
     },
     {
