@@ -2,7 +2,12 @@
 
 `mc`, typed alone, is the page. It is the only thing in mc that lists
 workareas, projects, sessions or queue entries, and there is exactly one
-only surface. `mc --watch` existed for a few hours on 2026-08-29 and was removed the same day (Martin: a page redrawn on a timer is not a live page; the real one comes later).
+only surface. Left open at a terminal it stays true: every 30 seconds the
+rows that changed are rewritten where they stand, and nothing else on the
+screen moves — see [*The live page*](#the-live-page). `mc --watch` existed
+for a few hours on 2026-08-29 and was removed the same day (Martin: *a page
+redrawn on a timer is not a live page; the real one comes later*). That
+section is the later.
 
 That is a deliberate limit (decision `mc-3`, 2026-08-29). Before it, five
 verbs each printed a list of their own — bare `mc` printed the V1 sessions
@@ -16,14 +21,18 @@ sessions or projects is a regression**, not a feature.
 
 | | what it does |
 |---|---|
-| `mc` | prints the page; at a terminal, then the menu |
+| `mc` | prints the page; at a terminal, then the menu, and the page refreshes in place under it every 30 s |
 | `mc --json [--fresh]` | the same object the renderer takes, one key per section, exit 0 |
 | `mc --fresh` | fetch and ask GitHub first, then print |
 | `mc status <name>` | one project — still its own verb |
 | `mc work <name> …` | the workarea verbs — still their own |
 
 Without a TTY — a pipe, a subprocess, a session reading it — the page
-prints and exits 0. Nothing ever prompts where nobody can answer.
+prints once and exits 0. Nothing ever prompts where nobody can answer,
+nothing loops, and no escape byte is written at all: not colour, not a
+cursor move, not an erase. `tests/mc/front-door.test.js` asserts it as
+bytes, for `mc` and `mc --json` both, because a live surface leaking into a
+script is the one regression nobody would notice by looking.
 
 `mc list`, `mc sessions list`, bare `mc status` and `mc status
 --sessions|--watch|--wait` exit 2 and say where they went. `--offline` is
@@ -129,9 +138,12 @@ dead pids as it registers.
 
 ## Why it is instant
 
-`time mc` is 0.09–0.11 s with both caches hit, against 1.92 s for the board
-it replaced. (Measured over twelve runs at load average 10; a busy moment on
-the same machine pushes single runs to 0.2–0.3 s.) Two changes did it, and
+`time mc` was 0.09–0.11 s with both caches hit, against 1.92 s for the board
+it replaced. (Measured over twelve runs at load average 10 on 2026-08-29; a
+busy moment on the same machine pushed single runs to 0.2–0.3 s.) **That
+number no longer holds** — see [*What a refresh
+costs*](#what-a-refresh-costs) below, which is the same read measured again
+while the live page was built. Two changes bought the original figure, and
 they are worth different amounts:
 
 1. **One read per repository instead of one per plan.** `listPlans` was
@@ -160,6 +172,34 @@ The **cold** path is not instant: the first print after `origin/main` moves
 re-reads both repositories and costs 0.31 s quiet, 0.48 s under load. That
 happens once per merge. The runner could warm it in the round it already
 fetches in; it does not yet.
+
+### What a refresh costs
+
+A refresh is one `collectPage` — the identical read a bare `mc` does, with
+no model, no session and no write but the two read-through caches above.
+So the cost of the page being live is the cost of the page, once every 30
+seconds, and the number to know is what that read actually takes now:
+
+| when | `mc --json`, warm | what the machine was doing |
+|---|---|---|
+| 2026-08-29 | 0.09–0.11 s | the caches hit, quiet |
+| 2026-09-02 | 2.4 s, 2.7 s, 4.8 s (and 3.9–6.6 s in a second set) | the runner landing pull requests, several sessions open |
+| 2026-09-03 | 1.83 s, 1.11 s, 1.09 s | the runner running, nothing merging |
+
+The spread is not noise and it is not the renderer: `plans.json` is keyed
+by the `origin/main` sha, so **every merge invalidates it**, and a machine
+whose runner is landing pull requests is a machine where the page is cold
+most of the time — exactly when it is most worth watching. The 0.09 s in
+the section above is the hit; the seconds above are the miss, and the miss
+is the ordinary case under a runner.
+
+Making that read quick is a different problem and deliberately not this
+one. What the live page does about it is refuse to be blocked by it: the
+interval is a floor measured from the moment the last collect *finished*,
+so a read slower than 30 s delays the next frame rather than queueing one
+behind it, and there are never two in flight. A 45 s collect therefore
+gives frames 75 s apart, not 45 — the machine is left alone between them,
+which was the point.
 
 ## How it looks
 
@@ -266,7 +306,7 @@ Four things hold that table up:
   the row's own footprint, where two of the seven
   leading spaces used to be. Everything else is byte-identical, at six widths,
   against the same fixtures.
-- **`--watch` is gone** (2026-08-29): it cleared and redrew on a timer, which is not a live page. A real live page is later work.
+- **`--watch` is gone** (2026-08-29): it cleared and redrew on a timer, which is not a live page. The real one arrived on 2026-09-03 and writes only the rows that changed — [*The live page*](#the-live-page).
 
 `tests/mc/page.test.js` pins all of it: a per-row signature snapshot of the
 painted page (the colours in order, not the escape bytes), the two tables
@@ -300,6 +340,154 @@ under the only name it has.
 The prompt reads `/dev/tty` by design, so a subprocess without a terminal
 never reaches it.
 
+## The live page
+
+The page under that prompt keeps telling the truth. **Every 30 seconds the
+rows that changed are rewritten where they stand, and nothing else on the
+screen is written to at all** — not the scrollback above, not the two key
+lines, not the prompt, not the cursor in whatever the person is half-way
+through typing. The page is not reprinted and the screen is not cleared:
+that was `--watch`, and it is why `--watch` went.
+
+Two modules, and the split is the same one `page-render.js` already keeps:
+
+- **`page-frame.js`** knows about terminals and nothing about time. Given
+  the lines on the screen, the lines that should be, and where the page sits
+  relative to the cursor, `frameWrites` returns the bytes that turn the first
+  into the second — and the empty string when they are the same. It is pure,
+  so every case below is asserted as bytes in `tests/mc/page-frame.test.js`
+  with no terminal involved.
+- **`page-live.js`** is what runs while somebody is sitting in front of it:
+  the timer, the reading of the line, and the arithmetic that says where the
+  page is relative to the cursor. `liveReader` is what `home.js` hands the
+  menu instead of a plain `ask`.
+
+### What is written, and what is not
+
+Every move is relative — `CSI n A`, `CSI n B`, `CSI 2K` — never an absolute
+row. Absolute row numbers are wrong the moment anything else writes to the
+terminal, and the page has no claim on the screen: it lives in the
+scrollback with whatever was printed before it, and what is below it belongs
+to somebody else. Four cases, each decided rather than fallen into:
+
+| the frame | what happens |
+|---|---|
+| unchanged | **no bytes at all** — not a redraw of identical text. A terminal that receives nothing is the only way to be sure nothing flickered |
+| a row changed | one move up to that row, `CSI 2K`, the row, one move back. Rows that did not change are not touched |
+| fewer rows than before | the surplus rows are **cleared where they stand** and the page keeps its footprint |
+| more rows than before | the page is **reprinted**: `CSI 0J` from its first reachable row, then the frame as ordinary lines |
+
+The whole write of an ordinary frame is `\x1b7`, the writes, `\x1b8`, in one
+`stdout.write` so nothing can interleave with it. The prompt row is not
+among the rows it touches, which is what puts the cursor back in the column
+it was in without anybody having to know what that column was.
+
+**Shrinking keeps the footprint** because `CSI M` (delete line) would close
+the gap by pulling the menu and the prompt up a row and dropping whatever is
+at the bottom of the screen — rows the page does not own. A blank row the
+page printed is the page's to blank. The visible price: a page that loses
+rows leaves blank rows above the key lines until some later frame grows and
+reprints.
+
+**Growth is the case that can damage the scrollback**, so it is the one
+written down at length. A frame with more rows than the last has grown past
+the footprint it was printed in, and everything below its last row belongs
+to the caller, so no in-place write can be right. The reprint lets the
+terminal scroll at the bottom exactly as the first print of the page
+scrolled it, which is what puts a line into the scrollback once and intact.
+`CSI L` (insert line) was rejected for the opposite reason: it shifts the
+region down without scrolling anything into the scrollback, and silently
+drops the bottom row of the screen. The cost is paid by the loop rather than
+hidden — after a growth frame everything below the page has been erased, so
+`page-live.js` prints the key lines, the prompt and the half-typed answer
+again itself.
+
+### The two numbers, and the two terminals that break them
+
+`above` is how many rows above the cursor the page's first row sits:
+the page's footprint plus the newlines in the block the menu prints under it.
+`rows` is the terminal's height, and it bounds how far up the writes reach —
+the cursor is on the last row of the screen, so `rows - 1` rows above it are
+addressable and **a changed row further up than that is not written at
+all**. That is what makes a page taller than the terminal safe: the page is
+96 rows at the current `~/mc`, taller than most terminals, and what has
+scrolled off the top is history. History is not rewritten and not scrolled
+back to.
+
+**Narrower than 60 columns, the page is not live.** `columnsFor` clamps to a
+floor of 60, so below that every row is wider than the screen and wraps, and
+every row of the arithmetic above is then off by the number of wrapped rows
+between the cursor and the page. `readerFor` in `home.js` hands such a
+terminal `plainReader` instead — the page printed once and the line read the
+way it always was. That is also the reader the front-door tests drive, so
+the not-live path is not one that nothing exercises.
+
+**A resize does not redraw at once.** `process.stdout`'s `resize` marks the
+frame invalid rather than the page — the widths were computed for the old
+columns — and the next refresh reprints the page whole instead of diffing
+against lines that no longer describe the screen. For up to 30 seconds a
+resized terminal therefore shows the page that was drawn for the old width.
+
+### Why the reading had to change
+
+`prompt.js` reads a line with a blocking `readSync`, and blocking is the
+whole problem: no timer fires while the process is parked in a syscall. The
+live reader borrows `/dev/tty` the same way — its own descriptor, never
+`process.stdin`, so the tool mc launches next inherits an untouched terminal
+— but reads it asynchronously, and **in raw mode**.
+
+Asynchronous alone would have been enough for the interval, and would have
+kept the terminal's echo, backspace and kill-line for free. It would not
+have been enough for a growth frame: that frame is a reprint, and in
+canonical mode the typed characters sit in the kernel's line buffer where
+this process cannot see them, so a growth frame would blank a person's
+answer off the screen while still, invisibly, holding it. Raw mode is what
+makes *half-typed input survives* true in every frame rather than in most of
+them. Its price is that the echo, the backspace, ctrl-u and ctrl-c are ours:
+`readLine` in `page-live.js`, and about forty lines. Arrow keys and anything
+else arriving as an escape sequence are swallowed rather than echoed as
+rubbish — the menu has no history to walk through.
+
+**A collect that throws leaves the last good frame on screen** and says so
+in one line, written into the blank row the menu prints between the page and
+the keys — a row the loop can write without the page growing and without
+anything scrolling. A live surface that blanks on a transient failure is
+worse than one that says it is holding an old frame.
+
+**Quitting gives the terminal back bit-for-bit.** Raw mode is restored
+before the descriptor is closed, and then one read that looks pointless and
+is not: macOS sets `PENDIN` — *retype the pending input* — in the terminal's
+flags on every switch back to canonical mode, whether or not anything is
+pending. Measured 2026-09-03 in a pty: `stty -g` before and after `mc`
+differed by exactly that bit, with an empty input queue, and it does not
+clear on its own. The driver clears it the first time it services a read, so
+`closeInput` opens `/dev/tty` non-blocking and reads once — `EAGAIN`, the
+ordinary case — and the terminal is then identical to the one mc was handed.
+`q` and ctrl-c leave the same way, and the last frame stays in the
+scrollback.
+
+### What was checked in a real terminal
+
+The bytes and the timing are unit tests — `page-frame.test.js` on the four
+cases, `page-live.test.js` on a fake clock — and they cannot say what a
+terminal does with those bytes. `scripts/mc-live-page-check.mjs` runs the
+real `mc` in a real pty against a fixture work root and reads the screen back
+with `@xterm/headless`. It is **not part of `npm test`**: it takes five and a
+half minutes, because the interval is 30 s and there is deliberately no way
+to configure it.
+
+It passed whole on 2026-09-03 — ten refreshes 30 s apart, the marker line
+above the page still there and still once, `PROGRAMMES` on the screen once
+rather than printed again under itself, a `1` typed before the first refresh
+still at the prompt with the cursor after it, backspace taking it back, `q`
+leaving with exit 0, no alternate screen buffer (`\x1b[?1049` never written),
+and `stty -g` identical before and after. What it does not do is press return
+on that `1`, because that opens a workarea and launches a tool on the machine
+it is running on. That the reader hands back `1` after a refresh is asserted
+in `page-live.test.js`, and that `1` opens the project PROGRAMMES numbered
+`1` is asserted in `front-door.test.js`; the join between the two is the only
+part nobody has run.
+
 ## The modules
 
 | file | what it is |
@@ -307,6 +495,8 @@ never reaches it.
 | `src/mc/commands/home.js` | the two surfaces: the page and the menu |
 | `src/mc/page-collect.js` | the five sections, built from read data |
 | `src/mc/page-render.js` | how they look |
+| `src/mc/page-frame.js` | the difference between two frames, as bytes — pure, no terminal |
+| `src/mc/page-live.js` | the loop under the prompt: the 30 s interval, the raw-mode reader, the arithmetic |
 | `src/mc/page-cache.js` | `plans.json` and `prs.json` |
 | `src/mc/status-collect.js` | the readers more than one caller needs — `nowBlock`, `kindFor`, `pidAlive`, `areasWithCheckout` |
 | `src/mc/status-render.js` | the drawing primitives — `painter`, `width`, `pad`, `clip`, `elapsed` |
@@ -322,7 +512,18 @@ parsed JSON and compares, so the two surfaces cannot drift.
 
 `tests/mc/front-door.test.js` drives the menu in process with the reading
 and the opening handed in, so a number can be shown to open the project
-PROGRAMMES gave that number to without a session ever starting.
+PROGRAMMES gave that number to without a session ever starting. It is also
+where the piped page is pinned: `mc | cat` and `mc --json | cat` exit 0 with
+no `\x1b` anywhere in stdout, every section heading exactly once, and
+`--json` a single document that re-serialises to itself.
+
+One seam worth knowing about: `interactive()` reads the *process* streams
+while `colourFor` and `columnsFor` read the stream handed to `run()`. From
+the CLI they are the same object, so nothing reachable today can disagree —
+but a caller that handed `run()` a non-TTY stdout while the process's own
+stdout was a terminal would print a plain page and then go live on it. If a
+future surface ever calls `run()` with deps, `interactive` is the line to
+fix, and the fix is to have it take the same stream.
 
 ## What went, and what did not
 
@@ -369,3 +570,14 @@ The palette came after, as `docs/project/mc/mc-ui-polish/`, in two steps: the
 page in colour ([#446](https://github.com/martinforsberg81/memoro-cli/pull/446))
 and this close-out. It added no section, no datum and no flag — the page it
 paints is the page above.
+
+The live surface came last, as `docs/project/mc/mc-live-page/`, in four
+steps: the frame differ
+([#544](https://github.com/martinforsberg81/memoro-cli/pull/544)), the loop
+that does not interrupt the prompt
+([#546](https://github.com/martinforsberg81/memoro-cli/pull/546)), the piped
+page pinned as bytes
+([#547](https://github.com/martinforsberg81/memoro-cli/pull/547)) and this
+close-out. It added no section, no datum and no flag either: the page that
+refreshes is the page above, and 30 s is one number, chosen, with no way to
+configure it until there is a reason for another.
