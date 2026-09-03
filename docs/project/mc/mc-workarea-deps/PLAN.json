@@ -17,12 +17,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A workarea mc has just made runs the five test files that need a dependency, with no `node_modules` inside it.",
       "check": "In a fresh `mc work add <name> memoro-cli`, with no `node_modules` under the workarea: `node --test --import ./tests/_isolate-home.mjs tests/mc/owned-resource-cleanup.test.js tests/mc/session-runtime-v1.test.js tests/runtime/session-host/runtime-host.test.js tests/runtime/session-host/socket-e2e.test.js tests/runtime/session-host/terminal-screen.test.js` reports 0 fail."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`scripts/affected-tests.js` still narrows: the dependencies are nowhere it can see.",
       "check": "`node scripts/affected-tests.js --base-ref origin/main` in that workarea reports `why.reason: \"affected\"` and an empty `why.unexplained`, not `full-suite`."
     },
@@ -74,7 +74,7 @@
     },
     {
       "title": "One dependency tree above the workareas",
-      "status": "ready",
+      "status": "done",
       "done_when": "A workarea mc makes runs the five dependency-needing test files green with no `node_modules` inside it, and `scripts/affected-tests.js` in that workarea still reports `affected` with nothing unexplained.",
       "instruction": [
         "Put the tree at `~/mc/node_modules` — one directory, above every workarea, resolved by node's own parent walk. `paths.js` owns the shape of the work root and should own this name too; `work-area.js`'s `addWorktree` is where a workarea is made and is the natural place to make sure the tree is there.",
@@ -82,7 +82,14 @@
         "Whatever it holds, it must be kept out of the page and out of the runner. Both list a directory under the work root only when it holds a checkout of a repository mc knows (`status-collect.js`'s `areasWithCheckout`, `run.js`'s `workareas()`), and `~/mc/node_modules` holds none — so this is already true and the step's job is to assert it rather than to build a filter. Add that assertion.",
         "Nothing goes inside `<workarea>/<repo>/`. Measured 2026-09-02: a `node_modules` symlink there is not matched by `.gitignore`'s `node_modules/`, so `scripts/affected-tests.js` reported it as an unexplained changed path and fell back to the whole suite — 250 files instead of 41. The success criterion for this step names that reading because it is the one that would silently undo the selector's whole value."
       ],
-      "pr": null,
+      "comments": [
+        "**The tree is an `npm ci` of its own, and the copy of the two files is what has to be kept true.** `~/mc/node_modules` is installed in the work root from a copy of the repository's `package.json` and `package-lock.json`, and the way in is a byte comparison of the repository's lockfile against that copy: same bytes and a tree already there means nothing runs. The cheaper form measured before this step — symlinks into `~/memoro-cli/node_modules` — was not taken, because it makes every workarea's tests resolve whatever that one checkout last installed, and an `npm ci` there while a session runs pulls the packages out from under it. Measured 2026-09-02: `mc work add deps-check memoro-cli` was 22 s in total, worktree and `npm ci` together, and a second workarea on the same lockfile pays one file read.",
+        "The copy is the manifest minus `scripts` and `bin`. `npm ci` runs the root package's lifecycle scripts, and this repository's `postinstall` is `node scripts/postinstall.js` — a path that does not exist in the work root — so a verbatim copy fails the install. That is the one non-obvious thing about the mechanism, and `tests/mc/work-deps.test.js` holds it.",
+        "What the tree follows is the repository's own manifest, which is main's, not the new workarea's branch: one directory holds one tree, and reading each branch would have two workareas reinstalling over each other. A branch that adds a dependency therefore does not get it from here until it lands.",
+        "**Step 3 should expect the failing *test* count to go up when the candidate gets a tree, and the failing *file* count to go down.** Measured 2026-09-02 over the 131 test files this branch's change selects, run twice on an `origin/main` checkout: in a worktree outside `~/mc` with no tree, 14 failing tests across 12 files; in a workarea under `~/mc` with the tree, 18 failing tests across 8 files. The five dependency files go green, and `tests/runtime/certified-execution/launch-plan.test.js` — already red — goes from 1 failing test to 8, because with its imports resolving, more of it runs. Whoever measures the round after step 3 should not read those 7 as their own doing.",
+        "**Nothing needed a filter, and this was measured rather than assumed.** `mc --json` and `mc repo --json` were run with `~/mc/node_modules` in place and neither mentions it; `areasWithCheckout` and the runner's `workareas()` exclude it because both name a directory only when it holds a checkout, and `tests/mc/work-deps.test.js` asserts that against a real work root rather than trusting it. One caller does return it: `listWorkAreas` lists every non-dot directory, so the tree joins `bin/`, `brief/`, `decisions/` and `inbox/` in a list nothing renders bare today. A future caller of that function inherits the whole crowd, not this one directory."
+      ],
+      "pr": 541,
       "blocked_by": null
     },
     {

@@ -110,3 +110,40 @@ export function planHome(env = process.env) {
 export function mcHomeExists() {
   return existsSync(mcHome());
 }
+
+/**
+ * `~/mc/node_modules` — one dependency tree, one directory above every
+ * workarea.
+ *
+ * Node resolves a bare specifier by walking `node_modules` up every parent of
+ * the importing file, so a checkout at `~/mc/<area>/<repo>/` reaches this one
+ * with nothing inside it at all. That last part is the point: a `node_modules`
+ * entry *inside* the checkout is visible to git and to
+ * `scripts/affected-tests.js`, and a symlink there is not matched by
+ * `.gitignore`'s `node_modules/` — measured 2026-09-02, the selector called it
+ * an unexplained changed path and fell back to the whole suite, 250 files
+ * instead of 41.
+ *
+ * The name lives here, with the rest of the work root's shape, for the same
+ * reason `PLAN_HOME` does: `work-deps.js` builds the tree and the tests assert
+ * where it is, and two copies of one word is how the two drift apart.
+ *
+ * It is not a work area and cannot be mistaken for one: both listings that
+ * matter — `mc status`'s `areasWithCheckout` and the runner's `workareas()` —
+ * name a directory under the work root only when it holds a checkout of a
+ * repository mc knows, and this one holds none.
+ */
+export const WORK_DEPS = 'node_modules';
+
+export function workDepsPath(env = process.env) {
+  return join(workRoot(env), WORK_DEPS);
+}
+
+/** What `npm ci` in the work root reads: a copy of the repository's two files. */
+export function workDepsManifestPath(env = process.env) {
+  return join(workRoot(env), 'package.json');
+}
+
+export function workDepsLockPath(env = process.env) {
+  return join(workRoot(env), 'package-lock.json');
+}
