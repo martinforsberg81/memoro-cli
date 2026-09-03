@@ -17,7 +17,8 @@ import { describe, it } from 'node:test';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
 import { REPO_NAMES } from '../../src/mc/run.js';
 import {
-  DEFAULT_BUDGET_MINUTES, DEFAULT_MODEL, DEFAULT_TOOL, HELPER_HOUR_UTC, QUOTA_SLEEP_MS, RUNS_HEADER,
+  DEFAULT_BUDGET_MINUTES, DEFAULT_MODEL, DEFAULT_TOOL, HELPER_HOUR_UTC, MC_OWN_TREES, QUOTA_SLEEP_MS,
+  RUNS_HEADER,
 } from '../../src/mc/run-plan.js';
 
 const DOC = readFileSync(fileURLToPath(new URL('../../docs/technical/mc-run.md', import.meta.url)), 'utf8');
@@ -64,6 +65,20 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     const beside = /## What runs beside it\n([\s\S]*?)\n## /u.exec(DOC);
     assert.ok(beside, 'the section a reader looks in for a supervisor is gone entirely');
     assert.match(beside[1], /`mc run --update`/u);
+  });
+
+  it('names the trees whose landing hands the runner over, and no others', () => {
+    const merge = /### The merge\n([\s\S]*?)\n## /u.exec(DOC);
+    assert.ok(merge, 'the section that describes the landing is gone');
+    for (const tree of MC_OWN_TREES) assert.ok(merge[1].includes(`\`${tree}\``), `the doc does not name ${tree}`);
+    // A widened list is the failure this pins: the next tree added to the code
+    // has to be argued for in the prose too.
+    assert.equal(MC_OWN_TREES.length, 2, 'a third tree needs its own paragraph here');
+    assert.match(merge[1], /writes `runner\/UPDATE` itself/u);
+  });
+
+  it('warns a reader of runs.tsv about a trespass on a step that changed the rules', () => {
+    assert.match(DOC, /`plan-trespass` on a step that changed the runner's\n  own rules is worth checking before it is believed/u);
   });
 
   it('states the flag defaults the command parses', () => {

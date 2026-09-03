@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, inFlight, landingNote,
-  nextBranch, queueFileNames, queueFileText, quotaSeen, readSessionOutput, sessionSettings,
-  stackOrder, stepPrompt, strictQueue, tsvHeader, tsvRow,
+  MC_OWN_TREES, assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, inFlight,
+  landingNote, mcOwnFiles, nextBranch, queueFileNames, queueFileText, quotaSeen,
+  readSessionOutput, sessionSettings, stackOrder, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
@@ -436,4 +436,18 @@ test('landingNote: a red gate is the pull request left open, and says so', () =>
   assert.equal(landingNote({ merged: false, stopped_at: 'drift' }), 'open,gate-drift');
   assert.equal(landingNote({ merged: false }), 'open,gate-unknown');
   assert.equal(landingNote(null), 'open');
+});
+
+test('mcOwnFiles: the two trees a running runner is already holding, and nothing beside them', () => {
+  assert.deepEqual(MC_OWN_TREES, ['src/mc/', 'canon/'], 'a third tree needs a line in docs/technical/mc-run.md too');
+  assert.deepEqual(mcOwnFiles(['src/mc/run.js', 'docs/technical/mc-run.md']), ['src/mc/run.js']);
+  assert.deepEqual(mcOwnFiles(['canon/roles/step.md']), ['canon/roles/step.md']);
+  // Prefixes, not substrings: the near misses are real paths in this
+  // repository, and each of them would buy a fresh process for nothing.
+  assert.deepEqual(mcOwnFiles(['src/mcp/server.js', 'src/adapters/index.js', 'canonical.md', 'tests/mc/run.test.js']), []);
+  // GitHub answers `{ path }` objects; the runner asks for the paths. Both
+  // shapes, so neither caller has to remember which it holds.
+  assert.deepEqual(mcOwnFiles([{ path: 'src/mc/run.js' }, { path: 'README.md' }]), ['src/mc/run.js']);
+  assert.deepEqual(mcOwnFiles(null), [], 'no answer is not a reason to hand over');
+  assert.deepEqual(mcOwnFiles([undefined, '']), []);
 });

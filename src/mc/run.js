@@ -58,7 +58,9 @@
  * `~/mc/runner/`, all read at a round boundary and never mid-session: `STOP`
  * ends it, `UPDATE` makes it fast-forward mc's own checkout and hand over to a
  * fresh process on the new code. `mc run start|stop|--update` write them; the
- * rules and the handover are in run-control.js.
+ * rules and the handover are in run-control.js. `UPDATE` has one writer that
+ * is not a person — a landing that changed `src/mc/` or `canon/`, which is
+ * the runner having merged the code it is running (`askForUpdate`).
  *
  * Every process boundary is a dependency on `deps`, so the round can be
  * driven in a test with a fake git, gh, tmux and session and no network.
@@ -93,7 +95,7 @@ import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
-  helperDue, helperNote, inFlight, landingNote, nextBranch, queueFileNames, queueFileText,
+  helperDue, helperNote, inFlight, landingNote, mcOwnFiles, nextBranch, queueFileNames, queueFileText,
   readSessionOutput, reconcilePrompt, sessionSettings, stackOrder, stepPrompt, strictQueue,
   tsvHeader, tsvRow,
 } from './run-plan.js';
@@ -380,10 +382,61 @@ export function createRunner({
       onProgress: (message) => say(`${name}: merge #${pr} — ${message}`),
     });
     const note = landingNote(report);
-    if (note === 'merged') say(`${name}: merged #${pr} into ${report.merged_into} through the gate`);
-    else if (note.startsWith('off-')) say(`${name}: #${pr} was merged into ${report.merged_into}, NOT main — not recorded as merged`);
+    if (note === 'merged') {
+      say(`${name}: merged #${pr} into ${report.merged_into} through the gate`);
+      askForUpdate(repo, name, pr);
+    } else if (note.startsWith('off-')) say(`${name}: #${pr} was merged into ${report.merged_into}, NOT main — not recorded as merged`);
     else say(`${name}: #${pr} left open — ${report?.reason || 'the merge round said nothing'}`);
     return note;
+  }
+
+  /**
+   * The second writer of `runner/UPDATE`, and the only one that is not a
+   * person: a landing that changed mc's own code.
+   *
+   * A step may change the rules the runner judges the next step by — the plan
+   * schema, `unauthorisedChanges`, the prompt — and the runner is the code
+   * being changed while it is running. Node read its module graph at process
+   * start, so the round after a merge of `plan-schema.js` judges plans with
+   * the schema the process was started with. Measured 2026-09-02: a step
+   * migrated every plan on both mains, the runner re-read them with the old
+   * schema, they did not parse, and a session that did nothing wrong was
+   * logged `plan-trespass`.
+   *
+   * GitHub's own file list for the merged pull request is what decides it,
+   * the way `docs-merge.js` reads a docs PR's files — not the gate's report,
+   * whose `files` are the *test* files its selection ran, and not a local
+   * diff a stale checkout could answer wrong. `landDocsPr` needs none of
+   * this: `runDocsMerge` refuses anything outside `docs/`, and neither
+   * `src/mc/` nor `canon/` is under it, so the gate is the only door mc's own
+   * code can come through.
+   *
+   * This writes the flag and nothing more. The reader is `runLoop`'s existing
+   * one, at the round boundary, never mid-session, and `mc run --update`
+   * keeps its own meaning as the human order — this adds a second writer of
+   * one file, not a second kind of handover.
+   */
+  function askForUpdate(repo, name, pr) {
+    const asked = deps.gh(repo.path, ['pr', 'view', String(pr), '--json', 'files', '-q', '.files[].path']);
+    if (!asked.ok) {
+      say(`${name}: GitHub could not be asked which files #${pr} changed (${lastLine(asked)}) — no update requested`);
+      return false;
+    }
+    const own = mcOwnFiles(String(asked.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean));
+    if (!own.length) return false;
+    // STOP is already written: this runner finishes the round and exits, and
+    // a fresh one reads the new code because it is a fresh process. Leaving
+    // UPDATE behind for whoever starts the next runner by hand would hand it
+    // over on its first round for nothing — the same refusal `requestUpdate`
+    // makes for the same reason.
+    if (stopRequested()) {
+      say(`${name}: #${pr} changed mc's own code, but STOP is written — the next runner starts on it anyway`);
+      return false;
+    }
+    if (updateRequested()) return true;
+    deps.write(paths.update, `${stamp()}\n`);
+    say(`${name}: #${pr} changed mc's own code (${own.slice(0, 3).join(' ')}${own.length > 3 ? ` +${own.length - 3} more` : ''}) — UPDATE written, handing over after this round`);
+    return true;
   }
 
   /**
