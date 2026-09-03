@@ -168,7 +168,7 @@
       "instruction": [
         "**Close-out** — `docs/technical/mc-cut.md`, the `project_log.md` row, and `reach.mjs` either kept as the guard it became or removed with a note."
       ],
-      "pr": null,
+      "pr": 565,
       "blocked_by": null,
       "comments": [
         "**`reach.mjs` is kept, and it had to move to be kept.** It lived in this plan's own directory, and `mc run` deletes that directory in the round it reads `done` — so leaving it there would have been the *removed* option taken by accident rather than the *kept* one chosen. It is `scripts/reach.mjs` now, with `npm run reach` and `npm run reach -- --list` in `package.json`. Two changes beyond the move: the root argument now skips a leading flag, because `npm run reach -- --list` passes `--list` as `argv[2]` and the old code would have resolved it as the repository root; and the header no longer cites step numbers of a plan that is about to stop existing. It is deliberately not in `npm test` — a file added mid-change is legitimately unreached until that change lands, and a test going red for it would gate ordinary work rather than drift.",
