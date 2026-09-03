@@ -35,7 +35,7 @@
       "check": "In a real terminal: type `1` without pressing return, wait through a refresh, and see the `1` still at the prompt and the cursor after it. Then press return and get that project's workarea."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A pipe is exactly what it is today.",
       "check": "`mc | cat` and `mc --json | cat` print once, exit 0, and their output contains no ESC byte — asserted in `tests/mc/front-door.test.js`."
     },
@@ -105,11 +105,18 @@
     },
     {
       "title": "A pipe is still a pipe",
-      "status": "ready",
+      "status": "done",
       "done_when": "Without a TTY, `mc` and `mc --json` print once, exit 0 and emit no escape byte — asserted, not assumed.",
       "instruction": [
         "The page already answers this question in two places: `colourFor` refuses colour without a TTY, and `run()` in `commands/home.js` prints and returns rather than calling `menu()`. The live loop hangs off the same fork and must not add a third opinion.",
         "Add the assertion to `tests/mc/front-door.test.js` beside the ones already there: the output of a piped `mc` contains no `\\x1b`, and the process exits without waiting. That test is cheap and it is the one that would catch a live surface leaking into a script, a subprocess or a session reading the page."
+      ],
+      "comments": [
+        "**Nothing had to be built — the fork was already one fork, and now it is asserted.** `interactive()` (`src/mc/prompt.js:28`) is `process.stdin.isTTY && process.stdout.isTTY`, and `run()` returns on it *before* `readerFor` is ever called (`src/mc/commands/home.js:90`), so `liveReader` cannot be constructed without a terminal. `colourFor` refuses colour on the same condition. This step is one test and no production change; the diff is `tests/mc/front-door.test.js` alone.",
+        "**What the test asserts, and why each part is there.** For `mc` and `mc --json` piped: `signal === null` and `status === 0` (a leaked loop would be killed by the helper's 60 s timeout rather than exit), stdout contains no `\\x1b` at all — not colour, not a cursor move, not an erase — and the run finished in under 30 s, which is the interval a leaked refresh would at minimum have waited for. Then *once*: every section heading (`RUNNER` … `WORK`) appears exactly one time in the whole of stdout, and `--json` is a single document, checked by re-serialising what parsed and comparing it to the output. Counting headings is what would catch a page reprinted under itself; the ESC check alone would not.",
+        "**The assertions were mutation-checked, not just watched to pass.** Writing a single `\\x1b[2K` and a second copy of the page from `run()` turns the new test red and leaves the other sixteen in the file green; reverting makes it pass again. Verified 2026-09-03 with `node --test --import ./tests/_isolate-home.mjs` over `front-door`, `page-live`, `page-frame` and `page-render` — 38 tests, all passing. Separately, the real binary in this worktree: `node src/mc-cli.js | cat` and `node src/mc-cli.js --json | cat` against the real `~/mc`, both exit 0, neither output holds an ESC byte, `RUNNER` appears once.",
+        "**The one seam where a third opinion could still appear.** `interactive()` reads the *process* streams while `colourFor` and `columnsFor` read the stream handed to `run()`. From the CLI they are the same object — `runModule` (`src/mc-cli.js:139`) calls `module.run(argv)` with no deps — so nothing reachable today can disagree. But a caller that hands `run()` a non-TTY stdout while the process's own stdout is a terminal would print a plain page and then go live on it. If a future surface ever calls `run()` with deps, that is the line to fix, and the fix is to have `interactive` take the same stream.",
+        "**A number step 4 will want.** Piped against the real `~/mc` on 2026-09-03 the whole of `mc` took 1.7 s and `mc --json` 1.0 s wall-clock, warm. That is faster than the 2.4–6.6 s recorded on 2026-09-02 in step 1's comments, and the difference is the plans cache: it is keyed by the `origin/main` sha, so the number depends entirely on whether the runner has landed a pull request since the last read. Both numbers are real; `docs/technical/mc-ui.md` should say the range and why it moves rather than pick one."
       ],
       "pr": null,
       "blocked_by": null
