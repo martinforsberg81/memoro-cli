@@ -26,15 +26,7 @@ THE PAGE
   mc status <name>                 One project, whole
   mc work <name>                   Open that workarea
 
-MAINTENANCE
-  mc doctor [--repair] [--json]    Diagnose or safely repair session-home state
-  mc dev list [--json]             Every development server on this machine:
-                                    which session owns it, whether it is
-                                    healthy, and where it is listening
-  mc dev status|logs|stop|restart <selector>
-                                    One of them — read it, tail it, stop it,
-                                    or start it again. mc dev with no verb
-                                    lists all nine and what each one takes
+IN FULL
   mc status <name>                 One project: its PLAN.md frontmatter and
                                     step, the decisions that belong to it,
                                     its last three runner steps and the open
@@ -206,55 +198,32 @@ MAINTENANCE
                                     overlay and the model default
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
-  mc migrate [--dry-run] [--stop-legacy-runtimes]
-                                    Move pre-V1 sessions into session homes, once
-                                    and explicitly; no other command migrates
-  mc migrate --session <name>       Move one session and leave the rest alone
+  mc vault <verb>                  The Memoro token vault: setup, unlock,
+                                    lock, status, set, get, list, rm, rotate,
+                                    bind, bindings, import, scan, audit,
+                                    adopt, hydrate, devices, recovery,
+                                    recover, migrate. mc vault with no verb
+                                    prints them with what each one takes. The
+                                    one capability verb that is not a door
+                                    into the session manager, and the one
+                                    this cut keeps
 
-SESSIONS
-
-  Local sessions are authoritative on this machine and are read without
-  probing sockets or the network. Cloud sessions are authoritative in Memoro
-  Cloud and are a separate source. They are not synchronized copies.
-
-  There is no verb that lists them. mc is the page; a second list beside the
+WHAT IS NOT HERE
+  There is no verb that lists work. mc is the page; a second list beside the
   first one is what this replaced.
 
-EXECUTION
-  Codex and Claude use one certified execution path. A live runtime is attached
-  without starting another process. An inactive runtime resumes only from its
-  exact recorded conversation evidence. Missing or conflicting evidence fails
-  closed; --replace is required to create a replacement conversation.
-
-  A session may use several repositories, worktrees, checkouts, and ordinary
-  directories during its lifetime. These paths are workspace associations,
-  never the session identity or an implicit cleanup authority.
-
-SETUP AND CAPABILITIES
-  mc setup [--json]                Verify local setup
-  mc install-shell                 Install shell directory-change support
-  mc auth status [--json]          Check Memoro and coding-tool readiness
-  mc connections                   Manage connected services
-  mc github status [--json]        Check GitHub App capability for this repo
-  mc github pr list|view|checks    Read pull requests through the GitHub App
-  mc github pr create|update       Write through the same typed capability
-  mc setup profile                 Write your Coding Profile in $EDITOR — a
-                                    letter to your tools about how you work
-  mc coding-profile read|diff|write|edit
-                                    The same profile, for a machine to handle
-  mc doctor                        Diagnose local mc state
-
-IDENTITY
-  A session has one opaque mc-id and one owner: this machine or Memoro Cloud.
-  Its name, workspace, tool conversation, process, PTY, and runtime generation
-  may change without changing that identity.
+  The session manager is not here either. A registry, a broker, a PTY host,
+  managed providers and cloud runtimes were the product before this one, and
+  the fourteen verbs that were their doors — setup, install-shell, auth,
+  tool-auth, connections, github, coding-profile, dev, deps, cloud-session,
+  cloud-runtime, security, doctor, migrate, and the session verbs before them
+  — went on 2026-09-03. A work area is a directory, the worktrees it spans and
+  the conversations started in it, and nothing else about it is mc's to know.
 
 REQUIREMENTS
-  - Run from any directory you want to associate with the session. mc does not
-    require a Git repository; a repository is one thing a workspace may be.
   - Plain mc prints the page and, at a terminal, opens what you pick.
   - Install and authenticate the selected coding tool.
-  - Sign in to Memoro only for cloud listing and connected capabilities.
+  - Sign in to Memoro for mc vault.
 
 HELP
   mc <command> --help              Show command-specific usage
