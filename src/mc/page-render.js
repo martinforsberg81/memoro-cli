@@ -548,13 +548,6 @@ export function renderPageLines(data, {
   lines.push('');
 
   const sessions = data.sessions || { desks: {}, others: [] };
-  runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
-  lines.push('');
-  // The two desks sit between the machine and the work: one helper, one
-  // brief, each a heading with its own state on the line.
-  deskLine(lines, c, wide, 'HELPER', sessions.desks?.helper, 'mc helper');
-  deskLine(lines, c, wide, 'BRIEF', sessions.desks?.brief, 'mc brief');
-  lines.push('');
   queueLines(lines, c, wide, data.queue);
   lines.push('');
   intakeLines(lines, c, wide, data.intake);
@@ -562,6 +555,19 @@ export function renderPageLines(data, {
   programmesLines(lines, c, wide, data.programmes);
   lines.push('');
   workLines(lines, c, wide, sessions, data.programmes?.unplanned);
+  lines.push('');
+  // The machine last, nearest the prompt. RUNNER and the two desks are the
+  // rows that change while the page is left open — a step's minutes, a
+  // session's age — and the live loop rewrites only rows still on the
+  // screen (page-frame.js). At the top, under a hundred rows of projects,
+  // they had scrolled into history before the prompt was printed and never
+  // changed again (Martin, 2026-09-03: "Tid för runner ligger kvar"). The
+  // listing above is the overview and stays whole; what moves sits where
+  // the eye already is.
+  runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
+  lines.push('');
+  deskLine(lines, c, wide, 'HELPER', sessions.desks?.helper, 'mc helper');
+  deskLine(lines, c, wide, 'BRIEF', sessions.desks?.brief, 'mc brief');
 
   const cache = data.caches?.fresh
     ? 'fresh — fetched and asked GitHub'

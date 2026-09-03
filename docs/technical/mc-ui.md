@@ -40,16 +40,14 @@ still accepted on the page and does nothing: offline is what the page does.
 
 ## The five sections
 
-In this order, because that is the order the questions come in:
+In this order — the listing first and whole, the machine last and nearest the
+prompt. RUNNER, HELPER and BRIEF are the rows that change while the page is
+left open (a step's minutes, a session's age), and the live loop rewrites only
+rows still on the screen (`page-frame.js`); at the top, under a hundred rows
+of projects, they had scrolled into history before the prompt was printed and
+never moved (2026-09-03). The overview stays complete — every project is
+listed — and what moves sits where the eye already is:
 
-- **RUNNER** — the runner's steps in flight, one line per lane (kind, tool,
-  model, elapsed against budget, pid), a pending `~/mc/runner/STOP`, the lane
-  files whose process is gone, and one line of the day behind it: steps,
-  merged, open, failed, timed out, and an estimated **list-price** cost. The
-  machine, and nothing else.
-- **HELPER** and **BRIEF** — one row each, drawn open or not. They are
-  singletons, so *"is the helper running?"* is a question an empty row answers
-  as well as a full one.
 - **QUEUE** — how deep, how much of it is runnable, the next few by name and
   kind, and the skips counted by reason. Every reason comes from the plan: a
   session somebody has open in the workarea is not one of them, because the
@@ -77,6 +75,14 @@ In this order, because that is the order the questions come in:
   that section answer two questions; a folder with nothing to explain it is
   work in the sense this heading means, and is often the same folder a session
   is open in.
+- **RUNNER** — the runner's steps in flight, one line per lane (kind, tool,
+  model, elapsed against budget, pid), a pending `~/mc/runner/STOP`, the lane
+  files whose process is gone, and one line of the day behind it: steps,
+  merged, open, failed, timed out, and an estimated **list-price** cost. The
+  machine, and nothing else.
+- **HELPER** and **BRIEF** — one row each, drawn open or not. They are
+  singletons, so *"is the helper running?"* is a question an empty row answers
+  as well as a full one.
 
 Two rules the sections keep:
 
