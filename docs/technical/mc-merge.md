@@ -199,6 +199,30 @@ It is asked for, never scheduled. Measured 2026-08-31 on memoro-cli at `8a34a0d`
 that on the way past and report it as `standing_red`, which is how it came to be
 believed and never checked.
 
+*Declared*, since 2026-09-02, and it was not before. `--full` read the suite off
+`package.json` — `npm test`, verbatim — on the argument that mc must not keep a
+second definition of somebody else's suite. The argument holds; the assumption
+under it did not. memoro's `npm test` is `node scripts/testing/ci.mjs`, a
+diff-selector, and a `--full` round has no pull request: it checked out
+`origin/main` detached and diffed it against itself. 0 changed paths, 6 selected
+files, reported as the whole suite. Measured at `58db0f5`, the same tree gives 6
+files from `npm test` and 2,021 from `npm run test:full`.
+
+So the gate table carries `suite` and `suite_why` beside `select`, through the
+same three layers, and one rule closes the guess: **a declaration with `select`
+and no `suite` may not answer a `--full`.** It stops, naming both fields — a
+repository that declared a selector has already said that its `npm test`
+narrows, so there is nothing honest left to fall back to. A repository with no
+`select` keeps `npm test` and needs no declaration. Measured after the change:
+`mc test memoro --full` is 17,982 tests in 288.3 s, six failures, eight red
+names; `mc test memoro-cli --full` is the same 2,440 tests and the same 47 red
+names it was before, byte for byte.
+
+A whole-suite round records which command produced it — `full_suite` in `--json`
+and on the `--full` clause of the verdict — because "it was full" and "this is
+what full means here" stopped being the same claim, and the round that ran six
+files said `full: true` while it did it.
+
 **And the commands the same selection named.** memoro's selector reports a
 `commands` array beside `files` — `css:lint`, `css:tokens`, `i18n:contract` and
 their kind — and until 2026-08-31 the round read the files and dropped them, so

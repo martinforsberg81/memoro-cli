@@ -48,6 +48,20 @@
  * a day while the operator table beside it carried the measurement). The rule
  * is unchanged; only the address is.
  *
+ * The same rule reaches one field further than preparation. `--full` asks for
+ * a repository's *whole* suite, and mc used to read that off `package.json`:
+ * `npm test`, verbatim, on the argument that mc must not keep a second
+ * definition of somebody else's suite. The argument holds; the assumption
+ * under it did not. memoro's `npm test` is `node scripts/testing/ci.mjs`, a
+ * diff-selector — and with no pull request to diff against, `--full` measured
+ * `origin/main` against `origin/main` and ran 6 files of 2,018 while calling
+ * it the whole suite. So `suite` is declared here beside `select`, and the
+ * narrow rule that makes the old guess impossible is in `repo-gate.js`: a
+ * declaration carrying `select` and no `suite` may not answer a `--full`. A
+ * repository that declares a selector has said, by declaring one, that its
+ * `npm test` is not the whole thing. One with no `select` is unaffected and
+ * keeps `npm test`.
+ *
  * And a `prepare_why` may never carry a provenance that does not exist. This
  * rule is written rather than tested because its content cannot be checked by
  * code: a string saying "declared by the PM" looks identical whether or not
@@ -107,6 +121,14 @@ export const SHIPPED = Object.freeze({
     select_why: 'measured 2026-08-30 on this repository\'s own gate work: 17 of 257 test files, '
       + '241 tests in 25 s, against 2,353 tests in ~100 s for the whole suite — twice, once a side. '
       + 'It fails closed to the full suite whenever a changed path is not source it can trace',
+    // Its `npm test` really is everything, so `suite` says so rather than
+    // exempting this repository from the rule. The declaration is the point:
+    // "npm test happens to be the whole suite here" and "mc assumes npm test
+    // is always the whole suite" produce the same command and are not the
+    // same claim, and only the first one is checkable.
+    suite: 'npm test',
+    suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs "tests/**/*.test.js"` '
+      + '— a glob over the whole tree, not a selector; read off package.json 2026-09-02',
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
     // The flag its own `test` script gives node, stated rather than parsed.
@@ -134,6 +156,17 @@ export const SHIPPED = Object.freeze({
     select_why: 'measured 2026-08-30: a documentation diff selected 332 files and 6 of them were '
       + 'the diff\'s; 326 were the always-on msr-contract profile. With that profile bound to its '
       + 'own surface and pin-following closing the blindness it covered, the same diff selects 6',
+    // The whole suite, which `npm test` here is not: `ci.mjs` selects by diff,
+    // so a `--full` round with no pull request diffed origin/main against
+    // itself and ran the 6 mandatory-core files as if they were everything.
+    // `test:full` is `node scripts/testing/run.mjs --profile full`, which
+    // takes the registry rather than a diff.
+    suite: 'npm run test:full',
+    suite_why: 'measured 2026-09-02 on an Apple M1 (8 cores, 8 GB, machine not idle): '
+      + '`npm run test:full` is 2,018 files and 17,928 tests in 337.42 s wall (~808 s of CPU across '
+      + '7 lanes), with six tests red on main. The same day `node scripts/testing/ci.mjs --list '
+      + '--base-ref HEAD` reported 0 changed paths and 6 selected files — which is what --full ran '
+      + 'while `npm test` was assumed to be the whole suite',
     // No extra gates. `msr contract` was one until 2026-08-30, and it was the
     // same 326 files the suite already ran — `test:msr:contract` globs exactly
     // the `msr-contract` profile, so the round paid for that suite four times
@@ -374,6 +407,16 @@ function normalise(entry, env) {
     // report main's own red as this change's doing.
     select: entry.select ?? null,
     select_why: entry.select_why ?? null,
+    // What this repository calls its *whole* suite, for `--full`. Not read off
+    // `package.json` any more: `npm test` is a selector in at least one of the
+    // two repositories mc knows, and a selector run with nothing to select
+    // against reports a handful of files as the whole tree.
+    //
+    // `null` is only safe where nothing else claims to narrow. `repo-gate.js`
+    // refuses a `--full` for a declaration that has `select` and not this;
+    // a repository with neither keeps `npm test`, which is what it always was.
+    suite: entry.suite ?? null,
+    suite_why: entry.suite_why ?? null,
     // What a branch runs when it is freshened against a new main —
     // `repo-freshen.js` has described this path since it was written, and the
     // field it names has been `undefined` for every repository, so the path
