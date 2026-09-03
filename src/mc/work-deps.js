@@ -47,6 +47,19 @@
  * branch which adds a dependency does not get it until it lands; the session
  * on that branch installs it itself, and nothing here stops it.
  *
+ * ## The gate's candidate resolves the same directory
+ *
+ * The merge gate builds its throwaway worktree under the work root too
+ * (`paths.js`, `WORK_GATE` beside `WORK_DEPS`), so the tree is two parents
+ * above the candidate and there is one copy of it rather than one per place
+ * that runs the tests. The round calls this on the candidate itself and names
+ * the repository with `repoName`: a pull request that changes the lockfile is
+ * measured against a tree installed from *its* lockfile, which is the one
+ * reading of "what this change does to the suite" that is not a lie. The
+ * shared tree then stands at that pull request's lockfile until the next
+ * caller moves it — one directory, one lockfile, and the price of that is
+ * paid here rather than hidden.
+ *
  * ## One repository's tree, named rather than inferred
  *
  * One directory holds one manifest, so it can serve one repository, and the
@@ -92,14 +105,22 @@ export function workDepsManifest(text) {
  * Make sure the tree above the workareas matches the repository, and say what
  * it took.
  *
+ * `repo` is where the two files are read from; `repoName` is which repository
+ * they belong to, for the caller that reads them from somewhere that is not
+ * the checkout itself. The merge gate is that caller: its candidate is a
+ * worktree called `candidate`, and the tree it resolves through is the same
+ * one directory the workareas resolve through, one level under the work root.
+ *
  * Never throws and never fatal to its caller: a workarea whose tests cannot
  * resolve a package is worse off than one whose tests can, and both are
- * better off than no workarea at all. `state` is one of `not-shared`,
- * `no-manifest`, `no-lockfile`, `no-dependencies`, `current`, `installed`,
- * `failed`.
+ * better off than no workarea at all. The gate leans on the same property
+ * from the other end — it measures whether the candidate resolves anything
+ * (`dependency-tree.js`) rather than trusting what this returned. `state` is
+ * one of `not-shared`, `no-manifest`, `no-lockfile`, `no-dependencies`,
+ * `current`, `installed`, `failed`.
  */
-export function ensureWorkDeps({ repo, env = process.env, install = npmCi } = {}) {
-  const name = String(repo || '').replace(/\/+$/u, '').split('/').pop() || '';
+export function ensureWorkDeps({ repo, repoName = null, env = process.env, install = npmCi } = {}) {
+  const name = String(repoName || repo || '').replace(/\/+$/u, '').split('/').pop() || '';
   const path = workDepsPath(env);
   if (!SHARED_TREE_REPOS.includes(name)) {
     return { ok: true, state: 'not-shared', path, why: `${name || 'this repository'} keeps its own dependencies` };

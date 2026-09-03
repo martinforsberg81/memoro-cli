@@ -73,8 +73,13 @@ function fixture({
   const root = mkdtempSync(join(tmpdir(), 'mc-repo-gate-'));
   const repoPath = join(root, 'repo');
   const mcHome = join(root, 'home');
+  // The work root, because that is where the candidate is built: under
+  // `<work root>/gate/`, so the one dependency tree mc keeps at
+  // `<work root>/node_modules` is above it and node's parent walk finds it.
+  const workRoot = join(root, 'work');
   mkdirSync(repoPath, { recursive: true });
   mkdirSync(mcHome, { recursive: true, mode: 0o700 });
+  mkdirSync(workRoot, { recursive: true });
   // The gate runs whatever the repository calls its full suite.
   writeJson(join(repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' } });
 
@@ -130,6 +135,7 @@ function fixture({
     root,
     repoPath,
     mcHome,
+    workRoot,
     calls,
     git,
     gh,
@@ -143,6 +149,7 @@ function fixture({
       pr: 400,
       holder: AREA,
       root: mcHome,
+      env: { ...process.env, MC_WORK_ROOT: workRoot },
       git,
       gh,
       suite,
@@ -580,49 +587,93 @@ describe('the pull request\'s own tests are run, wherever they lie', () => {
 });
 
 /**
- * A suite in a worktree with no dependency tree does not fail, it shrinks
- * (D-0152): 2162 tests and a tidy number where 206 never ran. The gate checks
- * the tree after preparation and before the run.
+ * A suite that cannot resolve its dependencies does not fail, it shrinks
+ * (D-0152): 2162 tests and a tidy number where 206 never ran. The gate asks
+ * after preparation and before the run — and asks it the way node does,
+ * walking the parents, because the tree mc keeps is above the candidate and
+ * not in it.
  */
 describe('the dependency tree is checked before a suite is believed', () => {
   const declared = (fx, prepare) => writeJson(join(fx.mcHome, 'repo-gates.json'), {
     repo: { prepare, prepare_why: 'a test', extra_gates: [], merge_log: null },
   });
+  const needsLeftPad = (fx) => writeJson(join(fx.repoPath, 'package.json'), {
+    name: 'repo', scripts: { test: 'node --test tests/' }, dependencies: { left_pad: '1.0.0' },
+  });
 
-  it('stops when a prepared worktree still has no node_modules and the manifest declares dependencies', async () => {
+  it('stops when a prepared candidate still cannot resolve what the manifest declares', async () => {
     const fx = fixture();
     try {
-      writeJson(join(fx.repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' }, dependencies: { left_pad: '1.0.0' } });
+      needsLeftPad(fx);
       declared(fx, 'true');
       const result = await fx.run();
       assert.equal(result.stopped_at, 'dependencies', JSON.stringify(result));
-      assert.match(result.reason, /candidate declares 1 dependencies and has no node_modules after preparation/u);
+      assert.match(result.reason, /candidate declares 1 dependencies and cannot resolve 1 of them/u);
+      assert.match(result.reason, /left_pad/u, 'a stop that does not name the package is one nobody can act on');
       assert.match(result.reason, /D-0152/u);
       assert.deepEqual(fx.ran('suite'), [], 'no suite was run on a tree that would have shrunk');
     } finally { fx.cleanup(); }
   });
 
-  it('runs when the tree is there', async () => {
+  it('an empty node_modules is not a tree', async () => {
+    // The half-installed case. This passed until 2026-09-03, because the
+    // question was whether the directory existed rather than whether the
+    // package was in it.
     const fx = fixture();
     try {
-      writeJson(join(fx.repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' }, dependencies: { left_pad: '1.0.0' } });
-      // The prepare step is what puts the tree in place.
+      needsLeftPad(fx);
       declared(fx, 'mkdir -p node_modules');
+      const result = await fx.run();
+      assert.equal(result.stopped_at, 'dependencies', JSON.stringify(result));
+      assert.deepEqual(fx.ran('suite'), []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('runs when the prepare step installs it', async () => {
+    const fx = fixture();
+    try {
+      needsLeftPad(fx);
+      declared(fx, 'mkdir -p node_modules/left_pad');
       const result = await fx.run();
       assert.equal(result.stopped_at, null, JSON.stringify(result));
       assert.equal(fx.ran('suite').length, 1);
     } finally { fx.cleanup(); }
   });
 
-  it('runs, and says so, when the declaration vouches the suite needs no tree', async () => {
+  /**
+   * The point of the whole project, at the level the round meets it: the
+   * candidate has no `node_modules` of its own and nothing is put inside it,
+   * and the suite runs anyway — because `<work root>/node_modules` is two
+   * directories above `<work root>/gate/<repo>/candidate` and node walks up.
+   * A declaration with nothing to prepare is then true rather than vouched.
+   */
+  it('a tree above the candidate is the tree, and the round needs no preparation', async () => {
     const fx = fixture();
     try {
-      writeJson(join(fx.repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' }, dependencies: { left_pad: '1.0.0' } });
+      needsLeftPad(fx);
       declared(fx, null);
+      mkdirSync(join(fx.workRoot, 'node_modules', 'left_pad'), { recursive: true });
       const progress = [];
       const result = await fx.run({ onProgress: (line) => progress.push(line) });
       assert.equal(result.stopped_at, null, JSON.stringify(result));
-      assert.ok(progress.some((line) => /1 dependencies declared and no node_modules — the declaration vouches/u.test(line)), progress.join('\n'));
+      assert.equal(fx.ran('suite').length, 1);
+      // And the old reassurance is gone with the branch that printed it.
+      assert.ok(
+        !progress.some((line) => /the declaration vouches/u.test(line)),
+        progress.join('\n'),
+      );
+    } finally { fx.cleanup(); }
+  });
+
+  it('builds the candidate under the work root, where that tree is above it', async () => {
+    const fx = fixture();
+    try {
+      await fx.run();
+      const added = fx.ran('git').find((call) => call.args[0] === 'worktree' && call.args[1] === 'add');
+      const dir = added.args[added.args.length - 2];
+      assert.equal(dir.startsWith(join(fx.workRoot, 'gate')), true, dir);
+      assert.equal(dir.endsWith('candidate'), true, dir);
+      assert.equal(dir.startsWith(fx.repoPath), false, 'the throwaway worktree must never be inside the repository');
     } finally { fx.cleanup(); }
   });
 });

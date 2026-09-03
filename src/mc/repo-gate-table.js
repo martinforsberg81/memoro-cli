@@ -17,18 +17,24 @@
  * repository, and it was false: the entry below declared `prepare: null` beside
  * three dependencies, one of them native, on the strength of gate rounds that
  * had every one of them run the same five-files-short suite. So the shape this
- * table has actually got wrong is a null next to declared dependencies, and
- * `repo-gate-table.test.js` now reads the shipped entry against `package.json`
- * rather than against a sentence about it.
+ * table has actually got wrong is a null next to declared dependencies that
+ * nothing installs, and `repo-gate-table.test.js` now reads the shipped entry
+ * against `package.json` rather than against a sentence about it.
  *
  * So the rule is: what a repository needs is written down, or the round stops.
  * Never guessed, never attempted in hope. A guess that works nine times and
  * quietly produces a green from an incomplete suite on the tenth is worse than
  * a stop, because the stop is visible and the green is not.
  *
- * The one thing that can be *proved* rather than declared is that no
- * preparation is needed: a repository with nothing to install has nothing that
- * could be missing. That carve-out is narrow on purpose.
+ * Two things can be *proved* rather than declared, and both carve-outs are
+ * narrow on purpose. A repository with nothing to install has nothing that
+ * could be missing. And a repository whose tree mc itself keeps above the
+ * candidate — `work-deps.js`, one `node_modules` at the work root that the
+ * gate's worktree and every workarea resolve through — has nothing for the
+ * *round* to install: `prepare` says what the round must run, not whether the
+ * suite has dependencies. The second one is only safe because it is not taken
+ * on trust: `repo-gate.js` asks whether every declared name actually resolves
+ * from the candidate, and stops when one does not.
  *
  * There are therefore three answers a declaration can give about preparation,
  * not two. `null` is a claim that none is needed and carries its evidence.
@@ -97,21 +103,30 @@ export const UNKNOWN = 'unknown';
  */
 export const SHIPPED = Object.freeze({
   'memoro-cli': Object.freeze({
-    // Not source only, and never was. `src/runtime/session-host/` imports
-    // `@xterm/addon-serialize`, `@xterm/headless` and `node-pty`, so five test
-    // files need a dependency tree to run at all — and the old `prepare: null`
-    // did not make the gate stop, it made the gate *say* the suite runs
-    // without one, once per round, while five files went unrun and uncounted.
-    // `npm ci` is the true answer today and the expensive one; it is here
-    // because it is true, not because it is the answer this repository wants.
-    // The cheaper one is a tree the candidate can already resolve, and that is
-    // a separate question about where a tree lives, not about this field.
-    prepare: 'npm ci',
-    prepare_why: 'measured 2026-09-02 on a clean origin/main worktree: without a dependency tree '
-      + 'owned-resource-cleanup, session-runtime-v1, runtime-host, socket-e2e and terminal-screen '
-      + 'fail with ERR_MODULE_NOT_FOUND; npm ci there is exit 0 in 17 s and the same five files '
-      + 'are 27 pass, 1 skip, 0 fail. Re-run it: git worktree add --detach <dir> origin/main, '
-      + 'run those five, npm ci, run them again',
+    // Nothing for the *round* to run, because the tree is the environment's.
+    // `src/runtime/session-host/` imports `@xterm/addon-serialize`,
+    // `@xterm/headless` and `node-pty`, and five test files cannot run without
+    // them — but the candidate now stands under the work root
+    // (`paths.js`: `WORK_GATE` beside `WORK_DEPS`), so node's own parent walk
+    // finds `~/mc/node_modules` two directories above it, the same tree every
+    // workarea resolves. The `npm ci` this entry carried from 2026-09-02 was
+    // true and was a second copy of a tree the candidate could already see.
+    //
+    // This null is not the old one. That one was a sentence — "verified across
+    // every gate round" — and it was false for months while five files went
+    // unrun and uncounted, because nothing measured it. `repo-gate.js` now
+    // asks `dependencyTree` whether every declared name resolves from the
+    // candidate, walking the parents as node does, and stops the round when
+    // one does not. The field says what the round must run; the measurement
+    // says whether the suite can run at all.
+    prepare: null,
+    prepare_why: 'nothing to install: mc keeps one tree at <work root>/node_modules (work-deps.js) and '
+      + 'builds the candidate at <work root>/gate/<repo>/candidate, so the three declared packages '
+      + 'resolve by node\'s parent walk with no node_modules inside the checkout. Measured 2026-09-03 '
+      + 'on a gate round for #566: the five session-host files that need them ran green in a candidate '
+      + 'with no node_modules of its own. Re-run it: mc test memoro-cli <pr> on a change reaching '
+      + 'tests/runtime/session-host/ — and the round checks the resolution itself, so a broken tree '
+      + 'stops it rather than shrinking the suite',
     // This repository's own answer to "what does this change reach": the import
     // closure of each test file, plus the source files a test reads as *text*
     // — which is a real edge here, not a hypothetical one. `merge-doc.test.js`

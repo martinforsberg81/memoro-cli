@@ -51,10 +51,15 @@ const run = promisify(execFile);
  * They do not depend on one another, so they all go at the same time.
  */
 /**
- * `'missing'` when the manifest declares dependencies and there is no
- * `node_modules`; `'present'` when there is one; `null` for a directory that
- * is not a Node project or declares nothing — where the question does not
- * arise and the page should say nothing.
+ * `'missing'` when the manifest declares dependencies and some of them resolve
+ * from nowhere — this directory or any above it, the way node looks;
+ * `'present'` when they all do; `null` for a directory that is not a Node
+ * project or declares nothing, where the question does not arise and the page
+ * should say nothing.
+ *
+ * A workarea under `~/mc` therefore reads `present` with no `node_modules` of
+ * its own, which is the point of the tree living one directory up: the page
+ * says what the tests will find, not what `ls` finds.
  */
 function dependencyState(path) {
   const tree = dependencyTree(path);
