@@ -117,7 +117,7 @@
         "**`mc repo nightly status` says whether the process is running and where it writes — and nothing about what it found.** That is deliberate: step 3's reading belongs on `mc repo status`'s per-repository section, where a person already looks, not behind a verb somebody has to know to type. The renderer for it is `renderNightlyLines` in `repo-render.js`, beside the watcher's.",
         "**memoro's `main` at `fc19465` is 8 red over 5 files**, and the two runs an interval apart found the identical set — checked name by name in `gate-rounds.jsonl`, which stores `red_names` on every round: `data-bus event names come from a single source file`; three under `S3.1 canonical mutation inventory`; `Signals runtime, routes, commands, and surfaces stay retired`; two under `mc context`; and `append enforces first/next/gap/parent/anchor and exact duplicate semantics`. memoro-cli's `main` at `0ae0bd4` is 47 red of 2,445 tests, also identical across its two runs. That is the first real evidence that step 3's \"since when\" has something stable to date — and the round log already carries the names, capped, if step 3 wants a second source for them."
       ],
-      "pr": null,
+      "pr": 550,
       "blocked_by": null
     },
     {
