@@ -119,6 +119,17 @@ terminal. It opens on a **programme**, not on one project — how many projects
 come out of it, under what names, and by what route they reach `main` is worked
 out in the session, not decided by the command that opens it.
 
+**A proposal that becomes a project is deleted when the project is created.**
+Most projects start as a file in `~/mc/proposals/` — the helper's reading of a
+digest, or a session's of the code — decided with Martin at the brief. The
+session that writes the `PLAN.json` deletes the proposals it consumed, in the
+same move, and names them in the pull request: they are not in this repository,
+so the PR body is the only place that record can live. Whatever a proposal held
+that the plan needs — the measurement, the file and line, the reason the fix is
+that one — has to be **in the plan first**, because afterwards there is no other
+copy. `~/mc/proposals/` holds what nobody has decided yet and only that; a file
+left there after its project exists is a decision that gets taken twice.
+
 **That session has no workarea and makes none.** It lives at
 `~/mc/plan/<programme>/`, with a checkout of each repository on branch
 `plan/<programme>` — mc's own directory, which `mc run` cannot see. What a
