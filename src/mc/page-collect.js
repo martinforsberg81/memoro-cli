@@ -41,6 +41,7 @@ import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
+import { staleBlockers } from './stale-blockers.js';
 import {
   RUNNER_MODEL, areasWithCheckout, kindFor, nowBlock, pidAlive,
 } from './status-collect.js';
@@ -48,6 +49,8 @@ import {
 /** How many of each list the page names rather than counts. */
 export const QUEUE_NAMED = 6;
 export const DECISIONS_NAMED = 3;
+/** How many stale blockers the line names before it only counts them. */
+export const STALE_NAMED = 3;
 
 /* ------------------------------------------------------------------ RUNNER */
 
@@ -188,8 +191,16 @@ export function sessionsSection({
  * skip the runner will not make is worse than one that says nothing, because
  * it is read as the runner's own answer. What stops a project is what the plan
  * says, and the plan is the only thing counted here.
+ *
+ * `stale` is the counterweight to `skipped`, and it is the reason this
+ * section reads every plan rather than only the queued ones: a step blocked
+ * on a project that has finished is not in the queue at all, and the whole
+ * fault is that nothing was ever going to put it there
+ * (stale-blockers.js). It is drawn from the same `origin/main` plans the
+ * runner obeys, and it names rather than only counts, because a count of two
+ * does not say which two a person has to go and read.
  */
-export function queueSection({ queue = [], plans = [], named = QUEUE_NAMED } = {}) {
+export function queueSection({ queue = [], plans = [], named = QUEUE_NAMED, staleNamed = STALE_NAMED } = {}) {
   const items = queue.map((name) => {
     const kind = kindFor(name, { plans });
     return { name, kind, runnable: !kind.startsWith('skip') };
@@ -208,7 +219,14 @@ export function queueSection({ queue = [], plans = [], named = QUEUE_NAMED } = {
     next: runnable.slice(0, named),
     more: Math.max(0, runnable.length - named),
     skipped: { count: skipped.length, reasons },
+    stale: staleSection(plans, staleNamed),
   };
+}
+
+/** The stale blockers as the line draws them: how many, and the first few. */
+function staleSection(plans, named) {
+  const items = staleBlockers(plans);
+  return { count: items.length, items: items.slice(0, named), more: Math.max(0, items.length - named) };
 }
 
 /* ------------------------------------------------------------------ INTAKE */

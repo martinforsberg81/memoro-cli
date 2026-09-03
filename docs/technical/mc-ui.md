@@ -53,7 +53,13 @@ In this order, because that is the order the questions come in:
 - **QUEUE** — how deep, how much of it is runnable, the next few by name and
   kind, and the skips counted by reason. Every reason comes from the plan: a
   session somebody has open in the workarea is not one of them, because the
-  runner does not decline for it either.
+  runner does not decline for it either. Under those, in yellow when it is
+  there at all: **blocker finished** — a step that is `blocked` on a project
+  whose plan on `origin/main` is `done` or gone, which is a plan waiting for
+  nothing (`stale-blockers.js`). Only a `project` blocker; a `decision` waits
+  on Martin and there is no artefact to read it against. It reports and
+  nothing more — flipping the step back to `ready` is a plan edit somebody
+  makes.
 - **INTAKE** — the newest `~/mc/intake/errors-<date>.md`, its age, what is
   new in it, and how many proposals nobody has queued or dropped.
 - **PROGRAMMES** — one heading per programme, with the room for its planning
@@ -271,6 +277,7 @@ Everything else is structure, and structure is quiet:
 | QUEUE | the next name, the first of them | white, bold white |
 | QUEUE | the number, `… N more runnable` | grey |
 | QUEUE | why a project was skipped | dim grey |
+| QUEUE | `blocker finished N` and the steps under it | bold yellow, yellow |
 | INTAKE | the digest's date, under 24 h old, older | green, yellow |
 | INTAKE | new errors, when > 0 | red |
 | INTAKE | proposals, when > 0 | yellow |

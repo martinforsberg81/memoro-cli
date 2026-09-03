@@ -2,46 +2,60 @@
   "schema": "mc-plan",
   "version": 1,
   "goal": [
-    "Martin, 2026-09-03: *\"Många steps tar lång tid, jag vill att vi ökar upp antalet parallella steps som kan göras från 2 till 4.\"* — and a verb to set it with: *\"t ex 'mc step' 'Välj antalet parallella steps.'\"*",
-    "There is no 2 to raise. The number of steps running at once is not a setting: `splitLanes` (`src/mc/run.js:1083-1091`) groups the queue by repository and returns one lane per repository, and `runLane` (`src/mc/run.js:1171-1205`) walks its lane's names in a plain `for` loop, one step at a time. Two repositories with ready plans is two lanes. The file's own opening says it on line 14: *\"one repository with ready plans is one lane.\"*",
-    "So reaching four means running several steps at once **inside** one repository, and three deliberate things stand in the way. `gate-lock.js` allows one gate round at a time on this machine and **refuses** rather than queues — `takeGateLock` returns `{ ok: false, running }` when another round holds it. `repo-lease.js` holds one gate round per repository, because two rounds merging against the same main each measured green against a main the other had already moved. And Martin himself, 2026-08-30, quoted in `gate-lock.js`: *\"En instans kan köra åt gången.\"*",
-    "This project measures before it moves any of that. Martin chose the order on 2026-09-03: measure first, build second — *\"Du får veta om 4 lanes hjälper innan spärren rörs.\"*",
-    "**And a second throughput fault, added by Martin on 2026-09-03: a blocked step does not unblock itself.** `blocked_by` names a decision or a project, and nothing in mc ever re-reads that name to ask whether the thing is still true. A step blocked on a project that has since finished stays `blocked` for ever, and the runner — which hands out `ready` steps and reads nothing else — never sees it. Measured the same day on `origin/main`: memoro holds **28 blocked plans against 4 ready**; memoro-cli holds 0 blocked against 2 ready. At least one of the 28 was already satisfied in substance — `email-window-layout` step 5 was blocked on `action-window`, which was done — and it took a human noticing, an edit, and a docs-only pull request (#11277 → `5a36b80`) to turn one step back to `ready`. Raising the lane count while plans silently self-park is filling a wider pipe from a tap somebody has closed."
+    "Martin, 2026-09-03: *\"Många steps tar lång tid, jag vill att vi ökar upp antalet parallella steps som kan göras från 2 till 4.\"* — and, the same day, when told the two lanes shared one round: *\"Varje lane måste naturligtvis köra separat.\"* And a verb to set the count with: *\"t ex 'mc step' 'Välj antalet parallella steps.'\"*",
+    "**Measured before anything moved** (`measurements.md`, 2026-09-03, 60 sessions): a step's time is the session's own turns and test reruns. Median 19 min, 76 turns; 5 598 Bash calls against 255 native tool calls, 2 803 of them `sed -n`/`grep -n` reads of a screen at a time; 11 test-class commands per session, one in four an exact repeat; 15 % of tool time in `sleep` loops polling a backgrounded suite. Landing a step is a median 0.9 min and the runner's own overhead is one second. And the lanes stood idle 43–56 % of the time — blocked plans, a schema migration the runner's checkout had not caught up with, dirty worktrees skipped 134 rounds in a row, and a round that ended only when both lanes had.",
+    "So the order is: fewer turns and one test run per step, each lane on its own clock, the gate lock waiting instead of refusing — and only then a lane count above one, measured against the numbers above. Raising the count first would have multiplied the same sessions.",
+    "There is no 2 to raise today. `splitLanes` (`src/mc/run.js`) returns one lane per repository and `runLane` walks its names one step at a time; two repositories with ready plans is two lanes. Reaching four means several steps at once **inside** one repository, and `gate-lock.js` — one gate round at a time on this machine, refusing rather than queueing (Martin, 2026-08-30: *\"En instans kan köra åt gången.\"*) — stands in the way of that."
   ],
   "contract": [
-    "**Step 1 measures and changes no behaviour.** It may add instrumentation and read logs. It may not change how many lanes run, and it may not touch `gate-lock.js` or `repo-lease.js`.",
-    "**Steps 2 and 3 do not start until Martin has read step 1's numbers.** They are `blocked` on that decision in this plan, not merely sequenced after it. If step 1 shows that lane count is not the bottleneck, the right outcome is that steps 2 and 3 are rewritten or dropped — not that they run anyway.",
-    "**The gate stays serial.** Whatever the lane count becomes, one gate round at a time on this machine is not up for negotiation in this project — the flakiness it absorbs is the 55 → 57 → 55 the red floor exists for. What may change is that a second round **waits** instead of being refused, so raising the lane count cannot throw away finished work.",
-    "**mc is symlinked into its own working tree.** `/opt/homebrew/bin/mc` resolves to `/Users/martinforsberg/memoro-cli/src/mc-cli.js`, so an edit here reaches every new `mc` process and every new headless session immediately. No step of this project edits `src/` while a runner round is live; check `~/mc/runner/runner.json` first.",
-    "**One step, one PR.** `mc` prints the page and `mc run --rounds 1` completes a round after each. A step that cannot keep both working stops and says so.",
-    "**Nothing merges to main without Martin.** No force-push, no rewritten history."
+    "**The gate stays serial.** Whatever the lane count becomes, one gate round at a time on this machine is not up for negotiation — the flakiness it absorbs is the 55 → 57 → 55 the red floor exists for. What may change is that a second round **waits** instead of being refused, so a wider lane count cannot throw away finished work.",
+    "**Step 4 does not start until step 2's numbers are read.** It is `blocked` on that decision in this plan, not merely sequenced after it. If step 2 shows the lane count is still not the bottleneck, the right outcome is that step 4 is rewritten or dropped — not that it runs anyway.",
+    "**mc is symlinked into its own working tree.** `/opt/homebrew/bin/mc` resolves to `/Users/martinforsberg/memoro-cli/src/mc-cli.js`. A change to how the runner or a session behaves lands through the gate and reaches the running runner by `mc run --update` (or STOP and start) — nobody edits `~/memoro-cli` by hand, and no step of this project edits `src/` in that checkout.",
+    "**Nothing changes what a step session may write.** The trespass check in `run.js` and the four fields a step owns (`status`, `pr`, `comments`, `met`) are not this project's to loosen.",
+    "**One step, one PR.** `mc` prints the page and `mc run --rounds 1` completes a round after each. A step that cannot keep both working stops and says so. No force-push, no rewritten history."
   ],
   "out_of_scope": [
-    "**Why an individual step takes 6–90 minutes.** That is what the session spends its turns on, and it is the larger prize — but it is a question about roles and prompts, not about the runner's concurrency, and it does not belong in the same project. Step 1 will produce evidence about it; the work itself is somebody else's.",
+    "**What a step session verifies beyond its `done_when`.** Step 1 tells the role to run the selection once and to leave screenshots and dev servers to a `done_when` that asks for them; rewriting individual plans' `done_when` is those plans' business.",
     "**Adding repositories.** More lanes by adding a third repository is not what was asked for and is not a runner change.",
-    "**`budget_minutes`.** Two of the last fifteen rounds died on their budget (exit 143, `no-json`, 5405 s and 5408 s). Whether the budget is right is a real question and not this one.",
-    "**Cloud or remote execution.** The lanes are inside the one local `mc run` process and stay there."
+    "**`budget_minutes`.** Two of fifteen rounds on 2026-09-02 died on their budget (exit 143, `no-json`). Whether the budget is right is a real question and not this one.",
+    "**Cloud or remote execution.** The lanes are inside the one local `mc run` process and stay there.",
+    "**The 18 plans parked on `plan-review`** (step 0's audit). That is Martin's reading queue; no mechanism here flips a `decision` blocker."
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "Every blocked step on origin/main in both repositories has been read, and each one either still has a live reason to be blocked or has been turned back to ready — with the count of each stated. Today that is 28 blocked against 4 ready in memoro.",
       "check": "A table in `docs/project/mc/step-parallelism/blocked-audit.md` naming every blocked step, what its `blocked_by` says, whether that thing is still true on main, and the disposition. The re-count after the sweep is run with the same script, checked in beside it."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A blocked step whose blocker has finished is surfaced without a person having to notice it — mc says so on its own.",
       "check": "With a plan blocked on a project whose plan is `done` on main, the surface named in step 1's design (a `mc status`/page line, or a runner.log line, whichever that step settles on) reports it; driven by a test with a real fixture pair rather than by inspection."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "It is written down, with measured numbers rather than reasoning, how a step's wall-clock time divides between the headless session, the gate round, and the git and GitHub work around them — for at least 20 rounds.",
-      "check": "A table in `docs/project/mc/step-parallelism/measurements.md`, derived from `~/mc/runner/log/runs.tsv` and the per-round JSON in `~/mc/runner/log/`, with the row count stated and the extraction script checked in beside it so the numbers can be reproduced."
+      "check": "`docs/project/mc/step-parallelism/measurements.md`, produced by `measure.py` beside it from `~/mc/runner/log/` and the session transcripts, with the row count stated. 60 sessions, 2026-09-01..03."
+    },
+    {
+      "met": true,
+      "criterion": "The number of gate-lock refusals under today's two lanes is counted, not estimated — the figure that says whether raising the lane count would throw work away.",
+      "check": "`measurements.md` § *The runner and the gate*: 9 refusals in `gate-rounds.jsonl` in total, 0 since 2026-09-02."
     },
     {
       "met": false,
-      "criterion": "The number of gate-lock refusals under today's two lanes is counted, not estimated — the figure that says whether raising the lane count would throw work away.",
-      "check": "A count of `takeGateLock` returning `{ ok: false }` over the measured window, from a log line added in step 1 if none exists today, reported in `measurements.md`."
+      "criterion": "A step session under the launch step 1 lands uses fewer turns and fewer test runs than the baseline: median turns and test-class commands per session, over at least 20 sessions after the change, against 76 turns and 11 test commands.",
+      "check": "`measure.py --since <landing day>` in `measurements.md` § *After*, with the session count stated. A drop of less than a quarter in either number is reported as such, not rounded up to a win."
+    },
+    {
+      "met": false,
+      "criterion": "Each repository's lane runs its own rounds: a step in one repository starts while the other repository's step is still in its session, and no chore of the shared round (helper, archive, close, tidy) was lost.",
+      "check": "`tests/mc/run.test.js` › *lanes run their own rounds*, and `runner.log` on a day with both lanes active showing `memoro-cli: round N done` lines interleaved with a memoro step in flight."
+    },
+    {
+      "met": false,
+      "criterion": "A round that finds the gate lock held waits for it and then takes it, rather than being told no and losing its round.",
+      "check": "A test drives two rounds against one lock without either losing work; `gate-rounds.jsonl` after the change carries no `another gate round is running` reason."
     },
     {
       "met": false,
@@ -73,7 +87,7 @@
   "steps": [
     {
       "title": "Read every blocked step, free the ones whose blocker is gone, and make mc say it next time",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/project/mc/step-parallelism/blocked-audit.md` accounts for every blocked step on origin/main in both repositories — blocker, whether it still holds, disposition — the ones whose blocker has finished are back to `ready` on main, and mc reports a stale blocker on its own rather than waiting to be noticed.",
       "instruction": [
         "**The fault, in Martin's words on 2026-09-03:** *\"vi måste förbättra hur ready sätts då planer kan stoppas utan avsikt\"*. A step is `blocked` with `blocked_by: { kind, name }` — `kind` is `decision` or `project` (`BLOCKER_KINDS`, `src/mc/plan-schema.js`). Nothing in mc ever re-reads that name to ask whether it is still true. The runner hands out `ready` steps and reads nothing else, so a step whose blocker finished months ago is invisible to it for ever. A blocker does not flip itself.",
@@ -85,55 +99,74 @@
         "**Then make the next one visible without a person.** Design and build the smallest thing that reports a step blocked on a project that is done: a line in `runner.log` at the end of a round, a row on the page, a line in `mc status` — pick one and say why. Beware of `mc status`'s known trap: it reads the workarea's local checkout, which lags origin/main, so it showed `blocked` for `email-window-layout` step 5 after main already said `ready`. Whatever surface this uses must read the plan on origin/main, which is what the runner obeys.",
         "**What this step does not do.** It does not change what `blocked` means, does not add a status, and does not make the runner start a blocked step. `STEP_STATUSES` stays `ready`/`done`/`blocked` — the fourth status (`waiting-decision`) was deliberately removed and is not coming back."
       ],
-      "comments": [],
-      "pr": null,
-      "blocked_by": null
-    },
-    {
-      "title": "Measure where a step's time goes, and what the gate actually costs",
-      "status": "ready",
-      "done_when": "`docs/project/mc/step-parallelism/measurements.md` states, from at least 20 rounds, how a step's wall-clock divides between session, gate round and git/gh work, and how many times the gate lock refused a round under today's two lanes — with the extraction script checked in beside it.",
-      "instruction": [
-        "**Change no behaviour in this step.** Instrumentation and reading are in scope; the lane count, `gate-lock.js` and `repo-lease.js` are not. Before editing anything under `src/`, check `~/mc/runner/runner.json` — `mc` is symlinked to `/Users/martinforsberg/memoro-cli/src/mc-cli.js`, so an edit reaches a live round's next session immediately.",
-        "**What is already known, measured 2026-09-03.** `~/mc/runner/log/runs.tsv` has a `seconds` column. Over the last fifteen rows a step ran 379–5408 seconds — 6 to 90 minutes. Two rows are `exit 143` with note `no-json` at 5405 and 5408 seconds: killed on their budget. The `kinds` split for 2026-09-02 was `{\"step\": 15, \"helper\": 2, \"reconcile\": 4}`. A full gate suite is described in `gate-lock.js` as taking about a minute and a half.",
-        "**The question this step answers.** If a step is 20 minutes of session and 90 seconds of gate, then four lanes make four slow steps run at once and contend for one gate at the end — the wall-clock win is real but bounded, and the risk is refused gate rounds. If instead a large share of a step is spent waiting on a gate another lane holds, raising the count without fixing the refusal makes things worse. The numbers decide which, and they are not currently written down anywhere.",
-        "**Where the time can be read from.** `runs.tsv` gives total seconds per round plus turns and token counts. The per-round JSON under `~/mc/runner/log/<name>-<ts>.json` (and its `.err` sibling) is the session's own record. `run.js` writes `~/mc/runner/current-<repo>.json` while a step is in flight, with `started` — the file exists exactly as long as the session does (`run.js:968`). Between them the session half can be separated from the round total; say plainly in `measurements.md` which parts are measured and which are inferred.",
-        "**The refusal count is the number that matters most, and it may not exist yet.** `takeGateLock` (`src/mc/gate-lock.js`) returns `{ ok: false, running }` when another round holds the lock. Find out whether that refusal is logged anywhere durable today. If it is not, adding one log line is the smallest change that answers the question — that is instrumentation and is allowed here, but it means the count only starts accumulating from when it ships, so land it early in the step and say in `measurements.md` what window the count covers.",
-        "**Report against the two lanes that exist today.** memoro and memoro-cli are the two lanes (`HELPER_REPOS`, `src/mc/helper-collect.js:161`). A refusal today can only be one lane meeting the other; that is the base rate the four-lane case would multiply.",
-        "**End the step by writing what you would do next**, in `measurements.md`: whether the lane count is worth raising at all, what it would cost, and whether the gate lock has to become a queue first. Martin reads that before steps 2 and 3 are unblocked. If the honest answer is that the lane count is not the bottleneck, say that — the plan's contract says dropping steps 2 and 3 is a legitimate outcome."
+      "comments": [
+        "The sweep, in numbers, from `blocked-scan.mjs` beside the audit. Before: 31 plans on main, 31 blocked steps (29 memoro, 2 memoro-cli), 21 waiting on a `decision` and 10 on a `project`. After: 29 blocked steps, and memoro went from 28 blocked plans against 3 ready to 26 against 5. Two steps were flipped, both waiting on `inbox-finish`, which had been delivered, logged and archived off main the same morning: `home-on-msr` step 2 and `time-axis` step 1, landed as memoro #11280 through `mc merge memoro 11280 --docs`. The goal says 4 ready in memoro and the audit says 3 — `email-window-layout` step 5 was flipped by hand between the two readings, which is the incident this step exists because of.",
+        "Twenty-one of the thirty-one waited on a `decision`, and none of them could be resolved here, because **there is no decision file anywhere in either repository** — `git ls-tree -r origin/main | grep decisions/` is empty in both. The `<area>/decisions/` apparatus went with the `waiting-decision` status, so a `decision` blocker is a label with nothing behind it and its answer lives in a plan's prose or in a conversation. Eighteen of the twenty-one are one deliberate park: #11152 converted twenty-six plans in a single commit and blocked every one's next step on `plan-review` by design. It is Martin's reading queue, not a fault, and it is the ceiling on what any automation here can reach — measured on the same refs, only 10 of 31 blocked steps were even machine-checkable.",
+        "The finding worth carrying forward, because a later step may want it: **`blocked_by` holds one blocker and a step can be waiting on two things.** `cache-warming` step 3 (\"Wait for the audit\") and `tool-profiles-per-model` step 1 (\"Wait for the numbers\") both wait in their instruction on `region-cache-audit`, which was delivered 2026-08-30 and archived by #11143 — but their `blocked_by` says `decision: plan-review`, because the conversion carried one blocker per step and the park took the slot. So the thing they are actually waiting for is finished and nothing can see it, including the mechanism this step built. Two rows did not seem worth a schema change, and it is not this step's to make; it is written down in `blocked-audit.md` § *The second blocker*.",
+        "The surface is the page, not `runner.log` and not `mc status`. `mc status <name>` reads the workarea's working tree when there is one (`status-project.js` says so at the top), which is exactly the trap the instruction warned about; `runner.log` is where `run.js` already declines to put plan-shaped refusals, in `refusedLine`'s own words, because they belong on the page. So `queueSection` grew a `stale` key and QUEUE grew a line under `skipped`. The line says **`blocker finished N`** and not *stale*: RUNNER two sections up already spends the word \"stale\" on a lane file whose process is gone, and one word with two meanings on one page is the kind of thing this repository has guards against.",
+        "What the mechanism deliberately will not do. It reads `kind: project` only, never `decision` — see above, there is nothing to check a decision against, and a machine that guessed would be wrong 21 times out of 31. It says *is not on main* rather than *is done*, because a project also leaves main when it is abandoned or superseded (`project_log.md` has both), and then the blocked step's premise may be dead rather than satisfied — only a person can tell which. And it writes nothing: flipping a step back to `ready` stays a plan edit somebody makes and a pull request somebody reads. This step's automation is the noticing, and only that.",
+        "For step 2, which measures: `blocked-scan.mjs` takes `--memoro-ref` and `--memoro-cli-ref`, so any past state of the queue can be re-counted from git without a checkout, and `--json` gives the rows. That is also how the before/after table in `blocked-audit.md` was produced."
       ],
-      "comments": [],
-      "pr": null,
+      "pr": 559,
       "blocked_by": null
     },
     {
-      "title": "The gate lock queues instead of refusing",
-      "status": "blocked",
-      "done_when": "A round that finds the gate lock held waits for it and then takes it, rather than being told no and losing its round — and a test drives two rounds against one lock without either losing work.",
+      "title": "Fewer turns, one test run, a Bash ceiling, visible skips — and each lane on its own clock",
+      "status": "done",
+      "done_when": "A headless step is launched with `--permission-mode acceptEdits` and a ten-minute Bash ceiling, `canon/roles/step.md` says to read whole files and run the selection once, a dirty-worktree skip names the files, and the unattended `mc run` loop runs one round-loop per repository with the chores beside them — with `measurements.md` and `measure.py` on main as the baseline.",
       "instruction": [
-        "**Do not start until Martin has read step 1's `measurements.md` and said to go on.** If step 1 found the refusal rate is already zero and stays zero at four lanes, this step may not be needed at all; if it found something else, this instruction may need rewriting before it runs.",
-        "**Keep the guarantee, change the answer.** `gate-lock.js` exists so one gate round runs at a time on this machine — a full suite takes about ninety seconds and pins the cores, and two at once make both slower and both flakier, which is the 55 → 57 → 55 the red floor was invented to absorb. That stays exactly as it is. What changes is what happens to the *second* round: today `takeGateLock` returns `{ ok: false, running }` and the caller gives up; the work that round already did is thrown away.",
-        "**The existing design notes are the constraint, not an obstacle.** `gate-lock.js` deliberately has no expiry, because there is no clock that can tell a slow round from a dead one — a round is *supposed* to take minutes — and the only honest question is whether the pid is alive. A queue must not smuggle a timeout back in through the side door. Waiting on a live pid is correct; waiting forever on a pid that has gone is not, and the existing dead-pid path (`taken, and the pid is gone → take it`) already answers that case.",
-        "**Find every caller before changing the contract.** `takeGateLock`'s `{ ok: false, running }` shape is read by callers that report to a person — `running` is *\"what to tell the operator, and it is the other round's own words rather than a guess.\"* A queue changes when that message is useful. Do not remove the ability to say who holds the lock; a round that has been waiting should still be able to say what it is waiting for.",
-        "**`repo-lease.js` is a different guarantee and is not this step.** It is advisory by design and holds one gate round per repository. Say in the PR whether a queued gate round interacts with it, but do not change it here."
+        "Done by the planning session on 2026-09-03, in the same PR as this plan: `src/mc/run-plan.js` (`headlessArgs`), `src/mc/run.js` (`realDeps.session` env, the dirty-worktree line, `round({ only })`, `chores()`, the unattended branch of `runLoop`), `canon/roles/step.md`, and this directory's `measure.py` and `measurements.md`."
+      ],
+      "comments": [
+        "The two workareas that were skipped every round (`email-window-layout`, `home-on-msr`) had their uncommitted files committed as `wip:` on their branches by hand the same day — nothing was discarded. `inbox-finish` was left: its project is off main and `closeWorkareas` files it as unplanned.",
+        "`chores()` archives finished plans only on a pass when no lane is in a session, because an archive lands a docs PR through the gate and the gate still refuses a second round. Once step 3 makes the lock wait, that guard can go.",
+        "`--once` and `--rounds N` still drive the old shared round; only the unattended run (`rounds === 0`) has independent lanes. Both are read by the same STOP and UPDATE files, at a lane's round boundary, and the handover waits for every lane."
+      ],
+      "pr": 560,
+      "blocked_by": null
+    },
+    {
+      "title": "Measure again, and say whether the count is worth raising",
+      "status": "blocked",
+      "done_when": "`measurements.md` § *After* holds the same table as the baseline for at least 20 step sessions started after step 1 landed, and ends with one recommendation: raise the lane count, or not, and why.",
+      "instruction": [
+        "**Wait for the window.** This step is `blocked` on decision `step-parallelism-window` until `runs.tsv` has 20 step rows after step 1's landing — a planning session flips it. If it is flipped early, the count in the table is what it is; say it and do not pad it.",
+        "**Run `measure.py`** with `--since` the day step 1 landed and `--until` today, and paste the output under a `## After` heading in `measurements.md`, beside the baseline. Compare median turns, test-class commands per session, Bash-versus-native calls, the poll/wait share and session wall-clock. State the session count.",
+        "**Read `runner.log` for the lanes.** Count `memoro-cli: round N done` lines that fall between a memoro `step starting` and its `step done`; that is the independence step 1 built, and criterion 6 wants a day's worth of it. Count `another gate round is running` in `gate-rounds.jsonl` since the landing; that is the base rate step 3 and step 4 care about.",
+        "**End with one recommendation**, written for Martin: whether four lanes in memoro would now buy wall-clock, what it would cost in gate contention, and whether step 3 must land first. If the honest answer is that the count is still not the bottleneck, say so — the contract says dropping step 4 is a legitimate outcome."
       ],
       "comments": [],
       "pr": null,
       "blocked_by": {
         "kind": "decision",
-        "name": "step-parallelism-measurements"
+        "name": "step-parallelism-window"
       }
+    },
+    {
+      "title": "The gate lock queues instead of refusing",
+      "status": "ready",
+      "done_when": "A round that finds the gate lock held waits for it and then takes it, rather than being told no and losing its round — and a test drives two rounds against one lock without either losing work.",
+      "instruction": [
+        "**Keep the guarantee, change the answer.** `gate-lock.js` exists so one gate round runs at a time on this machine — a full suite pins the cores, and two at once make both slower and both flakier, which is the 55 → 57 → 55 the red floor was invented to absorb. That stays exactly as it is. What changes is what happens to the *second* round: today `takeGateLock` returns `{ ok: false, running }` and the caller gives up; the work that round already did is thrown away. With each lane on its own clock (step 1) two landings can now meet more often than they did, and `measurements.md` counted 9 refusals in the history.",
+        "**The existing design notes are the constraint, not an obstacle.** `gate-lock.js` deliberately has no expiry, because there is no clock that can tell a slow round from a dead one — a round is *supposed* to take minutes — and the only honest question is whether the pid is alive. A queue must not smuggle a timeout back in through the side door. Waiting on a live pid is correct; waiting forever on a pid that has gone is not, and the existing dead-pid path (`taken, and the pid is gone → take it`) already answers that case.",
+        "**Find every caller before changing the contract.** `takeGateLock`'s `{ ok: false, running }` shape is read by callers that report to a person — `running` is *\"what to tell the operator, and it is the other round's own words rather than a guess.\"* A queue changes when that message is useful. Do not remove the ability to say who holds the lock; a round that has been waiting should still be able to say what it is waiting for, and `runner.log` should carry one line when a round waited and for how long.",
+        "**`repo-lease.js` is a different guarantee and is not this step.** It is advisory by design and holds one gate round per repository. Say in the PR whether a queued gate round interacts with it, but do not change it here.",
+        "**When this lands, `chores()` in `run.js` no longer needs its quiet-pass guard** around `archiveDone` — remove it in the same PR and say so."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
     },
     {
       "title": "The lane count is a setting, and `mc step` is how it is set",
       "status": "blocked",
       "done_when": "`mc step <n>` sets how many steps may run at once per repository, `mc step` prints the current value, the setting survives a restart, and a round with it above 1 runs several steps in one repository at once without losing work to the gate.",
       "instruction": [
-        "**Do not start until step 1's numbers are read and step 2 has landed** (or step 2 has been shown to be unnecessary). Raising the lane count while a refused gate still throws work away is the failure this plan is ordered to avoid.",
-        "**What has to change structurally.** `splitLanes` (`src/mc/run.js:1083-1091`) returns one lane object per repository and `runLane` (`:1171-1205`) walks its names serially. A count above one means either several lanes per repository or several steps in flight within one lane; decide which, and say why in the PR. Note that `runLane` re-reads `queue({ only: repo })` after a merge (`run.js:1194`) so a plan advanced by one step is seen by the next — whatever shape is chosen has to keep that true, and two steps in one repository make it harder, not easier.",
-        "**Two things a second step in the same repository must not break.** Each step already gets its own workarea and worktree, so the checkouts do not collide. What is shared is the repository's `git fetch` in `queue()` (`run.js:1063`) and the `inFlight` rule that stops a project being started while it has an open pull request (`run.js:935`, `project-prs.js`). Two lanes in one repository must not both start the same project, and must not both be mid-`fetch` in the same repository directory.",
+        "**Do not start until step 2's numbers are read and step 3 has landed.** Raising the lane count while a refused gate still throws work away is the failure this plan is ordered to avoid.",
+        "**What has to change structurally.** After step 1 the unattended loop in `runLoop` (`src/mc/run.js`) runs one `lane(repo)` loop per repository, each calling `round({ only: repo.name })`, which walks that repository's names serially in `runLane`. A count above one means several steps in flight within one repository's lane; decide the shape and say why in the PR. Note that `runLane` re-reads `queue({ only: repo })` after a merge so a plan advanced by one step is seen by the next — whatever shape is chosen has to keep that true, and two steps in one repository make it harder, not easier.",
+        "**Two things a second step in the same repository must not break.** Each step already gets its own workarea and worktree, so the checkouts do not collide. What is shared is the repository's `git fetch` in `queue()` and the `inFlight` rule that stops a project being started while it has an open pull request (`project-prs.js`). Two steps in one repository must not both start the same project, and must not both be mid-`fetch` in the same repository directory.",
         "**Where the setting lives.** `mc` reads its own state under `~/.memoro/mc/` (`src/mc/paths.js`, `mcHome()`), which is where `gate-running.json` and the lease files already are. Follow whatever the nearest existing setting does rather than inventing a new configuration mechanism; if there is no precedent for a persisted user setting, the smallest honest thing is a single JSON file written with `writeJsonAtomic` (`src/mc/atomic-write.js`), the way the gate lock is written.",
-        "**The verb.** Martin asked for `mc step` — `mc step 4` sets it, `mc step` with no argument prints it. Keep it to that; a setting with one number does not need subcommands. Check the name against the existing surface first: `mc --help` and the page name eight verbs, and `step` is already the word for a *kind* of round in `runs.tsv` and in `chooseKind` (`run-plan.js`). If `mc step` reads as \"run a step\" to anyone who has seen that vocabulary, say so and propose the name that does not — this is worth one paragraph in the PR, not a redesign.",
+        "**The verb.** Martin asked for `mc step` — `mc step 4` sets it, `mc step` with no argument prints it. Keep it to that; a setting with one number does not need subcommands. Check the name against the existing surface first: `mc --help` and the page name the verbs, and `step` is already the word for a *kind* of round in `runs.tsv` and in `chooseKind` (`run-plan.js`). If `mc step` reads as \"run a step\" to anyone who has seen that vocabulary, say so and propose the name that does not — this is worth one paragraph in the PR, not a redesign.",
         "**Default to today's behaviour.** Whatever the count's default is, an operator who sets nothing must get exactly what they get today. A setting that changes behaviour by existing is not a setting.",
         "**Finish the surface.** `mc --help`, the page, and a technical doc under `docs/technical/` saying what the lane count does and what it costs — including the gate contention the measurements found."
       ],

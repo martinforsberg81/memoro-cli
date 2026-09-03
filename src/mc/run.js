@@ -7,11 +7,12 @@
  * session through the launch adapter and waits for it. No inbox, no knock,
  * no watcher — it is the parent of the process it starts.
  *
- * A round drives one lane per repository at the same time: memoro's steps
- * and memoro-cli's never touch (different main branches, different
- * worktrees), so a round is as slow as the slower repository rather than as
- * slow as both. Nothing new to type or start — the lanes are inside the one
- * `mc run` process, and one repository with ready plans is one lane.
+ * Each repository is a lane, and each lane runs its own rounds on its own
+ * clock: memoro's steps and memoro-cli's never touch (different main
+ * branches, different worktrees), so neither waits for the other's round to
+ * end. Nothing new to type or start — the lanes are inside the one `mc run`
+ * process, and one repository with ready plans is one lane. `--rounds N` and
+ * `--once` still drive one shared round at a time, for a person watching.
  *
  * A round begins by taking away what is finished: every plan on main that
  * says `status: done` is archived — its `docs/project/<programme>/<project>/`
@@ -165,8 +166,15 @@ export function realDeps(env = process.env) {
     // collected here instead of by `maxBuffer`, and capped rather than
     // allowed to eat the machine: a session that floods stdout is not going
     // to parse as JSON either way.
+    //
+    // The session's Bash tool gets a ten-minute ceiling instead of claude's
+    // two-minute default. Measured 2026-09-01..03: with two minutes, a step
+    // ran `npm test` in the background and polled it in `sleep` loops of
+    // 120 s — 212 such calls, 1.9 h of 12.5 h tool time — and 17 calls were
+    // killed on the timeout itself. A suite run is one call now.
     session: ({ bin, args, cwd, timeoutMs }) => new Promise((resolve) => {
-      const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGTERM', env });
+      const sessionEnv = { ...env, BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000' };
+      const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGTERM', env: sessionEnv });
       const cap = 256 << 20;
       const collect = (stream) => {
         const chunks = [];
@@ -982,7 +990,17 @@ export function createRunner({
       const added = deps.addWorktree({ name, repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
       if (!added.ok) { say(`${name}: worktree add failed (${added.reason}), skip`); return 'skipped'; }
     }
-    if ((gitOut(worktree, ['status', '--porcelain']) || '').trim()) { say(`${name}: dirty worktree, skip`); return 'skipped'; }
+    // A dirty worktree parks the project for every round until a person acts,
+    // so the line names the files: `email-window-layout` stood third in
+    // queue.md and was skipped 134 rounds on three modified files before
+    // anyone read the reason.
+    const dirty = (gitOut(worktree, ['status', '--porcelain']) || '').trim();
+    if (dirty) {
+      const files = dirty.split('\n').map((line) => line.slice(3).trim() || line.trim());
+      const shown = files.slice(0, 3).join(', ') + (files.length > 3 ? ` +${files.length - 3}` : '');
+      say(`${name}: dirty worktree (${shown}) — skipped every round until it is committed or stashed in ${worktree}`);
+      return 'skipped';
+    }
     if (prsFailed.includes(repo.name)) { say(`${name}: what is open on GitHub is unknown this round, skip`); return 'skipped'; }
 
     // Work already in flight ends the round for this project, whatever the
@@ -1273,26 +1291,37 @@ export function createRunner({
    * only one repository holding ready plans there is one lane, and a round
    * is exactly what it was before.
    */
-  async function round({ once = false } = {}) {
+  async function round({ once = false, only = null } = {}) {
+    // `only` is one lane's round — the unattended loop's shape since
+    // 2026-09-03, when Martin saw that a round ended only when *both* lanes
+    // had: memoro-cli's lane sat idle for hours while memoro's walked thirty
+    // names, and a memoro-cli step that became ready in that time waited for
+    // a round boundary nobody needed. A lane's round reads the queue for its
+    // repository alone and does none of the chores, because the chores read
+    // the whole queue: `tidyQueue` over one repository's plans would drop the
+    // other's names from queue.md, and `closeWorkareas` would file the
+    // other's workareas as unplanned. `chores()` runs them beside the lanes.
+    const chores = only == null;
     // The day's helper first, and only in a round that is a round: `--once`
     // exists to watch a single step, and a two-minute model turn over
     // production is not what somebody typing it asked for.
-    if (!once && !stopRequested()) await runHelperDay();
-    const world = queue();
+    if (chores && !once && !stopRequested()) await runHelperDay();
+    const world = queue({ only });
     const { names, plans } = world;
-    if (!once) tidyQueue(plans);
-    writeUnreadable(plans);
+    if (chores && !once) tidyQueue(plans);
+    if (chores) writeUnreadable(plans);
     // A plan that says `done` is archived in the round the runner reads it,
     // before any step of that round runs — one PR per repository, and the
     // two repositories never touch. Not under `--once`, for the reason the
     // helper is not: that is one step to watch, not a round.
-    const archives = once ? [] : await Promise.all(repos.map((repo) => archiveDone(repo, plans)));
+    const archives = chores && !once ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
     const archived = archives.flatMap((a) => a.archived);
     const landed = archives.flatMap((a) => a.landed);
     const left = names.filter((name) => !archived.includes(name));
     // `--once` is one step, so it is one lane over the whole queue in
     // Martin's order — there is nothing for a second lane to do.
-    const lanes = once ? [{ repo: null, names: left }] : splitLanes(left, plans);
+    const lanes = (once ? [{ repo: null, names: left }] : splitLanes(left, plans))
+      .filter((lane) => only == null || lane.repo === only);
     if (lanes.length > 1) say(`lanes: ${lanes.map((lane) => `${lane.repo || 'unplaced'} (${lane.names.length})`).join(', ')}`);
     const results = await Promise.all(lanes.map((lane) => runLane(lane, world, { once })));
     const out = {
@@ -1303,14 +1332,39 @@ export function createRunner({
     // line per project: both lanes' refusals counted together, because a
     // reader of runner.log is reading a round, not a lane.
     const line = refusedLine(results.flatMap((r) => r.refused || []));
-    if (line) say(line);
+    if (line) say(only ? `${only}: ${line}` : line);
     // Last of all, and only in a whole round that was not cut short: the
     // workareas whose plan left main this round are taken down, and the ones
     // with no plan at all are written where Martin looks. `--once` changes
     // nothing but the one step it exists to watch.
-    if (!once && !out.stop) closeWorkareas(plans, landed, archivedProjects());
+    if (chores && !once && !out.stop) closeWorkareas(plans, landed, archivedProjects());
     if (results.some((r) => r.once)) out.once = true;
     return out;
+  }
+
+  /**
+   * What a whole round did around its lanes, for the unattended loop where
+   * the lanes no longer share a round: the day's helper, queue.md tidied,
+   * the unreadable plans filed, finished plans archived, finished workareas
+   * closed. Read from the whole queue — which is why it is not in a lane's
+   * round.
+   *
+   * Archiving lands a docs PR through the gate, and the gate refuses a
+   * second round rather than queueing it (gate-lock.js): a lane landing its
+   * step at that moment would lose the landing. So archives wait for a pass
+   * when no lane is in a session. `closeWorkareas` needs no such care — a
+   * workarea whose plan is not `done` is never touched, and a running step's
+   * plan is not.
+   */
+  async function chores() {
+    if (stopRequested()) return;
+    await runHelperDay();
+    const { plans } = queue();
+    tidyQueue(plans);
+    writeUnreadable(plans);
+    const quiet = !repos.some((repo) => deps.exists(paths.currentFor(repo.name)));
+    const archives = quiet ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
+    closeWorkareas(plans, archives.flatMap((a) => a.landed), archivedProjects());
   }
 
   /** runner.json — a runner is here, and this is the pid to test for life. */
@@ -1321,7 +1375,7 @@ export function createRunner({
   };
 
   return {
-    paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
+    paths, repos, say, round, chores, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
     writeUnreadable,
     updateRequested, syncMain, freshBranch, landProject, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
@@ -1389,25 +1443,60 @@ export async function runLoop({
   // handed to has already written its own, and removing it on the way out
   // would leave the page saying nothing is running while something is.
   let handedOver = false;
+  // `mc run --update`, read where STOP is read: at a round boundary, with no
+  // session in flight and nothing half-done. runner.json is cleared before
+  // the new runner is started rather than after, so the two never race for
+  // the same file.
+  const update = async () => {
+    runner.clearRunner();
+    const handed = await (deps.handOver || handOver)({ paths: runner.paths, deps, say: runner.say });
+    if (handed.ok) { handedOver = true; return true; }
+    runner.markRunner();
+    return false;
+  };
   try {
+    if (rounds === 0 && !once) {
+      // The unattended run: one loop per repository, each on its own clock.
+      // A lane's round ends when its own names are walked and its next one
+      // starts then — not when the other lane's does. Until 2026-09-03 the
+      // two lanes shared a round, and memoro-cli's sat idle for hours while
+      // memoro's walked thirty names. The chores a shared round did around
+      // its lanes run in their own loop beside them. STOP and UPDATE are
+      // read where they always were, at a round boundary — now each lane's
+      // own — and the handover waits for every lane to reach one.
+      const lane = async (repo) => {
+        for (let n = 1; ; n += 1) {
+          const r = await runner.round({ only: repo.name });
+          if (r.stop) return { stop: true };
+          runner.say(`${repo.name}: round ${n} done (${r.ran} ran)`);
+          if (runner.updateRequested()) return { update: true };
+          if (r.ran === 0) await deps.sleep(idleSleepMs);
+          if (runner.stopRequested()) return { stop: true };
+          if (runner.updateRequested()) return { update: true };
+        }
+      };
+      const choreLoop = async () => {
+        for (;;) {
+          if (runner.stopRequested() || runner.updateRequested()) return {};
+          await runner.chores();
+          await deps.sleep(idleSleepMs);
+        }
+      };
+      const results = await Promise.all([...runner.repos.map(lane), choreLoop()]);
+      if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
+      if (results.some((r) => r.update) && await update()) return 0;
+      runner.say('runner exit — the update did not hand over');
+      return 0;
+    }
     let n = 0;
-    while (rounds === 0 || n < rounds) {
+    while (once ? n < 1 : n < rounds) {
       n += 1;
       const r = await runner.round({ once });
       if (r.stop) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
       if (r.once) { runner.say('once: exiting'); return 0; }
       runner.say(`round ${n} done (${r.ran} ran)`);
-      // `mc run --update`, read where STOP is read: between rounds, with no
-      // session in flight and nothing half-done. runner.json is cleared before
-      // the new runner is started rather than after, so the two never race for
-      // the same file.
-      if (runner.updateRequested()) {
-        runner.clearRunner();
-        const handed = await (deps.handOver || handOver)({ paths: runner.paths, deps, say: runner.say });
-        if (handed.ok) { handedOver = true; return 0; }
-        runner.markRunner();
-      }
-      if (r.ran === 0 && (rounds === 0 || n < rounds)) await deps.sleep(idleSleepMs);
+      if (runner.updateRequested() && await update()) return 0;
+      if (r.ran === 0 && n < rounds) await deps.sleep(idleSleepMs);
     }
     runner.say(`runner exit after ${rounds} round(s)`);
     return 0;
