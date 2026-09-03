@@ -44,10 +44,19 @@
  * The first tick happens when the scheduler starts, rather than an interval
  * later. Starting it is itself a request for a reading, and a meter whose
  * first answer arrives tomorrow is one nobody trusts today.
+ *
+ * ## What it leaves behind
+ *
+ * The log, which is for a person reading it, and one bounded history of runs
+ * per repository (`nightly-history.js`), which is what `mc repo status` reads
+ * to say what is red and since when. Every outcome goes in — measured, and not
+ * measured — because a run that could not happen is not a run that found
+ * nothing.
  */
 import { gateLockPath, describeRunning, runningRound } from './gate-lock.js';
 import { mcHome } from './paths.js';
 import { DEFAULT_INTERVAL_MS } from './nightly.js';
+import { recordNightlyRun } from './nightly-history.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { runGate } from './repo-gate.js';
 import { repoStatus } from './repo-status.js';
@@ -118,7 +127,7 @@ export async function nightlyTick({
       // the tick goes on to the next, exactly as the watcher's loop goes on
       // to the next round. What it must not do is look like a run that found
       // no failures.
-      runs.push({
+      const threw = {
         repo: repo.name,
         path: repo.path,
         started_at: new Date(startedAt).toISOString(),
@@ -129,7 +138,9 @@ export async function nightlyTick({
         reason: error?.message || String(error),
         red: null,
         tests: null,
-      });
+      };
+      runs.push(threw);
+      recordNightlyRun(threw, { root });
       say(`${repo.name}  stopped at threw  started ${new Date(startedAt).toISOString()}  `
         + `took ${seconds(clock() - startedAt)}  main unknown — ${error?.message || String(error)}`);
       continue;
@@ -163,10 +174,23 @@ export async function nightlyTick({
       tests: report.candidate?.totals?.tests ?? null,
     };
     runs.push(run);
+    // The history the page reads: this run, and the thirteen before it. It is
+    // written here rather than by the round, because `mc test --full` typed by
+    // a person can be asked about a pull request, and red names about somebody's
+    // branch in this file would make "since when" a sentence about that branch
+    // (`nightly-history.js`).
+    recordNightlyRun(run, { root });
     say(line(run));
   }
 
-  if (skipped) say(`${skipped.repo}  skipped  ${skipped.reason}`);
+  if (skipped) {
+    // A skip is stored too, and stored as what it is: a run that measured
+    // nothing. Left out, a week of evenings behind merge rounds would leave
+    // the page showing one old green reading with nothing to say the meter had
+    // not run since.
+    recordNightlyRun({ ...skipped, started_at: skipped.at, stopped_at: 'busy', red: null }, { root });
+    say(`${skipped.repo}  skipped  ${skipped.reason}`);
+  }
   return { at, runs, skipped };
 }
 

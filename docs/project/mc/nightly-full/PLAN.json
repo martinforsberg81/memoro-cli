@@ -37,12 +37,12 @@
       "check": "Two scheduled runs observed in the log across one interval boundary. Then start a merge round, and confirm from the log that the tick that overlapped it recorded a skip with the holding round's pid rather than waiting."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A red test on main is named with the date it first went red.",
       "check": "After two runs that both see `tests/architecture/data-bus.test.js` red, `mc` names it with the timestamp of the first run that saw it, not the latest. Confirmed a second way by hand-editing the stored history to a third, older run and seeing the reported date move back."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A test that stops being red stops being reported.",
       "check": "Take a run's stored result, remove one failing name from it, run again, and confirm the name is gone from the page rather than lingering with an old date."
     }
@@ -122,7 +122,7 @@
     },
     {
       "title": "Red, and since when",
-      "status": "ready",
+      "status": "done",
       "done_when": "After two runs that both see the same test red, mc names that test with the timestamp of the **first** run that saw it, not the most recent; a test that passes in the latest run is gone from the report entirely; and a run that could not complete is distinguishable from a run in which everything passed.",
       "instruction": [
         "The number that would have prevented #10529 is not \"31 tests are red\". It is \"these 31 tests have been red since Tuesday\". A single run's red list looks exactly like a flake; the same list twice, dated, does not. So the stored thing is a short history of runs — when, which commit of `main`, and the set of failing test names — and the reported thing is derived from it: for each test red in the latest run, the earliest consecutive run that saw it red.",
@@ -132,8 +132,20 @@
         "Where it shows: the page mc already prints, in the section that says what a repository's state is — not a new verb, and not a section that appears only when something is wrong. A net that is invisible when everything is fine is a net nobody trusts when it finally says something, and \"last full run: 4 h ago, all green\" is the line that makes the red line credible. Keep it to a line or two per repository; the detail belongs behind whatever `--json` this surface already has.",
         "Two honest sentences memoro will need on day one: its `main` has six tests red as of 2026-09-02 — in `tests/architecture/data-bus.test.js`, `tests/architecture/s3-1-mutation-inventory.test.js` (two), `tests/architecture/signals-runtime-retirement.test.js`, `tests/ui/theme-contract.test.js` and `tests/mc/context.test.js`, and the report has to be readable rather than alarming with that as its normal state. And the first run has no history to compare against, so \"since when\" for it is \"first seen in this run\" — say that, rather than dating everything to the day the feature shipped."
       ],
-      "pr": null,
-      "blocked_by": null
+      "pr": 551,
+      "blocked_by": null,
+      "comments": [
+        "**Where it lives.** `nightly-history.js`: one file per repository under `~/.memoro/mc/nightly/`, named by the same slug rule as the watcher's snapshots (`repoFileSlug`), written with `writeJsonAtomic`, fourteen runs deep with the oldest dropped — two weeks at the default cadence. One stored run is `{at, duration_ms, commit, outcome, stopped_at, reason, tests, red}` and nothing else. The reading (`nightlyReading`) is derived on every read, so the store holds facts and the page holds sentences; nothing is stored that would have to be recomputed if the wording changes.",
+        "**Only the tick writes there, and the reason is not tidiness.** `mc test <repo> --full` typed by a person is the same reading, but `--full` chooses no tree — it only turns the selector off (`repo-gate.js:333`) — so it can be asked about a pull request, and then `candidate.red` is about a candidate merge tree that exists nowhere but in the gate worktree. One of those between two nightly entries would make \"since when\" a sentence about somebody's branch. If a later step ever wants a person's `--full` to count, the thing to key on is `report.pr === null`, not the flag.",
+        "**The names are deliberately not capped**, unlike `gate-rounds.jsonl`'s own `red_names` (40, then `… and N more, not named here`). A dropped name returns in the next run looking like a test that had gone green and broken again, and would be dated to today — the exact lie the file exists to prevent. The bound is the number of runs kept. This is also why the two stores disagree in the PR's own test-count paragraph: the round log hid 7 of memoro-cli's 47 names, the history hid none.",
+        "**A run that measured nothing is transparent to the streak.** It neither continues one nor breaks one, because it is evidence of nothing: red / stopped / red reads as red since the first red. The alternative — treating a stopped run as a break — would re-date every standing test to the morning after any night the machine was busy, which is the number this project exists to produce being reset by the machine being used. It is still stored, still counted in `runs`, and it is the `last` row on the page above the `measured` one it could not replace. In `--json` the difference is a type: `red: null` for a run that produced no suite result, `red: []` for one that found nothing.",
+        "**The page reads it fresh on both paths** — in `gatherRepo` for the computed page and beside `readLease` in `repoView` for the snapshot path — for the lease's reason and one of its own: it costs one file read, and \"is main red right now\" should not be the one section of the page that is a minute old for no saving at all.",
+        "**Verified live on both repositories, 2026-09-03, not only in tests.** memoro: two real ticks at 07:04:26 and 07:08:52, both at `origin/main` `fc19465`, 17,982 tests, the same 8 red both times, dated to 07:04:26 — `data-bus event names come from a single source file` among them, which is the test this plan's check names. memoro-cli: two ticks 66 s apart at `15af210`, 2,455 tests, the same 47 red, `since` 06:54:42 and not 06:55:47.",
+        "**And by hand, both ways, on the real stores (backed up and restored).** A third older run pasted at the *end* of memoro's file moved the reported date from 07:04:26 back to 2026-08-30 and the count to 3 — the store sorts by timestamp rather than by file order, precisely because an entry a person adds by hand lands last. Removing `data-bus event names…` from the newest stored run took the page from 8 red to 7, with the name gone rather than lingering with an old date and the other seven keeping their date. On memoro-cli, removing a name from the *middle* run only re-dated that one test to the latest run (`runs: 1, bounded: false`) while the other 46 kept theirs: the consecutive rule, observed rather than reasoned about.",
+        "**The skip, observed live.** A real `mc test memoro-cli --full` round held `gate-running.json` (pid 15461) while a tick ran; the tick recorded `busy` in 0.1 s and the page then read `47 red of 2,455` from 3m ago, `last tried just now — busy: another gate round is running…`, and the standing since-date unchanged. Three outcomes, three shapes.",
+        "**Not verified live: the green row.** Neither repository mc knows has a green `main`, so `all 2,445 green` — the line the instruction calls the one that makes the red line credible — is asserted in `repo-render.test.js` and has never been printed on this machine. Nothing about it depends on data the tests lack, but nobody has seen it.",
+        "**Two things worth knowing for whoever closes this project.** The `full run` section shows for every repository even when the nightly has never run (`never — mc repo nightly start`): deliberate, so the absence of the net is visible on the page rather than being an absence of a page, but it is a line every reader now sees whether or not they use the meter. And the round log and this history now carry the same red names from the same rounds by two paths with two caps; if they ever disagree, the round log is the one the round itself wrote."
+      ]
     }
   ]
 }
