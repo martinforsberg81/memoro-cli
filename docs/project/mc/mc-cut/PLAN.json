@@ -132,13 +132,16 @@
     },
     {
       "title": "The tests that only covered the deleted code",
-      "status": "ready",
+      "status": "done",
       "done_when": "Not stated in the plan as written — when this step is finished is for the plan review to settle.",
       "instruction": [
         "**The tests that only covered the deleted code.** `tests/` is 256 files and 60 064 lines against a `src/` of 78 606 — a large part of it tests machinery step 4 removes. This is where `#410` overlaps; the overlap is resolved by doing this step after step 4 and letting `#410` rebase onto it, not by merging `#410` in."
       ],
-      "pr": null,
-      "blocked_by": null
+      "pr": 561,
+      "blocked_by": null,
+      "comments": [
+        "Folded into #561 by the planning session on 2026-09-03: the six test files that stayed red after step 3's deletion — `tests/mc/fresh-session.test.js`, `tests/cli/lifecycle/auth-status.test.js`, `tests/cli/lifecycle/deps.test.js`, `tests/mc/commands/dormant.test.js`, `tests/runtime/broker/c1-source-closure.test.js`, `tests/runtime/certified-execution/credential-boundary.test.js` — covered verbs off the router and the broker closure the cut removed. They had to go in the same PR: the gate does not land a red candidate, and this step could not start while #561 was open."
+      ]
     },
     {
       "title": "`docs/plans/`",
