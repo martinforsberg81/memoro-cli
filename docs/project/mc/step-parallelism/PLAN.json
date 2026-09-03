@@ -4,12 +4,12 @@
   "goal": [
     "Martin, 2026-09-03: *\"Många steps tar lång tid, jag vill att vi ökar upp antalet parallella steps som kan göras från 2 till 4.\"* — and, the same day, when told the two lanes shared one round: *\"Varje lane måste naturligtvis köra separat.\"* And a verb to set the count with: *\"t ex 'mc step' 'Välj antalet parallella steps.'\"*",
     "**Measured before anything moved** (`measurements.md`, 2026-09-03, 60 sessions): a step's time is the session's own turns and test reruns. Median 19 min, 76 turns; 5 598 Bash calls against 255 native tool calls, 2 803 of them `sed -n`/`grep -n` reads of a screen at a time; 11 test-class commands per session, one in four an exact repeat; 15 % of tool time in `sleep` loops polling a backgrounded suite. Landing a step is a median 0.9 min and the runner's own overhead is one second. And the lanes stood idle 43–56 % of the time — blocked plans, a schema migration the runner's checkout had not caught up with, dirty worktrees skipped 134 rounds in a row, and a round that ended only when both lanes had.",
-    "So the order is: fewer turns and one test run per step, each lane on its own clock, the gate lock waiting instead of refusing — and only then a lane count above one, measured against the numbers above. Raising the count first would have multiplied the same sessions.",
+    "So the order is: fewer turns and one test run per step, each lane on its own clock, the gate lock waiting instead of refusing — then the measurement against the numbers above, and only then a lane count above one.",
     "There is no 2 to raise today. `splitLanes` (`src/mc/run.js`) returns one lane per repository and `runLane` walks its names one step at a time; two repositories with ready plans is two lanes. Reaching four means several steps at once **inside** one repository, and `gate-lock.js` — one gate round at a time on this machine, refusing rather than queueing (Martin, 2026-08-30: *\"En instans kan köra åt gången.\"*) — stands in the way of that."
   ],
   "contract": [
     "**The gate stays serial.** Whatever the lane count becomes, one gate round at a time on this machine is not up for negotiation — the flakiness it absorbs is the 55 → 57 → 55 the red floor exists for. What may change is that a second round **waits** instead of being refused, so a wider lane count cannot throw away finished work.",
-    "**Step 4 does not start until step 2's numbers are read.** It is `blocked` on that decision in this plan, not merely sequenced after it. If step 2 shows the lane count is still not the bottleneck, the right outcome is that step 4 is rewritten or dropped — not that it runs anyway.",
+    "**Step 4 does not start until step 3's numbers are read.** It is `blocked` on that decision in this plan, not merely sequenced after it. If step 3 shows the lane count is still not the bottleneck, the right outcome is that step 4 is rewritten or dropped — not that it runs anyway. Step 2 (the gate lock queues) depends on no number and runs first: Martin, 2026-09-03, on the evening mc-cut closed — *\"ska vi aktivera parallellism-projektet nu\"* — and a lock that waits is worth having at two lanes.",
     "**mc is symlinked into its own working tree.** `/opt/homebrew/bin/mc` resolves to `/Users/martinforsberg/memoro-cli/src/mc-cli.js`. A change to how the runner or a session behaves lands through the gate and reaches the running runner by `mc run --update` (or STOP and start) — nobody edits `~/memoro-cli` by hand, and no step of this project edits `src/` in that checkout.",
     "**Nothing changes what a step session may write.** The trespass check in `run.js` and the four fields a step owns (`status`, `pr`, `comments`, `met`) are not this project's to loosen.",
     "**One step, one PR.** `mc` prints the page and `mc run --rounds 1` completes a round after each. A step that cannot keep both working stops and says so. No force-push, no rewritten history."
@@ -45,7 +45,7 @@
     {
       "met": false,
       "criterion": "A step session under the launch step 1 lands uses fewer turns and fewer test runs than the baseline: median turns and test-class commands per session, over at least 20 sessions after the change, against 76 turns and 11 test commands.",
-      "check": "`measure.py --since <landing day>` in `measurements.md` § *After*, with the session count stated. A drop of less than a quarter in either number is reported as such, not rounded up to a win."
+      "check": "`measure.py --since <landing day>` in `measurements.md` § *After* (step 3), with the session count stated. A drop of less than a quarter in either number is reported as such, not rounded up to a win."
     },
     {
       "met": false,
@@ -126,23 +126,6 @@
       "blocked_by": null
     },
     {
-      "title": "Measure again, and say whether the count is worth raising",
-      "status": "blocked",
-      "done_when": "`measurements.md` § *After* holds the same table as the baseline for at least 20 step sessions started after step 1 landed, and ends with one recommendation: raise the lane count, or not, and why.",
-      "instruction": [
-        "**Wait for the window.** This step is `blocked` on decision `step-parallelism-window` until `runs.tsv` has 20 step rows after step 1's landing — a planning session flips it. If it is flipped early, the count in the table is what it is; say it and do not pad it.",
-        "**Run `measure.py`** with `--since` the day step 1 landed and `--until` today, and paste the output under a `## After` heading in `measurements.md`, beside the baseline. Compare median turns, test-class commands per session, Bash-versus-native calls, the poll/wait share and session wall-clock. State the session count.",
-        "**Read `runner.log` for the lanes.** Count `memoro-cli: round N done` lines that fall between a memoro `step starting` and its `step done`; that is the independence step 1 built, and criterion 6 wants a day's worth of it. Count `another gate round is running` in `gate-rounds.jsonl` since the landing; that is the base rate step 3 and step 4 care about.",
-        "**End with one recommendation**, written for Martin: whether four lanes in memoro would now buy wall-clock, what it would cost in gate contention, and whether step 3 must land first. If the honest answer is that the count is still not the bottleneck, say so — the contract says dropping step 4 is a legitimate outcome."
-      ],
-      "comments": [],
-      "pr": null,
-      "blocked_by": {
-        "kind": "decision",
-        "name": "step-parallelism-window"
-      }
-    },
-    {
       "title": "The gate lock queues instead of refusing",
       "status": "ready",
       "done_when": "A round that finds the gate lock held waits for it and then takes it, rather than being told no and losing its round — and a test drives two rounds against one lock without either losing work.",
@@ -156,6 +139,23 @@
       "comments": [],
       "pr": null,
       "blocked_by": null
+    },
+    {
+      "title": "Measure again, and say whether the count is worth raising",
+      "status": "blocked",
+      "done_when": "`measurements.md` § *After* holds the same table as the baseline for at least 20 step sessions started after step 1 landed, and ends with one recommendation: raise the lane count, or not, and why.",
+      "instruction": [
+        "**Wait for the window.** This step is `blocked` on decision `step-parallelism-window` until `runs.tsv` has 20 step rows after step 1's landing — a planning session flips it. If it is flipped early, the count in the table is what it is; say it and do not pad it.",
+        "**Run `measure.py`** with `--since` the day step 1 landed and `--until` today, and paste the output under a `## After` heading in `measurements.md`, beside the baseline. Compare median turns, test-class commands per session, Bash-versus-native calls, the poll/wait share and session wall-clock. State the session count.",
+        "**Read `runner.log` for the lanes.** Count `memoro-cli: round N done` lines that fall between a memoro `step starting` and its `step done`; that is the independence step 1 built, and criterion 6 wants a day's worth of it. Count `another gate round is running` in `gate-rounds.jsonl` since the landing; that is the base rate step 4 cares about — step 2 (the queueing lock) lands before this measurement, so count refusals before and after its landing separately.",
+        "**End with one recommendation**, written for Martin: whether four lanes in memoro would now buy wall-clock, what it would cost in gate contention, and whether the queueing lock (step 2) has changed the refusal picture. If the honest answer is that the count is still not the bottleneck, say so — the contract says dropping step 4 is a legitimate outcome."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": {
+        "kind": "decision",
+        "name": "step-parallelism-window"
+      }
     },
     {
       "title": "The lane count is a setting, and `mc step` is how it is set",
