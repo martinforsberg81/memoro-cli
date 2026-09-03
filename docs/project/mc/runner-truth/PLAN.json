@@ -19,7 +19,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`gate-round-lease-held` fires only when a died round's lease really was never reaped.",
       "check": "A test in `tests/mc/helper-cli-collect.test.js` that runs a died round with a matching `reap` line in the lease fixture through `collect()`/`cliRows()` — not through a hand-built object — and asserts `gate-round-lease-held` is absent while `gate-round-died` is present. It fails on the code as it stands today."
     },
@@ -52,7 +52,7 @@
   "steps": [
     {
       "title": "`gate-round-lease-held` says what it means",
-      "status": "ready",
+      "status": "done",
       "done_when": "`cliFailing` raises `gate-round-lease-held` only for a died round with no `reap` line for its pid, and a test drives that through `collect()`/`cliRows()` with a real lease fixture rather than by injecting `reaped`.",
       "instruction": [
         "The fault, measured 2026-09-01 and unchanged today. `src/mc/helper-cli-collect.js:129` builds the open rounds as `unfinishedRounds(rounds).filter((round) => inWindow(round.at) && round.verdict === 'died')`. `unfinishedRounds` (`src/mc/repo-round-log.js`) only ever attaches `verdict` — `running` or `died`, from whether the pid is alive — so no object in `open` has a `reaped` field at all. `cliFailing` (`helper-cli-collect.js:194`) then does `open.filter((round) => !round.reaped)`, which is true for every died round unconditionally. `gate-round-lease-held` is therefore a synonym for `gate-round-died` and fires whether the reaper cleaned up in two minutes or the lease is still stuck an hour later.",
@@ -62,8 +62,14 @@
         "The test suite does not catch this because it never exercises the real path: `tests/mc/helper-cli-collect.test.js` calls `cliFailing` with `open.map((r) => ({ ...r, reaped: false }))`, injecting by hand the field production never computes, and tests the `reaped: true` case by handing `cliFailing` a hand-built object. Nothing asserts that a round which really was reaped comes out of `collect()` with `reaped: true`. Add that case end to end, with a `reap` line in the lease fixture, and check it goes red against the current code before the fix.",
         "This is the section of the digest whose whole job is separating *worth waking up for* from *happened once, handled itself*. A condition that fires regardless gets learned as noise, and the day it is real it will read exactly like the two days it was not."
       ],
-      "pr": null,
-      "blocked_by": null
+      "pr": 553,
+      "blocked_by": null,
+      "comments": [
+        "The join lives in `reapedFor(leases, pid)` in `src/mc/log-read.js`, not in a call to `abandoned()`. `abandoned()` does its own `readRounds`, returns every unfinished round rather than the window's died ones, and attaches a `lease` array this caller does not render — so calling it from `cliRows` would have read `gate-rounds.jsonl` twice and folded two sources into one try/catch, which is the one thing that file is careful not to do (an unreadable source is a note, never an empty digest). Extracting the predicate keeps one implementation of the join with two callers, which is what the instruction asked for. `abandoned()` now goes through it too, so its `reaped` and the digest's cannot drift apart.",
+        "One behaviour change beyond the fault: `reapedFor` returns false for a round with no pid. `readLeaseLog` writes `pid: null` for a line that carried none, so the old expression made `null === null` true and a round mc cannot join would have read as reaped. `recordRoundStart` always writes `process.pid`, so no round written by today's mc is affected — this only bites hand-written or pre-pid lines.",
+        "**The condition is now right about reaps and still wrong about releases — book this, it is the next question here.** Measured on this machine at 2026-09-03 07:20Z over a 7-day window: 7 died rounds, of which 5 have a `reap` line for their pid. `gate-round-lease-held` drops from 7 (every died round, unconditionally) to 2. But both remaining ones are false too: pids 5245 and 21632 claimed at 06:32:30Z and 06:36:56Z and their leases were given back by `release` lines 10 s and 29 s later. A `release` carries `holder=` and `after=` and **no pid**, so no pid-keyed join can see it — the lease log cannot answer \"is this round's lease still held\" for the normal ending, only for the reaped one. Fixing that is a change to what the lease log writes, or a read of the current lease holder instead of the log, and both are larger than this step's contract allows; the repair as specified ships, and this is the finding it uncovered.",
+        "The `open` rows still carry no `lease` array — only `reaped` was added — so `renderCliSections` and `helper-collect.js`'s `data.open` are unchanged in shape. The lease log read moved above the rounds section, which changes only the order `notes` appear in when more than one source is unreadable."
+      ]
     },
     {
       "title": "`runner.json` is a claim that is checked",
