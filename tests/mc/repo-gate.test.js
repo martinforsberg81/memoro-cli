@@ -947,6 +947,10 @@ describe('a repository that selects by diff', () => {
    */
   function selecting({
     files, candidateRed = [], commands = undefined, scripts = {}, full = false,
+    // What this fixture's repository calls its whole suite. A repository that
+    // declares a selector must declare one too, or `--full` stops — so `null`
+    // here is the negative case, not an omission.
+    suiteCommand = 'npm run test:full',
   } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
     const repoPath = join(root, 'repo');
@@ -970,6 +974,7 @@ describe('a repository that selects by diff', () => {
         prepare_why: 'the fixture installs nothing',
         select: `echo '${JSON.stringify(commands === undefined ? { files } : { files, commands })}'`,
         select_why: 'the fixture says so',
+        ...(suiteCommand === null ? {} : { suite: suiteCommand, suite_why: 'the fixture says so' }),
         extra_gates: [],
         merge_log: null,
         pr_tests_flags: ['--import', './x.mjs'],
@@ -1009,17 +1014,20 @@ describe('a repository that selects by diff', () => {
       return Promise.resolve({ code: candidateRed.length ? 1 : 0, tap: tapWith(candidateRed, { tests: Math.max(ran.length * 3, 1) }) });
     };
     const suites = [];
+    const suiteCommands = [];
     return {
       runs,
       suites,
+      suiteCommands,
       marks,
       mark: (name) => (existsSync(join(marks, name)) ? readFileSync(join(marks, name), 'utf8') : null),
       report: (extra = {}) => runGate({
         repoPath, pr: full ? null : 7, full, holder: AREA, root: mcHome, git, gh, tests,
         env: { ...process.env, GATE_MARKS: marks },
-        suite: ({ cwd }) => {
+        suite: ({ cwd, command }) => {
           if (!full) throw new Error('a selecting round must not run the whole suite');
           suites.push(cwd);
+          suiteCommands.push(command);
           return Promise.resolve({ code: candidateRed.length ? 1 : 0, tap: tapWith(candidateRed, { tests: 42 }) });
         },
         ...extra,
@@ -1190,7 +1198,12 @@ describe('a repository that selects by diff', () => {
         assert.equal(report.selection, null, 'a --full round selects nothing');
         assert.equal(fx.runs.length, 0, 'the selected-file runner was used');
         assert.deepEqual(fx.suites.map((cwd) => cwd.split('/').pop()), ['candidate'], 'one tree');
-        assert.match(report.command, /npm test/u);
+        // The repository's own declared whole suite, not `npm test` read off
+        // its manifest. That inference is what ran 6 of memoro's 2,018 files
+        // and summarised them as everything (2026-09-02).
+        assert.equal(report.command, 'npm run test:full');
+        assert.deepEqual(fx.suiteCommands, ['npm run test:full'], 'the declared command reached the runner');
+        assert.deepEqual(report.full_suite, { command: 'npm run test:full', source: 'declared' });
         assert.equal(report.stopped_at, 'red');
         assert.deepEqual(report.candidate.red, ['main is red here']);
         assert.equal(report.candidate.is, 'base-branch-as-fetched');
@@ -1207,6 +1220,73 @@ describe('a repository that selects by diff', () => {
         assert.equal(report.pr_tests, null, 'and no diff of its own to prove');
         assert.match(verdictHeadline(report), /over the whole suite, asked for by --full/u);
         assert.match(gateLines(report).join('\n'), /the whole suite/u);
+      } finally { fx.cleanup(); }
+    });
+
+    /**
+     * The shape the bug had, asserted from the outside.
+     *
+     * `--full` used to turn the selector off and fall to `npm test`, read off
+     * `package.json`. For memoro that is `node scripts/testing/ci.mjs` — the
+     * diff-selector — and a `--full` round has no diff, so it measured
+     * origin/main against origin/main, ran the 6 mandatory-core files of
+     * 2,018, and reported them as the whole suite. Nothing about that round
+     * looked wrong: it said `full: true` while it did it.
+     *
+     * So the stop is the assertion, not the repair. A repository that
+     * declares a selector has said that its `npm test` narrows; mc has
+     * nothing honest to run for `--full` until it says what does not.
+     */
+    it('a declaration with a selector and no suite stops --full instead of falling back', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], full: true, suiteCommand: null });
+      try {
+        const report = await fx.report();
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'suite');
+        // Both fields named, because the reader has to know which one is
+        // missing and which one made it necessary.
+        assert.match(report.reason, /"select"/u);
+        assert.match(report.reason, /"suite"/u);
+        assert.match(report.reason, /will not fall back to npm test/u);
+        // And where to write it: the repository's own file first, the
+        // operator's table for a fact about this machine.
+        assert.match(report.reason, /\.mc\/test\.json/u);
+        assert.match(report.reason, /repo-gates\.json/u);
+        assert.equal(fx.suites.length, 0, 'nothing was run — a stop, not a smaller measurement');
+      } finally { fx.cleanup(); }
+    });
+
+    /**
+     * The layer that keeps this out of a release. `suite` is read through the
+     * same three files as `select` and `prepare`, so a machine-local
+     * correction — a repository whose whole suite is a different command here
+     * — does not wait for a version of mc.
+     */
+    it('the suite command is layered like the rest: the operator\'s table wins', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], full: true, suiteCommand: 'npm run test:everything' });
+      try {
+        const report = await fx.report();
+        assert.equal(report.ok, true, report.reason);
+        assert.deepEqual(fx.suiteCommands, ['npm run test:everything']);
+        assert.equal(report.declaration.suite, 'npm run test:everything');
+        assert.match(verdictHeadline(report), /asked for by --full \(npm run test:everything\)/u);
+      } finally { fx.cleanup(); }
+    });
+
+    /**
+     * The reader's half. `npm run test:full` and `npm test` read the same and
+     * differ by 2,015 files in memoro, so the report opens the manifest and
+     * says what the script is — which is also why a repository that declares
+     * `npm test` gets the exact line the report has always printed.
+     */
+    it('names the script behind an npm command, and a declared npm test reads as it always did', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], full: true, suiteCommand: 'npm test' });
+      try {
+        const report = await fx.report();
+        assert.equal(report.command, 'npm test  (node --test tests/)');
+        // What ran is still the command, not the annotation.
+        assert.deepEqual(fx.suiteCommands, ['npm test']);
+        assert.deepEqual(report.full_suite, { command: 'npm test', source: 'declared' });
       } finally { fx.cleanup(); }
     });
 

@@ -49,7 +49,10 @@ describe('an override that shadows shipped fields is said, not silent (D-0135)',
       // decides whether the round measures the change's reach or the whole
       // suite — so an override that omits it silently would cost the whole
       // saving, which is exactly the shape of the two earlier losses.
-      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'pr_tests_flags']);
+      // `suite` joined on 2026-09-02 and is worse to lose quietly: an
+      // override that drops it while keeping `select` does not cost a saving,
+      // it stops every `--full` for that repository.
+      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'suite', 'suite_why', 'pr_tests_flags']);
       // The shipped entry alone shadows nothing.
       const plain = declarationFor('/x/memoro-cli', { root });
       assert.deepEqual(plain.shadowed, []);
@@ -343,6 +346,8 @@ describe('a repository that declares itself in .mc/test.json', () => {
         prepare_why: SHIPPED['memoro-cli'].prepare_why,
         select: SHIPPED['memoro-cli'].select,
         select_why: SHIPPED['memoro-cli'].select_why,
+        suite: SHIPPED['memoro-cli'].suite,
+        suite_why: SHIPPED['memoro-cli'].suite_why,
         extra_gates: [],
         merge_log: join(fx.root, 'work', 'runner/log/merge-memoro-cli.md'),
         pr_tests_flags: ['--import', './tests/_isolate-home.mjs'],
@@ -367,6 +372,52 @@ describe('a repository that declares itself in .mc/test.json', () => {
       fx.override({ 'memoro-cli': { prepare: null, prepare_why: 'local', select: 'node one-off.js', extra_gates: [], merge_log: null } });
       assert.equal(fx.ask().declaration.select, 'node one-off.js');
       assert.equal(fx.ask().sources.select, 'override');
+    } finally { fx.cleanup(); }
+  });
+
+  /**
+   * The one field this table did not have until 2026-09-02, layered like the
+   * rest.
+   *
+   * What a repository calls its *whole* suite used to be read off
+   * `package.json` — `npm test`, verbatim — and the assumption under that is
+   * false for memoro, whose `npm test` is a diff-selector. A `--full` round
+   * had no diff, so it ran 6 files of 2,018 and summarised them as
+   * everything. So it is declared, and declared means all three files: a
+   * repository can correct mc without a release, and an operator can correct
+   * both without either.
+   */
+  it('the whole-suite command reads through the same three layers as the rest', () => {
+    const fx = cli();
+    try {
+      assert.equal(fx.ask().declaration.suite, SHIPPED['memoro-cli'].suite);
+      assert.equal(fx.ask().sources.suite, 'shipped');
+
+      fx.declare({ suite: 'npm run test:all', suite_why: 'the repository measured it' });
+      assert.equal(fx.ask().declaration.suite, 'npm run test:all');
+      assert.equal(fx.ask().sources.suite, 'repository');
+      assert.equal(fx.ask().declaration.select, SHIPPED['memoro-cli'].select, 'a partial file dropped the shipped select');
+
+      fx.override({ 'memoro-cli': { prepare: null, prepare_why: 'local', suite: 'npm run test:here', extra_gates: [], merge_log: null } });
+      assert.equal(fx.ask().declaration.suite, 'npm run test:here');
+      assert.equal(fx.ask().sources.suite, 'override');
+    } finally { fx.cleanup(); }
+  });
+
+  /**
+   * The absence that must stay expressible. `suite: null` is not a defect in
+   * a repository that never claimed to narrow anything — it is what "nothing
+   * here selects, so `npm test` is the whole thing" looks like, and the round
+   * is what decides whether that is enough (`repo-gate.js`, `suiteCommand`).
+   * This table's job is to report the fields, not to grade them.
+   */
+  it('a repository that has said nothing about its whole suite reads null, not a guess', () => {
+    const fx = repo('stranger', { name: 'stranger' });
+    try {
+      const answer = fx.ask();
+      assert.equal(answer.ok, true, answer.reason);
+      assert.equal(answer.declaration.suite, null);
+      assert.equal(answer.declaration.select, null);
     } finally { fx.cleanup(); }
   });
 

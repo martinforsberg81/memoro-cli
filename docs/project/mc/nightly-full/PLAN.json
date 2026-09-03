@@ -22,12 +22,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc test memoro --full` runs memoro's whole suite.",
       "check": "Run it. The report names 2,018 test files and a duration in the region of 337 s, against the 6 files it selects today. Cross-check the file count against `npm run test:full` in the memoro worktree."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A declaration that names a selector but no suite cannot produce a whole-suite answer.",
       "check": "A unit test over `declarationFor` and the `--full` path: a declaration with `select` and no `suite` stops with a reason naming both fields. Verified for real by removing memoro's `suite` and seeing `mc test memoro --full` stop rather than run six files."
     },
@@ -60,7 +60,7 @@
   "steps": [
     {
       "title": "`--full` runs what the repository calls its whole suite, or it stops",
-      "status": "ready",
+      "status": "done",
       "done_when": "`mc test memoro --full` reports about 2,018 test files instead of 6; a declaration that carries `select` and no `suite` makes `--full` stop with a reason naming both fields; `mc test memoro-cli --full` behaves exactly as it does today; and the suite command, like `select` and `prepare`, is layered shipped < the repository's `.mc/test.json` < `~/mc/repo-gates.json`.",
       "instruction": [
         "Read `repo-gate-table.js`'s header before touching it. Its whole argument is that what a repository needs is written down or the round stops, never guessed, and that a partial declaration which lets a round proceed is \"the guess wearing a uniform\". This step adds one more thing to write down and applies that same rule to it. Nothing about the layering, the `UNKNOWN` third answer, or the rule that a `_why` may never carry a provenance that does not exist changes here.",
@@ -81,9 +81,15 @@
         "Measured 2026-09-02 on this machine (Apple M1, 8 cores, 8 GB): memoro's `npm run test:full` is 2,018 files, 17,928 tests, 337.42 s wall, ~808 s summed CPU across 7 lanes, six tests red on `main`. One run a day is a twentieth of what the blanket costs a day.",
         "**Where the pieces already are**",
         "`gate-lock.js` is the one-round-at-a-time guard: a file and a pid under mc's home, `taken` and the pid alive → refused with the round's identity; taken and the pid gone → take it; no expiry, because no clock can tell a slow round from a dead one. It is exactly the door a scheduled run must knock on, and its own header says it never blocks anything but a gate round.",
-        "`repo-watch.js` / `repo-watch-loop.js` / `repo-snapshot.js` are the existing meter: a detached node process with a pid file and a log, a round every `DEFAULT_INTERVAL_MS` (60 s), writing atomically under `~/mc/repo-status/` and never inside a repository. Its round is seconds; a full suite is 337 s. The cadences cannot share a loop — but the shape (detached, pid file, atomic snapshot, optional, and the view says which way it answered) is the shape to copy, and `writeJsonAtomic` is already the one door that makes a file appear whole."
+        "`repo-watch.js` / `repo-watch-loop.js` / `repo-snapshot.js` are the existing meter: a detached node process with a pid file and a log, a round every `DEFAULT_INTERVAL_MS` (60 s), writing atomically under `~/mc/repo-status/` and never inside a repository. Its round is seconds; a full suite is 337 s. The cadences cannot share a loop — but the shape (detached, pid file, atomic snapshot, optional, and the view says which way it answered) is the shape to copy, and `writeJsonAtomic` is already the one door that makes a file appear whole.",
+        "**Done, and measured on both sides.** `--full` now runs the `suite` the declaration names. At memoro's `58db0f5` the same tree gives 6 files from `npm test` (`node scripts/testing/ci.mjs --list`: `changed paths: 0, selected test files: 6`) and 2,021 from `npm run test:full` (`run.mjs --profile full --list`: standard 1,770, sqlite 243, heavy 8). The round itself: 17,982 tests, 6 fail, 3 process summaries, 288.3 s of suite inside 302.3 s wall, `full_suite: {command: \"npm run test:full\", source: \"declared\"}`. memoro-cli's round is unchanged — the same commit `7e0f84d`, the same 2,440 tests, 40 failures and 47 red names as the identical round driven by unmodified `origin/main` mc, and the two `--json` reports differ only in timings, holder, and the two new fields.",
+        "**The operator table on this machine shadows the shipped entry, and that is the third instance of D-0135.** `~/.memoro/mc/repo-gates.json` carries a whole-entry override for memoro, so the shipped `suite` could not reach it: with the source change alone, `mc test memoro --full` stopped with `DECLARATION SHADOWED — the override for memoro omits suite`. I declared `suite`/`suite_why` in that file too (a machine-local file, outside both repositories, backed up first to `/tmp/repo-gates.json.bak-20260903T074723`) and the round then ran. The shadow warning did its job — this is the mechanism working, not failing — but it means every field this table gains has to be restated in the operator's file by hand, for memoro, for as long as that override exists. The plan's out-of-scope note says the shipped table can carry memoro's declaration today; on this machine it cannot, and a later step that assumes it can will stop the same way.",
+        "**The negative was verified for real, not only in a unit test.** With memoro's `suite` renamed away in a throwaway edit, `mc test memoro --full` stopped at `suite` naming both fields and both places to write them, and ran nothing — no worktree, no `npm ci`, no six files. That is the shape the bug had, and it is now a stop.",
+        "**The red set on memoro's main has already moved from the one in this plan.** At `58db0f5` on 2026-09-03 it is eight names over five files: `data-bus event names come from a single source file`; three under `S3.1 canonical mutation inventory`; `Signals runtime, routes, commands, and surfaces stay retired`; two under `mc context`; and `append enforces first/next/gap/parent/anchor and exact duplicate semantics`. `tests/ui/theme-contract.test.js` is no longer red, and the `append` one is new since 2026-09-02. Step 3's \"since when\" has nothing stored to compare against yet, and this is the drift it exists to make visible — the list in the plan is a day old and already wrong in two places.",
+        "**Two smaller decisions inside the step.** The report now names the npm script behind an npm command (`npm test  (node --test …)`, `npm run test:full  (node scripts/testing/run.mjs --profile full)`), because `npm run test:full` and `npm test` read identically and differ by 2,015 files — this also keeps memoro-cli's `command` line byte-identical to what it printed before. And `full_suite` on the report is a *different field* from `selection.full_suite`: the first is which command a whole-suite round ran, the second is the selector's admission that it could not narrow a change. They are never both set, because the first exists only when no selection ran.",
+        "**Worth knowing for step 2.** memoro's `npm run test:full` runs three sequential `node --test` processes (standard/sqlite/heavy) and prints one TAP summary each; `tapTotals` sums them, which it was already built to do. `prepare` for memoro is `npm ci` and cost 8.9 s here, not the minutes the tree size suggests. So a scheduled round is about 300 s of gate lock for memoro and about 70 s for memoro-cli — the numbers the tick's skip policy has to be sized against."
       ],
-      "pr": null,
+      "pr": "PR_PLACEHOLDER",
       "blocked_by": null
     },
     {

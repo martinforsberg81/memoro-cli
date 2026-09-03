@@ -17,8 +17,10 @@
  *     merged into it, so what is measured is the state after merging rather
  *     than the state the author last saw;
  *  4. run what the repository's selection reached — or, with `full`, the
- *     repository's own whole suite, which is the only reading here that is
- *     about the code rather than about a change;
+ *     whole suite the repository *declared*, which is the only reading here
+ *     that is about the code rather than about a change. Declared, not
+ *     inferred from `npm test`: that inference is what made `--full` run 6
+ *     files of memoro's 2,018 and summarise them as everything;
  *  5. run the command gates the repository's selection named;
  *  6. give the lease back, whatever happened.
  *
@@ -43,7 +45,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
 import { redNames, tapTotals } from './tap-red.js';
@@ -53,7 +55,7 @@ import { log } from './logger.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
-import { declarationFor } from './repo-gate-table.js';
+import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -168,6 +170,10 @@ export async function runGate({
     // the change reaches. Null when the repository has no `select`, or when
     // `--full` asked for the whole suite instead.
     selection: null,
+    // What the round ran when it ran a whole suite: the command, and whether
+    // the repository declared it or it is the `npm test` fallback. Null when
+    // a selection ran instead.
+    full_suite: null,
     extra_gates: [],
     // The pull request's own tests: every `*.test.js` it adds or changes, run
     // on the candidate after the suite (D-0157). `files: []` when it touches
@@ -327,9 +333,19 @@ export async function runGate({
     // reaches, or the repository's own whole suite. `full` asks for the second
     // on purpose; a repository with no `select` gets it either way.
     const selects = Boolean(declared.declaration.select) && !wholeSuite;
-    const commandLine = suiteCommand({ repoPath });
+    const commandLine = suiteCommand({ repoPath, declaration: declared.declaration, root });
     if (!commandLine.ok && !selects) return finish('suite', commandLine.reason);
     report.command = selects ? declared.declaration.select : commandLine.command;
+    // Which command produced a whole-suite reading, and which of the two
+    // answers it is. "It was full" is not enough on its own any more: `npm
+    // test` and a declared `suite` are both whole-suite runs and are not the
+    // same run, and the round that reported 6 files as everything reported
+    // `full: true` while it did it.
+    //
+    // Not the same field as `selection.full_suite`, which is the selector's
+    // admission that it could not narrow a change. They are never both set:
+    // this one exists only when no selection ran.
+    if (!selects) report.full_suite = { command: commandLine.run, source: commandLine.source };
 
     // Detached on purpose. The round must be able to merge the base into the
     // candidate without that ever becoming a commit on somebody's branch:
@@ -441,8 +457,8 @@ export async function runGate({
       ? await (say(`running the ${selection.files.length} file${selection.files.length === 1 ? '' : 's'} this change reaches`), timed('suite', () => measureSelected({
         tests: runTests, git: askGit, cwd: headDir, files: selection.files, flags, say, is,
       })))
-      : await (say('running the whole suite — this takes a while'), timed('suite', () => measure({
-        suite: runSuite, git: askGit, cwd: headDir, say, is,
+      : await (say(`running the whole suite — ${commandLine.run} — this takes a while`), timed('suite', () => measure({
+        suite: runSuite, git: askGit, cwd: headDir, command: commandLine.run, say, is,
       })));
     if (!after.ok) return finish('suite', `the run ${after.reason}`);
     report.candidate = after.result;
@@ -622,7 +638,14 @@ export function verdictPhrase(report) {
  * change.
  */
 function scopeOf(report) {
-  if (report.full) return ' — over the whole suite, asked for by --full';
+  // The command is on the `--full` line because "the whole suite" is now a
+  // claim mc can be wrong about: it was `npm test` by assumption, and for one
+  // of the two repositories mc knows that ran six files. Naming the command
+  // makes the claim checkable from the verdict alone.
+  if (report.full) {
+    const command = report.full_suite?.command;
+    return ` — over the whole suite, asked for by --full${command ? ` (${command})` : ''}`;
+  }
   if (report.selection?.full_suite) return ' — over the whole suite: the selector could not narrow this change';
   return '';
 }
@@ -636,9 +659,9 @@ function scopeOf(report) {
  * the whole verdict, so an unfinished run stops the round rather than counting
  * as evidence.
  */
-async function measure({ suite, git, cwd, say, is }) {
+async function measure({ suite, git, cwd, command, say, is }) {
   const at = git(['rev-parse', 'HEAD'], { cwd });
-  const run = await suite({ cwd, onLine: (line) => say(line) });
+  const run = await suite({ cwd, command, onLine: (line) => say(line) });
   const totals = tapTotals(run.tap);
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the suite did not run to the end' };
@@ -844,19 +867,80 @@ function prFacts({ gh, repoPath, pr }) {
 }
 
 /**
- * The repository's own definition of its full suite — `npm test`, verbatim.
+ * The repository's own definition of its whole suite — declared, or `npm test`.
  *
- * Deliberately not mc's idea of how to run tests, and deliberately not a
- * shorter command. A gate that runs a faster subset is not the gate; the whole
- * value of this is that what it runs is what the repository means by "the
- * suite", so nobody has to keep two definitions in agreement.
+ * Still deliberately not mc's idea of how to run tests, and still deliberately
+ * not a shorter command: what runs is what the repository means by "the
+ * suite", so nobody keeps two definitions in agreement. What changed is where
+ * that meaning is read from. `npm test` was taken as the whole suite by
+ * assumption, and for memoro the assumption was false — its `npm test` is
+ * `node scripts/testing/ci.mjs`, a diff-selector, and a `--full` round has no
+ * diff, so it ran 6 files of 2,018 and summarised them as everything.
+ *
+ * So there are three answers, and the middle one is the point:
+ *
+ *  - a declared `suite` is the command, whichever of the three layers wrote
+ *    it (`repo-gate-table.js`);
+ *  - a declaration with `select` and no `suite` is a **stop**. A repository
+ *    that declared a selector said, by declaring one, that `npm test` narrows
+ *    — so mc has nothing honest to run for `--full` and says so, naming both
+ *    fields. A stop is visible; a green off six files is not;
+ *  - a declaration with neither keeps `npm test`, verbatim, exactly as before.
+ *    Nothing claims to narrow there, so nothing can have narrowed it.
+ *
+ * `command` is for a reader and `run` is for the shell — for the `npm test`
+ * answer they differ, because the script behind it is the part worth seeing.
  */
-function suiteCommand({ repoPath }) {
+function suiteCommand({ repoPath, declaration = {}, root = mcHome() }) {
+  const declared = typeof declaration.suite === 'string' && declaration.suite.trim()
+    && declaration.suite !== UNKNOWN
+    ? declaration.suite.trim()
+    : null;
+  if (declared) {
+    return { ok: true, command: annotate(declared, repoPath), run: declared, source: 'declared' };
+  }
+
+  if (declaration.select) {
+    return {
+      ok: false,
+      reason: `${basename(repoPath)} declares how it selects the tests a change reaches ("select": ${declaration.select}) `
+        + 'but not what its whole suite is ("suite"), so --full has nothing to run. '
+        + 'mc will not fall back to npm test here: a repository that declares a selector has already said that '
+        + 'npm test narrows, and running it with no change to narrow against reports a handful of files as the whole tree. '
+        + `Declare it where the fact belongs — in the repository, ${repoDeclarationPath(repoPath)}: `
+        + '{"suite": "<command>", "suite_why": "<the measurement>"} '
+        + `— or, if it is a fact about this machine, in ${tablePath(root)}: `
+        + `{"${basename(repoPath)}": {"suite": "<command>", "suite_why": "<the measurement>"}}.`,
+    };
+  }
+
   let manifest = null;
   try { manifest = JSON.parse(readFileSync(join(repoPath, 'package.json'), 'utf8')); } catch { manifest = null; }
   const script = manifest?.scripts?.test;
   if (!script) return { ok: false, reason: `${repoPath} has no npm test script — the gate has no suite to run` };
-  return { ok: true, command: `npm test  (${script})` };
+  return { ok: true, command: `npm test  (${script})`, run: 'npm test', source: 'npm-test' };
+}
+
+/**
+ * A command with the script behind it, when the command is an npm script.
+ *
+ * `npm run test:full` says nothing about what it runs, and what it runs is the
+ * thing this whole step is about — memoro's `npm test` and `npm run test:full`
+ * differ by 2,015 files and read the same. So the manifest is opened to say
+ * so, for the reader only: `run` stays the command the declaration gave, and a
+ * manifest that will not parse or names no such script just gives the command
+ * back. This is where the `npm test  (…)` line the report has always carried
+ * comes from, and a declared `npm test` still produces it byte for byte.
+ */
+function annotate(command, repoPath) {
+  const named = /^npm\s+test$/u.test(command.trim())
+    ? 'test'
+    : (/^npm\s+run\s+(\S+)$/u.exec(command.trim())?.[1] ?? null);
+  if (!named) return command;
+  let manifest = null;
+  try { manifest = JSON.parse(readFileSync(join(repoPath, 'package.json'), 'utf8')); } catch { manifest = null; }
+  const script = manifest?.scripts?.[named];
+  return script ? `${command}  (${script})` : command;
 }
 
 /**
@@ -1101,7 +1185,16 @@ function nameSome(names) {
   return `${names.slice(0, 5).join(', ')}${names.length > 5 ? `, … and ${names.length - 5} more` : ''}`;
 }
 
-function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {
+/**
+ * The whole suite, as a process.
+ *
+ * `command` is what the declaration said, run through a shell because that is
+ * what a declaration is — a command line somebody wrote, not an argv mc gets
+ * to compose. It was `npm test` hard-coded here, which is the same assumption
+ * `suiteCommand` stopped making; the default keeps that behaviour for a caller
+ * that names nothing.
+ */
+function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env } = {}) {
   return new Promise((resolve) => {
     // The suite is started in a clean test context, not this process's.
     //
@@ -1121,8 +1214,9 @@ function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {
     const inherited = String(clean.NODE_OPTIONS || '')
       .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
       .trim();
-    const child = spawn('npm', ['test'], {
+    const child = spawn(command, {
       cwd,
+      shell: true,
       env: { ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
