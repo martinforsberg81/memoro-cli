@@ -54,6 +54,17 @@ import { repoStatus } from './repo-status.js';
 import { currentHolder } from './work-identity.js';
 
 /**
+ * How a scheduled round is written in the round log.
+ *
+ * `mode` is the log's word for what was asked for — a `--check` that stopped
+ * at red and a merge that did are different facts — and nobody asked for this
+ * one. Two more rounds a day would otherwise arrive in `mc repo rounds` as
+ * checks somebody typed, and "has the gate ever caught anything?" would be
+ * answered partly by rounds that were never about a change.
+ */
+const NIGHTLY_MODE = 'nightly';
+
+/**
  * One full round for one repository, through the door a person's `--full`
  * goes through.
  *
@@ -66,9 +77,9 @@ import { currentHolder } from './work-identity.js';
  */
 export async function scheduledRound({ repoPath, root = mcHome(), env = process.env, say = () => {} } = {}) {
   const holder = currentHolder();
-  recordRoundStart({ repo: repoPath, mode: 'check', holder: holder?.name || null, prs: [] }, { root });
+  recordRoundStart({ repo: repoPath, mode: NIGHTLY_MODE, holder: holder?.name || null, prs: [] }, { root });
   const report = await runGate({ repoPath, full: true, holder, root, env, onProgress: say });
-  recordRound(report, { mode: 'check', root });
+  recordRound(report, { mode: NIGHTLY_MODE, root });
   return report;
 }
 

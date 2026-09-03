@@ -32,3 +32,15 @@ section: Added
   memoro-cli --full` skipped it by pid in 9 s, and the ticks after it measured
   memoro (2,021 files) and memoro-cli whole, each logged with its start, its
   duration, the commit of `main` it measured and its result.
+
+  **Stopping it stops the suite too, and that is not what a plain kill does.**
+  Measured 2026-09-03: `mc test memoro-cli --full` killed 8 s into its suite
+  left two `node --test-concurrency=0` workers at `ppid 1`, still burning cores
+  after the round that started them was gone — the pre-existing behaviour of any
+  killed gate round, survivable when a person did the killing and can see what
+  is left, not survivable in a process that runs unattended every night. The
+  scheduler is spawned detached, so it is its own process-group leader and
+  `mc repo nightly stop` signals the group: the round in flight, its `npm run
+  test:full`, and the seven workers under it. Verified with a full memoro suite
+  in flight — after the stop, no `npm`, no `run.mjs`, no worker, no pid file,
+  and the round gave back its lease and the round lock on the way out.

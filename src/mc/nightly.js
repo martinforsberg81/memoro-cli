@@ -151,6 +151,23 @@ export function startNightly({ intervalMs = DEFAULT_INTERVAL_MS, root = mcHome()
  * saying it is running is the one failure this cannot have: the next reader
  * would believe a nightly is happening when none is, which is exactly the
  * false green the whole project exists to remove, arriving by a third road.
+ *
+ * ## Why the signal goes to the group and not to the pid
+ *
+ * The tick spends most of its life inside somebody else's suite: `npm run
+ * test:full`, which is a shell, which is npm, which is `node --test`, which is
+ * seven worker processes. Signalling only the scheduler kills the scheduler —
+ * and on POSIX the workers are reparented to init and keep running. Measured
+ * 2026-09-03: `mc test memoro-cli --full` killed 8 s into its suite left two
+ * `node --test-concurrency=0` workers at `ppid 1`, still burning cores after
+ * the round that started them was gone.
+ *
+ * That is the pre-existing behaviour of any killed gate round, and it is
+ * survivable when a person killed it and can see what is left. It is not
+ * survivable in a process that runs unattended every night. Because the
+ * scheduler is spawned detached it is its own process-group leader, so its
+ * whole descent — and nothing else — is reachable as `-pid`, which is exactly
+ * "what the scheduler started".
  */
 export async function stopNightly({ root = mcHome() } = {}) {
   const state = nightlyState({ root });
@@ -159,7 +176,10 @@ export async function stopNightly({ root = mcHome() } = {}) {
     return { ok: true, stopped: false, abandoned: state.abandoned };
   }
   const { pid } = state;
-  try { process.kill(pid, 'SIGTERM'); } catch { /* it went on its own */ }
+  // The group first, so the suite in flight goes with it; the pid alone as a
+  // fallback, in case this pid is somehow not a group leader — a stop that
+  // signalled nothing would be worse than one that left a worker behind.
+  signal(pid, 'SIGTERM');
   const deadline = Date.now() + STOP_GRACE_MS;
   while (Date.now() < deadline && alive(pid)) {
     await new Promise((resolve) => { setTimeout(resolve, 50); });
@@ -167,10 +187,15 @@ export async function stopNightly({ root = mcHome() } = {}) {
   let forced = false;
   if (alive(pid)) {
     forced = true;
-    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    signal(pid, 'SIGKILL');
   }
   rmSync(nightlyStatePath(root), { force: true });
   return { ok: true, stopped: true, pid, forced };
+}
+
+function signal(pid, what) {
+  try { process.kill(-pid, what); return; } catch { /* not a group leader */ }
+  try { process.kill(pid, what); } catch { /* it went on its own */ }
 }
 
 function rotate(log) {
