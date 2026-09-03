@@ -16,6 +16,7 @@ import { describe, it } from 'node:test';
 
 import { runMcCli } from './_helpers/mc-cli.js';
 import { menu, parsePageArgs } from '../../src/mc/commands/home.js';
+import { plainReader } from '../../src/mc/page-live.js';
 import { programmesSection } from '../../src/mc/page-collect.js';
 
 /** A work root with two areas and a queue, and nothing that needs a network. */
@@ -217,14 +218,18 @@ describe('the menu under the page', () => {
     const written = [];
     const opened = [];
     const queue = [...answers];
+    // The reader a terminal too narrow for the live page gets, with the line
+    // handed in instead of read: the menu has one way of asking, and this is
+    // it with the terminal taken out.
+    const stdout = { columns: 100, write: (text) => written.push(text) };
     return {
       opened,
       written,
       run: () => menu(DATA, {
-        stdout: { columns: 100, write: (text) => written.push(text) },
+        stdout,
         stderr: { write: (text) => written.push(text) },
         page: async () => ({ data: DATA, lines: ['  PROGRAMMES'] }),
-        ask: () => queue.shift() ?? null,
+        reader: plainReader({ stdout, ask: () => queue.shift() ?? null }),
         open: async (name) => { opened.push(name); return 0; },
       }),
     };

@@ -3,9 +3,10 @@
  *
  * One surface that lists, and no more (decision mc-3, sharpened 2026-08-29:
  * `--watch` went — a page redrawn on a timer is not a live page, and the
- * real one comes later). Bare `mc` used to print the V1 sessions
- * table; `mc status`, `mc list` and bare `mc work` each printed a list of
- * their own. They are one page now, and it is the one a person lands on.
+ * real one comes later; that later is `page-live.js`). Bare `mc` used to
+ * print the V1 sessions table; `mc status`, `mc list` and bare `mc work` each
+ * printed a list of their own. They are one page now, and it is the one a
+ * person lands on.
  *
  * What it prints is `page-collect.js`'s five sections drawn by
  * `page-render.js`. What it does after printing depends only on where it is
@@ -14,8 +15,12 @@
  *   - a terminal      the page, then the menu `mc work` used to carry — a
  *                     number or a name opens that project's workarea, making
  *                     one if it has none, and the numbers are the ones in
- *                     PROJECTS above the prompt
- *   - a pipe, --json  the page, and exit 0. Nothing prompts, ever
+ *                     PROJECTS above the prompt. The page stays true while
+ *                     the menu waits: every 30 seconds the rows that changed
+ *                     are rewritten where they stand
+ *   - a pipe, --json  the page, and exit 0. Nothing prompts, ever, and
+ *                     nothing loops — the fork is `interactive()` below and
+ *                     there is no second opinion about it
  *
  * The page is offline: it answers from `~/mc/runner/plans.json` and
  * `~/mc/runner/prs.json` and says how old the PR cache is. `--fresh` is the
@@ -28,8 +33,9 @@
 import { getPackageVersion } from '../../lib/version.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
 import { collectPage } from '../page-collect.js';
+import { LIVE_MIN_COLUMNS, liveReader, plainReader } from '../page-live.js';
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
-import { ask as askTerminal, interactive } from '../prompt.js';
+import { interactive } from '../prompt.js';
 import { inspectWorkArea } from '../work-area.js';
 import { openArea, parseArgs, runVerb, startSomething } from './work.js';
 
@@ -78,11 +84,26 @@ export async function run(argv, deps = {}) {
   stdout.write(`${first.lines.join('\n')}\n`);
 
   // A pipe, a script and `--json` see exactly the page and nothing else. A
-  // person at a terminal is asked instead of being handed a grammar.
+  // person at a terminal is asked instead of being handed a grammar — and
+  // only there does anything refresh, because this is the only place that
+  // knows there is a terminal to refresh.
   if (!(deps.interactive || interactive)()) return 0;
+  const reader = deps.reader || readerFor({ stdout, lines: first.lines, page });
   return menu(first.data, {
-    stdout, stderr, page, ask: deps.ask, open: deps.openArea,
+    stdout, stderr, page, reader, open: deps.openArea,
   });
+}
+
+/**
+ * Live, or the page as it always was.
+ *
+ * Narrower than `columnsFor`'s floor and every row of the page wraps, which
+ * makes every row of the live loop's arithmetic wrong; there the page is
+ * printed once and read the old way rather than written to the wrong rows.
+ */
+export function readerFor({ stdout, lines, page }) {
+  if (Number(stdout.columns) >= LIVE_MIN_COLUMNS) return liveReader({ stdout, lines, page });
+  return plainReader({ stdout });
 }
 
 export function parsePageArgs(argv) {
@@ -117,9 +138,15 @@ const KEYS = [
  * is read exactly as it would have been from the shell. Anything else is said
  * out loud rather than swallowed, and the page is drawn again with whatever
  * changed.
+ *
+ * The reading is a `reader` rather than a call, because at a terminal it is
+ * two things at once: the line being typed, and the page above it refreshing
+ * while it is (`page-live.js`). The menu owns what is printed under the page
+ * — it hands the reader that block so a frame that has to reprint can put it
+ * back — and the reader owns everything from the prompt onwards.
  */
 export async function menu(first, {
-  stdout, stderr, page, ask = askTerminal, open = openArea,
+  stdout, stderr, page, reader, open = openArea,
 }) {
   let data = first;
   for (;;) {
@@ -133,8 +160,7 @@ export async function menu(first, {
       ...data.programmes.programmes.flatMap((group) => group.projects),
       ...(data.programmes.unplanned?.shown || []),
     ];
-    stdout.write(`\n${KEYS}\n\n`);
-    const answer = ask('>', { stdout });
+    const answer = await reader.ask(`\n${KEYS}\n\n`, '>');
     if (!answer || answer === 'q') return 0;
 
     if (answer === 'n' || answer === 'new') return startSomething({ stdout, stderr });
@@ -170,10 +196,16 @@ export async function menu(first, {
     data = await redraw();
   }
 
-  /** The page again, printed, with the rows the numbers now mean. */
+  /**
+   * The page again, printed, with the rows the numbers now mean.
+   *
+   * Through the reader rather than to the stream: something has printed under
+   * the last frame — a project, a verb's output — so the page is somewhere
+   * else on the screen now, and the reader is what has to be told.
+   */
   async function redraw() {
     const next = await page();
-    stdout.write(`${next.lines.join('\n')}\n`);
+    reader.show(next.lines);
     return next.data;
   }
 }
