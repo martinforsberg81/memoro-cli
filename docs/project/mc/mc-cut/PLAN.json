@@ -105,7 +105,7 @@
         "**How this was verified.** The 25 test files `scripts/affected-tests.js` selects for this diff: 336 tests, 336 passing. `mc` prints the page. `mc run --rounds 1 --no-merge --no-caffeinate` completes a round against a temporary `MC_WORK_ROOT` — isolated on purpose, because the real runner was live and a second one writing `runner.json` would have claimed work. The full 246-file `npm test` was **not** run: main carries a standing red set, and ruling `mc-test-1` says the cause is this repository's uncapped concurrency and must be re-measured before it is trusted.",
         "**One pre-existing red found on the way.** `tests/mc/commands/dormant.test.js` still asserts that `mc pm` and `mc pm-helper` print a dormant line; #540 removed both verbs, so the router answers `unknown command` and the file fails on `main` today. It is not in this diff's affected set. It belongs to step 5 — the tests that only covered deleted code — and it is named here so step 5 does not have to find it twice."
       ],
-      "pr": "memoro-cli#543",
+      "pr": 543,
       "blocked_by": null
     },
     {
