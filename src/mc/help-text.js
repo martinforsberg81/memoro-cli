@@ -121,11 +121,11 @@ IN FULL
                                     only if nothing new went red and the base
                                     has not moved since, squash-merge, pull the
                                     source-linked installation, and log a line.
-                                    Nothing merges a red gate. The verdict says
-                                    GREEN only when the base itself has no red
-                                    names; otherwise it carries the number that
-                                    are standing, and .mc/red-ratchet.json is
-                                    what keeps that number from growing
+                                    Nothing merges a red gate. The round does
+                                    not measure the base, so the verdict
+                                    carries no standing-red number: green is
+                                    green, and what ran is the count on the
+                                    line under it
   mc merge <repo> <pr> <pr>...      Several at once: one candidate with all
                                     of them merged in, measured once each
                                     side, each one's own tests by itself, then

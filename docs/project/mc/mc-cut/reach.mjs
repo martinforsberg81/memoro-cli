@@ -142,7 +142,11 @@ const seed = (names) => names.map((n) => join(SRC, n)).filter((p) => existsSync(
 const page = reach(seed(LIVE), new Set(seed(['bin-mc.js'])));
 const live = reach(seed(LIVE).concat(seed(KEPT)));
 const vault = all.filter((f) => rel(f).startsWith('src/vault/'));
-const kept = reach(seed(LIVE).concat(seed(KEPT)).concat(seed(PACKAGE)).concat(vault));
+// `src/vault/engine/c1-claude-lease.js` spawns the C1 child by path and pins
+// its SHA-256, so the child belongs to vault's cost the way `nightly-run.js`
+// belongs to `nightly.js`. No import graph can see either edge.
+const kept = reach(seed(LIVE).concat(seed(KEPT)).concat(seed(PACKAGE))
+  .concat(vault).concat(seed(['runtime/broker/c1-child.js'])));
 const dead = all.filter((f) => !kept.has(f));
 
 const row = (label, files) => `${String(files.length).padStart(4)} filer ${String(sum(files)).padStart(6)} rader  ${label}`;
