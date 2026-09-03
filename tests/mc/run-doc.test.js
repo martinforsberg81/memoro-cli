@@ -59,6 +59,13 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(DOC, new RegExp(`after ${String(HELPER_HOUR_UTC).padStart(2, '0')}:00Z`, 'u'));
   });
 
+  it('sends a reader looking for a supervisor to `mc run --update`, and to no script', () => {
+    assert.doesNotMatch(DOC, /runner-loop/u, 'the shell supervisor is deleted — the doc must not send anyone to it');
+    const beside = /## What runs beside it\n([\s\S]*?)\n## /u.exec(DOC);
+    assert.ok(beside, 'the section a reader looks in for a supervisor is gone entirely');
+    assert.match(beside[1], /`mc run --update`/u);
+  });
+
   it('states the flag defaults the command parses', () => {
     const defaults = parseRunArgs([]);
     assert.equal(defaults.rounds, 0);
