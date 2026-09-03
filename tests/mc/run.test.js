@@ -1694,3 +1694,25 @@ test('runLoop: lanes run their own rounds — memoro-cli does not wait for memor
   // the workareas closed by the chore loop, from both repositories' plans.
   assert.equal(/memoro-cli: lanes:/u.test(log), false);
 });
+
+/**
+ * `mc-test`'s sessions opened three pull requests from `test-architecture-*`
+ * branches (2026-09-03). The runner knew the project's PRs only by the
+ * project's name, so it landed none of them, saw none as in flight, and ran
+ * the next step on top of them. The branch the worktree stands on is the
+ * project's, whatever the session called it.
+ */
+test('a pull request from the branch the worktree stands on is the project\'s, whatever it is called', async () => {
+  const f = fixture({
+    plans: { memoro: { alpha: ready } },
+    heads: { alpha: 'test-arch' },
+    gh: { alpha: { number: 77, title: 'Renamed', head: 'test-arch' } },
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.equal(f.calls.sessions.length, 1, 'the PR was not named after the project, so nothing stopped the step');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /alpha: #77 is on test-arch, not a branch named after the project — landing it anyway/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\talpha\tstep\t0\t\d+\t77\t/u, 'the row names the PR');
+});
