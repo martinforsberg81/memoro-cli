@@ -122,7 +122,7 @@
         "`chores()` archives finished plans only on a pass when no lane is in a session, because an archive lands a docs PR through the gate and the gate still refuses a second round. Once step 3 makes the lock wait, that guard can go.",
         "`--once` and `--rounds N` still drive the old shared round; only the unattended run (`rounds === 0`) has independent lanes. Both are read by the same STOP and UPDATE files, at a lane's round boundary, and the handover waits for every lane."
       ],
-      "pr": null,
+      "pr": 560,
       "blocked_by": null
     },
     {
