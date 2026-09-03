@@ -11,7 +11,7 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [] } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [] } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -44,6 +44,10 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     now: () => new Date(now),
     sleep: async () => {},
     tmuxHas: (name) => live.includes(name.replace(/^mc-/u, '')),
+    // The liveness test the loop's own refusal uses. A table, not `ps`: a
+    // fixture pid that happened to be a real process on the machine running
+    // the suite would make these tests answer to something outside them.
+    alive: (pid) => livePids.includes(Number(pid)),
     exists: (p) => p in files || dirs.has(p),
     read: (p) => files[p] ?? null,
     list: (p) => {
@@ -639,6 +643,45 @@ test('STOP file: the loop exits after the step it is in, and refuses to start wh
 });
 
 /**
+ * `runner.json` as a claim that is checked. Measured 2026-09-02: two runners
+ * were alive in one work root and each handed `runner-open-prs` step 3 to a
+ * session in the same worktree, 100 seconds apart — because `markRunner()`
+ * writes the file without ever reading it, so the second runner overwrote the
+ * first and nothing anywhere said two were running.
+ */
+test('runLoop: a second runner refuses to start while the first is alive, and names the pid', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [7777] });
+  f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777, started: '2026-08-29T06:33:25Z' }, null, 2)}\n`;
+  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 2);
+  assert.equal(f.calls.sessions.length, 0, 'a refused runner started a step anyway');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /a runner is already running — pid 7777, started 2026-08-29T06:33:25Z/u);
+  assert.match(log, /mc run stop ends it · mc run --update restarts it on the newest code/u);
+  assert.equal(/runner start \(mc run/u.test(log), false, 'it announced a start it did not make');
+  // The holder's own file is left exactly as it was: the refusal must not be
+  // the thing that makes the first runner invisible.
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']), { pid: 7777, started: '2026-08-29T06:33:25Z' });
+});
+
+test('runLoop: --once is refused by the same check — one worktree, one session', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [7777] });
+  f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777 }, null, 2)}\n`;
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 2);
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /a runner is already running — pid 7777\n/u);
+});
+
+test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777, started: '2026-08-29T06:33:25Z' }, null, 2)}\n`;
+  f.files['/w/runner/current-memoro.json'] = '{}';
+  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
+  assert.equal(f.calls.sessions.length, 1, "a killed runner's leftovers stopped the next one from running");
+  assert.match(f.files['/w/runner/log/runner.log'], /cleared runner\.json — the pid it named \(7777\) is gone/u);
+  assert.equal('/w/runner/current-memoro.json' in f.files, false, 'the killed runner\'s in-flight file outlived it');
+});
+
+/**
  * `mc run --update` from the runner's side: the file is read where STOP is
  * read — between rounds — and the round in flight is never cut short for it.
  */
@@ -664,6 +707,32 @@ test('UPDATE file: the loop finishes its round, then hands over to a new process
   const after = f.calls.removed.lastIndexOf('/w/runner/runner.json');
   assert.equal(f.calls.removed.slice(after + 1).includes('/w/runner/runner.json'), false,
     'runner.json was cleared a second time, after the new runner had written it');
+});
+
+test('UPDATE file: the successor starts with no refusal — runner.json is cleared before it', async () => {
+  // The failure this guard could plausibly introduce: the handover starts a
+  // second `mc run` while the first is still alive, on purpose. It works only
+  // because `runLoop` clears runner.json *before* calling handOver, so the
+  // successor reads no holder. This drives the real `handOver` and starts a
+  // real successor loop from `respawn`.
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [4242] });
+  const inner = f.deps.session;
+  f.deps.session = (call) => { f.files['/w/runner/UPDATE'] = ''; return inner(call); };
+  let successor = null;
+  let holderAtRespawn = null;
+  f.deps.respawn = () => {
+    holderAtRespawn = f.files['/w/runner/runner.json'] ?? null;
+    successor = runLoop({ once: true, deps: { ...f.deps, pid: 9001, session: inner } });
+    return 9001;
+  };
+  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(holderAtRespawn, null, 'the successor was started while runner.json still named the runner handing over');
+  assert.equal(await successor, 0, 'the successor refused to start');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.equal(/a runner is already running/u.test(log), false, 'the handover tripped the holder refusal');
+  // `respawn` starts the successor before `handOver` gets to say it handed
+  // over, so the successor's own start line is the earlier of the two.
+  assert.match(log, /runner start \(mc run, merge=1 rounds=0 once=1\)[\s\S]*handed over to pid 9001/u);
 });
 
 test('UPDATE file: a handover that does not start keeps this runner going', async () => {

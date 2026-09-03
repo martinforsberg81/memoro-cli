@@ -24,7 +24,7 @@
       "check": "A test in `tests/mc/helper-cli-collect.test.js` that runs a died round with a matching `reap` line in the lease fixture through `collect()`/`cliRows()` — not through a hand-built object — and asserts `gate-round-lease-held` is absent while `gate-round-died` is present. It fails on the code as it stands today."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A second `mc run` refuses to start while a first one is alive, and says which pid holds it.",
       "check": "With a runner running, a second `mc run` exits non-zero and names the live pid; `mc run --update`'s handover still starts its successor with no refusal, asserted in `tests/mc/` against the handover path that clears `runner.json` before starting the new runner."
     },
@@ -73,7 +73,7 @@
     },
     {
       "title": "`runner.json` is a claim that is checked",
-      "status": "ready",
+      "status": "done",
       "done_when": "`runLoop` refuses to start when `runner.json` names a live pid, saying which pid holds it and how to end it, and `mc run --update`'s handover still starts its successor without tripping the refusal.",
       "instruction": [
         "What happened, measured 2026-09-02: two runner processes were alive at once — pid 72779 started 06:33:25 (PPID 1) and pid 61846 started 21:13:11 — and each started a headless step session for `runner-open-prs` step 3 in the same worktree, `~/mc/runner-open-prs/memoro-cli`, 100 seconds apart. Both were given the identical prompt. The second session's only safe move was to stand down, because the first was already editing six files in the shared checkout: two agents in one working tree share one `git add -A` and one branch. That is a whole Opus session spent on nothing.",
@@ -84,7 +84,15 @@
         "Where the refusal is written matters for `--once`: `mc run --once` is a person watching one step. Say whether it is subject to the same refusal and why."
       ],
       "pr": null,
-      "blocked_by": null
+      "blocked_by": null,
+      "comments": [
+        "The refusal is `readRunner` called from `runLoop`, immediately after the STOP refusal and before `markRunner()` — the same function `mc run start` and `requestUpdate` already use, not a second read of the file. That reuse is the point: the reason a bare `mc run` and `mc run start` disagreed about whether a runner was running is that only one of them asked. It needed one new dependency, `alive: pidAlive` on `realDeps` — the runner had no liveness test of its own at all, which is the shape of the fault in one line.",
+        "The stale case is cleared, not refused. `runLoop` refuses only when the pid is alive; a `runner.json` naming a pid that is gone is a killed runner's leftovers and is removed with a line saying which pid it named, exactly as `startRunner` does. It goes through the runner's own `clearRunner()`, which takes the `current-<repo>.json` files with it — the same dead runner's other leftovers, which a reader of the page would otherwise draw as a step that has been in flight for hours. A machine that has to be unstuck by hand after a kill would be a worse failure than the one being fixed.",
+        "`--once` is refused too, and the instruction asked for the reason. `--once` is a person watching one step rather than an unattended loop, but the collision the guard exists for is identical: one step, one worktree, one `git add -A`, one branch, and a second session whose only safe move is to stand down. Being watched does not make that safe — it only means somebody sees it happen. The person who wanted the step run can `mc run stop` first, and the refusal names that.",
+        "The handover is asserted against the real `handOver`, not a stub: the test fakes only `respawn`, and that fake starts an actual second `runLoop` over the same fixture files, so the successor really goes through the new refusal and really is not refused. It works because `runLoop` clears `runner.json` before calling `handOver`, which was already true and is now load-bearing — moving that clear after the respawn would break the handover, and this test is what would say so. One incidental ordering fact, since it surprised the first version of the test: because `respawn` starts the successor synchronously, the successor's own `runner start` line lands in `runner.log` before the predecessor's `update: handed over to pid N`.",
+        "Verified beyond the suite, on this machine: with a live pid written into a throwaway `MC_WORK_ROOT`, `mc run --once` exited 2, printed `a runner is already running — pid 10049, started 2026-09-03T07:00:00Z` and the two ways on, and left the holder's `runner.json` byte-for-byte as it was. With pid 999999 (gone) and a leftover `current-memoro.json`, the same command logged `cleared runner.json — the pid it named (999999) is gone` and ran its round.",
+        "What this deliberately does not guard, for whoever reads it next. The claim is one per work root, because that is what `runner.json` is — two runners with different `MC_WORK_ROOT`s pointed at overlapping worktrees would still collide, and nothing here sees that. Two lanes inside one workarea is out of scope by the contract and remains so. And the 2026-09-02 second runner had PPID 1 and no `--update` handover before it in `runner.log`, so it was started by hand or by something outside mc; the guard holds either way, which is why finding out how it was started was never a prerequisite."
+      ]
     },
     {
       "title": "Delete the supervisor mc does not run",

@@ -146,10 +146,26 @@ not what somebody typing it asked for. The unreadable-plans table is written
 either way — it is a write of what the round has already read, not a pass over
 anything.
 
-The loop around the round is `runLoop`. It writes `runner.json`, runs rounds
-until `--rounds` is reached or a STOP file appears, sleeps `--idle-sleep`
-after a round that ran nothing, and clears its files in a `finally` however it
-ends.
+The loop around the round is `runLoop`. It reads `runner.json` before it
+writes one, runs rounds until `--rounds` is reached or a STOP file appears,
+sleeps `--idle-sleep` after a round that ran nothing, and clears its files in
+a `finally` however it ends.
+
+**It refuses to start while another runner is alive**, naming the pid that
+holds it and the two ways on — `mc run stop`, `mc run --update` — which is the
+same refusal `mc run start` has always made, from the same `readRunner`, so
+the two cannot disagree about who is running. It has to be here and not only
+in `start`, because on 2026-09-02 two runners were alive in one work root and
+handed the same step to two headless sessions in the same worktree a hundred
+seconds apart: two agents in one working tree share one `git add -A` and one
+branch, and the second session's only safe move was to stand down. `--once` is
+refused too — it is a person watching one step rather than an unattended loop,
+but the collision is identical. A `runner.json` naming a pid that is *gone* is
+a killed runner's leftovers, not a wall: it is cleared, along with the
+`current-<repo>.json` files that runner never got to remove, and the loop says
+so and goes on. The one start that must not be refused is `--update`'s
+successor, and it is not: `runLoop` clears `runner.json` before it hands over,
+so the new process reads no holder.
 
 ## The queue
 
@@ -228,9 +244,10 @@ thirty-eight then cost no git at all; the two `dirty worktree` names still
 walk into `runStep` and still cost their second or so, which is the point of
 them. The live before-and-after of one `mc run --rounds 1 --no-merge` is
 deliberately *not* in this note: the runner was up and holding the very
-session that wrote it, and a second `mc run` against `~/mc` spawns step
-sessions and races for `runner.json`. What is measured is the round that was
-slow, and the reading that replaces its 51 s.
+session that wrote it, and a second `mc run` against `~/mc` would then have
+spawned step sessions and raced for `runner.json` — it now refuses instead,
+which is the same reason there is no live before-and-after here. What is
+measured is the round that was slow, and the reading that replaces its 51 s.
 
 **A round is only slow in proportion to how much of the board it cannot act
 on.** On 2026-09-02 that was almost all of it: 21 of the 38 waited on
@@ -480,7 +497,8 @@ Everything lives under `~/mc/runner/`.
 - **`log/<name>-<ts>.json`** and `.json.err` — what the session actually
   printed, kept whole.
 - **`runner.json`** stays one per machine: a runner is here, and this is the
-  pid to test for life.
+  pid to test for life. Every start reads it first, so it is a claim that is
+  checked rather than one that is only made.
 - **`current-<repo>.json`** — one file per lane, existing exactly as long as
   that lane's session does. It carries the project name, kind, repo, tool,
   model, budget, start time, the runner's pid and the worktree, and it is
