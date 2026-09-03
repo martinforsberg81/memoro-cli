@@ -24,12 +24,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "Every blocked step on origin/main in both repositories has been read, and each one either still has a live reason to be blocked or has been turned back to ready — with the count of each stated. Today that is 28 blocked against 4 ready in memoro.",
       "check": "A table in `docs/project/mc/step-parallelism/blocked-audit.md` naming every blocked step, what its `blocked_by` says, whether that thing is still true on main, and the disposition. The re-count after the sweep is run with the same script, checked in beside it."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A blocked step whose blocker has finished is surfaced without a person having to notice it — mc says so on its own.",
       "check": "With a plan blocked on a project whose plan is `done` on main, the surface named in step 1's design (a `mc status`/page line, or a runner.log line, whichever that step settles on) reports it; driven by a test with a real fixture pair rather than by inspection."
     },
@@ -73,7 +73,7 @@
   "steps": [
     {
       "title": "Read every blocked step, free the ones whose blocker is gone, and make mc say it next time",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/project/mc/step-parallelism/blocked-audit.md` accounts for every blocked step on origin/main in both repositories — blocker, whether it still holds, disposition — the ones whose blocker has finished are back to `ready` on main, and mc reports a stale blocker on its own rather than waiting to be noticed.",
       "instruction": [
         "**The fault, in Martin's words on 2026-09-03:** *\"vi måste förbättra hur ready sätts då planer kan stoppas utan avsikt\"*. A step is `blocked` with `blocked_by: { kind, name }` — `kind` is `decision` or `project` (`BLOCKER_KINDS`, `src/mc/plan-schema.js`). Nothing in mc ever re-reads that name to ask whether it is still true. The runner hands out `ready` steps and reads nothing else, so a step whose blocker finished months ago is invisible to it for ever. A blocker does not flip itself.",
@@ -85,8 +85,15 @@
         "**Then make the next one visible without a person.** Design and build the smallest thing that reports a step blocked on a project that is done: a line in `runner.log` at the end of a round, a row on the page, a line in `mc status` — pick one and say why. Beware of `mc status`'s known trap: it reads the workarea's local checkout, which lags origin/main, so it showed `blocked` for `email-window-layout` step 5 after main already said `ready`. Whatever surface this uses must read the plan on origin/main, which is what the runner obeys.",
         "**What this step does not do.** It does not change what `blocked` means, does not add a status, and does not make the runner start a blocked step. `STEP_STATUSES` stays `ready`/`done`/`blocked` — the fourth status (`waiting-decision`) was deliberately removed and is not coming back."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The sweep, in numbers, from `blocked-scan.mjs` beside the audit. Before: 31 plans on main, 31 blocked steps (29 memoro, 2 memoro-cli), 21 waiting on a `decision` and 10 on a `project`. After: 29 blocked steps, and memoro went from 28 blocked plans against 3 ready to 26 against 5. Two steps were flipped, both waiting on `inbox-finish`, which had been delivered, logged and archived off main the same morning: `home-on-msr` step 2 and `time-axis` step 1, landed as memoro #11280 through `mc merge memoro 11280 --docs`. The goal says 4 ready in memoro and the audit says 3 — `email-window-layout` step 5 was flipped by hand between the two readings, which is the incident this step exists because of.",
+        "Twenty-one of the thirty-one waited on a `decision`, and none of them could be resolved here, because **there is no decision file anywhere in either repository** — `git ls-tree -r origin/main | grep decisions/` is empty in both. The `<area>/decisions/` apparatus went with the `waiting-decision` status, so a `decision` blocker is a label with nothing behind it and its answer lives in a plan's prose or in a conversation. Eighteen of the twenty-one are one deliberate park: #11152 converted twenty-six plans in a single commit and blocked every one's next step on `plan-review` by design. It is Martin's reading queue, not a fault, and it is the ceiling on what any automation here can reach — measured on the same refs, only 10 of 31 blocked steps were even machine-checkable.",
+        "The finding worth carrying forward, because a later step may want it: **`blocked_by` holds one blocker and a step can be waiting on two things.** `cache-warming` step 3 (\"Wait for the audit\") and `tool-profiles-per-model` step 1 (\"Wait for the numbers\") both wait in their instruction on `region-cache-audit`, which was delivered 2026-08-30 and archived by #11143 — but their `blocked_by` says `decision: plan-review`, because the conversion carried one blocker per step and the park took the slot. So the thing they are actually waiting for is finished and nothing can see it, including the mechanism this step built. Two rows did not seem worth a schema change, and it is not this step's to make; it is written down in `blocked-audit.md` § *The second blocker*.",
+        "The surface is the page, not `runner.log` and not `mc status`. `mc status <name>` reads the workarea's working tree when there is one (`status-project.js` says so at the top), which is exactly the trap the instruction warned about; `runner.log` is where `run.js` already declines to put plan-shaped refusals, in `refusedLine`'s own words, because they belong on the page. So `queueSection` grew a `stale` key and QUEUE grew a line under `skipped`. The line says **`blocker finished N`** and not *stale*: RUNNER two sections up already spends the word \"stale\" on a lane file whose process is gone, and one word with two meanings on one page is the kind of thing this repository has guards against.",
+        "What the mechanism deliberately will not do. It reads `kind: project` only, never `decision` — see above, there is nothing to check a decision against, and a machine that guessed would be wrong 21 times out of 31. It says *is not on main* rather than *is done*, because a project also leaves main when it is abandoned or superseded (`project_log.md` has both), and then the blocked step's premise may be dead rather than satisfied — only a person can tell which. And it writes nothing: flipping a step back to `ready` stays a plan edit somebody makes and a pull request somebody reads. This step's automation is the noticing, and only that.",
+        "For step 2, which measures: `blocked-scan.mjs` takes `--memoro-ref` and `--memoro-cli-ref`, so any past state of the queue can be re-counted from git without a checkout, and `--json` gives the rows. That is also how the before/after table in `blocked-audit.md` was produced."
+      ],
+      "pr": 559,
       "blocked_by": null
     },
     {

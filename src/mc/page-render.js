@@ -310,13 +310,48 @@ function queueLines(lines, c, wide, queue) {
   const skipped = queue.skipped.count
     ? `skipped ${queue.skipped.count} (${Object.entries(queue.skipped.reasons).map(([why, n]) => `${why} ${n}`).join(', ')})`
     : '';
-  if (!more && !skipped) return;
-  // What was passed over is the quietest thing in the section: it is the
-  // reason a name is *not* below, and dim grey is how the page says so.
-  lines.push(`       ${paint(c, between([
-    { text: more, styles: ['grey'] },
-    { text: skipped, styles: ['dim', 'grey'] },
-  ], ' · '), wide - 7)}`);
+  if (more || skipped) {
+    // What was passed over is the quietest thing in the section: it is the
+    // reason a name is *not* below, and dim grey is how the page says so.
+    lines.push(`       ${paint(c, between([
+      { text: more, styles: ['grey'] },
+      { text: skipped, styles: ['dim', 'grey'] },
+    ], ' · '), wide - 7)}`);
+  }
+  staleLine(lines, c, wide, queue.stale);
+}
+
+/**
+ * The one line for a plan that has been waiting for nothing: a step blocked
+ * on a project that is finished or gone from main (stale-blockers.js).
+ * Yellow, because the palette's yellow is what waits on a person and this is
+ * the page asking for one — nothing flips a blocker but a human with a plan
+ * edit.
+ *
+ * It says **blocker finished** and not *stale*, though the mechanism is named
+ * for staleness, because RUNNER two sections up already spends that word on a
+ * lane file whose process is gone. One word, one meaning, on one page.
+ *
+ * It is drawn under `skipped` rather than beside it on purpose. `skipped` is
+ * the runner declining work correctly; this is the runner declining work it
+ * should have been given, and reading as one number would hide it inside the
+ * other. Absent when there are none, which is the state to expect.
+ */
+function staleLine(lines, c, wide, stale) {
+  if (!stale?.count) return;
+  // One line each, not one line for all of them: at 120 columns a second name
+  // was already being clipped away, and a fault a person has to widen the
+  // terminal to see is one the page has not really reported.
+  lines.push(`       ${paint(c, [
+    { text: `blocker finished ${stale.count}`, styles: ['yellow', 'bold'] },
+    { text: ' — a blocked step is waiting on a project that is not coming', styles: ['yellow'] },
+  ], wide - 7)}`);
+  for (const item of stale.items) {
+    lines.push(`       ${paint(c, [
+      { text: `· ${item.project} step ${item.step} on ${item.blocker}, which ${item.why}`, styles: ['yellow'] },
+    ], wide - 7)}`);
+  }
+  if (stale.more) lines.push(`       ${paint(c, [{ text: `· … ${stale.more} more`, styles: ['yellow'] }], wide - 7)}`);
 }
 
 /**

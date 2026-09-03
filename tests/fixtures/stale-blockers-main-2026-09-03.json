@@ -1,0 +1,427 @@
+{
+  "captured": {
+    "repo": "memoro",
+    "ref": "6c04e604319a87fa3accd77f9ebf0912b7a6f563",
+    "ref_title": "Archive 1 done project: inbox-finish (#11279)",
+    "taken": "2026-09-03",
+    "why": "The real pair this mechanism was built for. At this sha `home-on-msr` step 2 and `time-axis` step 1 were both blocked on `project: inbox-finish`, and `inbox-finish` had no file left under docs/project/ — its plan was archived off main by #11279 the same day it was delivered. `web-renderer-close` rides along as the control: it is blocked on `time-axis`, which is on main and not done, so it must not be reported. Verbatim; nothing here is edited."
+  },
+  "plans": [
+    {
+      "repo": "memoro",
+      "programme": "msr-core",
+      "project": "home-on-msr",
+      "path": "docs/project/msr-core/home-on-msr/PLAN.json",
+      "legacy": false,
+      "plan": {
+        "schema": "mc-plan",
+        "version": 1,
+        "goal": [
+          "Every card the Home surface mounts is described by content (`blocks[]`, `actions[]`, `empty`, `delivery`) and drawn by the block renderer through a skin — no per-card web view on `/app`. Today Home mounts thirteen card keys and exactly one (`continue`) is migrated; the hero alone carries 1 741 home-only lines in `renderers/web/cards/hero/hub.js`. When this programme is done the ledger's home keys are gone, the hero's home mode is torn down, and Home is the first *surface* — not card — that MSR renders end to end, which is the precondition for the performance programme that follows (a surface that is one derivation + one renderer can be measured, seeded and bundled as one unit).",
+          "Ordered by Martin 2026-08-29: inbox first, then Home, then \"allting måste i princip renderas ögonblickligen\" — measured first."
+        ],
+        "contract": [
+          "The product's appearance survives the migration: the existing stylesheets are the asset, dressed back on through skins; new CSS only where no old rule exists to reuse. This is Martin's standing ruling, quoted in renderers/web/card-skin-registry.js: \"Vi kan inte börja om med all styling… resultatet i UI ska vara såsom det var.\"",
+          "The answer key is never edited to make a comparison green: a diff row is labelled vocabulary with a reason, or bug and the card is fixed. Re-capturing to remove a difference destroys the gate (msr-track-3's contract, shared).",
+          "A card leaves MSR_UNMIGRATED_CARDS only through the gates (G1–G4, its G6 comparison labelled); a key is retired or folded only by recorded ruling in the ledger.",
+          "The rulings the steps name (R-H3, R-H4, R-H5, R-H6) are Martin's: a step that reaches one unmade goes blocked with blocked_by naming it, and does not improvise.",
+          "No new vocabulary (block kind, mark, tone) without a ruling — an addition is a stop, never an edit."
+        ],
+        "out_of_scope": [
+          "The hub scenes for other surfaces (courses, people, …) — the hero key stays for them; only its home mode is torn down here (H3).",
+          "The reader and compose covers (email-window-layout), and everything inbox (inbox-finish).",
+          "The planning surface beyond the trio of cards Home itself mounts — the rest is planning-on-msr.",
+          "The performance programme the goal names as following this project — measured after, not built here."
+        ],
+        "success_criteria": [
+          {
+            "met": true,
+            "criterion": "H0a: `sdk/corpus/ports/` holds a recording per home mount and `sdk/corpus/legacy/` an answer key at every class for the six cards that can be mounted alone; every capture declares a fate and a reason for every class, glyph and valued attribute; `legacy-comparison.test.js` green.",
+            "check": "ls sdk/corpus/ports/ and sdk/corpus/legacy/; node --test tests/architecture/legacy-comparison.test.js green."
+          },
+          {
+            "met": false,
+            "criterion": "H0b: every home card has an answer key at every class and every variant; `AWAITING_CAPTURE` is empty.",
+            "check": "grep -R AWAITING_CAPTURE sdk/corpus/ports/ returns nothing; the capture harness run is in the PR."
+          },
+          {
+            "met": false,
+            "criterion": "By H8: `sdk/corpus/comparison/` holds a comparison for every one of those keys, every diff row is labelled, and `AWAITING_MIGRATION` is empty.",
+            "check": "ls sdk/corpus/comparison/ per key; node --test tests/architecture/legacy-comparison.test.js refuses an unlabelled row; grep AWAITING_MIGRATION empty."
+          },
+          {
+            "met": false,
+            "criterion": "Each of H1–H8: G7c 0 px / heightDelta 0 at 599/899/1280 against its capture (H6 excepted: retired), G5 every affordance reached, corpus scenario per variant, `test:msr:contract` green, CI green, and the running `/app` looked at per device class before the flip PR.",
+            "check": "The G7c and G5 runs per card are in each PR; npm run test:msr:contract green; the surface looked at in the running app at 599/899/1280, light and dark."
+          },
+          {
+            "met": false,
+            "criterion": "`grep -c \"'home-\" public/js/msr/contracts/card-migration-ledger.js` returns 0 inside `MSR_UNMIGRATED_CARDS`, and `hub.js` has no `*Home*` function.",
+            "check": "The grep itself, run and shown in the closing PR; grep -n \"Home\" public/js/renderers/web/cards/hero/hub.js (or its then-current path) shows no home-mode function."
+          },
+          {
+            "met": false,
+            "criterion": "`/app` mounts through `surfaces/home/index.js` with every card drawn by `card-block-renderer.js` — verified by `card-view-state-keys.test.js`'s registered-view count falling by twelve.",
+            "check": "node --test tests/surface-runtime/card-view-state-keys.test.js with the registered-view count stated before and after; /app watched in the running app mounting through surfaces/home/index.js."
+          }
+        ],
+        "documents": [
+          {
+            "label": "The rendering model this project copies, and the debt it must not inherit",
+            "path": "../../../technical/msr-rendering-model.md"
+          }
+        ],
+        "steps": [
+          {
+            "title": "H0a · The port data, and the keys that can be taken today",
+            "status": "done",
+            "done_when": "sdk/corpus/ports/ holds a recording per home mount and sdk/corpus/legacy/ an answer key at every class for the six cards mountable alone; legacy-comparison.test.js green. (Delivered — see What the code taught us.)",
+            "instruction": [
+              "**H0 · Freeze the answer key** *(no product change).* Split in two by what the code turned out to allow — see *What the code taught us*."
+            ],
+            "comments": [
+              "**2026-08-30, H0a**",
+              "**2026-08-30, H0a.** Four things, each of which changed how H0 is built rather than what it is for.",
+              "**A capture's port data lives in a scenario, and a scenario for an unmigrated card is red**",
+              "**A capture's port data lives in a scenario, and a scenario for an unmigrated card is red.** `msr-legacy-projection-capture.mjs` reads `sdk/corpus/cards/<key>.json`; `sdk/tooling/card-corpus.mjs` runs every file in that directory and fails one whose card has no registered derivation, with a reason. That is the corpus gate working, and it is incompatible with H0's order — capture every key BEFORE the first derivation, so no derivation's shape can leak into the key it will be measured against. So the port data got its own artifact, `sdk/corpus/ports/`, recorded by `scripts/msr-card-port-record.mjs` through the product's own query bindings, and it MOVES into the scenario at the card's migration rather than being copied. Two gates hold that: a card with both is refused, and a recording nothing captures is refused.",
+              "**A capture with no comparison is red too**",
+              "**A capture with no comparison is red too**, for the same structural reason: a comparison mounts the migrated card and needs its derivation. Between H0 and each card's own post there is an answer key with no reader, and that state is now declared (`AWAITING_MIGRATION`, one entry per card naming the post that closes it) rather than tolerated. An entry whose card HAS a comparison is red, so the declaration cannot hide a reader from the gate.",
+              "**The four hero children have no view of their own**",
+              "**The four hero children have no view of their own.** `card-views.js` registers `home-hero-postcard`, `-weather`, `-priority-rail` and `-fun-rail` as `parentOwnedChildView`, whose `render` returns null: the hero draws all four inside its own element in home mode. This is stronger evidence for R-H3 than the plan's own reading — the parent does not merely draw nothing of its own, the children draw nothing of theirs — and it means their answer keys need the capture to mount the parent and project a named slot. Their port data is recorded; the capture is H0b's first piece.",
+              "**The device classes are 599 / 899 / 900, not 599 / 899 / 1280**",
+              "**The device classes are 599 / 899 / 900, not 599 / 899 / 1280.** The capture derives each width from the class's own bound in `MSR_DEVICE_CLASS_BOUNDS` and refuses any width that resolves to another class, deliberately — the widths are a value in the contract rather than a behaviour of an instrument. 1280 is not one of them, and the plan's H0 text said it was. Desktop is where `action-home` splits into two columns and drops from eight rows to six, so the class matters and the number is the contract's to give. Two smaller findings, both on the record in the instruments rather than here: `items` has two query bindings declaring the same port with the same query and the same parameters (`msr:query-binding:home:content:items:data-source` and `msr:query-binding:items:home-content:data-source`), which the recorder dedupes and names; and a card can name its rows more than one way — the action/reminder stack keys two lists on `data-action-id` and `data-reminder-id` — so `rowAttribute` now takes a list."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "H0b · The rest of the keys",
+            "status": "blocked",
+            "done_when": "sdk/corpus/ports/ is empty of AWAITING_CAPTURE entries, every home card has an answer key at every class and variant, and MAX_OPEN_BUG_ROWS is pinned at a measured value.",
+            "instruction": [
+              "**H0b · The rest of the keys** *(one PR).* Three pieces, in this order:",
+              "The capture learns to mount a PARENT and project a named sub-tree. The four hero children register `parentOwnedChildView`, whose `render` returns null — the postcard and both rails are drawn inside the hero's element by its home-mode hydrate — so they cannot be mounted on their own. Their port data is already recorded and declared `AWAITING_CAPTURE`.",
+              "The `items` adapter draws in the harness. Today `hydrate` returns with the card still `card--loading` and `display: none`, no error and no rejection; the keys it produced said the card draws nothing and were deleted rather than committed.",
+              "The variant matrix on top of the base keys: hero × daypart (morning/day/evening/night) × theme (light/dark) × rails (filled/empty); today-focus without upcoming events; action-home (empty/filtered); the action/reminder stack with a populated day — the seeded week has nothing due on 2026-08-30, so H0a's key for it is the empty state and H8 needs both; items trip (active/none) and items content (grid, show-more). Per-variant `capturedAt` and a theme are instrument work the capture does not have yet.",
+              "Done when `sdk/corpus/ports/` is empty of `AWAITING_CAPTURE` entries, every home card has an answer key at every class, and `MAX_OPEN_BUG_ROWS` is pinned."
+            ],
+            "pr": null,
+            "blocked_by": {
+              "kind": "project",
+              "name": "inbox-finish"
+            }
+          },
+          {
+            "title": "H1 · `home-hero-weather` + `home-hero-postcard`",
+            "status": "ready",
+            "done_when": "Both cards leave MSR_UNMIGRATED_CARDS with the gates green and their G6 comparisons labelled; the scene draws per daypart from the port data in the running app, both themes.",
+            "instruction": [
+              "**H1 · `home-hero-weather` + `home-hero-postcard`** — the first `stat` and the first `media` blocks the renderer draws. Derivation from `daySketch`; the scene asset is a Value (`ref` + `variants`) chosen by the derivation from the daypart *in the port data* (the query already carries the date; the boundary timer becomes a query refresh at the boundary, owned by the host's scheduler, not the card). Ruling needed: R-H1 below."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "H2 · `home-hero-priority-rail` + `home-hero-fun-rail`",
+            "status": "ready",
+            "done_when": "Both rail cards leave the ledger; every row Destination arm — route, reader, object, command — works by press in the running app, and the G6 comparisons are labelled.",
+            "instruction": [
+              "**H2 · `home-hero-priority-rail` + `home-hero-fun-rail`** — two `list` cards whose rows carry every Destination arm at once: route (`href`), reader (email → `content-reader-route`), object (`play`, `mosaic`, `language` → `objectRef`, the third arm ruled 2026-08-26), and commands (`action.complete`, `action.dismiss`, `email.message.*`, `assistant.turn_context.add`). G5 proves each arm on one surface. The hover card is the host's (`HoverCard` molecule already keyed on the row's object), not content."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "H3 · Tear the hero's home mode down",
+            "status": "ready",
+            "done_when": "Home mounts the four children directly under a hero section with one skin; hub.js loses its home mode (lines 109–1827 as measured at planning); the hub scenes for other surfaces are unchanged in the running app. Stops on R-H3 if the ruling is unmade.",
+            "instruction": [
+              "**H3 · Tear the hero's home mode down** — the home surface mounts the four children directly under a `hero` section with one skin for the postcard + rails layout; `hub.js` loses lines 109–1827 and the home branch; the `hero` key stays for the hub scenes (courses/people/…) which are not this programme. Ruling needed: R-H3."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "H4 · `today-focus`",
+            "status": "ready",
+            "done_when": "today-focus leaves the ledger; the 60-second tick is a derivation of context.now on the host clock; the card's G6 comparison is labelled. Stops on R-H4 if the ruling is unmade.",
+            "instruction": [
+              "**H4 · `today-focus`** — `stat` (weather glyph, reused from H1's skin) + `copy` (date, reading, words) + `list` (remaining events, rows with `href` Destination). The 60 s tick becomes a derivation of `context.now` refreshed by the host's clock (the same scheduler as H1's boundary). Ruling: R-H4."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "H5 · `action-home`",
+            "status": "ready",
+            "done_when": "action-home leaves the ledger with every row action working by press; the popover question is resolved per R-H5, not improvised. Stops on R-H5 if the ruling is unmade.",
+            "instruction": [
+              "**H5 · `action-home`** — one `list`; rows = actions with `tags` (status, source), `meta` (due), `badge`, `actions` (complete, dismiss, archive-email, open-source, start-session, set-due, set-reminder). The two popovers are the stop-rule case: the vocabulary names the command (`action.set_due`, `reminder.open`) but not the popover. Recommended: the host owns both as",
+              "**command presentations** (a command whose executor opens a host popover, like `layout.route.open` opens a route) — no new block. Ruling: R-H5. The section's filter chips already live outside the card (section controls)."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "H6 · `home-onboarding-step`",
+            "status": "ready",
+            "done_when": "home-onboarding-step is retired from the ledger with a recorded reason, or migrated, per R-H6 — one small PR either way.",
+            "instruction": [
+              "**H6 · `home-onboarding-step`** — it draws nothing today and cannot (the lifecycle query emits no steps). Recommended: retire the key (`folded-into: none`, \"retired\" in the ledger the way `email-subscriptions` left it) and delete the view and its composition slot. One small PR. Ruling: R-H6."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "H7 · `items` on Home",
+            "status": "ready",
+            "done_when": "items leaves the ledger with both home configs drawing — the trip detail row and the content list — verified in the running app against the answer key.",
+            "instruction": [
+              "**H7 · `items` on Home** — the seed card's two home configs become the first `items` derivation: `entities:trip` → one `detail`-shaped row (the rich trip tile: title, dates, place, travel line, `open`), `content` → a `list` whose rows are the content tiles (`media` thumbnail, title, `meta` updatedAt, `tags` type) with `group.more` for \"show more\". The skin carries the grid and the mobile horizontal rail; drag-to-scroll stays host choreography. This is also the first cut into the 2 002-line adapter — Home exercises ≈600 lines of it, and those become the derivation; the library-hub two-thirds stay for the library programme. Ruling: R-H7."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "H8 · The planning trio",
+            "status": "ready",
+            "done_when": "The planning trio reads only content on the view-model tier; the ledger has no home key; the migrated count moves by the measured amount; /app is drawn by the block renderer from one composition.",
+            "instruction": [
+              "**H8 · The planning trio** — view-model tier: each keeps a view that reads only `content` (plan §3, \"step 8 is a rewrite against content\"). Rhythm and the stack carry an inline `form` (title/start/end; title) — the form host from card 4 (`commit: 'submit'`, segments) is ready. Delete's `window.confirm` becomes `requiresConfirmation` (card 6's host). Week-terrain's segmented load bar has no block field — it is `meta` + a skin verb at most, or a `progress` per segment; measured at H0, decided then. Last, because week-focus's own plan (skeleton layer, mount order) is `ready` and lands first.",
+              "After H8: the ledger has no home key; the gate reads `migrated 19 of 108` (6 today + 12 home + label-manager flip), and `/app` is drawn by the block renderer from one composition."
+            ],
+            "pr": null,
+            "blocked_by": null
+          }
+        ]
+      },
+      "problems": [],
+      "status": "blocked"
+    },
+    {
+      "repo": "memoro",
+      "programme": "msr-core",
+      "project": "time-axis",
+      "path": "docs/project/msr-core/time-axis/PLAN.json",
+      "legacy": false,
+      "plan": {
+        "schema": "mc-plan",
+        "version": 1,
+        "goal": [
+          "Give MSR a time contract of its own — one lifetime primitive that owns phase, currency, disposal and parent/child order — so the four axes currently carrying time for it (composition, data, rendering, presentation) can each change without touching the others. This is P1 of the axis programme (docs/plans/msr-core-programme.md §4), and its full plan is already written, measured and ruled: docs/plans/msr-p1-time-axis-plan.md (#10806). This PLAN.json is that plan's runnable form — each step is one of its posts, and the prose plan is the instruction of record; what is here is the map, not a copy.",
+          "Re-verified at the 2026-09-02 plan review against main (2d735aa574): nothing of P1 is built (no runtime/lifetime.js, no unit-state.js); createCardRuntime still has exactly one production caller behind the flag route; card-node still carries its own mounted/suspended/destroyed machine (card-node.js:95-98) read by planner.js:58,66; the three query consumers still hold their own visibilitychange listeners; bindShellLifecycle still has zero callers; the registry still rejects colons in reasons (surface-runtime-node-registry.js:52). Drift since the plan was written: 33 files with generation counters (was 36), 15 files with isRuntimeDestroyed (was 19 copies). The shape holds; re-run the §2 greps at each step per the plan's own instruction."
+        ],
+        "contract": [
+          "The five rulings in the prose plan's §1 are inputs and are not reopened — above all: the justification is structural, and native readiness may not be cited.",
+          "The state model moves onto the live path BEFORE the Canvas flag is deleted (ruling 3; tests/architecture/w1-native-readiness-interlock.test.js guards the order).",
+          "Post 2b's proof is a browser run of the three surfaces F5.3 broke (home, people, inbox), not a test count.",
+          "The LiveCall suspend question before post 5 ships is Martin's ruling, not the plan's default, if device testing shows a call surface degrading."
+        ],
+        "out_of_scope": [
+          "Everything the prose plan's §7 lists — P2/P3's deletions, SDK vocabulary, the unsurveyed axes, the 56 hygiene flags, W1's own deletions.",
+          "Post 8 — adoption across the ~33 counter files and 15 helper copies — is its own ratcheted project once the primitive exists; open-ended by design."
+        ],
+        "success_criteria": [
+          {
+            "met": false,
+            "criterion": "The five own state machines under public/js/msr/ become one: only lifetime.js assigns a phase.",
+            "check": "The single-lifetime ratchet (prose plan §6) run and green; grep for modules assigning both suspended and destroyed returns lifetime.js's owners only."
+          },
+          {
+            "met": false,
+            "criterion": "One lifecycle port: no visibilitychange subscriber under public/js/ outside shell-adapter.js and the recorded allowlist.",
+            "check": "The single-port guard green, with its allowlist and per-entry reasons in the tree."
+          },
+          {
+            "met": false,
+            "criterion": "The independence test collapses: the staleness-semantics change that touches 33+ files today touches the primitive and its test.",
+            "check": "Re-run the §3.1 count after post 8's first family lands; record the number in that step's `comments`."
+          },
+          {
+            "met": false,
+            "criterion": "W1 is unblocked: the four-bucket state model lives on the live path and the interlock guard points at the replacement route.",
+            "check": "node --test tests/architecture/w1-native-readiness-interlock.test.js green with its assertions re-pointed, each still failing when its target is removed."
+          }
+        ],
+        "documents": [
+          {
+            "label": "The plan of record — every step follows its §4 post",
+            "path": "../../../plans/msr-p1-time-axis-plan.md"
+          },
+          {
+            "label": "The lifecycle research",
+            "path": "../../../plans/msr-core-lifecycle-primitive.md"
+          },
+          {
+            "label": "The runtime design",
+            "path": "../../../plans/msr-core-runtime-design.md"
+          },
+          {
+            "label": "The axis programme",
+            "path": "../../../plans/msr-core-programme.md"
+          },
+          {
+            "label": "The capability survey (why native readiness may not be cited)",
+            "path": "../../../plans/msr-axis-capability-survey.md"
+          }
+        ],
+        "runner": null,
+        "steps": [
+          {
+            "title": "Post 0 · Hygiene and the paper test",
+            "status": "blocked",
+            "done_when": "The §2.2 history correction is a paragraph in msr-core-lifecycle-primitive.md; the four greps of the prose plan's §2 table are re-run against current main and recorded. No code.",
+            "instruction": [
+              "Follow §4 post 0 of ../../../plans/msr-p1-time-axis-plan.md. The paper test's result is already recorded in that plan (§3.1); what remains is the correction paragraph and the re-measurement.",
+              "Ruling · 2026-09-02, on msr-core-time-axis-schedule (file retired, ruling carried here). Martin: \"Vänta till inbox-finish är klar. Krångla inte till det med ytterligare steg om i vilken ordning det ska köras; det kan vi ta beslut om efterhand.\" So: this project starts when inbox-finish is done — the blocker above encodes exactly that — and no sequencing rule against home-on-msr is written into the steps; ordering questions are decided as they arise."
+            ],
+            "pr": null,
+            "blocked_by": {
+              "kind": "project",
+              "name": "inbox-finish"
+            }
+          },
+          {
+            "title": "Post 1 · createLifetime and its tests",
+            "status": "ready",
+            "done_when": "runtime/lifetime.js and tests/surface-runtime/lifetime.test.js exist and pass, with every case mutation-checked as §4 post 1 lists; no consumer yet.",
+            "instruction": [
+              "Follow §4 post 1 and the §3.2 decision table of ../../../plans/msr-p1-time-axis-plan.md exactly — the primitive ships complete before anything adopts it."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "Post 2a · unit-state.js",
+            "status": "ready",
+            "done_when": "runtime/unit-state.js holds card-runtime's state half and imports CARD_VIEW_MODEL_STATE_LAYERS — the contract's first import edge; card-runtime.js is not edited.",
+            "instruction": [
+              "Follow §4 post 2a of ../../../plans/msr-p1-time-axis-plan.md. The extraction is a copy; the source stays until W1 deletes it."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "Post 2b · card-node holds a lifetime and a unit state — the W1 interlock",
+            "status": "ready",
+            "done_when": "card-node runs on the lifetime and unit state with viewState carrying both; the W1 guard is re-pointed at the replacement route and each assertion still fails when its target is removed; home, people and the inbox settle ready in the browser with slot counts recorded.",
+            "instruction": [
+              "Follow §4 post 2b of ../../../plans/msr-p1-time-axis-plan.md. This is the one dated dependency in the programme, and the same file F5.3 broke — the browser run of the three surfaces is the proof, not the test count. If the runtime-error settlement F5.3 saw appears, stop and root-cause before landing."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "Post 3 · surface-scope on the lifetime",
+            "status": "ready",
+            "done_when": "surface-scope keeps every exported signature on a lifetime; the scope suites and the ten *-scope architecture tests pass unchanged; the 12 bindWebSurfaceExit registrants still animate out in the browser; the P2 interlock still passes.",
+            "instruction": [
+              "Follow §4 post 3 of ../../../plans/msr-p1-time-axis-plan.md. Independent of post 2 — may run in parallel."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "Post 4 · query-consumer-owner and surface-runtime on the lifetime",
+            "status": "ready",
+            "done_when": "Both modules run on lifetimes; surface-runtime.test.js and the owner/coordinator suites pass; the shrink ratchet shows 5 → 0 own state machines.",
+            "instruction": [
+              "Follow §4 post 4 of ../../../plans/msr-p1-time-axis-plan.md — two PRs, independent of each other and of post 3; record the FIFO check on the records drain."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "Post 5 · One port; the transient path driven for the first time",
+            "status": "ready",
+            "done_when": "The shell root lifetime is the only visibilitychange lifecycle binding; hide/show walks the recorded order once; FilePicker, EntityPicker, a play overlay and LiveCall verified in the browser (LiveCall on a device — stop and ask if the call surface degrades).",
+            "instruction": [
+              "Follow §4 post 5 and §3.5 of ../../../plans/msr-p1-time-axis-plan.md. The LiveCall parity default is the plan's assumption, marked as one — Martin rules if the device run shows degradation."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "Post 6 · node → unit",
+            "status": "ready",
+            "done_when": "The mechanical rename lands with zero test edits beyond import paths; the one-meaning-per-word guard passes and fails on a new createXNode.",
+            "instruction": [
+              "Follow §4 post 6 of ../../../plans/msr-p1-time-axis-plan.md — script-generated, one PR, no logic change."
+            ],
+            "pr": null,
+            "blocked_by": null
+          },
+          {
+            "title": "Post 7 · One reason vocabulary",
+            "status": "ready",
+            "done_when": "Every -destroyed/-suspended string literal under public/js/msr/ is a noun:phase:cause triple; the registry admits colons with a test; the declared-reasons guard is green and negative-tested.",
+            "instruction": [
+              "Follow §4 post 7 of ../../../plans/msr-p1-time-axis-plan.md. After post 6 the nouns are settled and after post 5 the causes are actually emitted — check the set against what runs."
+            ],
+            "pr": null,
+            "blocked_by": null
+          }
+        ]
+      },
+      "problems": [],
+      "status": "blocked"
+    },
+    {
+      "repo": "memoro",
+      "programme": "msr-core",
+      "project": "web-renderer-close",
+      "path": "docs/project/msr-core/web-renderer-close/PLAN.json",
+      "legacy": false,
+      "plan": {
+        "schema": "mc-plan",
+        "version": 1,
+        "goal": [
+          "W1 closes: no surface renders through Canvas, and the Canvas execution path, its strategy seam and its per-card rollout flag are deleted (docs/plans/msr-web-renderer.md). This is the \"web-renderer helt klar på rätt sätt\" half of the SDK precondition (Martin, 2026-09-02). The plan is thin on purpose: the deletion cannot be scheduled until time-axis post 2b moves the four-bucket state model onto the live path — the flag route is today the only production route to createCardRuntime, the model's only implementation, and tests/architecture/w1-native-readiness-interlock.test.js enforces exactly that order."
+        ],
+        "contract": [
+          "The order is the interlock's: the state model moves before the flag goes. Deleting the switch ahead of the replacement is the F5.3 mistake and is not repeated.",
+          "The closure is a deletion, not a rewrite: card-runtime.js, card-lifecycle-adapter.js, the flag, the Canvas binding and the tests that pin them go together, per the interlock guard's own failure text."
+        ],
+        "out_of_scope": [
+          "The state-model move itself (time-axis post 2b).",
+          "Anything the WebRenderer plan gates on its own phases and soak — this project schedules the deletion, it does not compress the soak."
+        ],
+        "success_criteria": [
+          {
+            "met": false,
+            "criterion": "No surface renders through Canvas; the Canvas execution path and the per-card rollout flag are deleted.",
+            "check": "grep for shouldUseCanvasRuntime and the flag returns nothing under public/js; the interlock test's post-W1 form is green; the app watched in the running browser across the migrated surfaces."
+          }
+        ],
+        "documents": [
+          {
+            "label": "The WebRenderer plan",
+            "path": "../../../plans/msr-web-renderer.md"
+          },
+          {
+            "label": "The interlock that sets the order (axis programme §3)",
+            "path": "../../../plans/msr-core-programme.md"
+          }
+        ],
+        "runner": null,
+        "steps": [
+          {
+            "title": "Schedule the closure against the interlock",
+            "status": "blocked",
+            "done_when": "time-axis post 2b is on main, the interlock guard points at the replacement route, and this project is re-planned into the concrete deletion steps against msr-web-renderer.md's remaining phases and soak.",
+            "instruction": [
+              "When time-axis post 2b lands, re-plan here (mc plan): read docs/plans/msr-web-renderer.md's remaining phase gates and the interlock test's failure text as it then stands, list the files the deletion takes (card-runtime.js, card-lifecycle-adapter.js, the flag in update-planner.js/flags.js, the binding in canvas-runtime-adapter.js, and their pinning tests), and write the deletion steps with their proofs. W1 has no dated decision point on record — post 2b is the precondition, not a date."
+            ],
+            "pr": null,
+            "blocked_by": {
+              "kind": "project",
+              "name": "time-axis"
+            }
+          }
+        ]
+      },
+      "problems": [],
+      "status": "blocked"
+    }
+  ]
+}
