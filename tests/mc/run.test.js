@@ -321,7 +321,7 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.equal(call.bin, '/bin/claude');
   assert.equal(call.cwd, '/w/alpha/memoro');
   assert.equal(call.timeoutMs, 90 * 60_000);
-  assert.deepEqual(call.args.slice(2, 6), ['--model', 'opus', '--permission-mode', 'auto']);
+  assert.deepEqual(call.args.slice(2, 6), ['--model', 'opus', '--permission-mode', 'acceptEdits']);
   assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- PLAN\.json -----\n\{/u);
   assert.match(call.args[1], /Your step is `steps\[0\]` — 1, "The one step"/u);
   assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /^PROFILE\n\n---\n\nROLE step$/u);
@@ -345,7 +345,7 @@ test('skips: dirty worktree, a blocked step', async () => {
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /dirty: dirty worktree, skip/u, 'the machine gets its own line');
+  assert.match(log, /dirty: dirty worktree \(.+\) — skipped every round until it is committed or stashed in \/w\/dirty\/memoro/u, 'the machine gets its own line, with the files and the way out');
   assert.match(log, /skipped 1 \(blocked 1\)/u, 'the plan gets a count');
   assert.doesNotMatch(log, /wait: /u, 'and no line of its own — the page already draws it');
 });
@@ -705,7 +705,7 @@ test('UPDATE file: the loop finishes its round, then hands over to a new process
   // One step ran, the round finished, and only then was the handover made.
   assert.equal(f.calls.sessions.length, 1);
   assert.deepEqual(handovers, ['/w/runner/UPDATE']);
-  assert.match(f.files['/w/runner/log/runner.log'], /round 1 done \(1 ran\)\n.*handed over to pid 9001/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /memoro: round 1 done \(1 ran\)\n[\s\S]*handed over to pid 9001/u);
   // The runner it handed to has written its own runner.json by now: this one
   // must not remove it on the way out.
   assert.equal('/w/runner/runner.json' in f.files, false);
@@ -1059,7 +1059,7 @@ test('a skip that is about the machine keeps its own line: dirty, in flight, unp
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /dirt: dirty worktree, skip/u);
+  assert.match(log, /dirt: dirty worktree \(.+\) — skipped every round/u);
   assert.match(log, /flight: #11246 is open \(Step 2\) — not starting a step/u);
   assert.match(log, /stuck: stuck has landed and stuck-2 could not be made, skip/u);
   // And the one refusal that is on the plan is the only one counted.
@@ -1652,4 +1652,45 @@ test('runLoop: --no-caffeinate is obeyed', async () => {
   f.deps.keepAwake = (options) => { asked.push(options); return { ok: true, pid: 1, flags: [], note: '' }; };
   assert.equal(await runLoop({ rounds: 1, awake: false, deps: f.deps }), 0);
   assert.deepEqual(asked, []);
+});
+
+/**
+ * The unattended loop: each repository's lane runs its own rounds. memoro's
+ * step is slow here; memoro-cli's second step must start — and its lane's
+ * round must end — while memoro's first is still in its session. Until
+ * 2026-09-03 both lanes shared one round, and memoro-cli's second step
+ * would have waited for memoro's session to end.
+ */
+test('runLoop: lanes run their own rounds — memoro-cli does not wait for memoro', async () => {
+  const f = fixture({ plans: { memoro: { a: ready }, 'memoro-cli': { x: ready, y: ready } }, session: okSession() });
+  const inner = f.deps.session;
+  const events = [];
+  let release = null;
+  const memoroMayFinish = new Promise((resolve) => { release = resolve; });
+  let cliSteps = 0;
+  f.deps.session = async (call) => {
+    const name = call.cwd.split('/')[2];
+    events.push(`${name}: start`);
+    if (call.cwd.endsWith('/memoro')) {
+      await memoroMayFinish;
+      events.push(`${name}: end`);
+      return inner(call);
+    }
+    cliSteps += 1;
+    // The second memoro-cli step ends the run for everyone, and only then
+    // is memoro's session allowed to finish.
+    if (cliSteps === 2) { f.files['/w/runner/STOP'] = ''; release(); }
+    events.push(`${name}: end`);
+    return inner(call);
+  };
+  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  const started = events.filter((e) => e.endsWith(': start')).map((e) => e.split(':')[0]);
+  assert.deepEqual(started.sort(), ['a', 'x', 'y'], `every step started: ${events.join(', ')}`);
+  assert.ok(events.indexOf('y: start') < events.indexOf('a: end'), `memoro-cli's second step waited for memoro's first: ${events.join(', ')}`);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /y: step done[\s\S]*a: step done/u, "memoro-cli's second step did not finish before memoro's first");
+  assert.match(log, /runner exit on STOP \(remove/u);
+  // A lane's round never runs the whole-queue chores: queue.md is tidied and
+  // the workareas closed by the chore loop, from both repositories' plans.
+  assert.equal(/memoro-cli: lanes:/u.test(log), false);
 });

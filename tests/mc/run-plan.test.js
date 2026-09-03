@@ -227,7 +227,7 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
 
 test('headlessArgs: claude is -p with json output; codex is exec --json', () => {
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs });
-  assert.deepEqual(claude, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'auto', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
+  assert.deepEqual(claude, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'PROFILE', prompt: 'do it', profileArgs });
   assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="PROFILE"', 'do it']);
   // Never `--full-auto`: workspace-write has no network and no writes outside

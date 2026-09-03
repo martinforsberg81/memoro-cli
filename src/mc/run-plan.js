@@ -406,15 +406,26 @@ export function reconcilePrompt({ name, repo, conflicts }) {
  * commit goes with it, because a workarea's `.git` is a file pointing into
  * the main checkout's `.git/worktrees/<name>`, which is outside the working
  * directory. So a codex step under `--full-auto` could never reach the one
- * thing its prompt ends with: "Stop when the PR exists." The claude lane is
- * already `--permission-mode auto` — the workarea is the boundary the runner
- * trusts, not a sandbox inside it, and both tools are given the same.
+ * thing its prompt ends with: "Stop when the PR exists." The workarea is the
+ * boundary the runner trusts, not a sandbox inside it, and both tools are
+ * given the same.
+ *
+ * The claude lane was `--permission-mode auto` until 2026-09-03. Auto mode
+ * routes every Bash call through a classifier and tells the session to do
+ * its work through Bash rather than the native tools — and the sessions did:
+ * over 59 step sessions (2026-09-01..03) 5 397 Bash calls against 255
+ * Read/Grep/Edit/Write, 2 699 of them `sed -n`/`grep -n` reads of a screen
+ * at a time, each one a model turn on a large context. That was about half
+ * of a step's turns and the largest single share of its wall-clock.
+ * `acceptEdits` runs the same session without the classifier and without
+ * that instruction; `~/.claude/settings.json` allows Bash outright, so
+ * nothing a step needs waits on a prompt nobody is there to answer.
  */
 export function headlessArgs({ toolId, adapter, model, instructions, prompt, profileArgs }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const instr = profileArgs(toolId, instructions);
   if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...instr, prompt];
-  return ['-p', prompt, ...modelArgs, '--permission-mode', 'auto', ...instr, '--output-format', 'json'];
+  return ['-p', prompt, ...modelArgs, '--permission-mode', 'acceptEdits', ...instr, '--output-format', 'json'];
 }
 
 /**

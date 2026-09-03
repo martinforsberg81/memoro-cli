@@ -26,10 +26,28 @@ saying what the answer is about, and open a PR that names the one thing you
 would do: a proposal Martin says GO to, never a menu. If the question is
 unclear or reading further would answer it, ask nothing: read.
 
-Otherwise run the affected tests (`npm test` selects them), set your step
-`done` with its `pr`, and open a PR whose body includes the `PLAN.json` diff.
-Do not merge — the runner merges after you. Decide from the code and say what
-you decided; there is nobody to ask.
+Otherwise build it, run the affected tests **once** before the PR (`npm test`
+selects them), set your step `done` with its `pr`, and open a PR whose body
+includes the `PLAN.json` diff. Do not merge — the runner merges after you, and
+its gate runs the selection again on the merged tree, so the gate is the
+measurement and your run is the check that you are not handing it something
+red. Decide from the code and say what you decided; there is nobody to ask.
+
+How you spend your turns is most of what a step costs. Measured over 59 step
+sessions (2026-09-01..03): a median step was 72 turns and 12 minutes, the long
+ones 250–350 turns and an hour, and half of that was not the work —
+
+- **Read whole files, not screens.** Use `Read` for a file and `Grep` for a
+  search; each `sed -n 40,80p` is a model turn on a large context, and the
+  sessions averaged 46 of them.
+- **Run the tests you are changing while you build; run the selection once at
+  the end.** The sessions ran a test command 11 times per step (up to 33), and
+  one in four was the same command again.
+- **One long command is one call.** Bash has a ten-minute ceiling here. Run
+  `npm test` in the foreground and read its output; never background it and
+  poll with `sleep` loops.
+- **Verify what `done_when` names and stop.** Screenshots, dev servers and
+  proof scripts are for a `done_when` that asks for them.
 
 The one time a session writes the steps is the other side of the same rule:
 when Martin has answered a question this project waited on, the answer is
