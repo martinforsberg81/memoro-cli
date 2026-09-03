@@ -24,7 +24,6 @@
     "test": "node --test --import ./tests/_isolate-home.mjs 'tests/**/*.test.js'",
     "test:affected": "node scripts/affected-tests.js --why",
     "security:credential-boundary": "node scripts/security/credential-boundary-probe.mjs",
-    "security:c1-source-closure": "node scripts/security/check-c1-source-closure.mjs",
     "smoke:mc": "node scripts/mc-release-smoke.js",
     "postinstall": "node scripts/postinstall.js"
   },

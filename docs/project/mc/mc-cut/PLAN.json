@@ -32,7 +32,7 @@
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Every file that no surviving verb reaches is deleted from `src/`, and the reachability run in `reach.mjs` proves it — checked in beside this plan and re-run in each step, not trusted from this document.",
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     },
@@ -110,23 +110,38 @@
     },
     {
       "title": "Delete what step 3 orphaned",
-      "status": "ready",
+      "status": "done",
       "done_when": "Not stated in the plan as written — when this step is finished is for the plan review to settle.",
       "instruction": [
         "**Delete what step 3 orphaned**, one directory per PR, re-measuring after each: `src/cli/`, `src/runtime/`, `src/adapters/`, `src/capabilities/`, `src/commands/`, then the `src/mc/` half — `session-*`, `registry.js`, `session-home.js`, `owned-resource*`, `managed-*`, `cloud*`, `dev-servers.js`, `cloudflare-guard.js`, `release-trust.js`, `dependencies.js`."
       ],
-      "pr": null,
+      "comments": [
+        "**The cut, measured.** `src/` went from 280 files / 80 889 lines to 151 / 40 617, and `reach.mjs` from 173 files / 53 909 lines unreached (67 %) to none. 130 source files went, with 103 test files, three security probes, the C1 release-contract script and its three assets. The starting numbers differ from step 3's (274 / 79 126) because `origin/main` moved between the two steps; the percentages are the comparable figures.",
+        "**One PR, not one per directory.** The instruction asks for a PR per directory and the runner gives a step one PR, so the split is by commit instead: `capabilities`, `adapters`, `runtime`, `cli`, `core`, `mc`, then the tests and the scripts. Only the last commit is a tree that runs. The unreached set imports across its own directories — `cli/cloud-runtime.js` imports the broker, `mc/session-cutover.js` imports the session host — so no single directory can be removed on its own and leave the rest loadable. That is a property of the code, not of the order chosen here.",
+        "**What no import graph could see.** Three files are spawned as child processes by a path literal: `lib/update-check-worker.js` from `lib/update-check.js`, `mc/nightly-run.js` from `mc/nightly.js`, `mc/repo-watch-run.js` from `mc/repo-watch.js`. All three were on `reach.mjs`'s unreached list and all three are load-bearing — deleting `nightly-run.js` would have left `mc repo nightly start` spawning a file that is not there, and the parent only ever checks the child's command line afterwards. They were found by grepping every `.js` path literal in the surviving files against the deletion list, which is the check a static graph cannot do for itself. `reach.mjs` seeds all three now and says why.",
+        "**`memoro` and `memoro-cli` are the one decision this step left standing.** `package.json` maps two of its three `bin` entries to `src/bin.js`, and `main` to `src/index.js`. Between them they reach 20 files / 3 664 lines that no mc verb touches: `src/commands/` whole, five files under `src/lib/`, `src/mc/session-projector.js` (773 lines), `src/mc/git.js`, `src/mc/open-question.js`, and `runtime/broker/client.js` and `paths.js`. The contract's first rule decides it here — no step of this project removed a `memoro` verb, so nothing `memoro` reaches may be deleted under it. Whether those two commands should still ship is a product decision rather than a cleanup; the README documents them under *low-level surface*. They are now the largest single thing between mc and a `src/` that is only mc, and `reach.mjs` counts them on their own row.",
+        "**Keeping vault cost about two and a half times what the contract estimated.** Beyond `credential-domain/`'s two files (3 649 lines), 13 more stay because those two import them at module top level: six `adapters/managed-runtime/` files, `capabilities/github/github-contract.js`, `runtime/broker/c1-artifacts.js`, `c1-process-group.js` and `c1-source-closure.js`, and `mc/managed-generation-journal.js`, `managed-provider-archive.js` and `runtime-secrets.js` — roughly 5 400 lines of exactly the broker world the goal removes. Deleting them would have left two files the contract keeps unable to load at all. Nothing reaches any of it: it is a preserved carcass, which is what the contract asked for, and it is bigger than the contract said.",
+        "**The C1 custody chain is split in half by the contract, and was already failing closed before this step.** `vault/engine/c1-claude-lease.js` spawns `runtime/broker/c1-child.js` by path and pins its SHA-256 in its own source, so the child is kept — the same kind of edge as `nightly.js` → `nightly-run.js`. What the child dynamically imports one layer further in is not kept: the managed-claude C1 harness pulls the C1 runtime, which pulls `claude-managed-policy.js`. That costs nothing, because `c1-source-closure.js`'s pinned digests for `package.json` and `src/mc/paths.js` already did not match `main` — `verifyInstalledC1SourceClosure()` was returning failure before this step touched anything, which is why `tests/runtime/broker/c1-source-closure.test.js` is red on main today. `scripts/security/check-c1-source-closure.mjs` walked from three files this step deleted, so it went with them and `npm run security:c1-source-closure` with it. `credential-boundary-probe.mjs` stays: its subject is `codex-managed.js`, which vault keeps.",
+        "**Two vault tests went with the world they reach into.** `tests/vault/credential-domain/local-claude.test.js` and `local-codex.test.js` import `src/mc/managed-provider-registry.js`, and keeping that alive pulls the managed registration halves and the artifact writers back with it — measured, not guessed. `tests/adapters/managed-runtime/codex-managed.test.js` builds its fixture out of `src/adapters/artifacts/`. The contract keeps vault's source and it does: both `credential-domain` files still load, and `tests/vault/engine/c1-claude-lease.test.js` still passes in full, which is why the C1 child was kept.",
+        "**The tests went in this step rather than step 5, and step 5 still has work.** 103 test files could no longer be loaded at all — an import of a deleted module throws before a single case runs, so leaving them would have made `npm test` unloadable rather than red, and no PR measuring this diff could have landed. What is left for step 5 is what still loads: six files that fail — `cli/lifecycle/auth-status`, `cli/lifecycle/deps`, `mc/commands/dormant` (step 3 named it), `mc/fresh-session`, `runtime/broker/c1-source-closure`, `runtime/certified-execution/credential-boundary` — all six of them red on `main` before this step; plus every test that still passes while covering behaviour nothing runs, plus `#410`'s rebase. Two survivors lost their only direct coverage: `src/mc/paths.js`, which the rest of the suite exercises transitively, and `runtime/broker/client.js`, which is kept only for `src/bin.js`.",
+        "**`scripts/mc-release-smoke.js` is dead and was left alone.** It drives `mc auth status`, `mc tool-switch`, `mc new`, `mc resume` and `mc fanout`, none of which exist; `npm run smoke:mc` still points at it. Nothing this step deleted broke it — it was already a release smoke of a product that is gone, so it is named here rather than removed under a step whose rule is that the verb goes first.",
+        "**Verifying `mc run` starts real work, and the next session should know it before trying.** `mc run --rounds 1 --no-merge --no-caffeinate` with `MC_WORK_ROOT` and `MC_HOME` pointed at temporary directories still reads the plans on `origin/main` and still creates worktrees in the real repositories from them: the round ran the helper digest, wrote intake, computed lanes (memoro 34, memoro-cli 3), created two workareas and dispatched two live `claude` step sessions before it was killed. Two branches survive that, both sitting exactly on their repository's `origin/main` with no commits: `mc-cut-4` in memoro-cli, whose worktree was removed, and `email-verification-round-3` in memoro, whose worktree at `/private/tmp/mc-work-pfF9/email-verification-round/memoro` is still registered — removing either branch, and that worktree, needed permissions this session does not have. There is no dry run: repository roots come from `homedir()`, not from `MC_WORK_ROOT`, so nothing short of a different `$HOME` isolates a round from the real work."
+      ],
+      "pr": 561,
       "blocked_by": null
     },
     {
       "title": "The tests that only covered the deleted code",
-      "status": "ready",
+      "status": "done",
       "done_when": "Not stated in the plan as written — when this step is finished is for the plan review to settle.",
       "instruction": [
         "**The tests that only covered the deleted code.** `tests/` is 256 files and 60 064 lines against a `src/` of 78 606 — a large part of it tests machinery step 4 removes. This is where `#410` overlaps; the overlap is resolved by doing this step after step 4 and letting `#410` rebase onto it, not by merging `#410` in."
       ],
-      "pr": null,
-      "blocked_by": null
+      "pr": 561,
+      "blocked_by": null,
+      "comments": [
+        "Folded into #561 by the planning session on 2026-09-03: the six test files that stayed red after step 3's deletion — `tests/mc/fresh-session.test.js`, `tests/cli/lifecycle/auth-status.test.js`, `tests/cli/lifecycle/deps.test.js`, `tests/mc/commands/dormant.test.js`, `tests/runtime/broker/c1-source-closure.test.js`, `tests/runtime/certified-execution/credential-boundary.test.js` — covered verbs off the router and the broker closure the cut removed. They had to go in the same PR: the gate does not land a red candidate, and this step could not start while #561 was open."
+      ]
     },
     {
       "title": "`docs/plans/`",

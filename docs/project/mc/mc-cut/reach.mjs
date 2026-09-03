@@ -13,8 +13,20 @@
  * pull in the registry, the broker, the session host and the managed
  * providers. It is a 42-line shim now — it prints where the page went and
  * hands a named project to `mc/commands/status-project.js` — so it is seeded
- * here by name, and step 4 must keep it (or fold its message into
- * `mc-cli.js`'s own `moved()`) when it empties `src/cli/`.
+ * here by name, and step 4 kept it.
+ *
+ * Three seeds are not imported by anyone: `lib/update-check-worker.js`,
+ * `mc/nightly-run.js` and `mc/repo-watch-run.js` are spawned as child
+ * processes by a path literal, so no import graph can see them. Step 4 found
+ * all three by grepping every `.js` path literal in the surviving files
+ * against the deletion list, and that grep is the check this script cannot
+ * do: a static graph is necessary evidence for a cut, never sufficient.
+ *
+ * The last two rows are the two costs the contract accepts. `src/vault/`
+ * stays whole (Martin, 2026-08-29), and `src/bin.js` + `src/index.js` are
+ * `package.json`'s other two installed commands — `memoro` and `memoro-cli` —
+ * which no step of this project has removed a verb from, so the contract's
+ * *the verb goes first* rule forbids deleting what they reach.
  *
  *   node docs/project/mc/mc-cut/reach.mjs .
  *
@@ -49,6 +61,9 @@ const LIVE = [
   'mc/commands/roles.js',
   'mc/commands/log.js',
   'mc/help-text.js',
+  'lib/update-check-worker.js',     // spawned by path from lib/update-check.js
+  'mc/nightly-run.js',              // spawned by path from mc/nightly.js
+  'mc/repo-watch-run.js',           // spawned by path from mc/repo-watch.js
 ];
 
 /**
@@ -58,6 +73,15 @@ const LIVE = [
  * `bin-mc.js` is seeded with it: it is the only thing that still reaches it.
  */
 const KEPT = ['bin-mc.js', 'cli/vault.js'];
+
+/**
+ * `package.json`'s other two `bin` entries and its `main`. Everything they
+ * reach is out of this project's reach by the contract's first rule: no step
+ * removed a `memoro` verb, so no `memoro` code may be deleted here. Whether
+ * those two commands should exist at all is a decision, not a cleanup — it is
+ * named in step 4's comments and belongs to Martin.
+ */
+const PACKAGE = ['bin.js', 'index.js'];
 
 const walk = (dir, out = []) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -117,12 +141,19 @@ const seed = (names) => names.map((n) => join(SRC, n)).filter((p) => existsSync(
 // would print the same figure.
 const page = reach(seed(LIVE), new Set(seed(['bin-mc.js'])));
 const live = reach(seed(LIVE).concat(seed(KEPT)));
-const dead = all.filter((f) => !live.has(f));
+const vault = all.filter((f) => rel(f).startsWith('src/vault/'));
+// `src/vault/engine/c1-claude-lease.js` spawns the C1 child by path and pins
+// its SHA-256, so the child belongs to vault's cost the way `nightly-run.js`
+// belongs to `nightly.js`. No import graph can see either edge.
+const kept = reach(seed(LIVE).concat(seed(KEPT)).concat(seed(PACKAGE))
+  .concat(vault).concat(seed(['runtime/broker/c1-child.js'])));
+const dead = all.filter((f) => !kept.has(f));
 
 const row = (label, files) => `${String(files.length).padStart(4)} filer ${String(sum(files)).padStart(6)} rader  ${label}`;
 console.log(row('src/', all));
 console.log(row('reached by the page and its verbs', [...page]));
 console.log(row(`…plus ${KEPT.join(', ')} (kept by contract)`, [...live]));
+console.log(row('…plus src/vault/ and the memoro / memoro-cli bins', [...kept]));
 console.log(row(`NOT reached — ${Math.round((100 * sum(dead)) / sum(all))}% of src/`, dead));
 
 if (LIST) {
