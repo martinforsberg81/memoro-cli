@@ -39,12 +39,11 @@ new work on it, and do not assume a module is live because it exists —
   cannot land a red one; see "Validation" below.
   `node --test --import ./tests/_isolate-home.mjs <files>` is the focused
   local loop.
-- `docs/plans/worktree-lifecycle.md` is historical context. Do not execute its
-  commands or use it to override current architecture, repository guidance, or
-  live capability descriptors.
-- Cloud workload changes: read
-  [`docs/plans/mc-v2-workload-allowlist.md`](plans/mc-v2-workload-allowlist.md)
-  first. No route outside that fail-closed table is permitted.
+- `docs/plans/` held the planning directory `docs/project/` replaced. mc-cut
+  emptied it of everything but the custody design `mc vault` still implements
+  ([`docs/plans/mc-custody.md`](plans/mc-custody.md) and
+  [`vault-import.md`](plans/vault-import.md)). Nothing there is an instruction;
+  do not execute its commands or use it to override current architecture.
 
 ## How work is organized
 
@@ -214,23 +213,13 @@ endpoint the agent can repurpose as a credential proxy.
   must fail closed. Do not fall back to interactive login, a tool-home auth file,
   a generic environment token, dotenv, or a legacy binding.
 
-- `docs/plans/credential-blind-capabilities.md` is the normative
-  confidentiality and provider-execution contract. No mc vault secret may be
-  exposed in plaintext to an LLM-controlled process, command, file,
-  environment, argv, output, log, transcript, browser payload, credential
-  helper, or inspectable peer process. Vault secrets back typed capabilities;
-  they are never materialised for Codex, Claude, generic adapters, or repo
-  dotenv files.
-- `docs/plans/connected-capabilities.md` is the normative foundation for every
-  external connection. GitHub, Cloudflare, LLM tools, and future providers
-  share one connection registry, token-free descriptors, readiness/repair
-  vocabulary, source/session binding, and short-lived broker-grant model.
-  Provider commands, adapters, brokers, and executors must not import Keychain
-  or mc vault code; only the common identity service may read the first-party
-  local Memoro device identity.
-- `docs/plans/github-app-capability.md` is the normative product and security
-  provider contract. The target is one central Memoro GitHub App and the same
-  typed mc broker operations for local and cloud sessions.
+- **No mc vault secret may be exposed in plaintext to an LLM-controlled
+  process,** command, file, environment, argv, output, log, transcript, browser
+  payload, credential helper, or inspectable peer process. They are never
+  materialised for Codex, Claude, generic adapters, or repo dotenv files —
+  `mc vault get` and `mc vault bind` refuse for exactly this reason. This
+  paragraph is the normative copy; the plan it was quoted from
+  (`docs/plans/credential-blind-capabilities.md`) went with mc-cut.
 - GitHub credentials are not mc vault material. App private keys and durable
   connection authority stay in the Memoro control plane; short-lived
   installation credentials must never enter the coding-tool child environment,

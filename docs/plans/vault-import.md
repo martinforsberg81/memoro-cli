@@ -1,6 +1,16 @@
 # Vault Import
 
-**Status:** core shipped / next slices active · 2026-06-06 · serves G3
+**Status:** partly shipped, partly withdrawn · 2026-06-06 · kept beside
+[`mc-custody.md`](mc-custody.md) as the record of the `mc vault` import verbs.
+
+What is live: `mc vault scan`, `mc vault import`, `mc vault bindings`
+(`src/vault/engine/import-scan.js`, `bindings.js`). What is **withdrawn**:
+every materialisation path below. `mc vault bind` now refuses — legacy file and
+env bindings are disabled — `mc vault get` refuses to print plaintext, and the
+"materialise at session launch, shred on `mc end`" lifecycle went with the
+session manager mc-cut removed. A binding file is audit metadata; it cannot
+cause a secret to be written anywhere. Sections describing that lifecycle are
+history, not a description of the current verb.
 
 Users often already have working local secrets in `.env`, `.env.local`,
 `.dev.vars`, shell profiles, or tool-specific config files. mc vault must not

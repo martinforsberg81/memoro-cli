@@ -4,7 +4,7 @@
  * or network access (except readRepoManifest which is tested against a
  * tmp dir).
  *
- * See docs/plans/coding-profile.md.
+ * See src/lib/annotate.js.
  */
 
 import assert from 'node:assert/strict';

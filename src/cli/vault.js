@@ -4,7 +4,8 @@
  * Verbs: setup, unlock, lock, status, list, get, set, rm,
  *        change-password, rotate.
  *
- * Phase-1 scope (per docs/plans/worktree-lifecycle.md §12k.1):
+ * Phase-1 scope (its plan, docs/plans/worktree-lifecycle.md §12k.1, was
+ * removed by mc-cut; the surviving custody design is docs/plans/mc-custody.md):
  *   - Port `vault-client-crypto.js` to Node (done — src/mc/vault/).
  *   - CRUD against the existing Memoro `/api/vault/*` endpoints.
  *   - No JIT materialisation, no PreToolUse hook integration, no
