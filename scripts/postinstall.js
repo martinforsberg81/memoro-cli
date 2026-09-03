@@ -1,23 +1,10 @@
 #!/usr/bin/env node
 
-// Preserve the existing node-pty repair, then mint a value-free C1 install
-// generation. Receipt failure is fail-closed for C1 but must not make ordinary
-// mc installation or provider use unavailable.
+// The node-pty repair, and nothing else.
+//
+// This also minted a value-free C1 install generation until 2026-09-03:
+// `src/runtime/broker/c1-install-receipt.js` and `c1-global-interlock.js`
+// were the receipt and its baseline, and both went with the broker in
+// `mc-cut` step 4. Nothing reads a C1 install generation any more, so
+// writing one on every install was a file nobody opened.
 await import('./fix-pty-helper.js');
-
-const {
-  shouldWriteInstalledC1Receipt,
-  writeInstalledC1Receipt,
-} = await import('../src/runtime/broker/c1-install-receipt.js');
-const {
-  baselineInstalledC1Epoch,
-} = await import('../src/runtime/broker/c1-global-interlock.js');
-if (shouldWriteInstalledC1Receipt()) {
-  const receipt = writeInstalledC1Receipt();
-  const baseline = receipt.ok ? baselineInstalledC1Epoch() : null;
-  if (!receipt.ok) {
-    process.stderr.write('memoro-cli: C1 install receipt unavailable; Claude C1 stays disabled until reinstall.\n');
-  } else if (!baseline?.ok) {
-    process.stderr.write('memoro-cli: C1 install baseline unavailable; Claude C1 stays disabled until reinstall.\n');
-  }
-}
