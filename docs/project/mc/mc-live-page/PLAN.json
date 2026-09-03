@@ -118,7 +118,7 @@
         "**The one seam where a third opinion could still appear.** `interactive()` reads the *process* streams while `colourFor` and `columnsFor` read the stream handed to `run()`. From the CLI they are the same object — `runModule` (`src/mc-cli.js:139`) calls `module.run(argv)` with no deps — so nothing reachable today can disagree. But a caller that hands `run()` a non-TTY stdout while the process's own stdout is a terminal would print a plain page and then go live on it. If a future surface ever calls `run()` with deps, that is the line to fix, and the fix is to have `interactive` take the same stream.",
         "**A number step 4 will want.** Piped against the real `~/mc` on 2026-09-03 the whole of `mc` took 1.7 s and `mc --json` 1.0 s wall-clock, warm. That is faster than the 2.4–6.6 s recorded on 2026-09-02 in step 1's comments, and the difference is the plans cache: it is keyed by the `origin/main` sha, so the number depends entirely on whether the runner has landed a pull request since the last read. Both numbers are real; `docs/technical/mc-ui.md` should say the range and why it moves rather than pick one."
       ],
-      "pr": null,
+      "pr": 547,
       "blocked_by": null
     },
     {
