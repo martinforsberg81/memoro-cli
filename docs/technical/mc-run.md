@@ -62,7 +62,10 @@ the rules; `runLoop` reads them between rounds.
   the same argument list and the same stdio, and exits. `runner.json` is
   cleared *before* the new process is started, so the two never race for it.
   A checkout that will not fast-forward — local work, or diverged — is said out
-  loud and handed over anyway: the restart was asked for.
+  loud and handed over anyway: the restart was asked for. `UPDATE` has one
+  other writer, which is not a person: a landing that changed mc's own code
+  (see *The merge*). `mc run --update` itself is unchanged by that — it is
+  still the order somebody gives, with its own refusals.
 
 **Why `--update` has to exist at all.** Node reads its whole module graph at
 process start and never looks at the disk again. The runner merges pull
@@ -413,6 +416,25 @@ documentation by construction and lands through `mc merge --docs`, which
 checks that against GitHub's own file list and refuses anything touching a
 line of code.
 
+**A landing that changed mc's own code hands the runner over to it.** When the
+gate lands a pull request, the runner asks GitHub which files it changed — the
+same question `--docs` asks, and for the same reason: the gate's report lists
+the *test* files its selection ran, and a local diff is only as fresh as the
+checkout. If any of them is under **`src/mc/`** or **`canon/`**, the runner
+writes `runner/UPDATE` itself, and the round-boundary reader in *The switch*
+fast-forwards and hands over. Nothing else about the handover changes: it
+happens between rounds, never mid-session, and one file is written however many
+of mc's own pull requests the round landed.
+
+Those two trees and no others. `src/mc/` is the runner — node read its module
+graph at process start, so a merge of `plan-schema.js` changes nothing about
+the process that merged it — and `canon/` is the roles it quotes into the next
+step's prompt. A change to `tests/`, `docs/` or `scripts/` cannot make the
+running runner wrong, and a handover costs a fresh process; widening this to
+"the repository" would hand over after most memoro-cli landings. The archive
+door cannot trigger it at all: `--docs` refuses anything outside `docs/`, and
+neither of these is under it.
+
 A **stack** needs an order rather than a call — `mc merge` refuses a batch
 aimed at several bases. `stackOrder` in run-plan.js is the whole decision, over
 the list of open pull requests the round already fetched: exactly one aimed at
@@ -492,7 +514,15 @@ Everything lives under `~/mc/runner/`.
   and from codex's `exec --json` event stream; a field the tool does not give
   is `-`, never a guess. `exit` and `note` are independent and are allowed to
   disagree — a process can fail after a session that reported success, and
-  both are recorded.
+  both are recorded. **A `plan-trespass` on a step that changed the runner's
+  own rules is worth checking before it is believed.** The boundary is judged
+  inside the same round by the code the process started with, so a step that
+  merged a new `plan-schema.js`, prompt or `unauthorisedChanges` is measured
+  against the old one: on 2026-09-02 a step migrated every plan on both mains,
+  the runner re-read them with the schema it was holding, they did not parse,
+  and the row said `plan-trespass` against a session that did nothing wrong.
+  The handover above is what keeps the *next* round honest; it cannot save the
+  round that produced the change.
 - **`log/runner.log`** — the line-by-line narration, also on stdout.
 - **`log/<name>-<ts>.json`** and `.json.err` — what the session actually
   printed, kept whole.

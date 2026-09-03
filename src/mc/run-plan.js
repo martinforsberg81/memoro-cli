@@ -275,6 +275,31 @@ export function landingNote(report, { defaultBranch = 'main' } = {}) {
   return `open,gate-${stopped}`;
 }
 
+/**
+ * mc's own two trees: what a landed pull request has to touch for the runner
+ * to be running stale code the moment it lands.
+ *
+ * `src/mc/` is the runner itself — node read its whole module graph at process
+ * start, so a merge of `plan-schema.js` or `run.js` changes nothing about the
+ * process that just merged it. `canon/` is the roles, which the runner reads
+ * off disk and quotes into the next step's prompt. Those are the two, and the
+ * list is short on purpose: a handover costs a round boundary and a fresh
+ * process, and a change to `tests/`, `docs/` or `scripts/` cannot make the
+ * running runner wrong. Widening this to "the repository" would hand over
+ * after every memoro-cli landing, which is most of them.
+ *
+ * Prefixes, so `src/mcp/` is not `src/mc/` and a file named `canonical.md` is
+ * not `canon/`.
+ */
+export const MC_OWN_TREES = ['src/mc/', 'canon/'];
+
+/** The files of `files` that are mc's own code — empty when none are. PURE. */
+export function mcOwnFiles(files) {
+  return (files || [])
+    .map((file) => (typeof file === 'string' ? file : file?.path))
+    .filter((path) => typeof path === 'string' && MC_OWN_TREES.some((tree) => path.startsWith(tree)));
+}
+
 /* ----------------------------------------------------------- the helper */
 
 /**

@@ -11,7 +11,7 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [] } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -202,6 +202,12 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       // in the repository itself ("is one still open from an earlier round?").
       const repoName = Object.keys(repos).find((r) => cwd === repos[r]);
       if (repoName) {
+        // Which files a merged pull request changed, asked of GitHub in the
+        // repository itself after the gate landed it — `prFiles` per number,
+        // and a pull request nobody named changed nothing interesting.
+        if (args[1] === 'view' && args.includes('files')) {
+          return { ok: true, stdout: (prFiles[Number(args[2])] || ['README.md']).join('\n') };
+        }
         // The round's own question: every open PR of the repository, asked
         // once beside the fetch in `queue()`.
         if (args.includes('--limit')) {
@@ -741,6 +747,100 @@ test('UPDATE file: a handover that does not start keeps this runner going', asyn
   f.deps.handOver = async ({ say }) => { say('update: the new runner did not start'); return { ok: false }; };
   assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
   assert.match(f.files['/w/runner/log/runner.log'], /runner exit after 1 round/u);
+});
+
+/**
+ * The other writer of UPDATE, and the only one that is not a person: a
+ * landing that changed mc's own code.
+ *
+ * Measured 2026-09-02 — a step migrated every plan on both mains, the runner
+ * re-read them with the `plan-schema.js` it had loaded at process start, they
+ * did not parse, and the session was logged `plan-trespass` for it. The round
+ * that produced the change cannot be saved; the next one can.
+ */
+test('a landing that changed src/mc/ writes UPDATE itself', async () => {
+  const f = fixture({
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    prFiles: { 9: ['src/mc/plan-schema.js', 'tests/mc/plan-schema.test.js'] },
+  });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\n/u, 'it landed as usual');
+  assert.ok('/w/runner/UPDATE' in f.files, 'the runner merged its own code and asked for nothing');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 changed mc's own code \(src\/mc\/plan-schema\.js\) — UPDATE written/u);
+  // GitHub's own file list for the merged pull request, not the gate's report
+  // and not a local diff — the same question `mc merge --docs` asks.
+  assert.deepEqual(
+    f.calls.gh.filter((call) => call[1] === 'pr' && call[2] === 'view'),
+    [['/home/memoro-cli', 'pr', 'view', '9', '--json', 'files', '-q', '.files[].path']],
+  );
+});
+
+test('a landing that changed canon/ writes UPDATE too — the roles are quoted into the next prompt', async () => {
+  const f = fixture({
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    prFiles: { 9: ['canon/roles/step.md'] },
+  });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.ok('/w/runner/UPDATE' in f.files);
+});
+
+test('a landing that touched neither src/mc/ nor canon/ writes nothing', async () => {
+  const f = fixture({
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    // The near misses on purpose: a prefix is a prefix, so `src/mcp/` is not
+    // `src/mc/` and `canonical.md` is not `canon/`. A handover costs a fresh
+    // process, and most memoro-cli landings are these.
+    prFiles: { 9: ['docs/technical/mc-run.md', 'src/mcp/server.js', 'canonical.md', 'tests/mc/run.test.js'] },
+  });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\n/u);
+  assert.equal('/w/runner/UPDATE' in f.files, false, 'a handover was asked for that nothing needed');
+  assert.equal(/UPDATE written/u.test(f.files['/w/runner/log/runner.log']), false);
+});
+
+test('a landing whose files GitHub will not name asks for no update, and says why', async () => {
+  const f = fixture({ plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession() });
+  const inner = f.deps.gh;
+  f.deps.gh = (cwd, args) => (args[1] === 'view' && args.includes('files')
+    ? { ok: false, stdout: '', stderr: 'gh: not logged in' }
+    : inner(cwd, args));
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.equal('/w/runner/UPDATE' in f.files, false);
+  assert.match(f.files['/w/runner/log/runner.log'], /could not be asked which files #9 changed \(gh: not logged in\) — no update requested/u);
+});
+
+test('STOP already written: the code lands, and the next runner reads it because it is a new process', async () => {
+  const f = fixture({
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    prFiles: { 9: ['src/mc/run.js'] },
+  });
+  const inner = f.deps.session;
+  f.deps.session = (call) => { f.files['/w/runner/STOP'] = ''; return inner(call); };
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.equal('/w/runner/UPDATE' in f.files, false, 'an UPDATE left for whoever starts the next runner by hand');
+  assert.match(f.files['/w/runner/log/runner.log'], /STOP is written — the next runner starts on it anyway/u);
+});
+
+test('the loop hands over after a round that landed mc own code, with nobody typing --update', async () => {
+  const f = fixture({
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    prFiles: { 9: ['src/mc/run.js'] },
+  });
+  const handovers = [];
+  f.deps.handOver = async ({ paths, say }) => {
+    handovers.push(paths.update);
+    say('update: handed over to pid 9001 — this runner is done');
+    return { ok: true, pid: 9001 };
+  };
+  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
+  assert.deepEqual(handovers, ['/w/runner/UPDATE'], 'the round boundary reader never saw the flag');
+  // The round finished first: the flag is written while the landing happens
+  // and read between rounds, never mid-session.
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /UPDATE written[\s\S]*round 1 done \([0-9]+ ran\)\n.*handed over to pid 9001/u);
+  // Once, however many times the lane came back to the same project: the
+  // flag is a file, and a second write would be a second line saying so.
+  assert.equal(log.match(/UPDATE written/gu).length, 1);
 });
 
 test('runLoop: --rounds 1 does one pass and exits; --once exits after the first step', async () => {
