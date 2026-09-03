@@ -52,17 +52,28 @@ import { redNames, tapTotals } from './tap-red.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { log } from './logger.js';
-import { mcHome } from './paths.js';
+import { mcHome, workGatePath } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
+import { ensureWorkDeps } from './work-deps.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
 
-/** Where the throwaway worktree lives: mc's own home, never inside the repository. */
-export function gateRoot(root = mcHome()) {
-  return join(root, 'gate');
+/**
+ * Where the throwaway worktree lives: under the work root, never inside the
+ * repository.
+ *
+ * It lived under `mcHome()` until 2026-09-03, which is somewhere no dependency
+ * tree is — so the candidate ran the same five-files-short suite every
+ * workarea used to, and paid an `npm ci` of its own to stop doing it. The work
+ * root is where mc keeps the one tree (`paths.js`, `WORK_GATE` beside
+ * `WORK_DEPS`), and a candidate two directories under it resolves that tree by
+ * node's own parent walk.
+ */
+export function gateRoot(env = process.env) {
+  return workGatePath(env);
 }
 
 /**
@@ -286,7 +297,7 @@ export async function runGate({
     say(`DECLARATION SHADOWED — the override for ${declared.name} omits ${field}, which the shipped table declares; an override states every field it wants (D-0135)`);
   }
 
-  const workspace = join(gateRoot(root), repoFileSlug(repoPath));
+  const workspace = join(gateRoot(env), repoFileSlug(repoPath));
   // One worktree. There was a second, at the base branch, and everything that
   // ran in it answered "was main already red?" — the question the 2026-08-31
   // ruling took off the round.
@@ -397,6 +408,30 @@ export async function runGate({
       }
     }
 
+    // The tree the candidate resolves through, made to match the candidate.
+    //
+    // Not a preparation of the worktree and deliberately not one: nothing is
+    // written inside the checkout, where git and `scripts/affected-tests.js`
+    // would both see it. This is `mc work add`'s own mechanism
+    // (`work-deps.js`), called on the repository being measured — one
+    // `node_modules` at the work root, two directories above the candidate,
+    // for the workareas and the gate together.
+    //
+    // Read from the candidate rather than from the repository's checkout,
+    // because the candidate is what is being measured: a pull request that
+    // changes `package-lock.json` gets a tree installed from *its* lockfile
+    // instead of a round that cannot resolve what it added. The cost is that
+    // the shared tree then stands at that pull request's lockfile until the
+    // next `mc work add` or round moves it — the same one-tree-one-lockfile
+    // trade the work root already makes, said out loud.
+    //
+    // It never stops the round. Whether the suite can resolve its
+    // dependencies is measured below, from the candidate, and a measurement
+    // beats a report of what an install thought it did.
+    const deps = ensureWorkDeps({ repo: headDir, repoName: basename(repoPath), env });
+    if (deps.state === 'installed') say(`the dependency tree above the candidate was installed — ${deps.why}`);
+    if (!deps.ok) say(`the dependency tree above the candidate could not be made current — ${deps.why}`);
+
     // Whatever this repository needs before its suite can be believed. A
     // prepare that fails stops the round: a suite run on a tree that was not
     // prepared is exactly the incomplete run the declaration exists to
@@ -410,20 +445,25 @@ export async function runGate({
       }
     }
 
-    // A suite in a worktree with no dependency tree does not fail, it shrinks
+    // A suite that cannot resolve its dependencies does not fail, it shrinks
     // (D-0152): the tests that need nothing run and print a number with the
-    // right shape, and the rest are neither run nor counted as skipped. So
-    // the tree is checked after preparation and before the run, and a missing
-    // one stops the round — unless the declaration vouches that this suite
-    // runs without one (`prepare: null`, with the evidence in `prepare_why`),
-    // in which case the round says so rather than assuming.
+    // right shape, and the rest are neither run nor counted as skipped. So it
+    // is asked after preparation and before the run, from the candidate,
+    // walking the parents the way node does — a tree above the worktree is a
+    // tree, and this is what makes `~/mc/node_modules` usable here at all.
+    //
+    // There is no vouching branch any more. `prepare: null` used to buy a
+    // declaration the right to run anyway, on the strength of a sentence in
+    // the table — and this repository's sentence was false for months while
+    // five files went unrun and uncounted, once per round, with the line
+    // saying so read as reassurance. What the entry now says is what the
+    // *round* must run, and whether the suite can resolve anything is
+    // measured rather than declared.
     const tree = dependencyTree(headDir);
     if (tree.missing) {
-      if (declared.declaration.prepare === null) {
-        say(`${tree.declares} dependencies declared and no node_modules — the declaration vouches the suite runs without one`);
-      } else {
-        return finish('dependencies', `the candidate declares ${tree.declares} dependencies and has no node_modules after preparation — a suite run there would count only what happens to run (D-0152)`);
-      }
+      return finish('dependencies', `the candidate declares ${tree.declares} dependencies and cannot resolve `
+        + `${tree.unresolved.length} of them from the worktree or any directory above it `
+        + `(${nameSome(tree.unresolved)}) — a suite run there would count only what happens to run (D-0152)`);
     }
 
     // What this change reaches, asked of the repository rather than assumed.

@@ -2,11 +2,11 @@
  * What a repository needs before its suite means anything — declared, never
  * guessed.
  *
- * A gate worktree has no `node_modules`. For a repository whose suite cannot
- * run without them the suite dies, and the unfinished-run guard catches that.
- * The case it cannot catch is the one this file is about: a suite that runs a
- * *subset* and summarises anyway. Two such runs produce two small red sets that
- * match, and the gate calls that green.
+ * A gate worktree carries no `node_modules` of its own. For a repository whose
+ * suite cannot then resolve anything the suite dies, and the unfinished-run
+ * guard catches that. The case it cannot catch is the one this file is about:
+ * a suite that runs a *subset* and summarises anyway. Two such runs produce two
+ * small red sets that match, and the gate calls that green.
  *
  * So the rule asserted here is a refusal. A repository mc cannot prove is safe
  * to run unprepared, and has not been told about, stops the round — with a
@@ -27,6 +27,9 @@ import { describe, it } from 'node:test';
 import {
   SHIPPED, UNKNOWN, declarationFor, repoDeclarationPath, tablePath,
 } from '../../src/mc/repo-gate-table.js';
+import { gateRoot } from '../../src/mc/repo-gate.js';
+import { workDepsPath } from '../../src/mc/paths.js';
+import { SHARED_TREE_REPOS } from '../../src/mc/work-deps.js';
 
 describe('an override that shadows shipped fields is said, not silent (D-0135)', () => {
   it('names the fields the override dropped, and nothing when there is no override', () => {
@@ -150,9 +153,9 @@ describe('a repository mc has not been told about', () => {
 
 describe('the heuristic mc deliberately does not use', () => {
   it('the shipped entry for this repository is held against its own package.json', () => {
-    // What `prepare: null` claims is that the suite runs from a worktree with
-    // no dependency tree. This entry claimed it for months while it was false
-    // — `src/runtime/session-host/` imports `@xterm/addon-serialize`, and five
+    // What `prepare: null` claims is that the round has nothing to install.
+    // This entry claimed it for months while nothing installed anything —
+    // `src/runtime/session-host/` imports `@xterm/addon-serialize`, and five
     // test files went unrun and uncounted every round — and nothing here could
     // catch it, because the only evidence was a sentence in the entry itself.
     // So the manifest is the assertion, whatever names it happens to hold.
@@ -161,18 +164,39 @@ describe('the heuristic mc deliberately does not use', () => {
       ...Object.keys(manifest.dependencies || {}),
       ...Object.keys(manifest.devDependencies || {}),
     ];
-    if (declares.length) {
-      // A command, or UNKNOWN — anything but the claim that nothing is needed.
-      // `null` and a missing field are the same forgotten claim, so the shape
-      // is asserted rather than the value.
-      const { prepare } = SHIPPED['memoro-cli'];
+    const { prepare } = SHIPPED['memoro-cli'];
+    if (!declares.length) {
+      assert.equal(prepare, null, 'nothing to install, so nothing to prepare');
+      return;
+    }
+    if (prepare === null) {
+      // A null beside declared dependencies is allowed exactly once: when the
+      // tree is mc's own rather than the round's. That is a claim about two
+      // pieces of machinery, and it is asserted against them rather than
+      // against the sentence in `prepare_why` — this repository's tree is one
+      // mc keeps, and the gate builds its candidate under the directory that
+      // tree sits in, so node's parent walk finds it. Move either and this
+      // goes red, which is what the old null could never do.
+      const env = { MC_WORK_ROOT: '/work' };
       assert.ok(
-        typeof prepare === 'string' && prepare.length > 0,
-        `package.json declares ${declares.join(', ')}, and the shipped entry still claims this `
-        + `suite runs from a worktree with no dependency tree (prepare: ${JSON.stringify(prepare)})`,
+        SHARED_TREE_REPOS.includes('memoro-cli'),
+        `package.json declares ${declares.join(', ')} and nothing installs them: the entry says the `
+        + 'round needs no preparation, but mc keeps no tree for this repository',
+      );
+      assert.equal(workDepsPath(env), '/work/node_modules');
+      assert.ok(
+        gateRoot(env).startsWith('/work/'),
+        `the gate builds its candidate at ${gateRoot(env)}, which is not under the work root — `
+        + 'the tree mc keeps is not above it, and the suite would run five files short',
       );
     } else {
-      assert.equal(SHIPPED['memoro-cli'].prepare, null, 'nothing to install, so nothing to prepare');
+      // A command, or UNKNOWN — anything but a forgotten claim. `undefined`
+      // and a missing field are the same one, so the shape is asserted.
+      assert.ok(
+        typeof prepare === 'string' && prepare.length > 0,
+        `package.json declares ${declares.join(', ')}, and the shipped entry says nothing `
+        + `about preparing them (prepare: ${JSON.stringify(prepare)})`,
+      );
     }
   });
 
@@ -202,7 +226,7 @@ describe('the heuristic mc deliberately does not use', () => {
 });
 
 describe('declarations, shipped and overridden', () => {
-  it('memoro-cli is declared, and prepares the tree its manifest asks for', () => {
+  it('memoro-cli is declared, and its round runs whatever the entry says it must', () => {
     const fx = repo('memoro-cli', { name: 'memoro-cli', dependencies: { 'node-pty': '1.0.0' } });
     try {
       const answer = fx.ask();

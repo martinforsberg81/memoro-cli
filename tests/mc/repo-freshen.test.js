@@ -54,8 +54,10 @@ function fixture({ conflicts = [], addFails = false, pushFails = false } = {}) {
   return {
     repoPath,
     calls,
+    workRoot: join(root, 'work'),
+    // The scratch worktree goes where the gate's does, under the work root.
     run: (over = {}) => freshenBranchForLanding({
-      repoPath, branch: 'track-two', base: 'main', root: join(root, 'home'), git, ...over,
+      repoPath, branch: 'track-two', base: 'main', env: { MC_WORK_ROOT: join(root, 'work') }, git, ...over,
     }),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };

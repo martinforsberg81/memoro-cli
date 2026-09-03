@@ -2,11 +2,18 @@
  * One dependency tree, one directory above the workareas.
  *
  * `mc work add` used to hand a session a checkout with nothing to import
- * from. Five of this repository's test files need `@xterm/addon-serialize`,
+ * from. Five of this repository's test files needed `@xterm/addon-serialize`,
  * `@xterm/headless` or `node-pty` — measured 2026-09-02 on a clean
  * `origin/main` worktree: 14 failing files without a dependency tree, 9 with,
- * and the five in the difference fail with `ERR_MODULE_NOT_FOUND`. A session
+ * and the five in the difference failed with `ERR_MODULE_NOT_FOUND`. A session
  * reading that sees its own change blamed for a missing package.
+ *
+ * Those five went with `src/runtime/session-host/` in #561 on 2026-09-03, one
+ * day after they were measured, and no test file imports the three packages
+ * today. `package.json` still declares them and `scripts/mc-live-page-check.mjs`
+ * still imports two, so the tree is still what a checkout resolves through —
+ * and what makes that safe to say is no longer this paragraph but
+ * `dependency-tree.js`, which the gate asks every round.
  *
  * The tree goes at `~/mc/node_modules` (`paths.js`), above every workarea and
  * inside none of them, because node resolves a bare specifier by walking
@@ -46,6 +53,19 @@
  * workareas on two branches reinstalling over each other. The cost is that a
  * branch which adds a dependency does not get it until it lands; the session
  * on that branch installs it itself, and nothing here stops it.
+ *
+ * ## The gate's candidate resolves the same directory
+ *
+ * The merge gate builds its throwaway worktree under the work root too
+ * (`paths.js`, `WORK_GATE` beside `WORK_DEPS`), so the tree is two parents
+ * above the candidate and there is one copy of it rather than one per place
+ * that runs the tests. The round calls this on the candidate itself and names
+ * the repository with `repoName`: a pull request that changes the lockfile is
+ * measured against a tree installed from *its* lockfile, which is the one
+ * reading of "what this change does to the suite" that is not a lie. The
+ * shared tree then stands at that pull request's lockfile until the next
+ * caller moves it — one directory, one lockfile, and the price of that is
+ * paid here rather than hidden.
  *
  * ## One repository's tree, named rather than inferred
  *
@@ -92,14 +112,22 @@ export function workDepsManifest(text) {
  * Make sure the tree above the workareas matches the repository, and say what
  * it took.
  *
+ * `repo` is where the two files are read from; `repoName` is which repository
+ * they belong to, for the caller that reads them from somewhere that is not
+ * the checkout itself. The merge gate is that caller: its candidate is a
+ * worktree called `candidate`, and the tree it resolves through is the same
+ * one directory the workareas resolve through, one level under the work root.
+ *
  * Never throws and never fatal to its caller: a workarea whose tests cannot
  * resolve a package is worse off than one whose tests can, and both are
- * better off than no workarea at all. `state` is one of `not-shared`,
- * `no-manifest`, `no-lockfile`, `no-dependencies`, `current`, `installed`,
- * `failed`.
+ * better off than no workarea at all. The gate leans on the same property
+ * from the other end — it measures whether the candidate resolves anything
+ * (`dependency-tree.js`) rather than trusting what this returned. `state` is
+ * one of `not-shared`, `no-manifest`, `no-lockfile`, `no-dependencies`,
+ * `current`, `installed`, `failed`.
  */
-export function ensureWorkDeps({ repo, env = process.env, install = npmCi } = {}) {
-  const name = String(repo || '').replace(/\/+$/u, '').split('/').pop() || '';
+export function ensureWorkDeps({ repo, repoName = null, env = process.env, install = npmCi } = {}) {
+  const name = String(repoName || repo || '').replace(/\/+$/u, '').split('/').pop() || '';
   const path = workDepsPath(env);
   if (!SHARED_TREE_REPOS.includes(name)) {
     return { ok: true, state: 'not-shared', path, why: `${name || 'this repository'} keeps its own dependencies` };

@@ -183,7 +183,7 @@ export async function runMergeRound({
         // branch unmergeable to the forge until it carries the new main.
         const head = (verdict.prs || []).find((item) => item.number === number)?.head;
         if (head && report.batch.merges.some((item) => item.merged)) {
-          const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base || 'main', root, env, git: askGit, say });
+          const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base || 'main', env, git: askGit, say });
           if (!ready.ok) say(`#${number} could not be freshened first (${ready.reason}) — its own round will say what that means`);
         }
         say(`— round for #${number}`);
@@ -268,7 +268,7 @@ export async function runMergeRound({
         // what has landed stays landed and said.
         const head = (verdict.prs || []).find((item) => item.number === number)?.head;
         if (head) {
-          const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, root, env, git: askGit, say });
+          const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, env, git: askGit, say });
           if (!ready.ok) {
             if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: `could not be freshened for landing: ${ready.reason}` });
             return finish('merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it, and ${verdict.pr.base} now stands at a state the batch never measured by itself`);
@@ -339,7 +339,7 @@ export async function runMergeRound({
             for (const later of rest) {
               const head = (verdict.prs || []).find((item) => item.number === later)?.head;
               if (head) {
-                const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, root, env, git: askGit, say });
+                const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, env, git: askGit, say });
                 if (!ready.ok) say(`#${later} could not be freshened first (${ready.reason}) — its own round will say what that means`);
               }
               say(`— round for #${later}`);

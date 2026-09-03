@@ -139,6 +139,32 @@ export function workDepsPath(env = process.env) {
   return join(workRoot(env), WORK_DEPS);
 }
 
+/**
+ * `~/mc/gate` — where the merge gate builds its throwaway worktrees.
+ *
+ * A sibling of `WORK_DEPS`, and that is the whole reason it is here rather
+ * than under `mcHome()` where it used to be. The gate's candidate is a
+ * checkout with no `node_modules` in it, and it must resolve whatever the
+ * manifest declares for exactly the reason a workarea must: a test file that
+ * cannot import is neither run nor counted, and the suite shrinks in silence.
+ * (The five that did import them, under `src/runtime/session-host/`, were
+ * deleted by #561 on 2026-09-03; `package.json` still declares the three
+ * packages, and the round measures the resolution rather than trusting it.)
+ * Standing the candidate at
+ * `<work root>/gate/<repo>/candidate` puts the tree at `<work root>/node_modules`
+ * two parents above it, so node's own walk finds it — the same tree the
+ * workareas resolve, not a second copy of it.
+ *
+ * It is not a work area and cannot be mistaken for one: `areasWithCheckout`
+ * and the runner name a directory only when `<area>/<repo>/.git` exists, and
+ * the checkout here is one level deeper, under the repository's slug.
+ */
+export const WORK_GATE = 'gate';
+
+export function workGatePath(env = process.env) {
+  return join(workRoot(env), WORK_GATE);
+}
+
 /** What `npm ci` in the work root reads: a copy of the repository's two files. */
 export function workDepsManifestPath(env = process.env) {
   return join(workRoot(env), 'package.json');

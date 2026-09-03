@@ -41,7 +41,6 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { gateRoot } from './repo-gate.js';
-import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 
 /**
@@ -66,13 +65,13 @@ import { repoFileSlug } from './repo-snapshot.js';
  * A conflict aborts and touches nothing; the caller stops the batch there.
  */
 export function freshenBranchForLanding({
-  repoPath, branch, base, root = mcHome(), env = process.env, git = null, say = () => {},
+  repoPath, branch, base, env = process.env, git = null, say = () => {},
 } = {}) {
   const run = (tool) => (args, options = {}) => spawnSync(tool, args, {
     cwd: options.cwd, env, encoding: 'utf8',
   });
   const askGit = git || run('git');
-  const workspace = join(gateRoot(root), `${repoFileSlug(repoPath)}-freshen`);
+  const workspace = join(gateRoot(env), `${repoFileSlug(repoPath)}-freshen`);
   askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
   rmSync(workspace, { recursive: true, force: true });
   askGit(['worktree', 'prune'], { cwd: repoPath });
