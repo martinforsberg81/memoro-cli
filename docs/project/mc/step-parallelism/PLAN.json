@@ -93,7 +93,7 @@
         "What the mechanism deliberately will not do. It reads `kind: project` only, never `decision` — see above, there is nothing to check a decision against, and a machine that guessed would be wrong 21 times out of 31. It says *is not on main* rather than *is done*, because a project also leaves main when it is abandoned or superseded (`project_log.md` has both), and then the blocked step's premise may be dead rather than satisfied — only a person can tell which. And it writes nothing: flipping a step back to `ready` stays a plan edit somebody makes and a pull request somebody reads. This step's automation is the noticing, and only that.",
         "For step 2, which measures: `blocked-scan.mjs` takes `--memoro-ref` and `--memoro-cli-ref`, so any past state of the queue can be re-counted from git without a checkout, and `--json` gives the rows. That is also how the before/after table in `blocked-audit.md` was produced."
       ],
-      "pr": null,
+      "pr": 559,
       "blocked_by": null
     },
     {
