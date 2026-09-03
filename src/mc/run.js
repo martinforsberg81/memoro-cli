@@ -79,13 +79,13 @@ import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
-import { handOver } from './run-control.js';
+import { handOver, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
 import { runMergeRound } from './repo-merge.js';
-import { kindFor } from './status-collect.js';
+import { kindFor, pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
@@ -116,6 +116,10 @@ export function realDeps(env = process.env) {
     gh: (cwd, args) => sh('gh', args, { cwd }),
     tmuxHas: (name) => sh('tmux', ['has-session', '-t', name]).ok,
     exists: existsSync,
+    // The one liveness test the page, `mc run start` and the loop's own
+    // refusal all use, so a runner.json that names a pid means the same thing
+    // to every reader of it.
+    alive: pidAlive,
     read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
     list: (path) => { try { return readdirSync(path); } catch { return []; } },
     write: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); },
@@ -1285,6 +1289,33 @@ export async function runLoop({
 } = {}) {
   const runner = createRunner({ merge, deps });
   if (runner.stopRequested()) { runner.say(`STOP file present (${runner.paths.stop}) — remove it before starting`); return 2; }
+  // runner.json read before it is written. `markRunner()` below is a
+  // statement, not a claim anyone checked, so until now a second `mc run` in
+  // the same work root simply overwrote the first and became invisible to
+  // every reader of mc's state — measured 2026-09-02, when two runners handed
+  // the same step to two sessions in one worktree 100 seconds apart. `mc run
+  // start` has always refused on exactly this; the same `readRunner` answers
+  // here, so the two cannot disagree about who is running.
+  //
+  // `--once` is refused too. It is a person watching one step rather than an
+  // unattended loop, but the collision is the same one: one step, one
+  // worktree, one `git add -A`, and a second session that can only stand
+  // down. There is nothing about being watched that makes that safe.
+  const held = readRunner({ paths: runner.paths, read: deps.read, alive: deps.alive || pidAlive });
+  if (held?.alive) {
+    runner.say(`a runner is already running — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`);
+    runner.say('mc run stop ends it · mc run --update restarts it on the newest code');
+    return 2;
+  }
+  // A file naming a pid that is gone is a killed runner's leftovers, not a
+  // reason nothing can start: it is cleared and said, the way `mc run start`
+  // clears it. `clearRunner()` takes the `current-<repo>.json` files with it,
+  // which are the same runner's other leftovers and would otherwise draw a
+  // step that has not been running for hours.
+  if (held) {
+    runner.clearRunner();
+    runner.say(`cleared runner.json — the pid it named (${held.pid}) is gone`);
+  }
   runner.say(`runner start (mc run, merge=${merge ? 1 : 0} rounds=${rounds} once=${once ? 1 : 0})`);
   // Before the first round, so a run that is going to be unattended is already
   // holding the assertion by the time anybody walks away from it. `--once` is
