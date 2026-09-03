@@ -9,6 +9,7 @@
  *
  *   mc repo status [repo] [--json] [--offline]
  *   mc repo watch start|stop|status
+ *   mc repo nightly start|stop|status
  *   mc repo claim <repo> "<errand>" / release <repo> [--force] / who <repo>
  *
  * It reads. The one thing status writes is a `git fetch` — remote-tracking
@@ -20,7 +21,9 @@
 import { basename } from 'node:path';
 
 import { painter } from '../status-render.js';
-import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
+import {
+  leaseRow, livenessRow, renderNightlyLines, renderRepoLines, renderWatchLines,
+} from '../repo-render.js';
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { installPushGuard, pushCheckLines, pushGuardState, pushVerdict } from '../push-guard.js';
 import { currentHolder } from '../work-identity.js';
@@ -31,13 +34,20 @@ import { livenessForLeases } from '../lease-liveness.js';
 import { readCombinedSnapshot } from '../repo-snapshot.js';
 import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
+import {
+  DEFAULT_INTERVAL_MS as NIGHTLY_INTERVAL_MS, nightlyState, startNightly, stopNightly,
+} from '../nightly.js';
 import { scanArgs } from './flags.js';
 
-const VERBS = ['status', 'watch', 'claim', 'release', 'who', 'merge', 'rounds', 'guard', 'push-check'];
+const VERBS = ['status', 'watch', 'nightly', 'claim', 'release', 'who', 'merge', 'rounds', 'guard', 'push-check'];
 // `merge` stays in the list only so the old spelling can be answered with
 // where it went; it is not a verb here any more.
-const WATCH_VERBS = ['start', 'stop', 'status'];
+// Both meters have the same three words, and deliberately the same three:
+// `mc repo nightly` is a second background process beside the watcher, and a
+// second grammar for starting one would be a thing to remember.
+const METER_VERBS = ['start', 'stop', 'status'];
 const LEASE_VERBS = ['claim', 'release', 'who'];
+const INTERVAL_ELSEWHERE = '--interval belongs to mc repo watch start or mc repo nightly start';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -50,6 +60,7 @@ export async function run(argv, deps = {}) {
   }
 
   if (opts.verb === 'watch') return watch(opts, { stdout, stderr });
+  if (opts.verb === 'nightly') return nightly(opts, { stdout, stderr });
   if (opts.verb === 'merge') {
     stderr.write('mc: mc repo merge is now mc merge — same round, its own door: mc merge <repo> <pr> [--check] | --docs\n');
     return 2;
@@ -124,6 +135,59 @@ async function watch(opts, { stdout, stderr }) {
     return 0;
   }
   stdout.write(`${renderWatchLines(state, {
+    columns: stdout.columns || 100,
+    colour: Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined,
+  }).join('\n')}\n`);
+  return 0;
+}
+
+/**
+ * The full run nobody asks for: start it, stop it, or ask after it.
+ *
+ * Explicit for the watcher's reason — no page starts a background process —
+ * and for one more of its own: this one runs whole suites, which pin the
+ * machine for minutes at a time. A process that appears because somebody read
+ * a page is bad enough when it costs a fetch.
+ *
+ * It is a meter and nothing else. Whatever it finds refuses no merge, delays
+ * no round and changes no verdict (ruled by Martin, 2026-09-02), so stopping
+ * it costs a reading and never a decision.
+ */
+async function nightly(opts, { stdout, stderr }) {
+  if (opts.nightly === 'start') {
+    const started = startNightly({ intervalMs: opts.intervalMs });
+    if (!started.ok && started.reason === 'already-running') {
+      stdout.write(`mc: the nightly is already running (pid ${started.pid}, every ${every(started.interval_ms)})\n`);
+      return 0;
+    }
+    if (!started.ok) {
+      stderr.write(`mc: could not start the nightly (${started.reason})\n`);
+      return 1;
+    }
+    stdout.write(`mc: a full run of every repository every ${every(started.interval_ms)} (pid ${started.pid})\n`);
+    stdout.write(`mc: it writes ${started.log} and nothing else — it merges nothing and blocks nothing\n`);
+    stdout.write('mc: a tick that finds a gate round running skips and says so; it never queues behind one\n');
+    return 0;
+  }
+
+  if (opts.nightly === 'stop') {
+    const stopped = await stopNightly();
+    if (!stopped.stopped) {
+      stdout.write(stopped.abandoned
+        ? 'mc: no nightly was running — cleared the pid file it left behind\n'
+        : 'mc: no nightly is running\n');
+      return 0;
+    }
+    stdout.write(`mc: stopped the nightly (pid ${stopped.pid})${stopped.forced ? ' — it had to be killed' : ''}\n`);
+    return 0;
+  }
+
+  const state = nightlyState();
+  if (opts.json) {
+    stdout.write(`${JSON.stringify(state, null, 2)}\n`);
+    return 0;
+  }
+  stdout.write(`${renderNightlyLines(state, {
     columns: stdout.columns || 100,
     colour: Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined,
   }).join('\n')}\n`);
@@ -624,12 +688,28 @@ function seconds(ms) {
   return `${value}s`;
 }
 
+/**
+ * The same number, said the way a day-long cadence reads.
+ *
+ * `--interval` is seconds for both meters, because one flag with two units
+ * across sibling verbs is a trap — but "every 86400s" is not a sentence
+ * anybody checks, so the nightly prints hours and the watcher prints seconds.
+ */
+function every(ms) {
+  const value = Number(ms) || 0;
+  if (value < 3_600_000) return seconds(value);
+  return `${Math.round((value / 3_600_000) * 10) / 10}h`;
+}
+
 function usage() {
   return [
     'usage — mc repo status [repo] [--json] [--offline]\n',
     '        mc repo watch start [--interval <seconds>]\n',
     '        mc repo watch stop\n',
     '        mc repo watch status [--json]\n',
+    '        mc repo nightly start [--interval <seconds>]\n',
+    '        mc repo nightly stop\n',
+    '        mc repo nightly status [--json]\n',
     '        mc repo claim <repo> "<what for>"\n',
     '        mc repo release <repo> [--force]\n',
     '        mc repo who <repo> [--json]\n',
@@ -645,6 +725,7 @@ export function parseArgs(argv) {
   const opts = {
     verb: 'status',
     watch: 'status',
+    nightly: 'status',
     names: [],
     repo: null,
     pr: null,
@@ -662,6 +743,9 @@ export function parseArgs(argv) {
   // grammar rather than the user's.
   if (VERBS.includes(positional[0])) opts.verb = positional.shift();
 
+  // The two meters share one flag and one unit; only the default differs,
+  // because a watcher round is a second and a full suite is minutes.
+  if (opts.verb === 'nightly') opts.intervalMs = NIGHTLY_INTERVAL_MS;
   if (scanned.flags.interval !== null) {
     const value = Number(scanned.flags.interval);
     if (!Number.isFinite(value) || value < 1) return { ...opts, error: '--interval needs a number of seconds' };
@@ -703,24 +787,24 @@ export function parseArgs(argv) {
     if (opts.force && opts.verb !== 'release') {
       return { ...opts, error: '--force belongs to mc repo release' };
     }
-    if (scanned.flags.interval !== null) return { ...opts, error: '--interval belongs to mc repo watch start' };
+    if (scanned.flags.interval !== null) return { ...opts, error: INTERVAL_ELSEWHERE };
     return opts;
   }
 
   if (opts.force) return { ...opts, error: '--force belongs to mc repo release' };
 
-  if (opts.verb === 'watch') {
+  if (opts.verb === 'watch' || opts.verb === 'nightly') {
     const word = positional.shift() || 'status';
-    if (!WATCH_VERBS.includes(word)) {
-      return { ...opts, error: `mc repo watch ${word}? — start, stop or status` };
+    if (!METER_VERBS.includes(word)) {
+      return { ...opts, error: `mc repo ${opts.verb} ${word}? — start, stop or status` };
     }
-    opts.watch = word;
-    if (positional.length) return { ...opts, error: `mc repo watch takes no repository (${positional[0]})` };
+    opts[opts.verb] = word;
+    if (positional.length) return { ...opts, error: `mc repo ${opts.verb} takes no repository (${positional[0]})` };
     return opts;
   }
 
   if (scanned.flags.interval !== null) {
-    return { ...opts, error: '--interval belongs to mc repo watch start' };
+    return { ...opts, error: INTERVAL_ELSEWHERE };
   }
   opts.names = positional;
   return opts;

@@ -21,7 +21,10 @@
  *
  * `mc test <repo> --full` is the other reading, and the only one here that is
  * about the code rather than about a change: the repository's whole suite on
- * the default branch as fetched. It is asked for, never scheduled.
+ * the default branch as fetched. Asked for here, and — since 2026-09-03 — also
+ * taken on an interval by `mc repo nightly`, which runs this same round rather
+ * than a copy of it, so the scheduled reading and the asked-for one cannot
+ * disagree about what a repository's whole suite is.
  */
 import { gate, parseMergeArgs } from './repo.js';
 

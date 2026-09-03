@@ -384,3 +384,48 @@ Two leases, and between them a merge round cannot overlap another:
 Both carry the holder's pid, so a round that was killed rather than finished
 is reaped by the next claim instead of blocking forever. Neither blocks git:
 they refuse `mc`, and nothing else.
+
+## The full run nobody asks for
+
+`mc repo nightly start` runs `mc test <repo> --full` for every repository mc
+knows, on an interval, with nobody typing anything. It exists because memoro's
+whole suite ran only when a person typed `npm run test:full`, and #10529 is what
+that produced: four days of merges left 31 tests red on `main` while every pull
+request's affected-selection passed, because nothing ever looked at the whole.
+
+It is a **meter**, and the word is load-bearing (ruled by Martin, 2026-09-02):
+nothing it finds refuses a merge, delays a round or changes a verdict. It never
+commits, never pushes, never writes inside a repository and never takes a
+branch. Everything it writes is under mc's home —
+`~/.memoro/mc/nightly/nightly.log` and its pid file beside it — and it is
+entirely optional, exactly like the watcher.
+
+- **The round is the same round.** Not a copy, and not `npm run test:full`
+  directly: it calls `runGate` with the `full: true` a person's `--full` passes,
+  so the scheduled reading and the asked-for reading cannot disagree about what
+  a repository's whole suite is. Every tick is counted in `gate-rounds.jsonl`
+  like any other round, so `mc repo rounds` stays true about what this machine
+  did.
+- **A held lock is a skip, never a wait.** The round lock has no expiry on
+  purpose — a round is *supposed* to take minutes, so no clock can tell a slow
+  round from a dead one. So the nightly attempts it, and a live holder ends the
+  tick then and there with a line naming that round's pid. A machine that merged
+  all evening shows a night of skips and one run, and that reads as normal. No
+  queue, no backoff, no notion of a run that is "overdue": a missed night is a
+  missed night and the next tick runs.
+- **The cadence is measured from the last completed tick**, never from a
+  wall-clock hour. A laptop asleep at 03:00 never sees 03:00, and a scheduler
+  that notices the miss on waking fires a catch-up burst at breakfast. Sleep
+  simply stretches the gap here. Default once a day; `--interval <seconds>` is
+  the watcher's flag with the watcher's unit.
+- **Three outcomes stay apart.** A run that found nothing, a run that named
+  failures, and a run that produced no suite result at all — the lock was held,
+  the preparation failed, the declaration stopped it, the process died. The
+  third is not zero failures, and a day of them reported as a green streak would
+  be the same false green `--full` was fixed to remove, arriving by another
+  road.
+
+Measured 2026-09-03 on this machine: a tick that found a `mc test memoro-cli
+--full` round holding the lock recorded `memoro  skipped  another gate round is
+running on this machine (pid 77336, memoro-cli-1d5e7a04, since …) — one at a
+time` and did not wait.

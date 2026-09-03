@@ -90,10 +90,12 @@ export async function runGate({
   // which one carried which test. `pr` alone is the single-PR round it
   // always was.
   prs = null,
-  // The whole suite on one tree, instead of the files the diff reaches. Asked
-  // for, never scheduled: it is the one reading here that is about the code
-  // rather than about a change, and with no pull request it measures the
-  // default branch as fetched.
+  // The whole suite on one tree, instead of the files the diff reaches. It is
+  // the one reading here that is about the code rather than about a change,
+  // and with no pull request it measures the default branch as fetched. Asked
+  // for by `mc test <repo> --full`, and taken on an interval by `mc repo
+  // nightly`, which calls this function with this flag rather than copying
+  // what it does.
   full = false,
   tests = null,
   holder = currentHolder(),
