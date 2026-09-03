@@ -127,7 +127,7 @@
         "**`scripts/mc-release-smoke.js` is dead and was left alone.** It drives `mc auth status`, `mc tool-switch`, `mc new`, `mc resume` and `mc fanout`, none of which exist; `npm run smoke:mc` still points at it. Nothing this step deleted broke it — it was already a release smoke of a product that is gone, so it is named here rather than removed under a step whose rule is that the verb goes first.",
         "**Verifying `mc run` starts real work, and the next session should know it before trying.** `mc run --rounds 1 --no-merge --no-caffeinate` with `MC_WORK_ROOT` and `MC_HOME` pointed at temporary directories still reads the plans on `origin/main` and still creates worktrees in the real repositories from them: the round ran the helper digest, wrote intake, computed lanes (memoro 34, memoro-cli 3), created two workareas and dispatched two live `claude` step sessions before it was killed. Two branches survive that, both sitting exactly on their repository's `origin/main` with no commits: `mc-cut-4` in memoro-cli, whose worktree was removed, and `email-verification-round-3` in memoro, whose worktree at `/private/tmp/mc-work-pfF9/email-verification-round/memoro` is still registered — removing either branch, and that worktree, needed permissions this session does not have. There is no dry run: repository roots come from `homedir()`, not from `MC_WORK_ROOT`, so nothing short of a different `$HOME` isolates a round from the real work."
       ],
-      "pr": null,
+      "pr": 561,
       "blocked_by": null
     },
     {
