@@ -127,7 +127,7 @@
     },
     {
       "title": "The gate lock queues instead of refusing",
-      "status": "ready",
+      "status": "blocked",
       "done_when": "A round that finds the gate lock held waits for it and then takes it, rather than being told no and losing its round — and a test drives two rounds against one lock without either losing work.",
       "instruction": [
         "**Keep the guarantee, change the answer.** `gate-lock.js` exists so one gate round runs at a time on this machine — a full suite pins the cores, and two at once make both slower and both flakier, which is the 55 → 57 → 55 the red floor was invented to absorb. That stays exactly as it is. What changes is what happens to the *second* round: today `takeGateLock` returns `{ ok: false, running }` and the caller gives up; the work that round already did is thrown away. With each lane on its own clock (step 1) two landings can now meet more often than they did, and `measurements.md` counted 9 refusals in the history.",
@@ -136,13 +136,18 @@
         "**`repo-lease.js` is a different guarantee and is not this step.** It is advisory by design and holds one gate round per repository. Say in the PR whether a queued gate round interacts with it, but do not change it here.",
         "**When this lands, `chores()` in `run.js` no longer needs its quiet-pass guard** around `archiveDone` — remove it in the same PR and say so."
       ],
-      "comments": [],
+      "comments": [
+        "Being built by the planning session on the evening of 2026-09-03 (Martin: \"Du ska få fart på själva mc-sessionerna … samt se till så att vi kan göra flera än 2 parallella sessioner\"). Parked here so the runner does not start it in parallel; the session's PR sets it `done` or back to `ready`."
+      ],
       "pr": null,
-      "blocked_by": null
+      "blocked_by": {
+        "kind": "decision",
+        "name": "step-parallelism-by-hand"
+      }
     },
     {
       "title": "Measure again, and say whether the count is worth raising",
-      "status": "ready",
+      "status": "blocked",
       "done_when": "`measurements.md` § *After* holds the same table as the baseline for at least 20 step sessions started after step 1 landed, and ends with one recommendation: raise the lane count, or not, and why.",
       "instruction": [
         "**Measure what exists.** Martin, 2026-09-03: *\"20 är bara taget ur luften. Det tar för lång tid allt. Slå på projekten nu.\"* — so this step runs as soon as step 2 has landed, over every step session started after step 1 landed (2026-09-03 19:35Z). State the session count in the table; a small count is reported as small, not padded.",
@@ -150,13 +155,18 @@
         "**Read `runner.log` for the lanes.** Count `memoro-cli: round N done` lines that fall between a memoro `step starting` and its `step done`; that is the independence step 1 built, and criterion 6 wants a day's worth of it. Count `another gate round is running` in `gate-rounds.jsonl` since the landing; that is the base rate step 4 cares about — step 2 (the queueing lock) lands before this measurement, so count refusals before and after its landing separately.",
         "**End with one recommendation**, written for Martin: whether four lanes in memoro would now buy wall-clock, what it would cost in gate contention, and whether the queueing lock (step 2) has changed the refusal picture. If the honest answer is that the count is still not the bottleneck, say so — the contract says dropping step 4 is a legitimate outcome."
       ],
-      "comments": [],
+      "comments": [
+        "Being built by the planning session on the evening of 2026-09-03 (Martin: \"Du ska få fart på själva mc-sessionerna … samt se till så att vi kan göra flera än 2 parallella sessioner\"). Parked here so the runner does not start it in parallel; the session's PR sets it `done` or back to `ready`."
+      ],
       "pr": null,
-      "blocked_by": null
+      "blocked_by": {
+        "kind": "decision",
+        "name": "step-parallelism-by-hand"
+      }
     },
     {
       "title": "The lane count is a setting, and `mc step` is how it is set",
-      "status": "ready",
+      "status": "blocked",
       "done_when": "`mc step <n>` sets how many steps may run at once per repository, `mc step` prints the current value, the setting survives a restart, and a round with it above 1 runs several steps in one repository at once without losing work to the gate.",
       "instruction": [
         "**Read step 3's recommendation first** — it is in that step's `comments` and in `measurements.md` § *After*. If it says the lane count is not the bottleneck, do not build the count anyway: set this step `blocked` on decision `step-parallelism-count` with the reason, and stop. Otherwise go on; step 2 has made a refused gate a wait, so a wider count no longer throws work away.",
@@ -167,9 +177,14 @@
         "**Default to today's behaviour.** Whatever the count's default is, an operator who sets nothing must get exactly what they get today. A setting that changes behaviour by existing is not a setting.",
         "**Finish the surface.** `mc --help`, the page, and a technical doc under `docs/technical/` saying what the lane count does and what it costs — including the gate contention the measurements found."
       ],
-      "comments": [],
+      "comments": [
+        "Being built by the planning session on the evening of 2026-09-03 (Martin: \"Du ska få fart på själva mc-sessionerna … samt se till så att vi kan göra flera än 2 parallella sessioner\"). Parked here so the runner does not start it in parallel; the session's PR sets it `done` or back to `ready`."
+      ],
       "pr": null,
-      "blocked_by": null
+      "blocked_by": {
+        "kind": "decision",
+        "name": "step-parallelism-by-hand"
+      }
     }
   ]
 }
