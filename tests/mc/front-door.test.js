@@ -83,6 +83,47 @@ describe('bare mc', () => {
     } finally { fx.cleanup(); }
   });
 
+  /**
+   * The live page must not leak into a pipe.
+   *
+   * `mc` at a terminal refreshes every 30 s and moves the cursor to do it
+   * (`page-live.js`). Without a TTY none of that may happen: `colourFor`
+   * refuses colour and `run()` returns before `readerFor` is ever reached, so
+   * the fork is one fork. This is the assertion that would catch a third
+   * opinion about it — a script, a subprocess or a session reading the page
+   * would otherwise get cursor moves in the middle of its input.
+   */
+  it('piped, both surfaces print once, exit 0 and write no escape byte', () => {
+    const fx = fixture();
+    try {
+      for (const args of [[], ['--json']]) {
+        const started = Date.now();
+        const result = runMcCli(args, fx.env);
+        const elapsed = Date.now() - started;
+        const what = `mc ${args.join(' ')}`.trim();
+
+        assert.equal(result.signal, null, `${what} had to be killed: it never exited`);
+        assert.equal(result.status, 0, `${what}: ${result.stderr}`);
+        // Not one escape byte — no colour, no cursor move, no erase.
+        assert.ok(!result.stdout.includes('\u001b'), `${what} wrote an escape sequence to a pipe`);
+        // It exits rather than waiting: a leaked refresh would sit here for
+        // the 30 s interval at the very least, and forever at worst.
+        assert.ok(elapsed < 30_000, `${what} took ${elapsed} ms — it waited for something`);
+      }
+
+      // Once, not once per refresh. Every section heading appears exactly one
+      // time in the whole of stdout.
+      const printed = runMcCli([], fx.env).stdout;
+      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROGRAMMES', 'WORK']) {
+        const seen = printed.match(new RegExp(`^\\s+${section}\\b`, 'gmu')) || [];
+        assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
+      }
+      // And --json is one document, not a stream of them.
+      const json = runMcCli(['--json'], fx.env).stdout;
+      assert.equal(json.trimEnd(), JSON.stringify(JSON.parse(json), null, 2));
+    } finally { fx.cleanup(); }
+  });
+
   it('mc work with no name is the same page', () => {
     const fx = fixture();
     try {
