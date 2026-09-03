@@ -545,9 +545,12 @@ const DATA = pageData({
 });
 
 describe('the page', () => {
-  it('prints the four sections in order, with the counts and the verb that expands each', () => {
+  it('prints the sections in order — the listing first, the machine last and nearest the prompt', () => {
     const text = renderPage(DATA, { columns: 120, version: '0.7.11', now: NOW });
-    const at = ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROGRAMMES', 'WORK'].map((head) => text.indexOf(`  ${head}`));
+    // RUNNER and the desks are the rows that change while the page is open,
+    // and the live loop can only rewrite rows still on the screen; at the
+    // top they scrolled off under the projects and never moved (2026-09-03).
+    const at = ['QUEUE', 'INTAKE', 'PROGRAMMES', 'WORK', 'RUNNER', 'HELPER', 'BRIEF'].map((head) => text.indexOf(`  ${head}`));
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     assert.match(text, /2 of 3 queued/u);
@@ -752,14 +755,6 @@ describe('the palette', () => {
     '',
     'bold+white grey grey white grey grey', //   MEMORO·CLI 0.7.11 ── 4 decisions · 2 of 3 queued · ≈$7.28 today
     '',
-    'bold+cyan grey', //                                          RUNNER                                mc run
-    'green bold+white green grey grey grey white grey grey', //  ● mc-ui  step · claude opus · 20 min of 90 min · pid 4242
-    'red+bold grey', //                                          ■ STOP requested — the runner exits after the steps it is in
-    'grey', //                                                     runner up 120 min · 3 steps in 24 h — …
-    '',
-    'bold+cyan cyan grey grey grey grey grey grey', //            HELPER  ● open 60 min · claude sonnet · pid 99   mc helper
-    'bold+cyan dim+grey grey', //                                 BRIEF  ·  not open                                mc brief
-    '',
     'bold+cyan grey grey', //                                      QUEUE  2 runnable of 3            mc status <name>
     'grey bold+white green', //                                      1  mc-ui  step
     'grey white green', //                                           2  docx-editor  step
@@ -782,6 +777,14 @@ describe('the palette', () => {
     'yellow bold+white cyan grey grey grey grey', //             ◆ docx-editor  tmux · open 60 min · mc-docx-editor
     '',
     'grey grey grey dim+grey grey', //                               5 · ui-fixes  —  no project on main
+    '',
+    'bold+cyan grey', //                                          RUNNER                                mc run
+    'green bold+white green grey grey grey white grey grey', //  ● mc-ui  step · claude opus · 20 min of 90 min · pid 4242
+    'red+bold grey', //                                          ■ STOP requested — the runner exits after the steps it is in
+    'grey', //                                                     runner up 120 min · 3 steps in 24 h — …
+    '',
+    'bold+cyan cyan grey grey grey grey grey grey', //            HELPER  ● open 60 min · claude sonnet · pid 99   mc helper
+    'bold+cyan dim+grey grey', //                                 BRIEF  ·  not open                                mc brief
     '',
     'grey', //                                                     offline, PRs 2 h old — --fresh asks GitHub
     'grey', //                                                     note: no queue.md
