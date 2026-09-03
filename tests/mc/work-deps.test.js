@@ -1,11 +1,14 @@
 /**
  * The dependency tree above the workareas.
  *
- * Five test files in this repository import `@xterm/addon-serialize`,
+ * Five test files in this repository imported `@xterm/addon-serialize`,
  * `@xterm/headless` or `node-pty`, and a workarea mc made had nowhere to
  * resolve them from — so they failed in every workarea and in the gate's
  * candidate, and a session read its own change as the cause. `work-deps.js`
  * puts one tree at `~/mc/node_modules`, above every workarea and inside none.
+ * (#561 deleted those five with `src/runtime/session-host/` on 2026-09-03;
+ * the manifest still declares the packages, and what the gate now checks is
+ * whether they resolve, not whether somebody wrote down that they need to.)
  *
  * `npm` is never run here. What it would be asked to do is the injected
  * `install`, so these tests are about *when* it runs and *where* it writes,

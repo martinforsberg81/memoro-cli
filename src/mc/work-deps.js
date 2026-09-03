@@ -2,11 +2,18 @@
  * One dependency tree, one directory above the workareas.
  *
  * `mc work add` used to hand a session a checkout with nothing to import
- * from. Five of this repository's test files need `@xterm/addon-serialize`,
+ * from. Five of this repository's test files needed `@xterm/addon-serialize`,
  * `@xterm/headless` or `node-pty` — measured 2026-09-02 on a clean
  * `origin/main` worktree: 14 failing files without a dependency tree, 9 with,
- * and the five in the difference fail with `ERR_MODULE_NOT_FOUND`. A session
+ * and the five in the difference failed with `ERR_MODULE_NOT_FOUND`. A session
  * reading that sees its own change blamed for a missing package.
+ *
+ * Those five went with `src/runtime/session-host/` in #561 on 2026-09-03, one
+ * day after they were measured, and no test file imports the three packages
+ * today. `package.json` still declares them and `scripts/mc-live-page-check.mjs`
+ * still imports two, so the tree is still what a checkout resolves through —
+ * and what makes that safe to say is no longer this paragraph but
+ * `dependency-tree.js`, which the gate asks every round.
  *
  * The tree goes at `~/mc/node_modules` (`paths.js`), above every workarea and
  * inside none of them, because node resolves a bare specifier by walking

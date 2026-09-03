@@ -104,18 +104,19 @@ export const UNKNOWN = 'unknown';
 export const SHIPPED = Object.freeze({
   'memoro-cli': Object.freeze({
     // Nothing for the *round* to run, because the tree is the environment's.
-    // `src/runtime/session-host/` imports `@xterm/addon-serialize`,
-    // `@xterm/headless` and `node-pty`, and five test files cannot run without
-    // them — but the candidate now stands under the work root
-    // (`paths.js`: `WORK_GATE` beside `WORK_DEPS`), so node's own parent walk
-    // finds `~/mc/node_modules` two directories above it, the same tree every
-    // workarea resolves. The `npm ci` this entry carried from 2026-09-02 was
-    // true and was a second copy of a tree the candidate could already see.
+    // The candidate stands under the work root (`paths.js`: `WORK_GATE` beside
+    // `WORK_DEPS`), so node's own parent walk finds `~/mc/node_modules` two
+    // directories above it, the same tree every workarea resolves. The `npm
+    // ci` this entry carried from 2026-09-02 was true and was a second copy of
+    // a tree the candidate could already see.
     //
     // This null is not the old one. That one was a sentence — "verified across
-    // every gate round" — and it was false for months while five files went
-    // unrun and uncounted, because nothing measured it. `repo-gate.js` now
-    // asks `dependencyTree` whether every declared name resolves from the
+    // every gate round" — and it was false for months while the five
+    // `src/runtime/session-host/` test files went unrun and uncounted, because
+    // nothing measured it. (Those files are gone: #561 deleted that world on
+    // 2026-09-03, and no test file imports the three declared packages today.
+    // The entry has to stay honest for the day one does again.) `repo-gate.js`
+    // now asks `dependencyTree` whether every declared name resolves from the
     // candidate, walking the parents as node does, and stops the round when
     // one does not. The field says what the round must run; the measurement
     // says whether the suite can run at all.
@@ -123,10 +124,10 @@ export const SHIPPED = Object.freeze({
     prepare_why: 'nothing to install: mc keeps one tree at <work root>/node_modules (work-deps.js) and '
       + 'builds the candidate at <work root>/gate/<repo>/candidate, so the three declared packages '
       + 'resolve by node\'s parent walk with no node_modules inside the checkout. Measured 2026-09-03 '
-      + 'on a gate round for #566: the five session-host files that need them ran green in a candidate '
-      + 'with no node_modules of its own. Re-run it: mc test memoro-cli <pr> on a change reaching '
-      + 'tests/runtime/session-host/ — and the round checks the resolution itself, so a broken tree '
-      + 'stops it rather than shrinking the suite',
+      + 'on the gate round for #570: the whole suite in such a candidate is 143 files, 1538 tests, '
+      + '0 fail in 74.5 s, with no npm ci. Re-run it: mc test memoro-cli <pr> --full — and the round '
+      + 'measures the resolution itself, so a package that stops resolving stops the round rather '
+      + 'than shrinking the suite',
     // This repository's own answer to "what does this change reach": the import
     // closure of each test file, plus the source files a test reads as *text*
     // — which is a real edge here, not a hypothetical one. `merge-doc.test.js`
