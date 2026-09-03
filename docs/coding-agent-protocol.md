@@ -19,22 +19,25 @@ grounded coordinator runtime, not a project-management system and not an
 agent runner" — described the product before `mc plan`, `mc run` and
 `mc brief` existed.
 
-A large part of `src/` is still the session manager that preceded this:
-a registry, a broker, a PTY host, managed providers, cloud runtimes and a
-capability dispatcher. Measured 2026-08-29, 71 % of `src/` is unreachable
-from the page and its verbs. It is being removed by
-[`docs/project/mc/mc-cut/PLAN.json`](project/mc/mc-cut/PLAN.json). Do not build
-new work on it, and do not assume a module is live because it exists —
-`node docs/project/mc/mc-cut/reach.mjs .` answers that question.
+A large part of `src/` used to be the session manager that preceded this — a
+registry, a broker, a PTY host, managed providers, cloud runtimes and a
+capability dispatcher, 71 % of `src/` unreachable from the page and its verbs
+when it was measured on 2026-08-29. `mc-cut` removed it on 2026-09-03:
+`src/` is 153 files where it was 281, and nothing in it is unreached. What
+survives that no verb reaches, and why each piece was kept, is
+[`docs/technical/mc-cut.md`](technical/mc-cut.md). Do not assume a module is
+live because it exists — `npm run reach` still answers that question, and its
+last row should read `0%`.
 
 ## Stack + commands
 
-- Two binaries from one package (`package.json` `bin` field):
+- Three commands from one package (`package.json` `bin` field):
   - `memoro-cli` / `memoro` → `src/bin.js` (low-level: login, legacy lens
-    compatibility, hook installation, heartbeat daemon)
-  - `mc` → `src/mc-cli.js` — the page and the verbs, falling through to
-    `src/bin-mc.js` for the capability commands (auth, vault, github,
-    connections, dev)
+    compatibility, hook installation, heartbeat daemon). No mc verb reaches
+    any of it; whether it should still ship is Martin's decision, not a
+    cleanup — see [`docs/technical/mc-cut.md`](technical/mc-cut.md).
+  - `mc` → `src/mc-cli.js` — the page and twelve verbs, falling through to
+    `src/bin-mc.js`, whose whole table is now `mc vault`
 - Tests are the merge gate. `mc merge memoro-cli <pr>` runs the suite and
   cannot land a red one; see "Validation" below.
   `node --test --import ./tests/_isolate-home.mjs <files>` is the focused
@@ -129,16 +132,14 @@ a round. Two rules, both cheap:
 
 ## Work Method Updates
 
-When the user wants durable changes to how coding agents should work with
-them, use `mc coding-profile read`, `mc coding-profile diff`, and `mc
-coding-profile write` in dialogue with the user. Do not edit generated
-adapter files, `AGENTS.md`, `CLAUDE.md`, or old repo roadmap files as a
-substitute for the server-owned Coding Profile.
-
-The expected loop is explicit: read the current profile with `--json`, discuss
-the change, draft a full replacement Markdown profile, show the diff, and write
-only after the user approves. When no profile exists, `read --json` returns
-`base_revision: 0` plus `template_markdown` for the first revision.
+Durable changes to how coding agents should work with the user are the
+**Coding Profile**, which is the user's and lives in Memoro. mc reads it
+(`src/mc/portrait.js`, `GET /api/mc/coding-profile`) and hands it to a new
+conversation as a launch argument — `--append-system-prompt` for Claude,
+`-c instructions=` for Codex. It has no verb of its own any more:
+`mc coding-profile read|diff|write` went with mc-cut, and the profile is
+edited in Memoro. Do not edit `AGENTS.md`, `CLAUDE.md`, or old repo roadmap
+files as a substitute for it.
 
 A rule that should bind the next agent in a repository — a way of merging,
 a way of running subagents, a thing never to do again — is written into
@@ -151,18 +152,23 @@ saved as a memory and nowhere else.
 
 ## Code conventions
 
-- `src/mc/commands/<name>.js` for new `mc` subcommands (NOT
-  `src/commands/`, which belongs to `memoro-cli` / `memoro`).
-- `src/mc/` for mc-only subsystems (`registry.js`, `vault/`,
-  `orchestration/`, `paths.js`, `git.js`, `adapter-sync.js`, …).
-- Lazy import in `bin-mc.js` `LIFECYCLE` table — cold start matters
-  because `mc` is called frequently from fanout flows.
+- `src/mc/commands/<name>.js` for new `mc` subcommands, added to the
+  `modules` map in `src/mc-cli.js` (NOT `src/commands/`, which belongs to
+  `memoro-cli` / `memoro`, and NOT `src/bin-mc.js`, whose whole table is
+  `mc vault`).
+- `src/mc/` for mc-only subsystems (`paths.js`, `run.js`, `repo-gate.js`,
+  `page-collect.js`, …). `src/vault/` is the vault engine and is the one
+  subsystem this repository keeps without a verb reaching all of it.
+- Cold start matters: `mc` is the page and is typed constantly, so a verb's
+  module is imported when it is routed to, never at load.
 - Tests mirror `src/` structure under `tests/`.
-- Adapter contract: every `src/adapters/<tool>.js` exports
-  - `ID` and `LABEL` — identity for sync + registry
-  - `detect()` — soft signal that the user has the tool installed
-  - `TOOL_NAME`, `STATUS_TIMEOUT_MS`, `getStatus()` — `mc auth
-    status` probe (§11a)
+- Adapter contract: `src/adapters/index.js` is the launch adapter every verb
+  that starts a tool goes through — `resolveLaunch(toolInput)`, called from
+  `src/mc/run.js`, `src/mc/work-open.js` and `src/mc/helper-turn.js`, so no
+  verb spells out `claude` or `codex` itself. Each `src/adapters/<tool>.js`
+  still exports `ID`, `LABEL` and `detect()`; its `TOOL_NAME` /
+  `STATUS_TIMEOUT_MS` / `getStatus()` probe lost its only caller when
+  `mc auth status` was removed.
 
 ### A reason says what was measured, not what was inferred (normative)
 
@@ -224,19 +230,14 @@ endpoint the agent can repurpose as a credential proxy.
   connection authority stay in the Memoro control plane; short-lived
   installation credentials must never enter the coding-tool child environment,
   argv, files, prompt, transcript, logs, browser payloads, or session records.
-- GitHub behavior belongs to mc core and its source/session broker, not an LLM
-  adapter. All tools get the same token-free capability descriptor, operations,
-  hard operation policy, errors, and compatibility surface. The coding-tool
-  host applies the user's native approval settings to mutating invocations; mc
-  does not store, override, or duplicate that preference.
-- `mc github` is canonical. A session-scoped `gh` compatibility shim may map
-  only allowlisted commands to typed broker operations. Never invoke or expose
-  `gh auth token`, `gh auth status --show-token`, arbitrary `gh api`, GraphQL,
-  extensions, or real-CLI passthrough inside the managed capability.
-- The local host-keyring/preflight prototype is transitional and superseded by
-  the central-App contract. Do not expand it or treat `MC_HOST_CAPABILITIES` or
-  `MC_HOST_GH_BIN` as public interfaces. Cloud must work with the local machine
-  offline, and neither source may fall back implicitly to a local `gh` login.
+- **A session uses the machine's own `git` and `gh`.** The managed GitHub
+  capability that used to sit between them — `mc github`, the session-scoped
+  `gh` shim, the typed broker operations, `MC_HOST_CAPABILITIES` — was deleted
+  by mc-cut on 2026-09-03, and nothing replaced it. The workarea is the
+  boundary mc trusts, not a capability inside it. Do not reintroduce a
+  credential path here to get around that: never read or print `gh auth
+  token`, `gh auth status --show-token`, or any token `gh` holds, and never
+  put one in a file, an environment variable, an argv, a log or a PR body.
 
 ### Deterministic publication lifecycle
 
@@ -245,32 +246,29 @@ Use one bounded transaction for ordinary commit → PR → main work:
 1. Inspect the current branch, complete diff, and base once. Reading the diff
    is the review; no test run gates this step.
 2. Stage only intended files, commit, and freeze the exact local head SHA.
-3. Publish only the registered session branch through the typed Memoro GitHub
-   App operation advertised by the live session. Publication is non-force and
-   expected-head/base guarded. If branch publication is not advertised, stop
-   with the capability repair state; do not fall back to GitHub login, a host
-   credential helper, raw authenticated `git push`, or per-file GitHub object
-   reconstruction.
-4. Create or update the PR through `mc github`. The PR description states what
-   changed, why, user impact, root cause for fixes, and known gaps. It does not
-   claim validation that was not performed.
+3. Push the workarea's own branch — `<project>` or `<project>-<n>`, whatever
+   the worktree stands on — and no other. Never force-push and never rewrite
+   published history. A branch you named yourself is one `mc run` neither
+   lands nor sees as in flight, so it will run the next step on top of your
+   unlanded work.
+4. Create or update the PR with `gh pr create` / `gh pr edit` from that
+   branch. The PR description states what changed, why, user impact, root
+   cause for fixes, and known gaps. It does not claim validation that was not
+   performed.
 5. Read one current PR/check/review snapshot for the frozen head. This
    repository currently has no automatic pull-request workflows; an empty
    checks result is terminal normal state, not a reason to poll. Never claim a
    hosted gate ran unless GitHub reports that exact head's run.
-6. Review the final combined diff. After the required explicit merge approval,
-   merge through the App with the exact expected head SHA and the repository's
-   established merge method. Do not pass `--delete-branch`: whether the remote
-   branch survives a merge is the repository's setting, not a session's
-   decision. Some repositories delete it deliberately, to stop branches
-   accumulating — that is not a fault to report or undo. The local branch and
-   its worktree belong to `mc` and are never removed by hand.
+6. Review the final combined diff. Landing is `mc merge <repo> <pr>` and
+   nothing else — see *Validation* below — and it happens after the required
+   explicit merge approval. A step session never lands its own code PR: the
+   runner does, in the round after it. Do not pass `--delete-branch`: whether
+   the remote branch survives a merge is the repository's setting, not a
+   session's decision. Some repositories delete it deliberately, to stop
+   branches accumulating — that is not a fault to report or undo. The local
+   branch and its worktree belong to `mc` and are never removed by hand.
 7. Confirm the merge result once. Re-read or revalidate only when the head,
    base, diff, review state, or external condition actually changed.
-
-The session-scoped `gh` shim is compatibility syntax for its advertised typed
-operations, not native GitHub authority. `mc github` is the canonical wording
-in instructions and diagnostics.
 
 ### Validation (normative)
 
@@ -289,57 +287,63 @@ one does.
 - `mc merge <repo> <pr> --docs` — a pull request whose every file is under
   `docs/`: no suite, no lease, no worktree, no model. The session that opened
   it lands it itself.
-- `npm test` locally is the fast loop, but it runs 2 107 tests with no
-  `--test-concurrency` cap and is load-flaky on this machine. A local red is
-  worth re-running before it is worth reporting; the gate's verdict is the one
-  that counts.
+- `npm test` locally is the fast loop and it is green: 1 534 tests, 1 525
+  passing, 9 skipped, 0 failing in 64 s, measured 2026-09-03 after mc-cut took
+  out the tests of the deleted machinery. There is no standing red set left.
+  It still runs with no `--test-concurrency` cap, which ruling `mc-test-1`
+  ([`docs/project/mc/rulings.md`](project/mc/rulings.md) §4) names as the
+  cause of the load-flakiness, so a local red is worth re-running before it is
+  worth reporting. `npm run test:affected` selects the files a diff actually
+  touches and is what a step session runs; the gate's verdict is the one that
+  counts.
 
-Two things this does **not** yet cover, both known and both written down rather
-than left to be rediscovered:
+**The runner lands through the same door.** `mc run` has no `gh pr merge` in
+it: a finished step's pull request goes through `runMergeRound`
+(`src/mc/repo-merge.js`) called in the runner's own process, and the row reads
+`merged` only when GitHub says the base it landed on was `main`. So the gate
+measures every landing, whoever started it.
 
-- **The runner does not gate.** `mc run` lands a step's pull request with
-  `mergePr` (`src/mc/run.js`), a raw `gh pr merge --squash`. Ruling `mc-test-1`
-  ([`docs/project/mc/rulings.md`](project/mc/rulings.md) §4) replaces that path
-  so the runner goes through `mc merge`; until it does, a runner-landed PR was
-  not gated.
+One thing to keep saying out loud all the same:
+
 - **Never claim a run you did not make.** Say in the PR body what was run and
   what was not. "Suite not run" is an acceptable sentence; implying it passed
   is not.
 
 ## Critical paths — extra care
 
-- `src/commands/auth.js` — Memoro keychain accounts, browser OAuth
-  flow
+- `src/mc/repo-gate.js` + `src/mc/repo-merge.js` — the only door code lands
+  through, for a session and for the runner alike. A bug here lands a red
+  tree, or lands it on the wrong base.
+- `src/mc/run.js` + `src/mc/run-plan.js` — the runner. It spends
+  ninety-minute unattended sessions on what these two decide, in two
+  repositories at once.
+- `src/mc/plan-schema.js` — a plan the schema refuses hands out no step, and
+  a project sits still until somebody notices.
+- `src/mc/work-area.js` + `src/mc/close-workarea.js` +
+  `src/mc/archive-plan.js` — destructive worktree, branch and directory work
+  under exact provenance. `mc work discard` and `mc work release` are the
+  verbs on top of it.
+- `src/mc/push-guard.js` + `src/mc/branch-landed.js` — what stops a session
+  pushing over work that has already landed.
+- `src/vault/engine/` — provider-independent secret store; client-side
+  crypto, custody and the C1 lease.
+- `src/lib/device-flow.js` + `src/lib/keychain.js` — token issuance and
+  macOS keychain access. Per-device tokens are `api-tokens` with scope
+  `device`.
+- `src/commands/auth.js` — Memoro keychain accounts, browser OAuth flow
+  (`memoro` / `memoro-cli`, not `mc`).
 - `src/commands/heartbeat-loop.js` — daemon with WebSocket reconnect
   policy (4003 'Replaced' is terminal — don't reconnect)
-- `src/lib/device-flow.js` + `src/lib/keychain.js` — token issuance
-  and macOS keychain access (§14)
-- `src/mc/vault/` — provider-independent secret store (§12);
-  client-side crypto + PreToolUse hook
-- `src/mc/commands/end.js` + `src/mc/commands/delete.js` — session archival
-  and explicit session-home deletion
-- `src/mc/commands/cleanup.js` + `src/mc/owned-resource-cleanup.js` —
-  destructive worktree, branch, and directory cleanup under exact provenance
-- `src/mc/commands/new.js` + `src/mc/commands/resume.js` — re-exec
-  the same mc binary in wrap mode (PR #30); changes here affect
-  every "open a tool in a session" path
-- `src/mc/commands/adapter.js` + `src/mc/adapter-sync.js` —
-  materialises CLAUDE.md / AGENTS.md from this file; bugs propagate
-  to every repo using mc-managed wrappers
-- `src/bin-mc.js` — dispatcher strips wrapper-injected flags before
-  routing; commands rely on the env-var default (PR #29)
-- The shell wrapper template literal in
-  `src/mc/commands/install-shell.js` — wrapper bugs land in every
-  user's `~/.zshrc`; read the rendered wrapper before shipping
 
 ## What not to do
 
 - Don't import a wrapper / dispatcher without checking that it loads
   (PR #28 lesson)
-- Don't duplicate install-hint strings (they belong in adapter
-  `getStatus()` only)
-- Don't make `mc` / `mc auth status` print to stdout in a way
-  that breaks `--json` consumers
+- Don't add a verb to a router without something reaching it, and don't
+  leave a module nothing reaches — `npm run reach` is the check, and its last
+  row should read `0%`
+- Don't make `mc` / `mc --json` print to stdout in a way that breaks `--json`
+  consumers
 - Don't guess on design with 2+ reasonable options — raise a decision
   file (`~/mc/<workarea>/decisions/<programme>-<n>.md`) with one
   recommendation and let `mc brief` answer it. A menu of options is not a
@@ -348,8 +352,8 @@ than left to be rediscovered:
   non-interactive by default
 - Keep `CLAUDE.md` / `AGENTS.md` thin. They are hand-edited wrappers
   around this file: put repo conventions here and reflect them there.
-  Use `mc coding-profile read|diff|write` for durable user work-method
-  changes — those are the user's, not the repository's.
+  Durable user work-method changes go in the Coding Profile in Memoro —
+  those are the user's, not the repository's.
 
 ## Per-tool surface (what each tool reads natively)
 
@@ -362,6 +366,7 @@ than left to be rediscovered:
 mc writes none of these files. The user's Coding Profile is handed to a new
 conversation as a launch argument — `--append-system-prompt` for Claude,
 `-c instructions=` for Codex — and a resumed conversation already has it.
-Existing sessions change tool only when relaunched with
-`mc resume <name> --codex` / `--claude`; a running TUI cannot switch tool
-in place.
+A conversation's tool is chosen when it starts — `mc work <name> new`, with
+`--codex` / `--claude` / `--model <m>` — and a running TUI cannot switch tool
+in place. There is no handover between tools mid-conversation; the machinery
+that once offered one went with mc-cut.

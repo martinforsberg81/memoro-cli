@@ -23,6 +23,7 @@
   "scripts": {
     "test": "node --test --import ./tests/_isolate-home.mjs 'tests/**/*.test.js'",
     "test:affected": "node scripts/affected-tests.js --why",
+    "reach": "node scripts/reach.mjs",
     "security:credential-boundary": "node scripts/security/credential-boundary-probe.mjs",
     "smoke:mc": "node scripts/mc-release-smoke.js",
     "postinstall": "node scripts/postinstall.js"

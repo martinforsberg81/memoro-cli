@@ -3,24 +3,32 @@
  *
  * A static import graph — `import`, dynamic `import()`, and the router's own
  * `runModule('./…')` — seeded from the page and the verbs `mc --help`
- * describes. Everything it does not reach is what `mc-cut` removes, one
- * verb-removal at a time.
+ * describes. Everything it does not reach was what `mc-cut` removed, one
+ * verb-removal at a time; the last row reads `0%` now, and this script is
+ * kept as the guard it became rather than retired with the project that
+ * wrote it. See [`docs/technical/mc-cut.md`](../docs/technical/mc-cut.md).
+ *
+ * It is deliberately **not** in `npm test`: a file added in the middle of a
+ * change is legitimately unreached for as long as that change is open, and a
+ * test that went red for it would gate ordinary work rather than drift. Run
+ * it when a verb is added or removed, and when a directory looks dead.
  *
  * Seeded by hand from the routers' surviving entries rather than by parsing
- * the tables, because until step 3 landed the tables held the verbs being cut
- * and seeding from them reported the whole v1 world as live. `mc status
+ * the tables, because while the tables still held the verbs being cut,
+ * seeding from them reported the whole session manager as live. `mc status
  * <name>` was the trap: it routes through `src/cli/status.js`, which used to
  * pull in the registry, the broker, the session host and the managed
  * providers. It is a 42-line shim now — it prints where the page went and
  * hands a named project to `mc/commands/status-project.js` — so it is seeded
- * here by name, and step 4 kept it.
+ * here by name, and the cut kept it.
  *
  * Three seeds are not imported by anyone: `lib/update-check-worker.js`,
  * `mc/nightly-run.js` and `mc/repo-watch-run.js` are spawned as child
- * processes by a path literal, so no import graph can see them. Step 4 found
- * all three by grepping every `.js` path literal in the surviving files
- * against the deletion list, and that grep is the check this script cannot
- * do: a static graph is necessary evidence for a cut, never sufficient.
+ * processes by a path literal, so no import graph can see them. They were
+ * found by grepping every `.js` path literal in the surviving files against
+ * the deletion list, and that grep is the check this script cannot do for
+ * itself: a static graph is necessary evidence for a cut, never sufficient.
+ * `runtime/broker/c1-child.js` is a fourth, seeded with vault below.
  *
  * The last two rows are the two costs the contract accepts. `src/vault/`
  * stays whole (Martin, 2026-08-29), and `src/bin.js` + `src/index.js` are
@@ -28,16 +36,21 @@
  * which no step of this project has removed a verb from, so the contract's
  * *the verb goes first* rule forbids deleting what they reach.
  *
- *   node docs/project/mc/mc-cut/reach.mjs .
+ *   npm run reach              # per-directory totals for whatever is unreached
+ *   npm run reach -- --list    # every unreached file, largest first
+ *   node scripts/reach.mjs <repo root>
  *
- * `--list` prints every unreached file rather than the per-directory totals.
+ * The root defaults to the working directory; a leading flag is never read as
+ * one, because `npm run reach -- --list` passes `--list` as the first
+ * argument.
  */
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, dirname, resolve, relative } from 'node:path';
 
-const ROOT = resolve(process.argv[2] || '.');
+const args = process.argv.slice(2);
+const ROOT = resolve(args.find((a) => !a.startsWith('-')) || '.');
 const SRC = join(ROOT, 'src');
-const LIST = process.argv.includes('--list');
+const LIST = args.includes('--list');
 
 /**
  * The surface as it stands: the page, and the twelve verbs `src/mc-cli.js`
@@ -69,17 +82,18 @@ const LIVE = [
 /**
  * Kept by the contract, whatever the graph says (Martin, 2026-08-29).
  *
- * `mc vault` is the whole of `src/bin-mc.js`'s table after step 3, so
- * `bin-mc.js` is seeded with it: it is the only thing that still reaches it.
+ * `mc vault` is the whole of `src/bin-mc.js`'s table, so `bin-mc.js` is
+ * seeded with it: it is the only thing that still reaches it.
  */
 const KEPT = ['bin-mc.js', 'cli/vault.js'];
 
 /**
  * `package.json`'s other two `bin` entries and its `main`. Everything they
- * reach is out of this project's reach by the contract's first rule: no step
- * removed a `memoro` verb, so no `memoro` code may be deleted here. Whether
- * those two commands should exist at all is a decision, not a cleanup — it is
- * named in step 4's comments and belongs to Martin.
+ * reach was out of mc-cut's reach by its contract's first rule: no step
+ * removed a `memoro` verb, so no `memoro` code could be deleted under it.
+ * Whether those two commands should exist at all is a decision, not a
+ * cleanup, and it belongs to Martin — 20 files and 3 665 lines of it, which
+ * is now the largest single thing between mc and a `src/` that is only mc.
  */
 const PACKAGE = ['bin.js', 'index.js'];
 
