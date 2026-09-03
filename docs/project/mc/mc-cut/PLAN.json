@@ -22,12 +22,12 @@
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The workarea `handoff` concept is gone from the code, the plan role and `~/mc`. It has three sites and zero writers.",
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The workarea `inbox` channel is gone: `mc work send`, `mc sessions send`, `mc sessions read`, `src/mc/work-send.js`, and `tellHolder`'s delivery half in `src/mc/lease-refusal.js`.",
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     },
@@ -47,7 +47,7 @@
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Close-out: `docs/technical/mc-cut.md` says what mc is made of afterwards, and a `project_log.md` row.",
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     }
@@ -163,13 +163,22 @@
     },
     {
       "title": "Close-out",
-      "status": "ready",
+      "status": "done",
       "done_when": "Not stated in the plan as written — when this step is finished is for the plan review to settle.",
       "instruction": [
         "**Close-out** — `docs/technical/mc-cut.md`, the `project_log.md` row, and `reach.mjs` either kept as the guard it became or removed with a note."
       ],
       "pr": null,
-      "blocked_by": null
+      "blocked_by": null,
+      "comments": [
+        "**`reach.mjs` is kept, and it had to move to be kept.** It lived in this plan's own directory, and `mc run` deletes that directory in the round it reads `done` — so leaving it there would have been the *removed* option taken by accident rather than the *kept* one chosen. It is `scripts/reach.mjs` now, with `npm run reach` and `npm run reach -- --list` in `package.json`. Two changes beyond the move: the root argument now skips a leading flag, because `npm run reach -- --list` passes `--list` as `argv[2]` and the old code would have resolved it as the repository root; and the header no longer cites step numbers of a plan that is about to stop existing. It is deliberately not in `npm test` — a file added mid-change is legitimately unreached until that change lands, and a test going red for it would gate ordinary work rather than drift.",
+        "**The four sets in the note are a partition, not four overlapping readings.** `reach.mjs` prints cumulative rows, which is right for watching a cut but reads badly as an inventory, so the note gives the disjoint split: the page and its twelve verbs 101 files / 23 354 lines, `mc vault`'s own door 13 / 4 628, vault's carcass 19 / 9 451, `memoro` + `memoro-cli` 20 / 3 665 — 153 / 41 098 exactly. Computed with the same graph and the same seeds, not by subtracting the printed rows by hand.",
+        "**Vault's carcass is not a preserved capability, and the note says so.** Step 4 kept 13 files beyond `credential-domain/` because those two import them at module top level. Reading them for this note turned up that the kept code cannot run either way: `local-codex.js`'s `MANAGED_GITHUB_RUNTIME_PATHS` names `src/capabilities/github/github-session.js`, `github-shim.js` and `github-write-client.js`, and its launch path `realpathSync`s `src/adapters/artifacts/codex.js` — four files step 4 deleted, in a list that is digested rather than imported, so no import graph and no load-time error could have shown it. That is the same shape as `c1-source-closure.js`'s pinned digests already not matching `main`. Read, not run: nothing here was executed.",
+        "**What this step fixed beyond the three things it was asked for, and why.** Step 6's comments handed `docs/coding-agent-protocol.md` and `docs/onboarding.md` to \"the close-out step … or its own project\". I took the protocol and left the other two. The protocol is the file every session in this repository is told to read first, and it was instructing them to publish through `mc github`, a `gh` shim and a Memoro GitHub App operation that this project deleted — a defect mc-cut created in the one normative document. Corrected: the mc-cut paragraph (it also linked into this plan directory, which the archive removes), the `bin` description, the code conventions, the publication lifecycle's steps 3/4/6, the credential-boundary bullet about `mc github`, the *Validation* claim that the runner does not gate (`run.js` has had no `gh pr merge` since #519), the critical-paths list, and the `mc coding-profile` references in the protocol, `CLAUDE.md` and `AGENTS.md`. Nothing was restructured and no doctrine was added — every edit replaces a named command, file or mechanism that no longer exists with the one that does.",
+        "**`README.md` and `docs/onboarding.md` are still false, deliberately left, and named in the note.** README's command table offers roughly forty rows — `mc setup`, `mc auth …`, `mc new`, `mc end`, `mc resume`, `mc sessions …`, `mc dev …`, `mc deps …`, `mc gc …`, `mc install-shell`, `mc cd`, `mc coding-profile` — almost none of which route anywhere, and `docs/onboarding.md` is 248 lines in which every section walks a deleted verb. They are the package's front door and the description of what mc *is* to a stranger, which is Martin's copy rather than a cleanup, and rewriting them is materially bigger than this step. My recommendation is one small project — delete `docs/onboarding.md` outright, rewrite README's surface against `mc --help`, and delete `scripts/mc-release-smoke.js` with its `npm run smoke:mc` — rather than a step bolted onto this plan. `docs/technical/mc-cut.md` § *What is still untrue* names all three so the next reader does not have to find them.",
+        "**Success criterion 6 is left `met: false` on purpose.** \"`npm test` green … after **every** step\" was never true and is not true now: `main` carries a standing red set, ruling `mc-test-1` says the cause is this repository's uncapped `npm test` concurrency and must be re-measured before it is believed, and no step of this project ran the full suite. Every step ran the selection `scripts/affected-tests.js` chose for its own diff and said so. Criteria 2 and 3 were verified and set here rather than by the steps that earned them: `grep -rn \"HANDOFF.md\\|FILING_DIRECTORIES\"` over `src/`, `canon/`, `docs/` and `tests/` returns only the historical note in `work-area.js`, `work-send`/`lease-refusal`/`tellHolder`/`sessions send`/`sessions read` return nothing in `src/`, and `~/mc` holds no `handoff/`, no `HANDOFF.md` and no `inbox/`.",
+        "**How this was verified.** `npm run reach` and `npm run reach -- --list` both run and print `NOT reached — 0% of src/`. `node scripts/changelog-fold.js --check` accepts the new fragment. `mc` prints the page. `scripts/affected-tests.js` selects a large set for this diff because the selector is documentation-aware and most `tests/mc/` files declare a read of `docs/coding-agent-protocol.md`; the run and its numbers are in the pull request body. The full `npm test` was not run, for the reason above, and `mc run --rounds 1` was not run: this diff touches no file `mc run` loads, and step 4's comment records that a round cannot be isolated from the real repositories — it creates worktrees in them and dispatches live sessions."
+      ]
     }
   ]
 }
