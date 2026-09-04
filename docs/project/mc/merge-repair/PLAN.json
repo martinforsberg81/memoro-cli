@@ -82,7 +82,7 @@
         "Two things for step 3 and the close-out. (1) `planRefusal` in `runLane` passes over a project whose plan on origin/main is blocked, done or unparseable *before* `runStep` is reached, so such a project's held pull request gets neither a repair nor the brief's line in runner.log — the brief must read `held.json` itself (which is what step 3 does) rather than the log. (2) `docs/technical/mc-ui.md`'s `held.json` row was extended with `red`/`gates`; `docs/technical/mc-run.md` § *Held before merge* is still step 4's to write, and should say that the repair is counted before the session, not after.",
         "Test note, and one fixture fix. `tests/mc/run.test.js` had three failures on this machine before this step and still has them — `STOP file: …`, `UPDATE file: …` and `STOP ends both lanes …` — because `runLoop` reads the real `~/.memoro/mc/lanes.json` (this machine says 4) when the fixture does not inject `laneCount`. Verified pre-existing in a detached worktree of `HEAD`; `MC_HOME=<empty dir> npm test` is green, 1563 passing, and that is how the whole selection was run for this step. Criterion 2 is ticked on those tests: the `kind` `repair` row it names is the fixture's runs.tsv, because no real held pull request existed to repair while this step ran — the close-out should say the same, or replace it with a real one if the runner has repaired something by then. The fixture fix: a workarea given through `areas:` now marks its checkout directory as existing, because `runStep` asks `exists(worktree)` and was quietly re-creating it from origin/main — which overwrote the very plan the fixture had put on that branch."
       ],
-      "pr": null,
+      "pr": 585,
       "blocked_by": null
     },
     {
