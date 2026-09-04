@@ -39,7 +39,7 @@ import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea } from '../work-area.js';
 import { openInWorkArea } from '../work-open.js';
 import { PLAN_HOME, planHome } from '../paths.js';
-import { readCanonRole, reservedRoleHint, reservedRoleName } from '../roles.js';
+import { readCanonRole, reservedRoleHint, reservedRoleName, sharedRoleText } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
 import { scanArgs } from './flags.js';
 
@@ -286,30 +286,34 @@ export function programmeLabel(row) {
  * is where the convention and the `PLAN.json` schema actually live, and the
  * programme's own directory. There is no role overlay behind this — the role
  * file is frontmatter, the model and the tools, and no prose.
+ *
+ * The one thing that does come from outside is the text every role session
+ * shares — `canon/roles/_common.md`, read here rather than restated. A rule
+ * that holds for every session holds for this one, and a planning session is
+ * the only one that cannot inherit it through its role: `instructionsFor`
+ * hangs the shared text on the overlay, and this role has none. So it comes in
+ * through the prompt, which is what a planning session is told (Martin,
+ * 2026-08-31) — and it comes in by reading the one file, so the rule still has
+ * a single home and this function is still the whole account of what this
+ * session hears.
  */
-export function planLaunch({ programme, repos = [], role }) {
+export function planLaunch({ programme, repos = [], role, shared = sharedRoleText() }) {
   const beside = repos.map((repo) => `\`${repo}/\``).join(' and ') || 'no checkout';
-  const prompt = [
+  const lines = [
     `You are the planning session for the \`${programme}\` programme.`,
     '',
     `You stand in \`~/mc/plan/${programme}/\`, with ${beside} beside you — each a`,
     `worktree on branch \`plan/${programme}\`. This is not a workarea: nothing`,
     '`mc run` does can reach it.',
-    '',
-    // The one method line every session gets, the planning one included: a
-    // turn is the cost. Thirteen runner steps on 2026-09-03 made 1 800 tool
-    // calls and not one turn carried more than one of them, and the planning
-    // session that measured it worked the same way until it was told not to.
-    'A turn is the unit of cost, not a tool call: put every call that does not',
-    "depend on another's result in the same message, read with `Read` and search",
-    'with `Grep` rather than `sed`/`grep` through Bash, and write no prose',
-    'between tool calls.',
+  ];
+  if (shared) lines.push('', shared);
+  lines.push(
     '',
     'Martin is at the terminal. Start by reading `docs/project/README.md` and what',
     `\`docs/project/${programme}/\` already holds in each repository, and say what`,
     'you found.',
-  ].join('\n');
-  return { overlay: role.overlay || null, prompt, model: role.model || null };
+  );
+  return { overlay: role.overlay || null, prompt: lines.join('\n'), model: role.model || null };
 }
 
 function parseArgs(argv) {

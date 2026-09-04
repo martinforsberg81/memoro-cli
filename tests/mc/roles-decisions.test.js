@@ -12,9 +12,14 @@
  * its first unfinished step being `ready`.
  */
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { readCanonRole } from '../../src/mc/roles.js';
+import { planLaunch } from '../../src/mc/commands/plan.js';
+import {
+  SHARED_ROLE_FILE, canonRolesDir, instructionsFor, readCanonRole,
+} from '../../src/mc/roles.js';
 
 /**
  * Every role that may put a question to Martin. `brief` answers them.
@@ -88,5 +93,57 @@ describe('the decision shape every role writes', () => {
     assert.match(overlay, phrase('says GO to'));
     assert.match(overlay, phrase('Never lay out options for him to choose between'));
     assert.match(overlay, phrase('is not his to answer'));
+  });
+});
+
+/**
+ * The other half of the same subject: what a session does with something it
+ * found that nobody asked it about, and who settles the route to `main`.
+ *
+ * These are not one role's rules, so they are not in a role file. They are in
+ * `canon/roles/_common.md`, and this asserts they arrive — through the
+ * assembler for the seven roles with a body, and through `planLaunch` for the
+ * one without.
+ */
+describe('the rules every session gets, whichever role it is', () => {
+  const CANON_ROLES = ['brief', 'helper', 'intake', 'plan', 'reconcile', 'repair', 'step', 'worker'];
+  const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
+  const ROUTE = phrase('The practical route to `main` is yours to settle');
+
+  /** What a session of this role actually receives, by the path that carries it. */
+  const toldTo = (name) => {
+    const role = readCanonRole(name);
+    assert.ok(role, `${name} is missing from canon/roles/`);
+    // `plan` is frontmatter only and stays that way (#580): a planning
+    // session's text is its first prompt, so `planLaunch` is where anything
+    // reaches it. Every other role inherits through its overlay.
+    return role.overlay
+      ? instructionsFor('claude-code', 'PROFILE', role.overlay)
+      : planLaunch({ programme: 'msr-core', repos: ['memoro-cli'], role }).prompt;
+  };
+
+  for (const name of CANON_ROLES) {
+    it(`${name} is told both`, () => {
+      const told = toldTo(name);
+      assert.match(told, LOOSE_THREAD, `${name}: no loose-thread rule`);
+      assert.match(told, ROUTE, `${name}: no route rule`);
+    });
+  }
+
+  // One rule, one home. A copy in a role file is a copy that drifts.
+  it('and the text of them exists in exactly one file', () => {
+    const carriers = readdirSync(canonRolesDir())
+      .filter((file) => file.endsWith('.md'))
+      .filter((file) => LOOSE_THREAD.test(readFileSync(join(canonRolesDir(), file), 'utf8')));
+    assert.deepEqual(carriers, [SHARED_ROLE_FILE]);
+  });
+
+  // A loose thread is a proposal and not intake, and the reason is in the text
+  // — a session that is only told which directory picks the one it saw last.
+  it('says why a finding is a proposal and not intake', () => {
+    const told = toldTo('worker');
+    assert.match(told, /~\/mc\/proposals\/<date>-<slug>\.md/u);
+    assert.match(told, phrase('drained one file'));
+    assert.match(told, phrase('asks a second session to work it out again'));
   });
 });

@@ -24,7 +24,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "Every canon role's assembled instructions carry the loose-thread rule, and the text of it exists in exactly one file.",
       "check": "A test reads each of the eight canon roles through the assembler and asserts the rule is present. `grep -rl` for its opening phrase across `canon/` names one file."
     },
@@ -107,7 +107,7 @@
     },
     {
       "title": "Where a loose thread goes, and who settles the route",
-      "status": "ready",
+      "status": "done",
       "done_when": "The shared file carries both rules, every canon role's assembled instructions are asserted to hold them, and a planning session is told the same through `planLaunch`.",
       "instruction": [
         "Two rules go into the shared file step 1 created. Write them in the catalogue's voice; what they have to say is below, and the second half of each is the part that is usually dropped.",
@@ -117,8 +117,14 @@
         "The test goes in `tests/mc/roles-decisions.test.js`, which already reads canon roles by name and asserts on their wording. Do not extend its `AUTHORS` list — that list is `['worker', 'step', 'repair']`, the roles that put a question to Martin, and the file explains at length why `plan` is not on it. Add a separate block that walks all eight canon roles through the assembler from step 1 and asserts both rules are in what a session would receive.",
         "Run `npm test`."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The plan path: `planLaunch` reads `sharedRoleText()` and folds it into the prompt, and the overlay stays null. The other shape — making the assembler supply the shared text when the overlay is null — would have cost the parallel-operation guarantee: `instructionsFor` hangs the shared text on the overlay precisely because no overlay is no role, and a conversation in an ordinary work area must inherit nothing. Supplying it there would have needed a second flag saying \"this null overlay is a role and that one is not\", which is the drift this project exists to stop. Reading the one file from `planLaunch` keeps the rule in a single home and keeps `planLaunch` the whole account of what a planning session hears, which is what `docs/technical/mc-plan.md:147` says it is. It also consumed the inline turn-cost restatement step 1 left there.",
+        "`tests/mc/commands/plan.test.js`'s \"predicts nothing about the deliverable or how it lands\" now asserts on the prompt with the shared text removed, not on the whole prompt. It had to move: the route rule names `pull request` and `mc merge`, both on that test's forbidden list. The guard's subject is unchanged — the text `planLaunch` composes itself must not predict how many projects this programme needs or by what route its plan reaches main (Martin, 2026-08-31) — and the shared text predicts nothing about this programme; it says what any session does with a loose thread and that the route is read rather than asked. The test also now asserts the shared text is present, so the subtraction cannot silently become a no-op.",
+        "The turn-cost rule still has one copy outside `canon/`: `stepPrompt` in `src/mc/run-plan.js` (~line 432) restates it to every runner step, so a step session hears it twice. Left alone deliberately — it is outside this step's `done_when`, and `plan.js` was the only prompt this step had reason to touch. Whoever takes step 3 or 4 can delete those lines outright; nothing reads them.",
+        "The new block in `tests/mc/roles-decisions.test.js` walks all eight canon roles, each by the path that actually delivers the text: the assembler for the seven with a body, `planLaunch` for `plan`. Asserting `plan` through `instructionsFor` would assert nothing — its overlay is null and the assembler correctly hands it nothing.",
+        "For step 3's line count: `_common.md` grew from 9 to 31 lines, so `wc -l canon/roles/*.md` now totals 301. The criterion's under-260 target counts `canon/roles/*.md`, which includes the shared file — worth knowing before measuring the cut, since 22 of those lines are text that was moved out of the roles rather than added to them."
+      ],
+      "pr": 611,
       "blocked_by": null
     },
     {
