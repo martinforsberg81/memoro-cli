@@ -19,7 +19,7 @@
     {
       "met": true,
       "criterion": "A workarea mc has just made runs the five test files that need a dependency, with no `node_modules` inside it.",
-      "check": "In a fresh `mc work add <name> memoro-cli`, with no `node_modules` under the workarea: `node --test --import ./tests/_isolate-home.mjs tests/mc/owned-resource-cleanup.test.js tests/mc/session-runtime-v1.test.js tests/runtime/session-host/runtime-host.test.js tests/runtime/session-host/socket-e2e.test.js tests/runtime/session-host/terminal-screen.test.js` reports 0 fail."
+      "check": "In a fresh `mc work add <name> memoro-cli`, with no `node_modules` under the workarea: `node --test --import ./tests/_isolate-home.mjs tests/mc/owned-resource-cleanup.test.js tests/mc/session-runtime-v1.test.js tests/runtime/session-host/runtime-host.test.js tests/runtime/session-host/socket-e2e.test.js tests/runtime/session-host/terminal-screen.test.js` reports 0 fail. — Read after mc-cut (#561) removed tests/runtime/session-host/: the measurement is a gate round on any candidate with no `npm ci` and every declared package resolving (decision workarea-deps-1, 2026-09-04)."
     },
     {
       "met": true,
@@ -29,7 +29,7 @@
     {
       "met": false,
       "criterion": "The merge gate's candidate worktree runs the whole declared suite, not the part that happens to import nothing.",
-      "check": "`mc test memoro-cli <pr>` on a pull request that reaches `tests/runtime/session-host/` reports those files green rather than red, and its log no longer prints the `no node_modules` line."
+      "check": "`mc test memoro-cli <pr>` on a pull request that reaches `tests/runtime/session-host/` reports those files green rather than red, and its log no longer prints the `no node_modules` line. — Read after mc-cut (#561) removed tests/runtime/session-host/: the measurement is a gate round on any candidate with no `npm ci` and every declared package resolving (decision workarea-deps-1, 2026-09-04)."
     },
     {
       "met": true,
@@ -94,7 +94,7 @@
     },
     {
       "title": "The gate's candidate sees the same tree",
-      "status": "blocked",
+      "status": "done",
       "done_when": "`mc test memoro-cli <pr>` on a change reaching `tests/runtime/session-host/` reports those files green, and the round no longer prints the `no node_modules` line for this repository.",
       "instruction": [
         "The gate builds its candidate with `git worktree add --detach` into `join(workspace, 'candidate')` (`src/mc/repo-gate.js:289` and `:346`). Where that workspace sits decides whether step 2's tree is above it; if it is not, this step is what puts one there — by the same means, not by a second mechanism.",
@@ -105,10 +105,11 @@
         "**The work is built, measured and green in #570; what is blocked is calling it done.** The candidate is built at `<work root>/gate/<repo>/candidate` (`paths.js`: `WORK_GATE` beside `WORK_DEPS`), so `~/mc/node_modules` is two parents above it and node's own walk finds it — one tree for the workareas and the gate, no `npm ci` in the round, nothing inside the checkout. `dependencyTree` now answers whether every declared name resolves from a directory, walking the parents as node does, instead of whether one directory exists; the branch where a declaration could *vouch* that a suite runs without a tree is gone, which is the branch that let five files go unrun for months while the round printed a reassuring line about it once per round. `prepare` for memoro-cli is `null` again — true this time, and measured every round rather than asserted in a sentence.",
         "Measured 2026-09-03 with this branch's own mc (`node src/mc-cli.js`, not the global symlink, which stands on main): the selected round on #570 was 73 files, 952 tests, 0 red, 39 s; `--full` on the same candidate was 143 files, 1538 tests, 0 red, 74.5 s. Neither round ran a prepare step and neither printed the `no node_modules` line. `tests/mc/repo-gate-table.test.js` now allows `prepare: null` beside declared dependencies only while both halves of the mechanism are in place — the repository is in `SHARED_TREE_REPOS`, and the gate root is under the work root — so moving either goes red.",
         "**The five files this project exists for were deleted while it ran, and that is why the step is blocked.** `c28eb6f` — *\"Delete what step 3 orphaned (mc-cut step 4)\"*, #561, merged 2026-09-03 — removed `src/runtime/session-host/` and `tests/runtime/session-host/`, one day after step 1 measured them. No test file in the repository imports `@xterm/addon-serialize`, `@xterm/headless` or `node-pty` today; the remaining importers are `scripts/mc-live-page-check.mjs` and the `node-pty` repair in `scripts/fix-pty-helper.js`, and `package.json` still declares all three. So this step's `done_when` and `success_criteria[2]` both name a directory that no longer exists, and no session can meet them as written. The question is `workarea-deps-1`, with one recommendation: land #570 and read the criterion at the level that can still be measured — a round with no `npm ci`, no vouch line, and every declared package resolving from the candidate.",
-        "**The suite is not the suite this plan describes, and the 9-versus-14 numbers cannot be reproduced.** mc-cut took the tree from ~250 test files to 143, and the nine that were red on main were the broker and managed-session world it removed: the whole suite is 0 red now. Whoever closes the project out should do it on what is true rather than on those numbers — the tree is what a checkout and a candidate resolve through, the failure that made it necessary was a test going red because of where it was run, and no test depends on it today."
+        "**The suite is not the suite this plan describes, and the 9-versus-14 numbers cannot be reproduced.** mc-cut took the tree from ~250 test files to 143, and the nine that were red on main were the broker and managed-session world it removed: the whole suite is 0 red now. Whoever closes the project out should do it on what is true rather than on those numbers — the tree is what a checkout and a candidate resolve through, the failure that made it necessary was a test going red because of where it was run, and no test depends on it today.",
+        "Decision `workarea-deps-1`, taken by the planning session on 2026-09-04 with Martin at the terminal: #570 landed, and the criterion is read at the level that can still be measured — a gate round with no `npm ci` in the candidate, no vouch line, and every declared package resolving from the candidate's tree. The five session-host files the project was written for went with mc-cut (#561); the mechanism is what remains and what step 4 closes out on."
       ],
       "pr": 570,
-      "blocked_by": { "kind": "decision", "name": "workarea-deps-1" }
+      "blocked_by": null
     },
     {
       "title": "Close it out",
