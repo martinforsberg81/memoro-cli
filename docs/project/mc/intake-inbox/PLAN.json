@@ -97,7 +97,7 @@
         "The oversized case did not go the way the criterion describes, and the criterion is left `met: false` for step 3 to assert from the row. A 23 MB / 220 000-line log named in the prompt produced a proposal that neither names a read limit nor judges from the head — the turn read the file with a shell count instead and said so in the proposal (\"confirmed by grepping the whole file, not just head/tail\"). So the rule's failure mode did not occur rather than the rule failing: the turn resolved the size, and reported how. The prompt and the role carry the instruction; whether a turn ever hits a limit it cannot work around is a thing to watch in the first drain, not something this step could make happen.",
         "One drift worth knowing when step 4 writes the doc: for a file whose name says no repository, the turn wrote frontmatter of its own — `system: memoro-cli`, `source: note-from-martin.md` — rather than the `repo:`/`name:`/`kind:` keys `docs/technical/mc-helper.md:248` still calls fixed. Nothing breaks, because `listProposals` (`brief-collect.js:88`) reads filenames and never opens a proposal, and the roles say the inside of the file is prose and not a form. The contract puts the proposal's shape out of scope, so it was left alone; the doc's claim that the frontmatter is fixed is the part that is no longer true."
       ],
-      "pr": null,
+      "pr": 612,
       "blocked_by": null
     },
     {
