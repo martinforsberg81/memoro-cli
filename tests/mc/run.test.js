@@ -2035,3 +2035,28 @@ test('runLoop: an UPDATE drains — no lane starts a step, the ones in flight fi
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /memoro-cli: UPDATE — taking no new step; handing over when every lane is done/u);
 });
+
+/**
+ * One project, one lane. A lane that stays on a project after a merge and
+ * another lane's round that reads the same project as ready would both start
+ * it — two sessions in one worktree. The claim is in the process.
+ */
+test('a project already in flight in one lane is skipped by another', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  const inner = f.deps.session;
+  let release = null;
+  const held = new Promise((resolve) => { release = resolve; });
+  f.deps.session = async (call) => { await held; return inner(call); };
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  const first = runner.runStep('a', world, { lane: 0 });
+  await new Promise((resolve) => { setImmediate(resolve); });
+  const second = await runner.runStep('a', world, { lane: 1 });
+  assert.equal(second, 'skipped');
+  assert.match(f.files['/w/runner/log/runner.log'], /a: in flight in another lane, skip/u);
+  release();
+  await first;
+  assert.equal(f.calls.sessions.length, 1, 'one session, not two');
+  const third = await runner.runStep('a', world, { lane: 1 });
+  assert.notEqual(third, 'skipped', 'the claim is released when the step is over');
+});
