@@ -646,8 +646,10 @@ export function createRunner({
    * from MERGEABLE to CONFLICT the moment the first one landed.
    *
    * `git rebase --onto origin/main <the old base's head>` replays only what
-   * has not landed. A conflict is not resolved here and is not what
-   * `reconcile` is for: abort, name the files, and stop on this project.
+   * has not landed. A conflict is not resolved here, and it is not the
+   * conflicted `git merge origin/main` a step session is handed: a squashed
+   * base breaking the branch above it is a different cause with a different
+   * answer. Abort, name the files, and stop on this project.
    */
   function replayOnto(worktree, name, pr, wasAt) {
     if (!wasAt) return { ok: false, why: `where ${pr.headRefName} left ${pr.baseRefName} could not be read` };
@@ -1265,7 +1267,7 @@ export function createRunner({
     // path is a dirty worktree — which skips the project every round until a
     // person acts. So every way out of this round that is not the step
     // session goes through here: abort, and leave the workarea as clean as
-    // the old `reconcile` abort did.
+    // the old merge-only session's abort did.
     const abandonMerge = (why) => {
       if (!conflicts.length) return;
       deps.git(worktree, ['merge', '--abort']);
@@ -1423,9 +1425,11 @@ export function createRunner({
     // The queue is Martin's "these first", and it empties itself: this
     // project has had its step, so its name leaves the file now.
     dropFromQueue(name);
-    // A merged step or a finished reconcile both leave the project ready for
-    // its next step now; 'merged' is the round's cue to stay on it.
-    return note === 'success,merged' || (kind === 'reconcile' && note === 'success') ? 'merged' : 'ran';
+    // A merged step leaves the project ready for its next step now; 'merged'
+    // is the round's cue to stay on it. There is no second way to earn it:
+    // the only other session that used to — one that finished a merge and
+    // stopped — is gone, and its work is the first thing a step session does.
+    return note === 'success,merged' ? 'merged' : 'ran';
   }
 
   /**

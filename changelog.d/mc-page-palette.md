@@ -3,8 +3,8 @@ section: Changed
 - **The page reads at a glance: `mc` is in colour.** It painted fourteen
   things grey and three green, so a running step and a queued one looked
   alike. The palette is a table now, and the same meaning has the same colour
-  wherever it is printed: a step kind (step green, reconcile magenta, triage
-  blue, the foreground verbs cyan), a plan status (ready green, blocked red,
+  wherever it is printed: a step kind (step green, triage blue, the
+  foreground verbs cyan), a plan status (ready green, blocked red,
   waiting-decision yellow, done grey, no plan at all dim grey), cyan section
   headings, white for the name a person is looking for, grey for the
   bookkeeping. The clock beside a running step turns yellow past three

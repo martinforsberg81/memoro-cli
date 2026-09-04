@@ -35,7 +35,7 @@
       "check": "Seen in `~/mc/runner/log/runs.tsv`: a row whose project had a conflict that round, `kind` `step`, ending `success,merged` or with a pull request. Not asserted from the code."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`reconcile` is gone as a kind.",
       "check": "`grep -rn 'reconcile' src/ canon/ docs/technical/` returns only `reconcileHeld` and `reconcileHold`. `chooseKind` has no branch that returns it."
     },
@@ -115,7 +115,7 @@
     },
     {
       "title": "Remove the kind, and close out",
-      "status": "ready",
+      "status": "done",
       "done_when": "`grep -rn 'reconcile' src/ canon/ docs/technical/` returns only `reconcileHeld` and `reconcileHold`, and `docs/project/project_log.md` has the row.",
       "instruction": [
         "What goes: `canon/roles/reconcile.md`, `reconcilePrompt` (`src/mc/run-plan.js`), the branch in `chooseKind` that returns the kind, the `MERGE_HEAD` abort keyed on it (`src/mc/run.js`) unless step 3 kept it for step sessions, its arm of the merged/ran verdict (`kind === 'reconcile' && note === 'success'`), and the colour in `src/mc/page-render.js`.",
@@ -124,7 +124,13 @@
         "The documentation: `docs/technical/mc-run.md` describes the kind in four places (the kinds table, the sync section, what the roles are, and the workarea section) and `docs/technical/mc-ui.md` in two (the colour table and the shared vocabulary). Replace them with what now happens — git resolves, the runner resolves a plan, the step session resolves the rest — rather than deleting the paragraphs and leaving a gap where a reader expects the answer.",
         "Add the row to `docs/project/project_log.md`, naming the memoro half (`generated-artifact-merge`) so a reader of either log finds the other. In the PR, give the count: of the 67 conflict events measured, how many the three layers now take without a session, on the same categorisation the plan was sized against — 37 were entirely mechanical, 13 mixed, 17 real code."
       ],
-      "comments": [],
+      "comments": [
+        "The kind is gone: `canon/roles/reconcile.md` deleted, `reconcilePrompt` deleted, the magenta out of `KIND_TONE`, and the merged/ran verdict is now `note === 'success,merged'` and nothing else. The abort stayed, as step 3 asked — it is keyed on `sync.conflicts`, not on a kind, so removing the kind did not touch it. `chooseKind` had already lost its branch in step 3, so there was no code path to remove here, only names.",
+        "`runs.tsv` was left alone and still carries 64 rows whose `kind` is `reconcile`. Checked before assuming: `brief-collect.js`'s run summary counts by `kind` without a whitelist, `page-collect.js` reads `runs.tsv` for the last rows and the running project and never compares `kind` to a literal, and `page-render.js`'s `kindTone` falls through to grey for anything not in the table. So a historical row renders as bookkeeping rather than as an error, which is what it is.",
+        "Two prose uses of the *word* had to go that are not the kind, because the criterion is a literal grep: `held.js`'s header said held entries are \"reconciled once a round\" and `mc-run.md` said `queue()` \"reconciles the file\". Both were reworded to \"checked against the open list\". The identifiers `reconcileHeld` and `reconcileHold` are untouched, as the scope says.",
+        "Criterion 3 is still the one nobody has ticked, and it is not this session's to tick: it asks for a row in `~/mc/runner/log/runs.tsv` from a real round where a project had a conflict and got a `step`. No round has met a conflict since step 3 landed — `runner.log` still holds the same 67 `merge conflict in:` events the plan was sized against, all of them from before. The path is asserted end to end by the fixture runner in `tests/mc/run.test.js`; what is missing is a night that produces one.",
+        "The close-out row names the memoro half by path. That half is genuinely still open, and conditionally so: memoro's `.gitattributes` gives the SDK artifacts `merge=generated` (keep ours) only after `npm run sdk:check` is in the gate memoro declares as `affected`. Until then the 37 mechanical events of the measurement are only partly free here — this repository's `.gitattributes` covers the project log, and the runner covers the plans."
+      ],
       "pr": null,
       "blocked_by": null
     }

@@ -14,9 +14,9 @@
  * beside `runner.json` and `current-<repo>.json` — never a status in a
  * `PLAN.json`, which the runner does not write. An entry is born where the
  * runner decides not to land (`run.js`: `landPr`, `landProject`, the trespass
- * check) and dies when its pull request is no longer open — reconciled once a
- * round against the list `queue()` already fetches, so a pull request somebody
- * merged or closed by hand leaves the file by itself.
+ * check) and dies when its pull request is no longer open — the file is
+ * checked once a round against the list `queue()` already fetches, so a pull
+ * request somebody merged or closed by hand leaves the file by itself.
  *
  * Everything here is pure over the entries: the file is read, changed and
  * written by `run.js` through one function, because any lane may write it.

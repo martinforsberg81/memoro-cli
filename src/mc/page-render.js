@@ -17,7 +17,7 @@
  *
  * The palette is a table rather than a habit, so a kind and a status look the
  * same wherever they are printed: `KIND_TONE` for what the runner is doing
- * (step, reconcile, triage, the foreground verbs) and `STATUS_TONE` for where
+ * (step, triage, the foreground verbs) and `STATUS_TONE` for where
  * a plan stands. Everything else is structure — cyan headings, grey for the
  * bookkeeping, white for the name a person is looking for.
  *
@@ -48,7 +48,6 @@ const STATUS_TONE = {
 /** What is being done, one colour each, wherever a kind is printed. */
 const KIND_TONE = {
   step: ['green'],
-  reconcile: ['magenta'],
   triage: ['blue'],
   brief: ['cyan'],
   plan: ['cyan'],

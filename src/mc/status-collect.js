@@ -37,8 +37,9 @@ export const REPO_NAMES = Object.freeze(['memoro', 'memoro-cli']);
  *
  * The rule lives in one place, `chooseKind` in run-plan.js, and run.js calls
  * the same function before it starts a step; this only flattens the answer
- * to one string. It cannot see `reconcile`: that is a merge left in progress
- * inside a workarea, and the page does not open worktrees.
+ * to one string. A merge left in progress inside a workarea does not change
+ * it either way — the plan decides what a project gets, and the conflict is
+ * something the step session is told about rather than a kind of its own.
  *
  * Decisions are not a parameter any more. The runner runs `ready` plans and
  * nothing else — a project waiting on a decision is simply not ready, and no
