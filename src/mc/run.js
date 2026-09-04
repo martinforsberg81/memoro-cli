@@ -1110,7 +1110,27 @@ export function createRunner({
    * terminal somebody is standing in is not the same as declining to run a
    * step in it.
    */
+  /**
+   * One project is in flight in one lane at a time, whatever the lanes'
+   * slices say. The slices split a repository's names by index, but a lane
+   * that merged a step stays on its project for the next one (`runLane`),
+   * and another lane's round can read that project as ready — the pull
+   * request that would stop it is not open yet, and the worktree is clean
+   * for the first minute. Two sessions in one worktree is the failure this
+   * refuses; the claim lives in this process, where the lanes are.
+   */
+  const claims = new Set();
   async function runStep(name, world = {}, { lane = 0 } = {}) {
+    if (claims.has(name)) { say(`${name}: in flight in another lane, skip`); return 'skipped'; }
+    claims.add(name);
+    try {
+      return await runStepClaimed(name, world, { lane });
+    } finally {
+      claims.delete(name);
+    }
+  }
+
+  async function runStepClaimed(name, world = {}, { lane = 0 } = {}) {
     const { plans = [], prs = [], prsFailed = [] } = Array.isArray(world) ? { plans: world } : world;
     if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     // A quota answer in the other lane is this lane's answer too: wait it
