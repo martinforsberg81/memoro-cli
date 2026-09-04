@@ -234,6 +234,35 @@ describe('QUEUE', () => {
     assert.deepEqual(queue.next.map((item) => item.name), ['mc-ui']);
     assert.equal(queue.more, 1);
   });
+
+  /**
+   * A pull request the runner would not land keeps its project out of the
+   * queue entirely — `inFlight` refuses it every round — so it is in none of
+   * the counts above. `~/mc/runner/held.json` is where the runner writes why,
+   * and this is where a person reads it without opening runner.log.
+   */
+  it('carries every held pull request with its reason, oldest first', () => {
+    const queue = queueSection({
+      queue: ['mc-ui'],
+      plans: PLANS,
+      held: [
+        { project: 'mc-run', repo: 'memoro-cli', pr: 561, branch: 'mc-run-2', reason: 'the session changed more of the plan than its step', note: 'plan-trespass', since: '2026-08-29T11:00:00Z', repairs: 1 },
+        { project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor', reason: 'two tests the change reaches are red', note: 'open,gate-red', since: '2026-08-29T09:10:00Z', repairs: 0 },
+      ],
+    });
+    assert.equal(queue.held.count, 2);
+    assert.deepEqual(queue.held.items.map((item) => [item.project, item.pr, item.repairs]), [
+      ['docx-editor', 10958, 0], ['mc-run', 561, 1],
+    ]);
+    assert.deepEqual(Object.keys(queue.held.items[0]).sort(), [
+      'branch', 'note', 'pr', 'project', 'reason', 'repairs', 'repo', 'since',
+    ]);
+  });
+
+  it('has nothing held when the file is missing or not a list', () => {
+    assert.deepEqual(queueSection({ queue: [], plans: [] }).held, { count: 0, items: [] });
+    assert.equal(queueSection({ queue: [], plans: [], held: null }).held.count, 0);
+  });
 });
 
 
@@ -522,7 +551,15 @@ const DATA = pageData({
     now: NOW,
     alive: live,
   }),
-  queue: queueSection({ queue: ['mc-ui', 'docx-editor', 'mc-run'], plans: PLANS }),
+  queue: queueSection({
+    queue: ['mc-ui', 'docx-editor', 'mc-run'],
+    plans: PLANS,
+    held: [{
+      project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor',
+      reason: 'two tests the change reaches are red', note: 'open,gate-red',
+      since: '2026-08-29T09:10:00Z', repairs: 0,
+    }],
+  }),
   intake: intakeSection({
     digest: {
       name: 'errors-2026-08-29.md',
@@ -561,8 +598,9 @@ describe('the page', () => {
     assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
     assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
     assert.match(text, /runner up 120 min · 3 steps in 24 h — merged 1, open 1, failed 0, timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)/u);
-    assert.match(text, /QUEUE {2}2 runnable of 3\s+mc status <name>/u);
+    assert.match(text, /QUEUE {2}2 runnable of 3 · held before merge 1\s+mc status <name>/u);
     assert.match(text, /skipped 1 \(done 1\)/u);
+    assert.match(text, /· docx-editor {2}#10958 {2}two tests the change reaches are red/u);
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper --intake/u);
     assert.match(text, /PROGRAMMES {2}3 programmes · 4 projects {2}ready 2 · blocked 1 · done 1\s+p {2}plan a programme/u);
@@ -636,6 +674,11 @@ describe('collectPage', () => {
       verb: 'brief', area: 'brief', tool: 'claude', model: 'opus', pid: process.pid, started: '2026-08-29T11:00:00Z',
     }));
     writeFileSync(join(root, 'runner', 'log', 'runs.tsv'), TSV);
+    writeFileSync(join(root, 'runner', 'held.json'), JSON.stringify([{
+      project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor',
+      reason: 'two tests the change reaches are red', note: 'open,gate-red',
+      since: '2026-08-29T09:10:00Z', repairs: 0,
+    }]));
     writeFileSync(join(root, 'queue.md'), '# the queue\nmc-ui\ndocx-editor\n');
     mkdirSync(join(root, 'proposals'), { recursive: true });
     mkdirSync(join(root, 'intake'), { recursive: true });
@@ -667,6 +710,10 @@ describe('collectPage', () => {
     assert.equal(data.runner.day.steps, 3);
     assert.equal(data.queue.depth, 2, 'the comment line is not a project');
     assert.equal(data.queue.runnable, 2);
+    // The runner's own file, read where the runner writes it: nobody has to
+    // open runner.log to see which pull request is standing still.
+    assert.deepEqual(data.queue.held.items.map((item) => [item.project, item.pr, item.reason]),
+      [['docx-editor', 10958, 'two tests the change reaches are red']]);
     assert.equal(data.intake.new_errors, 1);
     assert.deepEqual(data.intake.loud_lines, ['`abc` — 41x 500 — loud']);
     assert.equal(data.intake.proposals, 1);
@@ -755,10 +802,11 @@ describe('the palette', () => {
     '',
     'bold+white grey grey white grey grey', //   MEMORO·CLI 0.7.11 ── 4 decisions · 2 of 3 queued · ≈$7.28 today
     '',
-    'bold+cyan grey grey', //                                      QUEUE  2 runnable of 3            mc status <name>
+    'bold+cyan grey grey yellow+bold grey', //                     QUEUE  2 runnable of 3 · held before merge 1   mc status <name>
     'grey bold+white green', //                                      1  mc-ui  step
     'grey white green', //                                           2  docx-editor  step
     'dim+grey', //                                                   skipped 1 (done 1)
+    'yellow+bold yellow', //                                         · docx-editor  #10958  two tests the change reaches are red
     '',
     'bold+cyan green grey red grey yellow grey', //                INTAKE  2026-08-29 (60 min old) · 1 new error (1 loud) · 1 proposal
     'red bold+white', //                                           !  `abc` — 41x 500 — loud

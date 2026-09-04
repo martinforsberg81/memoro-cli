@@ -47,7 +47,7 @@
   "steps": [
     {
       "title": "The runner remembers why it left a pull request open, and the page says so",
-      "status": "ready",
+      "status": "done",
       "done_when": "`~/mc/runner/held.json` lists every PR `landPr` did not land with its reason, is cleared when that PR lands or closes, `mc --json` carries it as `queue.held`, and the page's QUEUE section draws `held before merge N` with project, PR and reason — all driven by tests.",
       "instruction": [
         "**Where the fact is born.** `landPr` in `src/mc/run.js` ends with `const note = landingNote(report)` and three branches: `merged`, `off-<branch>`, and `else say(\\`${name}: #${pr} left open — ${report?.reason …}\\`)`. That `else` is the only place the runner knows a PR is held and why. Write it there: `~/mc/runner/held.json`, one entry per PR — `{ project, pr, branch, reason, note, since, repairs: 0 }` — through `writeJson` like the other runner files. The trespass path is the other birthplace: in `runStep`, `note = 'plan-trespass'` with the `problems` lines; write those as the reason. `no-json`/timeout with a PR open counts too: reason `session timed out with the PR open`.",
@@ -55,8 +55,13 @@
         "**The page.** `queueSection` in `src/mc/page-collect.js` already carries `skipped` and `stale` under QUEUE; add `held` beside them and draw it in `queueLines` (`src/mc/page-render.js`) as `held before merge N` on the heading's count line, with one row per PR under the skips: `<project>  #<pr>  <reason clipped>`. Yellow, like `blocker finished`: it waits on somebody. `mc --json` gets it for free through the section. Fixtures: `tests/mc/page.test.js` builds `queueSection` inputs directly — add `held` to `DATA` and to the painted snapshot; `tests/mc/run.test.js` has the `rounds` fixture that makes a merge round report `stopped_at: 'red'` — assert the file after such a round.",
         "**What not to do.** No new step status, no write into any `PLAN.json`. The file is mc's, beside `runner.json` and `current-*.json`, and `docs/technical/mc-ui.md` § *Where the facts come from* gets a row for it."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The rules are `src/mc/held.js`, pure over the entries; `run.js` reads-changes-writes the file through `hold()`, `release()` and `reconcileHold()` and nothing else, and `createRunner()` returns `held()` for a reader. Every entry carries `repo` as well as the fields the instruction named: two repositories number their pull requests independently, so `samePr` is repo *and* number — memoro #9 and memoro-cli #9 are different work, and a release keyed on the number alone would have dropped the wrong one.",
+        "The reconcile is in `queue()` rather than in `chores()`. That is where the round already asks GitHub what is open (`PR_LIST_ARGS`), and a lane's round calls `queue({ only })`, so a lane reconciles only the repository it asked about; a repository `gh` could not be answered for is *unknown* rather than empty, and nothing of its is dropped on a bad network. `chores()` calls `queue()` too, so the whole file is still swept once a round.",
+        "For step 2: `holdPr` keeps `since` and `repairs` when the same pull request is held again, so bumping `repairs` before the repair session starts (as the instruction wants) survives the next round's re-hold. `holdReason({ note, problems })` and `holdsAfterSession(note)` in held.js are the words a repair prompt should carry — for `plan-trespass` the `unauthorisedChanges` problems are already inside `reason`, and `note` is the runs.tsv-shaped word (`open,gate-red`, `plan-trespass`, `timeout`, `open,not-a-stack`, `open,stack-stopped`). Step 3 should read the file through `heldPath(root)` + `heldEntries`/`parseHeld` rather than parsing it again.",
+        "Criterion 1 is left `met: false` on purpose: the fixture half is done (`tests/mc/page.test.js`, section and painted snapshot), but no real `open,gate-red` existed to see on the page — the runner has landed everything it started since. What was seen instead is the whole path end to end: a `held.json` written by hand under a throwaway `MC_WORK_ROOT`, and `mc` drawing `QUEUE  empty … · held before merge 1` with the project, `#11274` and the reason under it. The close-out step should tick it when a real one has been seen, or say it was the fixture."
+      ],
+      "pr": 584,
       "blocked_by": null
     },
     {

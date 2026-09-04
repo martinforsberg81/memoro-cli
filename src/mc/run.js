@@ -44,6 +44,14 @@
  * makes the `<name>`/`<name>-<suffix>` convention that matches a pull request
  * to a project true. The rules are project-prs.js and `inFlight`.
  *
+ * A pull request the runner will **not** land is written down rather than
+ * logged and forgotten: `~/mc/runner/held.json` carries every one of them with
+ * the reason — a red gate, a plan trespass, a session that timed out with its
+ * work pushed — and an entry leaves the file when its pull request lands or
+ * stops being open. It is mc's own state beside `runner.json`, never a status
+ * in a plan, and it is what the page draws as `held before merge`. The rules
+ * are held.js.
+ *
  * `~/mc/queue.md` is Martin's "these first" and nothing else: names of
  * projects that still have a step to run, one per line. The round rewrites it
  * to that shape and a name leaves it the moment its step has run, so a queue
@@ -78,6 +86,9 @@ import {
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
+import {
+  heldPath, holdPr, holdReason, holdsAfterSession, parseHeld, reconcileHeld, releasePr,
+} from './held.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
@@ -251,6 +262,10 @@ export function createRunner({
     // that is too late to answer "what is running now", which is why these
     // exist.
     runner: join(root, 'runner', 'runner.json'),
+    // Every pull request the runner would not land, with the reason it did
+    // not. mc's own state beside the two above, never a status in a plan —
+    // see held.js.
+    held: heldPath(root),
     // With more than one lane per repository (`mc lanes`), the first keeps
     // the file's old name and the rest number themselves, so the page —
     // which reads `current-*.json` by name — needs no new rule.
@@ -374,6 +389,44 @@ export function createRunner({
     return { ok: true, moved: next };
   }
 
+  /* --------------------------------------------------- held before merge */
+
+  /**
+   * `~/mc/runner/held.json`, read-modify-written through these three and
+   * nowhere else.
+   *
+   * Every lane may hold a pull request, and two lanes land at the same time,
+   * so the file is never held open across an await: it is read, changed and
+   * written whole (`writeJsonAtomic`) inside one turn, which is what makes a
+   * lane's hold safe beside another's. The rules themselves are pure, in
+   * held.js.
+   */
+  const heldNow = () => parseHeld(deps.read(paths.held));
+
+  function hold(entry) {
+    writeJson(paths.held, holdPr(heldNow(), { ...entry, since: stamp() }));
+  }
+
+  function release(repo, pr) {
+    const entries = heldNow();
+    const kept = releasePr(entries, { repo, pr: Number(pr) });
+    if (kept.length !== entries.length) writeJson(paths.held, kept);
+  }
+
+  /**
+   * The file against what the round has just asked GitHub. A pull request
+   * somebody merged or closed by hand is not held any more, and nothing else
+   * would ever have taken it out of the file.
+   */
+  function reconcileHold({ prs = [], repos: asked = [] }) {
+    const entries = heldNow();
+    if (!entries.length) return;
+    const { kept, dropped } = reconcileHeld(entries, { prs, repos: asked });
+    if (!dropped.length) return;
+    for (const entry of dropped) say(`held: ${entry.project} #${entry.pr} is no longer open — no longer held before merge`);
+    writeJson(paths.held, kept);
+  }
+
   /* --------------------------------------------------------------- landing */
 
   /**
@@ -396,7 +449,7 @@ export function createRunner({
    * cost seconds. That is the price of the contract, and `land_seconds` is
    * where a reader of runs.tsv sees it.
    */
-  async function landPr(repo, name, pr) {
+  async function landPr(repo, name, pr, { branch = null } = {}) {
     const round = () => deps.mergeRound({
       repoPath: repo.path,
       pr: Number(pr),
@@ -429,10 +482,20 @@ export function createRunner({
     if (waited) say(`${name}: merge #${pr} — waited ${Math.round((deps.now().getTime() - t0) / 1000)}s for the gate`);
     const note = landingNote(report);
     if (note === 'merged') {
+      // It landed, so nothing holds it any more — including a hold an earlier
+      // round wrote, which is how a repaired pull request leaves the file.
+      release(repo.name, pr);
       say(`${name}: merged #${pr} into ${report.merged_into} through the gate`);
       askForUpdate(repo, name, pr);
     } else if (note.startsWith('off-')) say(`${name}: #${pr} was merged into ${report.merged_into}, NOT main — not recorded as merged`);
-    else say(`${name}: #${pr} left open — ${report?.reason || 'the merge round said nothing'}`);
+    else {
+      // The one place the runner knows a pull request is held and why, and
+      // until now the only trace was this line. Written down first, said
+      // second.
+      const reason = report?.reason || 'the merge round said nothing';
+      hold({ project: name, repo: repo.name, pr: Number(pr), branch, reason, note });
+      say(`${name}: #${pr} left open — ${reason}`);
+    }
     return note;
   }
 
@@ -530,7 +593,13 @@ export function createRunner({
     const t0 = deps.now().getTime();
     const took = () => Math.round((deps.now().getTime() - t0) / 1000);
     const stack = stackOrder(prs);
-    if (!stack.ok) { say(`${name}: ${stack.reason} — landing none of them`); return { note: 'open,not-a-stack', seconds: took() }; }
+    if (!stack.ok) {
+      say(`${name}: ${stack.reason} — landing none of them`);
+      // Not one of these is going to be landed by anything the runner does
+      // next, and every one of them keeps the project from starting a step.
+      for (const pr of prs) hold({ project: name, repo: repo.name, pr: Number(pr.number), branch: pr.headRefName, reason: stack.reason, note: 'open,not-a-stack' });
+      return { note: 'open,not-a-stack', seconds: took() };
+    }
     if (!stack.order.length) return { note: 'open', seconds: took() };
     if (stack.order.length > 1) say(`${name}: a stack of ${stack.order.length}, landing bottom first: ${stack.order.map((pr) => `#${pr.number}`).join(' → ')}`);
     // Where each branch left its base, read now and not later: a base branch
@@ -547,9 +616,13 @@ export function createRunner({
         // rather than anything with `merged` in it: something of this project's
         // is still open, and a note that reads as merged would let the round
         // that closes workareas take this one away.
-        if (!replayed.ok) { say(`${name}: ${replayed.why} — stopping on this project for the round`); return { note: 'open,stack-stopped', seconds: took() }; }
+        if (!replayed.ok) {
+          say(`${name}: ${replayed.why} — stopping on this project for the round`);
+          hold({ project: name, repo: repo.name, pr: Number(pr.number), branch: pr.headRefName, reason: replayed.why, note: 'open,stack-stopped' });
+          return { note: 'open,stack-stopped', seconds: took() };
+        }
       }
-      note = await landPr(repo, name, pr.number);
+      note = await landPr(repo, name, pr.number, { branch: pr.headRefName });
       deps.git(worktree, ['fetch', '-q', 'origin']);
       if (note !== 'merged') return { note, seconds: took() };
     }
@@ -1136,6 +1209,7 @@ export function createRunner({
     // rewrote a step it did not run, added one, or widened the scope leaves a
     // PR the runner will not merge. Nothing is reverted here — the branch is
     // the session's work and Martin reads the PR.
+    let problems = [];
     if (kind === 'step' && note === 'success') {
       const after = readPlanText(deps.read(plan.path) || '');
       const trespass = after.plan
@@ -1143,9 +1217,19 @@ export function createRunner({
         : { ok: false, problems: [`the plan no longer parses: ${after.problems[0]}`] };
       if (!trespass.ok) {
         note = 'plan-trespass';
+        problems = trespass.problems;
         for (const problem of trespass.problems) say(`${name}: ${problem}`);
         say(`${name}: #${pr} left open — the session changed more of the plan than its step`);
       }
+    }
+
+    // The second birthplace of a hold: a pull request this session left behind
+    // that nothing is going to land. A trespass, a session that timed out with
+    // its work pushed, a tool that printed no result — all of them leave a
+    // branch `inFlight` refuses the project on every later round, and until now
+    // the only trace was a runs.tsv note.
+    if (pr !== '-' && holdsAfterSession(note)) {
+      hold({ project: name, repo: repo.name, pr: Number(pr), branch, reason: holdReason({ note, problems }), note });
     }
 
     let landSeconds = null;
@@ -1184,9 +1268,11 @@ export function createRunner({
     const plans = [];
     const prs = [];
     const prsFailed = [];
+    const askedRepos = [];
     for (const repo of repos) {
       if (only && repo.name !== only) continue;
       if (!deps.exists(join(repo.path, '.git'))) continue;
+      askedRepos.push(repo.name);
       deps.git(repo.path, ['fetch', '-q', 'origin']);
       plans.push(...listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }));
       const asked = deps.gh(repo.path, PR_LIST_ARGS);
@@ -1198,6 +1284,11 @@ export function createRunner({
         say(`${repo.name}: GitHub could not be asked what is open (${error?.message || error}) — no step starts in this repository this round`);
       }
     }
+    // What is open is the whole answer to what is still held, and the round
+    // has just paid for it. A repository GitHub could not be asked for is
+    // unknown rather than empty, so nothing of its is dropped on a bad
+    // network.
+    reconcileHold({ prs, repos: askedRepos.filter((repo) => !prsFailed.includes(repo)) });
     return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans, prs, prsFailed };
   }
 
@@ -1435,6 +1526,7 @@ export function createRunner({
 
   return {
     paths, repos, say, round, chores, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
+    held: heldNow,
     writeUnreadable,
     updateRequested, syncMain, freshBranch, landProject, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,

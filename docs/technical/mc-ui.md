@@ -57,7 +57,16 @@ listed — and what moves sits where the eye already is:
   nothing (`stale-blockers.js`). Only a `project` blocker; a `decision` waits
   on Martin and there is no artefact to read it against. It reports and
   nothing more — flipping the step back to `ready` is a plan edit somebody
-  makes.
+  makes. And, when there is one at all: **held before merge N** on the
+  heading's own count line, with a row under the skips for each — project,
+  pull request, reason. That is `~/mc/runner/held.json`, every pull request
+  `mc run` would not land (a red gate, a plan trespass, a session that timed
+  out with its work pushed). It belongs in QUEUE because it *is* the skip
+  nothing counted: a held pull request keeps its project out of the queue
+  entirely (`inFlight`), so the project is in none of the numbers above it.
+  Yellow, like the line under it — nothing in the runner moves it on its own.
+  The page draws the first six and counts the rest; `mc --json` carries every
+  one whole, with `note`, `since` and `repairs`.
 - **INTAKE** — the newest `~/mc/intake/errors-<date>.md`, its age, what is
   new in it, and how many proposals nobody has queued or dropped.
 - **PROGRAMMES** — one heading per programme, with the room for its planning
@@ -105,6 +114,7 @@ the helper and the sessions already write.
 | a step is in flight | `~/mc/runner/current-<repo>.json`, one per lane (name, kind, repo, tool, model, budget, started, pid, worktree) | `mc run`, per step |
 | stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
+| a pull request left unlanded | `~/mc/runner/held.json` (project, repo, pr, branch, reason, note, since, repairs) | `mc run`, whenever a landing does not land |
 | the queue | `~/mc/queue.md` | Martin, at the brief |
 | what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
 | someone is sitting here | `tmux ls`, `~/mc/runner/foreground/<pid>.json` | tmux, `foreground.js` |
