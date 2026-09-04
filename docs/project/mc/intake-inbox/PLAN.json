@@ -74,7 +74,7 @@
         "The three files on disk were moved by hand (`mv ~/mc/intake/{undocumented-closures,unplanned-workareas,unreadable-plans}.md ~/mc/runner/`), no migration code. One consequence for step 3: the global `mc` is a symlink to the checkout on main, so the *running* runner is still on the old code and will rewrite `unplanned-workareas.md` and `unreadable-plans.md` into `~/mc/intake/` at the end of every round until this lands and it takes the UPDATE. Whoever runs step 3 should `ls ~/mc/intake/` first and remove any leftover copy of the two — a stale table there is harmless (it is a file, it would be drained once and archived, and it never comes back) but it is not an inbox item and should not cost a turn.",
         "`mc brief --collect` was run for real from this worktree's code and wrote a brief whose three sections all rendered from `~/mc/runner/` — 25 undocumented closures, 29 unplanned workareas, and *Plans that do not parse* reading `_none_` rather than `_no ~/mc/runner/unreadable-plans.md_`, which is the distinction that proves the file was found at the new path and not merely missing at the old one. That brief file was then removed: `lastBriefTime` is the mtime of the newest file in `~/mc/brief/`, so leaving a verification run there would have started Martin's next brief window at 20:38 today and hidden everything merged before it."
       ],
-      "pr": null,
+      "pr": 608,
       "blocked_by": null
     },
     {
