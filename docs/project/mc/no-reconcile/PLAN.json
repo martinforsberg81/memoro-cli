@@ -20,7 +20,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "Two branches that each append a row to the project log merge without a conflict, keeping both rows.",
       "check": "In a scratch clone: branch A appends a row, branch B a different one, `git merge` succeeds, `tail` shows both. Output pasted in the PR."
     },
@@ -53,7 +53,7 @@
   "steps": [
     {
       "title": "The project log stops conflicting",
-      "status": "ready",
+      "status": "done",
       "done_when": "Two branches that each append a row to `docs/project/project_log.md` merge cleanly and keep both rows.",
       "instruction": [
         "memoro-cli has no `.gitattributes` at all. Create one with `docs/project/project_log.md merge=union`, and nothing else — every other conflict measured in this repository was real content.",
@@ -61,8 +61,12 @@
         "Write the limit into the comment beside the line. `union` keeps both sides of every conflicting hunk, which is right for a table only ever appended to and wrong the moment a row is edited or reordered — the result is a duplicated row nobody notices. This is a claim about how the close-out row is written, not a general policy, and the next person adding a line to this file needs to read that before they do.",
         "Verify it. Scratch clone, two branches each appending a distinct row, `git merge`, read the tail, paste it in the PR. `git check-attr merge -- docs/project/project_log.md` says `union`."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The repository now has a `.gitattributes` at its root, and it holds one rule: `docs/project/project_log.md merge=union`. Step 4 adds the close-out row to that file, so its merge against a `main` that gained rows meanwhile is now git's problem and not a session's — but only for an appended row. The comment block above the line says why, and step 4 should not edit or reorder an existing row without reading it first.",
+        "The counterfactual was measured, not assumed: with the driver removed and nothing else changed, the same two branches conflict (`CONFLICT (content)`, one marker set). So the clean merge is the attribute doing the work, not the two rows happening to land apart.",
+        "`union` is in force inside `mc run`'s own worktrees without any setup, because git reads `.gitattributes` from the merge's working tree and `union` is built in. That is the reason the driver is `union` and not memoro's installed `generated` driver, which `scripts/setup-hooks.sh` has to configure per clone and which therefore would not be in force where `syncMain` merges."
+      ],
+      "pr": 607,
       "blocked_by": null
     },
     {
