@@ -124,7 +124,7 @@
         "**Criterion 3 was flipped to met on the reading decision workarea-deps-1 gave it**, and measured again in this session rather than inherited from step 3's numbers: `mc test memoro-cli --full` on this branch's mc, 2026-09-04, ran the whole suite in a candidate under `~/mc/gate/memoro-cli/` at 44198c6 — 1544 tests, 0 fail, 30 s, no prepare step, no `no node_modules` line, and no dependency refusal, which is the round saying every declared name resolved from the candidate. The tree it resolved is `~/mc/node_modules`, holding `@xterm`, `node-pty` and `node-addon-api`. The criterion's own words name `tests/runtime/session-host/`, which mc-cut (#561) deleted; nothing in this project can make those files green again, and that is what the decision settled.",
         "One claim in the docs was corrected against the code while writing them: the dependency state is a field on each WORK row (`work-status.js`, `dependencyState`), reachable through `mc --json`, and no line of the rendered page prints it. A reader looking for the word `present` on the page will not find it."
       ],
-      "pr": null,
+      "pr": 578,
       "blocked_by": null
     }
   ]
