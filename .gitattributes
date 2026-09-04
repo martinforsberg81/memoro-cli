@@ -1,0 +1,15 @@
+# The project log is append-only: every row is a close-out, written once and
+# never edited. Two branches that each close out a project conflict on the last
+# line for no reason a human should have to read, so git keeps both rows.
+#
+# `union` is a built-in driver — no `git config` per clone, which matters
+# because `mc run` merges inside worktrees it creates itself (`syncMain`,
+# `src/mc/run.js`), where an installed driver would not be in force.
+#
+# The limit, and it is sharp: `union` keeps both sides of every conflicting
+# hunk. That is right for a table only ever appended to and wrong the moment a
+# row is edited, reordered or rewritten — the result is a silently duplicated
+# row nobody notices. If you ever change an existing row in this file, this
+# line stops being safe for that change. Nothing else in this repository gets
+# `union`: every other conflict measured here was real content.
+docs/project/project_log.md merge=union
