@@ -296,6 +296,15 @@ export function planLaunch({ programme, repos = [], role }) {
     `worktree on branch \`plan/${programme}\`. This is not a workarea: nothing`,
     '`mc run` does can reach it.',
     '',
+    // The one method line every session gets, the planning one included: a
+    // turn is the cost. Thirteen runner steps on 2026-09-03 made 1 800 tool
+    // calls and not one turn carried more than one of them, and the planning
+    // session that measured it worked the same way until it was told not to.
+    'A turn is the unit of cost, not a tool call: put every call that does not',
+    "depend on another's result in the same message, read with `Read` and search",
+    'with `Grep` rather than `sed`/`grep` through Bash, and write no prose',
+    'between tool calls.',
+    '',
     'Martin is at the terminal. Start by reading `docs/project/README.md` and what',
     `\`docs/project/${programme}/\` already holds in each repository, and say what`,
     'you found.',
