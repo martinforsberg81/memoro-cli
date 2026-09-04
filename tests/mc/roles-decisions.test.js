@@ -35,25 +35,43 @@ const AUTHORS = ['worker', 'step', 'repair'];
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
 
+/** What a session of this role actually receives, by the path that carries it. */
+const toldTo = (name) => {
+  const role = readCanonRole(name);
+  assert.ok(role, `${name} is missing from canon/roles/`);
+  // `plan` is frontmatter only and stays that way (#580): a planning session's
+  // text is its first prompt, so `planLaunch` is where anything reaches it.
+  // Every other role inherits through its overlay.
+  return role.overlay
+    ? instructionsFor('claude-code', 'PROFILE', role.overlay)
+    : planLaunch({ programme: 'msr-core', repos: ['memoro-cli'], role }).prompt;
+};
+
+/**
+ * Asserted on the assembled text rather than on the role's own overlay. The
+ * shape used to be written out in each of these three files; it is one
+ * paragraph of `canon/roles/_common.md` now, and what matters is that a
+ * session of this role is told it — not which file it came from.
+ */
 describe('the decision shape every role writes', () => {
   for (const name of AUTHORS) {
     describe(name, () => {
-      const { overlay } = readCanonRole(name);
+      const told = toldTo(name);
 
       it('asks for a proposal, not a menu', () => {
-        assert.match(overlay, /\bGO\b|never as a menu|Never a menu|not a menu|never a menu/u);
-        assert.match(overlay, /menu/u);
+        assert.match(told, /\bGO\b|[Nn]ever\s+(as\s+)?a\s+menu|not\s+a\s+menu/u);
+        assert.match(told, /menu/u);
       });
 
       it('no longer tells the session to list the options', () => {
-        assert.doesNotMatch(overlay, phrase('the options one line each'));
-        assert.doesNotMatch(overlay, phrase('with the options and your recommendation'));
-        assert.doesNotMatch(overlay, phrase('question, options, recommendation'));
+        assert.doesNotMatch(told, phrase('the options one line each'));
+        assert.doesNotMatch(told, phrase('with the options and your recommendation'));
+        assert.doesNotMatch(told, phrase('question, options, recommendation'));
       });
 
       it('forbids the question when it is not ready', () => {
-        assert.match(overlay, /unclear|not ready/u);
-        assert.match(overlay, /\bread\b/u);
+        assert.match(told, /unclear|not ready/u);
+        assert.match(told, /\bread\b/u);
       });
     });
   }
@@ -109,18 +127,6 @@ describe('the rules every session gets, whichever role it is', () => {
   const CANON_ROLES = ['brief', 'helper', 'intake', 'plan', 'reconcile', 'repair', 'step', 'worker'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
   const ROUTE = phrase('The practical route to `main` is yours to settle');
-
-  /** What a session of this role actually receives, by the path that carries it. */
-  const toldTo = (name) => {
-    const role = readCanonRole(name);
-    assert.ok(role, `${name} is missing from canon/roles/`);
-    // `plan` is frontmatter only and stays that way (#580): a planning
-    // session's text is its first prompt, so `planLaunch` is where anything
-    // reaches it. Every other role inherits through its overlay.
-    return role.overlay
-      ? instructionsFor('claude-code', 'PROFILE', role.overlay)
-      : planLaunch({ programme: 'msr-core', repos: ['memoro-cli'], role }).prompt;
-  };
 
   for (const name of CANON_ROLES) {
     it(`${name} is told both`, () => {

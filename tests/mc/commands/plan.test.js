@@ -41,7 +41,10 @@ describe('the plan role', () => {
   it('is the model and the tools, with no prose behind it', () => {
     const role = readCanonRole('plan');
     assert.equal(role.name, 'plan');
-    assert.equal(role.model, 'opus');
+    // `fable`, not `opus` (Martin, 2026-09-04). mc passes `--model` through
+    // unvalidated, so the word has to be one the tool accepts: `claude --model
+    // fable` was run and resolved to `claude-fable-5-1`.
+    assert.equal(role.model, 'fable');
     assert.deepEqual(role.tools, ['claude', 'codex']);
     assert.equal(role.overlay, null);
   });
@@ -124,7 +127,7 @@ describe('the prompt', () => {
     // The two things to read, and they are the only instruction there is.
     assert.match(launch.prompt, /docs\/project\/README\.md/u);
     assert.match(launch.prompt, /docs\/project\/msr-core\//u);
-    assert.equal(launch.model, 'opus');
+    assert.equal(launch.model, 'fable');
     assert.equal(launch.overlay, null);
   });
 

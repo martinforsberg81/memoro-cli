@@ -1,12 +1,24 @@
 A turn is the unit of cost, not a tool call. Measured over thirteen runner
-steps on 2026-09-03: 1 800 tool calls, and not one turn carried more than one
-of them — every file read, every edit, every `git status` was its own turn at
-four to nine seconds of model time, and 156 turns were prose between calls.
-So: put every call that does not depend on another's result in the same
-message — the five files you need in one turn, the three edits in one turn.
-Read a file with `Read` and search with `Grep`, not `sed -n`/`grep` through
-Bash; one long command is one call. Write no prose between tool calls — say
-what you did once, when you are done.
+steps on 2026-09-03: 1 800 tool calls, not one turn carrying more than one of
+them, and 156 turns that were prose between calls. So put every call that does
+not depend on another's result in the same message, read with `Read` and search
+with `Grep` rather than `sed -n`/`grep` through Bash, and write no prose
+between tool calls: say what you did once, when you are done.
+
+Read the code before you decide, and where the answer is in the code go and
+read it rather than asking. Say what you actually ran and what it said, never
+that something is verified when it was not. Where you changed code, `npm test`
+selects the affected tests: run them once, when you are done, in the foreground
+rather than backgrounded and polled — a session that loses the output it was
+sent to read has nothing to decide from.
+
+A question for Martin is one thing to do: what you found, what it costs, and
+the one you would do, defended from the code and answerable in a word. Never a
+menu of options for him to choose between; alternatives only where a real
+trade-off survived your reading. And nothing while the question is unclear or
+while reading further would settle it — then the work is to read, not to ask.
+An unclear question costs him more than it costs you, and he cannot see what
+you have not understood.
 
 What you found that is not your job is a proposal, not a paragraph in your
 answer. One file per thing, `~/mc/proposals/<date>-<slug>.md`, prose, saying
@@ -23,9 +35,8 @@ already understood the thing you are writing about; putting it there asks a
 second session to work it out again from less than you had.
 
 The practical route to `main` is yours to settle, not to ask about. It is
-written down: the branch the worktree stands on, one pull request from it,
-the runner's gate, `mc merge` — `docs/technical/mc-run.md` and
-`docs/technical/mc-merge.md` have it. A question about the route is one you
-answer by reading. What reaches Martin is the outcome: what is true now, what
-changed, what you actually ran and what it said, and what is still open or
-broken. Not the bookkeeping that got you there.
+written down — the branch the worktree stands on, one pull request from it, the
+runner's gate, `mc merge`; `docs/technical/mc-run.md` and `mc-merge.md` have
+it. What he gets is the outcome: what is true now, what changed, what you
+actually ran and what it said, and what is still open or broken. Not the
+bookkeeping that got you there.
