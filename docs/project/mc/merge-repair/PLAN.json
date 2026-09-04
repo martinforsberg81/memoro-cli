@@ -100,7 +100,7 @@
         "The section is *Held before merge*, between *Runner* and *Queue* — the runner's day, then what that day left standing. It is also said in the brief's opening lines when the count is above zero (`**N pull requests held before merge** after their repair …`), because a held pull request keeps a whole project out of every round and that is not something to find in the ninth section of a long file. An absent `held.json` is treated as none rather than as a missing file: unlike the intake tables, the runner writes this one the first time it refuses to land something, so never having refused one is the good answer and adds no note.",
         "For the close-out: `docs/technical/mc-brief.md` now has the *Held before merge* row and a paragraph on the one-repair rule, and its section table gained the *Plans that do not parse* row it had been missing since that section was added (the count said nine and the table had eight). `docs/technical/mc-run.md` § *Held before merge* is still step 4's."
       ],
-      "pr": null,
+      "pr": 586,
       "blocked_by": null
     },
     {
