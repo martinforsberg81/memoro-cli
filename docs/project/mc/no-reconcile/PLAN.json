@@ -66,7 +66,7 @@
         "The counterfactual was measured, not assumed: with the driver removed and nothing else changed, the same two branches conflict (`CONFLICT (content)`, one marker set). So the clean merge is the attribute doing the work, not the two rows happening to land apart.",
         "`union` is in force inside `mc run`'s own worktrees without any setup, because git reads `.gitattributes` from the merge's working tree and `union` is built in. That is the reason the driver is `union` and not memoro's installed `generated` driver, which `scripts/setup-hooks.sh` has to configure per clone and which therefore would not be in force where `syncMain` merges."
       ],
-      "pr": null,
+      "pr": 607,
       "blocked_by": null
     },
     {
