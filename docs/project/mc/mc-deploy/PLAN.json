@@ -1,0 +1,106 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "Martin, 2026-09-04: *\"Skapa ett nytt kommando sen, 'mc deploy' som ett nytt projekt.\"*",
+    "`mc deploy` is the verb a person types to put memoro's `main` in production, the way `mc merge` is the verb that puts a pull request on `main`: one door, the repository's own script behind it, mc's lease around it, and a record nobody has to reconstruct afterwards. Today production is `npm run deploy` in `~/memoro` (`scripts/deploy.mjs`, 820 lines, seventeen steps ending in *Verify live version*), and mc knows about it only after the fact — `helper-collect.js` reads `/admin/deploy/logs` and `GET /api/version` to say how old the deploy is.",
+    "What the verb adds is not the deploy — `deploy.mjs` is the deploy and stays so — but what is around it: that `main` is the tree the runner measured green, that no gate round or landing is moving `main` while the build reads it, that the deployed SHA and the outcome are written where the page, the brief and the helper read, and that a deploy nobody typed cannot happen. Deploying to production is always Martin's word (his letter: *\"Deploy till produktion\"* is one of the things to ask first), so `mc deploy` is a foreground verb with a confirmation, never a runner step."
+  ],
+  "contract": [
+    "**A person types it, every time.** `mc deploy` runs in a terminal, prints what it is about to ship — the SHA, how far behind or ahead of the last deploy, what the nightly said about that tree — and asks once. Without a TTY it refuses. No flag skips the question; `--dry-run` answers it with the plan and stops. The runner never calls it and no role tells a session to.",
+    "**`scripts/deploy.mjs` is the deploy.** mc does not reimplement a step of it, does not pass it flags it does not already take, and does not edit it. If a preflight mc wants is missing there, the change is a memoro pull request, made on its own terms.",
+    "**Main is not moved under it.** The verb claims memoro's lease (`repo-lease.js`) for the length of the deploy with errand `deploy <sha>`; a gate round or a landing that meets the lease waits (the runner) or refuses (a person's `mc merge`), as they do today.",
+    "**The record is written before the deploy starts and finished after it ends** — a deploy that dies half-way is a row that says so, never a gap.",
+    "**One step, one PR; everything lands through `mc merge`.** `mc` prints the page and `mc run --rounds 1` completes a round after each step."
+  ],
+  "out_of_scope": [
+    "**Container rollouts, Docker, Wrangler auth.** `deploy.mjs` owns them (`MEMORO_DEPLOY_CONTAINERS`, the OrbStack preflight); `mc deploy` passes the environment through and reads the exit code.",
+    "**Rollback.** A verb that puts a previous SHA back is a project of its own once there is a deploy record to roll back to.",
+    "**memoro-cli.** It is not deployed; it is installed. `mc deploy` takes no repository argument and is memoro's.",
+    "**The release race** (`scripts/release-race.mjs`: validate → test → deploy → smoke → changelog → PR). Its verify and changelog halves are memoro's release process; whether `mc deploy` should be what its deploy stage calls is a question for after this project, not a step in it."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`mc deploy` at a terminal shows the SHA it would ship, the last deployed SHA and the gap in commits, the nightly's verdict on the tree, asks once, and runs `npm run deploy` in memoro's main checkout under the repository lease.",
+      "check": "Driven by tests with `deploy.mjs` faked: the confirmation text names the SHA and the gap; a `no` ends it with nothing run; a `yes` runs `npm run deploy` in `~/memoro` with the lease held and released after; without a TTY it exits 2 and says so. Then one real deploy by Martin, watched."
+    },
+    {
+      "met": false,
+      "criterion": "Every deploy through the verb leaves a row — SHA, build number, who, started, ended, outcome, the live version `deploy.mjs` verified — in `~/mc/runner/log/deploys.tsv`, and a half-done deploy is a row that says where it stopped.",
+      "check": "The test that fakes a failing `deploy.mjs` finds a row with the failure; the page and `mc --json` show the last deploy in the RUNNER block's day line or beside it."
+    },
+    {
+      "met": false,
+      "criterion": "The page, the brief and the helper agree on what is in production: the last row of `deploys.tsv` and `GET /api/version` name the same SHA, or the page says they differ.",
+      "check": "`page-collect.js` reads the row and the version the helper already fetches; a fixture where the two differ draws the difference; `helper-collect.js`'s `deployState` uses the same row rather than only `/admin/deploy/logs`."
+    },
+    {
+      "met": false,
+      "criterion": "`mc --help`, the page's key line and `docs/technical/mc-deploy.md` say what the verb does, what it refuses, and where the record is.",
+      "check": "`mc --help` names `mc deploy [--dry-run]`; the technical note exists on main; the `project_log.md` row is written at close-out."
+    }
+  ],
+  "documents": [
+    { "label": "memoro's deploy — the script and the runbook", "path": "../../../../../memoro/docs/runbooks/deploy.md" },
+    { "label": "How mc lands a pull request (the lease, the gate)", "path": "../../../technical/mc-run.md" },
+    { "label": "The page", "path": "../../../technical/mc-ui.md" }
+  ],
+  "runner": { "tool": "claude", "model": "opus", "budget_minutes": 90 },
+  "steps": [
+    {
+      "title": "The verb: what it would ship, one question, the script under the lease",
+      "status": "ready",
+      "done_when": "`mc deploy [--dry-run]` exists: it names the SHA of memoro's `origin/main`, the last deployed SHA and the gap, asks once at a TTY and refuses without one, claims memoro's lease with errand `deploy <sha>`, runs `npm run deploy` in `~/memoro` with the process's environment and stdio, releases the lease however it ends, and returns the script's exit code — all driven by tests with the script and the prompt faked.",
+      "instruction": [
+        "**The shape to copy is `mc merge`** (`src/mc/commands/merge.js`, and `gate` in `commands/repo.js`): a verb module in `src/mc/commands/deploy.js`, registered in `src/mc-cli.js`'s module table beside `merge` and `test`, with `run(argv, deps)` and every process boundary on `deps` — `git`, the spawn of `npm run deploy`, the prompt, the lease — so `tests/mc/commands/deploy.test.js` drives the whole verb with nothing real behind it. `parseMergeArgs`/`scanArgs` (`commands/flags.js`) is the argument parser to reuse: `--dry-run` and `--json` only.",
+        "**What it shows before it asks.** Fetch `origin/main` in `~/memoro` (`defaultRepos(env)` in `brief-collect.js` gives the path) and print: the SHA it would ship; the last deployed SHA — from `~/mc/runner/log/deploys.tsv` when there is one, else from `GET https://meetmemoro.app/api/version` (`{ commit, build, build_time }`, public, `no-store` — `helper-collect.js` already fetches it) — and `git rev-list --count <last>..<sha>` as the gap; and what the nightly said about the tree: `nightly-history.js` (`readNightlyHistory`) has the last full-suite run per repository with its SHA and red count. If the nightly's SHA is not the one about to ship, say so plainly — *\"the nightly measured `abc1234`, 6 commits ago; this tree was not measured whole\"* — and still ask. The question is `deploy <sha> to production? [y/N]`, through `ask` in `src/mc/prompt.js`; `interactive(env)` false is exit 2 with one line.",
+        "**The lease and the script.** `claimLease({ repoPath, errand: \\`deploy ${sha}\\`, holder: currentHolder(), ownerPid: process.pid })` from `repo-lease.js` before the spawn; a held lease is a refusal that names the holder, exactly as `repo-merge.js:159` does. Spawn `npm run deploy` in `~/memoro` with `stdio: 'inherit'` — the script prints its seventeen steps and the person is watching — and the process's `env` passed through so `MEMORO_DEPLOY_CONTAINERS` and Wrangler's own variables reach it. `releaseLease` in a `finally`. The verb's exit code is the script's.",
+        "**Main must be the tree.** `deploy.mjs`'s own preflight refuses a dirty tree, a branch that is not `main`, and a `main` that is not `origin/main` — trust it, and do not fast-forward `~/memoro` from the verb: that checkout is Martin's, and the runbook (`docs/runbooks/deploy.md` § *What `npm run deploy` does*, step 2) says the script fast-forwards a clean `main` itself. What the verb adds before the question is only the reading.",
+        "**Not in this step:** the record (step 2), the page (step 3). Do print the outcome line the script ends with — the build number and the live version — so a person who ran it has it in the terminal."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The record: deploys.tsv, written before and after",
+      "status": "ready",
+      "done_when": "`~/mc/runner/log/deploys.tsv` gets a row when `mc deploy` starts (sha, build number if known, holder, started, outcome `running`) and the same row completed when it ends (ended, outcome `deployed`/`failed`/`refused`, the live version the script verified, the step it stopped at when it failed) — with a reader in `src/mc/deploys.js` the page and the helper can call, and tests for a success, a failure and a refusal.",
+      "instruction": [
+        "**Follow `runs.tsv`.** `RUNS_HEADER`, `tsvHeader`, `tsvRow` in `run-plan.js` and `parseRuns` in `brief-collect.js` are the pattern: a header written once, rows appended whole, read back keyed by the header. Columns: `started`, `ended`, `sha`, `build`, `holder`, `outcome`, `live_commit`, `live_build`, `stopped_at`, `note`. Append the starting row, then rewrite that one row when the deploy ends — `writeFileAtomic` (`atomic-write.js`) on the whole file is fine at this size, and simpler than an in-place edit.",
+        "**What the script tells you.** `deploy.mjs` prints `step('…')` headers and ends with *Verify live version*; capture its stdout as well as inheriting it (a `tee` through the spawn's `stdout` pipe, echoed to the terminal) so the last `step(` before a non-zero exit is `stopped_at`, and the verified `{ commit, build }` line is `live_commit`/`live_build`. Read the script for the exact lines — name them in the PR — and keep the parsing tolerant: a line that is not there is an empty cell, never a crash after a successful deploy.",
+        "**`refused` is a row too:** a `no` at the question, no TTY, or a held lease each write one row with `outcome: refused` and the reason in `note`, so the brief can see a deploy somebody meant to make.",
+        "**Tests:** `tests/mc/deploys.test.js` for the reader and the two writes; `commands/deploy.test.js` extended with a faked script that fails at *wrangler deploy* and a row that says so."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The page, the brief and the helper read the same deploy",
+      "status": "ready",
+      "done_when": "The page's RUNNER block carries one line — `production <short sha> · deployed <age> ago by <holder>` — and says in yellow when `GET /api/version` names another SHA than the last row; `~/mc/brief/<date>.md` has a *Production* section with the last deploy and the gap to `main`; `helper-collect.js`'s `deployState` reads the row beside `/admin/deploy/logs`; all driven by fixtures.",
+      "instruction": [
+        "**The page.** `runnerLines` in `src/mc/page-render.js` draws the day line (`runner up N min · steps …`); add the production line under it, from `page-collect.js` (`nowBlock`/the runner section) reading `deploys.js` and the version the helper caches — do not fetch in the page's collect: the page is offline and instant (`docs/technical/mc-ui.md` § *Why it is instant*); read what `helper --collect` last wrote for `/api/version`, and say its age. A difference between the row and the live version is yellow: it waits on a person.",
+        "**The brief.** The section writer in `brief-collect.js`/`commands/brief.js` (where the runner's day and, since `merge-repair`, *Held before merge* are assembled) gets *Production*: last deploy row, `git rev-list --count <sha>..origin/main` as commits not yet shipped, and the nightly's verdict on `origin/main`. `canon/roles/brief.md` gets one sentence: a `main` well ahead of production with a green nightly is a deploy to propose, one line, for Martin to type.",
+        "**The helper.** `deployState` in `helper-collect.js` computes age from `/admin/deploy/logs`; give it the row as a second source and let the digest say when the two disagree — the webhook writing nothing was the failure mode the comment there describes, and the row is the reading that does not depend on it.",
+        "**Tests:** `tests/mc/page.test.js` (the line, the yellow), the brief's section test beside its siblings, `helper-collect.test.js` for the two-source age."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close-out: help, the technical note, and one real deploy",
+      "status": "ready",
+      "done_when": "`mc --help` names `mc deploy [--dry-run]`, `docs/technical/mc-deploy.md` says what the verb does, refuses and records and where `deploy.mjs` ends and mc begins, the criteria are `met` where their checks were done as written, and the plan is `done`.",
+      "instruction": [
+        "`src/mc/help-text.js` gets the line beside `mc merge`. Write `docs/technical/mc-deploy.md`: the sequence, the lease, the record's columns, what is refused and why, and the boundary with `scripts/deploy.mjs` and the runbook. Criterion 1's last half — *one real deploy by Martin, watched* — is his, not the session's: leave that criterion `met: false` with a comment saying the tests are done and the deploy is his to type, and say the same in the PR. The runner archives the plan when every step is `done`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
