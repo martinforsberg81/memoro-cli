@@ -462,6 +462,92 @@ it is still `ready`, its next step follows at once rather than a whole round
 later, up to eight times. A six-step plan would otherwise have taken six
 rounds of twenty projects.
 
+### Held before merge
+
+A landing that does not land leaves a pull request open, and an open pull
+request stops its project: `inFlight` refuses it every later round. Until
+2026-09-04 the only trace of *why* was a `runner.log` line and a runs.tsv note
+— `success,open,gate-red`, `plan-trespass`, `open,not-a-stack`. Counted over
+2026-09-03..04: of 55 step rows seven ended that way, and each of those seven
+projects stood still until a person read the log, found the reason, fixed the
+branch by hand and typed `mc merge`.
+
+So the runner writes the fact down. **`~/mc/runner/held.json`** is one entry
+per pull request it would not land — `{ project, repo, pr, branch, reason,
+note, since, repairs }`, and, when a gate held it, `red` (every red test by
+name) and `gates` (`{ name, output }` per failed command gate, clipped at
+`OUTPUT_CAP`). It is mc's own state beside `runner.json` and
+`current-<repo>.json`, **never a status in a `PLAN.json`** — the runner does
+not write plans, and `ready`/`done`/`blocked` are still the whole of
+`STEP_STATUSES`. The rules are pure in [`src/mc/held.js`](../../src/mc/held.js);
+`run.js` reads-changes-writes the file whole through `hold()`, `countRepair()`,
+`release()` and `reconcileHold()`, because any lane may hold a pull request
+while another is landing one.
+
+`repo` is part of the identity, not decoration: two repositories number their
+pull requests independently, so memoro #9 and memoro-cli #9 are different
+work and a release keyed on the number alone would drop the wrong entry.
+
+**Two birthplaces.** `landPr`'s `else` — the gate went red, the round stopped,
+the stack was not one — writes the round's own `reason` plus what
+`holdDetails(report)` took off it. The report is the only place a command
+gate's output ever exists: `gate-rounds.jsonl` keeps the red names capped at
+forty and no output at all, and the report itself lives in memory for the
+length of that round, so it is read there or it is lost. The other is
+`runStep`, when a session ends with a pull request open and a note that is
+neither `success` nor `quota` (`holdsAfterSession`) — a `plan-trespass` with
+its problems named, a session that timed out with its work pushed, a tool that
+printed no result.
+
+**One death.** An entry leaves when its pull request is no longer open. `landPr`
+releases what it lands, and `queue()` reconciles the file against the open list
+the round has already fetched, so a pull request somebody merged or closed by
+hand leaves by itself with a line saying so. A repository `gh` could not be
+asked for is *unknown* rather than empty: nothing of its is dropped on a bad
+network.
+
+**Then one repair.** Before `inFlight` refuses the project, the round asks the
+file. A held pull request with `repairs: 0` is not work in flight — nothing is
+going to finish it — so the project gets a `repair` session instead of a skip:
+in its own workarea, standing on the entry's branch (a repair never calls
+`freshBranch`; that branch carries the work), told the pull request, the
+branch, the reason, every red test by name and every failed gate's output
+(`repairPrompt`, `canon/roles/repair.md`). It makes the branch green and
+pushes to the same branch — the runner lands it afterwards through the same
+`landPr` — or it sets its step `blocked` with a `blocked_by` and says what the
+answer is about. It never merges, never lowers a threshold, never deletes a
+test to pass: the gate decides and the repair obeys it. A conflicted
+`git merge origin/main` still gives `reconcile` first, and the pull request is
+still held the next round.
+
+The repair is counted **before** the session starts, not after. A repair killed
+on its budget still had its turn, and a count written afterwards would hand the
+next round a second one for the same pull request.
+
+A repair of a `plan-trespass` is judged against the plan on **origin/main**,
+not the plan in the worktree: the worktree's plan already carries the trespass,
+so judging by it would call the trespass repaired the moment the session
+touched nothing more, and the runner would land what it refused an hour
+earlier. `repairBaseline` picks the baseline and `stepOfPr` the index — the
+step that names this pull request, or the deliverable one before that edit has
+landed. An ordinary repair is judged against the worktree's plan, so a repair
+that oversteps is held again like any step.
+
+**And then it stops.** `repairs >= 1` is a skip again, with the line `#N is
+held before merge after a repair — the brief's`. No loop: a pull request its
+one repair could not save is a person's decision, and it reaches Martin in
+`mc brief`'s *Held before merge* section — merge by hand, close, or block the
+step with a decision, one proposal each (see
+[`mc-brief.md`](mc-brief.md)). Between briefs it is on the page: QUEUE draws
+`held before merge N` with project, pull request and reason under it, and
+`mc --json` carries `queue.held` whole (see [`mc-ui.md`](mc-ui.md)).
+
+One gap worth knowing: `planRefusal` passes over a project whose plan on
+`origin/main` is blocked, done or unparseable *before* `runStep` is reached, so
+such a project's held pull request gets neither a repair nor a line in
+runner.log. It is still in `held.json`, which is why both the page and the
+brief read the file rather than the log.
+
 ## Lanes
 
 Since 2026-08-29 a round drives **one lane per repository at the same time**.
@@ -568,6 +654,9 @@ Everything lives under `~/mc/runner/`.
   Readers — the page's NOW block, `mc status <name>` — glob
   `current-*.json` rather than opening one fixed path, which is why NOW is a
   list of lines and not a line.
+- **`held.json`** — every pull request a landing did not land, with the reason
+  and how many repairs it has had. One file for the machine, written by
+  whichever lane held or released something; see *Held before merge*.
 - **`log/closed/<name>/`** — whatever a closed workarea kept beside its
   checkout. Moved, never deleted.
 

@@ -19,7 +19,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "Every pull request the runner left unlanded is listed, with its reason, without anyone reading runner.log.",
       "check": "`mc --json` carries `queue.held` — `{ project, pr, reason, note, since, repairs }` per PR — and the page's QUEUE section draws `held before merge N` with each project, PR and reason under it. Driven by a fixture in `tests/mc/page.test.js`, and seen on the page after a real `open,gate-red`."
     },
@@ -34,7 +34,7 @@
       "check": "`~/mc/brief/<date>.md` has a *Held before merge* section listing each such PR with reason, repairs tried, and the branch; `canon/roles/brief.md` says these are the brief's to decide — merge by hand, close, or block the step — one proposal each."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`docs/technical/mc-run.md` says what `held` is, when a repair runs, and where it stops.",
       "check": "The section exists on main and names the file, the kind and the one-repair rule."
     }
@@ -110,7 +110,12 @@
       "instruction": [
         "Write the section in `docs/technical/mc-run.md` beside *The merge*, and the `held.json` row in `docs/technical/mc-ui.md` § *Where the facts come from* if step 1 did not. Set `met` on the criteria this project actually met, with the check done as written — the page seen with a real held PR if one exists, the fixture otherwise, and say which. The runner archives the plan and writes the `project_log.md` row when every step is `done`."
       ],
-      "comments": [],
+      "comments": [
+        "*Held before merge* is `### Held before merge` under *One step*, immediately after *The merge* — the two birthplaces, the one death, the one repair counted before the session, the trespass baseline on origin/main, and where the brief takes over. `held.json` also has its own bullet under *What the runner writes*: that list is everything under `~/mc/runner/`, and a file missing from it is a file nobody finds. `docs/technical/mc-ui.md`'s row was already written by step 1 and needed nothing.",
+        "The section is pinned like the rest of that note (`tests/mc/run-doc.test.js`): the section must exist, name the file and the `repair` kind, say `repairs >= 1` is a skip and that the brief takes it, and say the state is never a status in a `PLAN.json` — with `REPAIRS_BEFORE_BRIEF === 1` and `STEP_STATUSES` asserted beside the prose, so a code change that makes the paragraph false fails the test rather than aging quietly.",
+        "Criterion 1 is ticked on the fixture, not on a real held pull request: **no real one exists**. `~/mc/runner/held.json` is absent on this machine — the three `plan-trespass` and two `open,gate-red` rows in runs.tsv all pre-date step 1 landing (07:30Z on 2026-09-04), and every row since says `success,merged`. What was verified first-hand this session is the same path step 1 saw: a hand-written entry under a throwaway `MC_WORK_ROOT`, `mc` drawing `QUEUE  empty … · held before merge 1` with `step-parallelism  #559` and the reason under it, and `mc --json` carrying that entry whole as `queue.held`. The fixture half (`tests/mc/page.test.js`) is real and green. So the mechanism is proven end to end; what nobody has yet seen is the runner itself writing the file in anger — the first real `open,gate-red` after this lands is the one to look at.",
+        "Criteria 2 and 3 stay as steps 2 and 3 ticked them, on their fixtures, for the same reason: no held pull request existed to repair or to raise in a brief while this project ran. The whole selection was run once for this step — `MC_HOME=<empty dir> npm test`, 1567 passing, 0 failing, 9 skipped. That `MC_HOME` is step 2's note: `runLoop` otherwise reads this machine's real `~/.memoro/mc/lanes.json` (4) and three `tests/mc/run.test.js` cases fail on it, pre-existing and unrelated."
+      ],
       "pr": null,
       "blocked_by": null
     }
