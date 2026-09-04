@@ -642,6 +642,8 @@ nothing about it.
 
 ## What the era measured
 
+`scripts/measure-steps.py --since <day or instant> --until <day>` is the instrument: per step session, wall-clock against model time, turns, cost, test commands, the tool-time classes, Bash against native calls, and — since 2026-09-04 — the turns that carried more than one tool call, which is the number that says whether a session batches. The baseline it produced on 2026-09-03 is in `project_log.md` (step-parallelism) and that plan's history.
+
 `mc run` has been the runner since 2026-08-28T23:28Z. Through 2026-08-30 that
 is 115 rows in runs.tsv — 92 `step`, 20 `reconcile`, 2 `helper` and one
 `triage` from before the rules changed — with **84 merged and none left
