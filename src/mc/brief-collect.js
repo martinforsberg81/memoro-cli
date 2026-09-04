@@ -3,10 +3,12 @@
  * script and written to one file. No model is involved here; the model is
  * the session that reads the file afterwards.
  *
- * Eight sections, in the order the plan fixes them: merged since the last
+ * Ten sections, in the order the plan fixes them: merged since the last
  * brief · opened, not merged · the helper's proposals · plan status ·
- * archived without a note · workareas with no plan · runner · queue. Every line comes from a file the runner or a session already
- * writes (`~/mc/runner/log/runs.tsv`,
+ * archived without a note · workareas with no plan · plans that do not parse ·
+ * runner · held before merge · queue. Every line comes from a file the runner
+ * or a session already writes (`~/mc/runner/log/runs.tsv`,
+ * `~/mc/runner/held.json`,
  * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`,
  * `~/mc/intake/*.md`) or from GitHub through `gh`. The pure builders take text
  * and return data so the test can feed them fixtures; `collectBrief` is the
@@ -20,6 +22,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { heldPath, parseHeld } from './held.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
@@ -326,6 +329,32 @@ export function summariseRuns(rows) {
   return { steps: rows.length, kinds, merged, open, failed, timeout, cacheRead, output, seconds };
 }
 
+/* --------------------------------------------------- held before merge */
+
+/**
+ * How many repair sessions a held pull request gets before it is a person's.
+ * One: the runner runs it, and what that session could not fix is not tried
+ * again by another one exactly like it.
+ */
+export const REPAIRS_BEFORE_BRIEF = 1;
+
+/**
+ * `~/mc/runner/held.json`, filtered to what the brief is for: the pull
+ * requests whose repair session has already run and left them held anyway.
+ * An entry at `repairs: 0` is the runner's next round, not Martin's hour, and
+ * raising it here would ask him to decide something a session is about to try.
+ *
+ * Oldest first, because the pull request that has stood still longest is the
+ * one to open first. The file is read, never reconstructed: the runner writes
+ * it (`held.js`) and the page draws the same entries, so a runs.tsv note
+ * parsed back into a reason would be a second answer that can disagree.
+ */
+export function heldForBrief(text) {
+  return parseHeld(text)
+    .filter((entry) => entry.repairs >= REPAIRS_BEFORE_BRIEF)
+    .sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
+}
+
 export function queueNames(text) {
   return String(text || '').split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
 }
@@ -337,6 +366,7 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 const UNDOCUMENTED_FILE = '`~/mc/intake/undocumented-closures.md`';
 const UNPLANNED_FILE = '`~/mc/intake/unplanned-workareas.md`';
 const UNREADABLE_FILE = '`~/mc/intake/unreadable-plans.md`';
+const HELD_FILE = '`~/mc/runner/held.json`';
 /** The undocumented file is append-only; the brief shows the newest rows and counts the rest. */
 const INTAKE_CAP = 12;
 /**
@@ -353,7 +383,7 @@ const clip = (text, max = 90) => {
 
 export function renderBrief({
   now, since, firstBrief, merged, opened, proposals = [], plans,
-  undocumented = null, unplanned = null, unreadable = null, runs, queue, notes = [],
+  undocumented = null, unplanned = null, unreadable = null, runs, queue, held = [], notes = [],
 }) {
   const out = [];
   const stamp = (d) => d.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -362,6 +392,13 @@ export function renderBrief({
     ? `First brief: the window is the last 24 h (since ${stamp(since)}).`
     : `Since last brief: ${stamp(since)}.`);
   for (const note of notes) out.push(`> ${note}`);
+  // A held pull request keeps its whole project out of the runner's round, so
+  // it is not something to find in the ninth section of a long file.
+  if (held.length) {
+    out.push('', `**${held.length} pull request${held.length === 1 ? '' : 's'} held before merge** after `
+      + `${held.length === 1 ? 'its' : 'their'} repair — *Held before merge*, below. `
+      + `${held.length === 1 ? 'That project runs' : 'Those projects run'} nothing until you decide.`);
+  }
   out.push('');
 
   out.push('## Merged since last brief', '');
@@ -441,6 +478,22 @@ export function renderBrief({
   if (runs.rows.length) {
     out.push('', '| when | project | kind | s | pr | note |', '|---|---|---|---|---|---|');
     for (const r of runs.rows) out.push(`| ${r.ts.slice(5, 16)} | ${r.name} | ${r.kind} | ${r.seconds} | ${r.pr} | ${r.note} |`);
+  }
+  out.push('');
+
+  out.push('## Held before merge', '');
+  if (!held.length) out.push('_none_');
+  else {
+    out.push('| project | repo | pr | branch | repairs | reason |', '|---|---|---|---|---|---|');
+    for (const h of held) {
+      out.push(`| ${h.project || '?'} | ${h.repo || '?'} | #${h.pr} | ${h.branch || '?'} | ${h.repairs} | ${clip(h.reason, 80)} |`);
+    }
+    out.push('', `${held.length} pull request${held.length === 1 ? '' : 's'} the runner would not land, `
+      + `${held.length === 1 ? 'its' : 'each with its'} one repair session already behind it. `
+      + `Each is a project standing still — the pull request is open, so the runner passes the project every round — and each is now yours: `
+      + `\`mc merge <repo> <pr>\` by hand when the red is not the change's, \`gh pr close\` when the work is wrong, `
+      + `or the step set \`blocked\` with a \`blocked_by\` decision. One proposal per pull request. `
+      + `${HELD_FILE} has the rest of what the gate saw.`);
   }
   out.push('');
 
@@ -526,6 +579,12 @@ export async function collectBrief({
   let queue = [];
   try { queue = queueNames(read(join(root, 'queue.md'))); } catch { notes.push('no queue.md'); }
 
+  // No note when the file is not there: the runner writes `held.json` the
+  // first time it refuses to land something, and never having refused one is
+  // the good answer, not a missing file.
+  let held = [];
+  try { held = heldForBrief(read(heldPath(root))); } catch { held = []; }
+
   const proposals = listProposals(proposalsDir(env));
 
   // The three files `mc run` writes and never reads. Absent is its own answer —
@@ -537,10 +596,10 @@ export async function collectBrief({
 
   const text = renderBrief({
     now, since, firstBrief: !last, merged, opened, proposals, plans,
-    undocumented, unplanned, unreadable, runs, queue, notes,
+    undocumented, unplanned, unreadable, runs, queue, held, notes,
   });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
   writeFileSync(path, text);
-  return { path, text, data: { since, merged, opened, proposals, plans, undocumented, unplanned, unreadable, runs, queue, notes } };
+  return { path, text, data: { since, merged, opened, proposals, plans, undocumented, unplanned, unreadable, runs, queue, held, notes } };
 }

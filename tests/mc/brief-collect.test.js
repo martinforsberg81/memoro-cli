@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 
 import {
   UNDOCUMENTED_KEYS, UNPLANNED_KEYS,
-  collectBrief, intakeRows, lastBriefTime, listPlans, parseCatFileBatch, parsePlanFrontmatter,
+  collectBrief, heldForBrief, intakeRows, lastBriefTime, listPlans, parseCatFileBatch, parsePlanFrontmatter,
   listProposals, planFields,
   queueNames, runsFor, runsSince, showBatch, summariseRuns,
 } from '../../src/mc/brief-collect.js';
@@ -36,6 +36,20 @@ function workRoot() {
     '',
   ].join('\n'));
   writeFileSync(join(root, 'queue.md'), '# round 3\ndocx-editor\n\nsql-readiness-session-A\n');
+  // What the runner would not land: one whose repair session has already run
+  // and left it held, one the runner is about to repair itself.
+  writeFileSync(join(root, 'runner', 'held.json'), JSON.stringify([
+    {
+      project: 'sql-readiness-session-A', repo: 'memoro', pr: 10963, branch: 'sql-readiness-session-A-2',
+      reason: 'the session changed more of the plan than its step', note: 'plan-trespass',
+      since: '2026-08-25T19:20:00Z', repairs: 0,
+    },
+    {
+      project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor-3',
+      reason: '2 tests red: docx/export.test.js and docx/import.test.js', note: 'open,gate-red',
+      since: '2026-08-25T18:10:00Z', repairs: 1, red: ['docx/export.test.js', 'docx/import.test.js'],
+    },
+  ], null, 2));
   mkdirSync(join(root, 'proposals'), { recursive: true });
   // Its own room beside intake, not inside it: intake is what the turn
   // reads, proposals are what came out of reading it.
@@ -191,8 +205,31 @@ describe('the intake tables the runner writes', () => {
   });
 });
 
+/**
+ * `~/mc/runner/held.json` — the pull requests the runner would not land. The
+ * brief takes the ones a repair session has already tried and failed on; an
+ * entry still at `repairs: 0` is the runner's next round and not Martin's
+ * hour, and raising it would ask him to decide what a session is about to try.
+ */
+describe('held before merge', () => {
+  it('takes the repaired ones only, oldest first', () => {
+    const text = JSON.stringify([
+      { project: 'b', repo: 'memoro', pr: 2, branch: 'b-1', reason: 'red', since: '2026-09-03T10:00:00Z', repairs: 1 },
+      { project: 'a', repo: 'memoro', pr: 1, branch: 'a-1', reason: 'red', since: '2026-09-02T10:00:00Z', repairs: 2 },
+      { project: 'c', repo: 'memoro-cli', pr: 3, branch: 'c-1', reason: 'red', since: '2026-09-01T10:00:00Z', repairs: 0 },
+    ]);
+    assert.deepEqual(heldForBrief(text).map((h) => [h.project, h.repairs]), [['a', 2], ['b', 1]]);
+  });
+
+  it('is nothing at all for a file that is empty, absent or unreadable', () => {
+    assert.deepEqual(heldForBrief('[]'), []);
+    assert.deepEqual(heldForBrief(null), []);
+    assert.deepEqual(heldForBrief('{ not json'), []);
+  });
+});
+
 describe('collectBrief', () => {
-  it('writes the nine sections, offline, with a 24 h window on the first run', async () => {
+  it('writes the ten sections, offline, with a 24 h window on the first run', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
     const now = new Date('2026-08-25T20:00:00Z');
@@ -202,7 +239,7 @@ describe('collectBrief', () => {
     assert.equal(text, result.text);
     const order = ['## Merged since last brief', '## Opened, not merged', '## Proposals',
       '## Plan status', '## Archived without a note', '## Workareas with no project on main',
-      '## Plans that do not parse', '## Runner', '## Queue'];
+      '## Plans that do not parse', '## Runner', '## Held before merge', '## Queue'];
     let at = -1;
     for (const heading of order) {
       const next = text.indexOf(heading);
@@ -230,6 +267,14 @@ describe('collectBrief', () => {
     assert.match(text, /\| new-user \| memoro \| what_the_code_taught_us\[0\]\.body: at least one paragraph \|/u);
     assert.match(text, /1 plan on `origin\/main` the schema refuses/u);
     assert.match(text, /Last 24 h: 3 steps \(step 2, triage 1\) — merged 1, left open 1, failed 0, timed out 1/u);
+    // The pull requests the runner would not land: the repaired one is the
+    // brief's, the one still waiting for its repair session is the runner's.
+    assert.deepEqual(result.data.held.map((h) => h.pr), [10958]);
+    assert.match(text, /\| docx-editor \| memoro \| #10958 \| docx-editor-3 \| 1 \| 2 tests red: docx\/export\.test\.js and docx\/import\.test\.js \|/u);
+    assert.doesNotMatch(text, /\| sql-readiness-session-A \| memoro \| #10963 \|/u);
+    assert.match(text, /1 pull request the runner would not land, its one repair session already behind it/u);
+    // And it is said at the top, not only in the ninth section of a long file.
+    assert.match(text, /\*\*1 pull request held before merge\*\* after its repair/u);
     assert.match(text, /- docx-editor\n- sql-readiness-session-A/u);
     assert.match(text, /memoro: no checkout/u);
     assert.ok(lastBriefTime(join(root, 'brief')) instanceof Date);

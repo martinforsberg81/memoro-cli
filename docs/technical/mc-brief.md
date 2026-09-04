@@ -26,7 +26,7 @@ lines: collect, then hand the file to `openInWorkArea`.
 
 ## What it reads
 
-Nine sections, in this order, each from a file something else already
+Ten sections, in this order, each from a file something else already
 writes:
 
 | section | source |
@@ -37,7 +37,9 @@ writes:
 | Plan status | every `docs/project/*/*/PLAN.json` on `origin/main` of both repositories |
 | Archived without a note | `~/mc/intake/undocumented-closures.md` |
 | Workareas with no project on main | `~/mc/intake/unplanned-workareas.md` |
+| Plans that do not parse | `~/mc/intake/unreadable-plans.md` |
 | Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
+| Held before merge | `~/mc/runner/held.json`, the entries at `repairs >= 1` |
 | Queue | `~/mc/queue.md` |
 
 The two repositories are `~/memoro` and `~/memoro-cli` (`MC_REPOS_HOME`
@@ -51,6 +53,18 @@ per plan, 1.22 s for memoro's 38 against 54 ms for the whole listing.
 themselves are the record of when there was last a brief. The *Runner*
 section is the exception and always looks back 24 h — it is a picture of the
 machine's day, not of the interval.
+
+**Held before merge** is the one section that carries work rather than
+reporting it. `mc run` writes `~/mc/runner/held.json` whenever a landing does
+not land, gives such a pull request exactly one repair session, and stops
+there; what the repair could not fix is a project standing still — its pull
+request is open, so the runner passes it every round — and this is where a
+person is told. The brief takes the entries at `repairs >= 1` only: one still
+at zero is the runner's next round, and raising it would ask Martin to decide
+something a session is about to try. When there is one at all the brief says so
+in its opening lines, not only in the section. The three answers the role
+allows are in [`canon/roles/brief.md`](../../canon/roles/brief.md): merge by
+hand, close, or block the step with a decision.
 
 Two answers are kept apart everywhere. A file the runner has never written
 is reported as absent; a file it wrote and left empty is reported as none.
