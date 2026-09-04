@@ -71,7 +71,7 @@
     },
     {
       "title": "The record: deploys.tsv, written before and after",
-      "status": "ready",
+      "status": "done",
       "done_when": "`~/mc/runner/log/deploys.tsv` gets a row when `mc deploy` starts (sha, build number if known, holder, started, outcome `running`) and the same row completed when it ends (ended, outcome `deployed`/`failed`/`refused`, the live version the script verified, the step it stopped at when it failed) — with a reader in `src/mc/deploys.js` the page and the helper can call, and tests for a success, a failure and a refusal.",
       "instruction": [
         "**Follow `runs.tsv`.** `RUNS_HEADER`, `tsvHeader`, `tsvRow` in `run-plan.js` and `parseRuns` in `brief-collect.js` are the pattern: a header written once, rows appended whole, read back keyed by the header. Columns: `started`, `ended`, `sha`, `build`, `holder`, `outcome`, `live_commit`, `live_build`, `stopped_at`, `note`. Append the starting row, then rewrite that one row when the deploy ends — `writeFileAtomic` (`atomic-write.js`) on the whole file is fine at this size, and simpler than an in-place edit.",
@@ -79,8 +79,14 @@
         "**`refused` is a row too:** a `no` at the question, no TTY, or a held lease each write one row with `outcome: refused` and the reason in `note`, so the brief can see a deploy somebody meant to make.",
         "**Tests:** `tests/mc/deploys.test.js` for the reader and the two writes; `commands/deploy.test.js` extended with a faked script that fails at *wrangler deploy* and a row that says so."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The reader step 3 wants is `src/mc/deploys.js`: `lastDeploy(env)` is the last row with `outcome: deployed` — what the page means by *production* — `lastAttempt(env)` is the last row of any outcome, including a deploy that is running or one that never came back, and `readDeploys(env)` is all of them keyed by the header the file actually carries. The columns are the ten the instruction named. `commands/deploy.js` imports `lastDeploy` under the old name `lastDeployRow` so the `deps.lastDeploy` seam from step 1 is unchanged; the inline reader that placeholder held is gone, and its two tests moved to `tests/mc/deploys.test.js`.",
+        "The lines parsed out of `scripts/deploy.mjs` (read at `~/memoro` on 2026-09-04, and named here so a reader can check them against the script): `step()` at line 63 prints `\\n▸ <label>` in cyan — the last one before a non-zero exit is `stopped_at`; `verifyLiveVersion()` at line 495 prints `  Live /api/version verified: build <n> · <sha>`, which is the only thing that fills `live_commit`/`live_build`; the success banner at line 801 prints `✓ Deploy complete build <n> · <sha>`, which fills `build`; the catch at line 814 prints `✗ Deploy failed` with the message on the next line, which goes into `note`. The distinction between the banner and the verified line is deliberate — the banner is what mc stamped, the verified line is what production answered — so a deploy run with `MEMORO_DEPLOY_SKIP_LIVE_VERSION_VERIFY` gets a row with a `build` but no `live_commit` and the note *the script verified no live version*.",
+        "To capture that output the spawn now pipes stdout and stderr and echoes every chunk straight on, rather than inheriting them. The person still watches the seventeen steps as they happen (one test starts a real `npm run deploy` against a package.json that only prints, and asserts both the echo and the capture), but the child sees a pipe and not a terminal, so any tool in the deploy that draws a progress bar only for a TTY will print plain lines instead. stdin stays inherited. If that turns out to matter for wrangler's own output, the fix is a pty, not a smaller record.",
+        "What is deliberately *not* recorded: `--dry-run` writes nothing, because nothing was attempted and a row per person-checking-what-would-ship would drown the three that matter. A `running` row is never reaped — nothing sweeps the file — so a deploy killed half-way stays `running` for good, which is the true thing to say about it, and step 3's page is where a person would see it (a `running` row older than an hour is a deploy that did not come back).",
+        "Criterion 2 is met in its first half and not its second, so it is left `met: false`: the row and the failing-script test are done here, and *the page and `mc --json` show the last deploy in the RUNNER block* is step 3's own `done_when`. Whoever finishes step 3 should set it."
+      ],
+      "pr": 594,
       "blocked_by": null
     },
     {
