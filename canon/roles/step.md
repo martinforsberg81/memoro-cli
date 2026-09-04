@@ -43,6 +43,14 @@ How you spend your turns is most of what a step costs. Measured over 59 step
 sessions (2026-09-01..03): a median step was 72 turns and 12 minutes, the long
 ones 250–350 turns and an hour, and half of that was not the work —
 
+- **A turn is the cost, not a call — batch.** Thirteen steps on 2026-09-03
+  made 1 800 tool calls and not one turn carried more than one of them. Put
+  every call that does not depend on another's result in the same message:
+  the five files you need in one turn, the three edits in one turn, `git
+  status` beside the test run. Half the turns go away and nothing else
+  changes.
+- **No prose between tool calls.** 156 of those turns were text and nothing
+  else. The PR body is where you explain, once.
 - **Read whole files, not screens.** Use `Read` for a file and `Grep` for a
   search; each `sed -n 40,80p` is a model turn on a large context, and the
   sessions averaged 46 of them.
