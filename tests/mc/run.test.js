@@ -1779,3 +1779,39 @@ test('runLoop: lanes above one split a repository\'s names, and never hold the s
   assert.match(log, /memoro#2: round 1 done \(1 ran\)/u, 'the second lane closed a round of its own');
   assert.match(log, /runner exit on STOP after c/u, 'the first lane walked a then c and left on STOP');
 });
+
+/**
+ * UPDATE is honoured at the quiet moment, not at the first idle round. A lane
+ * that read UPDATE after an idle round used to leave its loop and wait for the
+ * busy lane's whole step, taking no work — memoro-cli sat half an hour with a
+ * ready plan on main (2026-09-04). It keeps taking rounds until nothing is in
+ * flight anywhere.
+ */
+test('runLoop: a lane keeps taking work while an UPDATE waits for the busy lane', async () => {
+  const plans = { memoro: { a: ready }, 'memoro-cli': {} };
+  const f = fixture({ plans, session: okSession() });
+  const inner = f.deps.session;
+  let release = null;
+  const cliRan = new Promise((resolve) => { release = resolve; });
+  const events = [];
+  f.deps.session = async (call) => {
+    const name = call.cwd.split('/')[2];
+    events.push(`${name}: start`);
+    if (call.cwd.endsWith('/memoro')) {
+      // Mid-step: an update is asked for, and a memoro-cli plan lands on main.
+      f.files['/w/runner/UPDATE'] = '';
+      plans['memoro-cli'].x = ready;
+      await cliRan;
+    } else {
+      release();
+    }
+    events.push(`${name}: end`);
+    return inner(call);
+  };
+  const handovers = [];
+  f.deps.handOver = async ({ say }) => { handovers.push(events.slice()); say('update: handed over to pid 9001 — this runner is done'); return { ok: true, pid: 9001 }; };
+  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.ok(events.indexOf('x: start') < events.indexOf('a: end'), `memoro-cli did not run x while memoro was busy: ${events.join(', ')}`);
+  assert.equal(handovers.length, 1, 'the update still handed over');
+  assert.deepEqual(handovers[0].filter((e) => e.endsWith(': end')).sort(), ['a: end', 'x: end'], 'the handover came after every step had ended');
+});
