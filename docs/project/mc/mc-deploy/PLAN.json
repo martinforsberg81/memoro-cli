@@ -106,7 +106,7 @@
         "The brief's *Production* section sits between *Runner* and *Held before merge* — the eleventh section, and the doc tables in `mc-brief.md` say so. `collectBrief` gained one seam, `nightly`, so the section can be driven from a fixture; everything else it needs (the row, the cached version, the gap) is a file on this disk or one `git rev-list`. `canon/roles/brief.md` gets the paragraph the instruction asked for: a `main` well ahead of production with a green nightly is a deploy to propose, one line, and the session never runs the verb.",
         "Criterion 2's second half — *the page and `mc --json` show the last deploy in the RUNNER block* — is met here, as step 2's comment said whoever finished this step should mark, so criterion 2 is now `met` whole. Criterion 3 is met, with one wording note: its check says \"the version the helper already fetches\", and the helper did not fetch it; it does now. Docs touched beyond the code: `mc-ui.md` (the production line, its colours, the two new files in the facts table), `mc-helper.md` (six sources, and why the deploy section has two), `mc-brief.md` (the eleventh section). `docs/technical/mc-deploy.md` is still step 4's."
       ],
-      "pr": null,
+      "pr": 595,
       "blocked_by": null
     },
     {
