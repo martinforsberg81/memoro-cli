@@ -24,6 +24,7 @@ THE PAGE
   mc run lanes [<n>]               Steps in flight per repository; no number prints it
   mc test <repo> <pr>              Measure a pull request; merge nothing
   mc merge <repo> <pr>             The same measurement, then the merge
+  mc deploy [--dry-run]            memoro's main to production, after one question
   mc status <name>                 One project, whole
   mc work <name>                   Open that workarea
 
@@ -137,6 +138,17 @@ IN FULL
                                     outside docs/ — no suite, no lease, squash.
                                     Anything else is refused with the file
                                     that is outside docs/
+  mc deploy [--dry-run] [--json]   memoro's main to production: the sha it
+                                    would ship, what is live now and the gap
+                                    between them, what the nightly said about
+                                    that tree — then one question, and on a
+                                    yes the repository's own npm run deploy,
+                                    under mc's lease so nothing moves main
+                                    while the build reads it. No flag skips
+                                    the question and without a terminal it
+                                    refuses; --dry-run is the reading and
+                                    stops there. It takes no repository:
+                                    memoro-cli is installed, not deployed
   mc repo guard [repo]             Install the pre-push guard: a push to a
                                     branch whose pull request is already merged
                                     is refused with the number and date, and

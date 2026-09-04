@@ -50,7 +50,7 @@
   "steps": [
     {
       "title": "The verb: what it would ship, one question, the script under the lease",
-      "status": "ready",
+      "status": "done",
       "done_when": "`mc deploy [--dry-run]` exists: it names the SHA of memoro's `origin/main`, the last deployed SHA and the gap, asks once at a TTY and refuses without one, claims memoro's lease with errand `deploy <sha>`, runs `npm run deploy` in `~/memoro` with the process's environment and stdio, releases the lease however it ends, and returns the script's exit code — all driven by tests with the script and the prompt faked.",
       "instruction": [
         "**The shape to copy is `mc merge`** (`src/mc/commands/merge.js`, and `gate` in `commands/repo.js`): a verb module in `src/mc/commands/deploy.js`, registered in `src/mc-cli.js`'s module table beside `merge` and `test`, with `run(argv, deps)` and every process boundary on `deps` — `git`, the spawn of `npm run deploy`, the prompt, the lease — so `tests/mc/commands/deploy.test.js` drives the whole verb with nothing real behind it. `parseMergeArgs`/`scanArgs` (`commands/flags.js`) is the argument parser to reuse: `--dry-run` and `--json` only.",
@@ -59,7 +59,13 @@
         "**Main must be the tree.** `deploy.mjs`'s own preflight refuses a dirty tree, a branch that is not `main`, and a `main` that is not `origin/main` — trust it, and do not fast-forward `~/memoro` from the verb: that checkout is Martin's, and the runbook (`docs/runbooks/deploy.md` § *What `npm run deploy` does*, step 2) says the script fast-forwards a clean `main` itself. What the verb adds before the question is only the reading.",
         "**Not in this step:** the record (step 2), the page (step 3). Do print the outcome line the script ends with — the build number and the live version — so a person who ran it has it in the terminal."
       ],
-      "comments": [],
+      "comments": [
+        "`helper-collect.js` does **not** fetch `GET /api/version` — the instruction says it already does, and it does not: its production reads are `/admin/errors`, `/admin/analysis`, `/admin/deploy/logs` and `/ping-d1`, all through `getJson` with the admin token. So `commands/deploy.js` fetches `/api/version` itself, public and `no-store`, through a `deps.fetchVersion` seam, using `baseUrl(env)` from `helper-collect.js` for the host. Step 3 says the page should read \"what `helper --collect` last wrote for `/api/version`\": nothing writes that today, so step 3 has to add the fetch and the cache to the helper's collect (one more public probe beside `/ping-d1`, no token) — or read only the row and treat the live version as the helper's when it exists.",
+        "`lastDeployRow(env)` in `commands/deploy.js` is a placeholder: a tolerant read of `~/mc/runner/log/deploys.tsv` keyed by its header, taking the last row with a `sha` and `outcome === 'deployed'`, and null when the file is absent — which it is, until step 2 writes it. Step 2 should move that read into `src/mc/deploys.js` and pass it in as `deps.lastDeploy`; the seam is already there and its test is `the last deploy mc made` in `tests/mc/commands/deploy.test.js`.",
+        "One line of `help-text.js` had to move now rather than in step 4: `tests/mc/help.test.js` reads `src/mc-cli.js`'s module table and asserts every routed verb appears in `mc --help`, so registering the verb without a help line is a red test. The short list line and an `IN FULL` entry are in; step 4 still owns `docs/technical/mc-deploy.md`, the page's key line and whatever the entry should say once the record and the page exist.",
+        "Exit codes, decided here because nothing in the plan fixed them: the script's own code when it ran, 0 for `--dry-run`, 1 for a `no` / a held lease / no `origin/main` in the checkout, 2 for a bad argument or no terminal. A deliberate `no` is exit 1 rather than 0 so `mc deploy && …` does not carry on as if it had shipped. The lease errand carries the full sha (`deploy <40 chars>`) and the plan's first line prints the full sha; the question itself says the short one — `deploy 1a2b3c4 to production? [y/N]`.",
+        "The reading half was run for real against `~/memoro` on 2026-09-04: `mc deploy --dry-run` printed origin/main `c061d74`, live `b3e65b6` (build 23533) from `/api/version`, a gap of 16 commits, and \"the nightly measured fc19465, 74 commits ago; this tree was not measured whole\". The deploying half is only ever exercised by the faked script — a real deploy is Martin's to type, as step 4 says."
+      ],
       "pr": null,
       "blocked_by": null
     },
