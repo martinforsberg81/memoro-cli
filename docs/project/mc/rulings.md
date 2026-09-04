@@ -168,6 +168,42 @@ step opens a planning session on it once.
 Where `repair` and `reconcile` sit in the same concept is not settled; neither
 existed when it was written.
 
+## 7 · `reconcile` is not a session kind
+
+`ruling · 2026-09-04` · raised in the `mc` planning session
+
+Asked to look the concept over: *"Jag tror inte att det är korrekt utformat, ska
+det ens finnas?"* The planning session measured `~/mc/runner/log/runner.log` and
+`runs.tsv` rather than arguing it: **67 conflict events, 166 conflicting files,
+64 reconcile sessions, 519 minutes of model time.** Of the 67 events, **37 had
+nothing in them but an append-only log, a generated artifact or a plan file**;
+13 were mixed; 17 were real code. The genuine tail is 75 distinct files over 88
+occurrences — almost no repetition.
+
+> **Beslut:** alla tre lagren, `reconcile` försvinner (Martin, 2026-09-04).
+
+The three: `.gitattributes` in both repositories, so git resolves the
+append-only log and the generated artifacts with no session at all; the runner
+resolving a `PLAN.json` conflict with `unauthorisedChanges`, the rule that
+already says who may write what; and the residue handed to the **step** session,
+which has to read the code anyway, instead of to a cold session that merges and
+stops.
+
+One correction to the record: the `fold-reconcile-into-step` proposal
+(2026-09-02, consumed and deleted by this plan) said a conflicted step round
+aborts and defers to the next round. That has not been true since; the round
+launches the reconcile immediately. The cost is a wasted session, not a wasted
+round.
+
+Conditional, and not negotiable: `merge=generated` means *keep ours*, and
+memoro's own `.gitattributes` says correctness then rests on a mandatory drift
+gate. `npm run sdk:check` exists (`package.json:143`) and is not in the gate
+memoro declares as `affected`. The SDK artifacts get the driver only after it
+is.
+
+**Carried by [`no-reconcile/PLAN.json`](no-reconcile/PLAN.json)** and, in memoro,
+by `docs/project/test-architecture/generated-artifact-merge/PLAN.json`.
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som

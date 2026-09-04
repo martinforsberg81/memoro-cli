@@ -1,0 +1,115 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A merge conflict is resolved where it is cheapest: by git for the files whose resolution is mechanical, by the runner for its own plan format, and — only for what is left — by the step session that had to read the code anyway.",
+    "`reconcile` stops being a session kind. No round pays a cold session to finish a merge and then stop."
+  ],
+  "contract": [
+    "Martin ruled all three layers on 2026-09-04, against the measurement below: `reconcile` goes.",
+    "A step session that meets a conflict resolves it and then does its step, in the same session. It never lands the merge and stops.",
+    "No conflict is resolved by weakening the result. `merge=union` is only for a file whose two sides append and never edit the same line; a plan is merged by the rule that already says who may write what, not by taking a side.",
+    "The memoro half — memoro's own `.gitattributes` and getting `sdk:check` into its gate — is `docs/project/test-architecture/generated-artifact-merge/PLAN.json` in memoro. Neither plan waits for the other, and this one changes no file in memoro."
+  ],
+  "out_of_scope": [
+    "memoro's `.gitattributes`, and `scripts/testing/ci.mjs`. A step here has a memoro-cli workarea and cannot reach them: `repoOf` (`src/mc/run.js`) returns the repository whose checkout the workarea holds.",
+    "The `repair` kind, and everything in `~/mc/runner/held.json`. A held pull request is a different mechanism with a different cause.",
+    "`replayOnto` and the stacked-branch retarget. Its comment says a conflict there is *not* what reconcile is for, and it stays that way — this project does not change what happens when a squashed base breaks the branch above it.",
+    "Whether the runner merges or rebases `origin/main` into a project branch. `syncMain` merges and never rebases; that is not revisited here.",
+    "The three `reconcile*` names that mean something else: `reconcileHeld` (`src/mc/held.js:157`) and `reconcileHold` (`src/mc/run.js:442`) are about held pull requests, not merges. Nothing in this project touches them."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "Two branches that each append a row to the project log merge without a conflict, keeping both rows.",
+      "check": "In a scratch clone: branch A appends a row, branch B a different one, `git merge` succeeds, `tail` shows both. Output pasted in the PR."
+    },
+    {
+      "met": false,
+      "criterion": "A `PLAN.json` conflict where the two sides changed different steps is resolved by the runner with no session.",
+      "check": "A test builds the three stages of such a conflict, runs the resolver, and asserts the result carries both sides' changes and passes `validatePlan`. A conflict the rule cannot resolve is left in progress, asserted separately."
+    },
+    {
+      "met": false,
+      "criterion": "A step session handed a conflicted worktree resolves it and delivers its step in the same session.",
+      "check": "Seen in `~/mc/runner/log/runs.tsv`: a row whose project had a conflict that round, `kind` `step`, ending `success,merged` or with a pull request. Not asserted from the code."
+    },
+    {
+      "met": false,
+      "criterion": "`reconcile` is gone as a kind.",
+      "check": "`grep -rn 'reconcile' src/ canon/ docs/technical/` returns only `reconcileHeld` and `reconcileHold`. `chooseKind` has no branch that returns it."
+    },
+    {
+      "met": false,
+      "criterion": "The runner still stops rather than guessing when a conflict is not resolvable.",
+      "check": "A test drives a round whose conflict neither git nor the plan rule can resolve, and asserts the project is skipped with the conflicting files named — never a session launched on a half-merged tree with no instructions about it."
+    }
+  ],
+  "documents": [
+    { "label": "The memoro half of the same decision", "path": "https://github.com/martinforsberg81/memoro/blob/main/docs/project/test-architecture/generated-artifact-merge/PLAN.json" },
+    { "label": "What the runner does in a round, today", "path": "../../../technical/mc-run.md" },
+    { "label": "The role catalogue's shape, changed in parallel by role-instructions", "path": "../role-instructions/PLAN.json" }
+  ],
+  "steps": [
+    {
+      "title": "The project log stops conflicting",
+      "status": "ready",
+      "done_when": "Two branches that each append a row to `docs/project/project_log.md` merge cleanly and keep both rows.",
+      "instruction": [
+        "memoro-cli has no `.gitattributes` at all. Create one with `docs/project/project_log.md merge=union`, and nothing else — every other conflict measured in this repository was real content.",
+        "`union` is a built-in git driver and needs no `git config`, unlike the `generated` driver memoro installs from `scripts/setup-hooks.sh`. That matters here: `mc run` merges inside worktrees it creates itself (`syncMain`, `src/mc/run.js`), and a driver that has to be installed per clone would not be in force where the conflicts happen.",
+        "Write the limit into the comment beside the line. `union` keeps both sides of every conflicting hunk, which is right for a table only ever appended to and wrong the moment a row is edited or reordered — the result is a duplicated row nobody notices. This is a claim about how the close-out row is written, not a general policy, and the next person adding a line to this file needs to read that before they do.",
+        "Verify it. Scratch clone, two branches each appending a distinct row, `git merge`, read the tail, paste it in the PR. `git check-attr merge -- docs/project/project_log.md` says `union`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A plan conflict is resolved by the plan's own rule",
+      "status": "ready",
+      "done_when": "A `PLAN.json` conflict whose two sides changed different steps is resolved by the runner without a session, and one that breaks the rule is left in progress.",
+      "instruction": [
+        "29 of the 166 conflicting files measured in `~/mc/runner/log/runner.log` were `PLAN.json` or `PLAN.md`. The shape is always the same: main carries a plan a later round wrote to, the branch carries the same plan with its own step edited. That is exactly the comparison the runner already knows how to make — `unauthorisedChanges(before, after, index)` in `src/mc/plan-schema.js` says which fields belong to whom: everything outside `steps[index]` and `met` is not the session's.",
+        "Run it as a merge rather than as a check. During a conflicted merge git holds all three sides in the index: `git show :1:<path>` is the merge base, `:2:` is ours, `:3:` is theirs. Parse all three as JSON, and build the result field by field — for each step, take whichever side changed it against the base; for `met`, take a criterion as met if either side met it; for `goal`, `contract`, `out_of_scope` and the criteria themselves, take main's, because a step session may not have changed them and the planning session's edit is the one on main.",
+        "Refuse rather than guess. If both sides changed the same step, or either side does not parse as JSON, or the result fails `validatePlan`, this file is not resolved — leave it conflicted and let the round fall through to the next step's path. A resolver that guesses on a plan produces a plan the next session acts on without checking, which is the most expensive kind of wrong in this system.",
+        "Where it goes: `syncMain` (`src/mc/run.js`) already has one special case of this shape — an identical `.gitignore` hunk, resolved inline with `checkout --theirs` and a commit. This is the second, and it is bigger than an inline branch; put the rule in its own module beside `plan-schema.js` so it can be tested without a git repository, and call it from `syncMain` with the conflicted paths.",
+        "Test the rule, not the plumbing: build the three stages as objects, assert the merged result carries both sides' changes and passes `validatePlan`, and assert each refusal case returns no result. Then `npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The step session takes the conflict",
+      "status": "ready",
+      "done_when": "A round that meets a conflict git and the plan rule could not resolve launches a `step` session on the conflicted worktree, and that session resolves it and delivers its step.",
+      "instruction": [
+        "Today the round reads `const plan = sync.conflicts.length ? null : planOf(worktree, name)` (`src/mc/run.js`), so a conflict makes the plan unreadable to the runner by construction and `chooseKind` (`src/mc/run-plan.js`) returns `{ kind: 'reconcile' }` before it looks at anything else. Both halves change: the plan is still read, and the conflict is something the step session is told about rather than a different kind of session.",
+        "Read the plan from `HEAD` while a merge is in progress. The file in the worktree may itself carry conflict markers — after step 2 that is rarer, but a plan whose two sides changed the same step is exactly the case step 2 refuses. `git show HEAD:<plan path>` is the branch's own last good copy, and it is the right one: the step the session is being handed is the step this branch is on.",
+        "`stepPrompt` gains a conflict preamble when there is one — the files by name, that a `git merge origin/main` is in progress and stopped on them, and that resolving it is the first thing to do and not the whole job. Keep the existing body after it unchanged; the session's step, its `done_when` and what it may write in the plan are all still true.",
+        "The resolution rules that `canon/roles/reconcile.md` carried are the part worth keeping, and they move to the step role: keep this branch's intent and main's changes both; a generated file (SDK artifacts, corpora, manifests, inventories) is regenerated with the repository's own script, found in `package.json` or the docs, never hand-edited; after a keep-both resolution, check no hunk was kept twice. Where that text goes depends on what has landed: `role-instructions` (this programme, in parallel) introduces a shared entry every role inherits. If it has landed, put what is common there and the rest in `step.md`; if it has not, put all of it in `canon/roles/step.md` plainly and say so in the PR. Do not wait for it and do not reshape the catalogue here.",
+        "Keep the failure path as clear as the one it replaces. Today a merge that the session does not finish is aborted (`if (kind === 'reconcile' && ... MERGE_HEAD ...) git merge --abort`), which leaves the worktree clean for the next round. A step session that cannot resolve the conflict must land in a state as clean: decide whether the abort still runs for a step session that left `MERGE_HEAD` behind, and say why in the PR. A half-merged worktree carried into the next round is the one outcome worse than today's cold session.",
+        "`npm test`, and then watch one real round: the criterion for this step is a row in `~/mc/runner/log/runs.tsv` with `kind` `step` for a project that had a conflict that round. Read `runner.log` for the `merge conflict in:` line that names it."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Remove the kind, and close out",
+      "status": "ready",
+      "done_when": "`grep -rn 'reconcile' src/ canon/ docs/technical/` returns only `reconcileHeld` and `reconcileHold`, and `docs/project/project_log.md` has the row.",
+      "instruction": [
+        "What goes: `canon/roles/reconcile.md`, `reconcilePrompt` (`src/mc/run-plan.js`), the branch in `chooseKind` that returns the kind, the `MERGE_HEAD` abort keyed on it (`src/mc/run.js`) unless step 3 kept it for step sessions, its arm of the merged/ran verdict (`kind === 'reconcile' && note === 'success'`), and the colour in `src/mc/page-render.js`.",
+        "What must not go, and it reads identically to a grep: `reconcileHeld` (`src/mc/held.js:157`) and `reconcileHold` (`src/mc/run.js:442`) are about reconciling `~/mc/runner/held.json` against the open pull requests. Different mechanism, different word, and nothing in this project touches them.",
+        "`runs.tsv` keeps its history. 64 rows carry `reconcile` as their `kind` and they are the measurement this project was planned on; nothing rewrites them, and whatever reads that column tolerates a value it no longer produces. Check `src/mc/brief-collect.js`'s run summary and `src/mc/page-collect.js` before assuming they do.",
+        "The documentation: `docs/technical/mc-run.md` describes the kind in four places (the kinds table, the sync section, what the roles are, and the workarea section) and `docs/technical/mc-ui.md` in two (the colour table and the shared vocabulary). Replace them with what now happens — git resolves, the runner resolves a plan, the step session resolves the rest — rather than deleting the paragraphs and leaving a gap where a reader expects the answer.",
+        "Add the row to `docs/project/project_log.md`, naming the memoro half (`generated-artifact-merge`) so a reader of either log finds the other. In the PR, give the count: of the 67 conflict events measured, how many the three layers now take without a session, on the same categorisation the plan was sized against — 37 were entirely mechanical, 13 mixed, 17 real code."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
