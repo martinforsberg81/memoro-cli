@@ -65,12 +65,18 @@ export function rolesDir(env = process.env) {
 /**
  * Every role defined in the catalogue, by file. A directory that does not
  * exist is an empty catalogue, not an error — roles are optional equipment.
+ *
+ * A leading underscore means "not a role": `_common.md` is the text every role
+ * session is told (see `sharedRoleText`), and a catalogue directory holding a
+ * copy of it must not grow a role named `_common` out of it.
  */
 export function listRoles(env = process.env) {
   const dir = rolesDir(env);
   let names = [];
   try {
-    names = readdirSync(dir).filter((name) => name.endsWith('.md')).sort();
+    names = readdirSync(dir)
+      .filter((name) => name.endsWith('.md') && !name.startsWith('_'))
+      .sort();
   } catch { return []; }
   const roles = [];
   for (const file of names) {
@@ -93,6 +99,29 @@ export function readCanonRole(name) {
   const path = join(canonRolesDir(), `${name}.md`);
   const role = parseRole(readFile(path), name);
   return role ? { ...role, path } : null;
+}
+
+/**
+ * The one file whose text every role session is told, whichever role it is.
+ *
+ * It lives in `canon/roles/` beside the roles themselves, under a name no role
+ * can have: `listRoles` makes a role out of every `*.md` in a catalogue
+ * directory, so a `common.md` copied into a user's catalogue would be listed
+ * and shown as a role named `common`. The underscore is the convention that
+ * says otherwise, and `listRoles` skips it.
+ *
+ * It is read here, at assembly, and deliberately not folded into
+ * `readCanonRole`'s `overlay`. `run.js` tests `role.overlay` to decide whether
+ * a role file is installed at all, and a shared preamble folded in ahead of
+ * that check would make a missing `repair.md` look present — a ninety-minute
+ * session launched with no instructions for what it is doing. `mc roles show`
+ * and `tests/mc/roles-decisions.test.js` read `overlay` as the role's own
+ * words for the same reason.
+ */
+export const SHARED_ROLE_FILE = '_common.md';
+
+export function sharedRoleText() {
+  return readFile(join(canonRolesDir(), SHARED_ROLE_FILE))?.trim() || null;
 }
 
 export function readRole(name, env = process.env) {
@@ -157,8 +186,20 @@ export function areaRole(areaPath, env = process.env) {
 }
 
 /**
- * What a new conversation is told: the profile, then the overlay behind it,
- * separated so each still reads as itself.
+ * What a new conversation is told: the profile, the text every role session
+ * shares, then this role's own overlay — separated so each still reads as
+ * itself.
+ *
+ * This is the single door. Four paths launch a session with instructions —
+ * `work-open.js` twice (a conversation in a work area, and the argv a handoff
+ * respawns), `run.js` for a runner session and `helper-turn.js` for the intake
+ * turn — and each of them used to write the join out for itself. Four copies
+ * of one rule is four places for it to drift, and the day they disagree is the
+ * day one kind of session quietly stops being told something every other kind
+ * is.
+ *
+ * No overlay is no role, and no role is no shared text: an ordinary work area
+ * inherits nothing, which is the whole parallel-operation guarantee.
  *
  * The same text for every tool, because the channel is the same shape for
  * every tool — `profileArgs` already carries a body of markdown to each one
@@ -168,7 +209,8 @@ export function areaRole(areaPath, env = process.env) {
  * what is assembled here.
  */
 export function instructionsFor(toolId, profile, overlay) {
-  const combined = [profile, overlay].filter(Boolean).join('\n\n---\n\n');
+  const shared = overlay ? sharedRoleText() : null;
+  const combined = [profile, shared, overlay].filter(Boolean).join('\n\n---\n\n');
   return combined || null;
 }
 

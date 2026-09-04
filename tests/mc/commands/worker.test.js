@@ -77,8 +77,13 @@ describe('mc worker', () => {
     assert.equal(readFileSync(join(workRoot, 'w1', '.mc-role'), 'utf8'), 'worker\n');
     const line = newSessionLine(log);
     assert.ok(line.includes(`'--model' 'fable'`), line);
-    assert.ok(line.includes('You are a worker. Escalate to the PM.'), line);
-    assert.ok(line.includes(`'do the thing'`), line);
+    // The instruction body is several lines now — the shared text every role
+    // session is told sits between the profile and the role's own words — so
+    // what follows `--append-system-prompt` is read off the whole recording.
+    const recorded = readFileSync(log, 'utf8');
+    assert.ok(recorded.includes('A turn is the unit of cost'), recorded);
+    assert.ok(recorded.includes('You are a worker. Escalate to the PM.'), recorded);
+    assert.ok(recorded.includes(`'do the thing'`), recorded);
   });
 
   it('an explicit --model outranks the role default', () => {
@@ -87,7 +92,7 @@ describe('mc worker', () => {
     assert.equal(result.status, 0, result.stderr);
     const line = newSessionLine(log);
     assert.ok(line.includes(`'--model' 'opus'`), line);
-    assert.ok(!line.includes(`'fable'`), line);
+    assert.ok(!readFileSync(log, 'utf8').includes(`'fable'`), line);
   });
 
   it('an ordinary area cannot become a worker afterwards', () => {
@@ -117,7 +122,8 @@ describe('mc worker', () => {
     assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
     assert.equal(readFileSync(join(workRoot, 'w3', '.mc-role'), 'utf8'), 'worker\n');
     assert.match(result.stdout, /role from .*canon\/roles\/worker\.md/u);
-    assert.ok(newSessionLine(log).includes('You are a worker on one project.'));
+    newSessionLine(log);
+    assert.ok(readFileSync(log, 'utf8').includes('You are a worker on one project.'));
     // The escalation the role carries: the step stops and the question goes in
     // the pull request. There is no PM and no decision file. The overlay is
     // several lines, so it is read off the whole recording.

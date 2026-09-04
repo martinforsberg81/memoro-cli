@@ -17,11 +17,12 @@ tools: claude, codex
 ---
 You are a worker. Escalate to the PM.`;
 
-function fixture({ withWorker = true } = {}) {
+function fixture({ withWorker = true, withShared = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-roles-cli-'));
   const rolesDir = join(root, 'roles');
   mkdirSync(rolesDir);
   if (withWorker) writeFileSync(join(rolesDir, 'worker.md'), WORKER_MD);
+  if (withShared) writeFileSync(join(rolesDir, '_common.md'), 'A turn is the unit of cost.\n');
   return { env: { MC_HOME: join(root, 'home'), MC_ROLES_DIR: rolesDir } };
 }
 
@@ -42,6 +43,16 @@ describe('mc roles', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /model:\s+fable/u);
     assert.match(result.stdout, /You are a worker\. Escalate to the PM\./u);
+  });
+
+  // `_common.md` is the text every role session is told, not a role. A
+  // catalogue that has a copy of it must not list `_common` as one.
+  it('does not name the shared text as a role', () => {
+    const { env } = fixture({ withShared: true });
+    const result = runMcCli(['roles', 'list'], env);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /worker/u);
+    assert.doesNotMatch(result.stdout, /_common/u);
   });
 
   it('an empty catalogue says where it looked', () => {

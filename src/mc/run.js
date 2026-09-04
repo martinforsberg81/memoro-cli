@@ -106,7 +106,7 @@ import { kindFor, pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
-import { readCanonRole } from './roles.js';
+import { instructionsFor, readCanonRole } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
@@ -1229,7 +1229,7 @@ export function createRunner({
       countRepair(repo.name, repair.entry.pr);
       say(`${name}: #${repair.entry.pr} is held before merge — one repair session: ${repair.entry.reason}`);
     }
-    const instructions = [await deps.profile(), role.overlay].filter(Boolean).join('\n\n---\n\n');
+    const instructions = instructionsFor(launch.id, await deps.profile(), role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, instructions, prompt, profileArgs });
 
     const ts = stamp().replace(/[-:]/gu, '');
