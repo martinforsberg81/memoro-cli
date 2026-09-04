@@ -1034,7 +1034,10 @@ export function createRunner({
     // anyone read the reason.
     const dirty = (gitOut(worktree, ['status', '--porcelain']) || '').trim();
     if (dirty) {
-      const files = dirty.split('\n').map((line) => line.slice(3).trim() || line.trim());
+      // `XY path` per porcelain line; the whole is trimmed above, which takes
+      // the first line's leading status space with it — hence a pattern, not
+      // `slice(3)`, which printed `ublic/css/…` on 2026-09-04.
+      const files = dirty.split('\n').map((line) => line.replace(/^[ MADRCU?!]{1,2}\s+/u, '').trim() || line.trim());
       const shown = files.slice(0, 3).join(', ') + (files.length > 3 ? ` +${files.length - 3}` : '');
       say(`${name}: dirty worktree (${shown}) — skipped every round until it is committed or stashed in ${worktree}`);
       return 'skipped';
