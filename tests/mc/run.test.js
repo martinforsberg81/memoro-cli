@@ -506,7 +506,7 @@ test('a workarea with no plan is not in the queue, and gets no step and no skip 
   // says why the name left it, and the workarea is written for `mc brief`.
   assert.match(log, /queue: dropped "fresh" — no plan on main/u);
   assert.equal(f.files['/w/queue.md'], '', 'the queue empties itself');
-  assert.match(f.files['/w/intake/unplanned-workareas.md'], /\| fresh \| memoro \|/u);
+  assert.match(f.files['/w/runner/unplanned-workareas.md'], /\| fresh \| memoro \|/u);
 });
 
 test('a quota answer is logged as quota, not merged, and the runner sleeps 30 minutes', async () => {
@@ -1533,7 +1533,7 @@ test('a project with no docs/technical note is recorded in intake, and archived 
   });
   await createRunner({ deps: f.deps }).round();
   assert.deepEqual(f.calls.rm, ['docs/project/prog/thin'], 'a thin note never stops an archive');
-  const intake = f.files['/w/intake/undocumented-closures.md'];
+  const intake = f.files['/w/runner/undocumented-closures.md'];
   assert.match(intake, /# Projects archived with no docs\/technical\/ note/u);
   assert.match(intake, /\| 2026-08-29 \| memoro \| prog \| thin \| abc1234 \|/u);
   assert.match(f.files['/w/runner/log/runner.log'], /archive: thin names no docs\/technical\/ note — recorded for mc brief/u);
@@ -1659,7 +1659,7 @@ test('a workarea whose plan an earlier round archived is closed on the strength 
   assert.deepEqual(f.calls.rmdirs, ['/w/gone']);
   assert.match(f.files['/w/runner/log/runner.log'], /close: gone removed — worktree, branch gone/u);
   // ...and it is not also filed as a folder nobody can explain.
-  assert.doesNotMatch(f.files['/w/intake/unplanned-workareas.md'], /\| gone \|/u);
+  assert.doesNotMatch(f.files['/w/runner/unplanned-workareas.md'], /\| gone \|/u);
 });
 
 /**
@@ -1707,7 +1707,7 @@ test('a workarea no project explains is never removed, and is written to intake 
   });
   await createRunner({ deps: f.deps }).round();
   assert.deepEqual(f.calls.rmdirs, [], 'only Martin can say whether an unplanned workarea is finished');
-  const intake = f.files['/w/intake/unplanned-workareas.md'];
+  const intake = f.files['/w/runner/unplanned-workareas.md'];
   assert.match(intake, /# Workareas with no project on main/u);
   assert.match(intake, /\| mc-repo \| memoro-cli \| 0 \| abc1234 \| landed \|/u);
   assert.match(intake, /\| msr-track-1 \| memoro \| 1 \| abc1234 \| ahead \|/u);
@@ -1726,7 +1726,7 @@ test('the branch is asked of the worktree, not guessed from the folder name', as
     session: okSession(),
   });
   await createRunner({ deps: f.deps }).round();
-  assert.match(f.files['/w/intake/unplanned-workareas.md'], /\| msr-track-1 \| memoro \| 0 \| abc1234 \| landed \|/u);
+  assert.match(f.files['/w/runner/unplanned-workareas.md'], /\| msr-track-1 \| memoro \| 0 \| abc1234 \| landed \|/u);
 });
 
 test('a live workarea is never closed, however done its plan is', async () => {
@@ -1749,7 +1749,7 @@ test('a live workarea is never closed, however done its plan is', async () => {
  * round for a day while the project stopped existing as far as any board
  * showed. The round writes it beside the workareas with no project instead.
  */
-test('a plan that does not parse gets a row in ~/mc/intake/, not a line nobody reads', async () => {
+test('a plan that does not parse gets a row in ~/mc/runner/, not a line nobody reads', async () => {
   const broken = JSON.stringify({ ...JSON.parse(ready), goal: [] }, null, 2);
   const f = fixture({
     plans: { memoro: { 'new-user': broken, alpha: ready } },
@@ -1757,7 +1757,7 @@ test('a plan that does not parse gets a row in ~/mc/intake/, not a line nobody r
     gh: { alpha: { number: 7 } },
   });
   await createRunner({ deps: f.deps }).round();
-  const intake = f.files['/w/intake/unreadable-plans.md'];
+  const intake = f.files['/w/runner/unreadable-plans.md'];
   assert.match(intake, /\| new-user \| memoro \| goal: at least one paragraph/u);
   assert.doesNotMatch(intake, /\| alpha \|/u, 'a plan that parses is not in the table');
   assert.match(f.files['/w/runner/log/runner.log'], /new-user: the plan does not parse on origin\/main/u);
@@ -1766,9 +1766,9 @@ test('a plan that does not parse gets a row in ~/mc/intake/, not a line nobody r
 /** The table is a picture of now, so a plan somebody fixed leaves it by itself. */
 test('the unreadable table is rewritten whole each round', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
-  f.files['/w/intake/unreadable-plans.md'] = 'stale\n';
+  f.files['/w/runner/unreadable-plans.md'] = 'stale\n';
   await createRunner({ deps: f.deps }).round();
-  assert.doesNotMatch(f.files['/w/intake/unreadable-plans.md'], /stale/u);
+  assert.doesNotMatch(f.files['/w/runner/unreadable-plans.md'], /stale/u);
 });
 
 test('--once closes nothing', async () => {
@@ -1781,7 +1781,7 @@ test('--once closes nothing', async () => {
   });
   await createRunner({ deps: f.deps }).round({ once: true });
   assert.deepEqual(f.calls.rmdirs, []);
-  assert.equal('/w/intake/unplanned-workareas.md' in f.files, false);
+  assert.equal('/w/runner/unplanned-workareas.md' in f.files, false);
 });
 
 /* --------------------------------------------------------------- queue */

@@ -555,7 +555,7 @@ export function programmesSection({
  *
  * Whether the branch's content is already on main is deliberately not here:
  * `git merge-tree` is another process per area, and the page is offline and
- * fast. `mc run` writes that into `~/mc/intake/unplanned-workareas.md` once a
+ * fast. `mc run` writes that into `~/mc/runner/unplanned-workareas.md` once a
  * round, which is where the question gets answered.
  */
 export function readUnplanned(root, areas, git = runGit) {

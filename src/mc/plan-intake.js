@@ -9,7 +9,7 @@
  * concerned.
  *
  * So it is written where the other things a machine must not decide are
- * written — `~/mc/intake/`, beside `unplanned-workareas.md`, in the same shape
+ * written — `~/mc/runner/`, beside `unplanned-workareas.md`, in the same shape
  * for the same reason: a table rewritten whole each round, so a plan somebody
  * fixed leaves the list by itself, and `mc brief --collect` raises it.
  *

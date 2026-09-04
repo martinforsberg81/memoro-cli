@@ -77,6 +77,47 @@ export function workAreaPath(name, env = process.env) {
   return join(workRoot(env), name);
 }
 
+/**
+ * `~/mc/runner/` — everything the runner writes about its own rounds:
+ * `runner.json`, `current-<repo>.json`, `held.json`, `log/`, and the three
+ * tables below.
+ *
+ * The tables used to live in `~/mc/intake/`, which was the wrong room for a
+ * reason that only showed once the inbox was asked to drain: `mc run` rewrites
+ * `unplanned-workareas.md` and `unreadable-plans.md` whole every round, so a
+ * turn that read one and filed it away would find it back next round, and the
+ * round after, forever. They are not material somebody dropped in an inbox —
+ * they are the runner's own output about its own rounds, and they belong beside
+ * the rest of it.
+ *
+ * The names live here, with the rest of the work root's shape, for the same
+ * reason `PLAN_HOME` and `WORK_DEPS` do: the runner writes them and
+ * `mc brief --collect` reads them, and two copies of one word is how the two
+ * drift apart.
+ */
+export const RUNNER_HOME = 'runner';
+
+/** Appended when a project is archived whose `project_log.md` row says `doc: none`. */
+export const UNDOCUMENTED_CLOSURES = 'undocumented-closures.md';
+/** Rewritten every round: the folders under `~/mc` no project on main explains. */
+export const UNPLANNED_WORKAREAS = 'unplanned-workareas.md';
+/** Rewritten every round: the plans on `origin/main` the schema refuses. */
+export const UNREADABLE_PLANS = 'unreadable-plans.md';
+
+export function runnerDir(env = process.env) {
+  return join(workRoot(env), RUNNER_HOME);
+}
+
+/** One of the three tables, by its filename constant. */
+export function runnerTablePath(file, env = process.env) {
+  return join(runnerDir(env), file);
+}
+
+/** The same path as the brief names it to a person, so the two cannot disagree. */
+export function runnerTableLabel(file) {
+  return `\`~/mc/${RUNNER_HOME}/${file}\``;
+}
+
 export function workAreaStatePath(name, env = process.env) {
   return join(workAreaPath(name, env), '.mc.json');
 }

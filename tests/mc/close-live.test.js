@@ -105,7 +105,7 @@ describe('closing a workarea, for real', () => {
 
   it('never removes the workarea no project explains, and writes it where mc brief looks', () => {
     assert.equal(existsSync(join(fx.work, 'orphan', 'memoro-cli')), true);
-    const text = readFileSync(join(fx.work, 'intake', 'unplanned-workareas.md'), 'utf8');
+    const text = readFileSync(join(fx.work, 'runner', 'unplanned-workareas.md'), 'utf8');
     assert.match(text, /# Workareas with no project on main/u);
     // Asked of content, not of commit counts: this branch has a commit main
     // does not, so it is `ahead` and something would be lost.

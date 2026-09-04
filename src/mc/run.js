@@ -26,12 +26,12 @@
  * last row in runs.tsv ends `merged` is removed: worktree handed back, local
  * branch deleted, everything it kept beside its checkout moved to
  * `runner/log/closed/<name>/`. A workarea no project explains at all is never
- * removed by a machine; it is written to `~/mc/intake/unplanned-workareas.md`
+ * removed by a machine; it is written to `~/mc/runner/unplanned-workareas.md`
  * instead. The rules are in close-workarea.js.
  *
  * The same holds for a plan on origin/main that does not parse: the runner can
  * hand out no step from it and must not guess at what its author meant, so it
- * goes to `~/mc/intake/unreadable-plans.md` (plan-intake.js) rather than to a
+ * goes to `~/mc/runner/unreadable-plans.md` (plan-intake.js) rather than to a
  * `runner.log` line nobody reads. `new-user` had that line every round for a
  * day, and the fault was five paragraphs of prose in a validated field.
  *
@@ -95,9 +95,11 @@ import { readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { handOver, readRunner } from './run-control.js';
-import { collectHelper, describeDigest, HELPER_REPOS, intakeDir, unreadableSections } from './helper-collect.js';
+import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
-import { workRoot } from './paths.js';
+import {
+  UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerTablePath, workRoot,
+} from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
 import { runMergeRound } from './repo-merge.js';
 import { kindFor, pidAlive } from './status-collect.js';
@@ -291,8 +293,13 @@ export function createRunner({
     // scratch directory a session left beside its checkout. Moved, never
     // deleted: the folder is what goes, not what somebody wrote in it.
     closed: join(root, 'runner', 'log', 'closed'),
-    unplanned: join(intakeDir(deps.env), 'unplanned-workareas.md'),
-    unreadable: join(intakeDir(deps.env), 'unreadable-plans.md'),
+    // The three tables the round writes about its own rounds, beside the rest
+    // of the runner's state rather than in `~/mc/intake/`: two of them are
+    // rewritten whole every round, so an inbox that drained one would find it
+    // back the next round, forever (paths.js).
+    undocumented: runnerTablePath(UNDOCUMENTED_CLOSURES, deps.env),
+    unplanned: runnerTablePath(UNPLANNED_WORKAREAS, deps.env),
+    unreadable: runnerTablePath(UNREADABLE_PLANS, deps.env),
   };
   const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
   const remove = deps.remove || (() => {});
@@ -814,9 +821,8 @@ export function createRunner({
     if (!pr) { say(`archive: ${repo.name} — the PR could not be opened (${created.stderr.trim().split('\n').at(-1) || 'no number'})`); return { archived: [], landed: [] }; }
 
     if (undocumented.length) {
-      const path = join(intakeDir(deps.env), 'undocumented-closures.md');
-      if (!deps.exists(path)) deps.write(path, UNDOCUMENTED_HEADER);
-      deps.append(path, `${undocumented.join('\n')}\n`);
+      if (!deps.exists(paths.undocumented)) deps.write(paths.undocumented, UNDOCUMENTED_HEADER);
+      deps.append(paths.undocumented, `${undocumented.join('\n')}\n`);
     }
     // Only a merged archive PR lets the workareas go: until the plan is off
     // main, the folder it explains stays where it is.
@@ -956,7 +962,7 @@ export function createRunner({
   }
 
   /**
-   * One row of `~/mc/intake/unplanned-workareas.md`. `branch` is asked of
+   * One row of `~/mc/runner/unplanned-workareas.md`. `branch` is asked of
    * content rather than of commit counts — the runner squash-merges, so
    * "ahead" by commits says nothing (branch-landed.js).
    */

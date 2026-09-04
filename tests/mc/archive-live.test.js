@@ -160,10 +160,10 @@ describe('archiving a done plan, for real', () => {
     assert.doesNotMatch(git(fx.repo, ['branch', '--list', 'mc-archive-*']), /mc-archive-/u);
   });
 
-  it('records the project with no docs/technical note in intake', () => {
-    const intake = join(fx.work, 'intake', 'undocumented-closures.md');
-    assert.equal(existsSync(intake), true);
-    const text = execFileSync('cat', [intake], { encoding: 'utf8' });
+  it('records the project with no docs/technical note in ~/mc/runner/', () => {
+    const table = join(fx.work, 'runner', 'undocumented-closures.md');
+    assert.equal(existsSync(table), true);
+    const text = execFileSync('cat', [table], { encoding: 'utf8' });
     assert.match(text, /\| memoro-cli \| prog-two \| alone \|/u);
     assert.doesNotMatch(text, /\| documented \|/u);
   });

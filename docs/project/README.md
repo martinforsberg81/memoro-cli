@@ -187,7 +187,7 @@ has no uncommitted change and whose last row in `runs.tsv` ends `merged`:
 the worktree is handed back, the local branch deleted, and whatever the
 folder kept beside its checkout moved to `~/mc/runner/log/closed/<name>/`
 (`src/mc/close-workarea.js`). A workarea with no plan on main is never
-removed by a machine — it is listed in `~/mc/intake/unplanned-workareas.md`
+removed by a machine — it is listed in `~/mc/runner/unplanned-workareas.md`
 and on the page, for Martin.
 
 None of that reaches a planning session. `~/mc/plan/<programme>/` holds no
