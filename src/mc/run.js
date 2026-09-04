@@ -92,6 +92,7 @@ import {
 } from './held.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
+import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { handOver, readRunner } from './run-control.js';
@@ -360,9 +361,43 @@ export function createRunner({
   }
 
   /**
-   * Merge origin/main into the area branch — never rebase. The one conflict
-   * resolved here is an identical .gitignore hunk; anything else is left in
-   * progress for a reconcile step.
+   * A conflicted `PLAN.json`, merged by the plan's own rule about who may
+   * write what (`plan-merge.js`) rather than by a session.
+   *
+   * The three sides come out of the index, which is where git keeps them
+   * while a merge is in progress: `:1:` the merge base, `:2:` ours — this
+   * project's branch — and `:3:` theirs, origin/main. Resolved means written
+   * and staged; the commit is `syncMain`'s, once every conflict is gone.
+   *
+   * Returns true when the file is resolved. Every other answer is a line in
+   * runner.log saying which side of the rule it fell off, because the next
+   * reader of that file is deciding whether the refusal was right.
+   */
+  function resolvePlanConflict(worktree, name, path) {
+    const stage = (n) => {
+      const shown = deps.git(worktree, ['show', `:${n}:${path}`]);
+      return shown.ok ? String(shown.stdout ?? '') : null;
+    };
+    const merged = mergePlanText({ base: stage(1), branch: stage(2), main: stage(3) });
+    if (!merged.ok) {
+      say(`${name}: ${path} is not resolvable by the plan's rule — ${merged.why}`);
+      return false;
+    }
+    deps.write(join(worktree, path), merged.text);
+    if (!deps.git(worktree, ['add', '--', path]).ok) {
+      say(`${name}: ${path} was merged by the plan's rule but could not be staged`);
+      return false;
+    }
+    const took = merged.took.length ? merged.took.join(', ') : 'nothing either side had changed';
+    say(`${name}: ${path} resolved by the plan's own rule — ${took}`);
+    return true;
+  }
+
+  /**
+   * Merge origin/main into the area branch — never rebase. Two conflicts are
+   * resolved here without a session: an identical .gitignore hunk, and a
+   * PLAN.json whose two sides wrote to different steps. Anything else — and
+   * any plan the rule refuses — is left in progress for the step session.
    */
   function syncMain(worktree, name) {
     if (!deps.git(worktree, ['fetch', '-q', 'origin']).ok) return { ok: false, conflicts: [] };
@@ -371,8 +406,17 @@ export function createRunner({
     if (conflicts.length === 1 && conflicts[0] === '.gitignore') {
       if (deps.git(worktree, ['checkout', '--theirs', '.gitignore']).ok && deps.git(worktree, ['add', '.gitignore']).ok && deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
     }
-    say(`${name}: merge conflict in: ${conflicts.join(' ')}`);
-    return { ok: false, conflicts };
+    const left = conflicts.filter((path) => !(isPlanPath(path) && resolvePlanConflict(worktree, name, path)));
+    if (!left.length) {
+      if (deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
+      // Resolved, staged, and the commit refused: not a conflict any more and
+      // not a merge either. The round skips the project rather than start a
+      // session in a worktree mid-merge.
+      say(`${name}: ${conflicts.join(' ')} resolved, but the merge would not commit`);
+      return { ok: false, conflicts: [] };
+    }
+    say(`${name}: merge conflict in: ${left.join(' ')}`);
+    return { ok: false, conflicts: left };
   }
 
   /**

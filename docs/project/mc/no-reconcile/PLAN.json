@@ -25,7 +25,7 @@
       "check": "In a scratch clone: branch A appends a row, branch B a different one, `git merge` succeeds, `tail` shows both. Output pasted in the PR."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A `PLAN.json` conflict where the two sides changed different steps is resolved by the runner with no session.",
       "check": "A test builds the three stages of such a conflict, runs the resolver, and asserts the result carries both sides' changes and passes `validatePlan`. A conflict the rule cannot resolve is left in progress, asserted separately."
     },
@@ -71,7 +71,7 @@
     },
     {
       "title": "A plan conflict is resolved by the plan's own rule",
-      "status": "ready",
+      "status": "done",
       "done_when": "A `PLAN.json` conflict whose two sides changed different steps is resolved by the runner without a session, and one that breaks the rule is left in progress.",
       "instruction": [
         "29 of the 166 conflicting files measured in `~/mc/runner/log/runner.log` were `PLAN.json` or `PLAN.md`. The shape is always the same: main carries a plan a later round wrote to, the branch carries the same plan with its own step edited. That is exactly the comparison the runner already knows how to make — `unauthorisedChanges(before, after, index)` in `src/mc/plan-schema.js` says which fields belong to whom: everything outside `steps[index]` and `met` is not the session's.",
@@ -80,8 +80,13 @@
         "Where it goes: `syncMain` (`src/mc/run.js`) already has one special case of this shape — an identical `.gitignore` hunk, resolved inline with `checkout --theirs` and a commit. This is the second, and it is bigger than an inline branch; put the rule in its own module beside `plan-schema.js` so it can be tested without a git repository, and call it from `syncMain` with the conflicted paths.",
         "Test the rule, not the plumbing: build the three stages as objects, assert the merged result carries both sides' changes and passes `validatePlan`, and assert each refusal case returns no result. Then `npm test`."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The rule is `src/mc/plan-merge.js`: `mergePlans({ base, branch, main })` over three parsed plans, `mergePlanText` over the three texts, and `isPlanPath` for the conflicted path. The three sides are named rather than ordered on purpose — `branch` is ours and `main` is theirs, and getting them the wrong way round would hand the branch's step edits to main's authority and silently lose them. The frozen field list is now `PLAN_FROZEN_FIELDS` in `plan-schema.js`, read by both `unauthorisedChanges` and the merge, so the check and the merge cannot drift apart.",
+        "Step 3 changes `syncMain`'s caller, not `syncMain` itself. What is there now: every conflicted path that `isPlanPath` recognises goes through `resolvePlanConflict`, which reads `:1:`/`:2:`/`:3:` with `git show`, writes the merged file, and stages it; when nothing is left conflicted the runner commits the merge itself. Files the rule refuses stay conflicted and are returned in `sync.conflicts` — so `sync.conflicts` is now what is *left*, which is exactly the list step 3 wants to name in the step session's preamble. One case worth knowing: everything resolved but `git commit` refusing returns `{ ok: false, conflicts: [] }`, which the round already treats as a skip, so no session starts in a worktree mid-merge.",
+        "A resolved plan is re-serialised (`JSON.stringify(plan, null, 2)`), not patched, so the merge commit carries a canonically formatted file whatever the two sides looked like. That is safe because nothing reads a plan as text — the trespass check, the page and the runner all parse it — but it does mean the merge commit's diff of a hand-formatted plan can be wide.",
+        "Measured against real git, not only against the fixture: in a scratch repo, two branches editing different steps of the same `PLAN.json` conflict, `git show :1:/:2:/:3:` returns base/ours/theirs as assumed, and writing `mergePlanText`'s output plus `git add` plus `git commit --no-edit` completes the merge with no `MERGE_HEAD` left and both sides' changes in the file."
+      ],
+      "pr": 610,
       "blocked_by": null
     },
     {
