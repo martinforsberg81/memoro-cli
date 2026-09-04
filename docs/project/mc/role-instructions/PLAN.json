@@ -1,0 +1,129 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "Every session — foreground or headless — knows what to do with what it found that is not its job: it writes a proposal, rather than handing Martin a paragraph he has to file himself. And it settles the practical route to main by reading, rather than by asking.",
+    "The rules that apply to every session are written once, in one file every role inherits, and the catalogue holds only what each role needs that no other role does."
+  ],
+  "contract": [
+    "A loose thread becomes `~/mc/proposals/<date>-<slug>.md`, one file per thing. Every role may write one — brief, helper, intake, plan, step, worker, reconcile and repair alike (Martin, 2026-09-04: \"Lösa trådar hör hemma i antingen mc/intake/ eller mc/proposals/. Inte direkt i ett svar till mig.\").",
+    "`~/mc/intake/` stays what it is: the three tables `mc run` writes (`unplanned-workareas.md`, `unreadable-plans.md`, `undocumented-closures.md`) and the day's `errors-<date>.md` that `mc helper --intake` hands to its turn. Nothing here gives it a reader for a file put there by hand.",
+    "What a session is told is assembled in one place. A rule that applies to every session is written once and reaches every role, `plan` included.",
+    "`canon/roles/plan.md` stays frontmatter only. A planning session's text is its first prompt (Martin, 2026-08-31; `docs/technical/mc-plan.md:147`), so whatever reaches it reaches it through `planLaunch`.",
+    "The catalogue is cut against the text it holds today. The 444-line count in the `roles-say-less` proposal was measured on 2026-08-31 and that cut landed; the eight files now hold 330 lines of different text."
+  ],
+  "out_of_scope": [
+    "Giving `~/mc/intake/` a reader for free-form files, and any change to what `helperPrompt` hands the intake turn.",
+    "The shape of a proposal file — its frontmatter, its sections, whether it is prose or a form. That belongs to the `proposals-are-prose` proposal.",
+    "Which model each role runs. `plan` is on `opus` where the original concept said `fable`; it stays as it is, and the question is carried by `~/mc/proposals/2026-09-04-role-models-and-mc-instructions.md`.",
+    "An `AGENTS.md` under `~/mc/`, and any instruction for a session standing there that is not a role. Same proposal carries it.",
+    "`mc plan`'s lifecycle — how a planning session is closed or discarded.",
+    "The user's own role catalogue under `MC_ROLES_DIR` or `<mc home>/roles`. Only `canon/roles/` is touched.",
+    "Any change to what the runner does with a step's `blocked_by`, or to `PLAN.json`'s schema."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "Every canon role's assembled instructions carry the loose-thread rule, and the text of it exists in exactly one file.",
+      "check": "A test reads each of the eight canon roles through the assembler and asserts the rule is present. `grep -rl` for its opening phrase across `canon/` names one file."
+    },
+    {
+      "met": false,
+      "criterion": "The turn-cost rule is written once.",
+      "check": "`grep -rl 'A turn is the unit of cost' canon/` names one file. Today it names four (`brief`, `helper`, `reconcile`, `worker`, byte-identical) with variants in `step` and `repair`."
+    },
+    {
+      "met": false,
+      "criterion": "All four launch paths take their instructions from one function.",
+      "check": "`grep -rn \"'\\\\n\\\\n---\\\\n\\\\n'\" src/` finds the join only inside `roles.js`. `work-open.js:93`, `work-open.js:342`, `run.js:1224` and `helper-turn.js:209` each call it."
+    },
+    {
+      "met": false,
+      "criterion": "The shared file is not mistaken for a role.",
+      "check": "A test asserts `listRoles` and `mc roles list` do not name it, with the file present in the catalogue directory under test."
+    },
+    {
+      "met": false,
+      "criterion": "The runner still skips a kind whose role file is missing.",
+      "check": "A test drives a round with `canon/roles/repair.md` absent and asserts the skip line still fires — the check reads the role's own body, not the assembled text."
+    },
+    {
+      "met": false,
+      "criterion": "The catalogue is shorter than it is today and nothing that only a session can judge was cut.",
+      "check": "`wc -l canon/roles/*.md` totals under 260 (today: 330). The PR body lists every removed passage with the role it came from and where it went — the shared file, a document under `docs/technical/`, or nowhere."
+    },
+    {
+      "met": false,
+      "criterion": "How a session's instructions are assembled is described in one place under `docs/technical/`.",
+      "check": "The four existing descriptions (`mc-run.md:356`, `mc-plan.md:147-158`, `mc-helper.md:336`, `mc-brief.md:67`) either point at that one place or are the one place; no fifth account of the mechanism exists."
+    }
+  ],
+  "documents": [
+    { "label": "What a PLAN.json is, and who writes what", "path": "../../README.md" },
+    { "label": "The plan role is frontmatter only, and why", "path": "../../../technical/mc-plan.md" },
+    { "label": "How the runner assembles a session's instructions", "path": "../../../technical/mc-run.md" },
+    { "label": "The role files the helper and intake turns read", "path": "../../../technical/mc-helper.md" }
+  ],
+  "steps": [
+    {
+      "title": "One place assembles what a session is told",
+      "status": "ready",
+      "done_when": "All four launch paths get their instructions from one function in `roles.js`, and the turn-cost rule lives in one file instead of six.",
+      "instruction": [
+        "There are four places a session's instructions are built, and they do not agree. `work-open.js:93` and `work-open.js:342` call `instructionsFor(toolId, profile, overlay)` from `roles.js:170`, which is `[profile, overlay].filter(Boolean).join('\\n\\n---\\n\\n')`. `run.js:1224` and `helper-turn.js:209` write that same join out by hand: `[await deps.profile(), role.overlay].filter(Boolean).join('\\n\\n---\\n\\n')`. Make one function the single door — it takes the profile and the role and returns the profile, the shared text, then that role's own body, joined the way they are joined today — and have all four call it. The delivered text for an existing role must be identical apart from the shared section this step introduces.",
+        "The shared text is a file under `canon/`, which `package.json` already ships (`files` lists `canon`). Where it goes matters mechanically: `listRoles` (`roles.js:70`) reads every `*.md` in a catalogue directory and makes a role out of each, and `mc roles list` (`src/mc/commands/roles.js`) prints what it returns. A file dropped into `canon/roles/` as `common.md` would be listed as a role named `common`. Two shapes work — `canon/common.md` beside `roles/`, or `canon/roles/_common.md` with `listRoles` skipping a leading underscore. Pick one, and say in the PR why. Note that `listRoles` reads the *user's* directory rather than canon, so the second shape only bites if a user copies the file across; the first cannot bite at all.",
+        "Move the turn-cost paragraph into it. It begins \"A turn is the unit of cost, not a tool call\" and is byte-identical from that line to end-of-file in `brief.md`, `helper.md`, `reconcile.md` and `worker.md` — verified by md5 of the tail of each. `step.md` and `repair.md` carry expanded variants: `step.md` has six bullets on step economics with its own measurement (59 sessions, 2026-09-01..03), and `repair.md` adds a clause about running `npm test` in the foreground rather than backgrounding and polling. The shared file takes the common statement and its measurement; those two keep only the clauses that are theirs and lose the restatement.",
+        "Leave `run.js:1209` reading the role's own body. It is `if (!role?.overlay) { say(`${name}: canon/roles/${kind}.md is missing — skip`); return 'skipped'; }` — the runner's only test that a role file is installed at all. If the shared preamble were folded in before that check, a missing `repair.md` would look present and the runner would launch a ninety-minute session with no instructions for what it is doing.",
+        "For the same reason, do not fold the shared text into `readCanonRole`'s `overlay`. `tests/mc/roles-decisions.test.js` reads `readCanonRole(name).overlay` and asserts on one role's own words, and `mc roles show <role>` prints it as that role's text. `overlay` stays the role's body; the assembler is where the two meet.",
+        "Run `npm test`. `tests/mc/roles.test.js`, `tests/mc/roles-decisions.test.js` and `tests/mc/canon.test.js` all read this text or this catalogue."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Where a loose thread goes, and who settles the route",
+      "status": "ready",
+      "done_when": "The shared file carries both rules, every canon role's assembled instructions are asserted to hold them, and a planning session is told the same through `planLaunch`.",
+      "instruction": [
+        "Two rules go into the shared file step 1 created. Write them in the catalogue's voice; what they have to say is below, and the second half of each is the part that is usually dropped.",
+        "First: what you found that is not your job is a proposal, not a paragraph in your answer. One file per thing, `~/mc/proposals/<date>-<slug>.md`, prose, saying which system it belongs to — `memoro` is the deployed service, `memoro-cli` is mc itself on this machine — and what you actually read to stand behind it. Three things in one breath are three files. Then say in one line that you wrote it, and carry on with the work you were given. `~/mc/intake/` is not the place, and the file has to say why or a session will pick it anyway: intake holds the three tables `mc run` writes and the day's digest, `helperPrompt` (`helper-turn.js:63`) hands that turn its material explicitly rather than sending it to read the directory, and `brief-collect.js:533` reads exactly three filenames. A file put there by hand reaches no reader.",
+        "Second: the practical route is yours to settle, not to ask about. How work reaches `main` is written down — the branch the worktree stands on, one pull request from it, the runner's gate, `mc merge`; `docs/technical/mc-run.md` and `docs/technical/mc-merge.md` have it. A question about the route is one you answer by reading. What reaches Martin is the outcome: what is true now, what changed, what you actually ran and what it said, and what is still open or broken. Not the bookkeeping that got you there.",
+        "The `plan` role is the one that cannot take this from its file: `canon/roles/plan.md` is frontmatter only and stays that way (#580; `docs/technical/mc-plan.md:147`). `planLaunch` in `src/mc/commands/plan.js` builds the whole of what a planning session is told and passes `overlay: role.overlay || null` — which is null — to `openInWorkArea`. Either make the assembler supply the shared text on that path too, or have `planLaunch` include it. Decide, and say which in the PR; the first keeps the rule in one place, the second keeps `planLaunch` the single account of what a planning session is told. Both are defensible and the plan does not pick for you.",
+        "The test goes in `tests/mc/roles-decisions.test.js`, which already reads canon roles by name and asserts on their wording. Do not extend its `AUTHORS` list — that list is `['worker', 'step', 'repair']`, the roles that put a question to Martin, and the file explains at length why `plan` is not on it. Add a separate block that walks all eight canon roles through the assembler from step 1 and asserts both rules are in what a session would receive.",
+        "Run `npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Read the eight roles against what they say today",
+      "status": "ready",
+      "done_when": "`wc -l canon/roles/*.md` totals under 260, and every passage removed is named in the PR body with the role it came from and where it went.",
+      "instruction": [
+        "This is the `roles-say-less` cut, re-aimed. That proposal measured 444 lines across seven roles on 2026-08-31 and the cut landed — the catalogue went to 185. It has grown back to 330 across eight files: brief 64, helper 35, intake 30, plan 6, reconcile 29, repair 54, step 75, worker 37. The number is not the target; the kinds of text the proposal named are, and they came back. Steps 1 and 2 take the two cases already known. Read all eight files whole and find the rest.",
+        "Three kinds to look for. Text duplicated across roles, now that there is a shared file to put it in. A role explaining another role's job, or a mechanism its own session does not operate. And a passage that is now written in `docs/technical/` or enforced in code, where the role can cite rather than restate.",
+        "Candidates read while planning, none of them decided here. `brief.md`'s *Held before merge* section is thirteen lines restating what `docs/technical/mc-brief.md:67` documents and what the runner already does — but it is also the only place the three allowed outcomes are named to the session that chooses between them, so cutting it may cost more than it saves. `worker.md` and `step.md` overlap heavily: both describe which `PLAN.json` fields the session may write, both describe the `blocked` / `blocked_by` shape. They are different sessions with different guarantees — `step` is compared before and after by the runner, `worker` is not — so decide per passage, not per file, and say why in the PR.",
+        "Do not cut judgement a session cannot derive from the code in front of it. `intake.md`'s *volume is not severity* and *three is a lot*, `brief.md`'s *never lay out options for him to choose between*, `repair.md`'s *a green bought by changing the measurement is the one outcome worse than the red* — these are the reason the file exists. Every role also keeps its opening: who this session is, and what it delivers.",
+        "Run `npm test`. `tests/mc/roles-decisions.test.js` asserts on phrases in `worker`, `step` and `repair`; a cut that moves one of those phrases makes that test the thing to read, not the thing to edit around."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close out: one account of how a session is instructed",
+      "status": "ready",
+      "done_when": "`docs/technical/` describes the assembly in one place, the other accounts point at it, and `docs/project/project_log.md` has the row.",
+      "instruction": [
+        "There is no `docs/technical/mc-roles.md`, and the mechanism is currently described in four documents from four angles: `mc-run.md:356` (what the runner wraps around a step prompt), `mc-plan.md:147-158` (the plan role's emptiness and `instructionsFor`), `mc-helper.md:336` (a table of which role file each turn reads), `mc-brief.md:67` (what `brief.md` allows a brief session to do). Write one account — a new `mc-roles.md`, or one of those four made the account and the others pointed at it — covering the catalogue, the shared file, the assembler, which paths call it, and why the runner's missing-role check reads the role's own body. Say in the PR which shape you chose. A fifth parallel description is the thing this project exists to stop.",
+        "Add the row to `docs/project/project_log.md`.",
+        "The proposal this project consumed, `~/mc/proposals/2026-08-31-roles-say-less.md`, was deleted by the planning session that wrote this plan and named in its pull request. Its two unconsumed questions — which model each role runs, and whether `~/mc/` should have instructions of its own — were carried to `~/mc/proposals/2026-09-04-role-models-and-mc-instructions.md` in the same move. Nothing here removes either file."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}

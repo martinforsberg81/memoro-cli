@@ -120,6 +120,35 @@ to carry the age of.
   cap is one line and addresses the cause; deleting 22 test files addresses the
   symptom.
 
+## 5 · A loose thread is a proposal, and every role may write one
+
+`ruling · 2026-09-04` · raised in the `mc` planning session
+
+Sessions were handing Martin what they had found but were not going to do —
+loose threads, and the practical bookkeeping of getting work to `main` — inside
+their answer to him, where it is his to file.
+
+> **Beslut:** "Jag vill inte att du diskuterar praktikaliteter med mig. För
+> dialog med mig om design-, arkitektur eller viktiga UI-frågor. Om det gäller
+> eventuella förbättringar skriver du en proposal. Allt annat förväntar jag mig
+> att du löser." … "Lösa trådar hör hemma i antingen mc/intake/ eller
+> mc/proposals/. Inte direkt i ett svar till mig." (Martin, 2026-09-04)
+
+Asked which sessions may write one, he ruled **all of them** — brief, helper,
+intake, plan, step, worker, reconcile and repair alike. `~/mc/proposals/` is the
+channel: it is read at the brief. `~/mc/intake/` is not, and the planning
+session confirmed why — `helperPrompt` (`helper-turn.js:63`) hands the intake
+turn its material explicitly rather than sending it to read the directory, and
+`brief-collect.js:533` reads three filenames. A file put there by hand reaches
+no reader, so nothing here tells a session to leave one.
+
+Asked how a rule that applies to every role should be written, he ruled **one
+shared entry every role inherits, and the catalogue cut in the same project** —
+the turn-cost paragraph is byte-identical in four role files today with variants
+in two more.
+
+**Carried by [`role-instructions/PLAN.json`](role-instructions/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
