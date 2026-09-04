@@ -122,7 +122,7 @@
         "One wording note on criterion 4, decided rather than asked: it names \"the page's key line\", and the page has no key line — no legend and no verb list. What it has is the section rows and, at a terminal, a number that opens a project. So what the page says about a deploy is the production line under the RUNNER block that step 3 drew, and the criterion's own `check` names only `mc --help`, the note on main and the log row. All three are done; nothing was added to the page here.",
         "What the note names as open, so it is not rediscovered: rollback (a verb that puts a previous sha back — now possible, because there is a record to roll back to) and memoro's `scripts/release-race.mjs`, whose deploy stage could call this verb. Both were `out_of_scope` for this project and both are one plan away. The one behavioural thing worth watching after a real deploy is the pipe: mc tees the script's output instead of inheriting it, so the child sees a pipe and not a terminal, and a tool inside the deploy that draws a progress bar only for a TTY will print plain lines. If that turns out to matter, the fix is a pty, not a smaller record."
       ],
-      "pr": null,
+      "pr": 596,
       "blocked_by": null
     }
   ]
