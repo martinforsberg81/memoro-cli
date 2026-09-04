@@ -138,6 +138,60 @@ export function inFlight(openPrs = []) {
 }
 
 /**
+ * A pull request the runner would not land is not simply work in flight.
+ *
+ * `inFlight` refuses the project every round while such a pull request is
+ * open, and that refusal is right for work a session is still doing and wrong
+ * for work nothing is going to finish: the seven held on 2026-09-03..04 each
+ * stood still until a person read runner.log. So before the refusal, the round
+ * asks `held.json` — a pull request held with no repair yet gets one repair
+ * session, in the workarea, on its own branch, told exactly why it was held.
+ *
+ * One repair per pull request, and no loop: still held after it, and it is the
+ * brief's. `repairs` is the whole memory of that, and the skip says so, because
+ * `#N is open — not starting a step` says nothing about who is expected to act.
+ *
+ * Pure over the entries and the open list. Returns `{ kind: 'repair', entry }`,
+ * a `{ kind: null, skip }` refusal, or null when nothing of this project's is
+ * held and the ordinary rules apply.
+ */
+export function heldRepair({ entries = [], openPrs = [], project = null, repo = null } = {}) {
+  if (!openPrs.length) return null;
+  const open = new Map(openPrs.map((pr) => [Number(pr.number), pr]));
+  const mine = entries.filter((entry) => entry.project === project
+    && (entry.repo == null || repo == null || entry.repo === repo)
+    && open.has(Number(entry.pr)));
+  if (!mine.length) return null;
+  const first = mine.find((entry) => !entry.repairs);
+  if (!first) {
+    const [waiting] = mine;
+    return {
+      kind: null,
+      reason: 'held-after-repair',
+      skip: `#${waiting.pr} is held before merge after a repair — the brief's`,
+      entry: waiting,
+    };
+  }
+  // The branch off GitHub when the entry does not name one: an entry written
+  // by an older runner, or by hand, still has a pull request that is on
+  // something, and a repair session has to stand on it.
+  const branch = first.branch || open.get(Number(first.pr))?.headRefName || null;
+  return { kind: 'repair', entry: { ...first, branch } };
+}
+
+/**
+ * The step a pull request carries, for judging what a session was allowed to
+ * change in the plan. The step that names it is the answer when the plan has
+ * one — a repair works on a step whose session already wrote its own `pr` —
+ * and the deliverable step is the answer before that edit has landed.
+ */
+export function stepOfPr(plan, pr) {
+  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+  const at = steps.findIndex((step) => step && Number(step.pr) === Number(pr));
+  return at >= 0 ? at : deliverableStep(plan).index;
+}
+
+/**
  * The branch a workarea moves to when the one it stands on has already
  * landed: `<name>-<n>`, the smallest `<n>` no branch is using. `<name>` is
  * the first of them, so the count starts at two.
@@ -387,6 +441,59 @@ export function stepPrompt({ name, repo, planPath, planText, step, index, now = 
     '----- PLAN.json -----',
     planText,
   ].join('\n');
+}
+
+/**
+ * The one repair session a held pull request gets, told what the gate saw.
+ *
+ * Everything the session needs that it cannot read off the branch: which pull
+ * request, which branch, why the runner would not land it, and — where the
+ * hold came from a gate — every red test by name and the output of every
+ * command gate that failed. A session told `sql:pr-ci — exit 1` and nothing
+ * else guesses; that is what happened on 2026-09-03, three rounds long.
+ */
+export function repairPrompt({ name, repo, pr, branch, reason, note = null, red = [], gates = [] }) {
+  const lines = [
+    `You are in the \`${name}\` workarea of ${repo} (this worktree), on branch`,
+    `\`${branch}\`, whose pull request #${pr} the runner would not land:`,
+    '',
+    reason,
+    '',
+  ];
+  if (red.length) {
+    lines.push(`The ${red.length} test${red.length === 1 ? '' : 's'} the gate found red, all of them:`, ...red.map((test) => `  ${test}`), '');
+  }
+  for (const gate of gates) {
+    lines.push(`The gate \`${gate.name}\` failed. What it printed:`, ...String(gate.output).split('\n').map((line) => `  ${line}`), '');
+  }
+  lines.push(
+    'Make it green and push to the same branch — the runner lands it after you.',
+    'Do not open another pull request, do not merge it yourself, do not lower a',
+    'threshold and do not delete or skip a test to pass. The gate decides; a',
+    'repair obeys it.',
+    '',
+  );
+  if (note === 'plan-trespass') {
+    lines.push(
+      'The problems above are the plan boundary: undo the change to any step that',
+      "is not the one this pull request carries, and to the goal, the contract, the",
+      "scope and the criteria themselves. Keep that step's own `status`, `pr` and",
+      '`comments`, and `met` on the criteria it met.',
+      '',
+    );
+  }
+  lines.push(
+    'If green needs a decision — an SQL admission, a change to the contract, a',
+    'threshold somebody has to agree to — do not take it. Set the step this pull',
+    'request carries to `blocked` with `blocked_by: { "kind": "decision" |',
+    '"project", "name": … }`, say in the pull request what the answer is about with',
+    'one recommendation rather than a menu, push, and stop.',
+    '',
+    'This is the one repair session this pull request gets. If it is still held',
+    "after you, it is a person's, through the brief — so say what you found either",
+    'way.',
+  );
+  return lines.join('\n');
 }
 
 export function reconcilePrompt({ name, repo, conflicts }) {

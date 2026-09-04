@@ -25,7 +25,7 @@ import { readCanonRole } from '../../src/mc/roles.js';
  * also the one session Martin is sitting in front of: a question does not have
  * to become anything to reach him, it can be asked.
  */
-const AUTHORS = ['worker', 'step'];
+const AUTHORS = ['worker', 'step', 'repair'];
 
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
