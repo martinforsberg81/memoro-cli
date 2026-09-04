@@ -206,13 +206,13 @@ export function nextBranch(name, taken = []) {
  * already in flight and nothing is started; `plan` is null when no PLAN.md
  * exists in the worktree.
  *
- * A merge left in conflict is no longer one of the answers here. It used to
- * be the first of them — `conflicts.length` returned a `reconcile` kind
- * before the plan was so much as looked at, and the round did not even read
- * the plan while a merge was in progress. A conflict is now something the
- * step session is *told* about (`stepPrompt`'s preamble): it resolves the
- * merge and then does its step, in the session that had to read the code
- * anyway, rather than a cold session that finishes a merge and stops.
+ * A merge left in conflict is not one of the answers here. It used to be the
+ * first of them — `conflicts.length` returned a kind of its own before the
+ * plan was so much as looked at, and the round did not even read the plan
+ * while a merge was in progress. A conflict is now something the step session
+ * is *told* about (`stepPrompt`'s preamble): it resolves the merge and then
+ * does its step, in the session that had to read the code anyway, rather than
+ * a cold session that finishes a merge and stops.
  *
  * Two things the runner used to do here and does not any more, both on
  * Martin's word of 2026-08-29:
@@ -412,9 +412,10 @@ const today = (now) => now.toISOString().slice(0, 10);
  * that the merge is the first thing it does rather than the job.
  *
  * It goes above the body and the body does not change — the step, its
- * `done_when` and what may be written in the plan are all still true. That
- * is the whole of what `reconcile` was: a session that read the conflicting
- * code, resolved it, and stopped. This session has to read that code anyway.
+ * `done_when` and what may be written in the plan are all still true. That is
+ * the whole of what the runner used to spend a session of its own on: a cold
+ * session that read the conflicting code, resolved it, and stopped. This
+ * session has to read that code anyway.
  */
 function conflictPreamble(conflicts) {
   if (!conflicts.length) return [];
@@ -525,16 +526,6 @@ export function repairPrompt({ name, repo, pr, branch, reason, note = null, red 
     'way.',
   );
   return lines.join('\n');
-}
-
-export function reconcilePrompt({ name, repo, conflicts }) {
-  return [
-    `You are working in the \`${name}\` workarea of ${repo} (this worktree). A`,
-    '`git merge origin/main` is in progress on this branch and stopped on',
-    `conflicts in: ${conflicts.join(' ')}`,
-    '',
-    'Resolve them as your role says, commit the merge, push, and stop.',
-  ].join('\n');
 }
 
 /* --------------------------------------------------------------- headless */
