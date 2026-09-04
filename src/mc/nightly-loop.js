@@ -229,8 +229,12 @@ export async function nightlyLoop({
  * round fetches for itself a moment later, and a scheduler that could not
  * reach the network should still say what it could not do rather than fail at
  * the door.
+ *
+ * Exported because `mc test nightly status` reports one block per repository
+ * and must report on the ones the tick will actually measure — a second list
+ * there could name a repository the loop never visits.
  */
-async function knownRepos({ env = process.env } = {}) {
+export async function knownRepos({ env = process.env } = {}) {
   const report = await repoStatus({ env, offline: true });
   return (report.repos || []).map((repo) => ({ name: repo.name, path: repo.path }));
 }
