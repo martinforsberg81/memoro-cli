@@ -88,7 +88,12 @@ listed — and what moves sits where the eye already is:
   model, elapsed against budget, pid), a pending `~/mc/runner/STOP`, the lane
   files whose process is gone, and one line of the day behind it: steps,
   merged, open, failed, timed out, and an estimated **list-price** cost. The
-  machine, and nothing else.
+  machine, and nothing else. Under the day, one line for **production**:
+  `production <sha> · deployed <age> ago by <holder>`, from the last `deployed`
+  row of `~/mc/runner/log/deploys.tsv`. When the `/api/version` the helper last
+  cached names another sha, the line says so in yellow — that is a deploy made
+  outside the record, or one that did not take, and only a person can say which.
+  The line is absent where neither source knows anything.
 - **HELPER** and **BRIEF** — one row each, drawn open or not. They are
   singletons, so *"is the helper running?"* is a question an empty row answers
   as well as a full one.
@@ -117,6 +122,8 @@ the helper and the sessions already write.
 | a pull request left unlanded | `~/mc/runner/held.json` (project, repo, pr, branch, reason, note, since, repairs, and — when a gate held it — `red` and `gates` for the repair session to read) | `mc run`, whenever a landing does not land |
 | the queue | `~/mc/queue.md` | Martin, at the brief |
 | what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
+| what mc deployed | `~/mc/runner/log/deploys.tsv` (sha, build, holder, outcome, the live version verified) | `mc deploy`, before and after |
+| what production answers it is | `~/mc/runner/version.json` (`GET /api/version`, with the moment it was asked) | `mc helper --collect` |
 | someone is sitting here | `tmux ls`, `~/mc/runner/foreground/<pid>.json` | tmux, `foreground.js` |
 | plans and open PRs | `~/mc/runner/plans.json`, `~/mc/runner/prs.json` | the page itself (below) |
 
@@ -284,6 +291,10 @@ Everything else is structure, and structure is quiet:
 | RUNNER | `■ STOP requested` | bold red |
 | RUNNER | a stale runner file | red |
 | RUNNER | a quota answer under 6 h old, older | yellow, grey |
+| RUNNER | the production sha, the rest of that line | white, grey |
+| RUNNER | `/api/version` naming another sha than the last deploy | bold yellow |
+| RUNNER | a deploy running now, one that has not come back in an hour | green, bold yellow |
+| RUNNER | a deploy that failed after the last good one | yellow |
 | RUNNER | between steps, no runner, the day's line, the tool and pid | grey |
 | HELPER, BRIEF | the `●` and the verb it is running | cyan |
 | HELPER, BRIEF | `·  not open` | dim grey |

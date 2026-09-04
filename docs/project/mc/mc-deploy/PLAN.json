@@ -26,12 +26,12 @@
       "check": "Driven by tests with `deploy.mjs` faked: the confirmation text names the SHA and the gap; a `no` ends it with nothing run; a `yes` runs `npm run deploy` in `~/memoro` with the lease held and released after; without a TTY it exits 2 and says so. Then one real deploy by Martin, watched."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Every deploy through the verb leaves a row — SHA, build number, who, started, ended, outcome, the live version `deploy.mjs` verified — in `~/mc/runner/log/deploys.tsv`, and a half-done deploy is a row that says where it stopped.",
       "check": "The test that fakes a failing `deploy.mjs` finds a row with the failure; the page and `mc --json` show the last deploy in the RUNNER block's day line or beside it."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The page, the brief and the helper agree on what is in production: the last row of `deploys.tsv` and `GET /api/version` name the same SHA, or the page says they differ.",
       "check": "`page-collect.js` reads the row and the version the helper already fetches; a fixture where the two differ draws the difference; `helper-collect.js`'s `deployState` uses the same row rather than only `/admin/deploy/logs`."
     },
@@ -91,7 +91,7 @@
     },
     {
       "title": "The page, the brief and the helper read the same deploy",
-      "status": "ready",
+      "status": "done",
       "done_when": "The page's RUNNER block carries one line — `production <short sha> · deployed <age> ago by <holder>` — and says in yellow when `GET /api/version` names another SHA than the last row; `~/mc/brief/<date>.md` has a *Production* section with the last deploy and the gap to `main`; `helper-collect.js`'s `deployState` reads the row beside `/admin/deploy/logs`; all driven by fixtures.",
       "instruction": [
         "**The page.** `runnerLines` in `src/mc/page-render.js` draws the day line (`runner up N min · steps …`); add the production line under it, from `page-collect.js` (`nowBlock`/the runner section) reading `deploys.js` and the version the helper caches — do not fetch in the page's collect: the page is offline and instant (`docs/technical/mc-ui.md` § *Why it is instant*); read what `helper --collect` last wrote for `/api/version`, and say its age. A difference between the row and the live version is yellow: it waits on a person.",
@@ -99,7 +99,13 @@
         "**The helper.** `deployState` in `helper-collect.js` computes age from `/admin/deploy/logs`; give it the row as a second source and let the digest say when the two disagree — the webhook writing nothing was the failure mode the comment there describes, and the row is the reading that does not depend on it.",
         "**Tests:** `tests/mc/page.test.js` (the line, the yellow), the brief's section test beside its siblings, `helper-collect.test.js` for the two-source age."
       ],
-      "comments": [],
+      "comments": [
+        "The live version needed a writer before it could have a reader, exactly as step 1's comment warned: nothing fetched `/api/version` except `mc deploy` itself, so `mc helper --collect` now asks it as a sixth source — public, no token, beside `/ping-d1` — and keeps the answer in `~/mc/runner/version.json` with the moment it was asked. The new module is `src/mc/live-version.js`: `writeLiveVersion` (the helper's), `readLiveVersion` (the page's and the brief's, which adds `short` and `age_seconds`). The page still fetches nothing at all. `commands/deploy.js` was left alone — its own `fetchVersionDefault` asks production *now*, which is a different question from what a cache can answer, and the two are ten lines each rather than one seam neither would fit.",
+        "`deployState` in `helper-collect.js` now takes `row` — the last `deployed` line of `deploys.tsv` — beside the webhook's log, and the change that matters is not the extra field but `stale`: the age is the *freshest* of the two sources, so a deploy Martin typed an hour ago is no longer called stale because `/admin/deploy/logs` never heard of it. `disagree` is deliberately **not** a new entry in `failingConditions`. `mc deploy` runs `npm run deploy` on this machine and fires no GitHub Action, so the two sources describing different deploys is the ordinary case from here on; as a failing condition it would be `!`-marked in every digest for ever, which is how a delta stops being read. It is a sentence in the Deploy section instead.",
+        "The page's production line carries three things beyond what `done_when` asked for, all from rows `deploys.tsv` already holds: a deploy that is `running` now (green, and yellow past an hour with *no end recorded* — step 2's comment named that row as this step's to draw), a deploy that failed after the last good one with the step it stopped at, and, when mc has deployed nothing at all, what `/api/version` answers instead. `productionSection` returns null when neither source knows anything, so a machine that has never deployed and never collected draws no line rather than one saying \"unknown\" — which is also why the palette snapshot in `page.test.js` is unchanged.",
+        "The brief's *Production* section sits between *Runner* and *Held before merge* — the eleventh section, and the doc tables in `mc-brief.md` say so. `collectBrief` gained one seam, `nightly`, so the section can be driven from a fixture; everything else it needs (the row, the cached version, the gap) is a file on this disk or one `git rev-list`. `canon/roles/brief.md` gets the paragraph the instruction asked for: a `main` well ahead of production with a green nightly is a deploy to propose, one line, and the session never runs the verb.",
+        "Criterion 2's second half — *the page and `mc --json` show the last deploy in the RUNNER block* — is met here, as step 2's comment said whoever finished this step should mark, so criterion 2 is now `met` whole. Criterion 3 is met, with one wording note: its check says \"the version the helper already fetches\", and the helper did not fetch it; it does now. Docs touched beyond the code: `mc-ui.md` (the production line, its colours, the two new files in the facts table), `mc-helper.md` (six sources, and why the deploy section has two), `mc-brief.md` (the eleventh section). `docs/technical/mc-deploy.md` is still step 4's."
+      ],
       "pr": null,
       "blocked_by": null
     },

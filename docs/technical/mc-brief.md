@@ -26,7 +26,7 @@ lines: collect, then hand the file to `openInWorkArea`.
 
 ## What it reads
 
-Ten sections, in this order, each from a file something else already
+Eleven sections, in this order, each from a file something else already
 writes:
 
 | section | source |
@@ -39,6 +39,7 @@ writes:
 | Workareas with no project on main | `~/mc/intake/unplanned-workareas.md` |
 | Plans that do not parse | `~/mc/intake/unreadable-plans.md` |
 | Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
+| Production | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, `git rev-list --count <it>..origin/main` in `~/memoro`, the nightly's last measurement, and the `/api/version` in `~/mc/runner/version.json` |
 | Held before merge | `~/mc/runner/held.json`, the entries at `repairs >= 1` |
 | Queue | `~/mc/queue.md` |
 
@@ -65,6 +66,16 @@ something a session is about to try. When there is one at all the brief says so
 in its opening lines, not only in the section. The three answers the role
 allows are in [`canon/roles/brief.md`](../../canon/roles/brief.md): merge by
 hand, close, or block the step with a decision.
+
+**Production** is the other section that can end in something being done, and
+what it ends in is Martin typing `mc deploy` — never the session, and never the
+runner. It carries three readings and no verdict: the last deploy mc made, how
+many commits `origin/main` is ahead of it, and whether the nightly ever measured
+that tree whole. The role turns those into at most one proposal
+([`canon/roles/brief.md`](../../canon/roles/brief.md)); a gap nobody has
+measured is a reason not to propose one yet. The same row is drawn on the page's
+RUNNER block, and `mc helper` reads it beside `/admin/deploy/logs`, so the three
+cannot say different things about what is live.
 
 Two answers are kept apart everywhere. A file the runner has never written
 is reported as absent; a file it wrote and left empty is reported as none.

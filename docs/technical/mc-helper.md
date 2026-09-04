@@ -63,17 +63,27 @@ did, and nothing alerted: surveyed 2026-08-29, there was no uptime check, no
 notifier and no Logpush. The eye does not add a monitoring system. It adds a
 reader.
 
-Five sources, and they do not share one failure domain. Each section of the
+Six sources, and they do not share one failure domain. Each section of the
 digest says what it could not read, and the run still succeeds: wrangler
-being unauthenticated must not cost us the other four.
+being unauthenticated must not cost us the other five.
 
 | section | how it is read | credential | timeout |
 |---|---|---|---|
 | error fingerprints | `scripts/admin/survey-errors.mjs --env production --limit <n> --since <iso>`, JSON on stdout | the script resolves `ADMIN_TOKEN` itself | 60 s |
 | analysis items | `GET /admin/analysis` — the server's own LLM pass over errors and feedback | bearer `ADMIN_TOKEN` | 30 s |
 | AI-provider errors | `scripts/admin/inspect-ai-provider-errors.mjs --env production --days 1` | **none** — it shells out to `wrangler d1 execute memoro-db --remote` | 180 s |
-| deploys | `GET /admin/deploy/logs?limit=20` — the `deploy:index` KV key itself | bearer `ADMIN_TOKEN` | 30 s |
+| deploys | `GET /admin/deploy/logs?limit=20` — the `deploy:index` KV key itself, beside the last `deployed` row of `~/mc/runner/log/deploys.tsv`, which `mc deploy` wrote | bearer `ADMIN_TOKEN` | 30 s |
+| what is live | `GET /api/version` — `{ commit, build, build_time }`, kept in `~/mc/runner/version.json` for the page | none | 30 s |
 | D1 health | `GET /ping-d1` | none | 30 s |
+
+The deploy section has **two sources on purpose**. `/admin/deploy/logs` is the
+GitHub webhook's, and it has been writing nothing for weeks; `deploys.tsv` is
+written by `mc deploy` around the deploy itself and depends on no webhook at
+all. The age is taken from whichever of them saw a deploy most recently — a
+deploy Martin typed an hour ago is not stale because CI never heard of it — and
+the digest says so plainly when the two are not describing the same deploy.
+`mc deploy` runs `npm run deploy` on this machine and fires no Action, so that
+is the ordinary case rather than a fault.
 
 Three facts about that table are easy to get wrong and were measured, not
 assumed:

@@ -36,6 +36,13 @@ when the answer is Martin's. The reason is in the section; `~/mc/runner/held.jso
 of what the gate saw. A held pull request you do not raise is a project
 standing still that nobody has been told about.
 
+*Production* is the one section that can end in a verb Martin types: a `main`
+well ahead of what is deployed, with a nightly that measured that tree green, is
+a deploy to propose — one line, naming the gap and what the nightly saw. You
+never run `mc deploy` and nothing in mc does; it asks its own question at his
+terminal. A gap nobody has measured whole is worth saying too, as the reason not
+to propose one yet.
+
 The tidying leaves two lists. *Archived without a note* asks whether a note
 under `docs/technical/` is worth writing, and which project should write it —
 never this session. *Workareas with no project on main* asks for a plan or for
