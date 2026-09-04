@@ -146,7 +146,7 @@
         "`canon/roles/plan.md` is `model: fable`, verified by launch and not from the file: `node src/mc-cli.js plan mc` opened a real planning session, `~/.memoro/mc/logs/mc.log` recorded `\"args\":[\"--model\",\"fable\",…],\"model\":\"fable\"`, and the session answered and exited 0. A bare `claude --model fable -p …` resolves to `claude-fable-5-1`, so the alias mc passes through unvalidated is one the tool accepts. Note the log line also shows `\"overlay\":false` — the plan role has no body, and the shared text reaches that session through `planLaunch`'s prompt, exactly as step 2 left it.",
         "For step 4, which writes the one account of assembly: the shared file now carries five rules, not two — turn cost, reading and testing, the shape of a question to Martin, the loose thread and why it is not intake, and the route to main. An account that describes `_common.md` as \"the turn-cost rule\" will be out of date the day it is written. The turn-cost restatement in `stepPrompt` (`src/mc/run-plan.js`) is gone, so `_common.md` is its only home; what `stepPrompt` still restates is `step.md`'s `PLAN.json` field list and the `blocked_by` shape, left alone because a step session is told those twice by two mechanisms that fail differently — the role file can be missing, the prompt cannot — and deciding that is a different question from this cut."
       ],
-      "pr": null,
+      "pr": 614,
       "blocked_by": null
     },
     {
