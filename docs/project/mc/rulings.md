@@ -204,6 +204,35 @@ is.
 **Carried by [`no-reconcile/PLAN.json`](no-reconcile/PLAN.json)** and, in memoro,
 by `docs/project/test-architecture/generated-artifact-merge/PLAN.json`.
 
+## 8 · The inbox is drained one file at a time
+
+`ruling · 2026-09-04` · raised in the `mc` planning session
+
+`~/mc/intake/` had grown into a room nothing empties: thirteen daily digests
+back to 2026-08-29, three tables `mc run` rewrites every round, and one turn a
+day reading one of them. Asked what it is for, Martin said it holds unsorted raw
+material — an error log, a screenshot — and that a session that has already
+understood something writes a proposal directly instead.
+
+> **Beslut:** "läsa in en fil i taget och bedöma med outcome proposal eller inte
+> proposal. Filen arkiveras direkt efteråt. Ny session upprepas tills alla filer
+> är hanterade." (Martin, 2026-09-04)
+
+Two consequences the planning session read out of the code rather than asking
+about. The turn must **read the file itself** instead of being handed its text:
+`helperPrompt` inlines `digestText` today, and a screenshot has no text to
+inline. And the runner's three tables must **leave the directory first** —
+`mc run` rewrites `unplanned-workareas.md` and `unreadable-plans.md` whole every
+round, so archiving one brings it back next round, forever.
+
+Archiving unconditionally is Martin's word and also the only version that
+terminates: a file kept because its turn failed is one the next round takes
+again.
+
+**Carried by [`intake-inbox/PLAN.json`](intake-inbox/PLAN.json)**, and it moved
+[`role-instructions`](role-instructions/PLAN.json)'s contract, which had said
+intake stays as it is.
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
