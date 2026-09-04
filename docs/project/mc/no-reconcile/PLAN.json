@@ -40,7 +40,7 @@
       "check": "`grep -rn 'reconcile' src/ canon/ docs/technical/` returns only `reconcileHeld` and `reconcileHold`. `chooseKind` has no branch that returns it."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The runner still stops rather than guessing when a conflict is not resolvable.",
       "check": "A test drives a round whose conflict neither git nor the plan rule can resolve, and asserts the project is skipped with the conflicting files named — never a session launched on a half-merged tree with no instructions about it."
     }
@@ -91,7 +91,7 @@
     },
     {
       "title": "The step session takes the conflict",
-      "status": "ready",
+      "status": "done",
       "done_when": "A round that meets a conflict git and the plan rule could not resolve launches a `step` session on the conflicted worktree, and that session resolves it and delivers its step.",
       "instruction": [
         "Today the round reads `const plan = sync.conflicts.length ? null : planOf(worktree, name)` (`src/mc/run.js`), so a conflict makes the plan unreadable to the runner by construction and `chooseKind` (`src/mc/run-plan.js`) returns `{ kind: 'reconcile' }` before it looks at anything else. Both halves change: the plan is still read, and the conflict is something the step session is told about rather than a different kind of session.",
@@ -101,8 +101,16 @@
         "Keep the failure path as clear as the one it replaces. Today a merge that the session does not finish is aborted (`if (kind === 'reconcile' && ... MERGE_HEAD ...) git merge --abort`), which leaves the worktree clean for the next round. A step session that cannot resolve the conflict must land in a state as clean: decide whether the abort still runs for a step session that left `MERGE_HEAD` behind, and say why in the PR. A half-merged worktree carried into the next round is the one outcome worse than today's cold session.",
         "`npm test`, and then watch one real round: the criterion for this step is a row in `~/mc/runner/log/runs.tsv` with `kind` `step` for a project that had a conflict that round. Read `runner.log` for the `merge conflict in:` line that names it."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The round now reads the plan whatever the merge did. `planOf(worktree, name, { fromHead })` reads `git show HEAD:<plan path>` while a merge is in progress, `chooseKind` no longer takes `conflicts` at all, and `stepPrompt` takes them instead — `conflictPreamble` in run-plan.js puts the files, the stopped merge and \"first thing, not the job\" above the body, which is otherwise unchanged. So `sync.conflicts` travels from `syncMain` to the prompt and nowhere else.",
+        "One thing that had to change with it, and it is not obvious: the plan-trespass check. A step session whose conflict was the plan itself is judged against the plan on **origin/main**, not against the HEAD copy it was handed — the merge that stopped *is* main's edits to that file, so judging by HEAD would read every one of them (a step somebody else finished, a criterion somebody else met) as a step this session had no business touching, and the runner would refuse to land a correct resolution. `planConflicted` in `runStepClaimed` is that switch; it is the same reasoning `repairBaseline` already uses for a `plan-trespass` repair, the other way round.",
+        "The abort stays, and step 4 should keep it: it is now keyed on `sync.conflicts` rather than on the kind, in two places. After the session, a `MERGE_HEAD` still standing means the session did not finish the merge, and it is aborted so the worktree is clean next round — an unmerged path is a dirty worktree, which is the skip that lasts until a person acts. Before the session, `abandonMerge` does the same for every way out of the round that is not a step session: a held pull request waiting for its repair, a worktree plan that is blocked or does not parse, a missing role, a tool that is not installed. A merge nobody is handed is a merge nobody finishes.",
+        "`role-instructions` had landed (`canon/roles/_common.md` exists, read by `sharedRoleText()`), so the resolution rules split as the instruction said: how to resolve a conflict — keep both intents, regenerate a generated file with the repository's own script, check no hunk was kept twice — is in `_common.md`, where every role hears it; the framing that a conflicted worktree is still your step, same session, same pull request, is in `step.md`. `canon/roles/reconcile.md` is untouched and step 4 deletes it.",
+        "What step 4 finds already gone: the `chooseKind` branch and `run.js`'s import of `reconcilePrompt`. What is still there for it: `reconcilePrompt` itself (exported, now unused), `canon/roles/reconcile.md`, the `kind === 'reconcile' && note === 'success'` arm of the merged/ran verdict, the colour in `page-render.js`, and the docs. Two comments that my change made false — `planRefusal`'s bullet in run.js and `chooseKind`'s doc — are already rewritten.",
+        "Criterion 3 is the one this session cannot tick: it asks for a row in `runs.tsv` from a real round, and this ran no round. The fixture runner asserts the whole path (one session, `kind` `step`, the preamble naming the files, the plan read from HEAD, and a resolution that lands rather than reading as a trespass); the live row is what a night with a conflict will add. Criterion 5 is ticked on the two abort tests — the check's \"skipped with the conflicting files named\" is now the case where there is no step to hand the conflict to, since a ready step gets it *with* instructions, which the same sentence allows.",
+        "A wrinkle worth knowing before it surprises somebody: the step handed out is read from HEAD, so a branch that is behind main on a step main has since finished can be handed that finished step again. It takes a branch that never landed and a plan conflict the rule refuses; the plan rule (step 2) resolves every case where the two sides touched different steps, so what is left is the same step on both sides, where HEAD and main disagree about that step and nothing else. The instruction chose HEAD deliberately — \"the step the session is being handed is the step this branch is on\" — and the trespass baseline above is what keeps the resolution landable."
+      ],
+      "pr": 613,
       "blocked_by": null
     },
     {

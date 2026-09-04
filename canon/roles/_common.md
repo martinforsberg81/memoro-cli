@@ -22,6 +22,14 @@ per turn by a session whose whole job is to decide what is in it. You have
 already understood the thing you are writing about; putting it there asks a
 second session to work it out again from less than you had.
 
+A merge that stopped is resolved, not worked around. Keep both intents — this
+branch's and main's — and never resolve by taking a side because it is
+quicker. A generated file (SDK artifacts, corpora, manifests, inventories) is
+regenerated with the repository's own script, named in `package.json` or the
+docs, and not hand-edited. After a keep-both resolution, read the result and
+check that no hunk was kept twice; a duplicated row or a doubled function is
+what a keep-both leaves behind, and nobody notices it later.
+
 The practical route to `main` is yours to settle, not to ask about. It is
 written down: the branch the worktree stands on, one pull request from it,
 the runner's gate, `mc merge` — `docs/technical/mc-run.md` and

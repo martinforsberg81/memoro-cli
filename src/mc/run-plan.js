@@ -203,9 +203,16 @@ export function nextBranch(name, taken = []) {
 
 /**
  * What a project gets this round. `openPrs` non-empty means its work is
- * already in flight and nothing is started; `conflicts` non-empty means the
- * merge of origin/main stopped and is left in progress; `plan` is null when
- * no PLAN.md exists in the worktree.
+ * already in flight and nothing is started; `plan` is null when no PLAN.md
+ * exists in the worktree.
+ *
+ * A merge left in conflict is no longer one of the answers here. It used to
+ * be the first of them — `conflicts.length` returned a `reconcile` kind
+ * before the plan was so much as looked at, and the round did not even read
+ * the plan while a merge was in progress. A conflict is now something the
+ * step session is *told* about (`stepPrompt`'s preamble): it resolves the
+ * merge and then does its step, in the session that had to read the code
+ * anyway, rather than a cold session that finishes a merge and stops.
  *
  * Two things the runner used to do here and does not any more, both on
  * Martin's word of 2026-08-29:
@@ -225,10 +232,9 @@ export function nextBranch(name, taken = []) {
  *   väntande beslut är ej ready.") A plan comes back by being set `ready`,
  *   which is the job of whoever applies the answer.
  */
-export function chooseKind({ plan, conflicts = [], openPrs = [] }) {
+export function chooseKind({ plan, openPrs = [] }) {
   const flight = inFlight(openPrs);
   if (flight) return flight;
-  if (conflicts.length) return { kind: 'reconcile' };
   if (!plan) return { kind: null, skip: null };
   if (plan.legacy) return { kind: null, reason: 'unmigrated', skip: 'still a PLAN.md — migrate it to PLAN.json' };
   if (!plan.plan) {
@@ -400,9 +406,34 @@ export function helperNote(turn) {
 
 const today = (now) => now.toISOString().slice(0, 10);
 
-export function stepPrompt({ name, repo, planPath, planText, step, index, now = new Date() }) {
+/**
+ * What a step session is told before anything else when the worktree it is
+ * handed has a merge in progress: which files, that it stopped there, and
+ * that the merge is the first thing it does rather than the job.
+ *
+ * It goes above the body and the body does not change — the step, its
+ * `done_when` and what may be written in the plan are all still true. That
+ * is the whole of what `reconcile` was: a session that read the conflicting
+ * code, resolved it, and stopped. This session has to read that code anyway.
+ */
+function conflictPreamble(conflicts) {
+  if (!conflicts.length) return [];
+  return [
+    'A `git merge origin/main` is in progress in this worktree and stopped on',
+    `conflicts in: ${conflicts.join(' ')}`,
+    '',
+    "Resolve them first: keep this branch's intent and main's changes both,",
+    'commit the merge, and then do your step below. It is the first thing you',
+    'do and not the job — one session, one pull request, and the step is what',
+    'the pull request is for.',
+    '',
+  ];
+}
+
+export function stepPrompt({ name, repo, planPath, planText, step, index, conflicts = [], now = new Date() }) {
   const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
+    ...conflictPreamble(conflicts),
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
     `is merged in). Below is your plan, \`${planPath}\`.`,
     '',

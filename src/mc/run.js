@@ -113,7 +113,7 @@ import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
   heldRepair, helperDue, helperNote, inFlight, landingNote, mcOwnFiles, nextBranch, queueFileNames,
-  queueFileText, readSessionOutput, reconcilePrompt, repairPrompt, sessionSettings, stackOrder,
+  queueFileText, readSessionOutput, repairPrompt, sessionSettings, stackOrder,
   stepOfPr, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from './run-plan.js';
 
@@ -333,13 +333,25 @@ export function createRunner({
   }
   const quotaHold = async () => { if (quotaSleep) await quotaSleep; };
 
-  function planOf(worktree, name) {
+  /**
+   * The plan the workarea carries. `fromHead` reads the branch's own last
+   * committed copy (`git show HEAD:<path>`) instead of the file on disk.
+   *
+   * That is for a worktree with a merge in progress. The file there may carry
+   * conflict markers — after the plan rule (plan-merge.js) that is only the
+   * case it refuses, two sides editing the same step, but it is exactly the
+   * case a session is then handed. HEAD is the branch's last good copy, and
+   * it is the right one: the step being handed out is the step this branch is
+   * on. Main's own edits to the plan are what the session is merging in.
+   */
+  function planOf(worktree, name, { fromHead = false } = {}) {
     const base = join(worktree, 'docs', 'project');
     for (const programme of deps.list(base)) {
       const dir = join(base, programme, name);
       const path = join(dir, 'PLAN.json');
       if (deps.exists(path)) {
-        const text = deps.read(path) || '';
+        const at = ['docs', 'project', programme, name, 'PLAN.json'].join('/');
+        const text = (fromHead ? gitOut(worktree, ['show', `HEAD:${at}`]) : deps.read(path)) || '';
         const { plan, problems } = readPlanText(text);
         return { path, programme, text, plan, problems, legacy: false };
       }
@@ -1244,28 +1256,41 @@ export function createRunner({
 
     const sync = syncMain(worktree, name);
     if (!sync.ok && !sync.conflicts.length) { say(`${name}: fetch/merge failed, skip`); return 'skipped'; }
-    const plan = sync.conflicts.length ? null : planOf(worktree, name);
-    // A conflicted merge is reconciled first whatever else is true — a repair
-    // cannot run in a worktree with a merge in progress, and its pull request
-    // is still held next round.
-    const choice = repair && !sync.conflicts.length
-      ? { kind: 'repair' }
-      : chooseKind({ plan, conflicts: sync.conflicts });
+    // What git and the plan's own rule could not resolve. It no longer makes
+    // the plan unreadable to the runner: the plan is read from HEAD and the
+    // conflict goes to the step session as something to do first.
+    const conflicts = sync.conflicts;
+    const plan = planOf(worktree, name, { fromHead: conflicts.length > 0 });
+    // A merge nobody is handed is a merge nobody finishes, and an unmerged
+    // path is a dirty worktree — which skips the project every round until a
+    // person acts. So every way out of this round that is not the step
+    // session goes through here: abort, and leave the workarea as clean as
+    // the old `reconcile` abort did.
+    const abandonMerge = (why) => {
+      if (!conflicts.length) return;
+      deps.git(worktree, ['merge', '--abort']);
+      say(`${name}: ${why} — the merge of origin/main is aborted, still conflicting in: ${conflicts.join(' ')}`);
+    };
+    // A repair cannot run in a worktree with a merge in progress; its pull
+    // request is still held next round, and the merge is not its job.
+    const choice = repair && !conflicts.length ? { kind: 'repair' } : chooseKind({ plan });
+    if (conflicts.length && (repair || choice.kind !== 'step')) {
+      abandonMerge(repair ? `#${repair.entry.pr} is held before merge` : (choice.skip || 'no step to hand it to'));
+      return 'skipped';
+    }
     // A null `skip` is a skip nobody would read — see `chooseKind`.
     if (!choice.kind) { if (choice.skip) say(`${name}: ${choice.skip}, skip`); return 'skipped'; }
     const { kind } = choice;
 
     const role = deps.role(kind);
-    if (!role?.overlay) { say(`${name}: canon/roles/${kind}.md is missing — skip`); return 'skipped'; }
+    if (!role?.overlay) { abandonMerge(`canon/roles/${kind}.md is missing`); say(`${name}: canon/roles/${kind}.md is missing — skip`); return 'skipped'; }
     const settings = sessionSettings(plan?.plan?.runner || {});
     const launch = deps.launch(settings.tool);
-    if (!launch?.ok) { say(`${name}: ${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); return 'skipped'; }
+    if (!launch?.ok) { abandonMerge(`${settings.tool} is not available`); say(`${name}: ${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); return 'skipped'; }
     const now = deps.now();
-    const prompt = kind === 'reconcile'
-      ? reconcilePrompt({ name, repo: repo.name, conflicts: sync.conflicts })
-      : kind === 'repair'
-        ? repairPrompt({ name, repo: repo.name, ...repair.entry })
-        : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, step: choice.step, index: choice.index, now });
+    const prompt = kind === 'repair'
+      ? repairPrompt({ name, repo: repo.name, ...repair.entry })
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, step: choice.step, index: choice.index, conflicts, now });
     // Counted before the session runs, not after: a repair killed on its budget
     // still had its one turn, and a count written afterwards would give the next
     // round a second repair for the same pull request.
@@ -1300,9 +1325,15 @@ export function createRunner({
     deps.write(out, result.stdout);
     deps.write(`${out}.err`, result.stderr);
 
-    if (kind === 'reconcile' && deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
+    // The abort survives the kind it was written for, and for the reason it
+    // was written: a merge the session did not commit leaves unmerged paths,
+    // and an unmerged path is a dirty worktree that skips the project every
+    // round until a person acts. It is only reached when the session left
+    // `MERGE_HEAD` behind — a step session that resolved the conflict and
+    // committed it has none, and nothing of its work is touched here.
+    if (conflicts.length && deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
       deps.git(worktree, ['merge', '--abort']);
-      say(`${name}: reconcile did not finish — merge aborted`);
+      say(`${name}: the session left the merge of origin/main unfinished — merge aborted`);
     }
     const branch = gitOut(worktree, ['branch', '--show-current']) || name;
     // What this project has open *now* — the same question `queue()` asked
@@ -1344,10 +1375,19 @@ export function createRunner({
     // judging the repair by it would call the trespass repaired the moment
     // nothing more was touched, and the runner would land what it refused to
     // land an hour earlier.
+    //
+    // A step session whose conflict was in the plan itself is judged against
+    // the plan on origin/main for the same reason, the other way round: the
+    // copy it was handed is the branch's HEAD, and the merge that stopped is
+    // precisely main's edits to that file. Judging by HEAD would read every
+    // one of them — a step somebody else finished, a criterion somebody else
+    // met — as a step this session had no business touching.
     let problems = [];
+    const onMain = plans.find((p) => p.project === name)?.plan || null;
+    const planConflicted = Boolean(plan?.path) && conflicts.some((path) => plan.path.endsWith(`/${path}`));
     const judged = kind === 'repair'
-      ? repairBaseline(repair.entry, plan, plans.find((p) => p.project === name)?.plan || null)
-      : (kind === 'step' ? { before: plan.plan, index: choice.index } : null);
+      ? repairBaseline(repair.entry, plan, onMain)
+      : (kind === 'step' ? { before: (planConflicted && onMain) || plan.plan, index: choice.index } : null);
     if (judged && note === 'success') {
       const after = readPlanText(deps.read(plan.path) || '');
       const trespass = after.plan
@@ -1471,9 +1511,9 @@ export function createRunner({
    * - **A name with no plan on main at all.** `assembleQueue` drops those, so
    *   it can only happen when a plan leaves main mid-round; `runStep` has the
    *   line for it, and this leaves it there.
-   * - **A conflicted merge left in a workarea.** That is `reconcile`, and it
-   *   lives in a worktree no plan on main can see. A project whose plan is
-   *   stopped keeps its half-finished merge until the plan is `ready` again —
+   * - **A conflicted merge left in a workarea.** It lives in a worktree no
+   *   plan on main can see, and it is the step session's to resolve — so a
+   *   project whose plan on main is stopped never reaches the merge at all,
    *   which is the round it would have been able to use it in anyway.
    */
   function planRefusal(name, plans = []) {

@@ -111,10 +111,9 @@ test('inFlight: a draft counts as open, and the rest are counted', () => {
   );
 });
 
-test('chooseKind: an open pull request comes before the plan and before a conflict', () => {
+test('chooseKind: an open pull request comes before the plan', () => {
   const open = [{ number: 11246, title: 'Step 4' }];
   assert.equal(chooseKind({ plan: record(), openPrs: open }).reason, 'in-flight');
-  assert.equal(chooseKind({ plan: record(), conflicts: ['x.md'], openPrs: open }).reason, 'in-flight');
   assert.equal(chooseKind({ plan: record(), openPrs: [] }).kind, 'step');
 });
 
@@ -126,8 +125,15 @@ test('nextBranch: the smallest number no branch is using', () => {
   assert.equal(nextBranch('action-window'), 'action-window-2');
 });
 
-test('chooseKind: reconcile beats everything; a ready first step is the only thing that runs', () => {
-  assert.equal(chooseKind({ plan: null, conflicts: ['x.md'] }).kind, 'reconcile');
+/**
+ * A conflicted merge used to be the first answer here, before the plan was
+ * looked at: `{ kind: 'reconcile' }`. It is not an answer at all any more —
+ * the plan decides what the round does, and a conflict is something the step
+ * session is told about (`stepPrompt`'s preamble, and the round in run.js).
+ */
+test('chooseKind: a ready first step is the only thing that runs, conflict or not', () => {
+  assert.deepEqual(chooseKind({ plan: null, conflicts: ['x.md'] }), { kind: null, skip: null });
+  assert.equal(chooseKind({ plan: record(), conflicts: ['x.md'] }).kind, 'step');
   const ready = chooseKind({ plan: record() });
   assert.equal(ready.kind, 'step');
   assert.equal(ready.index, 0);
@@ -218,12 +224,32 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
   // `{ kind, name }` at 10:18, and `msr-track-3` rewrote a criterion's own text
   // at 12:27. Both are checked on the way back in, so both are said here.
   assert.match(p, /its\n`comments` — an array of paragraph strings/u);
+  assert.doesNotMatch(p, /merge origin\/main` is in progress/u, 'no conflict, no preamble');
   assert.match(p, /"kind": "decision" \| "project", "name"/u);
   assert.match(p, /only `met` is yours/u);
   assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);
   // The runner only ever starts a plan whose first unfinished step is ready, so
   // a step is never handed an answered decision to apply (Martin, 2026-08-29).
   assert.doesNotMatch(p, /Decisions answered by Martin/u);
+});
+
+/**
+ * What `reconcile` used to be told, told to the session that is going to read
+ * that code anyway. The body below the preamble is untouched — the step, its
+ * `done_when` and the plan boundary are all still exactly true.
+ */
+test('stepPrompt: a conflicted worktree is a preamble, and the step is still the job', () => {
+  const step = { title: 'The hero object', status: 'ready', done_when: 'it draws', instruction: ['Do it.'], pr: null, blocked_by: null };
+  const p = stepPrompt({
+    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', planText: '{"schema":"mc-plan"}',
+    step, index: 1, conflicts: ['src/a.js', 'docs/project/p/x/PLAN.json'],
+    now: new Date('2026-09-04T00:00:00Z'),
+  });
+  assert.match(p, /^A `git merge origin\/main` is in progress in this worktree and stopped on\nconflicts in: src\/a\.js docs\/project\/p\/x\/PLAN\.json\n/u);
+  assert.match(p, /It is the first thing you\ndo and not the job/u);
+  assert.match(p, /Your step is `steps\[1\]` — 2, "The hero object"/u, 'the body is the same body');
+  assert.match(p, /Done when: it draws/u);
+  assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);
 });
 
 test('headlessArgs: claude is -p with json output; codex is exec --json', () => {

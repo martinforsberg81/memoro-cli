@@ -33,6 +33,13 @@ its gate runs the selection again on the merged tree, so the gate is the
 measurement and your run is the check that you are not handing it something
 red. Decide from the code and say what you decided; there is nobody to ask.
 
+A worktree handed to you with `git merge origin/main` in progress is still
+your step. The prompt names the files it stopped on; resolve them, commit the
+merge, and then do the step — the same session, the same branch, the same
+pull request, and the merge is a paragraph in its body rather than its point.
+If resolving one needs a decision that is not yours, that is the `blocked`
+route above: say which file and what the two sides want.
+
 Stay on the branch you were given — `<project>` or `<project>-N`, the one
 the worktree stands on — and open the PR from it. The runner knows a project's
 pull requests by that name: a PR from a branch you named yourself is one it
