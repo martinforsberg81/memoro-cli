@@ -138,11 +138,11 @@ because it ran, never because it was skipped.
 
 Two things a machine must not decide, so it writes them down and moves on:
 
-- **`~/mc/intake/undocumented-closures.md`** — appended when a project is
+- **`~/mc/runner/undocumented-closures.md`** — appended when a project is
   archived whose row says `doc: none`. A thin or missing `docs/technical/`
   note never stops an archive: keeping a project alive because its
   documentation is thin is how `docs/plans/` reached 656 files.
-- **`~/mc/intake/unplanned-workareas.md`** — rewritten every round with every
+- **`~/mc/runner/unplanned-workareas.md`** — rewritten every round with every
   folder under `~/mc` that **no project** explains — no plan on main and no
   row in `project_log.md` (sixteen of them on 2026-08-29, from before the plan
   world; fifty-seven on 2026-08-30). Such a folder is work somebody started and
@@ -162,6 +162,11 @@ Both are raised in `mc brief`, which is where they are read: two sections,
 role walks them one row at a time after the decisions. An absent file is
 reported as absent rather than as "none" — the runner has not written one
 yet is a different answer from there is nothing to report.
+
+They sit in `~/mc/runner/`, with the rest of what the runner writes about its
+own rounds, and not in `~/mc/intake/` where they were until 2026-09-04: the
+inbox is drained one file per turn, and a table rewritten whole every round is
+back in it the next round however carefully it was read.
 
 ## How it is tested
 

@@ -332,11 +332,11 @@ function workLines(lines, c, wide, sessions, unplanned) {
   // work in exactly the sense WORK means, and often the same folder somebody
   // has a session open in. Nothing removes them (close-workarea.js), which is
   // why they are counted where somebody looks; `mc run` writes the whole list,
-  // with whether each branch has landed, to `~/mc/intake/unplanned-workareas.md`.
+  // with whether each branch has landed, to `~/mc/runner/unplanned-workareas.md`.
   if (!folders.count) return;
   if (others.length) lines.push('');
   for (const area of folders.shown) lines.push(orphanLine(c, wide, area));
-  if (folders.more) say(lines, c, wide, 7, `… ${folders.more} more — ~/mc/intake/unplanned-workareas.md has them all`);
+  if (folders.more) say(lines, c, wide, 7, `… ${folders.more} more — ~/mc/runner/unplanned-workareas.md has them all`);
 }
 
 /** How the clock reads: white, then yellow near the budget, then red past it. */

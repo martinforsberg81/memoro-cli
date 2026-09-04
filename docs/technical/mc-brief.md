@@ -35,9 +35,9 @@ writes:
 | Opened, not merged | `gh pr list --state open` |
 | Proposals | `~/mc/proposals/*.md`, what `mc helper`'s turn wrote |
 | Plan status | every `docs/project/*/*/PLAN.json` on `origin/main` of both repositories |
-| Archived without a note | `~/mc/intake/undocumented-closures.md` |
-| Workareas with no project on main | `~/mc/intake/unplanned-workareas.md` |
-| Plans that do not parse | `~/mc/intake/unreadable-plans.md` |
+| Archived without a note | `~/mc/runner/undocumented-closures.md` |
+| Workareas with no project on main | `~/mc/runner/unplanned-workareas.md` |
+| Plans that do not parse | `~/mc/runner/unreadable-plans.md` |
 | Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
 | Production | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, `git rev-list --count <it>..origin/main` in `~/memoro`, the nightly's last measurement, and the `/api/version` in `~/mc/runner/version.json` |
 | Held before merge | `~/mc/runner/held.json`, the entries at `repairs >= 1` |

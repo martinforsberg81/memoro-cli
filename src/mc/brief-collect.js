@@ -10,7 +10,7 @@
  * or a session already writes (`~/mc/runner/log/runs.tsv`,
  * `~/mc/runner/held.json`,
  * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`,
- * `~/mc/intake/*.md`) or from GitHub through `gh`. The pure builders take text
+ * `~/mc/runner/*.md`) or from GitHub through `gh`. The pure builders take text
  * and return data so the test can feed them fixtures; `collectBrief` is the
  * only part that touches the machine.
  *
@@ -24,11 +24,14 @@ import { join } from 'node:path';
 
 import { lastAttempt, lastDeploy } from './deploys.js';
 import { heldPath, parseHeld } from './held.js';
-import { intakeDir, proposalsDir } from './helper-collect.js';
+import { proposalsDir } from './helper-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { nightlyReading } from './nightly-history.js';
 import { planSummary, readPlanText } from './plan-schema.js';
-import { workRoot } from './paths.js';
+import {
+  UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerTableLabel, runnerTablePath,
+  workRoot,
+} from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -93,7 +96,7 @@ export function listProposals(dir) {
   }
 }
 
-/* -------------------------------------------------- intake: what mc run left */
+/* ------------------------------------------ the runner's own three tables */
 
 /**
  * `mc run` writes three files and reads none: `undocumented-closures.md`,
@@ -106,6 +109,11 @@ export function listProposals(dir) {
  * never removed by a machine, and what a malformed plan meant to say is not
  * mc's to guess — and all three are therefore questions for the one person who
  * can answer them. This is where they are asked.
+ *
+ * They live in `~/mc/runner/` (paths.js), beside `held.json` and `log/`, and
+ * not in `~/mc/intake/` where they were written until 2026-09-04: two of the
+ * three are rewritten whole every round, so an inbox that drained one would
+ * find it back the next round, forever. This is their only reader.
  *
  * The runner is the only writer of either, so the shape is known: a header
  * paragraph saying who writes it, then one table.
@@ -139,8 +147,8 @@ export function intakeRows(text, keys) {
   return out;
 }
 
-/** One intake table, or `null` when the runner has never written the file. */
-function readIntake(read, path, keys) {
+/** One runner table, or `null` when the runner has never written the file. */
+function readTable(read, path, keys) {
   let text = null;
   try { text = read(path); } catch { return null; }
   return intakeRows(text, keys);
@@ -423,9 +431,9 @@ export function queueNames(text) {
 
 const fmt = (n) => Number(n).toLocaleString('en-US');
 /** Named in the brief so the answer is a file Martin can open, not a fact he must trust. */
-const UNDOCUMENTED_FILE = '`~/mc/intake/undocumented-closures.md`';
-const UNPLANNED_FILE = '`~/mc/intake/unplanned-workareas.md`';
-const UNREADABLE_FILE = '`~/mc/intake/unreadable-plans.md`';
+const UNDOCUMENTED_FILE = runnerTableLabel(UNDOCUMENTED_CLOSURES);
+const UNPLANNED_FILE = runnerTableLabel(UNPLANNED_WORKAREAS);
+const UNREADABLE_FILE = runnerTableLabel(UNREADABLE_PLANS);
 const HELD_FILE = '`~/mc/runner/held.json`';
 /** The undocumented file is append-only; the brief shows the newest rows and counts the rest. */
 const INTAKE_CAP = 12;
@@ -706,10 +714,9 @@ export async function collectBrief({
 
   // The three files `mc run` writes and never reads. Absent is its own answer —
   // the runner has not written one yet — so it is kept apart from empty.
-  const intake = intakeDir(env);
-  const undocumented = readIntake(read, join(intake, 'undocumented-closures.md'), UNDOCUMENTED_KEYS);
-  const unplanned = readIntake(read, join(intake, 'unplanned-workareas.md'), UNPLANNED_KEYS);
-  const unreadable = readIntake(read, join(intake, 'unreadable-plans.md'), UNREADABLE_KEYS);
+  const undocumented = readTable(read, runnerTablePath(UNDOCUMENTED_CLOSURES, env), UNDOCUMENTED_KEYS);
+  const unplanned = readTable(read, runnerTablePath(UNPLANNED_WORKAREAS, env), UNPLANNED_KEYS);
+  const unreadable = readTable(read, runnerTablePath(UNREADABLE_PLANS, env), UNREADABLE_KEYS);
 
   // What is in production, read from the files `mc deploy` and the helper
   // leave: no network, and no reading at all where memoro is not checked out.

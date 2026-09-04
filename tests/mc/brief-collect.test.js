@@ -54,16 +54,17 @@ function workRoot() {
   // Its own room beside intake, not inside it: intake is what the turn
   // reads, proposals are what came out of reading it.
   mkdirSync(join(root, 'intake'), { recursive: true });
-  // What `mc run` left behind: one project archived with no note, two folders
-  // no plan explains. Written through the runner's own row builders, so the
+  // What `mc run` left behind, in the runner's own room and not in the inbox:
+  // one project archived with no note, two folders no plan explains, one plan
+  // the schema refuses. Written through the runner's own row builders, so the
   // brief is read against the exact bytes the runner writes.
-  writeFileSync(join(root, 'intake', 'undocumented-closures.md'), UNDOCUMENTED_HEADER
+  writeFileSync(join(root, 'runner', 'undocumented-closures.md'), UNDOCUMENTED_HEADER
     + `${undocumentedRow({ date: '2026-08-29', repo: 'memoro', programme: 'msr-core', project: 'msr-design', pointer: '[#11003](https://github.com/x/y/pull/11003)' })}\n`);
-  writeFileSync(join(root, 'intake', 'unplanned-workareas.md'), unplannedFile([
+  writeFileSync(join(root, 'runner', 'unplanned-workareas.md'), unplannedFile([
     unplannedRow({ name: 'msr-track-1', repo: 'memoro', uncommitted: 0, lastCommit: '2026-08-24', branch: 'ahead' }),
     unplannedRow({ name: 'mc-repo', repo: 'memoro-cli', uncommitted: 2, lastCommit: '2026-08-20', branch: 'landed' }),
   ]));
-  writeFileSync(join(root, 'intake', 'unreadable-plans.md'), unreadableFile([
+  writeFileSync(join(root, 'runner', 'unreadable-plans.md'), unreadableFile([
     { project: 'new-user', repo: 'memoro', problem: 'what_the_code_taught_us[0].body: at least one paragraph', path: 'docs/project/onboarding/new-user/PLAN.json' },
   ]));
   writeFileSync(join(root, 'proposals', '2026-08-29-expose-operations.md'), PROPOSAL);
@@ -266,6 +267,11 @@ describe('collectBrief', () => {
     assert.deepEqual(result.data.unreadable.map((r) => r.project), ['new-user']);
     assert.match(text, /\| new-user \| memoro \| what_the_code_taught_us\[0\]\.body: at least one paragraph \|/u);
     assert.match(text, /1 plan on `origin\/main` the schema refuses/u);
+    // All three are read from `~/mc/runner/`, and named there for a person to
+    // open. They were in `~/mc/intake/` until 2026-09-04, which the inbox
+    // cannot drain: two of the three come back whole every round.
+    assert.match(text, /`~\/mc\/runner\/undocumented-closures\.md` is append-only/u);
+    assert.doesNotMatch(text, /~\/mc\/intake\//u, 'no runner table is named in the inbox any more');
     assert.match(text, /Last 24 h: 3 steps \(step 2, triage 1\) — merged 1, left open 1, failed 0, timed out 1/u);
     // The pull requests the runner would not land: the repaired one is the
     // brief's, the one still waiting for its repair session is the runner's.

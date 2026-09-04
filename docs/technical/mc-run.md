@@ -134,7 +134,7 @@ session opened.
    round and says so; the other repository's lane is untouched. An idle round
    costs ten minutes of sleep, a blind one bought a 120-minute Opus session.
 3. **Tidy `queue.md`** against that reading, and write
-   `~/mc/intake/unreadable-plans.md` from it.
+   `~/mc/runner/unreadable-plans.md` from it.
 4. **Archive** every plan that says `status: done` — the directory removed and
    a `project_log.md` row left behind it, one PR per repository, landed through
    `mc merge --docs`. See [`mc-tidy.md`](mc-tidy.md).
@@ -319,7 +319,7 @@ expensive one holds the decision.
 | merge left in conflict | `reconcile` |
 | plan says `status: ready` | `step` |
 | plan says anything else | nothing, one skip line |
-| the plan does not parse | nothing — and a row in `~/mc/intake/unreadable-plans.md` |
+| the plan does not parse | nothing — and a row in `~/mc/runner/unreadable-plans.md` |
 | no plan in the worktree | nothing, silently |
 
 There is no `triage` and there never will be again: the runner runs plans, it
@@ -660,16 +660,24 @@ Everything lives under `~/mc/runner/`.
 - **`log/closed/<name>/`** — whatever a closed workarea kept beside its
   checkout. Moved, never deleted.
 
-Three files go to `~/mc/intake/` instead, where `mc brief` raises them: they
-are questions for Martin rather than records of what the runner did.
-`undocumented-closures.md` is appended when a project is archived with
-`doc: none`; `unplanned-workareas.md` and `unreadable-plans.md` are rewritten
-whole every round, so a folder that got a plan and a plan somebody fixed each
-leave their list by themselves. `unreadable-plans.md` (`plan-intake.js`) is the
-newest of the three and exists for the same reason as the other two: the
-runner can hand out no step from a plan the schema refuses, and what its author
-meant to say is not mc's to guess. It used to be a `runner.log` line, which is
-where `new-user` sat for a day.
+Three more files sit beside them, and are the runner's questions for Martin
+rather than records of what it did — `mc brief --collect` is their only reader
+and renders one section each. `undocumented-closures.md` is appended when a
+project is archived with `doc: none`; `unplanned-workareas.md` and
+`unreadable-plans.md` are rewritten whole every round, so a folder that got a
+plan and a plan somebody fixed each leave their list by themselves.
+`unreadable-plans.md` (`plan-intake.js`) is the newest of the three and exists
+for the same reason as the other two: the runner can hand out no step from a
+plan the schema refuses, and what its author meant to say is not mc's to guess.
+It used to be a `runner.log` line, which is where `new-user` sat for a day.
+
+They were written to `~/mc/intake/` until 2026-09-04. That room is an inbox
+somebody drops one file into and a turn drains — and two of these three come
+back whole every round, so a turn that read one and filed it away would find it
+there again the next round, and the round after, forever. They are the runner's
+own output about its own rounds, so they live with the rest of it. The path is
+spelled once, in `src/mc/paths.js`, for the runner that writes it and the brief
+that names it to a person.
 
 ## Sleeping and stopping
 

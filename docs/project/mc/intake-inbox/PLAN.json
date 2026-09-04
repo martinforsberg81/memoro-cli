@@ -31,7 +31,7 @@
       "check": "A test drives a turn whose session returns non-zero and asserts the file moved to the archive and the row carries the failure. Not asserted from the code path alone."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The runner's own tables are no longer in the inbox and the brief still reads them.",
       "check": "`ls ~/mc/intake/` names none of `unplanned-workareas.md`, `unreadable-plans.md`, `undocumented-closures.md`. `mc brief --collect` renders all three sections with their rows."
     },
@@ -59,7 +59,7 @@
   "steps": [
     {
       "title": "The runner's tables leave the inbox",
-      "status": "ready",
+      "status": "done",
       "done_when": "`~/mc/intake/` holds no file `mc run` writes, and `mc brief --collect` still renders all three sections with their rows.",
       "instruction": [
         "Three files in `~/mc/intake/` are not inbox items and must go before anything drains the directory: `unplanned-workareas.md`, `unreadable-plans.md` and `undocumented-closures.md`. `mc run` writes them — `paths.unplanned` and `paths.unreadable` in `src/mc/run.js`, and the undocumented one written near the archive step — and rewrites the first two whole every round, which is the property that makes archiving one pointless: it would be back next round, and the round after, forever.",
@@ -68,7 +68,12 @@
         "A machine wrote them and a machine can find them again, so do not migrate what is on disk with code. Move the three files by hand as part of this step and say so in the PR; a migration path for three files that are rewritten every round is more code than it saves.",
         "Verify by running `mc brief --collect` and reading the three sections in the brief it writes. `npm test` — `tests/mc/brief-collect.test.js` reads these."
       ],
-      "comments": [],
+      "comments": [
+        "The room is `~/mc/runner/`, flat, beside `held.json` and `runner.json` — `src/mc/paths.js` showed no better one, and the plan's own suggestion was right. The path is spelled once there: `RUNNER_HOME` with the three filename constants, `runnerTablePath(file, env)` for the runner that writes them and `runnerTableLabel(file)` for the brief that names them to a person. `brief-collect.js` had the only three literal strings a human ever saw and now derives them, so the writer and the label cannot drift the way `PLAN_HOME` and `WORK_DEPS` exist to stop.",
+        "`intakeDir` is no longer imported by `run.js` or `brief-collect.js` at all — nothing outside the helper reads the inbox any more, which is exactly the ground step 3 needs before it starts draining it. `intakeDir` itself stays in `helper-collect.js` for the collector and the turn.",
+        "The three files on disk were moved by hand (`mv ~/mc/intake/{undocumented-closures,unplanned-workareas,unreadable-plans}.md ~/mc/runner/`), no migration code. One consequence for step 3: the global `mc` is a symlink to the checkout on main, so the *running* runner is still on the old code and will rewrite `unplanned-workareas.md` and `unreadable-plans.md` into `~/mc/intake/` at the end of every round until this lands and it takes the UPDATE. Whoever runs step 3 should `ls ~/mc/intake/` first and remove any leftover copy of the two — a stale table there is harmless (it is a file, it would be drained once and archived, and it never comes back) but it is not an inbox item and should not cost a turn.",
+        "`mc brief --collect` was run for real from this worktree's code and wrote a brief whose three sections all rendered from `~/mc/runner/` — 25 undocumented closures, 29 unplanned workareas, and *Plans that do not parse* reading `_none_` rather than `_no ~/mc/runner/unreadable-plans.md_`, which is the distinction that proves the file was found at the new path and not merely missing at the old one. That brief file was then removed: `lastBriefTime` is the mtime of the newest file in `~/mc/brief/`, so leaving a verification run there would have started Martin's next brief window at 20:38 today and hidden everything merged before it."
+      ],
       "pr": null,
       "blocked_by": null
     },

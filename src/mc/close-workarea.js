@@ -16,7 +16,7 @@
  *
  * A workarea **no project explains at all** — no plan on main, and no row in
  * the project log — is never removed by a machine. It is listed: on the page
- * under its own heading, and in `~/mc/intake/unplanned-workareas.md` for
+ * under its own heading, and in `~/mc/runner/unplanned-workareas.md` for
  * `mc brief` to raise, with whether its branch's content is already on main,
  * which is the one thing that says whether anything would be lost.
  *

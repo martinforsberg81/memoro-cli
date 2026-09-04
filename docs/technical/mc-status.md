@@ -98,7 +98,7 @@ When both exist and their frontmatters differ, the row adds
 A name that has a workarea but no plan anywhere is answered too — with
 `no plan — this is a workarea without a project`. Those are the closure
 candidates `mc run` will not remove by itself; the page lists them and
-`~/mc/intake/unplanned-workareas.md` keeps them.
+`~/mc/runner/unplanned-workareas.md` keeps them.
 
 ## The cost estimate
 
