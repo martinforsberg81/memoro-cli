@@ -27,7 +27,7 @@
       "check": "`node scripts/affected-tests.js --base-ref origin/main` in that workarea reports `why.reason: \"affected\"` and an empty `why.unexplained`, not `full-suite`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The merge gate's candidate worktree runs the whole declared suite, not the part that happens to import nothing.",
       "check": "`mc test memoro-cli <pr>` on a pull request that reaches `tests/runtime/session-host/` reports those files green rather than red, and its log no longer prints the `no node_modules` line. — Read after mc-cut (#561) removed tests/runtime/session-host/: the measurement is a gate round on any candidate with no `npm ci` and every declared package resolving (decision workarea-deps-1, 2026-09-04)."
     },
@@ -113,11 +113,16 @@
     },
     {
       "title": "Close it out",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/technical/` says where a workarea's dependencies come from, and `project_log.md` has a row.",
       "instruction": [
         "Say it where somebody would look for it: `docs/technical/mc-work.md` for what a workarea gets when mc makes one, and `docs/technical/mc-merge.md` for what the gate's candidate stands in. Name the directory, say why it is above the workareas rather than in them, and name the failure that made it necessary — a test going red because of where it was run.",
         "A row in `docs/project/project_log.md`."
+      ],
+      "comments": [
+        "**`docs/technical/mc-work.md` did not exist, so this step wrote it** — a page about what `mc work add` leaves a session, with the dependency tree as its long half: the directory, why it is above the workareas rather than in them (the selector's 250-files-instead-of-41 fallback, and 40 copies of the same three packages), what it holds and why an `npm ci` in the work root rather than symlinks into `~/memoro-cli/node_modules`, the two consequences of one directory holding one manifest, and the assertion that it is not a piece of work. The gate's half is a new section in `mc-merge.md` — *Where the candidate's dependencies come from* — and the two pages point at each other rather than restating one another.",
+        "**Criterion 3 was flipped to met on the reading decision workarea-deps-1 gave it**, and measured again in this session rather than inherited from step 3's numbers: `mc test memoro-cli --full` on this branch's mc, 2026-09-04, ran the whole suite in a candidate under `~/mc/gate/memoro-cli/` at 44198c6 — 1544 tests, 0 fail, 30 s, no prepare step, no `no node_modules` line, and no dependency refusal, which is the round saying every declared name resolved from the candidate. The tree it resolved is `~/mc/node_modules`, holding `@xterm`, `node-pty` and `node-addon-api`. The criterion's own words name `tests/runtime/session-host/`, which mc-cut (#561) deleted; nothing in this project can make those files green again, and that is what the decision settled.",
+        "One claim in the docs was corrected against the code while writing them: the dependency state is a field on each WORK row (`work-status.js`, `dependencyState`), reachable through `mc --json`, and no line of the rendered page prints it. A reader looking for the word `present` on the page will not find it."
       ],
       "pr": null,
       "blocked_by": null

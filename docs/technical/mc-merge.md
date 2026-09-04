@@ -165,6 +165,51 @@ longer mentions it. The gate form's argument errors live with the gate, in
 [`tests/mc/repo-merge.test.js`](../../tests/mc/repo-merge.test.js) and
 [`tests/mc/repo-gate.test.js`](../../tests/mc/repo-gate.test.js).
 
+## Where the candidate's dependencies come from
+
+The candidate is a fresh worktree with no `node_modules` in it, and a suite run
+where the declared packages cannot be resolved does not fail — it runs the
+tests that happen to need nothing and prints a number with the right shape
+(D-0152: 2162 tests and 30 failures, where 206 tests never ran and were not
+counted as skipped; 2368 of 2368 once the tree was linked). A number from such
+a run is not low, it is invalid, and nothing about the number says so.
+
+**So the candidate stands where the tree already is.** It is built at
+`<work root>/gate/<repo>/candidate` — `WORK_GATE` beside `WORK_DEPS` in
+[`src/mc/paths.js`](../../src/mc/paths.js) — which puts `~/mc/node_modules` two
+parents above it, found by node's own walk up the directory chain. That is the
+same one tree every workarea resolves through, described in
+[`mc-work.md`](mc-work.md) § *Where a workarea's dependencies come from*: one
+copy for the workareas and the rounds together, no `npm ci` in the round, and
+nothing inside the checkout for git or the selector to trip over. The gate
+directory used to live under `mcHome()`, and moving it is the whole of that
+half. The round calls the same `ensureWorkDeps` on the **candidate** rather
+than on the repository's checkout, so a pull request that changes
+`package-lock.json` is measured against a tree installed from *its* lockfile;
+the shared tree then stands at that lockfile until the next workarea or round
+moves it, which is the one-tree-one-lockfile trade the work root already makes,
+said out loud.
+
+**And the round measures the resolution instead of believing a declaration.**
+After the prepare step and before the suite, `dependencyTree(candidate)` asks
+whether every declared name resolves from the worktree or any directory above
+it; one that does not stops the round by name. There is no vouching branch left.
+memoro-cli's entry used to read `prepare: null` with a `prepare_why` saying the
+suite was *"node:test over source only; verified across every gate round since
+the verb existed"* — and it was false for months, while the five test files
+under `src/runtime/session-host/` went unrun and uncounted every round and the
+round printed a line about the missing `node_modules` once per round, read as
+reassurance. `prepare` says what the *round* must run; whether the suite can run
+at all is now measured. `tests/mc/repo-gate-table.test.js` reads the entry
+against `package.json` and allows `prepare: null` beside declared dependencies
+only while both halves of the mechanism are in place — the repository on
+`SHARED_TREE_REPOS`, and the gate root under the work root.
+
+Measured 2026-09-03 on the round for #570: the selected round was 73 files,
+952 tests, 0 red in 39 s, and `--full` on the same candidate 143 files, 1538
+tests, 0 red in 74.5 s. Neither ran a prepare step, and neither printed the
+`no node_modules` line.
+
 ## What the round measures
 
 Not "the suite", necessarily. A repository may declare `select` in the gate
