@@ -8,12 +8,26 @@
  * nothing at all when they are the same. It is pure: no stream, no state, no
  * clock, so every case below is asserted as bytes with no terminal involved.
  *
- * **Relative, never absolute.** Every move is `CSI n A` / `CSI n B` from where
- * the cursor already is. Absolute row numbers are wrong the moment anything
- * else writes to the terminal, and the page has no claim on the screen: it
- * lives in the scrollback with whatever was printed before it, and what is
- * below it — the menu, the prompt, whatever a person is half-way through
- * typing — belongs to somebody else.
+ * **Relative unless the caller has asked the terminal.** Every move is
+ * `CSI n A` / `CSI n B` from where the cursor already is, because an absolute
+ * row number the caller *guessed* is wrong the moment anything else writes to
+ * the terminal: the page has no claim on the screen, it lives in the
+ * scrollback with whatever was printed before it, and what is below it — the
+ * menu, the prompt, whatever a person is half-way through typing — belongs to
+ * somebody else.
+ *
+ * An absolute row the terminal *reported* is a different thing, and it is the
+ * one case where absolute is the safer of the two. `anchor` is the screen row
+ * the cursor is on, read back from `CSI 6n` by `page-live.js` after the prompt
+ * was printed; with it every target is `CSI ${anchor - above + index};1H` and
+ * the return is `CSI ${anchor};1H`. The gain is that a relative walk
+ * accumulates: `vertical(target - row)` from row to row means one bad number
+ * puts every later write on the wrong row and leaves the row it should have
+ * written standing. An absolute move cannot accumulate — each row is addressed
+ * from the same reported number — and a frame drawn against a screen that has
+ * scrolled is re-anchored rather than re-derived. Without an `anchor` the
+ * relative writes are exactly what they were, which is what a terminal that
+ * will not answer `CSI 6n` gets.
  *
  * **What the caller owns.** Vertical moves keep the column, so the writes
  * come back to the row they started on, at column 0. The column the cursor
@@ -72,20 +86,32 @@ const vertical = (delta) => (delta < 0 ? up(-delta) : down(delta));
  * assumed to be on the last row of the screen, which is where a page followed
  * by a prompt leaves it, so `rows - 1` rows above it can still be addressed.
  * Left out, nothing is skipped.
+ *
+ * `anchor` is the screen row the cursor is actually on, as the terminal
+ * reported it. Given one, the writes are absolute and `rows` is not needed to
+ * find the top of the screen: row 1 is the top, and a page row that would land
+ * above it has scrolled off and is left alone.
  */
-export function frameWrites(previous, next, { above = 0, rows = Infinity } = {}) {
+export function frameWrites(previous, next, { above = 0, rows = Infinity, anchor = null } = {}) {
   const before = previous || [];
   const after = next || [];
   const reach = Number.isFinite(rows) ? Math.max(0, rows - 1) : Infinity;
 
-  if (after.length > before.length) return reprint(after, { above, reach });
+  if (after.length > before.length) return reprint(after, { above, reach, anchor });
 
   const writes = [];
-  // Where the cursor is, in rows below the row it started on.
+  // Where the cursor is, in rows below the row it started on. Unused when the
+  // moves are absolute, because an absolute move does not depend on the last.
   let row = 0;
   for (let index = 0; index < before.length; index += 1) {
     const line = index < after.length ? after[index] : '';
     if (line === before[index]) continue;
+    if (anchor) {
+      const at = anchor - above + index;
+      if (at < 1) continue; // above the top of the screen; not ours to rewrite
+      writes.push(`${CSI}${at};1H`, CLEAR_LINE, line);
+      continue;
+    }
     if (above - index > reach) continue; // scrolled off the top; not ours to rewrite
     const target = index - above;
     writes.push(vertical(target - row), CLEAR_LINE, line);
@@ -93,11 +119,19 @@ export function frameWrites(previous, next, { above = 0, rows = Infinity } = {})
     row = target;
   }
   if (writes.length === 0) return '';
+  if (anchor) return `${writes.join('')}${CSI}${anchor};1H`;
   return `\r${writes.join('')}${vertical(-row)}`;
 }
 
 /** A frame that has outgrown its footprint: erase from the top of what can be reached, print it again. */
-function reprint(after, { above, reach }) {
+function reprint(after, { above, reach, anchor }) {
+  if (anchor) {
+    // The page's first row is `anchor - above`; what would be above row 1 has
+    // scrolled off and is not printed again.
+    const top = anchor - above;
+    const skip = Math.max(0, 1 - top);
+    return `${CSI}${Math.max(1, top)};1H${ERASE_BELOW}${after.slice(skip).join('\n')}`;
+  }
   const first = Math.max(0, above - reach);
   return `\r${up(above - first)}${ERASE_BELOW}${after.slice(first).join('\n')}`;
 }

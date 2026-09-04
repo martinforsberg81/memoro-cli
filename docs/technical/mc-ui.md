@@ -387,11 +387,14 @@ Two modules, and the split is the same one `page-render.js` already keeps:
 
 ### What is written, and what is not
 
-Every move is relative — `CSI n A`, `CSI n B`, `CSI 2K` — never an absolute
-row. Absolute row numbers are wrong the moment anything else writes to the
-terminal, and the page has no claim on the screen: it lives in the
-scrollback with whatever was printed before it, and what is below it belongs
-to somebody else. Four cases, each decided rather than fallen into:
+Every move is relative — `CSI n A`, `CSI n B`, `CSI 2K` — unless the terminal
+has said where the cursor is, in which case it is `CSI row;1H`. An absolute
+row the page *guessed* would be wrong the moment anything else wrote to the
+terminal: the page has no claim on the screen, it lives in the scrollback
+with whatever was printed before it, and what is below it belongs to somebody
+else. An absolute row the terminal *reported* is the safer of the two, and
+[*How the page finds itself*](#how-the-page-finds-itself) is why. Four cases,
+each decided rather than fallen into:
 
 | the frame | what happens |
 |---|---|
@@ -425,11 +428,49 @@ hidden — after a growth frame everything below the page has been erased, so
 `page-live.js` prints the key lines, the prompt and the half-typed answer
 again itself.
 
+### How the page finds itself
+
+**The page asks the terminal where it is.** After the page, the key lines and
+the prompt are printed, `page-live.js` writes `CSI 6n` — Device Status Report,
+cursor position — to the terminal and reads the reply, `ESC [ row ; col R`,
+off the `/dev/tty` stream it already holds in raw mode. `readLine` is what is
+listening, so the reply is recognised there and handed on as a row; nothing of
+it reaches the line being typed and nothing of it is echoed. That row is the
+`anchor` every frame is then written against: page row `i` is
+`anchor - above + i`, addressed with `CSI row;1H`.
+
+**Why asking, when `above` was already derived.** Because a derived number can
+be wrong and a relative walk turns one wrong number into a wrong page.
+`frameWrites` used to move from row to row with `vertical(target - row)`, so
+an `above` that is one short puts *every* write one row low: the row that
+should have been rewritten keeps the old text, the row under it gets the new,
+and the page shows one session twice with two ages. Martin saw exactly that
+twice on 2026-09-04 — `● items-sweep … 28 min` over `● items-sweep … 25 min`,
+same pid, one entry in the data. The number was one short for a plain reason:
+`tailRows` counted the newlines in the menu's block, and the menu's first key
+line is 85 characters, which is two screen rows on a terminal narrower than
+that. Both halves are fixed — `screenRows` counts wrapped rows rather than
+newlines, and the anchor makes the moves absolute so no error can accumulate
+from one row to the next.
+
+**When the terminal will not answer**, which some do not, the page waits
+`ANCHOR_MS` — 200 ms — and then goes on exactly as it did before: derived
+`above`, relative moves, and one line in the note row saying
+`mc: drawing by count — the terminal did not say where the page is`. Said once
+per reader, not once per prompt, and taken off the screen by the next frame.
+The prompt is never blocked on the answer: the reading of the line starts
+before the question goes out.
+
+**A reprint and a resize both invalidate the anchor**, so both ask again — a
+growth frame scrolls the screen, and a resize moves the prompt. A reply that
+arrives after the 200 ms is still taken; a row the terminal gave is worth more
+than a row the page counted.
+
 ### The two numbers, and the two terminals that break them
 
-`above` is how many rows above the cursor the page's first row sits:
-the page's footprint plus the newlines in the block the menu prints under it.
-`rows` is the terminal's height, and it bounds how far up the writes reach —
+`above` is how many rows above the cursor the page's first row sits: the
+page's footprint plus the rows the block the menu prints under it occupies on
+screen. `rows` is the terminal's height, and it bounds how far up the writes reach —
 the cursor is on the last row of the screen, so `rows - 1` rows above it are
 addressable and **a changed row further up than that is not written at
 all**. That is what makes a page taller than the terminal safe: the page is
