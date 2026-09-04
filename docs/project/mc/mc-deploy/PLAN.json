@@ -66,7 +66,7 @@
         "Exit codes, decided here because nothing in the plan fixed them: the script's own code when it ran, 0 for `--dry-run`, 1 for a `no` / a held lease / no `origin/main` in the checkout, 2 for a bad argument or no terminal. A deliberate `no` is exit 1 rather than 0 so `mc deploy && …` does not carry on as if it had shipped. The lease errand carries the full sha (`deploy <40 chars>`) and the plan's first line prints the full sha; the question itself says the short one — `deploy 1a2b3c4 to production? [y/N]`.",
         "The reading half was run for real against `~/memoro` on 2026-09-04: `mc deploy --dry-run` printed origin/main `c061d74`, live `b3e65b6` (build 23533) from `/api/version`, a gap of 16 commits, and \"the nightly measured fc19465, 74 commits ago; this tree was not measured whole\". The deploying half is only ever exercised by the faked script — a real deploy is Martin's to type, as step 4 says."
       ],
-      "pr": null,
+      "pr": 592,
       "blocked_by": null
     },
     {
