@@ -54,13 +54,19 @@ def classify(cmd):
     return 'other'
 
 
+def norm(bound):
+    """A day (2026-09-03) or an instant (2026-09-03T19:35) as the file stamp compares."""
+    digits = ''.join(ch for ch in bound if ch.isdigit())
+    padded = (digits + '0' * 14)[:14]
+    return f'{padded[:8]}T{padded[8:]}'
+
+
 def sessions(since, until, min_turns):
     """Every step session in the window with its result json and transcript."""
     out = []
     for path in sorted(glob.glob(f'{LOG}/*-*.json')):
-        stamp = os.path.basename(path).rsplit('-', 1)[1][:8]
-        day = f'{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]}'
-        if not (since <= day < until):
+        stamp = os.path.basename(path).rsplit('-', 1)[1][:15]   # YYYYMMDDTHHMMSS
+        if not (norm(since) <= stamp < norm(until)):
             continue
         try:
             result = json.load(open(path))
@@ -120,8 +126,8 @@ def quantiles(label, xs, unit=1.0, fmt='{:6.1f}'):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--since', required=True, help='first day, inclusive (YYYY-MM-DD)')
-    ap.add_argument('--until', required=True, help='last day, exclusive (YYYY-MM-DD)')
+    ap.add_argument('--since', required=True, help='first day or instant, inclusive (YYYY-MM-DD or YYYY-MM-DDTHH:MM)')
+    ap.add_argument('--until', required=True, help='last day or instant, exclusive')
     ap.add_argument('--min-turns', type=int, default=10, help='ignore sessions that died before doing anything')
     args = ap.parse_args()
 

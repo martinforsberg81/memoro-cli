@@ -91,6 +91,7 @@ import { runMergeRound } from './repo-merge.js';
 import { kindFor, pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { loadProfile, profileArgs } from './portrait.js';
+import { readLaneCount } from './lane-count.js';
 import { readCanonRole } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
@@ -102,6 +103,16 @@ import {
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
+
+/**
+ * A landing that met another round. `busy` is the gate lock (one gate round
+ * on this machine), `lease` the repository lease (one holder per repository);
+ * both are live rounds that end in minutes, and the runner waits for them
+ * rather than leaving the pull request open — see `landPr`.
+ */
+export const BUSY_STOPS = ['busy', 'lease'];
+export const LAND_WAIT_MS = 45 * 60 * 1000;
+export const LAND_RETRY_MS = 30 * 1000;
 
 /* ------------------------------------------------------------ real deps */
 
@@ -238,7 +249,11 @@ export function createRunner({
     // that is too late to answer "what is running now", which is why these
     // exist.
     runner: join(root, 'runner', 'runner.json'),
-    currentFor: (repo) => join(root, 'runner', `current-${repo}.json`),
+    // With more than one lane per repository (`mc lanes`), the first keeps
+    // the file's old name and the rest number themselves, so the page —
+    // which reads `current-*.json` by name — needs no new rule.
+    currentFor: (repo, lane = 0) => join(root, 'runner', lane ? `current-${repo}-${lane}.json` : `current-${repo}.json`),
+    currents: () => deps.list(join(root, 'runner')).filter((file) => /^current-.+\.json$/u.test(file)).map((file) => join(root, 'runner', file)),
     // Where a closed workarea's filing goes — its inbox, its decisions, the
     // scratch directory a session left beside its checkout. Moved, never
     // deleted: the folder is what goes, not what somebody wrote in it.
@@ -380,7 +395,7 @@ export function createRunner({
    * where a reader of runs.tsv sees it.
    */
   async function landPr(repo, name, pr) {
-    const report = await deps.mergeRound({
+    const round = () => deps.mergeRound({
       repoPath: repo.path,
       pr: Number(pr),
       // Who holds the repository for the length of the round. `currentHolder()`
@@ -389,6 +404,27 @@ export function createRunner({
       holder: { name, kind: 'work-area' },
       onProgress: (message) => say(`${name}: merge #${pr} — ${message}`),
     });
+    let report = await round();
+    // The gate lock and the repository lease both *refuse* a second round
+    // rather than queueing it (gate-lock.js: one gate round on this machine;
+    // repo-lease.js: one holder per repository), and that stays as it is —
+    // the guarantee is one suite at a time. What changes is what this caller
+    // does with the refusal: it used to log `#N left open` and move on, which
+    // parked the project until a person merged by hand, because an open pull
+    // request stops its project. Two lanes landing at once did that to each
+    // other; with several steps in flight per repository it would be routine.
+    // So a refused round waits — for a live round, which is minutes — and
+    // asks again, up to `LAND_WAIT_MS` in all.
+    const t0 = deps.now().getTime();
+    let waited = false;
+    while (report && BUSY_STOPS.includes(report.stopped_at) && deps.now().getTime() - t0 < LAND_WAIT_MS) {
+      if (!waited) say(`${name}: merge #${pr} — waiting for the gate: ${report.reason}`);
+      waited = true;
+      await deps.sleep(LAND_RETRY_MS);
+      if (stopRequested()) break;
+      report = await round();
+    }
+    if (waited) say(`${name}: merge #${pr} — waited ${Math.round((deps.now().getTime() - t0) / 1000)}s for the gate`);
     const note = landingNote(report);
     if (note === 'merged') {
       say(`${name}: merged #${pr} into ${report.merged_into} through the gate`);
@@ -975,7 +1011,7 @@ export function createRunner({
    * terminal somebody is standing in is not the same as declining to run a
    * step in it.
    */
-  async function runStep(name, world = {}) {
+  async function runStep(name, world = {}, { lane = 0 } = {}) {
     const { plans = [], prs = [], prsFailed = [] } = Array.isArray(world) ? { plans: world } : world;
     if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     // A quota answer in the other lane is this lane's answer too: wait it
@@ -1043,9 +1079,9 @@ export function createRunner({
     // The lane's current file exists exactly as long as the session does —
     // written before the call that blocks, removed however that call
     // returns. It carries its repo, which is also its lane's name.
-    const currentPath = paths.currentFor(repo.name);
+    const currentPath = paths.currentFor(repo.name, lane);
     writeJson(currentPath, {
-      name, kind, repo: repo.name, tool: settings.tool, model: settings.model,
+      name, kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
       budget_minutes: settings.budgetMinutes, started: stamp(), pid, worktree,
     });
     let result;
@@ -1254,7 +1290,7 @@ export function createRunner({
    * nothing about them one at a time — they are collected and returned as
    * `refused`, and the round leaves the one line (`refusedLine`).
    */
-  async function runLane({ repo = null, names = [] }, world, { once = false } = {}) {
+  async function runLane({ repo = null, names = [], lane = 0 }, world, { once = false } = {}) {
     let known = Array.isArray(world) ? { plans: world } : world;
     let ran = 0;
     const refused = [];
@@ -1265,7 +1301,7 @@ export function createRunner({
       // came good in that window does not wait for the next round.
       const no = planRefusal(name, known.plans);
       if (no) { refused.push(no); continue; }
-      let r = await runStep(name, known);
+      let r = await runStep(name, known, { lane });
       for (let stayed = 0; ; stayed += 1) {
         if (r === 'stop') return { ran, stop: true, refused };
         if (r === 'ran' || r === 'merged') {
@@ -1285,7 +1321,7 @@ export function createRunner({
         const status = known.plans.find((p) => p.project === name)?.status;
         if (!status || status === 'done') break;
         say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
-        r = await runStep(name, known);
+        r = await runStep(name, known, { lane });
       }
     }
     return { ran, stop: false, refused };
@@ -1302,7 +1338,7 @@ export function createRunner({
    * only one repository holding ready plans there is one lane, and a round
    * is exactly what it was before.
    */
-  async function round({ once = false, only = null } = {}) {
+  async function round({ once = false, only = null, lane = 0, count = 1 } = {}) {
     // `only` is one lane's round — the unattended loop's shape since
     // 2026-09-03, when Martin saw that a round ended only when *both* lanes
     // had: memoro-cli's lane sat idle for hours while memoro's walked thirty
@@ -1331,8 +1367,15 @@ export function createRunner({
     const left = names.filter((name) => !archived.includes(name));
     // `--once` is one step, so it is one lane over the whole queue in
     // Martin's order — there is nothing for a second lane to do.
+    // With `lanes` above one for a repository, this round is one of that
+    // many running side by side, and takes every `lanes`th name from the
+    // repository's list starting at its own index — so two rounds in one
+    // repository never hold the same project, and each still walks its
+    // names in the queue's order. A project that is in flight in the other
+    // lane is also refused by `inFlight`'s open pull request, once it has one.
     const lanes = (once ? [{ repo: null, names: left }] : splitLanes(left, plans))
-      .filter((lane) => only == null || lane.repo === only);
+      .filter((item) => only == null || item.repo === only)
+      .map((item) => ({ ...item, lane, names: item.names.filter((_, index) => index % count === lane) }));
     if (lanes.length > 1) say(`lanes: ${lanes.map((lane) => `${lane.repo || 'unplaced'} (${lane.names.length})`).join(', ')}`);
     const results = await Promise.all(lanes.map((lane) => runLane(lane, world, { once })));
     const out = {
@@ -1373,7 +1416,7 @@ export function createRunner({
     const { plans } = queue();
     tidyQueue(plans);
     writeUnreadable(plans);
-    const quiet = !repos.some((repo) => deps.exists(paths.currentFor(repo.name)));
+    const quiet = paths.currents().length === 0;
     const archives = quiet ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
     closeWorkareas(plans, archives.flatMap((a) => a.landed), archivedProjects());
   }
@@ -1382,7 +1425,7 @@ export function createRunner({
   const markRunner = () => writeJson(paths.runner, { pid, started: stamp() });
   const clearRunner = () => {
     remove(paths.runner);
-    for (const repo of repos) remove(paths.currentFor(repo.name));
+    for (const file of paths.currents()) remove(file);
   };
 
   return {
@@ -1475,11 +1518,21 @@ export async function runLoop({
       // its lanes run in their own loop beside them. STOP and UPDATE are
       // read where they always were, at a round boundary — now each lane's
       // own — and the handover waits for every lane to reach one.
-      const lane = async (repo) => {
+      //
+      // `mc run lanes <n>` puts n of these loops on each repository. Each
+      // takes every nth name of the repository's queue (round.js: `lane`,
+      // `count`), so two never hold one project; what they share is the
+      // repository's main, and a landing that meets the other's at the gate
+      // waits for it (`landPr`). The count is read here, once — a running
+      // runner keeps the count it started with until `--update`.
+      const count = (deps.laneCount || readLaneCount)();
+      if (count > 1) runner.say(`lanes: ${count} per repository`);
+      const lane = async (repo, index) => {
+        const tag = count > 1 ? `${repo.name}#${index + 1}` : repo.name;
         for (let n = 1; ; n += 1) {
-          const r = await runner.round({ only: repo.name });
+          const r = await runner.round({ only: repo.name, lane: index, count });
           if (r.stop) return { stop: true };
-          runner.say(`${repo.name}: round ${n} done (${r.ran} ran)`);
+          runner.say(`${tag}: round ${n} done (${r.ran} ran)`);
           if (runner.updateRequested()) return { update: true };
           if (r.ran === 0) await deps.sleep(idleSleepMs);
           if (runner.stopRequested()) return { stop: true };
@@ -1493,7 +1546,8 @@ export async function runLoop({
           await deps.sleep(idleSleepMs);
         }
       };
-      const results = await Promise.all([...runner.repos.map(lane), choreLoop()]);
+      const lanes = runner.repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)));
+      const results = await Promise.all([...lanes, choreLoop()]);
       if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
       if (results.some((r) => r.update) && await update()) return 0;
       runner.say('runner exit — the update did not hand over');

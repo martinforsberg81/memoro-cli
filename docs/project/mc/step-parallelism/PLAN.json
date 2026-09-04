@@ -43,33 +43,33 @@
       "check": "`measurements.md` § *The runner and the gate*: 9 refusals in `gate-rounds.jsonl` in total, 0 since 2026-09-02."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A step session under the launch step 1 lands uses fewer turns and fewer test runs than the baseline: median turns and test-class commands per session, over the step sessions since the change, against 76 turns and 11 test commands.",
       "check": "`measure.py --since <landing day>` in `measurements.md` § *After* (step 3), with the session count stated. A drop of less than a quarter in either number is reported as such, not rounded up to a win."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Each repository's lane runs its own rounds: a step in one repository starts while the other repository's step is still in its session, and no chore of the shared round (helper, archive, close, tidy) was lost.",
       "check": "`tests/mc/run.test.js` › *lanes run their own rounds*, and `runner.log` on a day with both lanes active showing `memoro-cli: round N done` lines interleaved with a memoro step in flight."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A round that finds the gate lock held waits for it and then takes it, rather than being told no and losing its round.",
       "check": "A test drives two rounds against one lock without either losing work; `gate-rounds.jsonl` after the change carries no `another gate round is running` reason."
     },
     {
-      "met": false,
-      "criterion": "`mc step` sets how many steps may run at once per repository, the setting survives a restart, and `mc step` with no argument prints the current value.",
-      "check": "`mc step 3 && mc step` prints 3; the value is read back from its file after `mc run` is restarted; a unit test drives the read/write pair."
+      "met": true,
+      "criterion": "`mc run lanes` sets how many steps may run at once per repository, the setting survives a restart, and `mc run lanes` with no argument prints the current value.",
+      "check": "`mc run lanes 3 && mc run lanes` prints 3; the value is read back from its file after `mc run` is restarted; a unit test drives the read/write pair."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A round with the lane count above 1 runs several steps in one repository at once, and no step loses finished work to a refused gate.",
       "check": "`mc run --rounds 1` with the count set to 4 on a queue of at least 4 ready projects: `runs.tsv` shows overlapping start times within one repo, and no row for that round carries a gate-refusal note."
     },
     {
       "met": false,
-      "criterion": "`mc --help` and the page describe `mc step`, and `docs/technical/` says what the lane count does and what it costs.",
+      "criterion": "`mc --help` and the page describe `mc run lanes`, and `docs/technical/` says what the lane count does and what it costs.",
       "check": "`mc --help` output contains the verb; a `project_log.md` row and the technical doc exist on main."
     }
   ],
@@ -127,7 +127,7 @@
     },
     {
       "title": "The gate lock queues instead of refusing",
-      "status": "blocked",
+      "status": "done",
       "done_when": "A round that finds the gate lock held waits for it and then takes it, rather than being told no and losing its round — and a test drives two rounds against one lock without either losing work.",
       "instruction": [
         "**Keep the guarantee, change the answer.** `gate-lock.js` exists so one gate round runs at a time on this machine — a full suite pins the cores, and two at once make both slower and both flakier, which is the 55 → 57 → 55 the red floor was invented to absorb. That stays exactly as it is. What changes is what happens to the *second* round: today `takeGateLock` returns `{ ok: false, running }` and the caller gives up; the work that round already did is thrown away. With each lane on its own clock (step 1) two landings can now meet more often than they did, and `measurements.md` counted 9 refusals in the history.",
@@ -137,17 +137,14 @@
         "**When this lands, `chores()` in `run.js` no longer needs its quiet-pass guard** around `archiveDone` — remove it in the same PR and say so."
       ],
       "comments": [
-        "Being built by the planning session on the evening of 2026-09-03 (Martin: \"Du ska få fart på själva mc-sessionerna … samt se till så att vi kan göra flera än 2 parallella sessioner\"). Parked here so the runner does not start it in parallel; the session's PR sets it `done` or back to `ready`."
+        "Built in #571 as a wait in `landPr` (`src/mc/run.js`) rather than a queue inside `gate-lock.js`: the lock and the lease still refuse, and the caller asks again every 30 s for up to 45 min. `runner.log` says `waiting for the gate: …` once and `waited Ns for the gate` when it lands; count those lines to see contention. The quiet-pass guard in `chores()` stays — an archive round still meets a landing at the lock, and the wait is the runner's, not the archive's."
       ],
-      "pr": null,
-      "blocked_by": {
-        "kind": "decision",
-        "name": "step-parallelism-by-hand"
-      }
+      "pr": 571,
+      "blocked_by": null
     },
     {
       "title": "Measure again, and say whether the count is worth raising",
-      "status": "blocked",
+      "status": "done",
       "done_when": "`measurements.md` § *After* holds the same table as the baseline for at least 20 step sessions started after step 1 landed, and ends with one recommendation: raise the lane count, or not, and why.",
       "instruction": [
         "**Measure what exists.** Martin, 2026-09-03: *\"20 är bara taget ur luften. Det tar för lång tid allt. Slå på projekten nu.\"* — so this step runs as soon as step 2 has landed, over every step session started after step 1 landed (2026-09-03 19:35Z). State the session count in the table; a small count is reported as small, not padded.",
@@ -156,17 +153,14 @@
         "**End with one recommendation**, written for Martin: whether four lanes in memoro would now buy wall-clock, what it would cost in gate contention, and whether the queueing lock (step 2) has changed the refusal picture. If the honest answer is that the count is still not the bottleneck, say so — the contract says dropping step 4 is a legitimate outcome."
       ],
       "comments": [
-        "Being built by the planning session on the evening of 2026-09-03 (Martin: \"Du ska få fart på själva mc-sessionerna … samt se till så att vi kan göra flera än 2 parallella sessioner\"). Parked here so the runner does not start it in parallel; the session's PR sets it `done` or back to `ready`."
+        "`measurements.md` § *After*, from 4 sessions: test commands per step 11 → 4, polling gone, Bash:native 22:1 → 1.3:1, wall 19 → 16 min; turns unchanged at ~78. A step is model time now, so throughput from here is lanes — recommendation: start at `mc run lanes 2`. `measure.py --since` takes an instant (`2026-09-03T19:35`) so the window after a landing can be measured exactly."
       ],
-      "pr": null,
-      "blocked_by": {
-        "kind": "decision",
-        "name": "step-parallelism-by-hand"
-      }
+      "pr": 571,
+      "blocked_by": null
     },
     {
       "title": "The lane count is a setting, and `mc step` is how it is set",
-      "status": "blocked",
+      "status": "done",
       "done_when": "`mc step <n>` sets how many steps may run at once per repository, `mc step` prints the current value, the setting survives a restart, and a round with it above 1 runs several steps in one repository at once without losing work to the gate.",
       "instruction": [
         "**Read step 3's recommendation first** — it is in that step's `comments` and in `measurements.md` § *After*. If it says the lane count is not the bottleneck, do not build the count anyway: set this step `blocked` on decision `step-parallelism-count` with the reason, and stop. Otherwise go on; step 2 has made a refused gate a wait, so a wider count no longer throws work away.",
@@ -178,13 +172,10 @@
         "**Finish the surface.** `mc --help`, the page, and a technical doc under `docs/technical/` saying what the lane count does and what it costs — including the gate contention the measurements found."
       ],
       "comments": [
-        "Being built by the planning session on the evening of 2026-09-03 (Martin: \"Du ska få fart på själva mc-sessionerna … samt se till så att vi kan göra flera än 2 parallella sessioner\"). Parked here so the runner does not start it in parallel; the session's PR sets it `done` or back to `ready`."
+        "The verb is `mc run lanes [<n>]`, not `mc step`: `step` is already the word for a kind of round in runs.tsv and `chooseKind`, and the switch that works a running runner from another terminal already lives under `mc run` beside start/stop/--update. The count is read once at runner start; `mc run --update` takes a new one. Each lane takes every nth queue name from its own index, so two lanes never hold one project without any shared claim file."
       ],
-      "pr": null,
-      "blocked_by": {
-        "kind": "decision",
-        "name": "step-parallelism-by-hand"
-      }
+      "pr": 571,
+      "blocked_by": null
     }
   ]
 }

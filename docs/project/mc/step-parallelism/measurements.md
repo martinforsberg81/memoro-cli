@@ -103,3 +103,39 @@ session's own turns and test reruns — not by the gate, not by the runner. Four
 lanes would multiply the same sessions. The order that follows is the plan's:
 fewer turns and one test run first (step 1), measured again (step 2), the gate
 lock queueing instead of refusing (step 3), and only then the count (step 4).
+
+## After — the first sessions on the step-1 launch
+
+`measure.py --since 2026-09-03T19:35 --until 2026-09-05 --min-turns 5`, run
+at 2026-09-03 21:00Z: **4 sessions** (mc-cut ×2, mc-workarea-deps,
+email-window-layout). Four is what existed; Martin chose not to wait for
+twenty (*"20 är bara taget ur luften"*).
+
+| | before (60) | after (4) |
+|---|---|---|
+| session wall-clock, median | 19.1 min | 16.3 min |
+| API (model) time, median | 11.9 min | 9.6 min |
+| turns, median | 76 | 78 |
+| test-class commands per session, median | 11 | 4 |
+| poll/wait share of tool time | 15 % | 0 % (one call) |
+| Bash calls : native Read/Grep/Edit/Write | 5 598 : 255 | 188 : 142 |
+| Bash calls killed at the 120 s timeout | 18 | 0 |
+| cost, median | $5.8 | $8.7 |
+
+What moved: the verification half. Test commands per step fell from 11 to
+4, the `sleep`-loop polling is gone, and reads go through `Read` rather than
+`sed -n`. Tool time is now a few minutes of a step, not half of it.
+
+What did not: **turns**. A step is still ~78 model turns at ~4.5 s each, and
+that is now nearly the whole of its wall-clock. Cost per session is up
+because the same turns read whole files instead of screens — more tokens per
+turn, fewer wasted calls — and four sessions is too few to call that a trend.
+
+**Recommendation (step 3):** a step's wall-clock is model time now, and no
+runner setting shortens a model turn. Throughput from here is lanes.
+`landPr` waits for a held gate instead of parking the project (step 2), so a
+second lane per repository costs nothing it did not already cost. Start at
+`mc run lanes 2` — four sessions on this machine, which is what Martin asked
+for — and read `runner.log` for `waiting for the gate` lines and the page for
+memory before going to 3. Gate-lock refusals since 2026-09-02: 0 before this
+change; the lines to count afterwards are `waited Ns for the gate`.

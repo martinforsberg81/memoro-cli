@@ -859,7 +859,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
 
   const during = f.duringSession[0];
   assert.deepEqual(JSON.parse(during['/w/runner/current-memoro.json']), {
-    name: 'alpha', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus', budget_minutes: 90,
+    name: 'alpha', kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', budget_minutes: 90,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro',
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z' });
@@ -875,7 +875,7 @@ test('the current file carries the project frontmatter, and is removed even when
   const runner = createRunner({ deps: f.deps });
   await assert.rejects(runner.round({ once: true }), /boom/u);
   assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current-memoro-cli.json']), {
-    name: 'cx', kind: 'step', repo: 'memoro-cli', tool: 'codex', model: 'o3', budget_minutes: 20,
+    name: 'cx', kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', budget_minutes: 20,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
   });
   assert.equal('/w/runner/current-memoro-cli.json' in f.files, false);
@@ -1715,4 +1715,67 @@ test('a pull request from the branch the worktree stands on is the project\'s, w
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /alpha: #77 is on test-arch, not a branch named after the project — landing it anyway/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\talpha\tstep\t0\t\d+\t77\t/u, 'the row names the PR');
+});
+
+/**
+ * The gate lock and the repository lease refuse a second round; the runner
+ * used to log `left open` and move on, which parked the project behind its
+ * own open pull request. A refused round is a live round that ends in
+ * minutes, so the landing waits and asks again.
+ */
+test('a landing that meets another round waits for it, and lands', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 70, title: 'Step' } }, session: okSession() });
+  let asked = 0;
+  f.deps.mergeRound = async () => {
+    asked += 1;
+    if (asked < 3) return { ok: false, merged: false, stopped_at: asked === 1 ? 'busy' : 'lease', reason: asked === 1 ? 'another gate round is running on this machine (pid 9)' : '/home/memoro is held by beta for “merge round for #71”' };
+    return { ok: true, merged: true, merged_into: 'main', default_branch: 'main', off_default: false, stopped_at: null, reason: null };
+  };
+  let slept = 0;
+  f.deps.sleep = async () => { slept += 1; };
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.equal(asked, 3, 'the round was asked again after each refusal');
+  assert.ok(slept >= 2, 'it waited between the asks');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /alpha: merge #70 — waiting for the gate: another gate round is running on this machine \(pid 9\)/u);
+  assert.match(log, /alpha: merge #70 — waited \d+s for the gate/u);
+  assert.match(log, /alpha: merged #70 into main through the gate/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\talpha\tstep\t.*\tsuccess,merged\t/u);
+});
+
+test('a landing refused for any other reason is left open, as before', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 70, title: 'Step' } }, session: okSession(), rounds: { 70: { ok: false, merged: false, stopped_at: 'red', reason: '2 tests red' } } });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.equal(f.calls.rounds.length, 1, 'a red round is not asked again');
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: #70 left open — 2 tests red/u);
+});
+
+/**
+ * `mc run lanes 2`: two loops on one repository, each taking every second
+ * name, each with a current file of its own. Neither waits for the other.
+ */
+test('runLoop: lanes above one split a repository\'s names, and never hold the same project', async () => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready, c: ready } }, session: okSession() });
+  const inner = f.deps.session;
+  const seen = [];
+  let started = 0;
+  f.deps.session = async (call) => {
+    started += 1;
+    seen.push({ name: call.cwd.split('/')[2], currents: Object.keys(f.files).filter((k) => /\/runner\/current-/u.test(k)).sort() });
+    if (started === 3) f.files['/w/runner/STOP'] = '';
+    return inner(call);
+  };
+  f.deps.laneCount = () => 2;
+  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  const names = seen.map((s) => s.name).sort();
+  assert.deepEqual(names, ['a', 'b', 'c'], `every project ran once: ${JSON.stringify(seen)}`);
+  const both = seen.find((s) => s.currents.length === 2);
+  assert.ok(both, `two steps were in flight at once: ${JSON.stringify(seen)}`);
+  assert.deepEqual(both.currents, ['/w/runner/current-memoro-1.json', '/w/runner/current-memoro.json']);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /lanes: 2 per repository/u);
+  assert.match(log, /memoro#2: round 1 done \(1 ran\)/u, 'the second lane closed a round of its own');
+  assert.match(log, /runner exit on STOP after c/u, 'the first lane walked a then c and left on STOP');
 });
