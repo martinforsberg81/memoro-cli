@@ -124,7 +124,7 @@
         "The new block in `tests/mc/roles-decisions.test.js` walks all eight canon roles, each by the path that actually delivers the text: the assembler for the seven with a body, `planLaunch` for `plan`. Asserting `plan` through `instructionsFor` would assert nothing — its overlay is null and the assembler correctly hands it nothing.",
         "For step 3's line count: `_common.md` grew from 9 to 31 lines, so `wc -l canon/roles/*.md` now totals 301. The criterion's under-260 target counts `canon/roles/*.md`, which includes the shared file — worth knowing before measuring the cut, since 22 of those lines are text that was moved out of the roles rather than added to them."
       ],
-      "pr": null,
+      "pr": 611,
       "blocked_by": null
     },
     {
