@@ -110,7 +110,7 @@
         "Criterion 3 is the one this session cannot tick: it asks for a row in `runs.tsv` from a real round, and this ran no round. The fixture runner asserts the whole path (one session, `kind` `step`, the preamble naming the files, the plan read from HEAD, and a resolution that lands rather than reading as a trespass); the live row is what a night with a conflict will add. Criterion 5 is ticked on the two abort tests — the check's \"skipped with the conflicting files named\" is now the case where there is no step to hand the conflict to, since a ready step gets it *with* instructions, which the same sentence allows.",
         "A wrinkle worth knowing before it surprises somebody: the step handed out is read from HEAD, so a branch that is behind main on a step main has since finished can be handed that finished step again. It takes a branch that never landed and a plan conflict the rule refuses; the plan rule (step 2) resolves every case where the two sides touched different steps, so what is left is the same step on both sides, where HEAD and main disagree about that step and nothing else. The instruction chose HEAD deliberately — \"the step the session is being handed is the step this branch is on\" — and the trespass baseline above is what keeps the resolution landable."
       ],
-      "pr": null,
+      "pr": 613,
       "blocked_by": null
     },
     {
