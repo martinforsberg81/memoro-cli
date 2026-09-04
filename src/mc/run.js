@@ -87,7 +87,8 @@ import {
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
 import {
-  heldPath, holdPr, holdReason, holdsAfterSession, parseHeld, reconcileHeld, releasePr,
+  bumpRepairs, heldPath, holdDetails, holdPr, holdReason, holdsAfterSession, parseHeld,
+  reconcileHeld, releasePr,
 } from './held.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
@@ -108,9 +109,9 @@ import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
-  helperDue, helperNote, inFlight, landingNote, mcOwnFiles, nextBranch, queueFileNames, queueFileText,
-  readSessionOutput, reconcilePrompt, sessionSettings, stackOrder, stepPrompt, strictQueue,
-  tsvHeader, tsvRow,
+  heldRepair, helperDue, helperNote, inFlight, landingNote, mcOwnFiles, nextBranch, queueFileNames,
+  queueFileText, readSessionOutput, reconcilePrompt, repairPrompt, sessionSettings, stackOrder,
+  stepOfPr, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
@@ -240,6 +241,21 @@ export function realDeps(env = process.env) {
 }
 
 /* --------------------------------------------------------------- runner */
+
+/**
+ * The plan a repair session's edits are judged against, and the step it was
+ * allowed to edit. Null when there is no plan to judge by at all.
+ *
+ * An ordinary repair is judged against the plan it was handed — the step that
+ * names this pull request is its own. A repair of a `plan-trespass` is judged
+ * against the plan on origin/main, because the plan it was handed is the
+ * trespass: the step's work has not landed, or it would not be held.
+ */
+function repairBaseline(entry, plan, onMain) {
+  if (!plan?.path) return null;
+  const before = entry.note === 'plan-trespass' && onMain ? onMain : plan.plan;
+  return before ? { before, index: stepOfPr(before, entry.pr) } : null;
+}
 
 export function createRunner({
   merge = true, deps = realDeps(),
@@ -407,6 +423,11 @@ export function createRunner({
     writeJson(paths.held, holdPr(heldNow(), { ...entry, since: stamp() }));
   }
 
+  /** This pull request's one repair, counted before the session starts. */
+  function countRepair(repo, pr) {
+    writeJson(paths.held, bumpRepairs(heldNow(), { repo, pr: Number(pr) }));
+  }
+
   function release(repo, pr) {
     const entries = heldNow();
     const kept = releasePr(entries, { repo, pr: Number(pr) });
@@ -493,7 +514,10 @@ export function createRunner({
       // until now the only trace was this line. Written down first, said
       // second.
       const reason = report?.reason || 'the merge round said nothing';
-      hold({ project: name, repo: repo.name, pr: Number(pr), branch, reason, note });
+      // With what the gate saw: the red tests by name and the output of every
+      // command gate that failed. The report is the only place either exists,
+      // and the repair session is the reader.
+      hold({ project: name, repo: repo.name, pr: Number(pr), branch, reason, note, ...holdDetails(report) });
       say(`${name}: #${pr} left open — ${reason}`);
     }
     return note;
@@ -1121,17 +1145,42 @@ export function createRunner({
     // plan says — the plan on origin/main and the plan in the worktree both
     // read `ready` while the step's work sits in an open pull request. The
     // rule itself is `inFlight`, beside `chooseKind` in run-plan.js.
-    const flight = inFlight(openPrsFor({ prs, name, names: plans.map((p) => p.project), repo: repo.name }));
-    if (flight) { say(`${name}: ${flight.skip}`); return 'skipped'; }
-    // And a session must be somewhere it can push from. The push-guard asks
-    // the same question at the wrong end — after ninety minutes of work.
-    const moved = freshBranch(worktree, name);
-    if (!moved.ok) { say(`${name}: ${moved.why}, skip`); return 'skipped'; }
+    const openPrs = openPrsFor({ prs, name, names: plans.map((p) => p.project), repo: repo.name });
+    // Unless it is a pull request the runner itself would not land. That is not
+    // work in flight — nothing is going to finish it — and its first round back
+    // is one repair session rather than the same skip for ever. `heldRepair`
+    // holds the whole rule, including the second round, which is the brief's.
+    const repair = heldRepair({ entries: heldNow(), openPrs, project: name, repo: repo.name });
+    if (repair?.skip) { say(`${name}: ${repair.skip}`); return 'skipped'; }
+    if (!repair) {
+      const flight = inFlight(openPrs);
+      if (flight) { say(`${name}: ${flight.skip}`); return 'skipped'; }
+    }
+    // A session must be somewhere it can push from. The push-guard asks the
+    // same question at the wrong end — after ninety minutes of work. A repair
+    // is the exception: its branch carries the work being repaired, so it is
+    // stood on rather than left behind.
+    if (repair) {
+      const on = gitOut(worktree, ['branch', '--show-current']);
+      if (repair.entry.branch && on !== repair.entry.branch
+        && !deps.git(worktree, ['checkout', '-q', repair.entry.branch]).ok) {
+        say(`${name}: #${repair.entry.pr} is on ${repair.entry.branch}, which this workarea could not check out, skip`);
+        return 'skipped';
+      }
+    } else {
+      const moved = freshBranch(worktree, name);
+      if (!moved.ok) { say(`${name}: ${moved.why}, skip`); return 'skipped'; }
+    }
 
     const sync = syncMain(worktree, name);
     if (!sync.ok && !sync.conflicts.length) { say(`${name}: fetch/merge failed, skip`); return 'skipped'; }
     const plan = sync.conflicts.length ? null : planOf(worktree, name);
-    const choice = chooseKind({ plan, conflicts: sync.conflicts });
+    // A conflicted merge is reconciled first whatever else is true — a repair
+    // cannot run in a worktree with a merge in progress, and its pull request
+    // is still held next round.
+    const choice = repair && !sync.conflicts.length
+      ? { kind: 'repair' }
+      : chooseKind({ plan, conflicts: sync.conflicts });
     // A null `skip` is a skip nobody would read — see `chooseKind`.
     if (!choice.kind) { if (choice.skip) say(`${name}: ${choice.skip}, skip`); return 'skipped'; }
     const { kind } = choice;
@@ -1144,7 +1193,16 @@ export function createRunner({
     const now = deps.now();
     const prompt = kind === 'reconcile'
       ? reconcilePrompt({ name, repo: repo.name, conflicts: sync.conflicts })
-      : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, step: choice.step, index: choice.index, now });
+      : kind === 'repair'
+        ? repairPrompt({ name, repo: repo.name, ...repair.entry })
+        : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, step: choice.step, index: choice.index, now });
+    // Counted before the session runs, not after: a repair killed on its budget
+    // still had its one turn, and a count written afterwards would give the next
+    // round a second repair for the same pull request.
+    if (kind === 'repair') {
+      countRepair(repo.name, repair.entry.pr);
+      say(`${name}: #${repair.entry.pr} is held before merge — one repair session: ${repair.entry.reason}`);
+    }
     const instructions = [await deps.profile(), role.overlay].filter(Boolean).join('\n\n---\n\n');
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, instructions, prompt, profileArgs });
 
@@ -1209,11 +1267,21 @@ export function createRunner({
     // rewrote a step it did not run, added one, or widened the scope leaves a
     // PR the runner will not merge. Nothing is reverted here — the branch is
     // the session's work and Martin reads the PR.
+    //
+    // A repair is checked the same way, and a repair of a `plan-trespass` is
+    // checked against the plan on **origin/main** rather than against the one
+    // it was handed: the worktree's plan already carries the trespass, so
+    // judging the repair by it would call the trespass repaired the moment
+    // nothing more was touched, and the runner would land what it refused to
+    // land an hour earlier.
     let problems = [];
-    if (kind === 'step' && note === 'success') {
+    const judged = kind === 'repair'
+      ? repairBaseline(repair.entry, plan, plans.find((p) => p.project === name)?.plan || null)
+      : (kind === 'step' ? { before: plan.plan, index: choice.index } : null);
+    if (judged && note === 'success') {
       const after = readPlanText(deps.read(plan.path) || '');
       const trespass = after.plan
-        ? unauthorisedChanges(plan.plan, after.plan, choice.index)
+        ? unauthorisedChanges(judged.before, after.plan, judged.index)
         : { ok: false, problems: [`the plan no longer parses: ${after.problems[0]}`] };
       if (!trespass.ok) {
         note = 'plan-trespass';

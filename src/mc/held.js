@@ -31,6 +31,10 @@ export function heldPath(root) {
 /** One entry, whatever a hand-edited file or an older runner left behind. */
 function normalise(entry) {
   const repairs = Number(entry.repairs);
+  const red = Array.isArray(entry.red) ? entry.red.map(String).filter(Boolean) : [];
+  const gates = Array.isArray(entry.gates)
+    ? entry.gates.filter(Boolean).map((gate) => ({ name: String(gate.name ?? 'a gate'), output: clip(gate.output) }))
+    : [];
   return {
     project: entry.project ?? null,
     repo: entry.repo ?? null,
@@ -40,7 +44,48 @@ function normalise(entry) {
     note: entry.note ?? null,
     since: entry.since ?? null,
     repairs: Number.isFinite(repairs) && repairs > 0 ? Math.round(repairs) : 0,
+    // What the gate itself saw, for the session that will be asked to fix it —
+    // written only when there is something to carry, so an entry a person reads
+    // is still the six short fields it was.
+    ...(red.length ? { red } : {}),
+    ...(gates.length ? { gates } : {}),
   };
+}
+
+/** How much of a gate's own output an entry carries. */
+export const OUTPUT_CAP = 4000;
+
+function clip(text) {
+  const said = String(text ?? '').trim();
+  if (said.length <= OUTPUT_CAP) return said;
+  return `${said.slice(0, OUTPUT_CAP)}\n… and ${said.length - OUTPUT_CAP} more characters, not kept here`;
+}
+
+/**
+ * What the gate saw, taken off a merge round's report at the moment it is
+ * held: every red test by name, and the output of every command gate that
+ * failed.
+ *
+ * The headline reason names five red tests and says "and 4 more" — that is a
+ * line for a person, not a brief for a session that has to fix them. The full
+ * list is `gate.candidate.red`, and a command gate's stderr is nowhere else at
+ * all: `gate-rounds.jsonl` keeps the red names (capped at forty) and no gate
+ * output, and the report itself is in memory for as long as this round. So it
+ * is read here or it is lost — on 2026-09-03 `sql:pr-ci — exit 1` was the whole
+ * of what anybody had, and three rounds were retried on a stale head before the
+ * reason was known.
+ */
+export function holdDetails(report) {
+  const gate = report?.gate || null;
+  const red = Array.isArray(gate?.candidate?.red) ? gate.candidate.red.map(String) : [];
+  const gates = (gate?.extra_gates || [])
+    .filter((item) => item && item.ok === false)
+    .map((item) => ({
+      name: String(item.name ?? 'a gate'),
+      output: [item.output, item.red?.length ? `red: ${item.red.join(' ')}` : null].filter(Boolean).join('\n'),
+    }))
+    .filter((item) => item.output);
+  return { red, gates };
 }
 
 /** The entries of a parsed file — anything else is no entries at all. */
@@ -80,6 +125,18 @@ export function holdPr(entries, entry) {
   return entries.map((item, index) => (index === at
     ? { ...next, since: was.since || next.since, repairs: was.repairs }
     : item));
+}
+
+/**
+ * This pull request's repair counted, before the session that is about to try
+ * it runs. Before rather than after: a repair session killed on its budget
+ * still had its one turn, and a count kept until the session came back would
+ * hand the next round a second one for the same pull request.
+ */
+export function bumpRepairs(entries, { repo = null, pr }) {
+  return entries.map((entry) => (samePr(entry, { repo, pr })
+    ? { ...entry, repairs: entry.repairs + 1 }
+    : entry));
 }
 
 /** The entries without it: the pull request landed, or is not open any more. */

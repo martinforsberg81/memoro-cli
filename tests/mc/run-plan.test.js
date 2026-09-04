@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  MC_OWN_TREES, assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, inFlight,
-  landingNote, mcOwnFiles, nextBranch, queueFileNames, queueFileText, quotaSeen,
-  readSessionOutput, sessionSettings, stackOrder, stepPrompt, strictQueue, tsvHeader, tsvRow,
+  MC_OWN_TREES, assembleQueue, chooseKind, headlessArgs, heldRepair, helperDue, helperNote,
+  inFlight, landingNote, mcOwnFiles, nextBranch, queueFileNames, queueFileText, quotaSeen,
+  readSessionOutput, repairPrompt, sessionSettings, stackOrder, stepOfPr, stepPrompt, strictQueue,
+  tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
@@ -436,6 +437,101 @@ test('landingNote: a red gate is the pull request left open, and says so', () =>
   assert.equal(landingNote({ merged: false, stopped_at: 'drift' }), 'open,gate-drift');
   assert.equal(landingNote({ merged: false }), 'open,gate-unknown');
   assert.equal(landingNote(null), 'open');
+});
+
+/* ------------------------------------------------------------------ repair */
+
+/**
+ * A pull request the runner would not land gets one repair session before it
+ * becomes a person's. `inFlight` refuses the project either way; the
+ * difference is that a repair is somebody doing something about it, and the
+ * second round says who is expected to act.
+ */
+const heldEntry = (over = {}) => ({
+  project: 'm', repo: 'memoro', pr: 9, branch: 'm', reason: 'two tests red',
+  note: 'open,gate-red', since: '2026-09-03T10:00:00Z', repairs: 0, ...over,
+});
+const openPr = (number, head) => ({ number, headRefName: head, baseRefName: 'main' });
+
+test('heldRepair: a held pull request with no repair yet is a repair session', () => {
+  const entries = [heldEntry()];
+  const openPrs = [openPr(9, 'm')];
+  const choice = heldRepair({ entries, openPrs, project: 'm', repo: 'memoro' });
+  assert.equal(choice.kind, 'repair');
+  assert.equal(choice.entry.pr, 9);
+  assert.equal(choice.entry.branch, 'm');
+
+  // Another project's hold, and another repository's #9, are not this one's.
+  assert.equal(heldRepair({ entries, openPrs, project: 'other', repo: 'memoro' }), null);
+  assert.equal(heldRepair({ entries, openPrs, project: 'm', repo: 'memoro-cli' }), null);
+  // And a hold whose pull request is not open is not one either — the round
+  // reconciles the file, but a lane that could not ask GitHub does not act on
+  // a stale entry.
+  assert.equal(heldRepair({ entries, openPrs: [openPr(10, 'm-2')], project: 'm', repo: 'memoro' }), null);
+  assert.equal(heldRepair({ entries, openPrs: [], project: 'm', repo: 'memoro' }), null);
+});
+
+test('heldRepair: the branch comes off GitHub when the entry names none', () => {
+  const choice = heldRepair({ entries: [heldEntry({ branch: null })], openPrs: [openPr(9, 'm-4')], project: 'm', repo: 'memoro' });
+  assert.equal(choice.entry.branch, 'm-4');
+});
+
+test('heldRepair: a pull request already repaired once is the brief\'s, and says so', () => {
+  const choice = heldRepair({ entries: [heldEntry({ repairs: 1 })], openPrs: [openPr(9, 'm')], project: 'm', repo: 'memoro' });
+  assert.equal(choice.kind, null);
+  assert.equal(choice.reason, 'held-after-repair');
+  assert.equal(choice.skip, '#9 is held before merge after a repair — the brief\'s');
+});
+
+/**
+ * A session told `sql:pr-ci — exit 1` and nothing else guesses: on 2026-09-03
+ * three rounds were retried on a stale head before anybody knew why. The
+ * prompt carries every red test by name and what a failed command gate
+ * printed.
+ */
+test('repairPrompt: the pull request, the branch, the reason, and everything the gate saw', () => {
+  const prompt = repairPrompt({
+    name: 'm',
+    repo: 'memoro',
+    pr: 11274,
+    branch: 'm-2',
+    reason: '2 tests red: tests/a.test.js, tests/b.test.js',
+    note: 'open,gate-red',
+    red: ['tests/a.test.js > one', 'tests/b.test.js > two'],
+    gates: [{ name: 'sql:pr-ci', output: 'admission missing for 0042_x.sql' }],
+  });
+  assert.match(prompt, /`m` workarea of memoro/u);
+  assert.match(prompt, /on branch\n`m-2`, whose pull request #11274 the runner would not land/u);
+  assert.match(prompt, /2 tests red: tests\/a\.test\.js/u);
+  assert.match(prompt, /The 2 tests the gate found red, all of them:\n {2}tests\/a\.test\.js > one\n {2}tests\/b\.test\.js > two/u);
+  assert.match(prompt, /The gate `sql:pr-ci` failed\. What it printed:\n {2}admission missing for 0042_x\.sql/u);
+  assert.match(prompt, /Make it green and push to the same branch/u);
+  assert.match(prompt, /do not delete or skip a test to pass/u);
+  assert.match(prompt, /set the step this pull request carries to `blocked`|Set the step this pull/u);
+  assert.match(prompt, /the one repair session this pull request gets/u);
+  assert.doesNotMatch(prompt, /plan boundary/u, 'the trespass paragraph is for a trespass');
+});
+
+test('repairPrompt: a plan trespass is told which change to undo', () => {
+  const prompt = repairPrompt({
+    name: 'm', repo: 'memoro', pr: 9, branch: 'm', note: 'plan-trespass',
+    reason: 'the session changed more of the plan than its step: goal: a step session does not change it',
+  });
+  assert.match(prompt, /goal: a step session does not change it/u);
+  assert.match(prompt, /The problems above are the plan boundary/u);
+  assert.match(prompt, /undo the change to any step that\nis not the one this pull request carries/u);
+});
+
+test('stepOfPr: the step that names the pull request, and the deliverable one before it does', () => {
+  const { plan } = record({
+    steps: [
+      { title: 'one', status: 'done', done_when: 'a', instruction: [], pr: 501, blocked_by: null },
+      { title: 'two', status: 'done', done_when: 'b', instruction: [], pr: 502, blocked_by: null },
+      { title: 'three', status: 'ready', done_when: 'c', instruction: ['do'], pr: null, blocked_by: null },
+    ],
+  });
+  assert.equal(stepOfPr(plan, 502), 1, 'the step whose session already wrote its own pr');
+  assert.equal(stepOfPr(plan, 503), 2, 'before that edit has landed, the step the runner would hand out');
 });
 
 test('mcOwnFiles: the two trees a running runner is already holding, and nothing beside them', () => {

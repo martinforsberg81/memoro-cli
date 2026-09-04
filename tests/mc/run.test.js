@@ -23,6 +23,11 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
   for (const [name, area] of Object.entries(areas)) {
     files[`${root}/${name}/${area.repo}/.git`] = '';
     dirs.add(`${root}/${name}`);
+    // The checkout itself, not only its `.git`: `runStep` asks whether the
+    // worktree is there before it makes one, and an area whose directory does
+    // not exist was quietly re-created from origin/main — which overwrote the
+    // very plan the fixture had put on its branch.
+    dirs.add(`${root}/${name}/${area.repo}`);
     if (area.plan) {
       files[`${root}/${name}/${area.repo}/docs/project/${area.programme}/${name}/PLAN.json`] = area.plan;
       dirs.add(`${root}/${name}/${area.repo}/docs/project`);
@@ -635,6 +640,119 @@ test('a session that timed out with its pull request open is held too', async ()
   await createRunner({ deps: f.deps }).round({ once: true });
   assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.note, entry.reason]),
     [[5, 'timeout', 'the session timed out with the pull request open']]);
+});
+
+/* ------------------------------------------------------------- the repair */
+
+/**
+ * A held pull request gets one repair session — the shape `reconcile` already
+ * has, for a different stop. Before this, `inFlight` refused the project every
+ * round because the pull request was open, and the project stood still until a
+ * person read runner.log, fixed the branch by hand and ran `mc merge`.
+ *
+ * One repair per pull request and no loop: still held after it, and it is the
+ * brief's.
+ */
+const heldEntry = (over = {}) => ({
+  project: 'm', repo: 'memoro', pr: 9, branch: 'm', reason: 'two tests the change reaches are red',
+  note: 'open,gate-red', since: '2026-09-03T10:00:00Z', repairs: 0, ...over,
+});
+const heldRound = (entries, over = {}) => {
+  const f = fixture({
+    plans: { memoro: { m: ready } },
+    openPrs: { memoro: [{ number: 9, headRefName: 'm', baseRefName: 'main', isDraft: false, title: 'Step' }] },
+    gh: { m: { number: 9, title: 'Step' } },
+    session: okSession(),
+    ...over,
+  });
+  f.files['/w/runner/held.json'] = JSON.stringify(entries);
+  return f;
+};
+
+test('a held pull request runs a repair session, told the pull request, the branch and what the gate saw', async () => {
+  const f = heldRound([heldEntry({
+    red: ['tests/a.test.js > one', 'tests/b.test.js > two'],
+    gates: [{ name: 'sql:pr-ci', output: 'admission missing for 0042_x.sql' }],
+  })]);
+  await createRunner({ deps: f.deps }).round({ once: true });
+
+  assert.equal(f.calls.sessions.length, 1, 'the open pull request is a repair, not a skip');
+  const [call] = f.calls.sessions;
+  assert.equal(call.cwd, '/w/m/memoro');
+  assert.match(call.args[1], /pull request #9 the runner would not land/u);
+  assert.match(call.args[1], /on branch\n`m`/u);
+  assert.match(call.args[1], /two tests the change reaches are red/u);
+  assert.match(call.args[1], /tests\/b\.test\.js > two/u);
+  assert.match(call.args[1], /admission missing for 0042_x\.sql/u);
+  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE repair$/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 is held before merge — one repair session: two tests the change reaches are red/u);
+
+  // The repair is counted before the session runs, not after: a session killed
+  // on its budget still had its one turn.
+  assert.equal(JSON.parse(f.duringSession[0]['/w/runner/held.json'])[0].repairs, 1);
+
+  // It came back green, so the runner lands it through the same gate that
+  // refused it — and nothing holds it any more.
+  const [row] = runRows(f.files);
+  assert.equal(row.kind, 'repair');
+  assert.equal(row.note, 'success,merged');
+  assert.deepEqual(f.calls.rounds.map((c) => c.pr), [9]);
+  assert.deepEqual(heldFile(f.files), []);
+});
+
+test('a pull request still held after its repair waits for the brief — no second repair', async () => {
+  const f = heldRound([heldEntry({ repairs: 1 })]);
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.equal(f.calls.sessions.length, 0, 'one repair per pull request, and no loop');
+  assert.equal(f.calls.rounds.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 is held before merge after a repair — the brief's/u);
+  assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.repairs]), [[9, 1]]);
+});
+
+test('a repair that stays red is held again, with the gate\'s new reason and its repair still counted', async () => {
+  const f = heldRound([heldEntry()], {
+    rounds: { 9: { ok: false, merged: false, merged_into: null, stopped_at: 'red', reason: 'one test is still red' } },
+  });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.equal(f.calls.sessions.length, 1);
+  assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.reason, entry.repairs, entry.since]),
+    [[9, 'one test is still red', 1, '2026-09-03T10:00:00Z']], 'held again keeps how long it has stood still, and that it had its repair');
+});
+
+/**
+ * A trespass is the one hold whose repair cannot be judged by the plan it was
+ * handed: that plan *is* the trespass. The baseline is the plan on
+ * origin/main, which is the one the trespassing step began from — its work has
+ * not landed, or it would not be held.
+ */
+test('a repair of a plan trespass is judged against origin/main, so a trespass it did not undo does not land', async () => {
+  const trespassed = JSON.parse(ready);
+  trespassed.goal = ['Something else entirely.'];
+  const f = heldRound([heldEntry({ note: 'plan-trespass', reason: 'the session changed more of the plan than its step: goal: a step session does not change it' })], {
+    areas: { m: { repo: 'memoro', programme: 'prog', plan: JSON.stringify(trespassed, null, 2) } },
+  });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.match(f.calls.sessions[0].args[1], /The problems above are the plan boundary/u);
+  assert.equal(f.calls.rounds.length, 0, 'a trespass the repair left in place lands nothing');
+  assert.equal(runRows(f.files)[0].note, 'plan-trespass');
+  assert.deepEqual(heldFile(f.files).map((entry) => [entry.note, entry.repairs]), [['plan-trespass', 1]]);
+});
+
+test('a repair that undoes the trespass lands', async () => {
+  const path = '/w/m/memoro/docs/project/prog/m/PLAN.json';
+  const trespassed = JSON.parse(ready);
+  trespassed.goal = ['Something else entirely.'];
+  const f = heldRound([heldEntry({ note: 'plan-trespass', reason: 'the session changed more of the plan than its step' })], {
+    areas: { m: { repo: 'memoro', programme: 'prog', plan: JSON.stringify(trespassed, null, 2) } },
+  });
+  f.deps.session = (call) => {
+    f.calls.sessions.push(call);
+    f.files[path] = ready;
+    return okSession()(call);
+  };
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.equal(runRows(f.files)[0].note, 'success,merged');
+  assert.deepEqual(heldFile(f.files), []);
 });
 
 test('a merge that landed somewhere other than main is not recorded as merged', async () => {
