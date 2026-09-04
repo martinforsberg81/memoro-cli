@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  readPlanText,
   deliverableStep,
   planState,
   unauthorisedChanges,
@@ -204,4 +205,22 @@ describe('what a step session may have changed', () => {
     after.success_criteria[0].check = 'Looks fine.';
     assert.match(unauthorisedChanges(before, after, 1).problems.join('\n'), /only `met` is the session's/u);
   });
+});
+
+/**
+ * Three sessions on 2026-09-03 wrote the pull request's URL into `pr`, and each
+ * parked its project on a plan that would not parse. The number is what the
+ * field holds; a URL or `#N` reads as that number, anything else is refused.
+ */
+it('pr: a URL or #N reads as the number; other strings are still refused', () => {
+  const plan = (pr) => JSON.stringify({
+    schema: 'mc-plan', version: 1, goal: ['g'], contract: ['c'], out_of_scope: ['o'],
+    success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
+    steps: [{ title: 't', status: 'done', done_when: 'd', instruction: [], comments: [], pr, blocked_by: null }],
+  });
+  assert.equal(readPlanText(plan('https://github.com/martinforsberg81/memoro/pull/11300')).plan.steps[0].pr, 11300);
+  assert.equal(readPlanText(plan('#11301')).plan.steps[0].pr, 11301);
+  assert.equal(readPlanText(plan('11275')).plan.steps[0].pr, 11275);
+  assert.equal(readPlanText(plan(560)).plan.steps[0].pr, 560);
+  assert.match(readPlanText(plan('pull request 5')).problems.join('\n'), /steps\[0\]\.pr: a pull request number, or null/u);
 });

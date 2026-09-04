@@ -176,6 +176,15 @@ function validateSteps(steps, problems) {
     if (step.comments !== undefined && !prose(step.comments, { min: 0 })) {
       problems.push(`${at}.comments: an array of paragraphs, possibly empty`);
     }
+    // `pr` is the number. Three sessions on 2026-09-03 wrote the pull
+    // request's URL there (#11275, #11300, #11301); each parsed as a broken
+    // plan, each was logged plan-trespass, and each parked its project until
+    // a person retyped a number. A URL or `#N` reads as N here — the plan a
+    // session leaves is read, not graded — and anything else is still refused.
+    if (typeof step.pr === 'string') {
+      const found = step.pr.trim().match(/(?:^#?|\/pull\/)(\d+)\/?$/u);
+      if (found) step.pr = Number(found[1]);
+    }
     if (step.pr !== null && step.pr !== undefined && !positiveInteger(step.pr)) {
       problems.push(`${at}.pr: a pull request number, or null`);
     }
