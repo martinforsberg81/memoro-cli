@@ -29,7 +29,7 @@
       "check": "`tests/mc/run.test.js`: a round on a project with a held PR runs a `repair` session whose prompt carries the PR number, the branch and the reason; a second round on the same PR runs no second repair. runs.tsv rows with `kind` `repair`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The brief sees what a repair could not fix, and its role tells it what to do with it.",
       "check": "`~/mc/brief/<date>.md` has a *Held before merge* section listing each such PR with reason, repairs tried, and the branch; `canon/roles/brief.md` says these are the brief's to decide — merge by hand, close, or block the step — one proposal each."
     },
@@ -87,7 +87,7 @@
     },
     {
       "title": "The brief takes what a repair could not fix",
-      "status": "ready",
+      "status": "done",
       "done_when": "`~/mc/brief/<date>.md` has a *Held before merge* section — project, PR, branch, reason, repairs — for every entry in `held.json` with `repairs >= 1`, and `canon/roles/brief.md` says these are the brief's to decide, one proposal each: merge by hand, close, or block the step with a decision.",
       "instruction": [
         "**The digest.** `src/mc/brief-collect.js` gathers the brief's first message from `runs.tsv`, the plans and the proposals (`parseRuns`, `listPlans`, `listProposals`); the writer that assembles the sections is in the same file or `commands/brief.js` — find it, and add *Held before merge* after the runner's day. Read `held.json` through the same helper step 1 wrote; do not parse runs.tsv notes to reconstruct it.",
@@ -95,7 +95,11 @@
         "**The page.** Nothing new: step 1's `held before merge` line is what a person sees between briefs. If the count is above zero at the top of a brief, the brief opens with it.",
         "**Tests.** Whatever `brief-collect` already has for its sections (`tests/mc/brief-collect.test.js`): a `held.json` with one entry at `repairs: 1` and one at `repairs: 0` yields a section naming the first only."
       ],
-      "comments": [],
+      "comments": [
+        "`heldForBrief(text)` in `brief-collect.js` is the whole rule — `parseHeld` from step 1's `held.js`, filtered to `repairs >= REPAIRS_BEFORE_BRIEF` (1) and sorted oldest first. Nothing is reconstructed from runs.tsv: the runner writes the file, the page draws the same entries through `heldEntries`, and a second reader that parsed a note back into a reason would be a second answer that can disagree with the first.",
+        "The section is *Held before merge*, between *Runner* and *Queue* — the runner's day, then what that day left standing. It is also said in the brief's opening lines when the count is above zero (`**N pull requests held before merge** after their repair …`), because a held pull request keeps a whole project out of every round and that is not something to find in the ninth section of a long file. An absent `held.json` is treated as none rather than as a missing file: unlike the intake tables, the runner writes this one the first time it refuses to land something, so never having refused one is the good answer and adds no note.",
+        "For the close-out: `docs/technical/mc-brief.md` now has the *Held before merge* row and a paragraph on the one-repair rule, and its section table gained the *Plans that do not parse* row it had been missing since that section was added (the count said nine and the table had eight). `docs/technical/mc-run.md` § *Held before merge* is still step 4's."
+      ],
       "pr": null,
       "blocked_by": null
     },

@@ -24,6 +24,18 @@ goes when the project is created, deleted by the session that writes the
 `PLAN.json` — so anything in it the plan will need has to be in the plan first.
 `~/mc/proposals/` holds what nobody has decided yet and only that.
 
+*Held before merge* is a pull request the runner refused to land and whose one
+repair session has already run and left it held anyway. Those are yours to
+decide, and nothing else waits on them: the pull request is open, so the runner
+passes that project every round, and until you say something it runs nothing.
+One proposal per pull request, never a menu, and one of
+three — `mc merge <repo> <pr>` by hand when the red is not the change's and
+you can say why, `gh pr close` with a line in the step's `comments` when the
+work itself is wrong, or the step set `blocked` with a `blocked_by` decision
+when the answer is Martin's. The reason is in the section; `~/mc/runner/held.json` has the rest
+of what the gate saw. A held pull request you do not raise is a project
+standing still that nobody has been told about.
+
 The tidying leaves two lists. *Archived without a note* asks whether a note
 under `docs/technical/` is worth writing, and which project should write it —
 never this session. *Workareas with no project on main* asks for a plan or for

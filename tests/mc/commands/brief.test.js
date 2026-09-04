@@ -50,6 +50,20 @@ describe('the brief role', () => {
     assert.match(overlay, /You remove nothing\./u);
   });
 
+  /**
+   * A pull request the runner would not land, whose one repair session has
+   * run, is the brief's — and the overlay has to say what an answer to one
+   * looks like, because the three of them are all the session may do.
+   */
+  it('takes the held pull requests, one proposal each', () => {
+    const { overlay } = readCanonRole('brief');
+    assert.match(overlay, /\*Held before merge\*/u);
+    assert.match(overlay, /`mc merge <repo> <pr>`/u);
+    assert.match(overlay, /`gh pr close`/u);
+    assert.match(overlay, /`blocked_by`/u);
+    assert.match(overlay, /One proposal per pull request, never a menu/u);
+  });
+
   it('opens with the brief as the first words', () => {
     const launch = briefLaunch({ ...COLLECTED, role: readCanonRole('brief') });
     assert.match(launch.prompt, /^This is the brief, from \/work\/brief\/2026-08-25T20-00-00Z\.md\. Start the meeting\.\n\n# Brief/u);
