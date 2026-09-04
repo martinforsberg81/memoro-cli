@@ -122,7 +122,14 @@ to carry the age of.
 
 ## What is still open
 
-Nothing.
+**`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
+kommando. Det är legacy."*). The verb list `mc-cut` fixed (#543) never named
+it, and it still carries eight sub-verbs in `src/mc/commands/repo.js`: `status`,
+`watch`, `nightly`, `claim`, `release`, `who`, `rounds`, `guard`, `push-check`.
+[`test-nightly/`](test-nightly/PLAN.json) moves `nightly` under `mc test`,
+because `test-architecture` in memoro waits on it. Where the other seven go —
+the page, `mc merge`, or nowhere — is this programme's next planning question,
+and `mc repo merge`'s exit-2 pointer is the form a retired sub-verb takes.
 
 Rulings 5 (*an open pull request stops its project*, and with it "only `mc
 merge` may be used") and 6 (*a step's learning lives on the step*) were here
