@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { sharedRoleText } from '../../src/mc/roles.js';
 import { openInWorkArea, startInBackground } from '../../src/mc/work-open.js';
 import { markStopped, readStopMark } from '../../src/mc/work-stop-marker.js';
 
@@ -114,6 +115,9 @@ describe('openInWorkArea and --model', () => {
 });
 
 describe('openInWorkArea in a role area', () => {
+  // The shared text every role session is told rides between the two: the
+  // profile is the user's, the shared text is every role's, the overlay is
+  // this role's. An area with no role gets neither (see above).
   it('the overlay rides behind the profile and the role model is the default', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, options } = opening();
@@ -122,7 +126,7 @@ describe('openInWorkArea in a role area', () => {
     });
     assert.equal(result.ok, true);
     assert.deepEqual(calls[0].args, [
-      '--model', 'fable', '--append-system-prompt', 'PROFILE\n\n---\n\nOVERLAY',
+      '--model', 'fable', '--append-system-prompt', `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nOVERLAY`,
     ]);
   });
 

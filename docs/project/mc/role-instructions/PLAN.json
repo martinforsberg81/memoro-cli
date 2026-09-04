@@ -29,22 +29,22 @@
       "check": "A test reads each of the eight canon roles through the assembler and asserts the rule is present. `grep -rl` for its opening phrase across `canon/` names one file."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The turn-cost rule is written once.",
       "check": "`grep -rl 'A turn is the unit of cost' canon/` names one file. Today it names four (`brief`, `helper`, `reconcile`, `worker`, byte-identical) with variants in `step` and `repair`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "All four launch paths take their instructions from one function.",
       "check": "`grep -rn \"'\\\\n\\\\n---\\\\n\\\\n'\" src/` finds the join only inside `roles.js`. `work-open.js:93`, `work-open.js:342`, `run.js:1224` and `helper-turn.js:209` each call it."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The shared file is not mistaken for a role.",
       "check": "A test asserts `listRoles` and `mc roles list` do not name it, with the file present in the catalogue directory under test."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The runner still skips a kind whose role file is missing.",
       "check": "A test drives a round with `canon/roles/repair.md` absent and asserts the skip line still fires — the check reads the role's own body, not the assembled text."
     },
@@ -85,7 +85,7 @@
   "steps": [
     {
       "title": "One place assembles what a session is told",
-      "status": "ready",
+      "status": "done",
       "done_when": "All four launch paths get their instructions from one function in `roles.js`, and the turn-cost rule lives in one file instead of six.",
       "instruction": [
         "There are four places a session's instructions are built, and they do not agree. `work-open.js:93` and `work-open.js:342` call `instructionsFor(toolId, profile, overlay)` from `roles.js:170`, which is `[profile, overlay].filter(Boolean).join('\\n\\n---\\n\\n')`. `run.js:1224` and `helper-turn.js:209` write that same join out by hand: `[await deps.profile(), role.overlay].filter(Boolean).join('\\n\\n---\\n\\n')`. Make one function the single door — it takes the profile and the role and returns the profile, the shared text, then that role's own body, joined the way they are joined today — and have all four call it. The delivered text for an existing role must be identical apart from the shared section this step introduces.",
@@ -95,7 +95,13 @@
         "For the same reason, do not fold the shared text into `readCanonRole`'s `overlay`. `tests/mc/roles-decisions.test.js` reads `readCanonRole(name).overlay` and asserts on one role's own words, and `mc roles show <role>` prints it as that role's text. `overlay` stays the role's body; the assembler is where the two meet.",
         "Run `npm test`. `tests/mc/roles.test.js`, `tests/mc/roles-decisions.test.js` and `tests/mc/canon.test.js` all read this text or this catalogue."
       ],
-      "comments": [],
+      "comments": [
+        "The shared file is `canon/roles/_common.md`, read by `sharedRoleText()` in `roles.js`, and `listRoles` now skips any `*.md` whose name starts with an underscore. The other shape the instruction offered — `canon/common.md` beside `roles/` — cannot be mistaken for a role at all, but it also cannot satisfy the success criterion that asks for a test of `listRoles`/`mc roles list` with the file sitting in the catalogue directory. Underscore-means-not-a-role is one line in `listRoles`, is testable, and keeps every piece of instruction text in one directory.",
+        "`instructionsFor(toolId, profile, overlay)` is the one door and kept its signature: it now returns profile, shared text, then the role's own overlay, joined with the same separator. The shared text is gated on there being an overlay — no overlay is no role, and an ordinary work area still inherits nothing, which is the parallel-operation guarantee `work-open.js` rests on. This is why step 2 still has a real choice to make about `plan`: `planLaunch` passes `overlay: null`, so the assembler as it stands hands a planning session nothing.",
+        "Two copies of the turn-cost rule are still outside `canon/`, both in prompts rather than role text, and neither was in this step's scope: `stepPrompt` in `src/mc/run-plan.js` (~line 432) restates it to every runner step, and `planLaunch` in `src/mc/commands/plan.js` (~line 303) carries a one-sentence version for the planning session. A step session now hears it twice — once from `_common.md`, once from its prompt. Step 2 has to touch the `plan` one anyway; the `stepPrompt` one is a straight deletion for whoever is comfortable making it.",
+        "Four documents still describe the assembly as profile-plus-role-overlay and do not know about the shared file: `docs/technical/mc-run.md:356`, `mc-plan.md:147-158`, `mc-helper.md:336`, `mc-brief.md:67`. That is step 4's job and it was left alone deliberately rather than half-corrected in four places.",
+        "`tests/mc/commands/worker.test.js` used to read the tmux `new-session` line and look for the overlay in it. The instruction body is multi-line now, so the recording spills past that first line; those assertions read the whole log file instead. Same reason, same fix, in the two tests that did it."
+      ],
       "pr": null,
       "blocked_by": null
     },

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createRunner, runLoop } from '../../src/mc/run.js';
+import { sharedRoleText } from '../../src/mc/roles.js';
 
 /**
  * A whole runner on fakes: a work root in memory, two repositories whose
@@ -329,7 +330,13 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.deepEqual(call.args.slice(2, 6), ['--model', 'opus', '--permission-mode', 'acceptEdits']);
   assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- PLAN\.json -----\n\{/u);
   assert.match(call.args[1], /Your step is `steps\[0\]` — 1, "The one step"/u);
-  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /^PROFILE\n\n---\n\nROLE step$/u);
+  // Profile, then the text every role session shares, then this role's own
+  // body — assembled by `instructionsFor`, the one door all four launch paths
+  // take.
+  assert.equal(
+    call.args[call.args.indexOf('--append-system-prompt') + 1],
+    `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nROLE step`,
+  );
   assert.deepEqual(f.calls.rounds.map((c) => [c.repoPath, c.pr]), [['/home/memoro', 77]], 'landed through mc merge, not gh pr merge');
   const rows = f.files['/w/runner/log/runs.tsv'].trim().split('\n');
   assert.equal(rows[0].split('\t').length, 14);
@@ -707,6 +714,20 @@ test('a pull request still held after its repair waits for the brief — no seco
   assert.equal(f.calls.rounds.length, 0);
   assert.match(f.files['/w/runner/log/runner.log'], /m: #9 is held before merge after a repair — the brief's/u);
   assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.repairs]), [[9, 1]]);
+});
+
+/**
+ * The runner's only test that a role file is installed at all is the role's
+ * own body, and it has to stay that way. The text every role session shares is
+ * assembled around that body at launch; folded in ahead of this check, a
+ * missing `repair.md` would look present and the runner would start a
+ * ninety-minute session with no instructions for what it is doing.
+ */
+test('a kind whose role file is missing is still skipped, not launched on the shared text alone', async () => {
+  const f = heldRound([heldEntry()], { roles: false });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.equal(f.calls.sessions.length, 0, 'no role file, no session');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: canon\/roles\/repair\.md is missing — skip/u);
 });
 
 test('a repair that stays red is held again, with the gate\'s new reason and its repair still counted', async () => {
