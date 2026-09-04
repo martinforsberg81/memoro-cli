@@ -3,10 +3,10 @@
  * script and written to one file. No model is involved here; the model is
  * the session that reads the file afterwards.
  *
- * Ten sections, in the order the plan fixes them: merged since the last
+ * Eleven sections, in the order the plan fixes them: merged since the last
  * brief · opened, not merged · the helper's proposals · plan status ·
  * archived without a note · workareas with no plan · plans that do not parse ·
- * runner · held before merge · queue. Every line comes from a file the runner
+ * runner · production · held before merge · queue. Every line comes from a file the runner
  * or a session already writes (`~/mc/runner/log/runs.tsv`,
  * `~/mc/runner/held.json`,
  * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`,
@@ -22,12 +22,22 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { lastAttempt, lastDeploy } from './deploys.js';
 import { heldPath, parseHeld } from './held.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
+import { readLiveVersion } from './live-version.js';
+import { nightlyReading } from './nightly-history.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The repository that has a production. memoro-cli is installed, not deployed
+ * (`commands/deploy.js`), so *Production* is one repository's section and takes
+ * no argument, exactly as the verb does.
+ */
+export const DEPLOY_REPO = 'memoro';
 
 /** The two repositories that carry projects, checked out on main at home. */
 export function defaultRepos(env = process.env) {
@@ -355,6 +365,56 @@ export function heldForBrief(text) {
     .sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
 }
 
+/* ------------------------------------------------------------- production */
+
+const sha7 = (sha) => (sha ? String(sha).slice(0, 7) : null);
+/** `2026-09-04 09:12` — an instant as the brief prints one, with no seconds. */
+const at16 = (iso) => (iso ? String(iso).slice(0, 16).replace('T', ' ') : '—');
+
+/**
+ * What is in production, what is on `main` that is not, and whether anything
+ * ever measured that tree.
+ *
+ * The three readings a deploy is decided on, gathered here so the brief can put
+ * them in one paragraph: the last row of `deploys.tsv` (`deploys.js`), the gap
+ * to `origin/main` in commits, and the nightly's verdict on the tree that would
+ * ship. `mc deploy` prints the same three before it asks its question
+ * (`commands/deploy.js`) — this is that reading, without the question, so the
+ * brief can propose the deploy Martin then types.
+ *
+ * The gap is counted from the deployed sha, which is a commit this checkout may
+ * not have — a deploy from another machine, a history rewritten — so it is null
+ * rather than a number when git cannot answer.
+ */
+export function productionState({
+  path = null, env = process.env, now = new Date(), git = runGit, nightly = nightlyReading,
+} = {}) {
+  if (!path) return null;
+  const sha = git(path, ['rev-parse', 'origin/main']);
+  const deploy = lastDeploy(env);
+  const attempt = lastAttempt(env);
+  const same = deploy && attempt && attempt.started === deploy.started && attempt.sha === deploy.sha;
+  const ahead = () => {
+    const out = deploy?.sha && sha ? git(path, ['rev-list', '--count', `${deploy.sha}..${sha}`]) : null;
+    const value = Number(out);
+    return out != null && Number.isFinite(value) ? value : null;
+  };
+  const measured = nightly(path)?.measured || null;
+  return {
+    repo: DEPLOY_REPO,
+    sha,
+    deploy,
+    // The last thing that happened, when it is not the deploy above: a deploy
+    // running now, one that failed, one somebody refused.
+    attempt: same ? null : attempt,
+    live: readLiveVersion(env, now),
+    ahead: ahead(),
+    nightly: measured
+      ? { commit: measured.commit, at: measured.at, red: measured.red, outcome: measured.outcome, this_tree: Boolean(sha) && measured.commit === sha }
+      : null,
+  };
+}
+
 export function queueNames(text) {
   return String(text || '').split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
 }
@@ -381,9 +441,61 @@ const clip = (text, max = 90) => {
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 
+/**
+ * *Production* — the last deploy, what is on `main` that it does not have, and
+ * what the nightly said about that tree.
+ *
+ * It is a reading and not a recommendation: whether a gap is worth shipping is
+ * the brief session's to judge and Martin's to type (`canon/roles/brief.md`).
+ * What this owes him is the three numbers that judgement needs, and the honest
+ * absence when one of them cannot be had.
+ */
+function productionLines(out, production) {
+  if (!production) {
+    out.push(`_no ${DEPLOY_REPO} checkout here — nothing to read_`);
+    return;
+  }
+  const { deploy, live, nightly } = production;
+  if (!deploy) {
+    out.push('- No deploy through `mc deploy` yet — `~/mc/runner/log/deploys.tsv` holds no `deployed` row, '
+      + 'so what is live is only what production says it is.');
+  } else {
+    const verified = deploy.live_commit ? `, verified live \`${sha7(deploy.live_commit)}\`` : '';
+    out.push(`- Last deploy: \`${sha7(deploy.sha)}\`${deploy.build ? ` build ${deploy.build}` : ''} — `
+      + `${at16(deploy.ended || deploy.started)}${deploy.holder ? ` by ${deploy.holder}` : ''}${verified}`);
+  }
+  if (production.attempt) {
+    const a = production.attempt;
+    out.push(`- Since then: a deploy of \`${sha7(a.sha)}\` is **${a.outcome}**`
+      + `${a.stopped_at ? `, stopped at *${a.stopped_at}*` : ''}${a.note ? ` — ${clip(a.note, 80)}` : ''}`);
+  }
+  out.push(`- \`origin/main\` is ${production.sha ? `\`${sha7(production.sha)}\`` : 'not readable here'}`
+    + `${production.ahead == null
+      ? ' — the gap to production cannot be counted from this checkout'
+      : (production.ahead === 0
+        ? ' — nothing to ship'
+        : `, **${production.ahead} commit${production.ahead === 1 ? '' : 's'} ahead of production**`)}`);
+  if (nightly) {
+    out.push(`- The nightly measured \`${sha7(nightly.commit)}\`${nightly.this_tree ? ' — this tree' : ' — not this tree'}`
+      + `, ${nightly.red == null ? 'no result' : `${nightly.red} red`} (${at16(nightly.at)})`);
+  } else {
+    out.push('- The nightly has measured nothing here — no tree has been measured whole.');
+  }
+  if (live) {
+    out.push(`- \`/api/version\` said build ${live.build ?? '?'} · \`${live.short}\``
+      + `${live.age_seconds == null ? '' : ` (read ${Math.round(live.age_seconds / 3600)} h ago)`}`
+      + `${deploy?.sha && live.commit !== deploy.sha ? ' — **not the sha of the last deploy**' : ''}`);
+  }
+  if (production.ahead) {
+    out.push('', 'A deploy is Martin\'s word every time: `mc deploy` asks once, at a terminal, and nothing else '
+      + 'in mc calls it. Propose it or do not, but do not schedule it.');
+  }
+}
+
 export function renderBrief({
   now, since, firstBrief, merged, opened, proposals = [], plans,
-  undocumented = null, unplanned = null, unreadable = null, runs, queue, held = [], notes = [],
+  undocumented = null, unplanned = null, unreadable = null, runs, queue, held = [],
+  production = null, notes = [],
 }) {
   const out = [];
   const stamp = (d) => d.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -481,6 +593,10 @@ export function renderBrief({
   }
   out.push('');
 
+  out.push('## Production', '');
+  productionLines(out, production);
+  out.push('');
+
   out.push('## Held before merge', '');
   if (!held.length) out.push('_none_');
   else {
@@ -541,6 +657,7 @@ export async function collectBrief({
   git = runGit,
   gh = runGh,
   fetch = fetchOrigin,
+  nightly = nightlyReading,
   read = (path) => readFileSync(path, 'utf8'),
 } = {}) {
   const root = workRoot(env);
@@ -594,12 +711,29 @@ export async function collectBrief({
   const unplanned = readIntake(read, join(intake, 'unplanned-workareas.md'), UNPLANNED_KEYS);
   const unreadable = readIntake(read, join(intake, 'unreadable-plans.md'), UNREADABLE_KEYS);
 
+  // What is in production, read from the files `mc deploy` and the helper
+  // leave: no network, and no reading at all where memoro is not checked out.
+  const production = productionState({
+    path: present.find((repo) => repo.name === DEPLOY_REPO)?.path || null,
+    env,
+    now,
+    git,
+    nightly,
+  });
+
   const text = renderBrief({
     now, since, firstBrief: !last, merged, opened, proposals, plans,
-    undocumented, unplanned, unreadable, runs, queue, held, notes,
+    undocumented, unplanned, unreadable, runs, queue, held, production, notes,
   });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
   writeFileSync(path, text);
-  return { path, text, data: { since, merged, opened, proposals, plans, undocumented, unplanned, unreadable, runs, queue, held, notes } };
+  return {
+    path,
+    text,
+    data: {
+      since, merged, opened, proposals, plans, undocumented, unplanned, unreadable,
+      runs, queue, held, production, notes,
+    },
+  };
 }

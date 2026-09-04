@@ -122,6 +122,88 @@ describe('RUNNER', () => {
   });
 });
 
+/**
+ * What is in production, drawn from the two readings that know it: the row
+ * `mc deploy` wrote and the `/api/version` the helper cached. Fixtures only —
+ * the page fetches nothing.
+ */
+describe('RUNNER — production', () => {
+  const SHA = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012';
+  const OTHER = 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00';
+  const DEPLOYED = {
+    started: '2026-08-29T09:40:00Z', ended: '2026-08-29T10:00:00Z', sha: SHA, build: '813',
+    holder: 'martin@laptop', outcome: 'deployed', live_commit: SHA, live_build: '813',
+    stopped_at: '', note: '',
+  };
+  const version = (commit, ageSeconds = 3600) => ({
+    commit, short: commit.slice(0, 7), build: 23533, build_time: '2026-08-29T10:00:00Z',
+    fetched: new Date(NOW.getTime() - ageSeconds * 1000).toISOString(), age_seconds: ageSeconds,
+  });
+  const section = (over = {}) => runnerSection({
+    rows: [], now: NOW, alive: () => false, deploy: DEPLOYED, attempt: DEPLOYED, live: version(SHA), ...over,
+  }).production;
+  const line = (over = {}) => rowWith(
+    paintedPage(pageData({ runner: runnerSection({ rows: [], now: NOW, alive: () => false, deploy: DEPLOYED, attempt: DEPLOYED, live: version(SHA), ...over }) })),
+    'production',
+  );
+
+  it('is the last deployed row, with its age and who typed it', () => {
+    const p = section();
+    assert.equal(p.short, '1a2b3c4');
+    assert.equal(p.build, '813');
+    assert.equal(p.holder, 'martin@laptop');
+    assert.equal(p.age_seconds, 7200);
+    assert.equal(p.differs, false);
+    assert.equal(p.running, null);
+    assert.match(strip(line()), /production 1a2b3c4 build 813 · deployed 2 h ago by martin@laptop/u);
+  });
+
+  it('says in yellow when /api/version names another sha than the row', () => {
+    const p = section({ live: version(OTHER) });
+    assert.equal(p.differs, true);
+    const drawn = line({ live: version(OTHER) });
+    assert.match(strip(drawn), /production 1a2b3c4 .* · \/api\/version says b3e65b6 \(60 min old\)/u);
+    // Yellow is the page's colour for what waits on a person, and nothing here
+    // can tell which of the two shas is the one to believe.
+    assert.equal(signature(drawn), 'white grey yellow+bold');
+  });
+
+  it('carries a deploy that is running now, and calls one that never came back late', () => {
+    const started = new Date(NOW.getTime() - 5 * 60 * 1000).toISOString();
+    const fresh = section({ attempt: { ...DEPLOYED, started, ended: '', sha: OTHER, outcome: 'running' } });
+    assert.equal(fresh.running.short, 'b3e65b6');
+    assert.equal(fresh.running.late, false);
+    assert.match(strip(line({ attempt: { ...DEPLOYED, started, ended: '', sha: OTHER, outcome: 'running' } })),
+      /· deploying b3e65b6 since 5 min/u);
+
+    const old = { ...DEPLOYED, started: '2026-08-29T08:00:00Z', ended: '', sha: OTHER, outcome: 'running' };
+    assert.equal(section({ attempt: old }).running.late, true);
+    assert.match(strip(line({ attempt: old })), /· deploying b3e65b6 since 4 h — no end recorded/u);
+  });
+
+  it('says a deploy failed after the last good one, and where it stopped', () => {
+    const failed = {
+      ...DEPLOYED, started: '2026-08-29T11:00:00Z', ended: '2026-08-29T11:30:00Z', sha: OTHER,
+      outcome: 'failed', live_commit: '', stopped_at: 'wrangler deploy',
+    };
+    assert.equal(section({ attempt: failed }).failed.stopped_at, 'wrangler deploy');
+    assert.match(strip(line({ attempt: failed })), /· a deploy failed 30 min ago at wrangler deploy/u);
+  });
+
+  it('says what production answers when mc has deployed nothing, and nothing at all when neither knows', () => {
+    const p = section({ deploy: null, attempt: null });
+    assert.equal(p.sha, null);
+    assert.equal(p.differs, false, 'there is no row to differ from');
+    assert.match(strip(line({ deploy: null, attempt: null })),
+      /production 1a2b3c4 · \/api\/version \(60 min old\) — mc has deployed nothing/u);
+
+    assert.equal(section({ deploy: null, attempt: null, live: null }), null);
+    const quiet = paintedPage(pageData({ runner: runnerSection({ rows: [], now: NOW, alive: () => false }) }));
+    assert.equal(quiet.filter((row) => strip(row).includes('production')).length, 0,
+      'a machine that has never deployed and never collected says nothing about production');
+  });
+});
+
 describe('SESSIONS', () => {
   const HELPER = {
     verb: 'helper', area: null, tool: 'claude', model: 'sonnet', pid: 99,
@@ -674,6 +756,17 @@ describe('collectPage', () => {
       verb: 'brief', area: 'brief', tool: 'claude', model: 'opus', pid: process.pid, started: '2026-08-29T11:00:00Z',
     }));
     writeFileSync(join(root, 'runner', 'log', 'runs.tsv'), TSV);
+    // What `mc deploy` wrote, and what the helper's last collect heard from
+    // `/api/version` — the page's whole knowledge of production, both offline.
+    writeFileSync(join(root, 'runner', 'log', 'deploys.tsv'), [
+      'started\tended\tsha\tbuild\tholder\toutcome\tlive_commit\tlive_build\tstopped_at\tnote',
+      '2026-08-29T09:40:00Z\t2026-08-29T10:00:00Z\t1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012\t813\tmartin@laptop\tdeployed\t1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012\t813\t\t',
+      '',
+    ].join('\n'));
+    writeFileSync(join(root, 'runner', 'version.json'), JSON.stringify({
+      fetched: '2026-08-29T11:00:00Z',
+      version: { commit: 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00', build: 23533, build_time: '2026-08-29T09:50:00Z' },
+    }));
     writeFileSync(join(root, 'runner', 'held.json'), JSON.stringify([{
       project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor',
       reason: 'two tests the change reaches are red', note: 'open,gate-red',
@@ -708,6 +801,10 @@ describe('collectPage', () => {
       'one current-<repo>.json per lane, and the page reads every one of them');
     assert.equal(data.sessions.desks.brief.verb, 'brief');
     assert.equal(data.runner.day.steps, 3);
+    // The row and the cached version, read from the files and nothing fetched.
+    assert.equal(data.runner.production.short, '1a2b3c4');
+    assert.equal(data.runner.production.live.short, 'b3e65b6');
+    assert.equal(data.runner.production.differs, true);
     assert.equal(data.queue.depth, 2, 'the comment line is not a project');
     assert.equal(data.queue.runnable, 2);
     // The runner's own file, read where the runner writes it: nobody has to

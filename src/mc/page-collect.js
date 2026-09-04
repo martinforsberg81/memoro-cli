@@ -36,8 +36,10 @@ import { join } from 'node:path';
 import {
   DAY_MS, defaultRepos, listProgrammes, queueNames, runsSince, summariseRuns,
 } from './brief-collect.js';
+import { lastAttempt, lastDeploy } from './deploys.js';
 import { heldEntries, heldPath } from './held.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
+import { readLiveVersion } from './live-version.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
@@ -70,8 +72,77 @@ export const STALE_NAMED = 3;
  * read. The rename is at this boundary only: `nowBlock` is shared with
  * `mc status` and keeps the shape it had.
  */
+/**
+ * Past this, a deploy that says `running` is a deploy that did not come back.
+ *
+ * Nothing sweeps `deploys.tsv` and nothing should: the row is what happened,
+ * and a deploy whose terminal was closed half-way through wrangler is truly
+ * `running` for ever. An hour is well past the longest deploy there is, so past
+ * it the row is a question rather than a status.
+ */
+export const DEPLOY_LATE_S = 60 * 60;
+
+const shortSha = (sha) => (sha ? String(sha).slice(0, 7) : null);
+
+/**
+ * What is in production, from the two readings that know: the last `deployed`
+ * row of `deploys.tsv` and the `/api/version` the helper last cached.
+ *
+ * They are drawn together because the interesting case is when they differ.
+ * The row says what mc shipped; the version says what is answering requests. A
+ * deploy somebody made another way, a deploy that did not take, a wrangler that
+ * rolled back — every one of them shows up here as two shas that are not the
+ * same, and nothing else on the page would say so.
+ *
+ * Nothing is fetched: the page is offline and instant, so the version is
+ * whatever `mc helper --collect` last wrote (`live-version.js`) and its age is
+ * carried so a reader can weigh it. Null when neither source has anything —
+ * a machine that has never deployed and never collected has nothing to say
+ * about production, and a line saying "unknown" is worse than no line.
+ */
+export function productionSection({ deploy = null, attempt = null, live = null, now = new Date() } = {}) {
+  if (!deploy?.sha && !live) return null;
+  const at = now.getTime();
+  const age = (iso) => {
+    const t = Date.parse(iso);
+    return Number.isNaN(t) ? null : Math.max(0, Math.round((at - t) / 1000));
+  };
+  const when = deploy ? (deploy.ended || deploy.started || null) : null;
+
+  // The last attempt matters only when it is not the deploy row itself: a
+  // deploy in flight, or one that failed after the last good one.
+  const same = deploy && attempt && attempt.started === deploy.started && attempt.sha === deploy.sha;
+  const since = same ? null : attempt;
+  const attemptState = (row) => ({
+    sha: row.sha || null,
+    short: shortSha(row.sha),
+    holder: row.holder || null,
+    at: row.ended || row.started || null,
+    age_seconds: age(row.ended || row.started),
+    stopped_at: row.stopped_at || null,
+  });
+  const running = since?.outcome === 'running' ? attemptState(since) : null;
+  if (running) running.late = running.age_seconds != null && running.age_seconds >= DEPLOY_LATE_S;
+
+  return {
+    sha: deploy?.sha || null,
+    short: shortSha(deploy?.sha),
+    build: deploy?.build || null,
+    holder: deploy?.holder || null,
+    at: when,
+    age_seconds: when ? age(when) : null,
+    live,
+    // Yellow on the page: what mc last shipped is not what production answers,
+    // and no machine here can tell which of the two is the one to believe.
+    differs: Boolean(live?.commit && deploy?.sha && live.commit !== deploy.sha),
+    running,
+    failed: since?.outcome === 'failed' ? attemptState(since) : null,
+  };
+}
+
 export function runnerSection({
   runner = null, currents = [], stop = false, rows = [],
+  deploy = null, attempt = null, live = null,
   now = new Date(), alive = pidAlive,
 } = {}) {
   const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, now, alive });
@@ -84,6 +155,8 @@ export function runnerSection({
   return {
     ...base,
     process,
+    // What is in production, under the day it took to get there.
+    production: productionSection({ deploy, attempt, live, now }),
     day: {
       ...summariseRuns(rows),
       tokens,
@@ -652,6 +725,11 @@ export async function collectPage({
     currents: readCurrents(join(root, 'runner')),
     stop: existsSync(join(root, 'runner', 'STOP')),
     rows,
+    // Three file reads, no network: the record `mc deploy` wrote and the
+    // version the helper's last collect cached.
+    deploy: lastDeploy(env),
+    attempt: lastAttempt(env),
+    live: readLiveVersion(env, now),
     now,
     alive,
   });

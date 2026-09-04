@@ -17,10 +17,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { DEPLOYS_HEADER } from '../../src/mc/deploys.js';
 import {
   analysisRows, collectHelper, computeDelta, deployState, digestName, errorRows, failingConditions,
   healthState, intakeDir, parseState, previousDigest, proposalsDir, readAdminToken, renderState,
 } from '../../src/mc/helper-collect.js';
+import { readLiveVersion } from '../../src/mc/live-version.js';
 
 const NOW = new Date('2026-08-29T06:00:00.000Z');
 
@@ -70,6 +72,21 @@ const DEPLOY = {
 
 const PING = { ok: true, d1: 'healthy', timings: { select1: 11, total: 43 }, slow: [] };
 
+/** `/api/version` — public, three fields, and what the page reads afterwards. */
+const LIVE_SHA = 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00';
+const VERSION = { commit: LIVE_SHA, build: 23533, build_time: '2026-08-29T04:05:00.000Z' };
+
+/** A row of `deploys.tsv` as `mc deploy` writes one. */
+const DEPLOYED_SHA = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012';
+function deploysTsv(root, { sha = DEPLOYED_SHA, ended = '2026-08-29T05:00:00.000Z', live = sha } = {}) {
+  mkdirSync(join(root, 'runner', 'log'), { recursive: true });
+  writeFileSync(join(root, 'runner', 'log', 'deploys.tsv'), [
+    DEPLOYS_HEADER.join('\t'),
+    ['2026-08-29T04:50:00.000Z', ended, sha, '813', 'martin@laptop', 'deployed', live, '813', '', ''].join('\t'),
+    '',
+  ].join('\n'));
+}
+
 /** A work root plus a memoro checkout with the two admin scripts present. */
 function ground() {
   const root = mkdtempSync(join(tmpdir(), 'mc-helper-'));
@@ -94,6 +111,7 @@ function stubs(overrides = {}) {
     calls.auth.set(path, token);
     if (path === '/admin/analysis') return overrides.analysis ?? { ok: true, json: ANALYSIS };
     if (path === '/admin/deploy/logs') return overrides.deploy ?? { ok: true, json: DEPLOY };
+    if (path === '/api/version') return overrides.version ?? { ok: true, json: VERSION };
     return overrides.ping ?? { ok: true, json: PING };
   };
   const git = async () => (overrides.git === undefined ? 'abc1234 2026-08-28T20:00:00+02:00' : overrides.git);
@@ -122,7 +140,7 @@ describe('mc helper --collect — the sources', () => {
     const g = ground();
     const { calls } = await collect(g);
     const paths = calls.urls.map((u) => new URL(u).pathname).sort();
-    assert.deepEqual(paths, ['/admin/analysis', '/admin/deploy/logs', '/ping-d1']);
+    assert.deepEqual(paths, ['/admin/analysis', '/admin/deploy/logs', '/api/version', '/ping-d1']);
     assert.ok(!paths.some((p) => p.startsWith('/api/admin/')), '/api/admin/* answers 401 to a bearer token');
   });
 
@@ -132,6 +150,7 @@ describe('mc helper --collect — the sources', () => {
     assert.equal(calls.auth.get('/admin/analysis'), 'test-token');
     assert.equal(calls.auth.get('/admin/deploy/logs'), 'test-token');
     assert.equal(calls.auth.get('/ping-d1'), '', 'the D1 probe needs no credential');
+    assert.equal(calls.auth.get('/api/version'), '', 'what production says it is, is public');
   });
 
   it('never asks for a route that writes', async () => {
@@ -281,6 +300,79 @@ describe('mc helper --collect — the deploy section', () => {
     const state = deployState({ logs: [{ run_id: '1', status: 'success', timestamp: '2026-08-29T05:00:00.000Z' }] }, { now: NOW });
     assert.equal(state.lastSuccess.run_id, '1');
     assert.equal(state.stale, false);
+  });
+
+  // The row `mc deploy` wrote is the second source, and the one that does not
+  // depend on a webhook that has been writing nothing for weeks.
+  it('reads mc\'s own row beside the webhook\'s log', async () => {
+    const g = ground();
+    deploysTsv(g.root);
+    const result = await collect(g);
+    const state = result.data.deploy;
+    assert.equal(state.mc.sha, DEPLOYED_SHA);
+    assert.equal(state.mc.build, '813');
+    assert.equal(state.mcAgeHours, 1);
+    assert.equal(state.age, 1, 'the freshest of the two is what production is');
+    assert.equal(state.disagree, false, 'an hour apart is the same deploy seen twice');
+    const section = result.text.split('## Deploy')[1];
+    assert.match(section, /mc's own last deploy: `1a2b3c4` build 813 — 2026-08-29 05:00 by martin@laptop, verified live `1a2b3c4` \(1 h ago\)/u);
+  });
+
+  it('says so when the two sources are not describing the same deploy', async () => {
+    const g = ground();
+    deploysTsv(g.root);
+    const result = await collect(g, {
+      deploy: { ok: true, json: { logs: [{ run_id: '9', status: 'success', branch: 'main', timestamp: '2026-08-25T00:00:00.000Z', environment: 'production' }] } },
+    });
+    assert.equal(result.data.deploy.disagree, true);
+    assert.match(result.text, /\*\*The two sources disagree\.\*\*/u);
+    // Ninety-six hours by the webhook, one by the row: not stale.
+    assert.equal(result.data.deploy.stale, false);
+  });
+
+  it('a silent webhook is not a stale deploy when mc deployed an hour ago', () => {
+    const row = { sha: DEPLOYED_SHA, ended: '2026-08-29T05:00:00.000Z', outcome: 'deployed' };
+    const state = deployState({ logs: [] }, { now: NOW, row });
+    assert.equal(state.silent, true, 'the webhook is still writing nothing');
+    assert.equal(state.stale, false);
+    assert.equal(state.age, 1);
+  });
+
+  it('says mc has deployed nothing rather than nothing at all', async () => {
+    const g = ground();
+    const section = (await collect(g)).text.split('## Deploy')[1];
+    assert.match(section, /mc has deployed nothing itself/u);
+  });
+
+  it('names what production answers, and whether it is the sha mc shipped', async () => {
+    const g = ground();
+    deploysTsv(g.root);
+    const section = (await collect(g)).text.split('## Deploy')[1];
+    assert.match(section, /`\/api\/version`: build 23533 · `b3e65b6`, built 2026-08-29 04:05/u);
+    assert.match(section, /\*\*Production is answering `b3e65b6`, not mc's last deploy `1a2b3c4`\.\*\*/u);
+  });
+
+  // The page is offline and instant, so this is the only place the answer is
+  // fetched: what the helper heard, and when it heard it.
+  it('caches /api/version where the page reads it', async () => {
+    const g = ground();
+    await collect(g);
+    assert.deepEqual(readLiveVersion(g.env, NOW), {
+      commit: LIVE_SHA,
+      short: 'b3e65b6',
+      build: 23533,
+      build_time: '2026-08-29T04:05:00.000Z',
+      fetched: NOW.toISOString(),
+      age_seconds: 0,
+    });
+  });
+
+  it('leaves the cache alone when the route does not answer', async () => {
+    const g = ground();
+    await collect(g, { version: { ok: false, error: '/api/version returned 503' } });
+    assert.equal(readLiveVersion(g.env, NOW), null);
+    assert.match((await collect(g, { version: { ok: false, error: '/api/version returned 503' } })).text,
+      /`\/api\/version`: _could not read: \/api\/version returned 503_/u);
   });
 });
 

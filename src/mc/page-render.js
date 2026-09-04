@@ -208,6 +208,7 @@ function runnerLines(lines, c, wide, runner) {
   say(lines, c, wide, 2, `${up}${day.steps} steps in 24 h — merged ${day.merged}, open ${day.open}, `
     + `failed ${day.failed}, timed out ${day.timeout}`
     + `${cost ? ` · ${cost} list (${day.model}, ${day.prices_dated})` : ''}`);
+  productionLine(lines, c, wide, now.production);
   if (now.quota.count) {
     // Yellow while a refusal is recent enough to still be the reason the
     // runner is idle; older than that it is history, and history is grey.
@@ -216,6 +217,56 @@ function runnerLines(lines, c, wide, runner) {
     say(lines, c, wide, 2, `quota: ${now.quota.count} answer(s) in the last 24 h, last ${when(now.quota.last)}`,
       recent ? 'yellow' : 'grey');
   }
+}
+
+/**
+ * What is in production, in one line under the runner's day: the sha mc last
+ * deployed, how long ago, and who typed it.
+ *
+ * The mismatch is the reason the line is worth its row. What mc shipped and
+ * what `/api/version` answers should be the same sha; when they are not,
+ * something happened outside the record — a deploy made another way, a deploy
+ * that did not take — and no machine here can say which of the two to believe.
+ * That is the page's yellow exactly: it waits on a person.
+ *
+ * Absent when neither source knows anything, which is the state before the
+ * first `mc deploy` and before the helper has ever collected.
+ */
+function productionLine(lines, c, wide, production) {
+  if (!production) return;
+  const live = production.live;
+  const liveAge = live ? ` (${ageWords(live.age_seconds)} old)` : '';
+  const parts = [];
+  if (production.sha) {
+    parts.push({ text: `production ${production.short}`, styles: ['white'] });
+    parts.push({
+      text: `${production.build ? ` build ${production.build}` : ''} · deployed ${ageWords(production.age_seconds)} ago`
+        + `${production.holder ? ` by ${production.holder}` : ''}`,
+      styles: ['grey'],
+    });
+  } else {
+    // Nothing mc deployed, but production answers something: say what it
+    // answers and where that came from, rather than nothing at all.
+    parts.push({ text: `production ${live.short}`, styles: ['white'] });
+    parts.push({ text: ` · /api/version${liveAge} — mc has deployed nothing`, styles: ['grey'] });
+  }
+  if (production.differs) {
+    parts.push({ text: ` · /api/version says ${live.short}${liveAge}`, styles: ['yellow', 'bold'] });
+  }
+  const running = production.running;
+  if (running) {
+    parts.push({
+      text: ` · deploying ${running.short} since ${ageWords(running.age_seconds)}${running.late ? ' — no end recorded' : ''}`,
+      styles: running.late ? ['yellow', 'bold'] : ['green'],
+    });
+  } else if (production.failed) {
+    parts.push({
+      text: ` · a deploy failed ${ageWords(production.failed.age_seconds)} ago`
+        + `${production.failed.stopped_at ? ` at ${production.failed.stopped_at}` : ''}`,
+      styles: ['yellow'],
+    });
+  }
+  lines.push(`  ${paint(c, parts, wide - 2)}`);
 }
 
 /** Past this, the age is the thing on the row worth looking at. */

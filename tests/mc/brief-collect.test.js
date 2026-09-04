@@ -229,7 +229,7 @@ describe('held before merge', () => {
 });
 
 describe('collectBrief', () => {
-  it('writes the ten sections, offline, with a 24 h window on the first run', async () => {
+  it('writes the eleven sections, offline, with a 24 h window on the first run', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
     const now = new Date('2026-08-25T20:00:00Z');
@@ -239,7 +239,7 @@ describe('collectBrief', () => {
     assert.equal(text, result.text);
     const order = ['## Merged since last brief', '## Opened, not merged', '## Proposals',
       '## Plan status', '## Archived without a note', '## Workareas with no project on main',
-      '## Plans that do not parse', '## Runner', '## Held before merge', '## Queue'];
+      '## Plans that do not parse', '## Runner', '## Production', '## Held before merge', '## Queue'];
     let at = -1;
     for (const heading of order) {
       const next = text.indexOf(heading);
@@ -277,7 +277,57 @@ describe('collectBrief', () => {
     assert.match(text, /\*\*1 pull request held before merge\*\* after its repair/u);
     assert.match(text, /- docx-editor\n- sql-readiness-session-A/u);
     assert.match(text, /memoro: no checkout/u);
+    // No memoro on this machine is no production reading, said as an absence
+    // rather than as a deploy that never happened.
+    assert.equal(result.data.production, null);
+    assert.match(text, /## Production\n\n_no memoro checkout here — nothing to read_/u);
     assert.ok(lastBriefTime(join(root, 'brief')) instanceof Date);
+  });
+
+  /**
+   * *Production*: the row `mc deploy` wrote, the commits on `main` it does not
+   * have, and what the nightly said about the tree that would ship. Three
+   * readings from files on this disk — no network, and the same three
+   * `mc deploy` prints before it asks its question.
+   */
+  it('reads production from the deploy row, the gap to main and the nightly', async () => {
+    const root = workRoot();
+    const home = mkdtempSync(join(tmpdir(), 'mc-repos-'));
+    mkdirSync(join(home, 'memoro', '.git'), { recursive: true });
+    const SHA = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012';
+    const MAIN = 'abcdef1234567890abcdef1234567890abcdef12';
+    const LIVE = 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00';
+    writeFileSync(join(root, 'runner', 'log', 'deploys.tsv'), [
+      'started\tended\tsha\tbuild\tholder\toutcome\tlive_commit\tlive_build\tstopped_at\tnote',
+      `2026-08-25T09:00:00Z\t2026-08-25T09:12:00Z\t${SHA}\t813\tmartin@laptop\tdeployed\t${SHA}\t813\t\t`,
+      '',
+    ].join('\n'));
+    writeFileSync(join(root, 'runner', 'version.json'), JSON.stringify({
+      fetched: '2026-08-25T19:00:00Z', version: { commit: LIVE, build: 23533, build_time: '2026-08-25T04:00:00Z' },
+    }));
+    const git = (cwd, args) => {
+      if (args[0] === 'rev-parse') return MAIN;
+      if (args[0] === 'rev-list') return '4';
+      return null; // no plans on this fixture's origin/main
+    };
+    const nightly = () => ({ measured: { commit: MAIN, at: '2026-08-25T02:00:00Z', red: 0, outcome: 'passed' } });
+    const result = await collectBrief({
+      env: { MC_WORK_ROOT: root, MC_REPOS_HOME: home },
+      now: new Date('2026-08-25T20:00:00Z'),
+      offline: true,
+      git,
+      nightly,
+    });
+    assert.equal(result.data.production.ahead, 4);
+    assert.equal(result.data.production.nightly.this_tree, true);
+    const section = result.text.split('## Production')[1].split('## Held')[0];
+    assert.match(section, /- Last deploy: `1a2b3c4` build 813 — 2026-08-25 09:12 by martin@laptop, verified live `1a2b3c4`/u);
+    assert.match(section, /- `origin\/main` is `abcdef1`, \*\*4 commits ahead of production\*\*/u);
+    assert.match(section, /- The nightly measured `abcdef1` — this tree, 0 red \(2026-08-25 02:00\)/u);
+    // The two readings of what is live, and the page draws the same difference.
+    assert.match(section, /- `\/api\/version` said build 23533 · `b3e65b6` \(read 1 h ago\) — \*\*not the sha of the last deploy\*\*/u);
+    // The gap is a deploy to propose, and a proposal is all it can be.
+    assert.match(section, /A deploy is Martin's word every time/u);
   });
 });
 
