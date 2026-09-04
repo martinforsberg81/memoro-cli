@@ -102,7 +102,7 @@
         "Four documents still describe the assembly as profile-plus-role-overlay and do not know about the shared file: `docs/technical/mc-run.md:356`, `mc-plan.md:147-158`, `mc-helper.md:336`, `mc-brief.md:67`. That is step 4's job and it was left alone deliberately rather than half-corrected in four places.",
         "`tests/mc/commands/worker.test.js` used to read the tmux `new-session` line and look for the overlay in it. The instruction body is multi-line now, so the recording spills past that first line; those assertions read the whole log file instead. Same reason, same fix, in the two tests that did it."
       ],
-      "pr": null,
+      "pr": 609,
       "blocked_by": null
     },
     {
