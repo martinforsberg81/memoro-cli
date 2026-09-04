@@ -180,8 +180,9 @@ describe('mc helper --intake', () => {
     assert.equal(result.code, 0);
     assert.equal(result.turned.called, true);
     assert.equal(result.opened.called, undefined, 'the intake half opens no session');
-    assert.equal(result.turned.digestPath, '/tmp/mc/intake/errors-2026-08-29.md');
-    assert.equal(result.turned.digestText, '# Errors and maintenance');
+    // The file, not its text: the turn opens it itself.
+    assert.equal(result.turned.file, '/tmp/mc/intake/errors-2026-08-29.md');
+    assert.equal(result.turned.digestText, undefined);
     assert.match(result.stdout, /1 proposal, 1 waiting \(\d+\.\ds, claude sonnet\)/u);
     assert.match(result.stdout, /2026-08-29-expose-operations\.md/u);
     assert.match(result.stdout, /read them at the next brief/u);
@@ -204,7 +205,7 @@ describe('mc helper --intake', () => {
   it('says a quiet day cost nothing, and is still a success', async () => {
     const result = await invoke(['--intake'], {}, TURN({ waiting: [{ file: 'old.md' }] }));
     assert.equal(result.code, 0);
-    assert.match(result.stdout, /no proposal — nothing in the digest warranted one \(1 still waiting\)/u);
+    assert.match(result.stdout, /no proposal — nothing in the file warranted one \(1 still waiting\)/u);
     assert.doesNotMatch(result.stdout, /next brief/u);
   });
 
@@ -270,7 +271,7 @@ describe('mc helper --intake', () => {
   });
 
   it('says what the turn produced in one line', () => {
-    assert.equal(describeTurn({ wrote: [], waiting: [] }), 'no proposal — nothing in the digest warranted one (0 still waiting)');
+    assert.equal(describeTurn({ wrote: [], waiting: [] }), 'no proposal — nothing in the file warranted one (0 still waiting)');
     assert.equal(describeTurn({ wrote: [1, 2], waiting: [1, 2, 3] }), '2 proposals, 3 waiting');
   });
 

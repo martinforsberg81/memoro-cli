@@ -108,7 +108,7 @@ export async function run(argv, deps = {}) {
   for (const { repo, result } of results) {
     const t1 = Date.now();
     const turn = await (deps.turn || runHelperTurn)({
-      digestPath: result.path, digestText: result.text, model: flags.model || null, repo,
+      file: result.path, model: flags.model || null, repo,
     });
     const took = ((Date.now() - t1) / 1000).toFixed(1);
     for (const note of turn.groundNotes || []) stderr.write(`mc: ${note}\n`);

@@ -79,7 +79,7 @@
     },
     {
       "title": "One file, one turn",
-      "status": "ready",
+      "status": "done",
       "done_when": "A turn is given one file by name, reads it itself, and its outcome is a proposal or no proposal for that file alone.",
       "instruction": [
         "`helperPrompt` (`src/mc/helper-turn.js`) currently inlines the whole digest as `digestText` between `----- DIGEST -----` markers. That has to become a filename: the turn already stands in `~/mc/intake/` as its cwd (`const dir = intakeDir(env)` in `runHelperTurn`), so naming the file is enough for it to open the file itself. This is not a refactor for tidiness — a screenshot has no text to inline, and the inbox is defined by Martin being able to drop anything in it.",
@@ -90,7 +90,13 @@
         "Test `helperPrompt` as a pure function against a named file, and `npm test`.",
         "Two other projects in this programme touch `canon/roles/` in parallel: `role-instructions` reshapes the catalogue into a shared entry every role inherits and trims the eight files, and `no-reconcile` moves the merge-resolution rules into the step role. Write the intake role's change into whatever shape exists in the tree you are handed, do not wait for either, and do not reshape the catalogue here. If your sync brings one of theirs in and the two edits meet in `canon/roles/intake.md`, both are additive — keep both."
       ],
-      "comments": [],
+      "comments": [
+        "The turn now takes `file` and nothing else about it: `runHelperTurn({ file })` and `helperPrompt({ file })` in `src/mc/helper-turn.js`, where `file` may be a path or a bare name and only `basename(file)` reaches the prompt — the turn stands in the inbox, so a name is enough to open it. `digestPath`/`digestText` are gone from both call sites (`run.js` in `runHelperDay`, `commands/helper.js` in the `--intake` half), and there is no `----- DIGEST -----` block any more. For step 3 that means the drain passes `file` per inbox file and nothing else; everything the prompt needs about a file that is not a digest it works out from the name.",
+        "`repoOfFile(name)` (exported from `helper-turn.js`) is the whole of the `repo:` rule: `errors-<repo>-<date>.md` and the legacy unprefixed `errors-<date>.md` answer `memoro`/`memoro-cli`, anything else answers `null`, and an explicit `repo` from the caller still wins over both. On `null` the prompt drops the `repo:` sentence and tells the turn to decide which system it is and say so in the proposal. So step 3 may call the turn with no `repo` at all for a file Martin dropped, and should keep passing the repository for a digest it just collected — the collector knows, and a name that says so should not be re-derived by a model.",
+        "Verified with two real turns, not only from the tests — a throwaway `MC_WORK_ROOT` under `/tmp`, the real `intake` role on claude sonnet, one file in its `intake/`. Given only the name `note-from-martin.md` the turn opened the file (its proposal quotes the contents and carries `source: note-from-martin.md`), wrote exactly one proposal about it, and left the note's second item unfiled with a reason. That is `done_when` end to end: one file by name, read by the turn, one outcome for that file alone.",
+        "The oversized case did not go the way the criterion describes, and the criterion is left `met: false` for step 3 to assert from the row. A 23 MB / 220 000-line log named in the prompt produced a proposal that neither names a read limit nor judges from the head — the turn read the file with a shell count instead and said so in the proposal (\"confirmed by grepping the whole file, not just head/tail\"). So the rule's failure mode did not occur rather than the rule failing: the turn resolved the size, and reported how. The prompt and the role carry the instruction; whether a turn ever hits a limit it cannot work around is a thing to watch in the first drain, not something this step could make happen.",
+        "One drift worth knowing when step 4 writes the doc: for a file whose name says no repository, the turn wrote frontmatter of its own — `system: memoro-cli`, `source: note-from-martin.md` — rather than the `repo:`/`name:`/`kind:` keys `docs/technical/mc-helper.md:248` still calls fixed. Nothing breaks, because `listProposals` (`brief-collect.js:88`) reads filenames and never opens a proposal, and the roles say the inside of the file is prose and not a form. The contract puts the proposal's shape out of scope, so it was left alone; the doc's claim that the frontmatter is fixed is the part that is no longer true."
+      ],
       "pr": null,
       "blocked_by": null
     },

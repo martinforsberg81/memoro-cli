@@ -1070,7 +1070,7 @@ export function createRunner({
       for (const note of digest.data.notes || []) say(`helper: ${repo}: ${note}`);
       for (const [section, source] of unreadableSections(digest.data)) say(`helper: ${repo}: ${section} not read — ${source.error}`);
 
-      const turn = await deps.helperTurn({ digestPath: digest.path, digestText: digest.text, repo, now: deps.now() });
+      const turn = await deps.helperTurn({ file: digest.path, repo, now: deps.now() });
       logRun({
         ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: turn.status ?? 1, seconds: took(), pr: '-',
         turns: turn.turns ?? '-', input: turn.input ?? '-', output: turn.output ?? '-',
