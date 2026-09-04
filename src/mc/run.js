@@ -1693,28 +1693,35 @@ export async function runLoop({
       const count = (deps.laneCount || readLaneCount)();
       if (count > 1) runner.say(`lanes: ${count} per repository`);
       //
-      // UPDATE is honoured when no lane has a session in flight — not when
-      // *this* lane happens to be between rounds. Until 2026-09-04 a lane
-      // that read UPDATE after an idle round left its loop at once and sat
-      // waiting for the busy lane's ninety-minute step, taking no work: the
-      // memoro-cli lanes stood idle for half an hour with a ready plan on
-      // main (Martin: "redan nu borde det köras en memoro-cli process men
-      // det startar inte"). Now a lane keeps taking rounds while UPDATE
-      // waits, sleeping briefly rather than the idle ten minutes, and leaves
-      // only when nothing is in flight anywhere — the moment the handover
-      // can happen. A lane that leaves stops taking work; the rest go on
-      // until they see the same quiet moment.
+      // UPDATE drains the runner: from the moment it is read no lane starts
+      // a step, the steps in flight finish and land, and the handover comes
+      // when nothing is in flight anywhere — within one step's length. Two
+      // wrong versions preceded this on 2026-09-04. In the morning a lane
+      // that read UPDATE after an idle round left its loop and *sat*, so the
+      // idle lanes took no work for the whole of a busy lane's step. Then
+      // idle lanes were let to keep taking work until a quiet moment — and
+      // with four lanes in steady work the quiet moment never came: an
+      // UPDATE the runner wrote for itself at 09:30 was still pending two
+      // hours later, running old code the whole time. Martin chose the drain
+      // (A) over an immediate handover with two runners (B).
       const quiet = () => runner.paths.currents().length === 0;
       const lane = async (repo, index) => {
         const tag = count > 1 ? `${repo.name}#${index + 1}` : repo.name;
+        let draining = false;
         for (let n = 1; ; n += 1) {
+          if (runner.updateRequested()) {
+            if (!draining) { draining = true; runner.say(`${tag}: UPDATE — taking no new step; handing over when every lane is done`); }
+            if (quiet()) return { update: true };
+            await deps.sleep(UPDATE_POLL_MS);
+            if (runner.stopRequested()) return { stop: true };
+            continue;
+          }
           const r = await runner.round({ only: repo.name, lane: index, count });
           if (r.stop) return { stop: true };
           runner.say(`${tag}: round ${n} done (${r.ran} ran)`);
-          if (runner.updateRequested() && quiet()) return { update: true };
-          if (r.ran === 0) await deps.sleep(runner.updateRequested() ? UPDATE_POLL_MS : idleSleepMs);
+          if (runner.updateRequested()) continue;
+          if (r.ran === 0) await deps.sleep(idleSleepMs);
           if (runner.stopRequested()) return { stop: true };
-          if (runner.updateRequested() && quiet()) return { update: true };
         }
       };
       const choreLoop = async () => {

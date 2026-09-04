@@ -2002,31 +2002,36 @@ test('runLoop: lanes above one split a repository\'s names, and never hold the s
  * ready plan on main (2026-09-04). It keeps taking rounds until nothing is in
  * flight anywhere.
  */
-test('runLoop: a lane keeps taking work while an UPDATE waits for the busy lane', async () => {
+test('runLoop: an UPDATE drains — no lane starts a step, the ones in flight finish, then the handover', async () => {
   const plans = { memoro: { a: ready }, 'memoro-cli': {} };
   const f = fixture({ plans, session: okSession() });
   const inner = f.deps.session;
-  let release = null;
-  const cliRan = new Promise((resolve) => { release = resolve; });
   const events = [];
+  let ticks = 0;
   f.deps.session = async (call) => {
     const name = call.cwd.split('/')[2];
     events.push(`${name}: start`);
     if (call.cwd.endsWith('/memoro')) {
       // Mid-step: an update is asked for, and a memoro-cli plan lands on main.
+      // The idle memoro-cli lanes see both, and start nothing.
       f.files['/w/runner/UPDATE'] = '';
       plans['memoro-cli'].x = ready;
-      await cliRan;
-    } else {
-      release();
+      // Let the other lanes poll a few times against the pending UPDATE.
+      while (ticks < 6) await new Promise((resolve) => { setImmediate(resolve); });
     }
     events.push(`${name}: end`);
     return inner(call);
   };
+  // A sleep that yields a macrotask, not a resolved promise: the draining
+  // lanes poll in a loop, and a no-op sleep would spin them in microtasks
+  // and starve the `setImmediate` the memoro session is waiting on.
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(() => { ticks += 1; resolve(); }); });
   const handovers = [];
   f.deps.handOver = async ({ say }) => { handovers.push(events.slice()); say('update: handed over to pid 9001 — this runner is done'); return { ok: true, pid: 9001 }; };
   assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
-  assert.ok(events.indexOf('x: start') < events.indexOf('a: end'), `memoro-cli did not run x while memoro was busy: ${events.join(', ')}`);
-  assert.equal(handovers.length, 1, 'the update still handed over');
-  assert.deepEqual(handovers[0].filter((e) => e.endsWith(': end')).sort(), ['a: end', 'x: end'], 'the handover came after every step had ended');
+  assert.equal(events.indexOf('x: start'), -1, `a lane started a step under a pending UPDATE: ${events.join(', ')}`);
+  assert.equal(handovers.length, 1, 'the update handed over');
+  assert.deepEqual(handovers[0], ['a: start', 'a: end'], 'the handover came after the step in flight had ended');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /memoro-cli: UPDATE — taking no new step; handing over when every lane is done/u);
 });
