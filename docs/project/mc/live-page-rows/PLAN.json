@@ -19,7 +19,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "The page's position on screen is read from the terminal, not derived, and every frame is written against it.",
       "check": "`tests/mc/page-live.test.js`: a fake terminal that answers `CSI 6n` with a row, and a frame whose writes move to that row; a terminal that does not answer within the timeout falls back to the derived count and the log says so."
     },
@@ -41,7 +41,7 @@
   "steps": [
     {
       "title": "Ask the terminal where the page is, and draw every frame against that row",
-      "status": "ready",
+      "status": "done",
       "done_when": "`liveReader` (`src/mc/page-live.js`) reads the cursor row with `CSI 6n` after the page and the prompt are printed — on the `/dev/tty` stream it already holds in raw mode — and passes an absolute anchor to `frameWrites` (`src/mc/page-frame.js`), which moves with `CSI row;1H` rather than relative `CSI A`; a terminal that does not answer within 200 ms keeps the derived `above` and says `mc: drawing by count — the terminal did not say where the page is` in the note row once; resize re-asks; tests drive the answering, the silent and the wrapped-tail cases.",
       "instruction": [
         "**Where the number comes from today.** `liveReader.ask` sets `tailRows = newlines(tail)` and `draw` computes `above = current.length + tailRows`; `frameWrites(previous, next, { above, rows })` in `page-frame.js` walks rows with `vertical(target - row)` and reprints a grown frame from `max(0, above - reach)` with `up(above - first)`. Every one of these is a count of *lines*, and the terminal counts *rows*: the two key lines under the page (`KEYS` in `commands/home.js`, 85 and 40 characters) wrap on a terminal narrower than that, and a wrapped line is two rows. The doubled rows Martin saw are one row of drift, exactly the kind of thing a miscount by one produces.",
@@ -51,8 +51,13 @@
         "**Tests** in `tests/mc/page-live.test.js`, beside the eight that exist: a fake input that answers `6n` with `\\x1b[42;3R` and a frame whose writes carry `\\x1b[<n>;1H` for the changed row; a fake that never answers and a frame drawn with relative moves plus the note; a tail whose key line wraps at the fixture's width, where the anchored frame lands on the right row and the derived one would not. `tests/mc/front-door.test.js` unchanged and green.",
         "**Documentation.** `docs/technical/mc-ui.md` § *The live page*: one paragraph — the page asks the terminal where it is, why, and what it does when the terminal will not answer."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The anchor alone would not have cured the doubled row, and that is worth knowing before anyone reads the diff and wonders why `tailRows` changed. A target is `anchor - above + index`, so a wrong `above` still moves every row — the anchor stops the error *accumulating* from row to row, it does not stop it. The `above` the page had was wrong for the reason the plan named: `tailRows` counted the newlines in the menu's block, and `KEYS[0]` in `commands/home.js` is 85 characters, which is two screen rows below 85 columns. So both halves landed — `screenRows(text, columns)` in `page-live.js` counts wrapped rows (exported, and unit-tested on its own), and `frameWrites` takes the anchor. This is what the plan's instruction called \"the rows the page and the tail actually occupy on screen\"; it is not extra scope, it is the half without which the wrapped-tail test could not pass.",
+        "The page's own rows are still counted one row per line, deliberately. `page-render.js` clips every row to `columnsFor(columns)`, so a page row is not supposed to wrap — and if one ever did, `frameWrites`'s index-to-row map would be wrong per row, which a single `above` cannot express. If a double-width glyph ever does push a page row over the edge, the fix is in the index map, not in `above`. Nothing in this step touched `page-render.js`.",
+        "Two things the runner's gate cannot see. First, criterion 2's second half — Martin's own terminal, left open across a step starting and ending, with no doubled row — has not been run and cannot be from here, which is why that criterion is still `met: false`; `scripts/mc-live-page-check.mjs` is the pty harness that would come closest and is not part of `npm test` (five and a half minutes). Second, criterion 3 is written but its check says \"on main\", so it stays `false` until this lands. Also unmeasured: whether the anchor cures tmux, which the plan put out of scope — no claim is made either way.",
+        "One behavioural change that is easy to miss in review: after a growth or resize reprint the loop now re-asks `CSI 6n`, so a reprint frame ends with `\\x1b[6n` rather than with the half-typed answer. Two existing tests asserted `endsWith` on that write and now assert `includes` plus an explicit `endsWith(DSR)`. Six other existing tests were given an `advance(1_000)` before their mark so the 200 ms by-count note falls outside the slice they measure — the note is real behaviour on a silent fake terminal, not test noise."
+      ],
+      "pr": 593,
       "blocked_by": null
     }
   ]

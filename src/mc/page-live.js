@@ -32,10 +32,23 @@
  * occupies on screen — set when the page is printed, and unchanged by a frame
  * with fewer rows, because a shrinking frame blanks its surplus rows where
  * they stand rather than pulling the menu up. `above` is `footprint` plus the
- * newlines in the block the menu prints under the page, which is how many
- * rows above the cursor the page's first row sits. Both are derived, never
- * assumed: change what the menu prints under the page and the arithmetic
+ * rows the block the menu prints under the page occupies *on screen*, which is
+ * how many rows above the cursor the page's first row sits. Both are derived,
+ * never assumed: change what the menu prints under the page and the arithmetic
  * follows.
+ *
+ * **And the terminal is asked where that is.** Deriving alone was not enough,
+ * and the way it failed is why this module now asks. `tailRows` counted the
+ * newlines in the menu's block; the menu's first key line is 85 characters, so
+ * on a terminal narrower than that it is two screen rows and the count was one
+ * short. One short is enough: the relative walk in `page-frame.js` moves from
+ * row to row, so every write after the bad number lands a row low — the row
+ * that should have been rewritten keeps the old text, the row under it gets
+ * the new, and the page shows the same session twice with two ages. Martin saw
+ * exactly that twice on 2026-09-04. So `tailRows` counts wrapped rows now, and
+ * on top of that the prompt row is read back from the terminal with `CSI 6n`
+ * and handed to `frameWrites` as an absolute `anchor`. A terminal that will
+ * not answer within `ANCHOR_MS` gets the derived count and one line saying so.
  *
  * **What is not live.** A terminal narrower than 60 columns, which is
  * `columnsFor`'s floor: every page row is then wider than the screen and
@@ -50,13 +63,28 @@ import { ReadStream } from 'node:tty';
 
 import { frameWrites } from './page-frame.js';
 import { ask as askTerminal } from './prompt.js';
-import { clip } from './status-render.js';
+import { clip, width } from './status-render.js';
 
 /** The interval. One number, chosen, and a floor rather than a schedule. */
 export const REFRESH_MS = 30_000;
 
 /** Below this the page wraps and none of the row arithmetic holds. */
 export const LIVE_MIN_COLUMNS = 60;
+
+/**
+ * How long the page waits for a terminal to say where the cursor is. Long
+ * enough for anything that answers at all — a reply is one round trip through
+ * a terminal that is right there — and short enough that a terminal which
+ * ignores `CSI 6n` costs a fifth of a second once, at a prompt nothing is
+ * blocked on anyway.
+ */
+export const ANCHOR_MS = 200;
+
+/** Device Status Report — cursor position. Answered as `ESC [ row ; col R`. */
+const DSR = '\x1b[6n';
+
+/** Said once, in the note row, by a page that had to go on deriving. */
+const BY_COUNT = 'mc: drawing by count — the terminal did not say where the page is';
 
 const SAVE = '\x1b7';
 const RESTORE = '\x1b8';
@@ -66,7 +94,22 @@ const up = (n) => (n > 0 ? `\x1b[${n}A` : '');
 /** Writes that go somewhere else on the screen and come back. */
 const aside = (body) => (body ? `${SAVE}${body}${RESTORE}` : '');
 
-const newlines = (text) => (String(text).match(/\n/gu) || []).length;
+/**
+ * How many rows printing `text` moves the cursor down.
+ *
+ * Not the newlines: a segment wider than the terminal is two rows or more, and
+ * the menu's first key line is 85 characters. Counting the wrap is what makes
+ * `above` describe the screen rather than the string — see the header.
+ */
+export function screenRows(text, columns) {
+  const wide = Number(columns) > 0 ? Number(columns) : 80;
+  const segments = String(text).split('\n');
+  return segments.reduce((rows, segment, index) => {
+    const wrapped = Math.max(0, Math.ceil(width(segment) / wide) - 1);
+    // Every segment but the last is followed by the newline that ended it.
+    return rows + wrapped + (index < segments.length - 1 ? 1 : 0);
+  }, 0);
+}
 
 /**
  * The reader for a terminal too narrow to hold the page, and the one a test
@@ -108,8 +151,14 @@ export function liveReader({
   let tailRows = 0;
   let typed = '';
   let holding = false;
+  // Said once per reader, not once per question: a terminal that ignored the
+  // first `CSI 6n` will ignore the next one, and a line repeated at every
+  // prompt is noise rather than news.
+  let saidByCount = false;
 
   return { ask, show };
+
+  function columnsOf() { return Number(stdout.columns) || 80; }
 
   function show(next) {
     stdout.write(`${next.join('\n')}\n`);
@@ -123,7 +172,7 @@ export function liveReader({
    * refreshing above it.
    */
   async function ask(tail, prompt) {
-    tailRows = newlines(tail);
+    tailRows = screenRows(tail, columnsOf());
     typed = '';
     stdout.write(`${tail}${prompt} `);
 
@@ -131,31 +180,77 @@ export function liveReader({
     let stopped = false;
     let timer = null;
     let dirty = false;
+    // The prompt's screen row as the terminal reported it, and the timer that
+    // is waiting for it to. `null` in the first is "draw by count".
+    let anchor = null;
+    let waiting = null;
 
     // A resize invalidates the frame rather than the page: the widths were
     // computed for the old columns, so the next frame is reprinted whole
     // rather than diffed against lines that no longer describe the screen.
-    const onResize = () => { dirty = true; };
+    // It invalidates the anchor too — a reflowed screen has moved the prompt —
+    // so the row is asked for again rather than carried over.
+    const onResize = () => { dirty = true; askAnchor(); };
     stdout.on?.('resize', onResize);
 
     const schedule = () => { timer = setTimer(tick, intervalMs); };
     schedule();
 
+    // The reading is started before the question is asked, because the answer
+    // to `CSI 6n` arrives on the same stream as the typing and `readLine` is
+    // what is listening to it.
     const inputStream = openInput();
+    const line = readLine({
+      input: inputStream,
+      stdout,
+      onTyped: (value) => { typed = value; },
+      onCursor: takeAnchor,
+    });
+    askAnchor();
     try {
-      const answer = await readLine({
-        input: inputStream,
-        stdout,
-        onTyped: (value) => { typed = value; },
-      });
+      const answer = await line;
       stopped = true;
       clearTimer(timer);
       return answer;
     } finally {
       stopped = true;
       clearTimer(timer);
+      if (waiting !== null) clearTimer(waiting);
       stdout.off?.('resize', onResize);
       closeInput(inputStream);
+    }
+
+    /**
+     * Ask the terminal where the cursor is. The timer is armed before the
+     * bytes go out, because a terminal — or a test — can answer inside the
+     * write, and a reply that arrives before anything is waiting for it would
+     * otherwise leave the timeout running.
+     */
+    function askAnchor() {
+      if (stopped) return;
+      anchor = null;
+      if (waiting !== null) clearTimer(waiting);
+      waiting = setTimer(byCount, ANCHOR_MS);
+      stdout.write(DSR);
+    }
+
+    /**
+     * The reply. Taken even when it is late: a row the terminal gave is worth
+     * more than a row this module counted, and the only thing that moves the
+     * prompt between the question and the answer is a reprint, which asks
+     * again anyway.
+     */
+    function takeAnchor(row) {
+      if (waiting !== null) { clearTimer(waiting); waiting = null; }
+      if (!stopped) anchor = row;
+    }
+
+    /** No reply. Keep the derived count, and say so — in the note row, once. */
+    function byCount() {
+      waiting = null;
+      if (stopped || saidByCount) return;
+      saidByCount = true;
+      note(`  ${BY_COUNT}`);
     }
 
     /**
@@ -191,14 +286,19 @@ export function liveReader({
         // the frame as ordinary lines — which leaves nothing below it, so the
         // rows under the page are this caller's to print again, the typed
         // answer among them.
-        stdout.write(`${frameWrites([], next, { above, rows })}${tail}${promptText}${typed}`);
+        stdout.write(`${frameWrites([], next, { above, rows, anchor })}${tail}${promptText}${typed}`);
         current = [...next];
         dirty = false;
         holding = false;
+        // The reprint scrolled the screen and reprinted the block under the
+        // page at whatever width the terminal is now: both numbers this loop
+        // draws by are stale, so both are taken again.
+        tailRows = screenRows(tail, columnsOf());
+        askAnchor();
         return;
       }
 
-      const writes = frameWrites(current, next, { above, rows });
+      const writes = frameWrites(current, next, { above, rows, anchor });
       const cleared = holding ? `${up(tailRows)}\r${CLEAR_LINE}` : '';
       if (writes || cleared) stdout.write(`${aside(cleared)}${aside(writes)}`);
       // Padded back to the footprint: the surplus rows are blank on screen and
@@ -216,9 +316,18 @@ export function liveReader({
      * failure is worse than one that says it is holding an old frame.
      */
     function hold(err) {
-      const width = Number(stdout.columns) || 80;
-      const note = clip(`  mc: holding the last frame — ${message(err)}`, width);
-      stdout.write(aside(`${up(tailRows)}\r${CLEAR_LINE}${note}`));
+      note(`  mc: holding the last frame — ${message(err)}`);
+    }
+
+    /**
+     * One line in the blank row the menu prints between the page and the keys.
+     * Relative, and deliberately so: it is the one row this loop can reach
+     * without knowing anything, which is what the by-count case needs — that
+     * note exists precisely because the anchor is missing. `holding` is what
+     * makes the next frame take it back off the screen.
+     */
+    function note(text) {
+      stdout.write(aside(`${up(tailRows)}\r${CLEAR_LINE}${clip(text, columnsOf())}`));
       holding = true;
     }
   }
@@ -235,14 +344,23 @@ const message = (err) => String(err?.message || err || 'unknown').split('\n')[0]
  * are swallowed rather than echoed as rubbish — the menu has no history to
  * walk through.
  *
+ * One escape sequence is not just swallowed but read: `ESC [ row ; col R`, the
+ * terminal answering `CSI 6n`. It arrives here because in raw mode there is
+ * nowhere else for it to arrive, and it is handed to `onCursor` as the row.
+ * Nothing of it reaches the buffer, so a person typing while the answer comes
+ * back sees their own characters and none of the terminal's.
+ *
  * Returns the trimmed line, or null for nothing at all: an empty answer,
  * ctrl-c, ctrl-d and a closed input are all the same answer, which the menu
  * reads as quit — the same as before it was live.
  */
-export function readLine({ input, stdout, onTyped = () => {} }) {
+export function readLine({ input, stdout, onTyped = () => {}, onCursor = () => {} }) {
   return new Promise((resolve) => {
     let buffer = '';
-    let escape = false;
+    // The escape sequence being swallowed, kept rather than counted so a
+    // cursor report can be recognised when its final byte arrives — including
+    // when it arrives in a later chunk than the one it started in.
+    let escape = '';
     let settled = false;
 
     const done = (value) => {
@@ -262,10 +380,15 @@ export function readLine({ input, stdout, onTyped = () => {} }) {
     const onData = (chunk) => {
       for (const ch of String(chunk)) {
         if (escape) {
-          if (/[A-Za-z~]/u.test(ch)) escape = false;
+          escape += ch;
+          if (/[A-Za-z~]/u.test(ch)) {
+            const report = /^\x1b\[(\d+);(\d+)R$/u.exec(escape);
+            if (report) onCursor(Number(report[1]));
+            escape = '';
+          }
           continue;
         }
-        if (ch === '\x1b') { escape = true; continue; }
+        if (ch === '\x1b') { escape = ch; continue; }
         if (ch === '\r' || ch === '\n') { leave(buffer.trim() || null); return; }
         if (ch === '\x03') { leave(null); return; } // ctrl-c
         if (ch === '\x04') { if (buffer === '') { leave(null); return; } continue; } // ctrl-d

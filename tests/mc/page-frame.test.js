@@ -96,6 +96,37 @@ describe('the difference between two frames', () => {
     assert.equal(frameWrites([], ['a', 'b'], { above: 0 }), '\r\x1b[0Ja\nb');
   });
 
+  it('addresses the row absolutely when the terminal has said where the cursor is', () => {
+    const before = ['a', 'b', 'c', 'd'];
+    const after = ['a', 'B', 'c', 'D'];
+    // The cursor is on row 30 and the page's first row six above it, on 24.
+    assert.equal(
+      frameWrites(before, after, { above: 6, anchor: 30 }),
+      '\x1b[25;1H\x1b[2KB\x1b[27;1H\x1b[2KD\x1b[30;1H',
+    );
+    // The point of it: a wrong `above` moves the whole frame together. Every
+    // row is one further up and no row is left holding the old text, which is
+    // what a relative walk does with the same wrong number.
+    assert.equal(
+      frameWrites(before, after, { above: 7, anchor: 30 }),
+      '\x1b[24;1H\x1b[2KB\x1b[26;1H\x1b[2KD\x1b[30;1H',
+    );
+  });
+
+  it('leaves a reported row above the top of the screen alone', () => {
+    const before = ['a', 'b', 'c'];
+    const after = ['A', 'b', 'C'];
+    // The page's first row is at 4 - 5 = -1, off the top; row 1 is on screen.
+    assert.equal(frameWrites(before, after, { above: 5, anchor: 4 }), '\x1b[1;1H\x1b[2KC\x1b[4;1H');
+  });
+
+  it('reprints a grown frame from the reported row', () => {
+    assert.equal(frameWrites(['a', 'b'], ['a', 'B', 'c'], { above: 4, anchor: 10 }), '\x1b[6;1H\x1b[0Ja\nB\nc');
+    // Starting above the screen: the reprint begins at row 1 and the rows that
+    // scrolled off are not printed again.
+    assert.equal(frameWrites(['a', 'b', 'c'], ['a', 'b', 'c', 'd'], { above: 5, anchor: 3 }), '\x1b[1;1H\x1b[0Jd');
+  });
+
   it('leaves rows that have scrolled off the top alone', () => {
     const before = frame(7200);
     const after = [...frame(10800)];
