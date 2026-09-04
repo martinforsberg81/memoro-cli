@@ -131,7 +131,7 @@
         "Criterion 3 is still the one nobody has ticked, and it is not this session's to tick: it asks for a row in `~/mc/runner/log/runs.tsv` from a real round where a project had a conflict and got a `step`. No round has met a conflict since step 3 landed — `runner.log` still holds the same 67 `merge conflict in:` events the plan was sized against, all of them from before. The path is asserted end to end by the fixture runner in `tests/mc/run.test.js`; what is missing is a night that produces one.",
         "The close-out row names the memoro half by path. That half is genuinely still open, and conditionally so: memoro's `.gitattributes` gives the SDK artifacts `merge=generated` (keep ours) only after `npm run sdk:check` is in the gate memoro declares as `affected`. Until then the 37 mechanical events of the measurement are only partly free here — this repository's `.gitattributes` covers the project log, and the runner covers the plans."
       ],
-      "pr": null,
+      "pr": 615,
       "blocked_by": null
     }
   ]
