@@ -61,7 +61,7 @@
         "For step 2: `holdPr` keeps `since` and `repairs` when the same pull request is held again, so bumping `repairs` before the repair session starts (as the instruction wants) survives the next round's re-hold. `holdReason({ note, problems })` and `holdsAfterSession(note)` in held.js are the words a repair prompt should carry — for `plan-trespass` the `unauthorisedChanges` problems are already inside `reason`, and `note` is the runs.tsv-shaped word (`open,gate-red`, `plan-trespass`, `timeout`, `open,not-a-stack`, `open,stack-stopped`). Step 3 should read the file through `heldPath(root)` + `heldEntries`/`parseHeld` rather than parsing it again.",
         "Criterion 1 is left `met: false` on purpose: the fixture half is done (`tests/mc/page.test.js`, section and painted snapshot), but no real `open,gate-red` existed to see on the page — the runner has landed everything it started since. What was seen instead is the whole path end to end: a `held.json` written by hand under a throwaway `MC_WORK_ROOT`, and `mc` drawing `QUEUE  empty … · held before merge 1` with the project, `#11274` and the reason under it. The close-out step should tick it when a real one has been seen, or say it was the fixture."
       ],
-      "pr": null,
+      "pr": 584,
       "blocked_by": null
     },
     {
