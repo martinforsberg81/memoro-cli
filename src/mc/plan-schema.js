@@ -59,6 +59,14 @@ const STEP_KEYS = Object.freeze([
   'blocked_by',
 ]);
 
+/**
+ * The fields a step session never writes: the project's own terms, and what
+ * the file is. Named here because two things now read the same rule —
+ * `unauthorisedChanges` below, which checks a session's edit on the way back
+ * in, and `plan-merge.js`, which resolves a conflicted plan by it.
+ */
+export const PLAN_FROZEN_FIELDS = Object.freeze(['goal', 'contract', 'out_of_scope', 'schema', 'version']);
+
 const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
 const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
 const RUNNER_KEYS = Object.freeze(['tool', 'model', 'budget_minutes']);
@@ -308,8 +316,7 @@ export function deliverableStep(plan) {
  */
 export function unauthorisedChanges(before, after, index) {
   const problems = [];
-  const frozen = ['goal', 'contract', 'out_of_scope', 'schema', 'version'];
-  for (const key of frozen) {
+  for (const key of PLAN_FROZEN_FIELDS) {
     if (JSON.stringify(before?.[key]) !== JSON.stringify(after?.[key])) {
       problems.push(`${key}: a step session does not change it`);
     }

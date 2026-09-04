@@ -289,10 +289,22 @@ should leave alone says so by being `blocked` in its own plan.
 
 Then a missing workarea is created rather than skipped: `mc work add <name>
 <repo> <name> --from origin/main`. Then `git merge origin/main` — **never** a
-rebase, which is what nights 1–2 of the shell runner cost to learn. The one
-conflict resolved without a session is an identical `.gitignore` hunk; anything
-else is left in progress and the project gets a `reconcile` step instead of a
-`step`, with the conflicting paths named in its prompt.
+rebase, which is what nights 1–2 of the shell runner cost to learn. Two
+conflicts are resolved without a session. One is an identical `.gitignore`
+hunk. The other is a **`PLAN.json` whose two sides wrote to different steps** —
+29 of the 166 conflicting files measured in `runner.log`, always the same
+shape: main carries the plan a later round wrote to, the branch carries the
+same plan with its own step edited. `plan-merge.js` merges it from the three
+sides git holds in the index while the merge is in progress (`:1:` the base,
+`:2:` ours, `:3:` origin/main), by the rule the plan already has about who may
+write what: each step goes to whichever side changed it, a criterion is met if
+either side met it, and `goal`, `contract`, `out_of_scope` and the criteria
+themselves are main's, because a step session may not change them. It refuses
+rather than guesses — both sides on the same step, a side that is not JSON, a
+step added or removed, or a result `validatePlan` would reject leaves the file
+conflicted, with the reason in `runner.log`. Anything else is left in progress
+and the project gets a `reconcile` step instead of a `step`, with the
+conflicting paths named in its prompt.
 
 **A project's branches are `<name>` or `<name>-<suffix>`.** That convention is
 what lets a pull request be matched back to a project at all, and rule 5 is

@@ -11,7 +11,7 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, stages = {}, roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -130,6 +130,14 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     git: (cwd, args) => {
       calls.git.push([cwd, ...args]);
       const repoName = Object.keys(repos).find((r) => cwd === repos[r]);
+      // The three sides git holds in the index while a merge is in progress:
+      // `:1:` the merge base, `:2:` ours, `:3:` theirs. `stages` is per
+      // workarea, per path — a file it does not name is one git cannot show.
+      if (args[0] === 'show' && /^:[123]:/u.test(args[1] || '')) {
+        const [, stage, path] = args[1].match(/^:([123]):(.*)$/u);
+        const held = (stages[cwd.split('/')[2]] || {})[path];
+        return held ? { ok: true, stdout: held[Number(stage)] ?? '' } : { ok: false, stdout: '' };
+      }
       if (args[0] === 'ls-tree' && repoName) {
         return { ok: true, stdout: Object.keys(plans[repoName] || {}).map((n) => `docs/project/prog/${n}/PLAN.json`).join('\n') };
       }
@@ -475,6 +483,82 @@ test('the round asks GitHub once per repository, beside the fetch it already pay
   assert.deepEqual(lists.map((c) => c[0]), ['/home/memoro', '/home/memoro-cli']);
   assert.deepEqual(asked.prs, []);
   assert.deepEqual(asked.prsFailed, []);
+});
+
+/**
+ * The plan conflict, resolved by the plan's own rule and not by a session.
+ *
+ * 29 of the 166 conflicting files measured in runner.log were a plan, always
+ * in this shape: main carries the plan a later round wrote to, the branch
+ * carries the same plan with its own step edited. The rule itself is
+ * plan-merge.js and is tested there; what these two ask is what the round
+ * does with it — that the merge finishes and the project gets its ordinary
+ * step, and that a plan the rule refuses is still left in progress.
+ */
+const PLAN_AT = 'docs/project/prog/c/PLAN.json';
+
+function planStages({ bothOnStepOne = false } = {}) {
+  const twoSteps = [
+    { title: 'One', status: 'ready', done_when: 'x', instruction: ['Do x.'], comments: [], pr: null, blocked_by: null },
+    { title: 'Two', status: 'ready', done_when: 'y', instruction: ['Do y.'], comments: [], pr: null, blocked_by: null },
+  ];
+  const base = JSON.parse(plan({ steps: twoSteps }));
+  const main = structuredClone(base);
+  main.steps[0] = { ...main.steps[0], status: 'done', pr: 601, comments: ['Step one landed.'] };
+  main.success_criteria[0] = { ...main.success_criteria[0], met: true };
+  const branch = structuredClone(base);
+  const at = bothOnStepOne ? 0 : 1;
+  branch.steps[at] = { ...branch.steps[at], comments: ['What this branch found.'] };
+  const text = (value) => `${JSON.stringify(value, null, 2)}\n`;
+  return { base: text(base), branch: text(branch), main: text(main) };
+}
+
+test('a PLAN.json whose two sides changed different steps is merged by the runner, and the project gets its step', async () => {
+  const three = planStages();
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
+    plans: { memoro: { c: three.main } },
+    conflicts: { c: [PLAN_AT] },
+    stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch, 3: three.main } } },
+    session: okSession(), gh: { c: { number: 90, title: 'Step two' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+
+  const merged = JSON.parse(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json']);
+  assert.deepEqual(merged.steps.map((s) => [s.status, s.pr]), [['done', 601], ['ready', null]], "main's step 1 survived");
+  assert.deepEqual(merged.steps.map((s) => s.comments[0]), ['Step one landed.', 'What this branch found.'], 'and so did the branch\'s step 2');
+  assert.deepEqual(merged.success_criteria.map((c) => c.met), [true]);
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'add' && c.at(-1) === PLAN_AT), 'the resolution is staged');
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'commit'), 'and the merge is committed, in the runner');
+
+  assert.equal(f.calls.sessions.length, 1, 'one session, and it is the step');
+  const [call] = f.calls.sessions;
+  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE step$/u);
+  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tc\tstep\t/u);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json resolved by the plan's own rule — steps\[0\] from main, steps\[1\] from this branch/u);
+  assert.doesNotMatch(log, /c: merge conflict in:/u);
+});
+
+test('a PLAN.json whose two sides changed the same step is left in progress, with the reason', async () => {
+  const three = planStages({ bothOnStepOne: true });
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
+    plans: { memoro: { c: three.main } },
+    conflicts: { c: [PLAN_AT] },
+    stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch, 3: three.main } } },
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+
+  assert.equal(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json'], three.branch, 'the file is untouched — a refusal writes nothing');
+  assert.ok(!f.calls.git.some((c) => c[1] === 'add' && c.at(-1) === PLAN_AT), 'and stages nothing');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json is not resolvable by the plan's rule — steps\[0\]: changed on this branch and on main both/u);
+  assert.match(log, /c: merge conflict in: docs\/project\/prog\/c\/PLAN\.json/u);
 });
 
 test('a conflicting merge of origin/main becomes a reconcile step with the files named', async () => {
