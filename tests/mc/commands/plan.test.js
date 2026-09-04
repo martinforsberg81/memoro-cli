@@ -19,7 +19,7 @@ import {
   ensurePlanArea, planArea, planBranch, planLaunch, programmeLabel, programmeRows, run,
 } from '../../../src/mc/commands/plan.js';
 import { profileArgs } from '../../../src/mc/portrait.js';
-import { instructionsFor, readCanonRole } from '../../../src/mc/roles.js';
+import { instructionsFor, readCanonRole, sharedRoleText } from '../../../src/mc/roles.js';
 import { openInWorkArea } from '../../../src/mc/work-open.js';
 import { runMcCli } from '../_helpers/mc-cli.js';
 
@@ -132,13 +132,38 @@ describe('the prompt', () => {
   // knowable when the session opens: how many projects the programme needs,
   // what they are called, whether a plan comes out of it at all, or by what
   // route it reaches main. A prompt that answers them in advance is guessing.
+  //
+  // It is asserted on what this function composes, with the shared text taken
+  // out. The rules every role session is told — `canon/roles/_common.md` —
+  // reach a planning session through here, because a role with no overlay
+  // cannot inherit them; they say what any session does with a loose thread
+  // and that the route to main is read rather than asked, and they name `mc
+  // merge` in saying so. That is a rule about conduct, not a prediction about
+  // this programme, and the guard below is for the prediction.
   it('predicts nothing about the deliverable or how it lands', () => {
     const { prompt } = planLaunch({
       programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
     });
+    const own = prompt.replace(sharedRoleText(), '');
+    assert.notEqual(own, prompt, 'the shared text should be in the prompt');
     for (const guess of ['PLAN.json', '<project>', 'PR', 'pull request', 'mc merge', 'push', 'programme document', 'Then stop']) {
-      assert.ok(!prompt.includes(guess), `the prompt should not predict "${guess}": ${prompt}`);
+      assert.ok(!own.includes(guess), `the prompt should not predict "${guess}": ${own}`);
     }
+  });
+
+  // A planning session is the one session that cannot be told this by its role
+  // file, and the rules are not restated here — they are read from the file
+  // they are written in.
+  it('carries the text every role session shares', () => {
+    const { prompt } = planLaunch({
+      programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
+    });
+    assert.ok(prompt.includes(sharedRoleText()), prompt);
+    // Missing from the install, it is left out rather than faked.
+    const without = planLaunch({
+      programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'), shared: null,
+    });
+    assert.match(without.prompt, /not a workarea: nothing\n`mc run` does can reach it\.\n\nMartin is at the terminal/u);
   });
 
   it('names only the checkout it actually got', () => {
