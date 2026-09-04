@@ -57,7 +57,7 @@
         "Two things the runner's gate cannot see. First, criterion 2's second half — Martin's own terminal, left open across a step starting and ending, with no doubled row — has not been run and cannot be from here, which is why that criterion is still `met: false`; `scripts/mc-live-page-check.mjs` is the pty harness that would come closest and is not part of `npm test` (five and a half minutes). Second, criterion 3 is written but its check says \"on main\", so it stays `false` until this lands. Also unmeasured: whether the anchor cures tmux, which the plan put out of scope — no claim is made either way.",
         "One behavioural change that is easy to miss in review: after a growth or resize reprint the loop now re-asks `CSI 6n`, so a reprint frame ends with `\\x1b[6n` rather than with the half-typed answer. Two existing tests asserted `endsWith` on that write and now assert `includes` plus an explicit `endsWith(DSR)`. Six other existing tests were given an `advance(1_000)` before their mark so the 200 ms by-count note falls outside the slice they measure — the note is real behaviour on a silent fake terminal, not test noise."
       ],
-      "pr": null,
+      "pr": 593,
       "blocked_by": null
     }
   ]
