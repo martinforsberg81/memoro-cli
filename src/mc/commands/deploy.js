@@ -19,23 +19,32 @@
  * not be `main` as it was two commits ago. It is released however the deploy
  * ends.
  *
+ * The record (`deploys.js`) is written around the spawn rather than after it:
+ * the row exists, saying `running`, before `npm run deploy` is started, and is
+ * completed however it ends. A deploy that never came back is then a row that
+ * says so instead of a silence somebody has to reconstruct from
+ * `/admin/deploy/logs`. A refusal — no terminal, a `no`, a held repository —
+ * is a row too: it is a deploy somebody meant to make.
+ *
  * Every process boundary is on `deps` — git, the spawn, the prompt, the
  * lease, the version fetch — so the whole verb runs in a test with nothing
- * real behind it.
+ * real behind it. The lease and the record are the two exceptions, and
+ * deliberately so: they are what this verb exists to leave behind, `env` is
+ * already the seam that points both at a throwaway directory, and a faked
+ * writer would only prove that the fake was called.
  *
  * Exit codes: the script's own when it ran; 0 for `--dry-run`; 1 for a `no`,
  * a held lease or a repository this machine has no checkout of; 2 for a bad
  * argument or no terminal.
  */
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
+import { stripAnsi } from '../../lib/prompt.js';
 import { defaultRepos } from '../brief-collect.js';
+import { DEPLOYED, FAILED, lastDeploy as lastDeployRow, recordEnd, recordRefusal, recordStart } from '../deploys.js';
 import { tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { nightlyReading } from '../nightly-history.js';
-import { workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { claimLease as realClaim, currentHolder, releaseLease as realRelease } from '../repo-lease.js';
 import { leaseRow } from '../repo-render.js';
@@ -62,29 +71,6 @@ export function usage() {
   return 'usage — mc deploy [--dry-run] [--json]   memoro\'s main to production, under the lease, after one question\n';
 }
 
-/**
- * `~/mc/runner/log/deploys.tsv` — the last deploy mc itself made.
- *
- * Read tolerantly and inline for now: the file is written by the next step of
- * this project, which also gives it a reader of its own (`src/mc/deploys.js`)
- * for the page and the helper. Until then an absent file is simply "mc has
- * not deployed anything yet", which is true, and the version endpoint below
- * answers the same question about the world rather than about mc.
- */
-export function lastDeployRow(env = process.env) {
-  let text = null;
-  try { text = readFileSync(join(workRoot(env), 'runner', 'log', 'deploys.tsv'), 'utf8'); } catch { return null; }
-  const lines = text.split('\n').filter((line) => line.trim());
-  if (lines.length < 2) return null;
-  const header = lines[0].split('\t');
-  const rows = lines.slice(1).map((line) => {
-    const cells = line.split('\t');
-    return Object.fromEntries(header.map((name, index) => [name, cells[index] ?? '']));
-  });
-  const last = rows.filter((row) => row.sha && row.outcome === 'deployed').at(-1);
-  return last || null;
-}
-
 /** `GET /api/version` — what production says it is, public and uncached. */
 async function fetchVersionDefault(env = process.env) {
   try {
@@ -98,15 +84,83 @@ async function fetchVersionDefault(env = process.env) {
   } catch { return null; }
 }
 
-function spawnDeployDefault({ cwd, env }) {
+export function spawnDeployDefault({ cwd, env, onOutput, stdout = process.stdout, stderr = process.stderr }) {
   return new Promise((resolve) => {
-    // The person is watching the script's own seventeen steps, and the
-    // environment goes through untouched: MEMORO_DEPLOY_CONTAINERS and
+    // The environment goes through untouched: MEMORO_DEPLOY_CONTAINERS and
     // wrangler's own variables are the caller's to set, not mc's to invent.
-    const child = spawn('npm', ['run', 'deploy'], { cwd, env, stdio: 'inherit' });
+    //
+    // stdout and stderr are piped rather than inherited so the row can say
+    // which step it stopped at and what version was verified — every chunk is
+    // echoed straight on, so the person still watches the script's own
+    // seventeen steps as they happen. The cost is that the child sees a pipe
+    // and not a terminal, so a tool that draws a progress bar only for a TTY
+    // prints plain lines instead. stdin stays inherited: `deploy.mjs` asks
+    // nothing, but wrangler's own login flow might.
+    const child = spawn('npm', ['run', 'deploy'], { cwd, env, stdio: ['inherit', 'pipe', 'pipe'] });
+    const tee = (stream, sink) => {
+      if (!stream) return;
+      stream.setEncoding('utf8');
+      stream.on('data', (chunk) => { sink.write(chunk); onOutput?.(chunk); });
+    };
+    tee(child.stdout, stdout);
+    tee(child.stderr, stderr);
     child.on('error', (error) => resolve({ code: 127, error: error?.message || String(error) }));
+    // `close` rather than `exit`: it fires once the piped streams are drained,
+    // so the last step header is in hand before the row is completed.
     child.on('close', (code, signal) => resolve({ code: signal ? 1 : (code ?? 1), signal: signal || null }));
   });
+}
+
+/** How much of the script's chatter is kept. Everything the row needs — the
+ * last step header, the verified version, the failure — is at the end of it,
+ * and a container build can print megabytes before that. */
+const OUTPUT_TAIL = 256 * 1024;
+
+/**
+ * What `deploy.mjs` said, in the four things the row keeps.
+ *
+ * The lines, read from `scripts/deploy.mjs` on 2026-09-04 and matched after
+ * the colours are stripped:
+ *   `▸ <label>`                                     — `step()`, its 17 headers
+ *   `Live /api/version verified: build <n> · <sha>` — `verifyLiveVersion()`
+ *   `✓ Deploy complete build <n> · <sha>`           — the success banner
+ *   `✗ Deploy failed` + the message beneath it      — the catch at the end
+ *
+ * Tolerant on purpose: every one of them is a line that may not be there —
+ * `MEMORO_DEPLOY_SKIP_LIVE_VERSION_VERIFY` removes the verified line, a
+ * script that changes its wording removes any of them — and a missing line is
+ * an empty cell. A deploy that worked must never be recorded as a failure
+ * because mc could not parse the banner it printed.
+ */
+export function readScriptOutput(text) {
+  const lines = stripAnsi(String(text || '')).split('\n').map((line) => line.trim());
+  let stoppedAt = '';
+  let verified = null;
+  let banner = null;
+  let failure = '';
+  lines.forEach((line, index) => {
+    const step = /^▸\s+(.+)$/u.exec(line);
+    if (step) { stoppedAt = step[1].trim(); return; }
+    const live = /^Live \/api\/version verified: build (\d+) · (\S+)$/u.exec(line);
+    if (live) { verified = { build: live[1], commit: live[2] }; return; }
+    const complete = /^✓ Deploy complete build (\d+) · (\S+)$/u.exec(line);
+    if (complete) { banner = { build: complete[1], commit: complete[2] }; return; }
+    if (/^✗ Deploy failed$/u.test(line)) {
+      failure = lines.slice(index + 1).find((next) => next) || '';
+    }
+  });
+  return {
+    stopped_at: stoppedAt,
+    // The build number that shipped: the banner's, or the verified line's when
+    // the script fell over between the two.
+    build: banner?.build || verified?.build || '',
+    // Only what was actually verified against production goes in these two.
+    // The banner is what mc stamped, which is a different claim.
+    live_commit: verified?.commit || '',
+    live_build: verified?.build || '',
+    verified: Boolean(verified),
+    failure,
+  };
 }
 
 /**
@@ -198,6 +252,17 @@ export function planLines(plan) {
   return lines;
 }
 
+/** The row's last cell: why it ended that way, in one line, or nothing when
+ * there is nothing to say beyond `deployed`. */
+function endNote({ result, said, ok }) {
+  if (result.error) return `mc could not run npm run deploy — ${result.error}`;
+  if (result.signal) return `killed by ${result.signal}`;
+  if (!ok) return said.failure ? `exit ${result.code} — ${said.failure}` : `exit ${result.code}`;
+  // A green deploy whose live version nobody checked is worth saying: the
+  // script skips its own verification on MEMORO_DEPLOY_SKIP_LIVE_VERSION_VERIFY.
+  return said.verified ? '' : 'the script verified no live version';
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -240,8 +305,14 @@ export async function run(argv, deps = {}) {
     return 0;
   }
 
+  // The holder is who the record and the lease both name, and it is needed
+  // before either: a refusal is written by somebody too.
+  const holder = deps.holder || currentHolder();
+  const refuse = (note) => recordRefusal({ sha: plan.sha, holder: holder.name, note }, env);
+
   const interactive = deps.interactive || realInteractive;
   if (!interactive(env)) {
+    refuse('no terminal to ask at');
     stderr.write('mc: mc deploy asks before it deploys, and there is no terminal here to ask — run it in one\n');
     return 2;
   }
@@ -249,29 +320,56 @@ export async function run(argv, deps = {}) {
   const ask = deps.ask || realAsk;
   const answer = ask(`deploy ${plan.short} to production? [y/N]`, { stdout });
   if (!/^y(es)?$/iu.test(String(answer || '').trim())) {
+    refuse('answered no at the question');
     stdout.write('mc: nothing was deployed\n');
     return 1;
   }
 
   const claim = deps.claimLease || realClaim;
   const release = deps.releaseLease || realRelease;
-  const holder = deps.holder || currentHolder();
   const claimed = claim({ repoPath: path, errand: `deploy ${plan.sha}`, holder, ownerPid: process.pid });
   if (!claimed.ok) {
+    refuse(`held by ${claimed.lease.holder} — ${claimed.lease.errand}`);
     const c = painter(Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined);
     stderr.write(`mc: ${path} is held by ${claimed.lease.holder} — ${leaseRow(c, claimed.lease)}\n`);
     stderr.write('mc: a deploy takes the lease for its whole length, so main cannot move under the build — nothing was deployed\n');
     return 1;
   }
 
+  // Before the spawn, not after it: a deploy that never comes back — the
+  // terminal closed, a ^C in the middle of wrangler — leaves this row saying
+  // `running` with no `ended`, which is the true thing to say about it.
+  const key = recordStart({ sha: plan.sha, holder: holder.name }, env);
+
   const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
+  let tail = '';
+  const onOutput = (chunk) => {
+    tail = (tail + chunk).slice(-OUTPUT_TAIL);
+  };
   try {
-    const result = await spawnDeploy({ cwd: path, env, sha: plan.sha });
+    const result = await spawnDeploy({ cwd: path, env, sha: plan.sha, onOutput, stdout, stderr });
+    const said = readScriptOutput(tail);
+    const ok = result.code === 0;
+    recordEnd(key, {
+      outcome: ok ? DEPLOYED : FAILED,
+      build: said.build,
+      live_commit: said.live_commit,
+      live_build: said.live_build,
+      stopped_at: ok ? '' : said.stopped_at,
+      note: endNote({ result, said, ok }),
+    }, env);
+
     if (result.error) stderr.write(`mc: could not run npm run deploy in ${path} — ${result.error}\n`);
     if (result.signal) stderr.write(`mc: the deploy was killed by ${result.signal}\n`);
-    if (opts.json) stdout.write(`${JSON.stringify({ sha: plan.sha, exit_code: result.code, deployed: result.code === 0 }, null, 2)}\n`);
-    else if (result.code !== 0) stderr.write(`mc: npm run deploy exited ${result.code} — production may be part-way; the script's own last step says where\n`);
+    if (opts.json) stdout.write(`${JSON.stringify({ sha: plan.sha, exit_code: result.code, deployed: ok, ...said }, null, 2)}\n`);
+    else if (!ok) stderr.write(`mc: npm run deploy exited ${result.code}${said.stopped_at ? ` at ${said.stopped_at}` : ''} — production may be part-way\n`);
+    else if (said.live_commit) stdout.write(`mc: deployed — build ${said.live_build} · ${short(said.live_commit)} verified live\n`);
     return result.code;
+  } catch (error) {
+    // A throw is not a deploy that finished: the row would otherwise stay
+    // `running` for a failure mc itself caused, and the throw goes on up.
+    recordEnd(key, { outcome: FAILED, stopped_at: readScriptOutput(tail).stopped_at, note: `mc: ${error?.message || error}` }, env);
+    throw error;
   } finally {
     // However it ended, including a throw: a lease left behind by a deploy
     // stops the next gate round for a reason that is over.
