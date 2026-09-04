@@ -149,6 +149,25 @@ in two more.
 
 **Carried by [`role-instructions/PLAN.json`](role-instructions/PLAN.json).**
 
+## 6 · A planning session runs on fable
+
+`ruling · 2026-09-04` · raised in the `mc` planning session
+
+The role concept had `plan` on `fable` from the start; `canon/roles/plan.md`
+shipped on `opus` and nobody had placed it deliberately since.
+
+> **Beslut:** "Plan ska i utgångspunkt köra fable." (Martin, 2026-09-04)
+
+One word of frontmatter, but not one that can be asserted from the file:
+`prices.js:21` maps the alias for costing, while `modelArgs`
+(`src/adapters/claude-code.js`) passes the string to the tool unvalidated on
+purpose. A name the tool refuses fails at launch and nowhere earlier, so the
+step opens a planning session on it once.
+
+**Carried by [`role-instructions/PLAN.json`](role-instructions/PLAN.json).**
+Where `repair` and `reconcile` sit in the same concept is not settled; neither
+existed when it was written.
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som

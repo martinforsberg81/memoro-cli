@@ -10,12 +10,13 @@
     "`~/mc/intake/` stays what it is: the three tables `mc run` writes (`unplanned-workareas.md`, `unreadable-plans.md`, `undocumented-closures.md`) and the day's `errors-<date>.md` that `mc helper --intake` hands to its turn. Nothing here gives it a reader for a file put there by hand.",
     "What a session is told is assembled in one place. A rule that applies to every session is written once and reaches every role, `plan` included.",
     "`canon/roles/plan.md` stays frontmatter only. A planning session's text is its first prompt (Martin, 2026-08-31; `docs/technical/mc-plan.md:147`), so whatever reaches it reaches it through `planLaunch`.",
-    "The catalogue is cut against the text it holds today. The 444-line count in the `roles-say-less` proposal was measured on 2026-08-31 and that cut landed; the eight files now hold 330 lines of different text."
+    "The catalogue is cut against the text it holds today. The 444-line count in the `roles-say-less` proposal was measured on 2026-08-31 and that cut landed; the eight files now hold 330 lines of different text.",
+    "`canon/roles/plan.md` runs on `fable` (Martin, 2026-09-04: \"Plan ska i utgångspunkt köra fable.\"). It is on `opus` today; the file is frontmatter only, so this is one word — but the word has to be one the tool accepts."
   ],
   "out_of_scope": [
     "Giving `~/mc/intake/` a reader for free-form files, and any change to what `helperPrompt` hands the intake turn.",
     "The shape of a proposal file — its frontmatter, its sections, whether it is prose or a form. That belongs to the `proposals-are-prose` proposal.",
-    "Which model each role runs. `plan` is on `opus` where the original concept said `fable`; it stays as it is, and the question is carried by `~/mc/proposals/2026-09-04-role-models-and-mc-instructions.md`.",
+    "Which model `repair` and `reconcile` run. Both are on `opus` and neither existed when the model concept was written; placing them is carried by `~/mc/proposals/2026-09-04-role-models-and-mc-instructions.md`.",
     "An `AGENTS.md` under `~/mc/`, and any instruction for a session standing there that is not a role. Same proposal carries it.",
     "`mc plan`'s lifecycle — how a planning session is closed or discarded.",
     "The user's own role catalogue under `MC_ROLES_DIR` or `<mc home>/roles`. Only `canon/roles/` is touched.",
@@ -56,13 +57,30 @@
       "met": false,
       "criterion": "How a session's instructions are assembled is described in one place under `docs/technical/`.",
       "check": "The four existing descriptions (`mc-run.md:356`, `mc-plan.md:147-158`, `mc-helper.md:336`, `mc-brief.md:67`) either point at that one place or are the one place; no fifth account of the mechanism exists."
+    },
+    {
+      "met": false,
+      "criterion": "A planning session opens on fable by default.",
+      "check": "`canon/roles/plan.md` says `model: fable`, and `mc plan <programme>` was actually opened once with it — the launch line names the model and the session answered. Not asserted from the file alone: mc passes `--model` through unvalidated (`src/adapters/claude-code.js` `modelArgs`), so a name the tool rejects fails only at launch."
     }
   ],
   "documents": [
-    { "label": "What a PLAN.json is, and who writes what", "path": "../../README.md" },
-    { "label": "The plan role is frontmatter only, and why", "path": "../../../technical/mc-plan.md" },
-    { "label": "How the runner assembles a session's instructions", "path": "../../../technical/mc-run.md" },
-    { "label": "The role files the helper and intake turns read", "path": "../../../technical/mc-helper.md" }
+    {
+      "label": "What a PLAN.json is, and who writes what",
+      "path": "../../README.md"
+    },
+    {
+      "label": "The plan role is frontmatter only, and why",
+      "path": "../../../technical/mc-plan.md"
+    },
+    {
+      "label": "How the runner assembles a session's instructions",
+      "path": "../../../technical/mc-run.md"
+    },
+    {
+      "label": "The role files the helper and intake turns read",
+      "path": "../../../technical/mc-helper.md"
+    }
   ],
   "steps": [
     {
@@ -100,9 +118,10 @@
     {
       "title": "Read the eight roles against what they say today",
       "status": "ready",
-      "done_when": "`wc -l canon/roles/*.md` totals under 260, and every passage removed is named in the PR body with the role it came from and where it went.",
+      "done_when": "`wc -l canon/roles/*.md` totals under 260, every removed passage is named in the PR body with where it went, and a planning session has been opened once on `fable`.",
       "instruction": [
         "This is the `roles-say-less` cut, re-aimed. That proposal measured 444 lines across seven roles on 2026-08-31 and the cut landed — the catalogue went to 185. It has grown back to 330 across eight files: brief 64, helper 35, intake 30, plan 6, reconcile 29, repair 54, step 75, worker 37. The number is not the target; the kinds of text the proposal named are, and they came back. Steps 1 and 2 take the two cases already known. Read all eight files whole and find the rest.",
+        "One frontmatter change rides with this read-through: `canon/roles/plan.md` goes from `model: opus` to `model: fable` (Martin, 2026-09-04). Verify it rather than assuming it. `src/mc/prices.js:21` maps the alias `fable` to `claude-fable-5` for costing, but that table is not what launches anything: `modelArgs` in `src/adapters/claude-code.js` passes the string through as given, with the comment that mc does not validate model names because the tool is the authority. So open `mc plan` once on the changed file and confirm the session actually starts on it; if the bare word is refused, use the name the tool accepts and say in the PR which one, rather than leaving a role whose model fails at launch.",
         "Three kinds to look for. Text duplicated across roles, now that there is a shared file to put it in. A role explaining another role's job, or a mechanism its own session does not operate. And a passage that is now written in `docs/technical/` or enforced in code, where the role can cite rather than restate.",
         "Candidates read while planning, none of them decided here. `brief.md`'s *Held before merge* section is thirteen lines restating what `docs/technical/mc-brief.md:67` documents and what the runner already does — but it is also the only place the three allowed outcomes are named to the session that chooses between them, so cutting it may cost more than it saves. `worker.md` and `step.md` overlap heavily: both describe which `PLAN.json` fields the session may write, both describe the `blocked` / `blocked_by` shape. They are different sessions with different guarantees — `step` is compared before and after by the runner, `worker` is not — so decide per passage, not per file, and say why in the PR.",
         "Do not cut judgement a session cannot derive from the code in front of it. `intake.md`'s *volume is not severity* and *three is a lot*, `brief.md`'s *never lay out options for him to choose between*, `repair.md`'s *a green bought by changing the measurement is the one outcome worse than the red* — these are the reason the file exists. Every role also keeps its opening: who this session is, and what it delivers.",
