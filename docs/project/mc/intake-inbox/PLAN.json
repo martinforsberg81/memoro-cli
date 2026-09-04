@@ -47,8 +47,14 @@
     }
   ],
   "documents": [
-    { "label": "What the intake turn is and what it may write", "path": "../../../technical/mc-helper.md" },
-    { "label": "The two rooms, and which one a session's own finding goes in", "path": "../role-instructions/PLAN.json" }
+    {
+      "label": "What the intake turn is and what it may write",
+      "path": "../../../technical/mc-helper.md"
+    },
+    {
+      "label": "The two rooms, and which one a session's own finding goes in",
+      "path": "../role-instructions/PLAN.json"
+    }
   ],
   "steps": [
     {
@@ -76,7 +82,8 @@
         "The `repo:` line in the prompt is today derived from which repository's digest this is, and the role calls that out as the one thing a turn must not get wrong. A file Martin drops belongs to neither repository by its name. So: keep deriving it for a file the collector wrote, and for anything else tell the turn to decide it and say which in the proposal — the role already carries the sentence that `memoro` is the deployed service and `memoro-cli` is mc on this machine.",
         "Say what the outcome is, in the role and in the prompt: this file, read whole, and then either one proposal or none, with a line saying which and why. Not two proposals from one file — the role's *one report is one proposal* rule is the helper's and it holds here.",
         "A file the tool cannot read whole is the case that produces a confident wrong answer. Tell the turn to say so rather than judge from the head: a proposal that names the limit, or no proposal with that as the reason. The thirteen digests waiting are 3–15 kB, so this is about what Martin drops, not about them.",
-        "Test `helperPrompt` as a pure function against a named file, and `npm test`."
+        "Test `helperPrompt` as a pure function against a named file, and `npm test`.",
+        "Two other projects in this programme touch `canon/roles/` in parallel: `role-instructions` reshapes the catalogue into a shared entry every role inherits and trims the eight files, and `no-reconcile` moves the merge-resolution rules into the step role. Write the intake role's change into whatever shape exists in the tree you are handed, do not wait for either, and do not reshape the catalogue here. If your sync brings one of theirs in and the two edits meet in `canon/roles/intake.md`, both are additive — keep both."
       ],
       "comments": [],
       "pr": null,
