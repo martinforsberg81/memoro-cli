@@ -113,6 +113,8 @@ export const REPO_NAMES = ['memoro', 'memoro-cli'];
 export const BUSY_STOPS = ['busy', 'lease'];
 export const LAND_WAIT_MS = 45 * 60 * 1000;
 export const LAND_RETRY_MS = 30 * 1000;
+/** How often an idle lane looks again while an UPDATE waits for the quiet moment. */
+export const UPDATE_POLL_MS = 30 * 1000;
 
 /* ------------------------------------------------------------ real deps */
 
@@ -1527,16 +1529,29 @@ export async function runLoop({
       // runner keeps the count it started with until `--update`.
       const count = (deps.laneCount || readLaneCount)();
       if (count > 1) runner.say(`lanes: ${count} per repository`);
+      //
+      // UPDATE is honoured when no lane has a session in flight — not when
+      // *this* lane happens to be between rounds. Until 2026-09-04 a lane
+      // that read UPDATE after an idle round left its loop at once and sat
+      // waiting for the busy lane's ninety-minute step, taking no work: the
+      // memoro-cli lanes stood idle for half an hour with a ready plan on
+      // main (Martin: "redan nu borde det köras en memoro-cli process men
+      // det startar inte"). Now a lane keeps taking rounds while UPDATE
+      // waits, sleeping briefly rather than the idle ten minutes, and leaves
+      // only when nothing is in flight anywhere — the moment the handover
+      // can happen. A lane that leaves stops taking work; the rest go on
+      // until they see the same quiet moment.
+      const quiet = () => runner.paths.currents().length === 0;
       const lane = async (repo, index) => {
         const tag = count > 1 ? `${repo.name}#${index + 1}` : repo.name;
         for (let n = 1; ; n += 1) {
           const r = await runner.round({ only: repo.name, lane: index, count });
           if (r.stop) return { stop: true };
           runner.say(`${tag}: round ${n} done (${r.ran} ran)`);
-          if (runner.updateRequested()) return { update: true };
-          if (r.ran === 0) await deps.sleep(idleSleepMs);
+          if (runner.updateRequested() && quiet()) return { update: true };
+          if (r.ran === 0) await deps.sleep(runner.updateRequested() ? UPDATE_POLL_MS : idleSleepMs);
           if (runner.stopRequested()) return { stop: true };
-          if (runner.updateRequested()) return { update: true };
+          if (runner.updateRequested() && quiet()) return { update: true };
         }
       };
       const choreLoop = async () => {
