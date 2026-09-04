@@ -18,9 +18,10 @@ THE PAGE
 
   mc brief                         Decide what to work on next
   mc plan [<programme>]            Plan a programme; no name asks which
-  mc run                           The runner: one step at a time, headless
+  mc run                           The runner: headless steps, a lane per repository
   mc run start | stop [--force]    Turn it on, or off — after the round, or now
   mc run --update                  After the round: new code, new process
+  mc run lanes [<n>]               Steps in flight per repository; no number prints it
   mc test <repo> <pr>              Measure a pull request; merge nothing
   mc merge <repo> <pr>             The same measurement, then the merge
   mc status <name>                 One project, whole
