@@ -1,0 +1,115 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`~/mc/intake/` is an inbox that drains. Martin drops a file in it — an error log, a screenshot, a note — and one turn reads that one file, decides proposal or no proposal, and the file is archived. A new turn takes the next one, until the directory is empty.",
+    "Nothing accumulates there. Today thirteen daily digests going back to 2026-08-29 sit beside three tables the runner rewrites every round, and one turn a day reads one of them."
+  ],
+  "contract": [
+    "One file, one turn, one outcome: a proposal or no proposal (Martin, 2026-09-04: \"läsa in en fil i taget och bedöma med outcome proposal eller inte proposal. Filen arkiveras direkt efteråt. Ny session upprepas tills alla filer är hanterade.\").",
+    "The file is archived immediately after its turn, whatever the outcome and whether or not the turn succeeded. An inbox that keeps a file it could not judge is one that never drains.",
+    "Only files a person or a collector put there are drained. The three tables `mc run` writes and rewrites every round are not inbox items and leave the directory in step 1 — archiving one would delete state the next round recreates, forever.",
+    "The turn reads the file itself rather than being handed its text. A screenshot cannot be inlined in a prompt, and the whole point of the inbox is that Martin may drop anything in it.",
+    "`~/mc/proposals/` is unchanged. What comes out of a turn is what comes out of it today: zero or more `<date>-<slug>.md`, prose, naming the system it belongs to."
+  ],
+  "out_of_scope": [
+    "What the daily collect gathers and how. `collectHelper` keeps writing `errors-<repo>-<date>.md` once a day; this project changes what happens to that file afterwards, never what is in it.",
+    "The `intake` role's judgement — the delta is the agenda, volume is not severity, zero proposals is a good answer. Those rules survive intact; only what one turn is given changes.",
+    "The shape of a proposal file, and which sessions may write one. That is `role-instructions` and the ruling behind it.",
+    "`~/mc/intake/decisions-archive/` — an archive already, and a directory rather than a file. It is skipped, not drained and not moved.",
+    "`mc brief` and what the brief shows. It keeps reading the same three tables from wherever step 1 puts them."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "The inbox drains: every file put in `~/mc/intake/` is read by exactly one turn and then gone from the directory.",
+      "check": "Drop three files, let the runner work, and read `~/mc/runner/log/runs.tsv`: three rows, one per file, each naming its file. `ls ~/mc/intake/` afterwards lists no file — only `decisions-archive/`."
+    },
+    {
+      "met": false,
+      "criterion": "A turn that fails still archives its file.",
+      "check": "A test drives a turn whose session returns non-zero and asserts the file moved to the archive and the row carries the failure. Not asserted from the code path alone."
+    },
+    {
+      "met": false,
+      "criterion": "The runner's own tables are no longer in the inbox and the brief still reads them.",
+      "check": "`ls ~/mc/intake/` names none of `unplanned-workareas.md`, `unreadable-plans.md`, `undocumented-closures.md`. `mc brief --collect` renders all three sections with their rows."
+    },
+    {
+      "met": false,
+      "criterion": "A turn can judge a file that is not text.",
+      "check": "Put a screenshot in the inbox and let a turn take it. The row says what it decided; the session's output says what it saw. Run it once for real."
+    },
+    {
+      "met": false,
+      "criterion": "A file the turn could not read whole is said so, not judged from its head.",
+      "check": "A file past the tool's read limit produces either a proposal that names the limit or no proposal with that reason in the turn's line. Asserted by putting one in."
+    }
+  ],
+  "documents": [
+    { "label": "What the intake turn is and what it may write", "path": "../../../technical/mc-helper.md" },
+    { "label": "The two rooms, and which one a session's own finding goes in", "path": "../role-instructions/PLAN.json" }
+  ],
+  "steps": [
+    {
+      "title": "The runner's tables leave the inbox",
+      "status": "ready",
+      "done_when": "`~/mc/intake/` holds no file `mc run` writes, and `mc brief --collect` still renders all three sections with their rows.",
+      "instruction": [
+        "Three files in `~/mc/intake/` are not inbox items and must go before anything drains the directory: `unplanned-workareas.md`, `unreadable-plans.md` and `undocumented-closures.md`. `mc run` writes them — `paths.unplanned` and `paths.unreadable` in `src/mc/run.js`, and the undocumented one written near the archive step — and rewrites the first two whole every round, which is the property that makes archiving one pointless: it would be back next round, and the round after, forever.",
+        "They are read by exactly one reader, `mc brief --collect`: `src/mc/brief-collect.js` reads the three filenames from `intakeDir(env)` and renders a section for each, with `UNDOCUMENTED_FILE`, `UNPLANNED_FILE` and `UNREADABLE_FILE` naming the paths in the brief text so Martin can open them. All of that moves with the files, including the strings in the brief.",
+        "They are the runner's own output about its own rounds, so `~/mc/runner/` is where they belong — beside `held.json`, `runner.json` and `log/`. Put them there unless reading `src/mc/paths.js` shows a better room, and say which you chose. The three constants in `brief-collect.js` are the only place the path is written for a human, so they and `intakeDir` are the whole change on the reading side.",
+        "A machine wrote them and a machine can find them again, so do not migrate what is on disk with code. Move the three files by hand as part of this step and say so in the PR; a migration path for three files that are rewritten every round is more code than it saves.",
+        "Verify by running `mc brief --collect` and reading the three sections in the brief it writes. `npm test` — `tests/mc/brief-collect.test.js` reads these."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "One file, one turn",
+      "status": "ready",
+      "done_when": "A turn is given one file by name, reads it itself, and its outcome is a proposal or no proposal for that file alone.",
+      "instruction": [
+        "`helperPrompt` (`src/mc/helper-turn.js`) currently inlines the whole digest as `digestText` between `----- DIGEST -----` markers. That has to become a filename: the turn already stands in `~/mc/intake/` as its cwd (`const dir = intakeDir(env)` in `runHelperTurn`), so naming the file is enough for it to open the file itself. This is not a refactor for tidiness — a screenshot has no text to inline, and the inbox is defined by Martin being able to drop anything in it.",
+        "Keep everything else the prompt gives it. `helperGround` supplies the plans on main, the project log and the proposals already waiting, and the `intake` role judges against them — *duplicating live work is noise*, *the delta is the agenda*. A turn that loses that ground starts proposing what is already being built.",
+        "The `repo:` line in the prompt is today derived from which repository's digest this is, and the role calls that out as the one thing a turn must not get wrong. A file Martin drops belongs to neither repository by its name. So: keep deriving it for a file the collector wrote, and for anything else tell the turn to decide it and say which in the proposal — the role already carries the sentence that `memoro` is the deployed service and `memoro-cli` is mc on this machine.",
+        "Say what the outcome is, in the role and in the prompt: this file, read whole, and then either one proposal or none, with a line saying which and why. Not two proposals from one file — the role's *one report is one proposal* rule is the helper's and it holds here.",
+        "A file the tool cannot read whole is the case that produces a confident wrong answer. Tell the turn to say so rather than judge from the head: a proposal that names the limit, or no proposal with that as the reason. The thirteen digests waiting are 3–15 kB, so this is about what Martin drops, not about them.",
+        "Test `helperPrompt` as a pure function against a named file, and `npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Archived immediately, and repeated until empty",
+      "status": "ready",
+      "done_when": "The runner takes one file per turn and keeps going across rounds until `~/mc/intake/` holds no file, each file archived the moment its turn ends.",
+      "instruction": [
+        "Two gates change. `helperDue` (`src/mc/run-plan.js`) asks whether the day's helper has run, and that is right for the **collect** half — one digest per repository per day, at `HELPER_HOUR_UTC`. It is wrong for the turn half, which is now asked a different question: is there a file in the inbox? Split them, so a round can collect nothing and still drain, or collect and drain in the same round.",
+        "Oldest first, by name — the collector's filenames carry their date, and draining in the order things arrived is what makes the queue legible. One file per round, or several: decide from what a round costs today and say which in the PR. One per round drains the current thirteen over thirteen rounds and never makes a round long; all of them in one round empties the inbox but makes that round unbounded.",
+        "Archive after the turn returns, whatever it returned. `~/mc/runner/log/intake/<date>/<file>` follows the precedent `closeWorkarea` sets with `~/mc/runner/log/closed/<name>/`. Unconditional is Martin's word and it is also the only version that terminates: a file kept because its turn failed is a file the next round takes again, and again.",
+        "The row in `runs.tsv` has to name the file, or a reader cannot tell thirteen turns apart. Today the note is `${repo},${helperNote(turn)}`. Decide whether the per-file turn keeps `kind: helper` or takes its own `intake` kind — its own kind reads better and separates the daily collect from the drain in `summariseRuns`, at the cost that 12 historical `helper` rows mean both things. Say which and why; whatever you choose, `summariseRuns` (`src/mc/brief-collect.js`) and the page's day line must both still count it.",
+        "There are sixteen files in the inbox right now and thirteen of them are digests going back to 2026-08-29, which will each get a turn once this works. That is the intended behaviour, not a problem to code around: the role's own rules — *the delta is the agenda*, *what was there yesterday has been seen*, *zero proposals is a good answer* — are what a stale digest should produce nothing from. Watch the first drain and say in the PR how many of the thirteen produced a proposal. If they produce a pile of proposals about problems already fixed, that is a finding about the role's judgement and belongs in a proposal, not in a patch here.",
+        "Verify for real, not only in tests: drop three files of your own into the inbox, let rounds run, and read `runs.tsv` and `ls ~/mc/intake/`. `npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close out",
+      "status": "ready",
+      "done_when": "`docs/technical/mc-helper.md` describes the inbox and the drain, and `docs/project/project_log.md` has the row.",
+      "instruction": [
+        "`docs/technical/mc-helper.md` describes the intake turn as one headless session a day reading a digest, with a table of role files at the end. Rewrite it to what now happens: an inbox anyone may drop a file into, a collector that adds one file a day per repository, one turn per file that reads it itself and decides, and an archive under `~/mc/runner/log/`. Say where the runner's three tables went and why they were never inbox items.",
+        "Say the boundary in the same place, because it is the question a reader arrives with: the inbox is for material nobody has read yet, and `~/mc/proposals/` is for something a session already understood. A session that has done the judging does not put its finding in the inbox for a second session to redo from less.",
+        "Add the row to `docs/project/project_log.md`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
