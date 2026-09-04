@@ -36,7 +36,7 @@
       "check": "`page-collect.js` reads the row and the version the helper already fetches; a fixture where the two differ draws the difference; `helper-collect.js`'s `deployState` uses the same row rather than only `/admin/deploy/logs`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc --help`, the page's key line and `docs/technical/mc-deploy.md` say what the verb does, what it refuses, and where the record is.",
       "check": "`mc --help` names `mc deploy [--dry-run]`; the technical note exists on main; the `project_log.md` row is written at close-out."
     }
@@ -111,13 +111,18 @@
     },
     {
       "title": "Close-out: help, the technical note, and one real deploy",
-      "status": "ready",
+      "status": "done",
       "done_when": "`mc --help` names `mc deploy [--dry-run]`, `docs/technical/mc-deploy.md` says what the verb does, refuses and records and where `deploy.mjs` ends and mc begins, the criteria are `met` where their checks were done as written, and the plan is `done`.",
       "instruction": [
         "`src/mc/help-text.js` gets the line beside `mc merge`. Write `docs/technical/mc-deploy.md`: the sequence, the lease, the record's columns, what is refused and why, and the boundary with `scripts/deploy.mjs` and the runbook. Criterion 1's last half — *one real deploy by Martin, watched* — is his, not the session's: leave that criterion `met: false` with a comment saying the tests are done and the deploy is his to type, and say the same in the PR. The runner archives the plan when every step is `done`."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "Criterion 1 stays `met: false`, and only its last clause is missing. The reading half was run for real once more from this worktree on 2026-09-04 — `mc deploy --dry-run` read `origin/main` at `e30fd83`, live `b3e65b6` (build 23533) from `/api/version`, 21 commits to ship, and \"the nightly measured fc19465, 79 commits ago; this tree was not measured whole\", exit 0 — and every one of the check's four test clauses is in `tests/mc/commands/deploy.test.js`. Everything from the question onwards has only ever run against a faked script. **The one real deploy is Martin's to type, watched**, and `docs/technical/mc-deploy.md` ends with a section saying exactly that, so whoever sees it happen knows the note is the place to record what it did.",
+        "Criterion 4's check is done in its three named parts and is marked met: `mc --help` names `mc deploy [--dry-run]` in the short list (step 1 had to add that line early, because `tests/mc/help.test.js` reads the router's module table and a routed verb with no help line is a red test) and its `IN FULL` entry gained the half step 1 deliberately left to this step — where the record is written and who reads it back. The technical note is new here. The `project_log.md` row is written here rather than left to the runner's archive: `archive-plan.js` prefers a row the close-out step wrote and never rewrites one, and the row it would derive has the last step's title as its summary, which is why the `merge-repair` and `nightly-full` rows above read \"Close-out\" and \"Red, and since when\".",
+        "One wording note on criterion 4, decided rather than asked: it names \"the page's key line\", and the page has no key line — no legend and no verb list. What it has is the section rows and, at a terminal, a number that opens a project. So what the page says about a deploy is the production line under the RUNNER block that step 3 drew, and the criterion's own `check` names only `mc --help`, the note on main and the log row. All three are done; nothing was added to the page here.",
+        "What the note names as open, so it is not rediscovered: rollback (a verb that puts a previous sha back — now possible, because there is a record to roll back to) and memoro's `scripts/release-race.mjs`, whose deploy stage could call this verb. Both were `out_of_scope` for this project and both are one plan away. The one behavioural thing worth watching after a real deploy is the pipe: mc tees the script's output instead of inheriting it, so the child sees a pipe and not a terminal, and a tool inside the deploy that draws a progress bar only for a TTY will print plain lines. If that turns out to matter, the fix is a pty, not a smaller record."
+      ],
+      "pr": 596,
       "blocked_by": null
     }
   ]

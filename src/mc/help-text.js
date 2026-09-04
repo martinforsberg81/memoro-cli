@@ -147,7 +147,12 @@ IN FULL
                                     while the build reads it. No flag skips
                                     the question and without a terminal it
                                     refuses; --dry-run is the reading and
-                                    stops there. It takes no repository:
+                                    stops there. Every deploy, and every
+                                    refusal, is a row in
+                                    ~/mc/runner/log/deploys.tsv — written
+                                    before the deploy and completed after it,
+                                    and read back by the page, the brief and
+                                    mc helper. It takes no repository:
                                     memoro-cli is installed, not deployed
   mc repo guard [repo]             Install the pre-push guard: a push to a
                                     branch whose pull request is already merged
