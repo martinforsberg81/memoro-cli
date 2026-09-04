@@ -432,11 +432,15 @@ they refuse `mc`, and nothing else.
 
 ## The full run nobody asks for
 
-`mc repo nightly start` runs `mc test <repo> --full` for every repository mc
-knows, on an interval, with nobody typing anything. It exists because memoro's
-whole suite ran only when a person typed `npm run test:full`, and #10529 is what
-that produced: four days of merges left 31 tests red on `main` while every pull
-request's affected-selection passed, because nothing ever looked at the whole.
+`mc test nightly start` runs `mc test <repo> --full` for every repository mc
+knows, on an interval, with nobody typing anything. It is under `mc test`
+because that is the round it runs; it was `mc repo nightly` until 2026-09-04,
+which now prints `mc repo nightly is now mc test nightly` and exits 2.
+
+It exists because memoro's whole suite ran only when a person typed `npm run
+test:full`, and #10529 is what that produced: four days of merges left 31 tests
+red on `main` while every pull request's affected-selection passed, because
+nothing ever looked at the whole.
 
 It is a **meter**, and the word is load-bearing (ruled by Martin, 2026-09-02):
 nothing it finds refuses a merge, delays a round or changes a verdict. It never
@@ -488,6 +492,14 @@ it back:
     full run   4h ago  8 red of 17,982  fc19465
                red since 2d ago (3 runs)  data-bus event names…  +7 more
 ```
+
+`mc test nightly status` prints those same rows, one block per repository the
+tick measures, under the running/interval/log lines — the same `nightlyRows`
+called rather than copied, so the two pages cannot answer "red, and since when"
+differently. `--json` carries `running`, `pid`, `interval_ms`, `log` and a
+`repos` object of one reading per repository. A person who started the meter
+reads it where they started it; the repository page is where somebody who is
+asking about a repository finds the same fact.
 
 - **Since when is the first run of the *consecutive* streak.** A test red on
   Monday, green on Tuesday and red on Wednesday has been red since Wednesday.

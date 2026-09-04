@@ -230,7 +230,7 @@ describe('mc repo status — red, and since when', () => {
     try {
       const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
       assert.deepEqual(view.repos[0].nightly, { runs: 0, last: null, measured: null, red: [] });
-      assert.match(runMcCli(['repo', 'status', '--offline'], fx.env).stdout, /full run\s+never — mc repo nightly start/u);
+      assert.match(runMcCli(['repo', 'status', '--offline'], fx.env).stdout, /full run\s+never — mc test nightly start/u);
     } finally { fx.cleanup(); }
   });
 });

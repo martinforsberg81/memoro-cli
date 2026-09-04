@@ -81,19 +81,6 @@ IN FULL
                                     for the price of a file read
   mc repo watch stop               Stop it; the last snapshot stays and ages
   mc repo watch status [--json]    Whether it is running and when it last wrote
-  mc repo nightly start [--interval <seconds>]
-                                    The whole suite of every repository, on an
-                                    interval, with nobody asking: the same
-                                    round mc test --full runs, once a day by
-                                    default, written to a log under mc's home.
-                                    A tick that finds a gate round running
-                                    skips it and says whose round it was — it
-                                    never queues behind one, and nothing it
-                                    finds refuses a merge or delays a round
-  mc repo nightly stop             Stop it; a round in flight ends with it
-  mc repo nightly status [--json]  Whether it is running, how often, and where
-                                    it writes. What it found is on mc repo
-                                    status: what is red on main, and since when
   mc repo claim <repo> "<what for>"
                                     Say you are holding a round on it: verify,
                                     merge, deploy. mc refuses a second claim
@@ -119,6 +106,21 @@ IN FULL
                                     selection is a function of the diff and the
                                     base's diff against itself is empty. Merges
                                     nothing, and cannot
+  mc test <repo> --full            The repository's own whole suite on the
+                                    default branch as fetched — one tree, no
+                                    pull request, no selection
+  mc test nightly start [--interval <seconds>]
+                                    That same full round on an interval, with
+                                    nobody asking: every repository mc knows,
+                                    once a day by default, written to a log
+                                    under mc's home. A tick that finds a gate
+                                    round running skips it and says whose round
+                                    it was; nothing it finds refuses a merge or
+                                    delays a round
+  mc test nightly stop             Stop it; a round in flight ends with it
+  mc test nightly status [--json]  Whether it is running, how often and where
+                                    it writes — and, per repository, what the
+                                    last run found: red, and since when
   mc merge <repo> <pr>             That same measurement, then the landing:
                                     only if nothing new went red and the base
                                     has not moved since, squash-merge, pull the

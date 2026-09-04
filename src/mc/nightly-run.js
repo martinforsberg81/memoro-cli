@@ -2,7 +2,7 @@
 /**
  * The nightly process itself.
  *
- * Started detached by `mc repo nightly start`, never by hand and never by a
+ * Started detached by `mc test nightly start`, never by hand and never by a
  * conversation. Its stdout and stderr are the log file the starter opened, so
  * everything below is written there with a timestamp — including the gate
  * round's own narration, which is minutes of it, and the stack of a tick that

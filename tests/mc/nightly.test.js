@@ -8,6 +8,11 @@
  * it; a round that could not measure is never mistaken for one that found
  * nothing; and stopping the scheduler stops it, leaving no orphan process and
  * no pid file.
+ *
+ * And where it is reached from: `mc test nightly`, the verb whose round it
+ * runs. `mc repo nightly` is the old spelling, and it answers with the new one
+ * rather than working — a legacy verb that still works is a verb nobody
+ * retires.
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -20,6 +25,7 @@ import { addArea, fixture, json, snapshot } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { nightlyLogPath, nightlyStatePath } from '../../src/mc/nightly.js';
+import { recordNightlyRun } from '../../src/mc/nightly-history.js';
 import { nightlyLoop, nightlyTick } from '../../src/mc/nightly-loop.js';
 
 const home = () => mkdtempSync(join(tmpdir(), 'mc-nightly-'));
@@ -212,11 +218,11 @@ describe('the process', () => {
       // gate declaration, so each round stops at `declaration` in a moment —
       // which is a run that did not produce a suite result, and it must be
       // logged as one.
-      const started = runMcCli(['repo', 'nightly', 'start', '--interval', '1'], fx.env);
+      const started = runMcCli(['test', 'nightly', 'start', '--interval', '1'], fx.env);
       assert.equal(started.status, 0, started.stderr);
       assert.match(started.stdout, /a full run of every repository every 1s \(pid \d+\)/u);
 
-      const state = json(runMcCli(['repo', 'nightly', 'status', '--json'], fx.env));
+      const state = json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env));
       assert.equal(state.running, true);
       assert.ok(state.pid > 0);
 
@@ -230,13 +236,13 @@ describe('the process', () => {
       // Every run says when it began, what it cost, and how it came out.
       assert.match(twice, /started \d{4}-\d\d-\d\dT[\d:.]+Z {2}took [\d.]+s/u);
 
-      const stopped = runMcCli(['repo', 'nightly', 'stop'], fx.env);
+      const stopped = runMcCli(['test', 'nightly', 'stop'], fx.env);
       assert.equal(stopped.status, 0, stopped.stderr);
       assert.match(stopped.stdout, /stopped the nightly \(pid \d+\)/u);
       assert.equal(existsSync(nightlyStatePath(fx.mcHome)), false, 'the pid file outlived the process');
       const gone = await until(() => !alive(state.pid));
       assert.ok(gone !== null, 'the nightly was still running after stop');
-      assert.equal(json(runMcCli(['repo', 'nightly', 'status', '--json'], fx.env)).running, false);
+      assert.equal(json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env)).running, false);
 
       // A meter: it wrote its own files and touched no repository.
       assert.equal(git(fx.dir, 'rev-parse HEAD'), before.head);
@@ -246,7 +252,7 @@ describe('the process', () => {
       assert.deepEqual(snapshot(worktree, { skipGit: true }), before.worktreeFiles);
       assert.deepEqual(snapshot(fx.workRoot), before.work);
     } finally {
-      runMcCli(['repo', 'nightly', 'stop'], fx.env);
+      runMcCli(['test', 'nightly', 'stop'], fx.env);
       fx.cleanup();
     }
   });
@@ -254,17 +260,17 @@ describe('the process', () => {
   it('stopping nothing is not an error, and neither is asking twice', async () => {
     const fx = fixture({ name: 'nightly' });
     try {
-      const stopped = runMcCli(['repo', 'nightly', 'stop'], fx.env);
+      const stopped = runMcCli(['test', 'nightly', 'stop'], fx.env);
       assert.equal(stopped.status, 0);
       assert.match(stopped.stdout, /no nightly is running/u);
 
-      const started = runMcCli(['repo', 'nightly', 'start', '--interval', '3600'], fx.env);
+      const started = runMcCli(['test', 'nightly', 'start', '--interval', '3600'], fx.env);
       assert.equal(started.status, 0, started.stderr);
-      const again = runMcCli(['repo', 'nightly', 'start'], fx.env);
+      const again = runMcCli(['test', 'nightly', 'start'], fx.env);
       assert.equal(again.status, 0);
       assert.match(again.stdout, /already running \(pid \d+, every 1h\)/u);
     } finally {
-      runMcCli(['repo', 'nightly', 'stop'], fx.env);
+      runMcCli(['test', 'nightly', 'stop'], fx.env);
       fx.cleanup();
     }
   });
@@ -272,17 +278,17 @@ describe('the process', () => {
   it('a pid file whose process is gone is said out loud, and clearing it is the stop', () => {
     const fx = fixture({ name: 'nightly' });
     try {
-      runMcCli(['repo', 'nightly', 'start', '--interval', '3600'], fx.env);
-      const state = json(runMcCli(['repo', 'nightly', 'status', '--json'], fx.env));
+      runMcCli(['test', 'nightly', 'start', '--interval', '3600'], fx.env);
+      const state = json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env));
       process.kill(state.pid, 'SIGKILL');
-      const abandoned = json(runMcCli(['repo', 'nightly', 'status', '--json'], fx.env));
+      const abandoned = json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env));
       assert.equal(abandoned.running, false);
       assert.equal(abandoned.abandoned, true);
-      const cleared = runMcCli(['repo', 'nightly', 'stop'], fx.env);
+      const cleared = runMcCli(['test', 'nightly', 'stop'], fx.env);
       assert.match(cleared.stdout, /cleared the pid file it left behind/u);
       assert.equal(existsSync(nightlyStatePath(fx.mcHome)), false);
     } finally {
-      runMcCli(['repo', 'nightly', 'stop'], fx.env);
+      runMcCli(['test', 'nightly', 'stop'], fx.env);
       fx.cleanup();
     }
   });
@@ -295,16 +301,16 @@ describe('the process', () => {
     // not it.
     const fx = fixture({ name: 'nightly' });
     try {
-      runMcCli(['repo', 'nightly', 'start', '--interval', '3600'], fx.env);
-      runMcCli(['repo', 'nightly', 'stop'], fx.env);
+      runMcCli(['test', 'nightly', 'start', '--interval', '3600'], fx.env);
+      runMcCli(['test', 'nightly', 'stop'], fx.env);
       writeFileSync(nightlyStatePath(fx.mcHome), JSON.stringify({
         pid: process.pid, started_at: new Date().toISOString(), interval_ms: 3_600_000,
       }));
-      const state = json(runMcCli(['repo', 'nightly', 'status', '--json'], fx.env));
+      const state = json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env));
       assert.equal(state.running, false);
       assert.equal(state.abandoned, true);
     } finally {
-      runMcCli(['repo', 'nightly', 'stop'], fx.env);
+      runMcCli(['test', 'nightly', 'stop'], fx.env);
       fx.cleanup();
     }
   });
@@ -312,7 +318,86 @@ describe('the process', () => {
   it('runs on a cadence of a day unless told otherwise', () => {
     const fx = fixture({ name: 'nightly' });
     try {
-      assert.equal(json(runMcCli(['repo', 'nightly', 'status', '--json'], fx.env)).interval_ms, 86_400_000);
+      assert.equal(json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env)).interval_ms, 86_400_000);
+    } finally { fx.cleanup(); }
+  });
+
+  it('the old spelling says where it went, and starts nothing', () => {
+    const fx = fixture({ name: 'nightly' });
+    try {
+      const moved = runMcCli(['repo', 'nightly', 'start', '--interval', '3600'], fx.env);
+      assert.equal(moved.status, 2, moved.stdout);
+      assert.match(moved.stderr, /mc repo nightly is now mc test nightly/u);
+      // Not an alias: nothing was started, and nothing is running.
+      assert.equal(existsSync(nightlyStatePath(fx.mcHome)), false, 'the old spelling started a nightly');
+      assert.equal(json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env)).running, false);
+      assert.equal(runMcCli(['repo', 'nightly', 'status'], fx.env).status, 2);
+    } finally {
+      runMcCli(['test', 'nightly', 'stop'], fx.env);
+      fx.cleanup();
+    }
+  });
+});
+
+/**
+ * The question the meter exists for, asked where the meter is started.
+ *
+ * Until 2026-09-04 "red, and since when" was printed only by `mc repo status`.
+ * A person who typed `nightly start` should be able to type `nightly status`
+ * and read what it found.
+ */
+describe('mc test nightly status — red, and since when', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const ago = (days) => new Date(Date.now() - days * DAY).toISOString();
+
+  const record = (fx, at, red, commit) => recordNightlyRun({
+    repo: 'repo', path: fx.dir, started_at: at, duration_ms: 302_300,
+    commit, verdict: red.length ? 'red' : 'green', stopped_at: red.length ? 'red' : null,
+    reason: null, red, tests: 2445,
+  }, { root: fx.mcHome });
+
+  it('prints each repository\'s last measured run, and the oldest red with its date', () => {
+    const fx = fixture({ name: 'nightly' });
+    addArea(fx, 'alpha', 'alpha');
+    try {
+      // Two runs, the second red on a name the first was also red on: the
+      // streak began at the first, not at the most recent.
+      const first = ago(3);
+      record(fx, first, ['data-bus event names'], 'a'.repeat(40));
+      record(fx, ago(1), ['data-bus event names'], 'b'.repeat(40));
+
+      const page = runMcCli(['test', 'nightly', 'status'], fx.env);
+      assert.equal(page.status, 0, page.stderr);
+      assert.match(page.stdout, /not running/u);
+      assert.match(page.stdout, /full run\s+.*1 red of 2,445\s+bbbbbbb/u);
+      // The streak reaches the oldest run kept, so the date is a floor — said
+      // as one, with the name it is about.
+      assert.match(page.stdout, /since at least 3d ago\s+data-bus event names/u);
+
+      const state = json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env));
+      assert.equal(state.running, false);
+      assert.equal(state.interval_ms, 86_400_000);
+      const reading = state.repos.repo;
+      assert.equal(reading.runs, 2);
+      assert.equal(reading.measured.commit, 'b'.repeat(40));
+      assert.equal(reading.measured.red, 1);
+      assert.equal(reading.red[0].name, 'data-bus event names');
+      // The whole point: the first run that saw it, not the most recent.
+      assert.equal(reading.red[0].since, first);
+      assert.equal(reading.red[0].since_commit, 'a'.repeat(40));
+    } finally { fx.cleanup(); }
+  });
+
+  it('a repository nobody has measured is named anyway, rather than left out', () => {
+    const fx = fixture({ name: 'nightly' });
+    addArea(fx, 'alpha', 'alpha');
+    try {
+      const page = runMcCli(['test', 'nightly', 'status'], fx.env);
+      assert.equal(page.status, 0, page.stderr);
+      assert.match(page.stdout, /full run\s+never — mc test nightly start/u);
+      assert.deepEqual(json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env)).repos.repo, {
+        runs: 0, last: null, measured: null, red: [],
+      });
     } finally { fx.cleanup(); }
   });
 });

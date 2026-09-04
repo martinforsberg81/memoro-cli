@@ -45,7 +45,7 @@ export const NIGHTLY_VERSION = 1;
  * of every repository mc knows, which is about 400 s of this machine on the
  * two it knows today. The number is here beside the process that uses it, the
  * way `DEFAULT_INTERVAL_MS` sits beside the watcher's, and `--interval` on
- * `mc repo nightly start` is the same flag with the same unit as the
+ * `mc test nightly start` is the same flag with the same unit as the
  * watcher's — one grammar, no second configuration surface.
  */
 export const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000;

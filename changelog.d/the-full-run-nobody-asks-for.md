@@ -1,6 +1,6 @@
 section: Added
 
-- **`mc repo nightly start|stop|status` — the whole suite of every repository,
+- **`mc test nightly start|stop|status` — the whole suite of every repository,
   on an interval, with nobody asking.** memoro's full suite ran when a person
   typed `npm run test:full` and at no other time; every workflow under its
   `.github/workflows/` is `workflow_dispatch:` and Actions has been
@@ -40,7 +40,7 @@ section: Added
   killed gate round, survivable when a person did the killing and can see what
   is left, not survivable in a process that runs unattended every night. The
   scheduler is spawned detached, so it is its own process-group leader and
-  `mc repo nightly stop` signals the group: the round in flight, its `npm run
+  `mc test nightly stop` signals the group: the round in flight, its `npm run
   test:full`, and the seven workers under it. Verified with a full memoro suite
   in flight — after the stop, no `npm`, no `run.mjs`, no worker, no pid file,
   and the round gave back its lease and the round lock on the way out.

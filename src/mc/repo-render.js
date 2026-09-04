@@ -106,25 +106,35 @@ export function renderWatchLines(state, { colour = false, now = Date.now() } = {
 }
 
 /**
- * The nightly, in four lines: whether it is running, how often, and where it
- * writes.
+ * The nightly (`mc test nightly status`): whether it is running, how often,
+ * where it writes — and, per repository, what it found.
  *
- * What it *found* is not here. That is a reading of a history of runs and it
- * belongs on the page that says what a repository's state is, beside main and
- * the open pull requests — not behind a verb somebody has to know to type.
+ * The reading below the state is the same `nightlyRows` the repository page
+ * prints under *full run*, called rather than copied: two renderings of "red,
+ * and since when" would be two answers to it. It is here because it is the
+ * question the meter exists for, and somebody who started this thing should be
+ * able to read it where they started it.
  */
-export function renderNightlyLines(state, { colour = false } = {}) {
+export function renderNightlyLines(state, {
+  colour = false, columns = 100, repos = [], now = Date.now(),
+} = {}) {
   const c = painter(colour);
+  const wide = Math.max(60, Math.min(columns, 160));
   const lines = [''];
   if (state.running) {
     lines.push(`  ${c('running', 'green')}  pid ${state.pid}  a full run of every repository every ${hours(state.interval_ms)}`);
     if (state.started_at) lines.push(`  ${c('since', 'grey')}  ${state.started_at}`);
   } else if (state.abandoned) {
-    lines.push(`  ${c('not running', 'yellow')}  ${c('— a pid file was left behind; mc repo nightly stop clears it', 'grey')}`);
+    lines.push(`  ${c('not running', 'yellow')}  ${c('— a pid file was left behind; mc test nightly stop clears it', 'grey')}`);
   } else {
-    lines.push(`  ${c('not running', 'grey')}  ${c('— mc repo nightly start', 'grey')}`);
+    lines.push(`  ${c('not running', 'grey')}  ${c('— mc test nightly start', 'grey')}`);
   }
   lines.push(`  ${c('log', 'grey')}  ${c(state.log, 'grey')}`);
+  for (const repo of repos) {
+    lines.push('');
+    lines.push(`  ${c(repo.name, 'bold')}  ${c(repo.path, 'grey')}`);
+    lines.push(...section(c, wide, 'full run', nightlyRows(c, repo, now)));
+  }
   lines.push('');
   return lines;
 }
@@ -159,6 +169,10 @@ function mainRows(c, repo, now) {
 /**
  * What the last full runs of this repository's own suite found, and since when.
  *
+ * Two pages print these rows — this one and `mc test nightly status` above,
+ * where the meter is started and stopped. One function, because "red, and
+ * since when" must read the same wherever it is asked.
+ *
  * Here rather than behind a verb, and here whether or not anything is wrong. A
  * net that is invisible when everything is fine is a net nobody trusts when it
  * finally says something, and "4h ago, all 2,445 green" is the line that makes
@@ -175,7 +189,7 @@ function nightlyRows(c, repo, now) {
   const state = repo.nightly;
   // A page from a version that had none, or a snapshot taken by one.
   if (!state) return [];
-  if (!state.runs) return [c('never — mc repo nightly start', 'grey')];
+  if (!state.runs) return [c('never — mc test nightly start', 'grey')];
 
   const rows = [];
   const { measured } = state;

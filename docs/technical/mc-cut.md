@@ -127,7 +127,7 @@ files in `src/` are reached only by a path literal:
 | `runtime/broker/c1-child.js` | `vault/engine/c1-claude-lease.js`, SHA-256 pinned |
 
 All four were on the unreached list. Three of them are load-bearing today:
-deleting `nightly-run.js` would have left `mc repo nightly start` spawning a
+deleting `nightly-run.js` would have left `mc test nightly start` spawning a
 file that is not there, and the parent only ever checks the child's command
 line afterwards. They were found by grepping every `.js` path literal in the
 surviving files against the deletion list — the check the graph cannot do for

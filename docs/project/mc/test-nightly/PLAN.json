@@ -18,17 +18,17 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "The nightly is started, stopped and asked under `mc test`.",
       "check": "`tests/mc/nightly.test.js`'s start/status/stop round-trip runs `mc test nightly …` instead of `mc repo nightly …` and passes; `mc repo nightly start` exits 2 with the pointer line and starts nothing, asserted in the same file."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc test nightly status` says red, and since when.",
       "check": "With a history file holding a red run, `mc test nightly status` prints, per repository: when the last measured run was, its commit, `N red of M`, and the oldest red test's name with the date its streak began; `--json` carries `running`, `interval_ms`, and per repository the `nightlyReading` object. Asserted on a fixture history in `tests/mc/nightly.test.js`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Nothing in the repository still says `mc repo nightly`.",
       "check": "`git grep -n 'mc repo nightly' -- src docs canon README.md AGENTS.md` returns only the exit-2 pointer string and `docs/project/project_log.md`'s historical rows."
     }
@@ -41,7 +41,7 @@
   "steps": [
     {
       "title": "mc test nightly, and mc repo nightly points at it",
-      "status": "ready",
+      "status": "done",
       "done_when": "`mc test nightly start [--interval <seconds>] | stop | status [--json]` does what `mc repo nightly …` did, and `status` additionally prints each repository's last measured run — when, commit, red of total, oldest red and since when — with `--json` carrying the same; `mc repo nightly …` exits 2 with `mc repo nightly is now mc test nightly`; `tests/mc/nightly.test.js` asserts both on the new arguments; `mc help`, `docs/mc-command-matrix.md`, `docs/technical/mc-merge.md`, `docs/technical/mc-cut.md` and every user-facing string under `src/` say the new verb; and `npm test` is green.",
       "instruction": [
         "`src/mc/commands/test.js` hands everything to `parseMergeArgs(argv, { full: true })`, which reads the first positional as a repository name. Intercept before that: if `argv[0] === 'nightly'`, dispatch on `argv[1]` to the three sub-verbs and never reach `parseMergeArgs`. No repository is named `nightly` and none will be; say so in a comment rather than defending against it. Keep `test.js`'s existing header comment true — it already says the nightly runs this same round — and add the one sentence that it is now reached from here.",
@@ -51,8 +51,12 @@
         "Tests. `tests/mc/nightly.test.js` drives the real CLI through `runMcCli(['repo', 'nightly', …])` at lines 215–257; change the arguments, and add two assertions: `mc repo nightly status` exits 2 and prints the pointer, and `mc test nightly status` over a fixture history file prints `N red of M` and the oldest red name with its since-date, and `--json` carries the reading. The fixture is a `mc-nightly-history` v1 file with two runs, the second red on a test the first was also red on, so *since when* is the first run's `at` and not the second's. `tests/mc/nightly-history.test.js` shows how one is written.",
         "One trap, from `mc-workarea-deps`: this repository's tests run from `~/mc/node_modules` above the workarea, so a new import resolves the same way a test's does, but a new file under `src/` is not seen by `scripts/affected-tests.js` until it is `git add`ed. Add before running `npm test`."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "`'nightly'` stays in `repo.js`'s `VERBS`, which the instruction said to take it out of. It has to: the pointer is returned from `parseArgs`, exactly as `mc repo merge`'s is, and a word that is not in `VERBS` is read as a repository name — `mc repo nightly start` would then answer `no repository called \"nightly\"` and exit 1 instead of saying where the verb went. The comment above the list now says both spellings are kept only to be answered.",
+        "`mc test nightly status` lists one block per repository from `knownRepos()`, now exported from `nightly-loop.js` — literally the list a tick iterates, so the page cannot name a repository the loop never visits. It costs what `mc repo status --offline` costs (the board, plus git per repository); the rows themselves are `repo-render.js`'s own `nightlyRows`, called by both renderers rather than copied.",
+        "`git grep -n 'mc repo nightly' -- src docs canon README.md AGENTS.md` returns four lines: the pointer string in `repo.js`, the matrix's *Gone* row and `mc-merge.md`'s sentence (both quoting that string), and two prose mentions of the move as history — `commands/test.js`'s header and `mc-merge.md:437`. Nothing tells a reader to type it. The unreleased `changelog.d/the-full-run-nobody-asks-for.md` was renamed too, since it would otherwise announce a verb that does not exist."
+      ],
+      "pr": 599,
       "blocked_by": null
     }
   ]

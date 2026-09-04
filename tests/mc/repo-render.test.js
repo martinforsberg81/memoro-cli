@@ -261,7 +261,7 @@ describe('the full run, on the page', () => {
   });
 
   it('never run says that, and how to start it', () => {
-    assert.match(page(reading({ runs: 0, last: null, measured: null, red: [] })), /full run\s+never — mc repo nightly start/u);
+    assert.match(page(reading({ runs: 0, last: null, measured: null, red: [] })), /full run\s+never — mc test nightly start/u);
   });
 
   it('a page from a version that had no reading shows no section at all', () => {
