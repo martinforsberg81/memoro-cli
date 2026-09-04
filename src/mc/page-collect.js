@@ -36,6 +36,7 @@ import { join } from 'node:path';
 import {
   DAY_MS, defaultRepos, listProgrammes, queueNames, runsSince, summariseRuns,
 } from './brief-collect.js';
+import { heldEntries, heldPath } from './held.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
@@ -200,7 +201,9 @@ export function sessionsSection({
  * runner obeys, and it names rather than only counts, because a count of two
  * does not say which two a person has to go and read.
  */
-export function queueSection({ queue = [], plans = [], named = QUEUE_NAMED, staleNamed = STALE_NAMED } = {}) {
+export function queueSection({
+  queue = [], plans = [], held = [], named = QUEUE_NAMED, staleNamed = STALE_NAMED,
+} = {}) {
   const items = queue.map((name) => {
     const kind = kindFor(name, { plans });
     return { name, kind, runnable: !kind.startsWith('skip') };
@@ -219,8 +222,25 @@ export function queueSection({ queue = [], plans = [], named = QUEUE_NAMED, stal
     next: runnable.slice(0, named),
     more: Math.max(0, runnable.length - named),
     skipped: { count: skipped.length, reasons },
+    held: heldSection(held),
     stale: staleSection(plans, staleNamed),
   };
+}
+
+/**
+ * The pull requests the runner would not land (`~/mc/runner/held.json`),
+ * oldest first — the one that has been standing still longest is the one to
+ * read.
+ *
+ * Every entry is carried, not the first few: `mc --json` is read by programs
+ * and by the brief, and a held pull request that fell off a display cap is a
+ * project standing still that nothing was told about. The page draws what fits
+ * and counts the rest (page-render.js), which is where a cap belongs.
+ */
+function heldSection(held) {
+  const items = heldEntries(held)
+    .sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
+  return { count: items.length, items };
 }
 
 /** The stale blockers as the line draws them: how many, and the first few. */
@@ -645,7 +665,7 @@ export async function collectPage({
   return {
     runner,
     sessions,
-    queue: queueSection({ queue, plans }),
+    queue: queueSection({ queue, plans, held: heldEntries(readJson(heldPath(root))) }),
     intake: intakeSection({ digest: readDigest(intakeDir(env)), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({
       plans, areas, rows, openPrs: prs.prs, live: liveNames,

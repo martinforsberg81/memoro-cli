@@ -543,6 +543,100 @@ test('a red gate leaves the pull request open and says so in the row', async () 
   assert.match(f.files['/w/runner/log/runner.log'], /m: #9 left open — two tests the change reaches are red/u);
 });
 
+/* ------------------------------------------------------- held before merge */
+
+/**
+ * `~/mc/runner/held.json` — which pull requests the runner would not land, and
+ * why.
+ *
+ * Until now that fact lived in a runner.log line and a runs.tsv note, and
+ * every one of those projects stood still until a person read the log: seven
+ * of them in one evening (2026-09-03..04, #11274, #11275, #11276, #11300,
+ * #11301, #559, #561). It is mc's own state beside `runner.json` — never a
+ * status in a plan.
+ */
+const heldFile = (files) => JSON.parse(files['/w/runner/held.json'] || '[]');
+
+test('a pull request the gate would not land is written to held.json with its reason', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    rounds: { 9: { ok: false, merged: false, merged_into: null, stopped_at: 'red', reason: 'two tests the change reaches are red' } },
+  });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.deepEqual(heldFile(f.files), [{
+    project: 'm', repo: 'memoro', pr: 9, branch: 'm',
+    reason: 'two tests the change reaches are red', note: 'open,gate-red',
+    since: '2026-08-29T10:00:00Z', repairs: 0,
+  }]);
+});
+
+test('a held pull request that lands leaves the file', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } } });
+  f.files['/w/runner/held.json'] = JSON.stringify([
+    { project: 'm', repo: 'memoro', pr: 9, branch: 'm', reason: 'two tests red', note: 'open,gate-red', since: '2026-08-28T10:00:00Z', repairs: 1 },
+    { project: 'other', repo: 'memoro-cli', pr: 9, branch: 'other', reason: 'still red', note: 'open,gate-red', since: '2026-08-28T10:00:00Z', repairs: 0 },
+  ]);
+  const runner = createRunner({ deps: f.deps });
+  const repo = runner.repos.find((r) => r.name === 'memoro');
+  const landed = await runner.landProject('/w/m/memoro', repo, 'm', [{ number: 9, headRefName: 'm', baseRefName: 'main' }]);
+  assert.equal(landed.note, 'merged');
+  // The other repository's #9 is a different pull request: two repositories
+  // number their own, so a number alone was never an identity.
+  assert.deepEqual(heldFile(f.files).map((entry) => [entry.repo, entry.pr]), [['memoro-cli', 9]]);
+});
+
+test('a held pull request somebody merged or closed by hand leaves the file the next round', async () => {
+  const entries = [
+    { project: 'gone', repo: 'memoro', pr: 500, branch: 'gone', reason: 'two tests red', note: 'open,gate-red', since: '2026-08-28T10:00:00Z', repairs: 0 },
+    { project: 'still', repo: 'memoro', pr: 501, branch: 'still', reason: 'two tests red', note: 'open,gate-red', since: '2026-08-28T11:00:00Z', repairs: 0 },
+  ];
+  const f = fixture({
+    plans: { memoro: { m: ready } },
+    openPrs: { memoro: [{ number: 501, headRefName: 'still', baseRefName: 'main', isDraft: false, title: 'Step' }] },
+  });
+  f.files['/w/runner/held.json'] = JSON.stringify(entries);
+  createRunner({ deps: f.deps }).queue();
+  assert.deepEqual(heldFile(f.files).map((entry) => entry.pr), [501]);
+  assert.match(f.files['/w/runner/log/runner.log'], /held: gone #500 is no longer open — no longer held before merge/u);
+
+  // A repository GitHub could not be asked for is unknown, not empty: nothing
+  // is dropped because the network was down.
+  const blind = fixture({ plans: { memoro: { m: ready } }, prsFail: ['memoro', 'memoro-cli'] });
+  blind.files['/w/runner/held.json'] = JSON.stringify(entries);
+  createRunner({ deps: blind.deps }).queue();
+  assert.deepEqual(heldFile(blind.files).map((entry) => entry.pr), [500, 501]);
+});
+
+test('a session that changed more of the plan than its step is held, with the problems as the reason', async () => {
+  const path = '/w/m/memoro/docs/project/prog/m/PLAN.json';
+  const f = fixture({
+    plans: { memoro: { m: ready } },
+    gh: { m: { number: 9 } },
+    session: (call) => {
+      const after = JSON.parse(f.files[path]);
+      after.goal = ['Something else entirely.'];
+      f.files[path] = JSON.stringify(after, null, 2);
+      return okSession()(call);
+    },
+  });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.equal(f.calls.rounds.length, 0, 'a trespassing session lands nothing');
+  assert.deepEqual(heldFile(f.files).map((entry) => [entry.project, entry.pr, entry.note, entry.reason]), [[
+    'm', 9, 'plan-trespass',
+    'the session changed more of the plan than its step: goal: a step session does not change it',
+  ]]);
+});
+
+test('a session that timed out with its pull request open is held too', async () => {
+  const f = fixture({
+    plans: { memoro: { t: ready } }, gh: { t: { number: 5 } },
+    session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true }),
+  });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.note, entry.reason]),
+    [[5, 'timeout', 'the session timed out with the pull request open']]);
+});
+
 test('a merge that landed somewhere other than main is not recorded as merged', async () => {
   const f = fixture({
     plans: { memoro: { m: ready } }, gh: { m: { number: 11250 } }, session: okSession(),
@@ -563,6 +657,9 @@ test('a pull request aimed at a branch that is nobody head lands nothing', async
   assert.equal(f.calls.rounds.length, 0, 'nothing is handed to the merge round');
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,not-a-stack\t\d+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /#11250 is aimed at msr-track-3-capture-command — none of them is aimed at main — landing none of them/u);
+  // Nothing else is going to land it either, so it is held with the reason
+  // rather than left to a log line.
+  assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.note]), [[11250, 'open,not-a-stack']]);
 });
 
 test('a stack is landed bottom first, each one above it retargeted and replayed', async () => {

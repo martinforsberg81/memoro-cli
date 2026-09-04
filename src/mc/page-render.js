@@ -300,7 +300,13 @@ function queueLines(lines, c, wide, queue) {
   const counts = queue.depth
     ? `${queue.runnable} runnable of ${queue.depth}`
     : 'empty — mc brief queues the next thing';
-  heading(lines, c, wide, 'QUEUE', counts, 'mc status <name>');
+  // A pull request the runner would not land is not a queue depth, but it is
+  // the reason a project is not in the queue at all — so it rides on the
+  // heading's own count line, where the section's answer already is.
+  const held = queue.held?.count
+    ? [{ text: ' · ', styles: ['grey'] }, { text: `held before merge ${queue.held.count}`, styles: ['yellow', 'bold'] }]
+    : [];
+  heading(lines, c, wide, 'QUEUE', [{ text: counts, styles: ['grey'] }, ...held], 'mc status <name>');
   for (const [index, item] of queue.next.entries()) {
     const name = c(pad(clip(item.name, 25), 26), ...(index === 0 ? ['bold', 'white'] : ['white']));
     const kind = paint(c, [{ text: item.kind, styles: kindTone(item.kind) }], wide - 34);
@@ -318,7 +324,39 @@ function queueLines(lines, c, wide, queue) {
       { text: skipped, styles: ['dim', 'grey'] },
     ], ' · '), wide - 7)}`);
   }
+  heldLines(lines, c, wide, queue.held);
   staleLine(lines, c, wide, queue.stale);
+}
+
+/** How many held pull requests the page names before it only counts them. */
+export const HELD_DRAWN = 6;
+
+/**
+ * One row per pull request the runner left open: the project, the number, and
+ * the reason it was not landed.
+ *
+ * Yellow, like `blocker finished` under it: nothing in the runner is going to
+ * move this on its own — it waits on a repair session or on a person. Drawn
+ * under the skips because that is what it is, the skip nothing counted: a held
+ * pull request keeps its project out of the queue entirely (`inFlight`), so
+ * the project is not among the names above and not among the reasons beside
+ * them.
+ *
+ * The reason is clipped rather than the row: the project and the number are
+ * what a person acts on, and `mc --json` carries every entry whole.
+ */
+function heldLines(lines, c, wide, held) {
+  if (!held?.count) return;
+  for (const item of held.items.slice(0, HELD_DRAWN)) {
+    const left = `· ${item.project || 'unknown'}  #${item.pr}  `;
+    const reason = clip(one(item.reason), Math.max(8, wide - 7 - left.length));
+    lines.push(`       ${paint(c, [
+      { text: left, styles: ['yellow', 'bold'] },
+      { text: reason, styles: ['yellow'] },
+    ], wide - 7)}`);
+  }
+  const more = held.count - Math.min(held.count, HELD_DRAWN);
+  if (more) lines.push(`       ${paint(c, [{ text: `· … ${more} more`, styles: ['yellow'] }], wide - 7)}`);
 }
 
 /**
