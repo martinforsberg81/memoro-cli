@@ -21,7 +21,8 @@ THE PAGE
   mc run                           The runner: headless steps, a lane per repository
   mc run start | stop [--force]    Turn it on, or off — after the round, or now
   mc run --update                  After the round: new code, new process
-  mc run lanes [<n>]               Steps in flight per repository; no number prints it
+  mc run lanes [<n>] [--total <n>] Steps in flight: <n> per repository, --total across
+                                    every repository at once; no argument prints both
   mc test <repo> <pr>              Measure a pull request; merge nothing
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question

@@ -66,6 +66,28 @@ export function readLaneCount({ root = mcHome() } = {}) {
 }
 
 /**
+ * One value against the rule, without touching the file: `{ ok, count }`, with
+ * `count` null for the `none` that means no cap, or `{ ok: false, reason }`
+ * naming the forms the field takes.
+ *
+ * It is separate from the write, and exported, because `mc run lanes 3 --total
+ * 5` sets both numbers in one command: a `per_repo` written beside a refused
+ * `total` is half of what was asked for, and the caller can only avoid that by
+ * asking about both before it writes either.
+ */
+export function laneValue(value, { field = 'per_repo' } = {}) {
+  const total = field === 'total';
+  const none = total && typeof value === 'string' && value.trim().toLowerCase() === LANES_NONE;
+  const n = none ? null : inRange(value);
+  if (!none && n === null) {
+    const forms = `a whole number from ${LANES_MIN} to ${LANES_MAX}${total ? `, or ${LANES_NONE} for no cap` : ''}`;
+    const what = total ? 'lanes --total is' : 'lanes is';
+    return { ok: false, reason: `${what} ${forms}, not ${JSON.stringify(value)}` };
+  }
+  return { ok: true, count: n };
+}
+
+/**
  * Set one of the two, leaving the other as it was: the file is written whole,
  * so it is read and merged first. `field` is `per_repo` (the default, which is
  * what the bare positional has always meant) or `total`, and `total` also
@@ -75,14 +97,9 @@ export function readLaneCount({ root = mcHome() } = {}) {
  * holds it — or `{ ok: false, reason }` naming the forms it accepts.
  */
 export function writeLaneCount(value, { field = 'per_repo', root = mcHome(), now = new Date() } = {}) {
-  const total = field === 'total';
-  const none = total && typeof value === 'string' && value.trim().toLowerCase() === LANES_NONE;
-  const n = none ? null : inRange(value);
-  if (!none && n === null) {
-    const forms = `a whole number from ${LANES_MIN} to ${LANES_MAX}${total ? `, or ${LANES_NONE} for no cap` : ''}`;
-    const what = total ? 'lanes --total is' : 'lanes is';
-    return { ok: false, reason: `${what} ${forms}, not ${JSON.stringify(value)}` };
-  }
+  const seen = laneValue(value, { field });
+  if (!seen.ok) return seen;
+  const n = seen.count;
   const next = readLaneCount({ root });
   next[field] = n;
   writeJsonAtomic(laneCountPath(root), { ...next, set: now.toISOString() }, { mode: 0o600 });

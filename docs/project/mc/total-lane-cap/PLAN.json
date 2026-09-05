@@ -30,7 +30,7 @@
       "check": "A `lanes.json` with only `per_repo` produces the same lane behaviour as today; asserted by a test, and by reading the file mc actually has before the change is made."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc run lanes` with no argument says both numbers and what they mean together.",
       "check": "Run it. The line reads like `3 per repository, 3 in total — 3 in flight`, and a reader who had only ever seen the old line would not have had to ask the question that started this."
     },
@@ -105,7 +105,7 @@
     },
     {
       "title": "The verb says both, and what they mean together",
-      "status": "ready",
+      "status": "done",
       "done_when": "`mc run lanes` prints both numbers and the number in flight in one line, and `mc run lanes --total <n>` sets the total without touching `per_repo`.",
       "instruction": [
         "`mc run lanes [<n>]` lives in `src/mc/commands/run.js`: `parseRunArgs` at `:120` takes one positional number, `lanes()` at `:75` prints or sets it, and the usage line at `:41` describes it. A second form rather than a second verb — `mc run lanes --total 3` — is what the proposal asked for and it keeps the bare positional meaning what it has always meant, so nobody's muscle memory changes meaning under them.",
@@ -115,7 +115,13 @@
         "Update the usage line at `:41` and `docs/technical/mc-run.md` in this step rather than at close-out: the verb's own help text is the documentation most readers will ever see.",
         "`npm test`, and run all four forms by hand — bare, positional, `--total`, and a refused value — and put the output in the PR."
       ],
-      "comments": [],
+      "comments": [
+        "The bare line is `lanes 3 per repository, 3 in total — 2 in flight`, and with no total set `lanes 1 per repository, no total cap (up to 2 across 2 repositories) — 0 in flight`. The absence is said and so is its consequence, in the same words and the same order as the runner's own log line (`run.js`: `lanes: 3 per repository, 3 in total`), so the verb and the log cannot be read as two different settings. The in-flight number comes from `readCurrents(runnerDir())` filtered by `pidAlive` — the same files and the same staleness test the page's NOW block applies, so a killed runner's leftovers are not counted as running by one reader and not the other.",
+        "`mc run lanes 3 --total 5` sets both in one command, and both values are checked before either is written (`laneValue` is now exported from `lane-count.js` for exactly that; `writeLaneCount` calls it). Landing the 3 and then refusing the 5 would leave the operator with half of what they typed and no line saying which half. `--total` is a strict value flag, so `mc run lanes --total` with nothing after it is an error rather than a silent read.",
+        "A total at or above `per_repo × repositories` cannot ever refuse a lane a slot, so it is set and then a line says it is a no-op: `that total never binds: 3 per repository across 2 repositories is at most 6`. Set rather than refused, because the pair is legitimate on the way to raising `per_repo`, and because refusing a value that is inside 1..8 would need a second rule the operator has not been told about. The repository count comes from `REPO_NAMES` (2), the same list the runner builds its lanes from.",
+        "Step 4 inherits two things. First: `docs/technical/mc-run.md` now carries a *Lanes* passage on the total — what it bounds, that a session count is a proxy for load, absent meaning no cap, `takeSlot`/`waitForSlot` and the 15 s poll, the fairness hazard, and all four forms of the verb — so close-out is the interim `per_repo 1` being lifted with Martin and the `project_log.md` row, not a doc written from scratch. `tests/mc/run-doc.test.js` now pins the poll against `TOTAL_POLL_MS` and the bounds against `LANES_MIN`/`LANES_MAX`. Second: the real `~/.memoro/mc/lanes.json` was not touched by this session — the hand-runs wrote to a copy under `MC_HOME`, and it still reads `per_repo: 1`, set 2026-09-05T06:05:18Z, with no total.",
+        "Criterion 3 is met and was met by running it, not by reading it. Criterion 1 is still step 4's: it wants a live runner started under a real pair and a busy hour watched against the RUNNER block, which is `mc run --update` and Martin's number."
+      ],
       "pr": null,
       "blocked_by": null
     },
