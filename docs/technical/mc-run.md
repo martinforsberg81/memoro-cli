@@ -382,11 +382,11 @@ criterion, say in the PR body how you verified it, and — if the Contract must
 change — stop with the step `blocked` and say so in the PR. It ends "Do not merge.
 Do not ask questions. Stop when the PR exists."
 
-Around that body go the Coding Profile and `canon/roles/step.md` (over
-`canon/roles/_common.md`, which every role inherits), joined into one
-instruction text and passed through the channel each tool
-already has: `--append-system-prompt` for claude, `-c instructions=` for
-codex. Nothing is written into the worktree to carry them.
+Around that body go the Coding Profile, `canon/roles/_common.md` and
+`canon/roles/step.md` — assembled by `instructionsFor` and passed through the
+channel each tool already has, with nothing written into the worktree to carry
+them. How that is found and joined, for every session and not only this one, is
+[`mc-roles.md`](mc-roles.md).
 
 The two argument lists are the only place the tools differ:
 

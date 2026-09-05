@@ -154,12 +154,13 @@ text in memoro and memoro-cli. Naming the file rather than restating it is what
 keeps this from becoming a second copy that drifts.
 
 The user's Coding Profile still reaches the session the way it reaches every
-other — `--append-system-prompt` for claude, `-c instructions=` for codex,
-through `instructionsFor` in [`roles.js`](../../src/mc/roles.js) and
-`profileArgs` in [`portrait.js`](../../src/mc/portrait.js). With no overlay,
-that body is the profile alone. The prompt rides as the **last positional
-argument**, which is how both tools take opening words, and only for a new
-conversation.
+other, and with no overlay that body is the profile alone
+([`mc-roles.md`](mc-roles.md)). The one thing this prompt carries that it did
+not write is `canon/roles/_common.md`, the text every role session shares:
+`planLaunch` reads it and folds it in, because a role with no overlay cannot
+inherit it through the assembler and a rule that holds for every session holds
+for this one. The prompt rides as the **last positional argument**, which is
+how both tools take opening words, and only for a new conversation.
 
 ## Questions
 

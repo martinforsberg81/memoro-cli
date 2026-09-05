@@ -101,9 +101,10 @@ The bare verb opens **an ordinary foreground terminal program** — `spawn`
 with `stdio: 'inherit'` through `openInWorkArea`
 ([`src/mc/work-open.js:127`](../../src/mc/work-open.js)) — not tmux, never
 `--resume`. Opus by default from the role, `--codex` allowed through the
-adapter, the Coding Profile appended, the overlay from
-[`canon/roles/brief.md`](../../canon/roles/brief.md), and the brief file as
-the first prompt. NOW says `brief` for exactly as long as it holds the
+adapter, the Coding Profile appended, then `canon/roles/_common.md` and the
+overlay from [`canon/roles/brief.md`](../../canon/roles/brief.md) — assembled
+like every other session's ([`mc-roles.md`](mc-roles.md)) — and the brief file
+as the first prompt. NOW says `brief` for exactly as long as it holds the
 terminal.
 
 It stands in `~/mc`, the work root, and not in a repository. It writes one
