@@ -74,7 +74,7 @@
         "Two callers were adapted, not changed in behaviour: `run.js` (now `const { per_repo: count } = ...`) and the `lanes` verb in `src/mc/commands/run.js` (`const { per_repo: n } = read()`). Both still ignore the total — that is step 2 and step 3. One test stub moved with the signature: `tests/mc/run.test.js:2390`'s `f.deps.laneCount` now returns the shape. Any new `deps.laneCount` override must return `{ per_repo, total }`, not a bare integer.",
         "No success criterion is marked met. Criterion 2 (an operator who sets no total sees no change) is half-shown here — the real `~/.memoro/mc/lanes.json` holds only `per_repo: 1` and `mc run lanes` prints exactly what it printed before — but the criterion is about lane behaviour, which nothing in this step touches yet. Step 2 is where it can be claimed."
       ],
-      "pr": null,
+      "pr": 636,
       "blocked_by": null
     },
     {
