@@ -19,7 +19,7 @@ import {
 } from '../../src/mc/helper-collect.js';
 import { DEFAULT_TURN_MINUTES, INTAKE_ROLE } from '../../src/mc/helper-turn.js';
 import { INTAKE_LOUD_NAMED } from '../../src/mc/page-collect.js';
-import { HELPER_HOUR_UTC, HELPER_KIND, HELPER_NAME } from '../../src/mc/run-plan.js';
+import { HELPER_HOUR_UTC, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND } from '../../src/mc/run-plan.js';
 
 const DOC = readFileSync(fileURLToPath(new URL('../../docs/technical/mc-helper.md', import.meta.url)), 'utf8');
 
@@ -58,6 +58,17 @@ describe('docs/technical/mc-helper.md says what the code does', () => {
     assert.equal(hour, HELPER_HOUR_UTC);
     assert.match(DOC, new RegExp(`\`${HELPER_NAME}\` in both the name and the kind column`, 'u'));
     assert.match(DOC, new RegExp(`whose \`kind\` is \`${HELPER_KIND}\``, 'u'));
+  });
+
+  /**
+   * The drain is the half a reader is likeliest to get wrong from outside the
+   * code: how many files one round takes, and which row names each of them.
+   * Both are constants, so both are pinned like everything else here.
+   */
+  it('states how many files a round drains, and the row that names each one', () => {
+    assert.equal(number(/`INTAKE_PER_ROUND` = (\d+)\s+files/u), INTAKE_PER_ROUND);
+    assert.ok(DOC.includes(`\`kind: ${INTAKE_KIND}\``), `the doc does not name the drain's kind: ${INTAKE_KIND}`);
+    assert.match(DOC, /the file in the name\s+column/u);
   });
 
   it('states the turn\'s timeout and how many loud lines the page names', () => {
