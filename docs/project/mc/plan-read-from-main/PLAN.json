@@ -1,0 +1,119 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A round never acts on a plan that `main` has replaced, and a workarea that cannot take `main` is reported as a project waiting on hands rather than as a plan that is stopped.",
+    "Today a conflict anywhere in the merge makes the round read the plan out of the branch instead of out of `main`, and then report whatever that older plan says. Measured 2026-09-05: `docx-editor` reported *\"step 17 is blocked on decision docx-ime-input-source\"* for eight consecutive rounds (runner.log 23348–23566). No such step exists on main — #11383 replaced it the evening before, and the plan on `origin/main` has said `ready` since. The only conflicting file was `docs/technical/docx-editing-surface.md`, which has nothing to do with the plan."
+  ],
+  "contract": [
+    "The documented contract is what this restores, not a new rule: *\"What a planning session and the runner share is a `PLAN.json` on `main`, and nothing else\"* (`docs/project/README.md`, § Who writes what).",
+    "`fromHead` keeps the case it was built for. Its reasoning at `src/mc/run.js:336` is sound where it applies — a worktree with a merge in progress may carry conflict markers in the plan itself, and HEAD is then the branch's last good copy. Nothing here removes that; what changes is when it fires.",
+    "A conflicted merge is still not resolved by the round and still not the round's to resolve. `syncMain` aborting is correct behaviour and stays.",
+    "A step session's own edits to its plan in its worktree are untouched. This is about which copy the *round* reads to decide what to hand out, not about what the session then edits or what its pull request carries."
+  ],
+  "out_of_scope": [
+    "Resolving any particular workarea's conflict by hand. `~/mc/docx-editor/memoro` was already brought to `docx-editor-3` from `origin/main` on 2026-09-05, and the estate's other stuck worktrees are a person's, one at a time.",
+    "How a repair session resolves a merge, and the one-repair rule. #617 and #618 changed that ground days ago and this project reads it rather than moving it.",
+    "The plan-conflict rule itself (`src/mc/plan-merge.js`). `resolvePlanConflict` and `mergePlanText` decide who may write what in a conflicted plan; this project changes only which file the round reads when the rule could not resolve one.",
+    "`mc status`'s own choice of which copy to read. `status-project.js` deliberately reads the workarea's tree when there is one and says so when the two differ; that is a different question with a different answer and it is not opened here."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A round whose merge conflicted in a file that is not the plan hands out the step `origin/main` says, not the step the branch says.",
+      "check": "A test drives a round with a conflict in one non-plan path and a plan that differs between HEAD and `origin/main`, and asserts the step chosen is main's. Failing today with the branch's step."
+    },
+    {
+      "met": false,
+      "criterion": "A workarea that could not be brought to base is reported as such, by name, and not as whatever its stale plan said.",
+      "check": "Read `runner.log` after a round over a genuinely conflicted workarea: the project-level line names the workarea and the files, and no line reports a blocker read out of the stale plan."
+    },
+    {
+      "met": false,
+      "criterion": "The case `fromHead` exists for still works.",
+      "check": "A test with the conflict in the `PLAN.json` itself asserts the plan is read from HEAD and the step session is handed the merge, exactly as today."
+    },
+    {
+      "met": false,
+      "criterion": "A workarea stuck this way is visible without reading `runner.log`.",
+      "check": "With one workarea deliberately unable to take main, it is named in the brief or in `mc status` with the files it conflicts on. Run the surface and read it."
+    }
+  ],
+  "documents": [
+    {
+      "label": "Where the plan is read and the round decides",
+      "path": "../../../../src/mc/run.js"
+    },
+    {
+      "label": "Who shares what with the runner",
+      "path": "../../README.md"
+    },
+    {
+      "label": "The sibling reading of what the runner can act on",
+      "path": "../runner-visibility/PLAN.json"
+    }
+  ],
+  "steps": [
+    {
+      "title": "Put the choice to Martin, with the narrow fix measured",
+      "status": "ready",
+      "done_when": "The PR names the three options, says which the code supports and at what cost, and carries one recommendation; Martin's answer is written into `docs/project/mc/rulings.md` when he gives it.",
+      "instruction": [
+        "This step writes no fix. It exists because the thing to change is a **deliberate, documented choice**, and a session that quietly reverses one is how a reason gets lost. `run.js:336` argues for reading HEAD in its own words: *\"HEAD is the branch's last good copy, and it is the right one: the step being handed out is the step this branch is on. Main's own edits to the plan are what the session is merging in.\"* Read that comment in full before writing anything.",
+        "Then read the condition it is attached to. At `run.js:1265` the call is `planOf(worktree, name, { fromHead: conflicts.length > 0 })`, and `conflicts` is `syncMain`'s *remaining* unresolved list (`run.js:431`) — every file git could not merge and the plan's own rule did not resolve. It fires on **any** conflicting file. The docstring's justification covers exactly one of them: a conflicted `PLAN.json`. That mismatch is the whole defect, and it is worth stating in one sentence in the PR, because it makes the narrow fix obvious: `fromHead` should fire when the plan itself is among the conflicts, not when anything is. `isPlanPath` (`src/mc/plan-merge.js:159`) is the predicate and it is already imported into `run.js`.",
+        "Both cases are live and both are in `runner.log`, so name them as the two ends of the range. `docx-editor`, eight rounds from 04:51 to 06:25 on 2026-09-05: the only conflict was `docs/technical/docx-editing-surface.md`, the plan was not conflicted at all, and the round reported a blocker from a step main had already replaced. `sdk-artifact-storage`, 08:03:56 the same day: *\"PLAN.json is not resolvable by the plan's rule — steps[1]: changed on this branch and on main both\"*, then the conflict, then `step 2 is blocked on decision sdk-storage-deploy-verified`. In the second the plan **is** the conflicted file and `fromHead` is doing what it was built to do.",
+        "Put the three options with the cost of each. **1 — read the plan from `origin/main`, never from the worktree**: honours the documented contract, `git show origin/main:<path>` is the same call the `step-parallelism` blocked audit already made (read it at `git show 914ce4b^:docs/project/mc/step-parallelism/blocked-audit.md`; it was archived in #573 and opens by naming this exact hazard), and it removes the class — but it also removes `fromHead`'s legitimate case, so say what a step session is then handed when its plan is genuinely mid-merge. **2 — refuse the step when the worktree could not be brought to base**: cheaper, keeps the current read, turns a silent wrong answer into a loud one, and does not fix the answer. **3 — the narrow scoping above plus 2 as its guard**: `fromHead` fires only on a conflicted plan, everything else reads main, and a workarea that cannot take main says so as a project-level stop.",
+        "Recommend one. The proposal recommended 1 with 2 as a guard; the scoping finding above was not available to it, and 3 may now be the smaller and more honest change. Decide from the code, not from the proposal, and say which you chose and why.",
+        "Carry the answer into `docs/project/mc/rulings.md` in the shape that file already uses — the question, the options, Martin's answer quoted verbatim, and the step that builds it. mc keeps no record of a decision anywhere else, so the ruling and this plan are the only two places it survives."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The round reads the plan the contract says it shares",
+      "status": "ready",
+      "done_when": "The round hands out the step `origin/main` names, except in whatever case step 1's ruling preserved, and a test covers both sides of that line.",
+      "instruction": [
+        "Build what step 1 settled and nothing else. If the ruling was option 3, the change at `run.js:1265` is one predicate — `conflicts.some(isPlanPath)` in place of `conflicts.length > 0` — plus whatever step 1 decided about reading `origin/main` rather than the worktree file in the clean case. If it was option 1, `planOf` grows a read through `git show origin/main:<path>` and `fromHead` goes; say in the PR what a mid-merge step session is handed instead.",
+        "`planOf` (`run.js:347`) already builds the repository-relative path as `['docs', 'project', programme, name, 'PLAN.json'].join('/')` for its `git show HEAD:` call, so the same string serves `git show origin/main:`. The programme is discovered by walking `docs/project` in the worktree — that walk stays, because it is how the project's directory is found at all.",
+        "A read from `origin/main` can fail in ways a file read cannot: the ref may be behind if the fetch failed, and the path may not exist on main at all for a project whose plan has not landed yet. `syncMain` already returns `{ ok: false, conflicts: [] }` for a failed fetch and the round skips on it (`run.js:1260`), so the ref is fresh whenever this is reached — say so in a comment rather than adding a second fetch. A plan that is not on main is a case `repoOf` and `assembleQueue` already exclude; assert that rather than handling it twice.",
+        "Update the docstring at `run.js:336` to say what is now true. It is a good comment that has become a wrong one, and the next reader will trust it — that is how this defect survived. Whichever case survives, name it and name what it is not.",
+        "Two tests, both driving the round rather than `planOf` alone: a conflict in a non-plan path with HEAD and main disagreeing about the plan, asserting main's step is handed out; and a conflict in the `PLAN.json` itself, asserting the behaviour step 1's ruling preserved. `tests/mc/run.test.js` already fixtures the round with injected `deps` and has conflict cases at `:928` — extend that shape.",
+        "`npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A workarea that cannot take main says so, once, where somebody looks",
+      "status": "ready",
+      "done_when": "A workarea whose merge of `origin/main` aborted is reported as a project waiting on hands, with the conflicting files, and is visible without reading `runner.log`.",
+      "instruction": [
+        "This is step 1's option 2 — the guard — and it is worth having whichever way the ruling went, because a worktree that will not take main is a thing a person has to fix either way and today nothing tells them so.",
+        "The round already writes the line. `abandonMerge` at `run.js:1272` says `<name>: <why> — the merge of origin/main is aborted, still conflicting in: <files>`, and it is correct as far as it goes. What it lacks is a reader: it went to `runner.log` eight times for `docx-editor` and nobody saw it. The defect is the audience, not the sentence.",
+        "The sibling project `runner-visibility` builds the reading this belongs in — one function beside `kindFor` in `src/mc/status-collect.js` answering \"would the runner start this project now, and if not what is in the way\", with an aborted merge as one of its reasons, surfaced in `mc status`, on the page and in the brief. **Check whether that has landed before you build anything here.** If it has, this step adds the reason to it and nothing else; if it has not, add the smallest thing that puts a stuck workarea where a person looks, and say in the PR which you did so the two do not end up with two implementations of one reason.",
+        "Say it once, not once per round. `runner.log` already carries 9 827 `, skip` lines and a per-round line for a condition that lasts eight rounds is what made this invisible in the first place. A surface that shows current state, with a `since`, is the right shape; a log line per round is not.",
+        "Verify against a real one: make a workarea conflict with main by hand, let a round run, read the surface, then clean it up. Put what it printed in the PR.",
+        "`npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close out",
+      "status": "ready",
+      "done_when": "`docs/technical/mc-run.md` says which copy of a plan the round reads and when, and `docs/project/project_log.md` has the row.",
+      "instruction": [
+        "Write down which copy the round reads, in which case, and why — this is the fact that was true, documented, deliberate, and wrong at the same time, and the documentation is where the next person deciding to change it will look.",
+        "Say it beside the contract it serves: the planning session and the runner share a `PLAN.json` on `main` and nothing else. `docs/project/README.md` already carries that sentence; the technical doc should say how the runner honours it.",
+        "Add the row to `docs/project/project_log.md`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
