@@ -47,7 +47,7 @@
   "steps": [
     {
       "title": "Measure what was actually lost, then put the choice",
-      "status": "ready",
+      "status": "blocked",
       "done_when": "The PR says what the dev-service registration did that nothing else does, names which repository does the remaining work under each option, and carries one recommendation for Martin.",
       "instruction": [
         "Start by narrowing the claim, because the proposal that raised this overstated it and the overstatement points the decision the wrong way. It says every workarea's *\"mechanism that detects a colliding second instance\"* has been a no-op since the cut. Read `scripts/dev.mjs` in memoro before accepting that: the same-worktree collision check is a **local lock file** — `LOCK_FILE` at `dev.mjs:51` is `<REPO_ROOT>/.wrangler/dev-server/run/dev.lock.json`, claimed with `fsp.open(…, \"wx\")` at `:361`, with a stale-pid sweep and a `verifySameWorktreeWrapper` check at `:373`–`:406`. It never touches mc and it still works. What went with the verb is the **cross-worktree inventory**: mc's own record of which dev servers are running in which workareas.",
@@ -58,9 +58,16 @@
         "One recommendation, in the PR body. On the evidence so far — the same-worktree guard is intact and local, and nothing in `memoro-cli` has wanted the inventory since the cut — *remove* is the shorter road and the one the cut already chose; say so if the measurement agrees, and say so if it does not.",
         "Carry Martin's answer into `docs/project/mc/rulings.md` in the shape that file uses. Nothing else in mc records a decision."
       ],
-      "comments": [],
+      "comments": [
+        "Measured, and the measurement is in the PR body. The plan's framing holds in both directions: the same-worktree collision guard is `dev.lock.json` plus `verifySameWorktreeWrapper` and never touches mc, and port de-confliction is `deterministicPortCandidates` plus a real `net.createServer` bind probe — neither has ever consulted the inventory. What the registration did that nothing else does is one machine-wide index of running dev servers keyed by `session_name`/`coding_session_id`, and a verified stop/restart argv for a server you did not start.",
+        "The usage numbers are the reason for the recommendation, and they are from `~/.memoro/mc/logs/mc.log`, which starts 2026-08-05. In that month `mc dev` was invoked 565 times: 370 `list --json`, 93 `register --json`, 92 `unregister --json` — all of those are `invokeMcDev` talking to itself — against 2 human `mc dev list`, 1 `status`, 1 `plan`, 6 `ensure`, and zero `stop`, `restart` or `logs`. `~/.memoro/mc/dev-servers/` holds 33 manifests, oldest 2026-07-26, and not one has a live pid: nothing reaped them even while the verb existed.",
+        "The dead-probe rate is higher than the proposal said: 131 exit-2 `dev` invocations on 2026-09-04 and 43 by 16:40 on 2026-09-05, not 22/day. Each costs 8-42 ms, so the cost is the misleading `mc dev inventory unavailable` warning in every dev-server log, not CPU.",
+        "Recommendation is *remove*, and the work is memoro's: `scripts/dev.mjs` (imports :29-35, `publishMcDevService` :418, `retireMcDevService` :465, call sites :139/:166/:308/:322/:1075), `scripts/lib/mc-dev-service.mjs`, `tests/scripts/mc-dev-service.test.js`, `tests/scripts/dev-script.test.js`, the `mc-dev-service` entry in `config/testing-registry.mjs`, `docs/technical/dev-service-registration.md`, `README.md:297-298`, and `.mc/dev.json` (whose `runtime-manifest` readiness only ever had `mc dev ensure` as a reader). That needs a plan under memoro's `docs/project/`; this repository's runner cannot reach it, which is also why success criteria 1 and 3 cannot be met from this plan under *remove*.",
+        "Two findings for step 2 that make *remove* not quite a no-op in `memoro-cli`, neither of them blocking: `devServersRoot()` at `src/mc/paths.js:33` survives the cut with no caller anywhere in `src/` or `tests/`, and `docs/dev-server-protocol.md` (226 lines) still documents the whole removed surface, `mc deps` and `mc setup --dependency-mode` included. Under *remove* those are what this repository's half actually is, plus sweeping the 33 orphaned files in `~/.memoro/mc/dev-servers/`.",
+        "Blocked on Martin's answer rather than done, deliberately: step 2 branches on a ruling that does not exist yet, and a `ready` step nothing can satisfy is the livelock the 2026-09-04 ruling in `docs/project/mc/rulings.md` was written about. Whoever carries the answer writes it into `rulings.md` in that file's shape, cites it as `mc-dev-1`, and sets this step `done` and step 2 `ready`. The question is written up at the workarea root as `mc-dev-1`."
+      ],
       "pr": null,
-      "blocked_by": null
+      "blocked_by": { "kind": "decision", "name": "mc-dev-1" }
     },
     {
       "title": "Build what was decided, in this repository's half",
