@@ -395,6 +395,30 @@ describe('QUEUE', () => {
 });
 
 
+describe('the stale-blocker line', () => {
+  const PLAN = (project, steps) => ({ repo: 'memoro', programme: 'p', project, status: 'blocked', plan: { steps } });
+  const BLOCKED = (name) => ({ title: 'A step', status: 'blocked', blocked_by: { kind: 'project', name } });
+
+  it('claims no more than the two things the check can know', () => {
+    // `staleBlockers` computes `why` as `is done` or `is not on main`, and is
+    // careful about the difference because a project also leaves main when it
+    // is abandoned. The header said *not coming*, which is a prediction.
+    const plans = [
+      PLAN('waiting-on-done', [BLOCKED('already-done')]),
+      PLAN('waiting-on-gone', [BLOCKED('never-heard-of-it')]),
+      { ...PLAN('already-done', [{ title: 'x', status: 'done' }]), status: 'done' },
+    ];
+    const queue = queueSection({ queue: [], plans });
+    assert.equal(queue.stale.count, 2);
+    const lines = renderPageLines(pageData({ queue }), { columns: 120 });
+    const header = lines.find((line) => /blocker finished/u.test(line));
+    assert.match(header, /blocker finished 2 — a blocked step names a project that is done or no longer on main/u);
+    assert.doesNotMatch(header, /not coming/u, 'the page predicts nothing the module refused to');
+    assert.ok(lines.some((line) => /waiting-on-done step 1 on already-done, which is done/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /waiting-on-gone step 1 on never-heard-of-it, which is not on main/u.test(line)), lines.join('\n'));
+  });
+});
+
 describe('INTAKE', () => {
   const DIGEST = [
     '# Errors and maintenance — 2026-08-29', '',

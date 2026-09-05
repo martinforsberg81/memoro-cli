@@ -423,6 +423,13 @@ function heldLines(lines, c, wide, held) {
  * for staleness, because RUNNER two sections up already spends that word on a
  * lane file whose process is gone. One word, one meaning, on one page.
  *
+ * It says *done or no longer on main* and not *not coming*, because those are
+ * the only two things the check can know — `stale-blockers.js` computes `why`
+ * as `is done` or `is not on main` and its docstring is careful about the
+ * difference, since a project also leaves main when it is abandoned. The
+ * header said *not coming*, which is a prediction neither the module nor
+ * anything else on this page is entitled to make.
+ *
  * It is drawn under `skipped` rather than beside it on purpose. `skipped` is
  * the runner declining work correctly; this is the runner declining work it
  * should have been given, and reading as one number would hide it inside the
@@ -435,7 +442,7 @@ function staleLine(lines, c, wide, stale) {
   // terminal to see is one the page has not really reported.
   lines.push(`       ${paint(c, [
     { text: `blocker finished ${stale.count}`, styles: ['yellow', 'bold'] },
-    { text: ' — a blocked step is waiting on a project that is not coming', styles: ['yellow'] },
+    { text: ' — a blocked step names a project that is done or no longer on main', styles: ['yellow'] },
   ], wide - 7)}`);
   for (const item of stale.items) {
     lines.push(`       ${paint(c, [
