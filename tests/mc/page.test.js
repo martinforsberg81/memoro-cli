@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
   collectPage, countNewErrors, intakeSection, newErrorLines, queueSection,
-  programmesSection, readDigest, runnerSection, sessionsSection,
+  programmesSection, readDigests, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
@@ -415,14 +415,15 @@ describe('INTAKE', () => {
 
   it('names the digest, its age and the proposals waiting', () => {
     const intake = intakeSection({
-      digest: { name: 'errors-2026-08-29.md', text: DIGEST, mtime_ms: Date.parse('2026-08-29T10:00:00Z') },
+      digests: [{ repo: 'memoro', name: 'errors-memoro-2026-08-29.md', text: DIGEST, mtime_ms: Date.parse('2026-08-29T10:00:00Z') }],
       proposals: ['2026-08-29-one.md', '2026-08-29-two.md'],
       now: NOW,
     });
-    assert.equal(intake.date, '2026-08-29');
-    assert.equal(intake.age_seconds, 7200);
-    assert.equal(intake.new_errors, 2);
-    assert.equal(intake.loud, 1);
+    assert.equal(intake.repos[0].repo, 'memoro');
+    assert.equal(intake.repos[0].date, '2026-08-29');
+    assert.equal(intake.repos[0].age_seconds, 7200);
+    assert.equal(intake.repos[0].new_errors, 2);
+    assert.equal(intake.repos[0].loud, 1);
     assert.equal(intake.proposals, 2);
   });
 
@@ -435,26 +436,26 @@ describe('INTAKE', () => {
       '- ! `four` — 60x 500 — the fourth',
     ].join('\n');
     assert.deepEqual(newErrorLines('- ! `a` — x').lines, [], 'a bullet outside the section is not a new error');
-    const intake = intakeSection({ digest: { name: 'errors-2026-08-29.md', text: many, mtime_ms: null }, named: 3 });
-    assert.equal(intake.new_errors, 5);
-    assert.equal(intake.loud, 4);
-    assert.deepEqual(intake.loud_lines, ['`one` — 90x 500 — the first', '`two` — 80x 500 — the second', '`three` — 70x 500 — the third']);
-    assert.equal(intake.more_loud, 1);
+    const intake = intakeSection({ digests: [{ repo: 'memoro', name: 'errors-memoro-2026-08-29.md', text: many, mtime_ms: null }], named: 3 });
+    assert.equal(intake.repos[0].new_errors, 5);
+    assert.equal(intake.repos[0].loud, 4);
+    assert.deepEqual(intake.repos[0].loud_lines, ['`one` — 90x 500 — the first', '`two` — 80x 500 — the second', '`three` — 70x 500 — the third']);
+    assert.equal(intake.repos[0].more_loud, 1);
 
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     const at = lines.findIndex((line) => /^ {2}INTAKE/u.test(line));
-    assert.match(lines[at + 1], /^ {2} {2}! {2}`one` — 90x 500 — the first$/u, 'the `!` lines come first, right under the heading');
-    assert.match(lines[at + 4], /… 1 more above the threshold/u);
+    assert.match(lines[at + 2], /^ {2} {2}! {2}`one` — 90x 500 — the first$/u, 'the `!` lines come under their repository row');
+    assert.match(lines[at + 5], /… 1 more above the threshold/u);
   });
 
   it('has no `!` lines to print on a quiet day', () => {
     const intake = intakeSection({
-      digest: { name: 'errors-2026-08-29.md', text: '## New since the last digest\n\n_nothing new_\n', mtime_ms: null },
+      digests: [{ repo: 'memoro', name: 'errors-memoro-2026-08-29.md', text: '## New since the last digest\n\n_nothing new_\n', mtime_ms: null }],
     });
-    assert.deepEqual(intake.loud_lines, []);
+    assert.deepEqual(intake.repos[0].loud_lines, []);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     const at = lines.findIndex((line) => /^ {2}INTAKE/u.test(line));
-    assert.equal(lines[at + 1], '', 'nothing between the heading and the next section');
+    assert.equal(lines[at + 2], '', 'the repository row, then nothing before the next section');
   });
 
   it('names today\'s digest with the digests present only in the archive', () => {
@@ -471,25 +472,27 @@ describe('INTAKE', () => {
     writeFileSync(join(archive, 'errors-memoro-cli-2026-08-29.md'), 'mc itself');
     writeFileSync(join(archive, 'errors-memoro-2026-08-29.md'), DIGEST);
 
-    const found = readDigest(env);
-    assert.equal(found.name, 'errors-memoro-2026-08-29.md', 'the newest, and memoro on a tie');
-    const intake = intakeSection({ digest: found, proposals: [], now: NOW });
-    assert.equal(intake.date, '2026-08-29');
-    assert.equal(intake.new_errors, 2);
+    const found = readDigests(env);
+    assert.deepEqual(found.map((d) => d.name), ['errors-memoro-2026-08-29.md', 'errors-memoro-cli-2026-08-29.md']);
+    const intake = intakeSection({ digests: found, proposals: [], now: NOW });
+    assert.equal(intake.repos[0].date, '2026-08-29');
+    assert.equal(intake.repos[0].new_errors, 2);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
-    assert.ok(lines.some((line) => /INTAKE {2}2026-08-29/u.test(line)), lines.join('\n'));
     assert.ok(!lines.some((line) => /no digest yet/u.test(line)), 'the collect has run');
+    // One row each, and neither repository is hidden behind the other.
+    assert.ok(lines.some((line) => /^ +memoro · 2026-08-29/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ +memoro-cli · 2026-08-29/u.test(line)), lines.join('\n'));
   });
 
   it('has no digest to name when nothing has been collected at all', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-page-intake-'));
-    assert.equal(readDigest({ MC_WORK_ROOT: root }), null);
+    assert.deepEqual(readDigests({ MC_WORK_ROOT: root }), []);
   });
 
   it('says there is no digest rather than a zero that looks like health', () => {
-    const intake = intakeSection({ digest: null, proposals: [], now: NOW });
-    assert.equal(intake.digest, null);
-    assert.equal(intake.new_errors, 0);
+    const intake = intakeSection({ digests: [], proposals: [], now: NOW });
+    assert.deepEqual(intake.repos, []);
+    assert.equal(intake.digests, 0);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     assert.ok(lines.some((line) => /INTAKE {2}no digest yet — mc helper --intake has not run/u.test(line)), lines.join('\n'));
   });
@@ -679,7 +682,7 @@ function pageData(over = {}) {
     runner: runnerSection({ rows: [], now: NOW, alive: () => false }),
     sessions: sessionsSection({ now: NOW, alive: () => false }),
     queue: queueSection({ queue: [], plans: [] }),
-    intake: intakeSection({ digest: null, proposals: [], now: NOW }),
+    intake: intakeSection({ digests: [], proposals: [], now: NOW }),
     programmes: programmesSection({ areas: [], plans: [] }),
     caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },
     notes: [],
@@ -719,11 +722,12 @@ const DATA = pageData({
     }],
   }),
   intake: intakeSection({
-    digest: {
-      name: 'errors-2026-08-29.md',
+    digests: [{
+      repo: 'memoro',
+      name: 'errors-memoro-2026-08-29.md',
       text: '## New since the last digest\n\n- ! `abc` — 41x 500 — loud\n',
       mtime_ms: Date.parse('2026-08-29T11:00:00Z'),
-    },
+    }],
     proposals: ['a.md'],
     now: NOW,
   }),
@@ -760,7 +764,8 @@ describe('the page', () => {
     assert.match(text, /skipped 1 \(done 1\)/u);
     assert.match(text, /· docx-editor {2}#10958 {2}two tests the change reaches are red/u);
     assert.doesNotMatch(text, /DECISIONS/u);
-    assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper --intake/u);
+    assert.match(text, /INTAKE {2}1 digest · 1 proposal\s+mc helper --intake/u);
+    assert.match(text, /^ +memoro · 2026-08-29 \(60 min old\) · 1 new error \(1 loud\)$/mu);
     assert.match(text, /PROGRAMMES {2}3 programmes · 4 projects {2}ready 2 · blocked 1 · done 1\s+p {2}plan a programme/u);
     assert.match(text, /^ {2}docx-editing-surface\s+·\s{2}no plan session$/mu, 'the programme is a heading of its own');
     assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
@@ -901,8 +906,8 @@ describe('collectPage', () => {
     // open runner.log to see which pull request is standing still.
     assert.deepEqual(data.queue.held.items.map((item) => [item.project, item.pr, item.reason]),
       [['docx-editor', 10958, 'two tests the change reaches are red']]);
-    assert.equal(data.intake.new_errors, 1);
-    assert.deepEqual(data.intake.loud_lines, ['`abc` — 41x 500 — loud']);
+    assert.equal(data.intake.repos[0].new_errors, 1);
+    assert.deepEqual(data.intake.repos[0].loud_lines, ['`abc` — 41x 500 — loud']);
     assert.equal(data.intake.proposals, 1);
     assert.deepEqual(data.programmes.programmes.flatMap((g) => g.projects).map((p) => p.name), ['avatar-self-serve', 'docx-editor', 'mc-run', 'mc-ui']);
     assert.equal(data.programmes.programmes.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
@@ -995,7 +1000,8 @@ describe('the palette', () => {
     'dim+grey', //                                                   skipped 1 (done 1)
     'yellow+bold yellow', //                                         · docx-editor  #10958  two tests the change reaches are red
     '',
-    'bold+cyan green grey red grey yellow grey', //                INTAKE  2026-08-29 (60 min old) · 1 new error (1 loud) · 1 proposal
+    'bold+cyan grey grey yellow grey', //                          INTAKE  1 digest · 1 proposal
+    'bold+white grey green grey red', //                                   memoro · 2026-08-29 (60 min old) · 1 new error (1 loud)
     'red bold+white', //                                           !  `abc` — 41x 500 — loud
     '',
     'bold+cyan grey green grey red grey grey grey', //          PROGRAMMES  3 programmes · 4 projects  ready 2 · done 1 · blocked 1
