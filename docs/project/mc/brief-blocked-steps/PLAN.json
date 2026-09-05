@@ -77,7 +77,7 @@
         "`NAME_RE` in `plan-schema.js` was defined and used by nothing; it is now exported and read by `blockedSteps`, which is the only reader. No validation was added — that is out of scope and stays so.",
         "The verification run of `mc brief --collect` wrote `~/mc/brief/2026-09-05T20-43-27Z.md` and I deleted it again afterwards, so the estate's \"since last brief\" window still stands at 2026-09-04T16:10Z and the next real brief does not lose a day of merged pull requests."
       ],
-      "pr": null,
+      "pr": 644,
       "blocked_by": null
     },
     {
