@@ -22,8 +22,8 @@ import { describe, it } from 'node:test';
 
 import { registerManifest } from '../../src/mc/dev-servers.js';
 import {
-  accountAvailable, answers, readDeclaration, runSuites, servingWorktree, startArgvFor,
-  stopServer, suiteEnv,
+  accountAvailable, answers, ensureDevServer, readDeclaration, runSuites, servingWorktree,
+  startArgvFor, stopServer, suiteEnv,
 } from '../../src/mc/test-environment.js';
 
 const DEAD_PID = 2_147_483_646;
@@ -442,5 +442,105 @@ describe('stopping one', () => {
     });
     assert.equal(stopped.ok, false);
     assert.match(stopped.error, /exited 3: lock held by another wrapper/u);
+  });
+});
+
+describe('bringing one up', () => {
+  /** A clock the test drives, so ten minutes of patience costs no seconds. */
+  function clock() {
+    let t = 0;
+    return { now: () => t, sleep: async (ms) => { t += ms; } };
+  }
+
+  it('waits minutes for a server that has registered', async () => {
+    // Measured 2026-09-05: a cold start with two other dev servers running
+    // took 181 seconds from spawn to `Ready on http://127.0.0.1:8900` — CSS
+    // build, 283 migrations, then wrangler. A two-minute ceiling called that
+    // a failure while the wrapper was working perfectly.
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const { now, sleep } = clock();
+    let readyAt = null;
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      now,
+      sleep,
+      spawn: () => { registerServer(root, worktree, { port: 8900 }); return { unref() {} }; },
+      fetch: async () => {
+        if (readyAt === null) readyAt = now() + 181_000;
+        return { ok: now() >= readyAt };
+      },
+    });
+
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.equal(ensured.started, true);
+    assert.ok(now() >= 181_000, `gave up after ${now()}ms`);
+
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('gives up in seconds when nothing registers at all', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const { now, sleep } = clock();
+    let asked = 0;
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      now,
+      sleep,
+      registerTimeoutMs: 5_000,
+      spawn: () => ({ unref() {} }),
+      fetch: async () => { asked += 1; return { ok: true }; },
+    });
+
+    assert.equal(ensured.ok, false);
+    assert.match(ensured.error, /no dev server registered/u);
+    assert.equal(asked, 0, 'nothing was asked for health — nothing had said where');
+
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a wrapper that dies while starting fails at once, not in ten minutes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const { now, sleep } = clock();
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      now,
+      sleep,
+      spawn: () => { registerServer(root, worktree, { port: 8900 }); return { unref() {} }; },
+      fetch: async () => {
+        // It registered, then went. The registration is swept on the next read.
+        rmSync(join(root, 'dev-8900.json'), { force: true });
+        return { ok: false };
+      },
+    });
+
+    assert.equal(ensured.ok, false);
+    assert.match(ensured.error, /stopped before it answered/u);
+    assert.ok(now() < 60_000, `waited ${now()}ms for a wrapper that was gone`);
+
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('reuses a live server for this worktree and starts nothing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    registerServer(root, worktree, { port: 8900 });
+    let spawned = 0;
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      spawn: () => { spawned += 1; return { unref() {} }; },
+    });
+
+    assert.equal(ensured.ok, true);
+    assert.equal(ensured.started, false);
+    assert.equal(spawned, 0);
+
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 });

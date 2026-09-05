@@ -39,8 +39,25 @@ export const DECLARATION_FILE = join('.mc', 'test.json');
 /** Where it says how its dev server starts. */
 export const DEV_DEFINITION_FILE = join('.mc', 'dev.json');
 
-/** How long to wait for a dev server that was not already running. */
-export const START_TIMEOUT_MS = 120_000;
+/**
+ * Two windows, because a start has two stages and only one of them is a guess.
+ *
+ * Until the wrapper registers, mc knows nothing: the process may be building,
+ * or it may have died on a bad `.dev.vars`. That window is short.
+ *
+ * Once it has registered, mc has been told the wrapper is alive and where it
+ * intends to serve, and the only thing left is waiting. That window is long,
+ * and it has to be: measured on 2026-09-05, a cold start in a worktree with
+ * two other dev servers already running took **181 seconds** from spawn to
+ * `Ready on http://127.0.0.1:8900` — CSS build, 283 migrations, then wrangler.
+ * A 120-second ceiling reported that as a failure while the wrapper was
+ * working perfectly, and the server answered a minute later.
+ *
+ * The long wait is not blind. Each turn checks the registered pid is still
+ * alive, so a wrapper that dies fails in a second rather than in ten minutes.
+ */
+export const REGISTER_TIMEOUT_MS = 120_000;
+export const READY_TIMEOUT_MS = 600_000;
 
 /**
  * Read what the repository offers.
@@ -147,13 +164,15 @@ export function startArgvFor(worktree, declaration) {
  * Starting one is the project's own command, run with `shell: false`, detached
  * so it outlives this process the way a dev server should. mc then waits for
  * the wrapper to register itself and for its health endpoint to answer — both,
- * because a registration is a claim and a 200 is the evidence.
+ * because a registration is a claim and a 200 is the evidence, and each gets
+ * its own window: see REGISTER_TIMEOUT_MS and READY_TIMEOUT_MS.
  */
 export async function ensureDevServer(worktree, declaration, deps = {}) {
   const now = deps.now || (() => Date.now());
   const sleep = deps.sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
   const fetchImpl = deps.fetch || fetch;
-  const timeoutMs = deps.timeoutMs ?? START_TIMEOUT_MS;
+  const registerMs = deps.registerTimeoutMs ?? REGISTER_TIMEOUT_MS;
+  const readyMs = deps.readyTimeoutMs ?? READY_TIMEOUT_MS;
   const root = deps.root;
 
   const running = servingWorktree(worktree, { root });
@@ -168,25 +187,55 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   });
   child.unref?.();
 
-  const deadline = now() + timeoutMs;
+  // Stage one: has it said where it will serve?
+  const registerBy = now() + registerMs;
   let server = null;
-  while (now() < deadline) {
+  while (!server && now() < registerBy) {
     await sleep(1000);
     server = servingWorktree(worktree, { root });
-    // One attempt while starting: the loop around this is the retry, and a
-    // server that is not up yet should not cost six seconds a turn.
-    if (server && await answers(server, { fetch: fetchImpl, attempts: 1 })) {
+  }
+  if (!server) {
+    return {
+      ok: false,
+      error: `no dev server registered for ${worktree} within ${seconds(registerMs)}`
+        + ' — its log is under .wrangler/dev-server/logs/',
+    };
+  }
+  deps.onRegistered?.(server);
+
+  // Stage two: has it started answering? One attempt a turn — the loop is the
+  // retry, and a server that is not up yet should not cost six seconds each
+  // time round.
+  const readyBy = now() + readyMs;
+  while (now() < readyBy) {
+    if (await answers(server, { fetch: fetchImpl, attempts: 1 })) {
       return {
         ok: true, server, started: true, service: start.service, profile: start.profile,
       };
     }
+    // A wrapper that has died is not going to answer, and waiting ten minutes
+    // to find that out is the wrong kind of patience.
+    const still = servingWorktree(worktree, { root });
+    if (!still) {
+      return {
+        ok: false,
+        error: `${worktree}'s dev server (${server.instance_id}) stopped before it answered`
+          + ' — its log is under .wrangler/dev-server/logs/',
+      };
+    }
+    server = still;
+    await sleep(2000);
   }
   return {
     ok: false,
-    error: server
-      ? `${worktree}'s dev server registered as ${server.instance_id} but never answered ${server.health_url || server.url}`
-      : `no dev server registered for ${worktree} within ${Math.round(timeoutMs / 1000)}s — its log is under .wrangler/dev-server/logs/`,
+    error: `${worktree}'s dev server registered as ${server.instance_id} but had not answered`
+      + ` ${server.health_url || server.url} after ${seconds(readyMs)}`,
   };
+}
+
+function seconds(ms) {
+  const value = Math.round(ms / 1000);
+  return value >= 120 ? `${Math.round(value / 60)} minutes` : `${value}s`;
 }
 
 /**
