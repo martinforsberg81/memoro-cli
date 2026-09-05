@@ -20,7 +20,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A project the runner cannot start does not read `ready` alone in any surface a person uses.",
       "check": "With #612 and #614 held as they are today, `mc status intake-inbox` and `mc status role-instructions` each name the held pull request beside the plan state, and the page's queue block does too. Run both commands and read them."
     },
@@ -83,7 +83,7 @@
     },
     {
       "title": "mc status and the page say the pair",
-      "status": "ready",
+      "status": "done",
       "done_when": "`mc status <name>` and the page show the plan state and the machine state together, and `ready` on its own means the runner would start it.",
       "instruction": [
         "`mc status <name>` today prints `planSummary(plan).status` and nothing about this machine: `fieldRows` in `src/mc/status-project.js:41` builds the rows, and the file's own header says the plan is read from the workarea when there is one and from `origin/main` otherwise. It shows open pull requests on the branch (`openPrsFor`) but never `held.json` and never the worktree. That is why `mc status role-instructions` reads `ready` while #614 is held.",
@@ -93,8 +93,15 @@
         "Verify against the estate as it actually stands: run `mc status intake-inbox`, `mc status role-instructions` and the page, and put what they print in the PR. If both holds have been repaired by the time you run it, make one by hand instead and say so.",
         "`npm test` — `tests/mc/status-project.test.js` and the page tests read these."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The pair rides on the status row of `mc status <name>`: `fieldRows(plan, problems, machine, home)` in `src/mc/status-project.js` builds `ready · <the machine's own sentence> (since MM-DD hh:mmZ)`. `machineNote` is the rule for when it says nothing, and there are three cases and no others: a refusal the plan already names is dropped (`blocked · blocked` is the row it exists to stop), `runnable` is silent, and the one loud `runnable` case is a hold still owed its repair — because what the runner would start there is a repair and not the step the plan names. The home directory is folded to `~` in the sentence, since a workarea's absolute path is most of a terminal row.",
+        "`collectProject` asks the reading of the plan on **origin/main**, not of the workarea copy the rows above it show, because origin/main is the copy the round reads. When the two differ the plan row already says `differs from origin/main`, and a plan that is `ready` in the workarea while main's is `blocked` now says so on the status row as well. The reading is given the project's siblings on main as bare `{ project, repo }` entries — without them a pull request on `mc-cut-2` reads as `mc`'s (project-prs.js).",
+        "`queueSection` (`src/mc/page-collect.js`) takes an injected `machine: (name) => …` rather than reading the filesystem itself, which is that module's rule; `collectPage` passes one built from `machineState` over the plans, the PR list, `held.json`, the STOP file and a read-only `git`. A caller that passes none gets exactly the plan-shaped block it got before, which is what the older page tests still assert. A skipped name's kind becomes `skip:<machine word>` so the existing count-by-reason picks it up for free, and a runnable name's kind is what the runner would actually start — `repair` where a hold is owed one, which needed a colour in `KIND_TONE` and therefore a row in the palette table of `docs/technical/mc-ui.md` (a test binds the two).",
+        "What GitHub was not asked is not the same as nothing being open, and both surfaces now say so rather than promising a `ready` they cannot stand behind: `mc status --offline` and a failed `gh` both leave the repository in `prsFailed`, and on the page so does a missing PR cache (`prs.fetched` null) or a `gh pr list` that failed under `--fresh`. The consequence to know about is that `mc status --offline <name>` reads `ready · GitHub could not be asked what this repository has open` for every project. It is the round's own word for it, and there is a test naming that choice.",
+        "Verified live on 2026-09-05 against the estate, in a shadow work root under `/tmp` with `MC_WORK_ROOT`, because `held.json` was `[]` and the runner (pid 9053) was running — writing a hand-made hold into `~/mc/runner/held.json` could have started a repair session on it. The shadow root held symlinks to four real workareas, a queue.md naming them, and a hold made by hand against this step's own pull request. Four readings: held with its repair spent (`ready · #631 is held before merge after a repair — the brief's (since 09-03 10:00Z)`, and `skipped 2 (held-after-repair 1, dirty 1)` on the page); the same hold at `repairs: 0` (`… one repair session is owed`, and `runner-visibility  repair` at the top of the queue); no hold at all (`#631 is open … — not starting a step`, `skipped 2 (in-flight 1, dirty 1)`); and `mc status total-lane-cap`, which has nothing in the way and printed the bare `ready` it printed before. The dirty case is real rather than made: `mc status connections-section` against the true `~/mc` reads `ready · uncommitted work in ~/mc/connections-section/memoro: hop-measure.mjs, probe.mjs (since 09-05 10:03Z)`. The shadow root was removed afterwards; nothing under `~/mc` was written.",
+        "For step 3: the brief is the surface this step did not touch, and `connections-section` is still dirty on this machine, so that step's own check can be run against it without making anything. The reading it needs is the same `machineState` call — `brief-collect.js` already reads `held.json` (`HELD_FILE`) and `runsFor`, and the four things a line needs (name, reason, since, the run that left it) are `reason`, `detail`, `since` and a `runs.tsv` row."
+      ],
+      "pr": 631,
       "blocked_by": null
     },
     {
