@@ -148,7 +148,7 @@
         "One gap in the surfaces this project built, found by the measurement and worth knowing before step 5 writes the docs: `inbox-finish` has held 6 files and 165 insertions of apparently finished work since its session was killed at 2026-09-02T20:59:43Z, and **no surface names it**, because its `PLAN.json` does not parse (`what_the_code_taught_us: unknown key`, `steps[1].pr`). `waitingOnHands` filters to `RUN_REFUSALS`, so an unparseable plan is a *Plan status* row and its dirty workarea is nobody's line. That is correct as designed — the plan is the first thing wrong there — but it means the worst single loss in the measurement is the one the new section cannot show.",
         "No ruling was asked for or given here; the session that has Martin's answer writes it into `docs/project/mc/rulings.md` in that file's shape, and this step deliberately did not pre-write the entry. Separately, the scratch half of the finding is a proposal rather than a paragraph of this plan: `~/mc/proposals/2026-09-05-scratch-files-stop-the-round.md` argues for a `$MC_SCRATCH` outside the worktree and one sentence in `canon/roles/_common.md`, on the ground that two of the eight episodes cost 43 rounds for throwaway files and the round's dirty check should not be softened to fix it."
       ],
-      "pr": null,
+      "pr": 633,
       "blocked_by": null
     },
     {
