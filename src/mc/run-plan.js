@@ -417,16 +417,26 @@ const today = (now) => now.toISOString().slice(0, 10);
  * session that read the conflicting code, resolved it, and stopped. This
  * session has to read that code anyway.
  */
-function conflictPreamble(conflicts) {
+function conflictPreamble(conflicts, then = null) {
   if (!conflicts.length) return [];
   return [
     'A `git merge origin/main` is in progress in this worktree and stopped on',
     `conflicts in: ${conflicts.join(' ')}`,
     '',
     "Resolve them first: keep this branch's intent and main's changes both,",
-    'commit the merge, and then do your step below. It is the first thing you',
-    'do and not the job — one session, one pull request, and the step is what',
-    'the pull request is for.',
+    ...(then || [
+      'commit the merge, and then do your step below. It is the first thing you',
+      'do and not the job — one session, one pull request, and the step is what',
+      'the pull request is for.',
+    ]),
+    '',
+    // A modify/delete is the one conflict "keep both" does not answer, and
+    // guessing it wrong restores something a finished project removed on
+    // purpose. `role-instructions`' #614 is exactly this: its branch edits
+    // `canon/roles/reconcile.md`, which `no-reconcile` deleted from main.
+    'A file main deleted stays deleted — `git rm` it and carry whatever your',
+    'branch was doing to it wherever main moved it, if anywhere. Restoring it',
+    'undoes a project that finished on purpose, and no test will say so.',
     '',
   ];
 }
@@ -484,7 +494,7 @@ export function stepPrompt({ name, repo, planPath, planText, step, index, confli
  * command gate that failed. A session told `sql:pr-ci — exit 1` and nothing
  * else guesses; that is what happened on 2026-09-03, three rounds long.
  */
-export function repairPrompt({ name, repo, pr, branch, reason, note = null, red = [], gates = [] }) {
+export function repairPrompt({ name, repo, pr, branch, reason, note = null, red = [], gates = [], conflicts = [] }) {
   const lines = [
     `You are in the \`${name}\` workarea of ${repo} (this worktree), on branch`,
     `\`${branch}\`, whose pull request #${pr} the runner would not land:`,
@@ -498,6 +508,15 @@ export function repairPrompt({ name, repo, pr, branch, reason, note = null, red 
   for (const gate of gates) {
     lines.push(`The gate \`${gate.name}\` failed. What it printed:`, ...String(gate.output).split('\n').map((line) => `  ${line}`), '');
   }
+  // A pull request held *because* it conflicts with main is the common case:
+  // the gate refused it for the conflict, and the runner's own sync then hits
+  // the same one. Resolving it is not a detour from the repair, it is the
+  // repair — see `runProject`, where a conflict no longer refuses this session.
+  lines.push(...conflictPreamble(conflicts, [
+    'commit the merge, and push. For a pull request held because it conflicts',
+    'with main, that is the whole repair; where the reason names something else',
+    'as well, it is the first thing and the reason below is the rest.',
+  ]));
   lines.push(
     'Make it green and push to the same branch — the runner lands it after you.',
     'Do not open another pull request, do not merge it yourself, do not lower a',

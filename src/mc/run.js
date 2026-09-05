@@ -1273,11 +1273,17 @@ export function createRunner({
       deps.git(worktree, ['merge', '--abort']);
       say(`${name}: ${why} — the merge of origin/main is aborted, still conflicting in: ${conflicts.join(' ')}`);
     };
-    // A repair cannot run in a worktree with a merge in progress; its pull
-    // request is still held next round, and the merge is not its job.
-    const choice = repair && !conflicts.length ? { kind: 'repair' } : chooseKind({ plan });
-    if (conflicts.length && (repair || choice.kind !== 'step')) {
-      abandonMerge(repair ? `#${repair.entry.pr} is held before merge` : (choice.skip || 'no step to hand it to'));
+    // A repair used to be refused in a worktree with a merge in progress, on
+    // the reasoning that the merge was not its job. That deadlocked the most
+    // common hold there is: a pull request held *because* it conflicts with
+    // main hits the same conflict when the runner syncs, so the repair was
+    // refused for the very reason it was owed — every round, for ever.
+    // Measured 2026-09-05: #612 and #614 both sat at `repairs: 0` with the
+    // gate's reason reading `conflicts with origin/main`. Resolving the merge
+    // is the repair; `repairPrompt` is handed the files.
+    const choice = repair ? { kind: 'repair' } : chooseKind({ plan });
+    if (conflicts.length && choice.kind !== 'step' && choice.kind !== 'repair') {
+      abandonMerge(choice.skip || 'no session to hand it to');
       return 'skipped';
     }
     // A null `skip` is a skip nobody would read — see `chooseKind`.
@@ -1291,7 +1297,7 @@ export function createRunner({
     if (!launch?.ok) { abandonMerge(`${settings.tool} is not available`); say(`${name}: ${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); return 'skipped'; }
     const now = deps.now();
     const prompt = kind === 'repair'
-      ? repairPrompt({ name, repo: repo.name, ...repair.entry })
+      ? repairPrompt({ name, repo: repo.name, ...repair.entry, conflicts })
       : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, step: choice.step, index: choice.index, conflicts, now });
     // Counted before the session runs, not after: a repair killed on its budget
     // still had its one turn, and a count written afterwards would give the next
