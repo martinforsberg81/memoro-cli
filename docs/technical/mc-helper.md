@@ -8,7 +8,7 @@ acts on until Martin picks it up at `mc brief` or `mc plan`.
 | | what it does |
 |---|---|
 | `mc helper` | **the desk.** A foreground session in `~/mc/helper/` that takes Martin's report of a bug or something that should be better, and writes it as a proposal. No digest, no production, no fix |
-| `mc helper --intake` | **the eye.** One digest per repository, then one headless turn per digest that reads it and proposes from it |
+| `mc helper --intake` | **the eye.** The day's digest per repository, then the inbox drained: one headless turn per file, oldest first, each file archived the moment its turn ends |
 | `mc helper --collect` | the eye's script half alone: write `~/mc/intake/errors-<repo>-<date>.md` for each repository, with the delta against that repository's previous digest. **No model, no writes to production** |
 | `--since <iso>` | the window; default is the last 24 h |
 | `--limit <n>` | fingerprints asked for; default 50, the route caps at 200 |
@@ -24,6 +24,54 @@ Nothing here writes `~/mc/queue.md`. A proposal is read at the next brief and
 Martin queues it or drops it — that is the arrangement that lets the eye run
 unattended every day, and it is why the desk can hand him something without
 having decided anything.
+
+## The inbox
+
+`~/mc/intake/` is an inbox. Anyone may drop a file in it — an error log, a
+screenshot, a note — and the collect step adds one digest a day per repository.
+Nothing stays in it: **one file, one turn, one outcome**, and the file is
+archived under `~/mc/runner/log/intake/<date>/` the moment its turn ends. A new
+round takes the next files, until the directory holds nothing.
+
+The archive is unconditional, and that is what makes this an inbox rather than
+a pile. A turn that failed, timed out, hit the quota or threw has still had its
+turn; a file put back for the next round is a file every round after this one
+takes again. An inbox that keeps what it could not judge never drains.
+
+**The turn opens the file itself.** It is named in the prompt, never inlined in
+it: the turn stands in `~/mc/intake/`, so a name is enough, and a screenshot has
+no text to inline. That is the whole reason the inbox can hold anything.
+
+### It is not `~/mc/proposals/`
+
+The two rooms differ by who has done the judging. The inbox is raw material
+nobody has read yet, and it costs a turn to work out what is in it.
+`~/mc/proposals/` is the other end: a session already understood the thing and
+wrote down what should happen about it. A session that has done the judging and
+drops its finding in the inbox asks a second session to work it out again from
+less than it had.
+
+### What left it, and why it was never an inbox item
+
+`mc run` writes three tables about its own rounds — `undocumented-closures.md`,
+`unplanned-workareas.md` and `unreadable-plans.md`. They sat in `~/mc/intake/`
+until 2026-09-05 and now live in `~/mc/runner/`, beside `held.json`,
+`runner.json` and `log/`. `RUNNER_HOME` and the three filenames are in
+`src/mc/paths.js`, with `runnerTablePath` for the runner that writes them and
+`runnerTableLabel` for the brief that names them to a person, so the writer and
+the label cannot drift.
+
+Two of them are rewritten **whole every round**, which is the property that made
+the old room wrong the moment the inbox was asked to drain: a turn that read one
+and filed it away would find it back next round, and the round after, forever.
+They are the runner's own output about its own rounds, read by exactly one
+reader — `mc brief --collect`, which renders a section for each — and they
+belong beside the rest of the runner's state. The three files were moved by
+hand: a migration for three files that are rewritten every round is more code
+than it saves.
+
+`~/mc/intake/decisions-archive/` is skipped rather than drained. It is a
+directory and an archive already; the drain lists files.
 
 ## The desk
 
@@ -211,20 +259,44 @@ wrong system.
 ## The turn
 
 One headless session with the `intake` role (`canon/roles/intake.md`,
-Sonnet), standing in `~/mc/intake/`, timeout 10 minutes — four times the
-longest measured run.
+Sonnet), standing in `~/mc/intake/`, timeout 10 minutes, given **one file by
+name** and asked for one outcome.
 
 The role is `intake` and not `helper` because `helper` is the desk, and the
 two want opposite things: the desk asks Martin, and the turn is told there is
 nobody to ask. One file trying to be both is how a role stops being either.
 
-**It is given its material, not sent to find it.** The prompt carries the
-digest whole, every plan on `origin/main` in whichever of the
-two checkouts is present, with its `status` and `next:`, the project log, and the proposals already
-waiting — 22 kB against a real 50-fingerprint digest. Its cwd is the intake
-directory and the repositories are elsewhere on the disk: a turn that cannot
-reach them cannot accidentally write in them either, which is cheaper than
-trusting it not to.
+**The file is named; the ground is given.** The prompt carries the filename and
+then what the turn judges it against — every plan on `origin/main` in whichever
+of the two checkouts is present, with its `status` and `next:`, the project log,
+and the proposals already waiting. Its cwd is the intake directory and the
+repositories are elsewhere on the disk: a turn that cannot reach them cannot
+accidentally write in them either, which is cheaper than trusting it not to. The
+file itself is the one exception, and it has to be.
+
+**Which system it belongs to is read from the name when the name says it.**
+`repoOfFile` answers `memoro` or `memoro-cli` for the collector's own
+`errors-<repo>-<date>.md` and the legacy unprefixed `errors-<date>.md`, and
+`null` for everything else. On a known name the prompt tells the turn; on `null`
+it tells the turn to decide from what it read and say which in the proposal.
+`repo:` is what everything downstream routes on, and a finding filed against the
+wrong system is worse than one not filed — but a file Martin dropped in belongs
+to whichever system its contents say, and the turn is the only reader that can
+tell.
+
+**One file, one outcome.** One proposal or none. Not two from one file — one
+report is one proposal — and no proposal is the right answer whenever the file
+does not warrant one. The turn says in one line which it did and why.
+
+**A file it cannot read whole is said so, not judged from its head.** Past the
+tool's read limit, or in a form it cannot open: a proposal that names the limit,
+or no proposal with that as the reason. Measured on 2026-09-05 against 6 MB of
+`/dev/urandom` — no proposal, and the line read *"high-entropy binary with no
+header, magic bytes, or structure — the file is unopenable, and there is nothing
+to judge it against"*. Two large text files did not reach the rule at all: a
+23 MB log and a 240 000-line one were both counted with shell tools and reported
+as counted, which is the better answer. The failure this guards against is the
+confident summary of a file somebody saw the first page of.
 
 **What it wrote is measured, not believed.** `runHelperTurn` lists
 `proposals/` before and after and reports the difference. A turn that says it
@@ -241,14 +313,18 @@ Its output is zero or more `~/mc/proposals/<date>-<slug>.md`:
 
     # <one line: what is wrong, or what is missing>
 
-    ## Evidence      — the digest's own numbers, quoted
+    ## Evidence      — what the file said, quoted
     ## Proposal      — a new project whose step 1 investigates, or one step
     ## Done when     — one line
 
-The frontmatter is fixed because `mc brief --collect` has to say what kind of
-thing each one is *without a model* — and it is the same frontmatter the desk
-writes, so the brief cannot tell, and does not need to tell, which door a
-proposal came through. The role's judgement rules are in the role file, and
+That is the shape the desk writes and the shape to aim at, but it is not fixed
+and nothing enforces it: **mc does not read a proposal.** `listProposals`
+returns filenames and never opens one, so a turn that wrote `system:` and
+`source:` instead of `repo:` — which one did, on 2026-09-05, for a note whose
+name said no repository — costs a reader a second and nothing else. The roles
+say the inside of a proposal is prose and not a form.
+
+The role's judgement rules are in the role file, and
 three of them matter enough to repeat: what was already there yesterday has
 already been seen; a proposal that duplicates a live plan is noise; **zero
 proposals is a good answer** — a quiet day should cost Martin nothing to
@@ -258,39 +334,74 @@ The role forbids, in the same words: `queue.md`, any plan, any decision
 file, anything outside `~/mc/proposals/`, production, a deploy, a
 credential, a PR, a session, and a question — there is nobody to answer one.
 
-## When the eye runs
+## When the two halves run
 
-`mc run` runs it **once per calendar day, at the top of the first round
-after 05:00Z**, before any step. It is not a step: it opens no worktree,
-touches no branch and produces no PR.
+Two gates, because they answer two different questions. `mc run` runs both at
+the top of a round, before any step, and calls `collectHelper` and `drainIntake`
+directly rather than the verb. Neither is a step: no worktree, no branch, no PR.
 
-It calls `collectHelper` and `runHelperTurn` directly, not the verb, so the
-runner's day is unaffected by what the bare `mc helper` does at a terminal.
-The desk has no schedule at all — it runs when Martin has something to say.
+**The collect is a day.** It runs once per calendar day, at the top of
+the first round after 05:00Z, and writes one digest per repository. `helperDue`
+(`run-plan.js`) reads `~/mc/runner/log/runs.tsv` and nothing else — there is no
+stamp file beside it to fall out of step with — and looks for a row
+whose `kind` is `helper` and whose date is today. The row goes in whether the
+collect worked or not, which is the whole of "a failed collect is logged, never
+retried within the day": a `collect-failed` row closes the day exactly as a
+successful one does.
+There is no model in this half — it writes two files and two rows.
 
-**The runs.tsv row is the whole gate.** `helperDue` reads
-`~/mc/runner/log/runs.tsv` and nothing else — there is no stamp file beside
-it to fall out of step with — and looks for a row whose `kind` is `helper`
-and whose date is today. The row goes in whether the run worked or not, which
-is the whole of "a failed collect is logged, never retried within the day":
-a `collect-failed` row closes the day exactly as a successful one does.
+**The drain is a question about a directory.** `runIntakeDrain` asks only *is
+there a file in the inbox?*, so a round can drain without collecting, and
+collect and drain in the same round. It takes the oldest `INTAKE_PER_ROUND` = 3
+files — oldest by the date **in the name** (`intakeQueue`), not by the name
+itself, because `errors-memoro-2026-09-04.md` sorts before
+`errors-memoro-cli-2026-08-31.md` as a string, and a name with no date in it
+sorts last, which is arrival order too.
 
-The row carries `helper` in both the name and the kind column, and the turn's
-tokens in the same `input`/`output`/`cache_read`/`cache_write` columns a step
-uses, so the page can price the day honestly. `run.js`'s header used to say
-the runner never calls a model; it does now, once a day.
+Three is what a round can afford: a turn is capped at ten minutes and measured
+at 39–193 s on files Martin dropped in and 115–691 s on a digest, so a round's
+drain is bounded at half an hour and usually far under it, beside a lane's
+ninety-minute step. One a round would take thirteen rounds to clear a backlog of
+thirteen; the whole inbox in one round has no bound at all and would stop the
+runner for a morning after Martin drops forty screenshots in.
 
-The note starts with `success` on a good day — `success,0-proposals`,
-`success,3-proposals` — because `summariseRuns` counts any note that does not
-start with `success` as a failure, and a quiet helper day is not a failure.
-A bad day's note is `collect-failed`, or the turn's own reason (`no-tool`,
-`no-role`, `timeout`).
+Sharing one gate is what filled the directory in the first place: a round could
+read one file a day, and only if it had also collected.
 
-**`mc run --once` does not run it.** That flag exists to watch one step, and
-two minutes of production reads plus a model turn is not what somebody typing
-it asked for. The real runner never passes `--once`, so this costs nothing.
+**The rows.** The collect writes one row per repository, carrying
+`helper` in both the name and the kind column, with the note
+`success,<repo>,<n>-new` or `collect-failed,<repo>`. Each drained file writes a
+row of its own: `kind: intake`, **the file in the name
+column**, note `success,<n>-proposals` or the turn's own reason (`no-tool`,
+`no-role`, `timeout`, `turn-threw`). Its own kind, so a drain that happened to
+run does not close `helperDue` for the day and so a reader can tell the script
+that read production from the model that read one file; the file in the name
+column, because that is the column for naming the thing a row is about.
+`summariseRuns` counts kinds generically and the page's day line prints them the
+same way, so both are counted with no change. The twelve `helper` rows written
+before 2026-09-05 mean both things, and nothing re-reads them.
 
-A `~/mc/runner/STOP` file stops the helper as well as the steps.
+**The outcome goes first in both notes.** `summariseRuns` counts a note that
+does not start with `success` as a failure, and every helper row ever written
+read `memoro,success,0-proposals` — so the brief and the page had counted every
+helper day as a failed run since the row existed.
+
+The turn's tokens go in the same `input`/`output`/`cache_read`/`cache_write`
+columns a step uses, so the page can price the day honestly. `run.js`'s header
+used to say the runner never calls a model; it does now, up to three times a
+round.
+
+**`mc run --once` runs neither.** That flag exists to watch one step, and
+production reads plus model turns are not what somebody typing it asked for. The
+real runner never passes `--once`, so this costs nothing.
+
+A `~/mc/runner/STOP` file stops both. The drain checks it between files, never
+inside one, and a turn that hit the quota pauses the runner the way a step's
+does.
+
+`mc helper --intake` at a terminal goes through the same `drainIntake`, the same
+cap and the same archive — one drain, not two. The desk has no schedule at all:
+it runs when Martin has something to say.
 
 ## Who acts on it
 
@@ -311,7 +422,9 @@ Nobody automatic. That is the point.
   themselves, first, three named and the rest counted. A count is a number
   somebody has to go and look up; the line is the thing that makes them look.
   With no digest it says `no digest yet — mc helper --intake has not run`
-  rather than printing a zero that would read as "production is quiet".
+  rather than printing a zero that would read as "production is quiet". The
+  section reads the newest digest **in the inbox**, and the inbox now drains —
+  see *What is not done*.
 
 ## The Contract
 
@@ -332,14 +445,15 @@ Nobody automatic. That is the point.
 
 | file | what |
 |---|---|
-| `src/mc/commands/helper.js` | the verb: the desk, and behind `--intake` the collect and the turn |
+| `src/mc/commands/helper.js` | the verb: the desk, and behind `--intake` the collect and the same drain the runner uses |
 | `canon/roles/helper.md` | the desk: what it takes, what it writes, what it never touches |
-| `src/mc/helper-collect.js` | the five sources, the delta, the state block, the rendered digest, `helperDir` |
-| `src/mc/helper-turn.js` | the prompt, the ground read from `origin/main`, the headless session, the measured `wrote` |
+| `src/mc/helper-collect.js` | the six sources, the delta, the state block, the rendered digest, `helperDir`, `intakeDir`, `intakeArchiveDir` |
+| `src/mc/helper-turn.js` | the prompt over one named file, `repoOfFile`, the ground read from `origin/main`, the headless session, the measured `wrote` — and `drainIntake`, the loop that archives every file the moment its turn ends |
 | `canon/roles/intake.md` | what the turn is, what it may write, how it judges |
-| `src/mc/run-plan.js` | `helperDue`, `helperNote`, `HELPER_KIND`/`HELPER_NAME` |
-| `src/mc/run.js` | `runHelperDay` — the daily gate inside the round |
-| `src/mc/brief-collect.js` | `listProposals` — the names, and nothing about what is in them |
+| `src/mc/run-plan.js` | `helperDue` and `collectNote` for the day; `intakeQueue`, `intakeNote`, `INTAKE_KIND` and `INTAKE_PER_ROUND` for the drain |
+| `src/mc/run.js` | `runHelperDay` — the daily collect — and `runIntakeDrain`, the inbox every round |
+| `src/mc/paths.js` | `RUNNER_HOME` and the three tables that left the inbox: `runnerTablePath` for the writer, `runnerTableLabel` for the brief |
+| `src/mc/brief-collect.js` | `listProposals` — the names, and nothing about what is in them — and the three sections read from `~/mc/runner/` |
 | `src/mc/page-collect.js`, `page-render.js` | `newErrorLines`, `intakeSection`, the INTAKE block |
 
 mc does not read a proposal. It used to parse a fixed frontmatter and fixed
@@ -353,14 +467,41 @@ is in one opens it.
 
 Tests: `tests/mc/helper-collect.test.js` (the digest on stubbed script output
 and stubbed routes, the delta against a previous digest, the failure domains
-kept separate), `tests/mc/helper-turn.test.js`,
-`tests/mc/commands/helper.test.js` — where the desk's own cases hold the
-thing worth holding down, that the bare verb reaches neither the collect step
-nor the model — the helper block of `tests/mc/run.test.js` (the daily gate
-driven end to end on fakes) and the INTAKE cases in `tests/mc/page.test.js`.
-No network and no model in any of them.
+kept separate), `tests/mc/helper-turn.test.js` (the prompt as a pure function over a named
+file, `repoOfFile`, and the drain — including the file that is archived after a
+turn that threw), `tests/mc/commands/helper.test.js` — where the desk's own
+cases hold the thing worth holding down, that the bare verb reaches neither the
+collect step nor the model, and where the verb's drain is handed its own `files`
+and `move` so the real inbox is out of reach even when the suite is run without
+`tests/_isolate-home.mjs` — `tests/mc/run-plan.test.js` (`intakeQueue`'s order,
+`intakeNote`, the two gates), the helper and intake blocks of
+`tests/mc/run.test.js` (the day's collect and the drain driven end to end on
+fakes: one row per file naming it, the failed turn's file archived all the same,
+`decisions-archive/` untouched, the cap and what is left over) and the INTAKE
+cases in `tests/mc/page.test.js`. No network and no model in any of them.
 
 ## What is not done
+
+**The delta's baseline is in the room that now drains.** `previousDigest` reads
+`~/mc/intake/` and only `~/mc/intake/`, so the baseline for tomorrow's digest is
+yesterday's file — the same file the drain archives the moment its turn ends.
+Measured 2026-09-05 against the real function: with yesterday's digest in the
+inbox the baseline is `errors-memoro-2026-09-04.md`; with it moved to
+`~/mc/runner/log/intake/<date>/` the baseline is `null`, which renders as *first
+digest — no baseline* and an empty *New since the last digest*. Today's backlog
+of fourteen files hides it — the drain takes three a round, oldest first, so the
+newest digest is not archived on the day it is written — but once the inbox is
+empty every day's digest will be a first digest, and *the delta is the agenda*
+is the rule the whole turn judges by. The fix is a baseline that looks in the
+archive as well as the inbox; proposal `2026-09-05-digest-baseline-archived.md`.
+
+**The page's INTAKE section reads a name the collector stopped writing.**
+`readDigest` (`page-collect.js`) matches `errors-<date>.md` only, so it has not
+seen a digest since the repository prefix landed: measured 2026-09-05, it read
+`errors-2026-08-30.md`, six days stale, while today's two digests sat beside it.
+Once the inbox drains it will find nothing at all and say `no digest yet`. That
+is not the drain's doing, but the drain makes it permanent; proposal
+`2026-09-05-page-intake-digest.md`.
 
 `scripts/sync-todo.mjs`, the `/improve` command and the `docs/TODO.md`
 production sentinels in `~/memoro` still exist. Decision `mc-2` retires them

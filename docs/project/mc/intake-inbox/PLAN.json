@@ -126,14 +126,19 @@
     },
     {
       "title": "Close out",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/technical/mc-helper.md` describes the inbox and the drain, and `docs/project/project_log.md` has the row.",
       "instruction": [
         "`docs/technical/mc-helper.md` describes the intake turn as one headless session a day reading a digest, with a table of role files at the end. Rewrite it to what now happens: an inbox anyone may drop a file into, a collector that adds one file a day per repository, one turn per file that reads it itself and decides, and an archive under `~/mc/runner/log/`. Say where the runner's three tables went and why they were never inbox items.",
         "Say the boundary in the same place, because it is the question a reader arrives with: the inbox is for material nobody has read yet, and `~/mc/proposals/` is for something a session already understood. A session that has done the judging does not put its finding in the inbox for a second session to redo from less.",
         "Add the row to `docs/project/project_log.md`."
       ],
-      "comments": [],
+      "comments": [
+        "`docs/technical/mc-helper.md` now carries a *The inbox* section before the desk — what may be dropped there, one file / one turn / one outcome, the unconditional archive under `~/mc/runner/log/intake/<date>/` and why it is the only version that terminates, the boundary against `~/mc/proposals/` (the inbox is material nobody has read; a session that has already judged its finding writes a proposal), and where the runner's three tables went. *The turn* is rewritten around one named file, `repoOfFile`, the one-outcome rule and the unreadable-file rule. *When the eye runs* became *When the two halves run*: the day gate and the directory gate, the two kinds of row, the cap, and the note-order fix. The proposal frontmatter is no longer described as fixed — the old sentence contradicted the doc's own paragraph three screens down saying mc reads no proposal.",
+        "One thing to know before editing that doc: `tests/mc/helper-doc.test.js` pins it against the code, and the pins are literal phrases — `first round after 05:00Z`, ``whose `kind` is `helper` ``, ``` `helper` in both the name and the kind column ```, `timeout 10 minutes`. Markdown wrapping is part of the assertion: a reflow that puts a line break inside one of those phrases fails the suite with \"the doc no longer says …\", which cost three runs here. Two pins were added for the drain in the same style — `INTAKE_PER_ROUND` read back out of the prose, and the `kind: intake` row that names its file.",
+        "Two measured findings were left as proposals rather than patched here, and both are named in the doc's *What is not done*. (1) `previousDigest` reads only `~/mc/intake/`, so the drain archives the very file tomorrow's delta uses as its baseline: measured against the real function on 2026-09-05, the baseline is `errors-memoro-2026-09-04.md` with yesterday's digest in the inbox and `null` once it is archived, which renders as *first digest — no baseline* and an empty *New since the last digest* — every day, once the backlog clears. *The delta is the agenda* is the rule the whole turn judges by, so this is the one that matters. (2) The page's `readDigest` matches `errors-<date>.md` only, so it has not seen a digest since the repository prefix landed: measured, it reads `errors-2026-08-30.md` from the real inbox while today's two sit beside it, and after the drain it will find nothing. `~/mc/proposals/2026-09-05-digest-baseline-archived.md` and `~/mc/proposals/2026-09-05-page-intake-digest.md`.",
+        "State on disk when this step ended: `~/mc/intake/` holds fourteen digests and `decisions-archive/`, untouched — the global `mc` is a symlink to the checkout on main, so the running runner has not drained anything yet and will start once this project's work is in main and it takes the update. Worth watching in that first real drain: how many of the fourteen produce a proposal (four judged in step 3's throwaway root gave two), and whether digest turns hit the ten-minute cap — one did, at 691 s, and its file was archived all the same."
+      ],
       "pr": null,
       "blocked_by": null
     }
