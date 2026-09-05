@@ -912,6 +912,38 @@ test('a held pull request runs a repair session, told the pull request, the bran
   assert.deepEqual(heldFile(f.files), []);
 });
 
+/**
+ * The deadlock this closes, measured on 2026-09-05: a pull request held
+ * *because* it conflicts with main hits that same conflict when the runner
+ * syncs, and the repair used to be refused for a merge in progress — the very
+ * reason it was owed. #612 and #614 both sat at `repairs: 0` with the gate's
+ * reason reading `conflicts with origin/main`, skipped every round, for ever.
+ *
+ * Resolving the merge *is* the repair, so the session is started and handed
+ * the files, and nothing aborts the merge under it.
+ */
+test('a pull request held because it conflicts with main gets its repair, told the files', async () => {
+  const f = heldRound(
+    [heldEntry({ reason: '#9 conflicts with origin/main — CONFLICT (content): Merge conflict in canon/roles/step.md' })],
+    { conflicts: { m: ['canon/roles/reconcile.md', 'canon/roles/step.md'] } },
+  );
+  await createRunner({ deps: f.deps }).round({ once: true });
+
+  assert.equal(f.calls.sessions.length, 1, 'a conflicted sync no longer refuses the repair it is owed');
+  const [call] = f.calls.sessions;
+  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE repair$/u);
+  assert.match(call.args[1], /conflicts in: canon\/roles\/reconcile\.md canon\/roles\/step\.md/u);
+  assert.match(call.args[1], /that is the whole repair/u);
+  // A modify\/delete is the one conflict "keep both" does not answer, and
+  // restoring the file would undo a project that finished on purpose.
+  assert.match(call.args[1], /A file main deleted stays deleted/u);
+  assert.ok(
+    !f.calls.git.some((c) => c[0] === '/w/m/memoro' && c[1] === 'merge' && c[2] === '--abort'),
+    'the merge is the repair session\'s to finish, not aborted under it',
+  );
+  assert.equal(JSON.parse(f.duringSession[0]['/w/runner/held.json'])[0].repairs, 1, 'still one repair, and no loop');
+});
+
 test('a pull request still held after its repair waits for the brief — no second repair', async () => {
   const f = heldRound([heldEntry({ repairs: 1 })]);
   await createRunner({ deps: f.deps }).round({ once: true });
