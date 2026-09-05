@@ -134,6 +134,8 @@ export const LAND_WAIT_MS = 45 * 60 * 1000;
 export const LAND_RETRY_MS = 30 * 1000;
 /** How often an idle lane looks again while an UPDATE waits for the quiet moment. */
 export const UPDATE_POLL_MS = 30 * 1000;
+/** How often a lane held back by the total cap looks for a free slot again. */
+export const TOTAL_POLL_MS = 15 * 1000;
 
 /* ------------------------------------------------------------ real deps */
 
@@ -274,6 +276,10 @@ function repairBaseline(entry, plan, onMain) {
 
 export function createRunner({
   merge = true, deps = realDeps(),
+  // `lanes.json`'s second number, or null for no cap — read once by `runLoop`
+  // and handed here, because the count of steps in flight has to be one count
+  // for the whole process and this is the one object every lane shares.
+  total = null,
 } = {}) {
   const root = workRoot(deps.env);
   const paths = {
@@ -1198,6 +1204,70 @@ export function createRunner({
   }
 
   /**
+   * The machine's cap: at most `total` steps in flight anywhere, over every
+   * repository at once, when `mc run lanes --total` has set one.
+   *
+   * `per_repo` needs nothing like this because it is structural — there are
+   * exactly that many lane loops on each repository, so no one has to count.
+   * A total cannot be: the lanes are independent loops over two repositories
+   * and nothing about their shape says three. So it is a claim, and it lives
+   * in this process beside `claims` below, for the reason that one does. A
+   * count of `current-*.json` files would be the wrong instrument: the file
+   * is written after the step begins, so two lanes reading it in one tick
+   * both see a free slot and both start.
+   *
+   * Nothing is counted at all when no total is set. An operator who has never
+   * set one gets exactly what they got before this existed, which is what
+   * `lanes.json` promises for an absent number.
+   *
+   * Taken at the last moment before the session rather than at the top of the
+   * round: a slot held while `runStepClaimed` fetches, merges and reads a
+   * plan is a slot the other repository cannot use for the length of a `git
+   * status` and a fetch, and most of those readings end in a refusal that
+   * spends no session at all. What it costs is a reading thrown away when the
+   * machine turns out to be full — seconds against the hour a session is.
+   *
+   * Which waiting lane gets a freed slot is whichever looks first, and that
+   * is arbitrary. Measured 2026-09-05: 26 memoro plans with a ready step
+   * against memoro-cli's 3, and a median step of 14 minutes (p90 58). The
+   * repository with the work is the one that keeps asking, so under a cap the
+   * small queue can wait behind the large one for as long as the large one
+   * has steps. That hazard is named here rather than answered — no ordering
+   * rule is built in this step, and none should be built before somebody has
+   * watched what the cap actually does.
+   */
+  let running = 0;
+  const cap = Number.isInteger(total) && total > 0 ? total : null;
+  /** Take a slot, or don't — in one tick, with no await between the test and the take. */
+  function takeSlot() {
+    if (cap !== null && running >= cap) return false;
+    running += 1;
+    return true;
+  }
+  const dropSlot = () => { running -= 1; };
+  /**
+   * `ok` when the slot is held, `stop` or `update` when the wait was given up
+   * on. One line when the waiting starts and none per attempt: runner.log
+   * already carries ten thousand `, skip` lines and this is the kind of loop
+   * that would add ten thousand more.
+   *
+   * It gives up on STOP for the obvious reason and on UPDATE for a contract
+   * one: from the moment an UPDATE is read no lane starts a step, and a lane
+   * that launched one after waiting out somebody else's would stretch a drain
+   * that is meant to end within one step's length into two.
+   */
+  async function waitForSlot(name) {
+    if (takeSlot()) return 'ok';
+    say(`${name}: ${running} of ${cap} steps in flight on this machine — waiting for a lane`);
+    for (;;) {
+      await deps.sleep(TOTAL_POLL_MS);
+      if (stopRequested()) return 'stop';
+      if (updateRequested()) return 'update';
+      if (takeSlot()) return 'ok';
+    }
+  }
+
+  /**
    * One project. Returns 'merged' | 'ran' | 'stop' | `skipped:<reason>`.
    *
    * The reason is a word, not a sentence: `RUN_REFUSALS` for the machine-shaped
@@ -1352,6 +1422,19 @@ export function createRunner({
     const settings = sessionSettings(plan?.plan?.runner || {});
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) { abandonMerge(`${settings.tool} is not available`); return refuse(REFUSAL['tool-missing'], `${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); }
+    // The machine's cap, claimed here — everything from this line to the
+    // session is the launch itself, and nothing below returns without
+    // spending it. Given up on the way `claims` refuses a project already in
+    // flight: a bare `skipped`, because a slot that was not free at one
+    // instant in this process is not a fact any file on this machine holds,
+    // and `machineState` would have to guess at it.
+    const slot = await waitForSlot(name);
+    if (slot !== 'ok') {
+      abandonMerge(slot === 'stop' ? 'STOP is present' : 'an UPDATE is pending');
+      if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
+      say(`${name}: UPDATE while waiting for a lane — starting no step, skip`);
+      return 'skipped';
+    }
     const now = deps.now();
     const prompt = kind === 'repair'
       ? repairPrompt({ name, repo: repo.name, ...repair.entry, conflicts })
@@ -1374,7 +1457,9 @@ export function createRunner({
     const t0 = deps.now().getTime();
     // The lane's current file exists exactly as long as the session does —
     // written before the call that blocks, removed however that call
-    // returns. It carries its repo, which is also its lane's name.
+    // returns. It carries its repo, which is also its lane's name. The
+    // machine's slot is dropped in the same breath, so what the page shows
+    // and what the cap counts are the same fact and cannot drift.
     const currentPath = paths.currentFor(repo.name, lane);
     writeJson(currentPath, {
       name, kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
@@ -1385,6 +1470,7 @@ export function createRunner({
       result = await deps.session({ bin: launch.spec.bin, args, cwd: worktree, timeoutMs: settings.budgetMinutes * 60_000 });
     } finally {
       remove(currentPath);
+      dropSlot();
     }
     const seconds = Math.round((deps.now().getTime() - t0) / 1000);
     deps.write(out, result.stdout);
@@ -1794,7 +1880,13 @@ export async function runLoop({
   awake = true,
   deps = realDeps(),
 } = {}) {
-  const runner = createRunner({ merge, deps });
+  // Both numbers, read once, before anything is started: `per_repo` is how
+  // many lane loops each repository gets and `total` is how many steps this
+  // machine will have in flight at once. A running runner keeps what it was
+  // started with — `mc run --update` (or stop and start) is how a new value
+  // takes effect, and the verb says so when it writes.
+  const laneSetting = (deps.laneCount || readLaneCount)();
+  const runner = createRunner({ merge, deps, total: laneSetting.total });
   if (runner.stopRequested()) { runner.say(`STOP file present (${runner.paths.stop}) — remove it before starting`); return 2; }
   // runner.json read before it is written. `markRunner()` below is a
   // statement, not a claim anyone checked, so until now a second `mc run` in
@@ -1869,10 +1961,17 @@ export async function runLoop({
       // takes every nth name of the repository's queue (round.js: `lane`,
       // `count`), so two never hold one project; what they share is the
       // repository's main, and a landing that meets the other's at the gate
-      // waits for it (`landPr`). The count is read here, once — a running
-      // runner keeps the count it started with until `--update`.
-      const { per_repo: count } = (deps.laneCount || readLaneCount)();
-      if (count > 1) runner.say(`lanes: ${count} per repository`);
+      // waits for it (`landPr`).
+      //
+      // `--total` bounds the two repositories together: `lanes 3` on both is
+      // six sessions, and the total is what says three. Both bind and the
+      // smaller wins — the loops are still `per_repo` per repository, and a
+      // lane waits for a slot before it launches (`waitForSlot`). With no
+      // total set nothing is counted and this is what it always was.
+      const { per_repo: count, total } = laneSetting;
+      if (count > 1 || total !== null) {
+        runner.say(`lanes: ${count} per repository, ${total === null ? 'no total cap' : `${total} in total`}`);
+      }
       //
       // UPDATE drains the runner: from the moment it is read no lane starts
       // a step, the steps in flight finish and land, and the handover comes
