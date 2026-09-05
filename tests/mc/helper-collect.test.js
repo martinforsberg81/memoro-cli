@@ -20,7 +20,7 @@ import { describe, it } from 'node:test';
 import { DEPLOYS_HEADER } from '../../src/mc/deploys.js';
 import {
   analysisRows, collectHelper, computeDelta, deployState, digestName, errorRows, failingConditions,
-  healthState, intakeDir, parseState, previousDigest, proposalsDir, readAdminToken, renderState,
+  healthState, intakeArchiveDir, intakeDir, parseState, previousDigest, proposalsDir, readAdminToken, renderState,
 } from '../../src/mc/helper-collect.js';
 import { readLiveVersion } from '../../src/mc/live-version.js';
 
@@ -423,8 +423,8 @@ describe('mc helper — the pure builders', () => {
     for (const name of ['errors-memoro-2026-08-26.md', 'errors-memoro-2026-08-28.md', 'notes.md']) {
       writeFileSync(join(intakeDir(g.env), name), name);
     }
-    assert.equal(previousDigest(intakeDir(g.env), 'errors-memoro-2026-08-29.md').name, 'errors-memoro-2026-08-28.md');
-    assert.equal(previousDigest(join(g.root, 'nowhere'), 'errors-memoro-2026-08-29.md'), null);
+    assert.equal(previousDigest(g.env, 'errors-memoro-2026-08-29.md').name, 'errors-memoro-2026-08-28.md');
+    assert.equal(previousDigest({ MC_WORK_ROOT: join(g.root, 'nowhere') }, 'errors-memoro-2026-08-29.md'), null);
   });
 
   it('the two repositories never read each other\'s baseline', () => {
@@ -435,8 +435,8 @@ describe('mc helper — the pure builders', () => {
     }
     // The whole reason the name carries the repository: a delta measured
     // against the other system's digest would call every fingerprint new.
-    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW), 'memoro').name, 'errors-memoro-2026-08-28.md');
-    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW, 'memoro-cli'), 'memoro-cli').name, 'errors-memoro-cli-2026-08-27.md');
+    assert.equal(previousDigest(g.env, digestName(NOW), 'memoro').name, 'errors-memoro-2026-08-28.md');
+    assert.equal(previousDigest(g.env, digestName(NOW, 'memoro-cli'), 'memoro-cli').name, 'errors-memoro-cli-2026-08-27.md');
   });
 
   it('memoro still finds the unprefixed digests it wrote before the rename', () => {
@@ -446,9 +446,35 @@ describe('mc helper — the pure builders', () => {
     // the first run afterwards would find no baseline and report an ordinary
     // Tuesday's fingerprints as all new.
     writeFileSync(join(intakeDir(g.env), 'errors-2026-08-28.md'), 'legacy');
-    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW), 'memoro').name, 'errors-2026-08-28.md');
+    assert.equal(previousDigest(g.env, digestName(NOW), 'memoro').name, 'errors-2026-08-28.md');
     // memoro-cli has no such history and must not adopt memoro's.
-    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW, 'memoro-cli'), 'memoro-cli'), null);
+    assert.equal(previousDigest(g.env, digestName(NOW, 'memoro-cli'), 'memoro-cli'), null);
+  });
+
+  it('finds the baseline after the drain has archived it', () => {
+    const g = ground();
+    // The inbox drains: `runIntakeDrain` archives every file it takes, the
+    // moment its turn ends. Yesterday's digest is therefore not in the inbox
+    // on any day the backlog is clear, and a lookup that reads only the inbox
+    // reports `first: true` for both repositories every day.
+    mkdirSync(intakeDir(g.env), { recursive: true });
+    const archive = intakeArchiveDir(g.env, new Date('2026-08-28T09:00:00Z'));
+    mkdirSync(archive, { recursive: true });
+    writeFileSync(join(archive, 'errors-memoro-2026-08-28.md'), 'archived');
+    writeFileSync(join(archive, 'errors-memoro-cli-2026-08-27.md'), 'archived too');
+
+    assert.equal(previousDigest(g.env, digestName(NOW), 'memoro').name, 'errors-memoro-2026-08-28.md');
+    assert.equal(previousDigest(g.env, digestName(NOW, 'memoro-cli'), 'memoro-cli').name, 'errors-memoro-cli-2026-08-27.md');
+  });
+
+  it('prefers the inbox over the archive for the same date', () => {
+    const g = ground();
+    mkdirSync(intakeDir(g.env), { recursive: true });
+    const archive = intakeArchiveDir(g.env, new Date('2026-08-28T09:00:00Z'));
+    mkdirSync(archive, { recursive: true });
+    writeFileSync(join(archive, 'errors-memoro-2026-08-28.md'), 'the filed copy');
+    writeFileSync(join(intakeDir(g.env), 'errors-memoro-2026-08-28.md'), 'the live one');
+    assert.equal(previousDigest(g.env, digestName(NOW), 'memoro').text, 'the live one');
   });
 
   it('picks the newest by DATE, not by string order across the two name shapes', () => {
@@ -458,6 +484,6 @@ describe('mc helper — the pure builders', () => {
     writeFileSync(join(intakeDir(g.env), 'errors-memoro-2026-08-26.md'), 'prefixed, older');
     // Sorted as strings, `errors-memoro-…` comes after `errors-…` whatever
     // the dates say, and the baseline would silently be the older file.
-    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW), 'memoro').name, 'errors-2026-08-28.md');
+    assert.equal(previousDigest(g.env, digestName(NOW), 'memoro').name, 'errors-2026-08-28.md');
   });
 });

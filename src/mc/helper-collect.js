@@ -42,7 +42,7 @@
  * health: it writes a probe key and deletes it again.
  */
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -86,7 +86,70 @@ export function intakeDir(env = process.env) {
  * after that, forever.
  */
 export function intakeArchiveDir(env = process.env, now = new Date()) {
-  return join(workRoot(env), 'runner', 'log', 'intake', now.toISOString().slice(0, 10));
+  return join(intakeArchiveRoot(env), now.toISOString().slice(0, 10));
+}
+
+/** `~/mc/runner/log/intake/` — the day directories the drain archives into. */
+export function intakeArchiveRoot(env = process.env) {
+  return join(workRoot(env), 'runner', 'log', 'intake');
+}
+
+/**
+ * Everywhere a digest can be, newest room first: the inbox, then the archive's
+ * day directories in reverse date order.
+ *
+ * The inbox is not a place a digest stays. `runIntakeDrain` takes the three
+ * oldest files every round and archives each one the moment its turn ends,
+ * unconditionally — so the file a lookup wants is the file the drain is
+ * designed to take away, and a lookup that reads only `~/mc/intake/` returns
+ * nothing on any day the backlog is clear. It was clear on 2026-09-05.
+ */
+export function digestDirs(env = process.env, list = readdirSync) {
+  const root = intakeArchiveRoot(env);
+  let days = [];
+  try {
+    days = list(root).filter((name) => /^\d{4}-\d{2}-\d{2}$/u.test(name)).sort().reverse();
+  } catch { days = []; }
+  return [intakeDir(env), ...days.map((day) => join(root, day))];
+}
+
+/**
+ * The newest digest for one repository across every room, or null.
+ *
+ * One lookup, because two callers want the same answer and the trap is the
+ * same in both: `errors-memoro-2026-08-29.md` and `errors-2026-08-30.md` sort
+ * wrongly against each other as strings, so the sort is on the date in the
+ * name. Ties go to the earliest directory in `dirs`, which is the inbox —
+ * a file being written now beats the same date already filed away.
+ */
+export function findDigest(dirs, { repo = 'memoro', exclude = null, read = readFileSync } = {}) {
+  const own = new RegExp(`^errors-${repo}-\\d{4}-\\d{2}-\\d{2}\\.md$`, 'u');
+  const legacy = /^errors-\d{4}-\d{2}-\d{2}\.md$/u;
+  const found = [];
+  for (const dir of dirs) {
+    let names = [];
+    try { names = readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (name === exclude) continue;
+      // memoro also accepts the old unprefixed name. Renaming a file whose
+      // entire purpose is to be *the previous one* would otherwise throw away
+      // a day of delta, and memoro-cli has no such history to adopt.
+      if (!(own.test(name) || (repo === 'memoro' && legacy.test(name)))) continue;
+      found.push({ name, path: join(dir, name) });
+    }
+  }
+  if (!found.length) return null;
+  // Newest first, and the sort is stable — so an equal date keeps the
+  // directory order above and the inbox's copy wins over the filed one.
+  found.sort((a, b) => dateIn(b.name).localeCompare(dateIn(a.name)));
+  const pick = found[0];
+  try {
+    return { name: pick.name, path: pick.path, text: read(pick.path, 'utf8'), mtime_ms: mtimeOf(pick.path) };
+  } catch { return null; }
+}
+
+function mtimeOf(path) {
+  try { return statSync(path).mtimeMs; } catch { return null; }
 }
 
 /**
@@ -198,26 +261,13 @@ export function digestName(now, repo = 'memoro') {
  * same day therefore both measure against yesterday, instead of the second
  * comparing today's file with itself and reporting nothing new.
  *
- * memoro also accepts the old unprefixed `errors-<date>.md`. Renaming a file
- * whose entire purpose is to be *the previous one* would otherwise throw away
- * a day of delta: the first run after the rename would find no baseline and
- * report an ordinary Tuesday's fingerprints as all new. The fallback costs
- * four lines and stops mattering once no unprefixed digest is left.
+ * It takes `env` rather than one directory because the baseline is not in the
+ * inbox for long: the drain archives it, and a delta measured only against
+ * `~/mc/intake/` became `first: true` for both repositories every day the
+ * moment the backlog cleared.
  */
-export function previousDigest(dir, exclude, repo = 'memoro') {
-  const own = new RegExp(`^errors-${repo}-\\d{4}-\\d{2}-\\d{2}\\.md$`, 'u');
-  const legacy = /^errors-\d{4}-\d{2}-\d{2}\.md$/u;
-  let names = [];
-  try {
-    names = readdirSync(dir)
-      .filter((name) => name !== exclude && (own.test(name) || (repo === 'memoro' && legacy.test(name))))
-      // By date, not by name: `errors-memoro-2026-08-29.md` and
-      // `errors-2026-08-30.md` sort wrongly against each other as strings.
-      .sort((a, b) => dateIn(a).localeCompare(dateIn(b)));
-  } catch { return null; }
-  const name = names.at(-1);
-  if (!name) return null;
-  try { return { name, text: readFileSync(join(dir, name), 'utf8') }; } catch { return null; }
+export function previousDigest(env = process.env, exclude = null, repo = 'memoro') {
+  return findDigest(digestDirs(env), { repo, exclude });
 }
 
 function dateIn(name) {
@@ -657,7 +707,7 @@ export async function collectHelper({
   const live = versionRaw.ok ? liveVersionState(versionRaw.json) : { error: versionRaw.error };
   if (versionRaw.ok) writeLiveVersion(versionRaw.json, { env, now });
 
-  const previous = previousDigest(dir, name, repo);
+  const previous = previousDigest(env, name, repo);
   const delta = computeDelta({
     fingerprints: errors.rows, failing: failingConditions({ deploy, health }), previous, threshold,
   });
@@ -692,7 +742,7 @@ async function collectCli({ env, now, since, threshold, cli = cliCollect }) {
   const windowStart = since ? new Date(since) : new Date(now.getTime() - DAY_MS);
   const measured = cli({ since: windowStart, now });
   const failing = cliFailing({ open: measured.open, lastRun: measured.lastRun, now });
-  const previous = previousDigest(dir, name, repo);
+  const previous = previousDigest(env, name, repo);
   const delta = computeDelta({ fingerprints: measured.rows, failing, previous, threshold });
 
   const out = [];

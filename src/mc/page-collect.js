@@ -38,7 +38,7 @@ import {
 } from './brief-collect.js';
 import { lastAttempt, lastDeploy } from './deploys.js';
 import { heldEntries, heldPath } from './held.js';
-import { intakeDir, proposalsDir } from './helper-collect.js';
+import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
@@ -395,7 +395,10 @@ export function intakeSection({ digest = null, proposals = [], now = new Date(),
   const age = digest.mtime_ms == null ? null : Math.max(0, Math.round((now.getTime() - digest.mtime_ms) / 1000));
   return {
     digest: digest.name,
-    date: (/errors-(\d{4}-\d{2}-\d{2})\.md/u.exec(digest.name) || [])[1] || null,
+    // The date is read off the end of the name: `errors-<repo>-<date>.md`
+    // does not match a pattern anchored on `errors-` and a digit, which is
+    // why the section showed no date at all once the prefix landed.
+    date: dateOf(digest.name) || null,
     age_seconds: age,
     new_errors: lines.length,
     loud: loud.length,
@@ -638,17 +641,32 @@ export function readForeground(dir, read = readJson, list = readdirSync) {
   return out;
 }
 
-/** The newest `errors-<date>.md` in the intake directory, with its mtime. */
-export function readDigest(dir) {
-  let names = [];
-  try {
-    names = readdirSync(dir).filter((name) => /^errors-\d{4}-\d{2}-\d{2}\.md$/u.test(name)).sort();
-  } catch { return null; }
-  const name = names.at(-1);
-  if (!name) return null;
-  try {
-    return { name, text: readFileSync(join(dir, name), 'utf8'), mtime_ms: statSync(join(dir, name)).mtimeMs };
-  } catch { return null; }
+/**
+ * The newest digest on the machine, whichever repository wrote it.
+ *
+ * It read `~/mc/intake/` alone and matched `errors-<date>.md` alone, which
+ * stopped being a digest's name when the two-repository digest landed: the
+ * section named a file from 2026-08-30 for six days, then said *no digest yet*
+ * on a day the collect had run twice, because the drain had archived the two
+ * legacy files it was still matching. Both halves are `findDigest`'s now, so
+ * the page and the delta cannot drift apart again.
+ *
+ * With two digests a day the section shows the newer, and memoro on a tie
+ * because it is the one with a production to read. That is a provisional
+ * answer to a question the prefix opened and nobody has decided: a line each
+ * is the honest alternative and is one row longer.
+ */
+export function readDigest(env) {
+  const dirs = digestDirs(env);
+  const found = HELPER_REPOS.map((repo) => findDigest(dirs, { repo })).filter(Boolean);
+  if (!found.length) return null;
+  // Newest first; memoro leads HELPER_REPOS, so a stable sort gives it the tie.
+  found.sort((a, b) => dateOf(b.name).localeCompare(dateOf(a.name)));
+  return found[0];
+}
+
+function dateOf(name) {
+  return (/(\d{4}-\d{2}-\d{2})\.md$/u.exec(name) || [])[1] || '';
 }
 
 /**
@@ -774,7 +792,7 @@ export async function collectPage({
         git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
       }),
     }),
-    intake: intakeSection({ digest: readDigest(intakeDir(env)), proposals: proposalFiles(proposalsDir(env)), now }),
+    intake: intakeSection({ digest: readDigest(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({
       plans, areas, rows, openPrs: prs.prs, live: liveNames,
       planning: sessions.planning,

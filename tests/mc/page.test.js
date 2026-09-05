@@ -12,8 +12,9 @@ import { describe, it } from 'node:test';
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
   collectPage, countNewErrors, intakeSection, newErrorLines, queueSection,
-  programmesSection, runnerSection, sessionsSection,
+  programmesSection, readDigest, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
+import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
 import { run as page } from '../../src/mc/commands/home.js';
@@ -454,6 +455,35 @@ describe('INTAKE', () => {
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     const at = lines.findIndex((line) => /^ {2}INTAKE/u.test(line));
     assert.equal(lines[at + 1], '', 'nothing between the heading and the next section');
+  });
+
+  it('names today\'s digest with the digests present only in the archive', () => {
+    // The section read `~/mc/intake/` alone and matched `errors-<date>.md`
+    // alone, so it named a file from 2026-08-30 for six days and then said
+    // *no digest yet* on a day the collect had run twice — the drain had
+    // archived the two legacy files it was still matching.
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-intake-'));
+    const env = { MC_WORK_ROOT: root };
+    mkdirSync(intakeDir(env), { recursive: true });
+    const archive = intakeArchiveDir(env, new Date('2026-08-29T09:00:00Z'));
+    mkdirSync(archive, { recursive: true });
+    writeFileSync(join(archive, 'errors-2026-08-25.md'), 'the legacy one');
+    writeFileSync(join(archive, 'errors-memoro-cli-2026-08-29.md'), 'mc itself');
+    writeFileSync(join(archive, 'errors-memoro-2026-08-29.md'), DIGEST);
+
+    const found = readDigest(env);
+    assert.equal(found.name, 'errors-memoro-2026-08-29.md', 'the newest, and memoro on a tie');
+    const intake = intakeSection({ digest: found, proposals: [], now: NOW });
+    assert.equal(intake.date, '2026-08-29');
+    assert.equal(intake.new_errors, 2);
+    const lines = renderPageLines(pageData({ intake }), { columns: 100 });
+    assert.ok(lines.some((line) => /INTAKE {2}2026-08-29/u.test(line)), lines.join('\n'));
+    assert.ok(!lines.some((line) => /no digest yet/u.test(line)), 'the collect has run');
+  });
+
+  it('has no digest to name when nothing has been collected at all', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-intake-'));
+    assert.equal(readDigest({ MC_WORK_ROOT: root }), null);
   });
 
   it('says there is no digest rather than a zero that looks like health', () => {
