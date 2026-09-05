@@ -1,14 +1,53 @@
 # mc dev-service protocol
 
-`mc` is the machine-local inventory and control plane for development servers.
-The project-specific wrapper remains authoritative for how a server starts,
-stops, restarts, and becomes healthy.
+`mc` keeps the machine-local inventory of development servers: which one is
+running, in which worktree, on which port. The project's own wrapper remains
+authoritative for how a server starts, stops, restarts and becomes healthy —
+mc never decides that and never signals a process.
+
+**What this document described until 2026-09-05, and no longer does.** It
+specified a twelve-verb surface: `mc dev plan`, `mc dev ensure`, `mc deps
+status`, `mc deps hydrate`, `mc storage status`, `mc gc`, `mc dev status`,
+`mc dev logs`, `mc dev stop`, `mc dev restart`, dependency snapshots, a
+resource preflight, a heavy-server concurrency limit and a worktree-scoped PATH
+guard. `mc-cut` removed all of it on 2026-09-03 (#561) and this file went on
+describing it for two days — a specification for a surface nobody could type.
+The paragraphs below are what exists. Everything else is in the history if it
+is ever wanted back.
+
+Three verbs:
+
+```sh
+mc dev list [--json]                     what is running, and where
+mc dev register <manifest> [--json]      take a copy of a wrapper's manifest
+mc dev unregister <manifest> [--json]    forget it
+```
+
+`list` is a capability probe as much as a listing: memoro's wrapper runs
+`mc dev list --json` before every register to find out whether the installed mc
+speaks this protocol at all, so it exits 0 and prints JSON on a machine with no
+servers. An empty inventory and a missing verb must not look the same.
+
+`list` also **sweeps as it reads**. A registration whose pid is gone is not a
+server; the old inventory never swept and held 33 dead manifests when it was
+measured, the oldest six weeks old. Liveness is `pidAlive` and nothing else — a
+tmux session name and a `pgrep` pattern both lied on 2026-08-29.
+
+## Who reads the inventory
+
+`mc test dev`. That is the whole answer, and it is why these verbs exist: the
+inventory was removed as unread, correctly, and came back when something needed
+to ask *which server is serving this worktree*. A URL that answers says
+something is serving; it never says it is serving the tree you are about to
+judge, and on a machine running four lanes those are different servers with
+identical shapes.
 
 ## Declarative project definition
 
 A repository may declare its development services in `.mc/dev.json`. Version 1
-is intentionally argv-only: mc never evaluates a shell command while reading or
-planning a definition.
+is intentionally argv-only: mc never evaluates a shell command while reading a
+definition. `mc test dev` reads the selected profile's `start.argv` when it has
+to bring a server up.
 
 ```json
 {
@@ -51,85 +90,14 @@ planning a definition.
 }
 ```
 
-`start`, `install`, and managed commands are argv arrays, never shell strings.
-Readiness and dependency paths must be relative to the worktree and may not
-escape it. Unknown fields are rejected so misspelled safety settings cannot be
-silently ignored.
+`start` and managed commands are argv arrays, never shell strings. Readiness
+and dependency paths must be relative to the worktree and may not escape it.
 
-Use `mc dev plan [service] [--profile <name>] [--json]` to validate the file and
-inspect the selected plan. The profile preference order is command line,
-`.mc/local.json`, `~/.memoro/config.json`, then the service's `default_profile`.
-Planning is read-only: it does not install dependencies or start a service.
-
-## Dependency snapshots
-
-`mc deps status [service] [--profile <name>] [--json]` calculates a dependency
-fingerprint and reports both the current worktree copy and the machine-local
-snapshot. The fingerprint includes every declared fingerprint file (normally
-`package.json` and `package-lock.json`), the exact install argv, Node ABI,
-operating system, architecture, and npm version.
-
-`mc deps hydrate [service] [--profile <name>] [--json]` is the explicit
-mutation boundary. It behaves according to the user's dependency mode:
-
-- `auto` reuses a matching immutable snapshot, or runs the declared `npm ci`
-  recipe on a cache miss and then publishes a snapshot.
-- `isolated` runs the recipe in the current worktree and never reads or writes
-  snapshots.
-- `off` refuses to install dependencies.
-
-Choose the global default with
-`mc setup --dependency-mode <auto|isolated|off>`. A repository-local
-`.mc/local.json` may override it under `dev.dependencies.mode`. The default is
-`auto`, but neither `mc new` nor session launch hydrates automatically. A later
-`mc dev ensure` invocation is the intended automatic consumer.
-
-Snapshot publication and worktree hydration use exclusive, crash-recoverable
-lock files and atomic directory renames. On APFS, mc asks `cp` for clone-on-write
-copies; other filesystems get an ordinary recursive copy. mc never symlinks a
-live `node_modules` directory between worktrees. Existing unmarked
-`node_modules` is left untouched unless `--replace` is explicit.
-
-On a cache miss, npm receives `npm_config_prefer_offline=true`: cached packages
-are preferred and npm retains its normal network fallback for missing content.
-`npm ci` may execute package lifecycle scripts, which is why hydrate is an
-explicit command and never part of `mc new`.
-
-## Ensuring a worktree server
-
-`mc dev ensure [service] [--profile <name>]` is the agent-facing entry point.
-It serializes callers per worktree and service, then:
-
-1. Reuses a healthy server only when its worktree, service, profile,
-   definition fingerprint, start argv, and resource class exactly match.
-2. Otherwise refuses a live mismatched or unhealthy server. Replacing one
-   requires the explicit `--restart` flag and a successful identity-verified
-   project stop command.
-3. Prepares dependencies according to the selected dependency mode. A running
-   reused server is never hydrated underneath.
-4. Applies the user's local resource preflight to `heavy` profiles and respects
-   the configured heavy-server concurrency limit.
-5. Starts the declared argv directly with `shell: false`, registers the
-   worktree runtime manifest, and waits for both verified process identity and
-   the declared HTTP health check.
-
-Servers in another worktree are never reuse candidates. A PID, port, process
-name, or merely compatible URL is not enough. Session grounding tells coding
-agents to use `mc dev ensure` instead of invoking a repository start command
-directly.
-
-For repositories with a valid definition, mc also places a worktree-scoped
-PATH guard in launched Codex and Claude sessions. Commands matching
-`managed_argv_prefixes` (including `npm run dev:*` when `npm run dev` is
-declared) are refused inside that worktree with guidance to use
-`mc dev ensure`. Other commands and repositories without a definition pass
-through unchanged. Only the exact child launched by `mc dev ensure` receives
-the internal bypass variable.
-
-Launched coding sessions receive `MC_SESSION_NAME`, `MC_CODING_SESSION_ID`, and,
-when the definition is valid, `MC_DEV_SERVICE`, `MC_DEV_PROFILE`, and
-`MC_DEV_DEFINITION_FINGERPRINT`. Repositories without `.mc/dev.json` continue to
-launch normally.
+`dependencies`, `managed_argv_prefixes` and the `readiness` block are read by
+nothing today — `mc deps` and `mc dev ensure` went with the cut, and the PATH
+guard with them. They are left in the schema because memoro's own wrapper reads
+its half of the file, and because a field removed from a schema is harder to
+bring back than one that sits unused.
 
 ## Runtime integration
 
@@ -147,8 +115,10 @@ mc dev unregister /absolute/worktree/.runtime/mc-dev.json
 
 Registration copies a validated, normalized manifest atomically to
 `$MC_HOME/dev-servers/<instance_id>.json` (normally
-`~/.memoro/mc/dev-servers/`). A crash may leave that copy behind; this is
-intentional, because `mc dev list` then exposes the server as an orphan.
+`~/.memoro/mc/dev-servers/`). A crash leaves that copy behind, and the next
+`mc dev list` removes it: the pid is gone, so it is not a server. Until
+2026-09-05 the copy stayed and the listing showed it, which is how the
+directory came to hold 33 manifests and no running servers.
 
 Schema version 1:
 
@@ -184,42 +154,28 @@ Schema version 1:
 }
 ```
 
-The plan identity fields (`profile`, `definition_fingerprint`, `start_argv`,
-and `resource_class`) are required for `mc dev ensure` reuse; older manifests
-without them remain visible but never count as an exact match.
-`coding_session_id` is optional. URLs must target loopback, and the source
+`worktree_path` is the field reuse turns on: `mc test dev` looks for a live
+server whose worktree is the one it is about to measure, and nothing else
+counts. The plan identity fields (`profile`, `definition_fingerprint`,
+`start_argv`, `resource_class`) and `coding_session_id` are optional and
+carried through as they come — the exact-match reuse they were added for went
+with `mc dev ensure`, and a manifest without them is a first-class citizen
+again. URLs must target loopback, and the source
 manifest and log must stay inside `worktree_path`. Control commands are argv
 arrays and are run without a shell.
 
 ## Safety contract
 
-Before `stop` or `restart`, mc verifies all of the following again:
+mc does not stop or restart anything. It holds an index and answers questions
+about it; the project's wrapper owns the process, and `npm run dev -- --stop`
+is how a server ends. This is narrower than the contract this document carried
+until 2026-09-05, which specified four identity checks before mc would signal a
+process — pid alive, manifests matching, live working directory, live process
+group. Nothing signals a process now, so nothing needs them.
 
-1. The registered PID is alive.
-2. The source and registered manifests match, including the unique instance,
-   process group, paths, endpoints, and control argv.
-3. The live process working directory is the registered worktree.
-4. The live process group is the registered process group.
-
-If any check fails, mc refuses the action. A PID or occupied port alone is
-never authority to signal or control a process. mc invokes the project's
-declared command; it does not signal the process group itself.
-
-## User commands
-
-```sh
-mc dev plan [service] [--profile <name>] [--json]
-mc dev ensure [service] [--profile <name>] [--restart] [--json]
-mc deps status [service] [--profile <name>] [--json]
-mc deps hydrate [service] [--profile <name>] [--replace] [--json]
-mc storage status [--json]
-mc gc --dependency-snapshots --dry-run|--apply [--min-age 30d]
-mc dev list [--json]
-mc dev status <session-or-instance> [--json]
-mc dev logs <session-or-instance> [--lines N]
-mc dev stop <session-or-instance> [--json]
-mc dev restart <session-or-instance> [--json]
-```
-
-Session and service selectors must resolve to exactly one server. When they do
-not, use the `instance_id` printed by `mc dev list`.
+What remains is the refusal at the door. A manifest is refused, not repaired,
+when it fails any of: the schema version, an `instance_id` that is a name
+rather than a path, an absolute `worktree_path`, a loopback `url` and
+`health_url`, a `log_path` and a source manifest inside the worktree they
+claim, and `control` commands that are argv arrays. A PID or an occupied port
+is never authority for anything.
