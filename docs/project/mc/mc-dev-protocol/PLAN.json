@@ -66,7 +66,7 @@
         "Two findings for step 2 that make *remove* not quite a no-op in `memoro-cli`, neither of them blocking: `devServersRoot()` at `src/mc/paths.js:33` survives the cut with no caller anywhere in `src/` or `tests/`, and `docs/dev-server-protocol.md` (226 lines) still documents the whole removed surface, `mc deps` and `mc setup --dependency-mode` included. Under *remove* those are what this repository's half actually is, plus sweeping the 33 orphaned files in `~/.memoro/mc/dev-servers/`.",
         "Blocked on Martin's answer rather than done, deliberately: step 2 branches on a ruling that does not exist yet, and a `ready` step nothing can satisfy is the livelock the 2026-09-04 ruling in `docs/project/mc/rulings.md` was written about. Whoever carries the answer writes it into `rulings.md` in that file's shape, cites it as `mc-dev-1`, and sets this step `done` and step 2 `ready`. The question is written up at the workarea root as `mc-dev-1`."
       ],
-      "pr": null,
+      "pr": 628,
       "blocked_by": { "kind": "decision", "name": "mc-dev-1" }
     },
     {
