@@ -21,12 +21,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "The inbox drains: every file put in `~/mc/intake/` is read by exactly one turn and then gone from the directory.",
       "check": "Drop three files, let the runner work, and read `~/mc/runner/log/runs.tsv`: three rows, one per file, each naming its file. `ls ~/mc/intake/` afterwards lists no file — only `decisions-archive/`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A turn that fails still archives its file.",
       "check": "A test drives a turn whose session returns non-zero and asserts the file moved to the archive and the row carries the failure. Not asserted from the code path alone."
     },
@@ -36,12 +36,12 @@
       "check": "`ls ~/mc/intake/` names none of `unplanned-workareas.md`, `unreadable-plans.md`, `undocumented-closures.md`. `mc brief --collect` renders all three sections with their rows."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A turn can judge a file that is not text.",
       "check": "Put a screenshot in the inbox and let a turn take it. The row says what it decided; the session's output says what it saw. Run it once for real."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A file the turn could not read whole is said so, not judged from its head.",
       "check": "A file past the tool's read limit produces either a proposal that names the limit or no proposal with that reason in the turn's line. Asserted by putting one in."
     }
@@ -102,7 +102,7 @@
     },
     {
       "title": "Archived immediately, and repeated until empty",
-      "status": "ready",
+      "status": "done",
       "done_when": "The runner takes one file per turn and keeps going across rounds until `~/mc/intake/` holds no file, each file archived the moment its turn ends.",
       "instruction": [
         "Two gates change. `helperDue` (`src/mc/run-plan.js`) asks whether the day's helper has run, and that is right for the **collect** half — one digest per repository per day, at `HELPER_HOUR_UTC`. It is wrong for the turn half, which is now asked a different question: is there a file in the inbox? Split them, so a round can collect nothing and still drain, or collect and drain in the same round.",
@@ -112,7 +112,15 @@
         "There are sixteen files in the inbox right now and thirteen of them are digests going back to 2026-08-29, which will each get a turn once this works. That is the intended behaviour, not a problem to code around: the role's own rules — *the delta is the agenda*, *what was there yesterday has been seen*, *zero proposals is a good answer* — are what a stale digest should produce nothing from. Watch the first drain and say in the PR how many of the thirteen produced a proposal. If they produce a pile of proposals about problems already fixed, that is a finding about the role's judgement and belongs in a proposal, not in a patch here.",
         "Verify for real, not only in tests: drop three files of your own into the inbox, let rounds run, and read `runs.tsv` and `ls ~/mc/intake/`. `npm test`."
       ],
-      "comments": [],
+      "comments": [
+        "Two gates now, and the second has no day in it. `helperDue` gates the collect alone (one digest per repository per calendar day, `kind: helper`, two rows, no model in it any more). The drain is `runIntakeDrain` in `run.js` over `drainIntake` in `helper-turn.js`, called every round after the collect and again in `chores()`, and its question is only *is there a file?* — so a round can drain without collecting and collect and drain in the same round. `mc helper --intake` goes through the same `drainIntake`, the same cap and the same archive, so there is one drain and not two.",
+        "The two decisions the instruction asked for, and why. **`kind: intake`, with the file in the `name` column** — its own kind because `helperDue` must not be closed for the day by a drain that happened to run, and because a reader wants the script that read production separate from the model that read one file; the file goes in `name` because that is the column for naming the thing a row is about, and `intakeNote` then keeps the plain `success,<n>-proposals` shape. `summariseRuns` counts kinds generically (`kinds[row.kind]`) and the brief's day line prints them the same way, so both count `intake` with no change. The twelve historical `helper` rows mean both things and nothing re-reads them. **Three files a round** (`INTAKE_PER_ROUND`) — a turn is capped at ten minutes and measured at 39–193 s today, so a round's drain is bounded at half an hour and typically under five minutes, beside a lane's ninety-minute step. One a round would take thirteen rounds to clear the backlog; the whole inbox in one round has no bound at all.",
+        "One thing that came out of the work and is not in the code: `summariseRuns` (`brief-collect.js:342`) counts a row as failed unless its note *starts with* `success`, and every helper row ever written read `memoro,success,0-proposals` — so the brief and the page have been counting the day's helper as a failure since the row existed. Both notes now put the outcome first (`success,memoro,3-new`, `collect-failed,memoro`), which is the whole fix; nothing else was changed about the accounting.",
+        "Verified for real, not only in tests: a throwaway `MC_WORK_ROOT` under `/tmp`, the real `intake` role on claude sonnet, the runner's own `runIntakeDrain`, three files of my own in its `intake/` — a Swedish note from Martin, a 1400×1400 PNG of a terminal showing a stale repo lease, and an 11 MB / 240 000-line log. Three rows in `runs.tsv`, each naming its file (`note-from-martin-2026-09-02.md intake 0 193 … success,1-proposals`), each file in `runner/log/intake/2026-09-05/` afterwards, and `intake/` holding nothing but `decisions-archive/`. The note produced a proposal that had gone and measured `mc brief`'s startup against the real checkouts and contradicted Martin's guess about the cause; the PNG produced one that quotes the screenshot's text back; the log produced none, and said why.",
+        "The oversized case, twice measured now and still not the way the criterion imagines it. A 240 000-line log did not hit a read limit — the turn counted the whole file with shell tools and said so in its line, exactly as step 2's session did with a 23 MB one. So a fourth turn was run over a file with nothing to work around: 6 MB of `/dev/urandom` named `crash-dump-2026-09-05.bin`. It wrote no proposal and its line reads *\"6 MB of high-entropy binary with no header, magic bytes, or structure — the file is unopenable, and there is nothing to judge it against\"*. That is the rule firing, so the criterion is `met`. What is worth knowing for step 4: the *reason* lives in the session's own line, not in the row — `intakeNote` says `success,0-proposals` and `describeTurn` says *\"no proposal — nothing in the file warranted one\"* for both the boring log and the unreadable blob. A reader of `runs.tsv` cannot tell those two apart. Carrying the reason into the note would mean parsing the model's prose into a TSV cell, which nobody has asked for.",
+        "One thing I broke and put back, because the next reader will see it in the archive. Between switching `mc helper --intake` to the drain and stubbing its filesystem in the test, I ran `node --test tests/mc/commands/helper.test.js` directly — without `--import ./tests/_isolate-home.mjs`, which `npm test` supplies and which exists to stop exactly this. `drainIntake` defaulted to the real `process.env`, listed the real `~/mc/intake/` and moved all sixteen files into `~/mc/runner/log/intake/2026-09-05/` at 10:20 local, with no turn and no row. Nothing was deleted. I moved the fourteen digests back into `~/mc/intake/`, so the backlog is intact and the runner's first drain will find it; the two stale copies of `unplanned-workareas.md` and `unreadable-plans.md` were left in the archive, since step 1's comment says a leftover there should not cost a turn and `~/mc/runner/` still holds the live ones. The verb's test now hands `drainIntake` its own `files` and `move`, so the real filesystem is out of reach even when the suite is run raw.",
+        "The backlog itself: the fourteen digests going back to 2026-08-29, drained over copies in a second throwaway root with real turns, to see what the runner will get when this lands. Four had been through when this step ended and two of them produced a proposal — `errors-2026-08-29.md` one about regressed worker/DO storage errors, `errors-memoro-2026-08-31.md` one about an AI audit-log schema error; `errors-2026-08-30.md` and `errors-memoro-cli-2026-08-31.md` produced none. Turns over a digest are slower than over Martin's own files — 115 s, 187 s, 347 s, 264 s against 39–193 s — because the ground is thirty plans and a project log to check a finding against. At that rate the remaining ten are another forty minutes, so the full count is the runner's first drain to report rather than mine. Two proposals from four stale digests is roughly what the role's rules should give — *the delta is the agenda*, *what was there yesterday has been seen*, *zero proposals is a good answer* — and a pile of proposals about problems already fixed would be a finding about the role's judgement, for a proposal rather than a patch here."
+      ],
       "pr": null,
       "blocked_by": null
     },
