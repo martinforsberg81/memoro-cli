@@ -22,7 +22,8 @@ import { describe, it } from 'node:test';
 
 import { registerManifest } from '../../src/mc/dev-servers.js';
 import {
-  accountAvailable, answers, readDeclaration, runSuites, servingWorktree, startArgvFor, suiteEnv,
+  accountAvailable, answers, readDeclaration, runSuites, servingWorktree, startArgvFor,
+  stopServer, suiteEnv,
 } from '../../src/mc/test-environment.js';
 
 const DEAD_PID = 2_147_483_646;
@@ -403,5 +404,43 @@ describe('a suite that says it did not run', () => {
     );
     assert.deepEqual(results.map((r) => [r.ok, r.skipped]), [[false, false]]);
     rmSync(worktree, { recursive: true, force: true });
+  });
+});
+
+describe('stopping one', () => {
+  const SERVER = Object.freeze({
+    instance_id: 'dev-8890',
+    worktree_path: '/tmp/a-worktree',
+    url: 'http://127.0.0.1:8890',
+    control: { stop: { argv: ['/usr/bin/node', '/tmp/a-worktree/scripts/dev.mjs', '--stop'], timeout_ms: 30_000 } },
+  });
+
+  it('asks the project, and signals nothing itself', () => {
+    let asked = null;
+    const stopped = stopServer(SERVER, {
+      spawnSync: (command, args, options) => {
+        asked = { command, args, options };
+        return { status: 0 };
+      },
+    });
+    assert.equal(stopped.ok, true);
+    assert.equal(asked.command, '/usr/bin/node');
+    assert.deepEqual(asked.args, ['/tmp/a-worktree/scripts/dev.mjs', '--stop']);
+    assert.equal(asked.options.cwd, '/tmp/a-worktree');
+    assert.equal(asked.options.shell, false);
+  });
+
+  it('refuses rather than guessing when there is no stop command', () => {
+    const stopped = stopServer({ instance_id: 'dev-nothing', worktree_path: '/tmp/x' });
+    assert.equal(stopped.ok, false);
+    assert.match(stopped.error, /declares no stop command/u);
+  });
+
+  it('a stop command that fails is reported, not swallowed', () => {
+    const stopped = stopServer(SERVER, {
+      spawnSync: () => ({ status: 3, stderr: 'lock held by another wrapper\n' }),
+    });
+    assert.equal(stopped.ok, false);
+    assert.match(stopped.error, /exited 3: lock held by another wrapper/u);
   });
 });

@@ -424,3 +424,42 @@ export async function forgetToken(name) {
   await deleteSecret(name);
   return { ok: true, name };
 }
+
+/**
+ * Stop the server serving this worktree — by asking the project, never by
+ * signalling anything.
+ *
+ * The manifest carries `control.stop.argv`, which is the wrapper's own stop
+ * command (`node scripts/dev.mjs --stop` in memoro's case). mc runs that and
+ * nothing else: it holds an index and it does not own the process. A pid or an
+ * occupied port has never been authority to signal anything here, and the
+ * unregister is the wrapper's to do on the way out — which is how mc learns
+ * the server is gone without being told.
+ *
+ * A refusal rather than a guess when the manifest has no stop command: a
+ * server mc cannot stop politely is one a person stops themselves, and the
+ * message says where.
+ */
+export function stopServer(server, deps = {}) {
+  const runOne = deps.spawnSync || spawnSync;
+  const argv = server?.control?.stop?.argv;
+  if (!Array.isArray(argv) || !argv.length) {
+    return {
+      ok: false,
+      error: `${server?.instance_id || 'that server'} declares no stop command — stop it where it was started`,
+    };
+  }
+  const [command, ...args] = argv;
+  const finished = runOne(command, args, {
+    cwd: server.worktree_path,
+    encoding: 'utf8',
+    shell: false,
+    timeout: Number(server.control.stop.timeout_ms) || 30_000,
+  });
+  return finished.status === 0
+    ? { ok: true, instance_id: server.instance_id }
+    : {
+      ok: false,
+      error: `${argv.join(' ')} exited ${finished.status}${finished.stderr ? `: ${String(finished.stderr).trim().split('\n').at(-1)}` : ''}`,
+    };
+}

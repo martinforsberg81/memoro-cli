@@ -139,7 +139,11 @@ IN FULL
                                     work on; --here gives the calling worktree
                                     its own, for a change that is not on main
                                     yet. --url prints the address and runs
-                                    nothing
+                                    nothing; --list says what is running
+                                    anywhere on the machine, and --stop ends
+                                    the one for this worktree by asking the
+                                    project's own stop command — mc holds the
+                                    index and signals nothing itself
   mc test prod [--here] [--suite <name>] [--json]
                                     The same suites against meetmemoro.app,
                                     for the answers that are only true there:

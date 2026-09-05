@@ -34,9 +34,10 @@
 import { join } from 'node:path';
 
 import { nightlyReading } from '../nightly-history.js';
+import { listServers } from '../dev-servers.js';
 import {
   accountAvailable, answers, callerWorktree, ensureDevServer, forgetToken, readDeclaration,
-  runSuites, sharedWorktree, storeToken, tokenFor,
+  runSuites, servingWorktree, sharedWorktree, stopServer, storeToken, tokenFor,
 } from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
 import {
@@ -106,6 +107,10 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     return 2;
   }
 
+  // What is running, before anything is started. `mc dev list` is the same
+  // reading; it is here too because this is the verb a person is already in.
+  if (opts.list) return listing(opts, { stdout });
+
   // `--here` says which worktree's suites to run, and for `dev` it also says
   // which server to measure. Those are two different things and only the
   // second is about production: the suite is the instrument, and running an
@@ -134,6 +139,8 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     stderr.write(`mc: it has ${declaration.suites.map((suite) => suite.name).join(', ')}\n`);
     return 2;
   }
+
+  if (opts.stop) return stop(worktree, { stdout, stderr });
 
   // Where to point them.
   let baseUrl = null;
@@ -252,12 +259,60 @@ function verdict(result) {
   return result.ok ? 'ok ' : 'RED';
 }
 
+/** Every dev server on this machine, from the same index `mc dev list` reads. */
+function listing(opts, { stdout }) {
+  const { servers, reaped } = listServers();
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({ servers, reaped }, null, 2)}\n`);
+    return 0;
+  }
+  if (!servers.length) stdout.write('mc: no dev server is running\n');
+  for (const server of servers) {
+    stdout.write(`${server.url}  ${server.session_name}  ${server.worktree_path}\n`);
+  }
+  return 0;
+}
+
+/**
+ * Stop the one serving this worktree.
+ *
+ * mc asks the project's own stop command and signals nothing itself — the
+ * wrapper owns the process, and it is the wrapper that unregisters on the way
+ * out. Nothing running is not an error: the end state is the one asked for.
+ */
+function stop(worktree, { stdout, stderr }) {
+  const server = servingWorktree(worktree);
+  if (!server) {
+    stdout.write(`mc: nothing is serving ${worktree}\n`);
+    return 0;
+  }
+  const stopped = stopServer(server);
+  if (!stopped.ok) {
+    stderr.write(`mc: ${stopped.error}\n`);
+    return 1;
+  }
+  stdout.write(`mc: stopped ${stopped.instance_id} (${server.url})\n`);
+  return 0;
+}
+
 export function parseEnvironmentArgs(where, argv) {
-  const scanned = scanArgs(argv, { booleans: ['--json', '--here', '--url'], strictValues: ['--suite'] });
+  const scanned = scanArgs(argv, {
+    booleans: ['--json', '--here', '--url', '--list', '--stop'], strictValues: ['--suite'],
+  });
   const opts = {
-    where, json: scanned.flags.json, here: scanned.flags.here, url: scanned.flags.url, suite: scanned.flags.suite,
+    where,
+    json: scanned.flags.json,
+    here: scanned.flags.here,
+    url: scanned.flags.url,
+    list: scanned.flags.list,
+    stop: scanned.flags.stop,
+    suite: scanned.flags.suite,
   };
   if (scanned.error) return { ...opts, error: scanned.error };
+  // There is one production and mc did not start it.
+  if ((opts.stop || opts.list) && where !== 'dev') {
+    return { ...opts, error: `--${opts.stop ? 'stop' : 'list'} is about local dev servers; mc did not start production` };
+  }
   if (scanned.positional.length) {
     return { ...opts, error: `mc test ${where} takes no repository (${scanned.positional[0]})` };
   }
@@ -460,6 +515,7 @@ function every(ms) {
 export function usage() {
   return [
     'usage — mc test dev [--here] [--suite <name>] [--url] [--json]   the app, running locally\n',
+    '        mc test dev --list | --stop [--here]     what is running; stop the one for this worktree\n',
     '        mc test prod [--here] [--suite <name>] [--json]          the app, in production\n',
     '        mc test token [--set | --rm]             the production test account, kept by mc\n',
     '        mc test <repo> <pr> [<pr>...] [--json]   measure the change; merge nothing\n',
