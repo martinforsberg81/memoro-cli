@@ -141,8 +141,11 @@
         "The question, with the recommendation, is in the PR. In one line: **`per_repo 2, total 3`**, not the `3`/`3` that criterion 1 names — 3/3 is the right pair to *check the cap with*, but as the operating pair it leaves memoro-cli with no guaranteed slot where the interim `per_repo 1` guaranteed it one, and 46 of the 56 attributable step runs since 2026-09-02 were memoro's (`~/mc/runner/log/runs.tsv` against `plans.json`; memoro has 9 plans with a ready first step to memoro-cli's 1 as of 2026-09-05T17:34Z). 2/3 lifts the interim, gives memoro two lanes instead of one, and makes the starvation structurally impossible instead of something to watch.",
         "Criterion 1 stays unmet for the same reason: it wants a live runner under a real pair and a busy hour watched against the RUNNER block, which is `mc run --update` after Martin's answer. Criteria 2, 3 and 4 were met by steps 1–3 and are marked so. Whoever takes this step up next needs only three things after the answer: write the pair with `mc run lanes <per_repo> --total <total>`, `mc run --update`, then watch `~/mc/runner/current-*.json` and the page's RUNNER block over a busy hour and add the `project_log.md` row saying what it did."
       ],
-      "pr": null,
-      "blocked_by": { "kind": "decision", "name": "lanes-pair" }
+      "pr": 639,
+      "blocked_by": {
+        "kind": "decision",
+        "name": "lanes-pair"
+      }
     }
   ]
 }
