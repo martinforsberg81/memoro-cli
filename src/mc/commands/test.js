@@ -153,7 +153,15 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     }
   } else {
     if (!opts.json) stdout.write(`mc: a dev server for ${worktree}…\n`);
-    const ensured = await ensureDevServer(worktree, declaration, deps);
+    const ensured = await ensureDevServer(worktree, declaration, {
+      ...deps,
+      // A cold start is minutes — build, migrations, then wrangler — and
+      // silence for three of them reads as a hang. Say the moment the wrapper
+      // registers, which is when mc knows it is alive.
+      onRegistered: opts.json ? null : (registered) => stdout.write(
+        `mc: ${registered.instance_id} is starting on ${registered.url} — waiting for it to answer\n`,
+      ),
+    });
     if (!ensured.ok) {
       stderr.write(`mc: ${ensured.error}\n`);
       return 1;
