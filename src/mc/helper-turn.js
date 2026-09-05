@@ -1,23 +1,27 @@
 /**
- * `mc helper --intake` — the model half: one headless turn that reads the
- * digest and writes proposals, and nothing else.
+ * `mc helper --intake` — the model half: one headless turn that reads **one
+ * file** from the inbox and writes a proposal or nothing, and nothing else.
  *
- * The collect step (`helper-collect.js`) gathers what production is saying
- * into `~/mc/intake/errors-<date>.md` without a model. This is the turn that
- * reads it: a fresh, headless session with the `intake` role from
- * `canon/roles/intake.md`, standing in `~/mc/intake/`, whose only output is
- * zero or more `~/mc/proposals/<date>-<slug>.md`.
+ * `~/mc/intake/` is an inbox. The collect step (`helper-collect.js`) puts one
+ * digest a day per repository in it without a model, and Martin puts whatever
+ * he has in it by hand. This is the turn that empties it one file at a time: a
+ * fresh, headless session with the `intake` role from `canon/roles/intake.md`,
+ * standing in `~/mc/intake/`, given one filename and asked for one outcome —
+ * one `~/mc/proposals/<date>-<slug>.md`, or none.
  *
  * The bare `mc helper` is the other half of the verb and is not here: it is a
  * session with Martin in it, taking his own reports (`commands/helper.js`).
  * Both write into the same `proposals/`, and neither reads the other.
  *
- * Everything the turn judges from is in its prompt — the digest, the project
- * log, every plan on main with the step it is on, and the proposals
- * already waiting. It is given the material rather than sent to find it: the
- * repositories are elsewhere on the disk, and a turn that cannot reach them
- * cannot accidentally write in them either. What it may write is one
- * directory, and the role says so in the same words as this comment.
+ * The file is **named**, not inlined. Everything else the turn judges against
+ * is in the prompt — the project log, every plan on main with the step it is
+ * on, and the proposals already waiting — because the repositories are
+ * elsewhere on the disk and a turn that cannot reach them cannot accidentally
+ * write in them either. The file itself is the exception, and it has to be:
+ * a screenshot has no text to inline, and the inbox is defined by Martin being
+ * able to drop anything in it. It is in the directory the turn stands in, so
+ * naming it is enough. What it may write is one directory, and the role says
+ * so in the same words as this comment.
  *
  * A proposal is not a plan and not a queue entry. Martin moves it into
  * `queue.md` at the next brief, or drops it; `mc brief --collect` lists what
@@ -26,7 +30,7 @@
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { defaultRepos, listProposals, planFields } from './brief-collect.js';
@@ -35,7 +39,7 @@ import { loadProfile, profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
 
-/** One turn over one digest. Ten minutes is four times the longest measured. */
+/** One turn over one file. Ten minutes is four times the longest measured. */
 export const DEFAULT_TURN_MINUTES = 10;
 
 /**
@@ -56,31 +60,67 @@ const clip = (text, max = 110) => {
 };
 
 /**
- * What the turn is told. The digest whole — it is the evidence, and clipping
- * it would make the turn guess — then the ground it judges against: what is
- * already planned, what was already closed, and what is already proposed.
+ * Which system a file in the inbox belongs to, when its name says so. The
+ * collector's own digests do — `errors-<repo>-<date>.md`, and the unprefixed
+ * `errors-<date>.md` from before memoro-cli had a digest of its own. Anything
+ * a person dropped in does not, and gets `null`: the turn decides that one
+ * from what it reads, which is the only reader that can.
  */
-export function helperPrompt({ digestPath, digestText, proposalsPath = proposalsDir(), projectLog = null, plans = [], proposals = [], repo = 'memoro', now = new Date() }) {
+export function repoOfFile(file) {
+  const name = basename(String(file || ''));
+  const match = /^errors-(memoro-cli|memoro)-\d{4}-\d{2}-\d{2}\.md$/u.exec(name);
+  if (match) return match[1];
+  return /^errors-\d{4}-\d{2}-\d{2}\.md$/u.test(name) ? 'memoro' : null;
+}
+
+/**
+ * What the turn is told: the name of the one file that is its business, and
+ * the ground to judge it against — what is already planned, what was already
+ * closed, and what is already proposed.
+ *
+ * The file is named rather than inlined. It sits in the directory the turn
+ * stands in, so a name is enough to open it, and it is the only form that
+ * works for a file that is not text.
+ */
+export function helperPrompt({ file, proposalsPath = proposalsDir(), projectLog = null, plans = [], proposals = [], repo = null, now = new Date() }) {
   const date = now.toISOString().slice(0, 10);
+  const name = basename(String(file || ''));
+  // `repo:` is the frontmatter key everything downstream routes on. A turn
+  // left to infer it from a digest's contents would get it right most days,
+  // and the days it did not would be a proposal filed against the wrong
+  // system — so a file whose name says which repository it is keeps saying so.
+  const known = repo || repoOfFile(name);
   const out = [
-    `Today is ${date}. Below is today's digest, \`${digestPath}\`, and the ground to judge it against.`,
-    // The digest is one repository's, and `repo:` is the frontmatter key
-    // everything downstream routes on. A turn left to infer it from the
-    // contents would get it right most days, and the days it did not would be
-    // a proposal filed against the wrong system.
-    `It is **${repo}**'s digest, so every proposal you write has \`repo: ${repo}\` in its frontmatter.`,
-    repo === 'memoro-cli'
-      ? 'memoro-cli has no server: its production is this machine, and the digest below counts what mc recorded about itself — invocations that failed, gate rounds that stopped or died, leases reaped from holders that went away, runner steps that did not succeed.'
-      : 'memoro\'s production is the deployed service, and the digest below is what it reported.',
-    'Decide what — if anything — is worth doing about it, and write the proposals your role describes',
-    `into \`${proposalsPath}\`, named \`${date}-<slug>.md\`. Write no file at all if nothing warrants one,`,
-    'and say in one line what you decided either way. Then stop.',
+    `Today is ${date}. One file in the directory you are standing in is yours this turn:`,
     '',
-    '----- DIGEST -----',
-    digestText,
+    `    ${name}`,
+    '',
+    'Read it — yourself, and whole — and decide what, if anything, is worth doing about it.',
+    'The ground to judge it against is below: what is already planned, what was already closed,',
+    'and what is already proposed.',
+    '',
+  ];
+  if (known) {
+    out.push(`It is **${known}**'s, so a proposal you write about it has \`repo: ${known}\` in its frontmatter.`);
+    out.push(known === 'memoro-cli'
+      ? 'memoro-cli has no server: its production is this machine — mc itself, its runner, its verbs and the logs it keeps about its own rounds.'
+      : 'memoro\'s production is the deployed service.');
+  } else {
+    out.push('Nothing in that name says which system the file belongs to, so decide it from what you read and say which',
+      'in the proposal: `memoro` is the deployed service, `memoro-cli` is mc itself on this machine.');
+  }
+  out.push(
+    '',
+    `One file, one outcome: either **one** proposal in \`${proposalsPath}\`, named \`${date}-<slug>.md\`,`,
+    'or none at all. Not two from one file — one report is one proposal — and no proposal is the right',
+    'answer whenever the file does not warrant one. Say in one line which you did and why, then stop.',
+    '',
+    'If you cannot read the file whole — it is past your tool\'s read limit, or in a form you cannot open —',
+    'say so rather than judging it from its head: either a proposal that names the limit, or no proposal',
+    'with that as the reason in your line.',
     '',
     '----- PLANS ON MAIN -----',
-  ];
+  );
   if (!plans.length) out.push('_none read_');
   else {
     out.push('| repo | programme / project | status | next |', '|---|---|---|---|');
@@ -97,7 +137,7 @@ export function helperPrompt({ digestPath, digestText, proposalsPath = proposals
 
 /** What the turn produced, in the one line a runner log and a person share. */
 export function describeTurn({ wrote = [], waiting = [] }) {
-  if (!wrote.length) return `no proposal — nothing in the digest warranted one (${waiting.length} still waiting)`;
+  if (!wrote.length) return `no proposal — nothing in the file warranted one (${waiting.length} still waiting)`;
   return `${wrote.length} proposal${wrote.length === 1 ? '' : 's'}, ${waiting.length} waiting`;
 }
 
@@ -169,9 +209,11 @@ async function listPlansOnMain(repo, git) {
 }
 
 /**
- * Run the turn over a digest. Returns what happened, never throws: a missing
- * role, a missing tool and a session that failed are all outcomes the caller
- * prints, because the runner logs this the same way it logs a step.
+ * Run the turn over one file in the inbox. `file` is that file — a path or a
+ * bare name; only the name reaches the prompt, because the turn stands in the
+ * directory it is in. Returns what happened, never throws: a missing role, a
+ * missing tool and a session that failed are all outcomes the caller prints,
+ * because the runner logs this the same way it logs a step.
  *
  * `wrote` is measured, not claimed — the proposals directory before and
  * after. A turn that said it wrote a file and did not is reported as having
@@ -180,10 +222,10 @@ async function listPlansOnMain(repo, git) {
 export async function runHelperTurn({
   env = process.env,
   now = new Date(),
-  digestPath,
-  digestText,
+  file,
   model = null,
-  repo = 'memoro',
+  // Null means the name decides, and if the name does not say, the turn does.
+  repo = null,
   minutes = DEFAULT_TURN_MINUTES,
   deps = {},
 } = {}) {
@@ -203,8 +245,8 @@ export async function runHelperTurn({
 
   const ground = await (deps.ground || helperGround)({ env });
   const prompt = helperPrompt({
-    digestPath, digestText, proposalsPath: proposals, projectLog: ground.projectLog, plans: ground.plans,
-    proposals: [...before].map((file) => ({ file, title: '' })), repo, now,
+    file, proposalsPath: proposals, projectLog: ground.projectLog, plans: ground.plans,
+    proposals: [...before].map((name) => ({ file: name, title: '' })), repo, now,
   });
   const profile = await (deps.profile || (() => loadProfile({ env })))();
   const instructions = instructionsFor(launch.id, profile, role.overlay);
