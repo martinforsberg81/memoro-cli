@@ -100,6 +100,28 @@ describe('the plan schema', () => {
     );
   });
 
+  it('refuses a sentence where a blocker name belongs', () => {
+    const [done, ready] = plan().steps;
+    const stopped = { ...ready, status: 'blocked' };
+    // The three that got through: a project name, an em dash, and a paragraph
+    // saying which step of it was meant. A sentence matches no project, and
+    // the page read every one of them as a blocker that had finished.
+    const sentence = 'sql-target-dispositions — its S6.W5 step records what authority proves a delete';
+    const bad = validatePlan(plan({ steps: [done, { ...stopped, blocked_by: { kind: 'project', name: sentence } }] }));
+    assert.equal(bad.ok, false);
+    assert.match(bad.problems.join('\n'), /blocked_by\.name: a name, not a sentence/u);
+    // The name it should have been.
+    assert.equal(
+      validatePlan(plan({ steps: [done, { ...stopped, blocked_by: { kind: 'project', name: 'sql-target-dispositions' } }] })).ok,
+      true,
+    );
+    // Still refused for being empty, and the message still says what it wants.
+    assert.match(
+      validatePlan(plan({ steps: [done, { ...stopped, blocked_by: { kind: 'project', name: '  ' } }] })).problems.join('\n'),
+      /blocked_by\.name: the decision or the project it waits for/u,
+    );
+  });
+
   it('takes `comments` on a step as prose, and refuses the old shared field', () => {
     const [done, ready] = plan().steps;
     assert.equal(validatePlan(plan({ steps: [{ ...done, comments: [] }, ready] })).ok, true);
