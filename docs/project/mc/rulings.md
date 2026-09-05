@@ -233,6 +233,58 @@ again.
 [`role-instructions`](role-instructions/PLAN.json)'s contract, which had said
 intake stays as it is.
 
+## 9 · A test environment, in dev and in prod
+
+`ruling · 2026-09-05` · answers `mc-dev-1`, raised by `mc-dev-protocol` step 1
+
+Two questions arrived on the same day from opposite directions. The runner's
+step 1 (#628) asked whether `mc dev`'s cross-worktree inventory should come
+back or its caller be removed, and recommended **remove** on a clean
+measurement: 565 invocations in a month, ten of them by a person, and 33
+registered manifests with not one live pid. Martin, in the planning session and
+without having read that PR, asked for something the measurement had not
+imagined.
+
+> **Beslut:** "Utvecklar ett mc test dev / mc test prod. Det vill säga
+> tillhandahåller en miljö för testning både i dev och prod. Enkel och smidig
+> att hanteras. Lokalt kan alltså köras en dev-server som alla olika sessioner
+> kan använda inkl. runner sessionerna." … "Inget av detta är tänkt att per
+> automatik köras av varje runner session. Detta är tänkt att förenkla tester
+> när det faktiskt behövs för planering, felanalys eller verifiering. För vissa
+> tester ska stämma måste det göras mot prod miljö." (Martin, 2026-09-05)
+
+So `mc-dev-1` is answered **restore**, and the measurement that said otherwise
+is not overturned — it is answered by its own last sentence: *"if that need
+comes back it comes back with a person behind it."* It did. An index with one
+honest consumer is a different object from an index with none, however
+identical the files look. Three verbs, `list`/`register`/`unregister`, and
+`list` sweeps what it reads, which is the half the old one was missing.
+
+Four things Martin settled when asked how the environment should work:
+
+- **One shared dev server**, started from the installation on `main`, that any
+  session can point at; `--here` gives the calling worktree its own for a
+  change that is not on `main` yet. Ten lanes with ten wranglers is a machine
+  nobody can work on.
+- **The whole set of URL-driven suites**, not a hand-picked smoke — when you
+  reach for this you want the coverage.
+- **Production may be written to**, in the managed test account, which is
+  built to be thrown away and rebuilt daily.
+- **Nothing runs by itself.** Not the runner, not the gate, not the nightly, not
+  session launch. It costs minutes and a browser and it is for planning,
+  debugging and verifying, when somebody asks.
+
+One thing he asked for that does not exist: reading the production test-account
+token from Cloudflare when the verb runs. Workers secrets are write-only by
+design — neither `wrangler secret list` nor the API returns a value — and
+`mc vault get` refuses plaintext export on purpose. He then ruled that mc may
+hold it itself, and it does, in the platform keychain, read at the moment the
+verb runs and passed to nothing but the suite.
+
+**Carried by [`mc-dev-protocol/PLAN.json`](mc-dev-protocol/PLAN.json)**, whose
+scope this ruling widened from *decide whether `mc dev` exists* to the two
+verbs above.
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som

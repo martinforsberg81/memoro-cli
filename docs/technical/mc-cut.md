@@ -133,6 +133,47 @@ line afterwards. They were found by grepping every `.js` path literal in the
 surviving files against the deletion list — the check the graph cannot do for
 itself. `reach.mjs` seeds all four by name now and says why.
 
+### The edge it cost a verb
+
+The fifth edge was not a path literal, and nothing above would have found it: a
+**sibling repository's shell-out**. memoro's dev-server wrapper has run
+`execFile('mc', ['dev', 'list', '--json'])` before every register and
+unregister since 2026-08-29, and `reach.mjs` is a graph over `memoro-cli/src`.
+No seeding, no grep of this repository's own path literals and no reading of
+the surviving verbs could see it, because the caller is not in this repository
+at all.
+
+So `dev` was cut with the other twelve on 2026-09-03, and for two days after
+that every `npm run dev` in every memoro worktree spawned an `mc` that printed
+*unknown command* and exited 2 — **1 132 times**, logged as `mc dev inventory
+unavailable` into a dev-server log nobody tails. It was found by the error
+digest, not by anything in this repository.
+
+The rule the four path literals taught holds, and needs widening: a static
+graph is necessary evidence, never sufficient, **and its edge is the
+repository, not the import**. Before removing a verb, ask what outside this
+checkout types it. `~/.memoro/mc/logs/mc.log` answers that: it has recorded
+every invocation with its `cwd` since 2026-08-05, and it would have shown 555
+calls to `dev` from ten different worktrees. Teaching `reach.mjs` to read it is
+a much larger job and is not done — knowing to look is most of the value.
+
+`mc dev` came back on 2026-09-05 as three verbs, because `mc test dev` gives
+the inventory a reader it did not have before. The cut was right about this
+repository.
+
+### And the seed list drifted anyway
+
+While that was being fixed, `reach.mjs` was calling `mc deploy` — routed since
+2026-09-04, working, 379 lines — dead. `mc-cli.js` dispatches through
+`runModule(modules[command], …)`, a lookup rather than a literal, so the script
+could not see the router's table and every verb needed a second entry in `LIVE`
+that somebody had to remember. Nobody did.
+
+A reachability tool whose answer depends on a hand-kept list being remembered
+will eventually recommend deleting something that works. The table is read
+where it lives now, and `LIVE` holds only what no import edge can reach: the
+router, and the files spawned by path.
+
 ## The measurement
 
 [`scripts/reach.mjs`](../../scripts/reach.mjs) is the evidence this project
