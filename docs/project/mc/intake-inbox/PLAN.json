@@ -139,7 +139,7 @@
         "Two measured findings were left as proposals rather than patched here, and both are named in the doc's *What is not done*. (1) `previousDigest` reads only `~/mc/intake/`, so the drain archives the very file tomorrow's delta uses as its baseline: measured against the real function on 2026-09-05, the baseline is `errors-memoro-2026-09-04.md` with yesterday's digest in the inbox and `null` once it is archived, which renders as *first digest — no baseline* and an empty *New since the last digest* — every day, once the backlog clears. *The delta is the agenda* is the rule the whole turn judges by, so this is the one that matters. (2) The page's `readDigest` matches `errors-<date>.md` only, so it has not seen a digest since the repository prefix landed: measured, it reads `errors-2026-08-30.md` from the real inbox while today's two sit beside it, and after the drain it will find nothing. `~/mc/proposals/2026-09-05-digest-baseline-archived.md` and `~/mc/proposals/2026-09-05-page-intake-digest.md`.",
         "State on disk when this step ended: `~/mc/intake/` holds fourteen digests and `decisions-archive/`, untouched — the global `mc` is a symlink to the checkout on main, so the running runner has not drained anything yet and will start once this project's work is in main and it takes the update. Worth watching in that first real drain: how many of the fourteen produce a proposal (four judged in step 3's throwaway root gave two), and whether digest turns hit the ten-minute cap — one did, at 691 s, and its file was archived all the same."
       ],
-      "pr": null,
+      "pr": 624,
       "blocked_by": null
     }
   ]
