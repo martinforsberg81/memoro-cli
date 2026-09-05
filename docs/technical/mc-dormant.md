@@ -120,7 +120,8 @@ It is [`canon/roles/worker.md`](../../canon/roles/worker.md) now, read
 through `readCanonRole` the way `mc plan` and `mc brief` read theirs, and
 `areaRole` falls back to canon so conversations opened in the area later get
 the overlay too. A catalogue that defines `worker` still wins — it is the
-user's rulebook — but it is no longer required for a worker to exist.
+user's rulebook — but it is no longer required for a worker to exist. The
+lookup and the assembly around it are [`mc-roles.md`](mc-roles.md).
 
 The overlay is what the removal is really about. A worker has no PM to
 escalate to, no inbox to write into and nothing watching its pane, so a

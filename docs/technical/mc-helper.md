@@ -456,6 +456,11 @@ Nobody automatic. That is the point.
 | `src/mc/brief-collect.js` | `listProposals` — the names, and nothing about what is in them — and the three sections read from `~/mc/runner/` |
 | `src/mc/page-collect.js`, `page-render.js` | `newErrorLines`, `intakeSection`, the INTAKE block |
 
+Both role files reach their session the same way every other role file does —
+the Coding Profile, `canon/roles/_common.md`, then the role's own words,
+assembled by `instructionsFor`. That mechanism is [`mc-roles.md`](mc-roles.md);
+what is written here is only which file each of the two halves wears.
+
 mc does not read a proposal. It used to parse a fixed frontmatter and fixed
 section names out of every file, in three places that disagreed with each
 other: a proposal whose first prose line was not marked `# ` was counted by the
