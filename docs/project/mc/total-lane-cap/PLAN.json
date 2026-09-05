@@ -57,7 +57,7 @@
   "steps": [
     {
       "title": "A second number in the same file",
-      "status": "ready",
+      "status": "done",
       "done_when": "`readLaneCount` returns both numbers, `writeLaneCount` can set either without disturbing the other, and an absent `total` reads as no cap.",
       "instruction": [
         "`src/mc/lane-count.js` is 55 lines and holds the whole setting: `readLaneCount` returns a bare integer, `writeLaneCount` writes `{ per_repo, set }` whole. Both signatures change here, and the callers are few — `run.js:1813` (`deps.laneCount || readLaneCount`) and `src/mc/commands/run.js`'s `lanes` verb. Find them all before you start; the file's exports are the search.",
@@ -67,8 +67,14 @@
         "Say in the module comment what the second number is and what it is not. The comment at `:13` already argues per-repo well; add beside it that `total` bounds this machine — CPU, memory, API quota, and how much a person can follow — and that a **count of sessions is a proxy for load, not a measurement of it**. That sentence is a contract term (it is in `out_of_scope`), and the module comment is where a reader who is about to build a resource guard on top of it will meet it.",
         "`npm test` — `tests/mc/lane-count.test.js` reads this."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "`readLaneCount` now returns `{ per_repo, total }` — `per_repo` a number (1 when unset), `total` a number or `null` for no cap. Each field falls back on its own, so a file with one good number and one bad one keeps the good one; a broken or absent file is still `{ per_repo: 1, total: null }` and never throws.",
+        "`writeLaneCount(value, { field })` takes `field` as `'per_repo'` (the default) or `'total'`, reads the file, merges and writes it whole through `writeJsonAtomic` at mode 0o600 — so setting one never clears the other. It returns `{ ok, field, count, per_repo, total }`, the pair as the file now holds it, which step 3 can print without a second read. `count` is the value that was set (`null` when the total was unset).",
+        "Explicit unset is `--total none`, not `--total 0`. `0` would have to be a special case in a rule that is otherwise 1..8, and \"0 in total\" reads like \"run nothing\" — a dangerous thing for it to mean if anyone ever took it literally. In the file, no cap is written as `total: null` rather than a missing key, so the file says what it holds; `readLaneCount` treats both the same. Step 3's parser has to accept the word `none` for `--total`, and the refusal message it will surface already names it: `lanes --total is a whole number from 1 to 8, or none for no cap, not \"...\"`. The per-repo message is unchanged.",
+        "Two callers were adapted, not changed in behaviour: `run.js` (now `const { per_repo: count } = ...`) and the `lanes` verb in `src/mc/commands/run.js` (`const { per_repo: n } = read()`). Both still ignore the total — that is step 2 and step 3. One test stub moved with the signature: `tests/mc/run.test.js:2390`'s `f.deps.laneCount` now returns the shape. Any new `deps.laneCount` override must return `{ per_repo, total }`, not a bare integer.",
+        "No success criterion is marked met. Criterion 2 (an operator who sets no total sees no change) is half-shown here — the real `~/.memoro/mc/lanes.json` holds only `per_repo: 1` and `mc run lanes` prints exactly what it printed before — but the criterion is about lane behaviour, which nothing in this step touches yet. Step 2 is where it can be claimed."
+      ],
+      "pr": 636,
       "blocked_by": null
     },
     {
