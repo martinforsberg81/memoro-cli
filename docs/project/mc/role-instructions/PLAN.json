@@ -49,7 +49,7 @@
       "check": "A test drives a round with `canon/roles/repair.md` absent and asserts the skip line still fires — the check reads the role's own body, not the assembled text."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The catalogue is shorter than it is today and nothing that only a session can judge was cut.",
       "check": "`wc -l canon/roles/*.md` totals under 260 (today: 330). The PR body lists every removed passage with the role it came from and where it went — the shared file, a document under `docs/technical/`, or nowhere."
     },
@@ -59,7 +59,7 @@
       "check": "The four existing descriptions (`mc-run.md:356`, `mc-plan.md:147-158`, `mc-helper.md:336`, `mc-brief.md:67`) either point at that one place or are the one place; no fifth account of the mechanism exists."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A planning session opens on fable by default.",
       "check": "`canon/roles/plan.md` says `model: fable`, and `mc plan <programme>` was actually opened once with it — the launch line names the model and the session answered. Not asserted from the file alone: mc passes `--model` through unvalidated (`src/adapters/claude-code.js` `modelArgs`), so a name the tool rejects fails only at launch."
     }
@@ -129,7 +129,7 @@
     },
     {
       "title": "Read the eight roles against what they say today",
-      "status": "ready",
+      "status": "done",
       "done_when": "`wc -l canon/roles/*.md` totals under 260, every removed passage is named in the PR body with where it went, and a planning session has been opened once on `fable`.",
       "instruction": [
         "This is the `roles-say-less` cut, re-aimed. That proposal measured 444 lines across seven roles on 2026-08-31 and the cut landed — the catalogue went to 185. It has grown back to 330 across eight files: brief 64, helper 35, intake 30, plan 6, reconcile 29, repair 54, step 75, worker 37. The number is not the target; the kinds of text the proposal named are, and they came back. Steps 1 and 2 take the two cases already known. Read all eight files whole and find the rest.",
@@ -139,8 +139,16 @@
         "Do not cut judgement a session cannot derive from the code in front of it. `intake.md`'s *volume is not severity* and *three is a lot*, `brief.md`'s *never lay out options for him to choose between*, `repair.md`'s *a green bought by changing the measurement is the one outcome worse than the red* — these are the reason the file exists. Every role also keeps its opening: who this session is, and what it delivers.",
         "Run `npm test`. `tests/mc/roles-decisions.test.js` asserts on phrases in `worker`, `step` and `repair`; a cut that moves one of those phrases makes that test the thing to read, not the thing to edit around."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "`wc -l canon/roles/*.md` totals 257, from 330. Two rules moved up into `_common.md`, which is why it grew from 31 lines to 42 while the eight roles fell by 84. The first is how a question reaches Martin — one thing to do, defended from the code, answerable in a word, never a menu, and nothing while reading would settle it — which `worker`, `step`, `repair` and `helper` each wrote out for themselves. The second is reading and testing: read the code before you decide, say what you actually ran and what it said, and `npm test` selects the affected tests — run them once, at the end, in the foreground. That was in `worker`, `step`, `repair` and `reconcile`, and `repair`'s foreground clause was the only part of it that was not already said four times.",
+        "Two passages that look like the same duplication were kept on purpose. `brief.md` still says *Never lay out options for him to choose between* — the plan named it as a thing not to cut, and it is the one session sitting in front of him. And `helper.md` and `intake.md` still name `~/mc/proposals/<date>-<slug>.md` even though `_common.md` does: for those two the proposal is the job, not the aside `_common.md` is about, and `tests/mc/commands/helper.test.js` asserts the desk's own text names where the file goes and what the date is for.",
+        "`tests/mc/roles-decisions.test.js`'s first block now asserts on the assembled text rather than on `readCanonRole(name).overlay`. It had to: the decision shape it checks is no longer in `worker`, `step` or `repair`, and asserting on the overlay after the move would have meant either keeping a copy in each file or deleting the test. Its subject is unchanged — a session of this role is told to put a question as one proposal — and the `doesNotMatch` guards against the old menu wording got stricter, because they now cover the shared file too. One regex there had to become whitespace-tolerant (`Never a\\nmenu` wraps), which is what the file's own `phrase()` helper exists for.",
+        "`canon/roles/plan.md` is `model: fable`, verified by launch and not from the file: `node src/mc-cli.js plan mc` opened a real planning session, `~/.memoro/mc/logs/mc.log` recorded `\"args\":[\"--model\",\"fable\",…],\"model\":\"fable\"`, and the session answered and exited 0. A bare `claude --model fable -p …` resolves to `claude-fable-5-1`, so the alias mc passes through unvalidated is one the tool accepts. Note the log line also shows `\"overlay\":false` — the plan role has no body, and the shared text reaches that session through `planLaunch`'s prompt, exactly as step 2 left it.",
+        "For step 4, which writes the one account of assembly: the shared file now carries five rules, not two — turn cost, reading and testing, the shape of a question to Martin, the loose thread and why it is not intake, and the route to main. An account that describes `_common.md` as \"the turn-cost rule\" will be out of date the day it is written. The turn-cost restatement in `stepPrompt` (`src/mc/run-plan.js`) is gone, so `_common.md` is its only home; what `stepPrompt` still restates is `step.md`'s `PLAN.json` field list and the `blocked_by` shape, left alone because a step session is told those twice by two mechanisms that fail differently — the role file can be missing, the prompt cannot — and deciding that is a different question from this cut.",
+        "Repair, 2026-09-05: this branch was held on a conflict with `main` and now carries `origin/main` merged in, which moves two numbers the comments above state. `wc -l canon/roles/*.md` reads **287**, not 257: `_common.md` 42→68 (three paragraphs `no-reconcile` and `uncomplicated-merge` added — resolving a stopped merge, `mc merge` being what decides a merge is uncomplicated, and what a session under `mc run` does instead), `intake.md` 27→42 (`intake-inbox`, one file per turn), `step.md` 48→55 (the merge-in-progress paragraph), and `reconcile.md` 18→0 (the role is gone from `main`). Every one of those deltas is main's; nothing this step cut came back, and the seven remaining roles hold 219 lines. The under-260 criterion is left `met: true` on that reading — the catalogue is shorter than the 330 it was — but the number a close-out reader measures will be 287, and if the threshold is meant to bind the merged tree rather than the cut, that is Martin's to say.",
+        "Also for step 4: the note above saying `_common.md` carries five rules is now the merged file's ten paragraphs — turn cost, reading and testing, the shape of a question, the loose thread, why it is not `~/mc/intake/`, resolving a stopped merge, the route to `main`, `mc merge` and the uncomplicated merge, what stays Martin's, and what a session under `mc run` does instead. And the catalogue is seven roles, not eight: `reconcile` was deleted on `main` while this step was open, so its line in the cut table above describes a file that no longer exists."
+      ],
+      "pr": 614,
       "blocked_by": null
     },
     {

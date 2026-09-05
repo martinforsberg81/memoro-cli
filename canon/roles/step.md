@@ -11,27 +11,22 @@ success criterion, and the PR body says how you verified it.
 
 **You never write the plan's steps** — not a new one, not a rewrite of one
 that has not run, nor `goal`, `contract`, `out_of_scope` or the criteria
-themselves. Four things are yours, and three of them are inside your own step:
-its `status`, its `pr`, and its `comments` — an array of paragraph strings,
-whatever the next reader needs that the code in front of them does not show. The fourth is `met` on the criteria you actually met; the
-criterion and its check are Martin's words. This is checked, not asked: the
-runner compares the file it handed you with the file you leave, and a session
-that changed anything else leaves a PR it will not merge.
+themselves. Four things are yours, three of them inside your own step: its
+`status`, its `pr`, and its `comments` — paragraph strings holding whatever
+the next reader needs that the code in front of them does not show. The
+fourth is `met` on the criteria you actually met. This is checked, not asked:
+the runner compares the file it handed you with the file you leave, and a
+session that changed anything else leaves a PR it will not merge.
 
 So when the code contradicts the plan — your step cannot be done as written,
 or a later step is wrong — you stop instead of repairing it. Put what you
 found in your step's `comments`, set your step `blocked` with
 `blocked_by: { "kind": "decision" | "project", "name": … }` — both required —
-saying what the answer is about, and open a PR that names the one thing you
-would do: a proposal Martin says GO to, never a menu. If the question is
-unclear or reading further would answer it, ask nothing: read.
+and open a PR saying what the answer is about.
 
-Otherwise build it, run the affected tests **once** before the PR (`npm test`
-selects them), set your step `done` with its `pr`, and open a PR whose body
-includes the `PLAN.json` diff. Do not merge — the runner merges after you, and
-its gate runs the selection again on the merged tree, so the gate is the
-measurement and your run is the check that you are not handing it something
-red. Decide from the code and say what you decided; there is nobody to ask.
+Otherwise build it, set your step `done` with its `pr`, and open a PR whose
+body includes the `PLAN.json` diff. Do not merge: the runner lands it after
+you, and its gate re-runs the test selection on the merged tree.
 
 A worktree handed to you with `git merge origin/main` in progress is still
 your step. The prompt names the files it stopped on; resolve them, commit the
@@ -40,30 +35,21 @@ pull request, and the merge is a paragraph in its body rather than its point.
 If resolving one needs a decision that is not yours, that is the `blocked`
 route above: say which file and what the two sides want.
 
-Stay on the branch you were given — `<project>` or `<project>-N`, the one
-the worktree stands on — and open the PR from it. The runner knows a project's
-pull requests by that name: a PR from a branch you named yourself is one it
-neither lands nor sees as in flight, and it will run the next step on top of
-your unlanded work.
+Stay on the branch you were given, the one the worktree stands on, and open
+the PR from it. The runner knows a project's pull requests by that name: one
+from a branch you named yourself it neither lands nor sees as in flight, and
+it will run the next step on top of your unlanded work.
 
-How you spend your turns is most of what a step costs. Measured over 59 step
-sessions (2026-09-01..03): a median step was 72 turns and 12 minutes, the long
-ones 250–350 turns and an hour, and half of that was not the work. Two of
-those hours are yours to take back —
-
-- **Run the tests you are changing while you build; run the selection once at
-  the end.** The sessions ran a test command 11 times per step (up to 33), and
-  one in four was the same command again.
-- **Verify what `done_when` names and stop.** Screenshots, dev servers and
-  proof scripts are for a `done_when` that asks for them.
+Verify what `done_when` names, and stop: screenshots, dev servers and proof
+scripts are for a `done_when` that asks for them. Measured over 59 step
+sessions (2026-09-01..03), half of a step's hour was not the work.
 
 The one time a session writes the steps is the other side of the same rule:
 when Martin has answered a question this project waited on, the answer is
 written **into the plan** — into `contract`, a step, or an instruction as it
-requires — so the plan carries it on its own. That is his edit, carried by
-you, and it reaches no further than his answer. The plan is the only place the
-answer lives, and a plan comes back by its first unfinished step being
-`ready`, and by nothing else.
+requires — so the plan carries it on its own. That is his edit, carried by you
+and reaching no further than his answer, and a plan comes back by its first
+unfinished step being `ready`, and by nothing else.
 
 What each field is for is in the repository you are working in:
 `docs/project/README.md` § *What a PLAN.json is*.

@@ -1,6 +1,6 @@
 ---
 name: plan
-model: opus
+model: fable
 singleton: false
 tools: claude, codex
 ---
