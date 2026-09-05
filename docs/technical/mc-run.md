@@ -705,6 +705,42 @@ which is what a refused round did until 2026-09-03. The lock and the lease
 themselves still refuse: one suite at a time is the guarantee, and it is the
 caller that learnt to wait.
 
+**And the machine has a number of its own — `mc run lanes --total <n>`.** It
+lives beside the first in the same file, and the two are not the same kind of
+thing. `per_repo` bounds how many steps share one `main` — where two landings
+meet at the gate — and is a correctness number. `total` bounds this machine
+across every repository at once: CPU, memory, API quota, and how much of a
+fleet one person can follow. `lanes 3` on two repositories is six sessions,
+and until 2026-09-05 nothing in the code objected. **A count of sessions is a
+proxy for load, not a measurement of it** — memory and quota are the honest
+measurements and neither is read.
+
+Absent means no total cap, so an operator who sets nothing gets exactly what
+they got before it existed. Set, both bind and the smaller wins: `per_repo`
+structurally, because there are that many lane loops per repository, and
+`total` as an in-process claim each lane takes at the last moment before it
+launches a session (`takeSlot`/`waitForSlot`, run.js) and drops in the same
+`finally` that removes its current file. It is a claim rather than a count of
+`current-*.json` because a file is written after a step begins, and two lanes
+counting files in the same tick would both see the same free slot. A lane with
+no slot polls every 15 s and says one line when the wait begins, and gives the
+wait up on STOP or UPDATE — the drain promises that from the moment UPDATE is
+read no lane starts a step. There is no ordering rule between waiting lanes:
+whoever polls first wins, so a busy repository can hold the machine while a
+quiet one waits. That is measured, not designed, and it is the thing to watch
+first if a cap turns out to starve one side.
+
+`mc run lanes` with no argument prints both numbers and how many steps are in
+flight while it is read — `3 per repository, 3 in total — 2 in flight`, or
+`1 per repository, no total cap (up to 2 across 2 repositories) — 0 in
+flight`, because a line that names only the per-repository number is the line
+that produced the wrong picture in the first place. `mc run lanes <n>` sets
+the per-repository number as it always has, `--total <n>` sets the machine's
+without touching it, `--total none` takes the cap off, and both may be given
+in one command — each is checked before either is written. A total at or above
+`per_repo × repositories` can never refuse a lane a slot, and the verb says so
+rather than letting an operator believe they capped anything.
+
 ### Why the session is spawned, not `spawnSync`
 
 `mc run` used to start the headless tool with `spawnSync` and block. Two lanes

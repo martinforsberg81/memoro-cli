@@ -17,7 +17,8 @@ import { describe, it } from 'node:test';
 import { REPAIRS_BEFORE_BRIEF } from '../../src/mc/brief-collect.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
 import { STEP_STATUSES } from '../../src/mc/plan-schema.js';
-import { REPO_NAMES } from '../../src/mc/run.js';
+import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
+import { REPO_NAMES, TOTAL_POLL_MS } from '../../src/mc/run.js';
 import {
   DEFAULT_BUDGET_MINUTES, DEFAULT_MODEL, DEFAULT_TOOL, HELPER_HOUR_UTC, MC_OWN_TREES, QUOTA_SLEEP_MS,
   RUNS_HEADER,
@@ -30,6 +31,13 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     const match = /every lane sleeping (\d+)m/u.exec(DOC);
     assert.ok(match, 'the doc no longer states the quota sleep');
     assert.equal(Number(match[1]) * 60_000, QUOTA_SLEEP_MS);
+  });
+
+  it('states the poll a lane held back by the total sleeps, and the bounds both numbers take', () => {
+    const match = /polls every (\d+) s/u.exec(DOC);
+    assert.ok(match, 'the doc no longer states the total-cap poll');
+    assert.equal(Number(match[1]) * 1000, TOTAL_POLL_MS);
+    assert.match(DOC, new RegExp(`${LANES_MIN} to ${LANES_MAX}`, 'u'), 'the doc no longer states the bounds on a lane count');
   });
 
   it('states the default budget a lane would have blocked on', () => {
