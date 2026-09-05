@@ -114,7 +114,7 @@ import { instructionsFor, readCanonRole } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
-  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, TIMEOUT_EXIT,
+  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, REFUSAL, TIMEOUT_EXIT,
   assembleQueue, chooseKind, collectNote, headlessArgs,
   heldRepair, helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, queueFileNames,
   queueFileText, readSessionOutput, repairPrompt, sessionSettings, stackOrder,
@@ -1198,7 +1198,13 @@ export function createRunner({
   }
 
   /**
-   * One project. Returns 'merged' | 'ran' | 'skipped' | 'stop'.
+   * One project. Returns 'merged' | 'ran' | 'stop' | `skipped:<reason>`.
+   *
+   * The reason is a word, not a sentence: `RUN_REFUSALS` for the machine-shaped
+   * refusals and `chooseKind`'s own for the plan-shaped ones, which is the same
+   * vocabulary `machineState` answers `mc status` in. Callers ask whether the
+   * outcome is `ran`, `merged` or `stop` and nothing else — a `skipped:` prefix
+   * is every way this ends without a session.
    *
    * `world` is what `queue()` returned: the plans on origin/main and the open
    * pull requests of both repositories. Everything that can end the round for
@@ -1242,18 +1248,25 @@ export function createRunner({
 
   async function runStepClaimed(name, world = {}, { lane = 0 } = {}) {
     const { plans = [], prs = [], prsFailed = [] } = Array.isArray(world) ? { plans: world } : world;
+    // Every way out of this round that is not a session goes through here, so
+    // that what the round refused on is a word and not only a line in the log.
+    // `machineState` answers `mc status` in the same words, and the agreement
+    // test drives one case per word through both (tests/mc/run.test.js).
+    const refuse = (reason, text = null) => { if (text) say(`${name}: ${text}`); return `skipped:${reason}`; };
     if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     // A quota answer in the other lane is this lane's answer too: wait it
     // out here, before a worktree is touched or a session is spent.
     await quotaHold();
     const repo = repoOf(name, plans);
-    if (!repo) { say(`${name}: no workarea and no plan on main, skip`); return 'skipped'; }
+    // `no-plan` and not a word of its own: no workarea and no plan on main is
+    // the same fact `kindFor` answers with, met one question later.
+    if (!repo) return refuse('no-plan', 'no workarea and no plan on main, skip');
     const worktree = join(root, name, repo.name);
     if (!deps.exists(worktree)) {
       say(`${name}: no workarea — creating ${repo.name} worktree from origin/main`);
       deps.git(repo.path, ['fetch', '-q', 'origin']);
       const added = deps.addWorktree({ name, repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
-      if (!added.ok) { say(`${name}: worktree add failed (${added.reason}), skip`); return 'skipped'; }
+      if (!added.ok) return refuse(REFUSAL.worktree, `worktree add failed (${added.reason}), skip`);
     }
     // A dirty worktree parks the project for every round until a person acts,
     // so the line names the files: `email-window-layout` stood third in
@@ -1266,10 +1279,9 @@ export function createRunner({
       // `slice(3)`, which printed `ublic/css/…` on 2026-09-04.
       const files = dirty.split('\n').map((line) => line.replace(/^[ MADRCU?!]{1,2}\s+/u, '').trim() || line.trim());
       const shown = files.slice(0, 3).join(', ') + (files.length > 3 ? ` +${files.length - 3}` : '');
-      say(`${name}: dirty worktree (${shown}) — skipped every round until it is committed or stashed in ${worktree}`);
-      return 'skipped';
+      return refuse(REFUSAL.dirty, `dirty worktree (${shown}) — skipped every round until it is committed or stashed in ${worktree}`);
     }
-    if (prsFailed.includes(repo.name)) { say(`${name}: what is open on GitHub is unknown this round, skip`); return 'skipped'; }
+    if (prsFailed.includes(repo.name)) return refuse(REFUSAL['prs-unknown'], 'what is open on GitHub is unknown this round, skip');
 
     // Work already in flight ends the round for this project, whatever the
     // plan says — the plan on origin/main and the plan in the worktree both
@@ -1281,10 +1293,10 @@ export function createRunner({
     // is one repair session rather than the same skip for ever. `heldRepair`
     // holds the whole rule, including the second round, which is the brief's.
     const repair = heldRepair({ entries: heldNow(), openPrs, project: name, repo: repo.name });
-    if (repair?.skip) { say(`${name}: ${repair.skip}`); return 'skipped'; }
+    if (repair?.skip) return refuse(repair.reason, repair.skip);
     if (!repair) {
       const flight = inFlight(openPrs);
-      if (flight) { say(`${name}: ${flight.skip}`); return 'skipped'; }
+      if (flight) return refuse(flight.reason, flight.skip);
     }
     // A session must be somewhere it can push from. The push-guard asks the
     // same question at the wrong end — after ninety minutes of work. A repair
@@ -1294,16 +1306,15 @@ export function createRunner({
       const on = gitOut(worktree, ['branch', '--show-current']);
       if (repair.entry.branch && on !== repair.entry.branch
         && !deps.git(worktree, ['checkout', '-q', repair.entry.branch]).ok) {
-        say(`${name}: #${repair.entry.pr} is on ${repair.entry.branch}, which this workarea could not check out, skip`);
-        return 'skipped';
+        return refuse(REFUSAL.branch, `#${repair.entry.pr} is on ${repair.entry.branch}, which this workarea could not check out, skip`);
       }
     } else {
       const moved = freshBranch(worktree, name);
-      if (!moved.ok) { say(`${name}: ${moved.why}, skip`); return 'skipped'; }
+      if (!moved.ok) return refuse(REFUSAL.branch, `${moved.why}, skip`);
     }
 
     const sync = syncMain(worktree, name);
-    if (!sync.ok && !sync.conflicts.length) { say(`${name}: fetch/merge failed, skip`); return 'skipped'; }
+    if (!sync.ok && !sync.conflicts.length) return refuse(REFUSAL.sync, 'fetch/merge failed, skip');
     // What git and the plan's own rule could not resolve. It no longer makes
     // the plan unreadable to the runner: the plan is read from HEAD and the
     // conflict goes to the step session as something to do first.
@@ -1330,17 +1341,17 @@ export function createRunner({
     const choice = repair ? { kind: 'repair' } : chooseKind({ plan });
     if (conflicts.length && choice.kind !== 'step' && choice.kind !== 'repair') {
       abandonMerge(choice.skip || 'no session to hand it to');
-      return 'skipped';
+      return refuse(choice.reason || 'no-plan');
     }
     // A null `skip` is a skip nobody would read — see `chooseKind`.
-    if (!choice.kind) { if (choice.skip) say(`${name}: ${choice.skip}, skip`); return 'skipped'; }
+    if (!choice.kind) return refuse(choice.reason || 'no-plan', choice.skip ? `${choice.skip}, skip` : null);
     const { kind } = choice;
 
     const role = deps.role(kind);
-    if (!role?.overlay) { abandonMerge(`canon/roles/${kind}.md is missing`); say(`${name}: canon/roles/${kind}.md is missing — skip`); return 'skipped'; }
+    if (!role?.overlay) { abandonMerge(`canon/roles/${kind}.md is missing`); return refuse(REFUSAL['role-missing'], `canon/roles/${kind}.md is missing — skip`); }
     const settings = sessionSettings(plan?.plan?.runner || {});
     const launch = deps.launch(settings.tool);
-    if (!launch?.ok) { abandonMerge(`${settings.tool} is not available`); say(`${name}: ${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); return 'skipped'; }
+    if (!launch?.ok) { abandonMerge(`${settings.tool} is not available`); return refuse(REFUSAL['tool-missing'], `${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); }
     const now = deps.now();
     const prompt = kind === 'repair'
       ? repairPrompt({ name, repo: repo.name, ...repair.entry, conflicts })

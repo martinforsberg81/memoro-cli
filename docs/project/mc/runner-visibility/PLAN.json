@@ -25,7 +25,7 @@
       "check": "With #612 and #614 held as they are today, `mc status intake-inbox` and `mc status role-instructions` each name the held pull request beside the plan state, and the page's queue block does too. Run both commands and read them."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The reading and the round agree on every reason the round refuses.",
       "check": "A test drives a table of cases — STOP file, dirty worktree, GitHub unknown, held with a repair spent, open pull request, branch that will not check out, aborted merge — against both the new reading and the round's own path, and asserts the same answer from each. A reason added to `runStepClaimed` without the reading fails it."
     },
@@ -35,7 +35,7 @@
       "check": "Make a workarea dirty by hand, run `mc brief --collect`, and read the section: the project, how long it has been dirty, and the `runs.tsv` row that left it. Remove the file afterwards and confirm the line goes."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The reading costs no git work on a project the plan already refuses.",
       "check": "The function short-circuits on `kindFor`'s answer before touching a worktree; asserted by a test whose git dependency throws if called."
     }
@@ -57,7 +57,7 @@
   "steps": [
     {
       "title": "The machine-state reading, beside kindFor",
-      "status": "ready",
+      "status": "done",
       "done_when": "One function answers \"would the runner start this project now, and if not what is in the way\" from the files on this machine, and a test asserts it agrees with the round over a table of cases.",
       "instruction": [
         "Half of this already exists and is already shared. `kindFor(name, { plans })` in `src/mc/status-collect.js:48` flattens `chooseKind` to one string — the kind, or `skip:<reason>` for a plan that is blocked, done, unparseable or unmigrated — and both the page (`page-collect.js:281`) and the runner (`run.js:1532`, as `planRefusal`) call it. That is the plan-shaped half and it is correct. Do not touch it.",
@@ -69,7 +69,15 @@
         "Do not read a lease. A repository lease held by a gate round or a deploy is a reason a round waits rather than a reason a project cannot run, and it is gone within minutes; putting it in this reading would make `mc status` flicker. If reading `repo-lease.js` convinces you otherwise, say so in the PR rather than adding it quietly.",
         "`npm test`."
       ],
-      "comments": [],
+      "comments": [
+        "The reading is `machineState(name, world)` in `src/mc/status-collect.js`, beside `kindFor`. It takes read data — `plans`, `prs`, `prsFailed`, the parsed `held.json`, whether the STOP file is there, the work root — plus three injected readers: `exists`, a `git` that is only ever given read-only arguments, and `mtime`. It returns `{ runnable, reason, detail, since, kind }`. `kind` is what the runner would start, `step` or `repair`, so step 2 can say `ready · repair owed` as easily as `ready · held #614`.",
+        "The anti-drift mechanism is a shared vocabulary, not a second list. `RUN_REFUSALS` in `run-plan.js` is every word a round refuses on for a reason that is not in the plan, in the order `runStepClaimed` asks them; `runStepClaimed` now returns `skipped:<reason>` through one `refuse()` helper, and the reading answers in the same words. Three tests hold it together in `tests/mc/run.test.js`: a table of twelve cases driven through both the round (`runner.runStep`) and the reading over one fixture, a coverage test asserting every word in `RUN_REFUSALS` has a case, and a source check that no refusal returns a bare `'skipped'` (the lane claim in `runStep` is the one exception, and it is a fact about this process rather than about the files).",
+        "Four of the eleven words carry `read: false` and a `why`: `worktree`, `sync`, `role-missing`, `tool-missing`. Each is the outcome of work the round did and the reading may not do — creating a worktree, fetching and merging, reading a role out of a synced worktree, spawning a tool. For those the table asserts the reading says *runnable* rather than guessing, which is the honest answer: `mc status` cannot know a fetch will fail. So `runnable: true` means nothing on this machine is standing in the way, not that the round is guaranteed to start.",
+        "`no-repo` is deliberately not a word. A name with neither a workarea nor a plan on main is `no-plan` — `kindFor`'s own word, which the reading reaches one question earlier than the round does. The round now says `no-plan` there too.",
+        "A merge left in a workarea is reported as `dirty`, because that is what the round does with it: an unmerged path makes `git status --porcelain` non-empty and the round skips on that, before any of its own merge work. The reading tells the two apart in `detail` — `a merge stopped in <worktree>: …` against `uncommitted work in <worktree>: …` — since a person needs to know which it is. There is no separate `merge` word, and adding one would make the two readings disagree.",
+        "Run against the estate on 2026-09-05 with a read-only script (`listPlans` over both repos, `gh pr list`, the real `held.json`, real git): 43 unfinished plans, and the two that read `ready` while nothing could start them are named — `connections-section` as `dirty since 2026-09-05T10:03:51Z — uncommitted work in /Users/martinforsberg/mc/connections-section/memoro: hop-measure.mjs, probe.mjs`, and this workarea itself. Nothing else disagreed with its plan state.",
+        "For step 2's check: `held.json` is now `[]` — #612 and #614 have both been repaired and landed, and `intake-inbox` and `role-instructions` are off main entirely. The estate example that survives is `connections-section`'s dirty worktree; a hold to look at will have to be made by hand, as that step's instruction allows."
+      ],
       "pr": null,
       "blocked_by": null
     },

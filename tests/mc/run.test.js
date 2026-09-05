@@ -4,7 +4,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createRunner, runLoop } from '../../src/mc/run.js';
+import { parseHeld } from '../../src/mc/held.js';
+import { RUN_REFUSALS } from '../../src/mc/run-plan.js';
 import { sharedRoleText } from '../../src/mc/roles.js';
+import { machineState } from '../../src/mc/status-collect.js';
 
 /**
  * A whole runner on fakes: a work root in memory, two repositories whose
@@ -12,7 +15,7 @@ import { sharedRoleText } from '../../src/mc/roles.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -203,7 +206,16 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       }
       if (args[0] === 'remote') return { ok: true, stdout: `git@github.com:o/${repoName || 'r'}.git` };
       if (args[0] === 'log') return { ok: true, stdout: 'abc1234' };
-      if (args[0] === 'status') return { ok: true, stdout: dirty.some((d) => cwd.includes(`/${d}/`)) ? ' M x' : '' };
+      // A merge left in a workarea is a dirty worktree too — `UU` is what
+      // `git status --porcelain` writes for a path it stopped on, and the
+      // round skips the project on it exactly as it does on a modified file.
+      if (args[0] === 'status') {
+        if (unmerged.some((d) => cwd.includes(`/${d}/`))) return { ok: true, stdout: 'UU canon/roles/step.md\n?? scratch.md' };
+        return { ok: true, stdout: dirty.some((d) => cwd.includes(`/${d}/`)) ? ' M x' : '' };
+      }
+      // A fetch a workarea cannot do: `syncMain` gives up on it, and no
+      // reading of the files could have known beforehand.
+      if (args[0] === 'fetch' && fetchFails.includes(cwd.split('/')[2])) return { ok: false, stdout: '', stderr: 'could not read from remote' };
       if (args[0] === 'merge' && args.includes('origin/main')) {
         const name = cwd.split('/')[2];
         return conflicts[name] ? { ok: false, stdout: '', stderr: 'CONFLICT' } : { ok: true, stdout: '' };
@@ -222,6 +234,13 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
           const head = heads[cwd.split('/')[2]];
           return head ? { ok: true, stdout: head } : { ok: false, stdout: '' };
         }
+        // `rev-parse -q --verify refs/heads/<b>` — has this workarea that
+        // branch at all? The same `refs` table the checkout below answers
+        // from, so the round and the reading cannot be told two things.
+        if (args.includes('--verify')) {
+          const ref = String(args.at(-1)).replace(/^refs\/heads\//u, '');
+          return { ok: (refs[cwd.split('/')[2]] || [cwd.split('/')[2]]).includes(ref), stdout: 'deadbee' };
+        }
         return { ok: false, stdout: '' };
       }
       if (args[0] === 'merge-tree') return { ok: true, stdout: landed.includes(args.at(-1)) ? 'basetree' : 'othertree' };
@@ -234,6 +253,16 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       if (args[0] === 'for-each-ref') return { ok: true, stdout: (refs[cwd.split('/')[2]] || []).join('\n') };
       if (args[0] === 'ls-remote') return { ok: true, stdout: (refs[cwd.split('/')[2]] || []).map((b) => `deadbee\trefs/heads/${b}`).join('\n') };
       if (args[0] === 'checkout' && args.includes('-b')) { calls.checkouts.push([cwd, args[args.indexOf('-b') + 1]]); heads[cwd.split('/')[2]] = args[args.indexOf('-b') + 1]; return { ok: true, stdout: '' }; }
+      // `git checkout -q <branch>` — the repair path standing on the branch its
+      // pull request is on. It works when the workarea has that branch, which
+      // is the one fact `refs` holds.
+      if (args[0] === 'checkout' && args.length === 3 && args[1] === '-q') {
+        const area = cwd.split('/')[2];
+        if (!(refs[area] || [area]).includes(args[2])) return { ok: false, stdout: '', stderr: `error: pathspec '${args[2]}' did not match` };
+        calls.checkouts.push([cwd, args[2]]);
+        heads[area] = args[2];
+        return { ok: true, stdout: '' };
+      }
       // `git branch --show-current`: the branch the workarea stands on, which
       // is the folder's name unless `heads` says otherwise.
       if (args[0] === 'branch') return { ok: true, stdout: heads[cwd.split('/')[2]] || cwd.split('/')[2] };
@@ -2435,4 +2464,228 @@ test('a project already in flight in one lane is skipped by another', async () =
   assert.equal(f.calls.sessions.length, 1, 'one session, not two');
   const third = await runner.runStep('a', world, { lane: 1 });
   assert.notEqual(third, 'skipped', 'the claim is released when the step is over');
+});
+
+/* ------------------------------------------- the round and the reading agree */
+
+/**
+ * `machineState` (status-collect.js) answers, from the files on this machine,
+ * the question a round answers by walking the project: would the runner start
+ * this now, and if not what is in the way. Two readings of one question is
+ * exactly the drift this table exists to stop — on 2026-09-05 both of
+ * memoro-cli's unfinished plans read `ready` in every surface while #612 and
+ * #614 were held and nothing could start at all.
+ *
+ * So the cases are driven through **both**: the round's own path
+ * (`runner.runStep`, which now returns `skipped:<reason>`) and the reading,
+ * over the same fixture, and the word has to be the same. The reading is taken
+ * first, because the round writes — a worktree it creates would change what
+ * the reading could see.
+ *
+ * `RUN_REFUSALS` is the list, and the last test below asserts every word in it
+ * has a case here. A reason added to `runStepClaimed` has to be named there to
+ * be said at all (`refuse`), and naming it there without teaching the reading
+ * fails this file.
+ */
+const roundReason = (outcome) => (outcome === 'stop'
+  ? 'stop'
+  : (String(outcome).startsWith('skipped:') ? String(outcome).slice('skipped:'.length) : null));
+
+const readingOf = (f, name, world) => machineState(name, {
+  plans: world.plans,
+  prs: world.prs,
+  prsFailed: world.prsFailed,
+  held: parseHeld(f.files['/w/runner/held.json'] ?? null),
+  stop: '/w/runner/STOP' in f.files,
+  root: '/w',
+  exists: f.deps.exists,
+  git: f.deps.git,
+  // The mtimes are the fixture's own: the files are in a map, not on a disk.
+  mtime: (path) => (path in f.files ? '2026-08-27T09:00:00Z' : null),
+});
+
+/** A workarea that already exists, with the plan on its branch. */
+const area = (name = 'm', plan = ready) => ({ [name]: { repo: 'memoro', programme: 'prog', plan } });
+const heldOn = (f, entries) => { f.files['/w/runner/held.json'] = JSON.stringify(entries); return f; };
+const prOn = (branch, number = 9) => ({ memoro: [{ number, headRefName: branch, baseRefName: 'main', isDraft: false, title: 'Step' }] });
+
+const CASES = [
+  {
+    reason: 'stop',
+    what: 'the STOP file is present',
+    make: () => {
+      const f = fixture({ plans: { memoro: { m: ready } }, session: okSession() });
+      f.files['/w/runner/STOP'] = '';
+      return f;
+    },
+    detail: /STOP file/u,
+  },
+  {
+    reason: 'worktree',
+    what: 'the workarea could not be made',
+    make: () => {
+      const f = fixture({ plans: { memoro: { m: ready } }, session: okSession() });
+      f.deps.addWorktree = () => ({ ok: false, reason: 'no space left on device' });
+      return f;
+    },
+  },
+  {
+    reason: 'dirty',
+    what: 'a dirty worktree',
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], session: okSession() }),
+    detail: /uncommitted work in \/w\/m\/memoro: x/u,
+  },
+  {
+    reason: 'dirty',
+    what: 'a merge left in the workarea',
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), unmerged: ['m'], session: okSession() }),
+    detail: /a merge stopped in \/w\/m\/memoro: canon\/roles\/step\.md, scratch\.md/u,
+  },
+  {
+    reason: 'prs-unknown',
+    what: 'GitHub could not be asked what is open',
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), prsFail: ['memoro'], session: okSession() }),
+    detail: /GitHub could not be asked/u,
+  },
+  {
+    reason: 'held-after-repair',
+    what: 'a held pull request whose one repair is spent',
+    make: () => heldOn(
+      fixture({ plans: { memoro: { m: ready } }, areas: area(), openPrs: prOn('m'), session: okSession() }),
+      [heldEntry({ repairs: 1 })],
+    ),
+    detail: /#9 is held before merge after a repair/u,
+    since: '2026-09-03T10:00:00Z',
+  },
+  {
+    reason: 'in-flight',
+    what: 'an open pull request',
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), openPrs: prOn('m-2', 11), session: okSession() }),
+    detail: /#11 is open/u,
+  },
+  {
+    reason: 'branch',
+    what: 'a repair whose branch the workarea cannot check out',
+    make: () => heldOn(
+      fixture({ plans: { memoro: { m: ready } }, areas: area(), openPrs: prOn('m-2'), refs: { m: ['m'] }, session: okSession() }),
+      [heldEntry({ branch: 'm-2' })],
+    ),
+    detail: /#9 is on m-2/u,
+  },
+  {
+    reason: 'sync',
+    what: 'origin could not be fetched',
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), fetchFails: ['m'], session: okSession() }),
+  },
+  {
+    reason: 'role-missing',
+    what: 'the role file is not installed',
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), roles: false, session: okSession() }),
+  },
+  {
+    reason: 'tool-missing',
+    what: 'the tool is not on this machine',
+    make: () => {
+      const f = fixture({ plans: { memoro: { m: ready } }, areas: area(), session: okSession() });
+      f.deps.launch = () => ({ ok: false, reason: 'not installed' });
+      return f;
+    },
+  },
+  // Not a machine word at all: the plan's own, which both readings take from
+  // `chooseKind` — the round from the worktree's copy, the reading from main's.
+  {
+    reason: 'blocked',
+    plan: true,
+    what: 'a step waiting on a decision',
+    make: () => fixture({ plans: { memoro: { m: plan({ status: 'blocked' }) } }, session: okSession() }),
+  },
+];
+
+for (const kase of CASES) {
+  test(`refusal: ${kase.what} — the round and the reading say \`${kase.reason}\``, async () => {
+    const f = kase.make();
+    const runner = createRunner({ deps: f.deps });
+    const world = runner.queue();
+    const reading = readingOf(f, 'm', world);
+    const outcome = await runner.runStep('m', world);
+    assert.equal(f.calls.sessions.length, 0, 'a refused project spends no session');
+    assert.equal(roundReason(outcome), kase.reason, `the round answered ${outcome}`);
+
+    const named = RUN_REFUSALS.find((item) => item.reason === kase.reason);
+    if (kase.plan || named.read) {
+      assert.equal(reading.reason, kase.reason, 'the reading and the round refuse on different words');
+      assert.equal(reading.runnable, false);
+      if (kase.detail) assert.match(reading.detail, kase.detail);
+      if (kase.since) assert.equal(reading.since, kase.since);
+    } else {
+      // The other half of agreeing: a refusal no file on this machine could
+      // have predicted, where the reading says so rather than guessing.
+      assert.equal(reading.runnable, true, `\`${kase.reason}\` is \`read: false\` — ${named.why}`);
+      assert.ok(named.why, 'a reason the reading cannot answer has to say why');
+    }
+  });
+}
+
+test('every reason the round can refuse on is in the table above', () => {
+  const covered = new Set(CASES.map((kase) => kase.reason));
+  const missing = RUN_REFUSALS.map((item) => item.reason).filter((reason) => !covered.has(reason));
+  assert.deepEqual(missing, [], 'a reason the round refuses on with no case here is one the reading was never taught');
+});
+
+/**
+ * The gate that makes the table above bite. A refusal that returns a bare
+ * `'skipped'` says no word, so it can be added to `runStepClaimed` without any
+ * of this failing — which is the two-lists-by-hand failure in another shape.
+ * The one exception is the lane claim in `runStep`: two lanes holding one
+ * project is a fact about this process for the length of one round, not about
+ * the files `mc status` reads.
+ */
+test('the round refuses in words: no bare `skipped` outside the lane claim', () => {
+  const source = readFileSync(new URL('../../src/mc/run.js', import.meta.url), 'utf8');
+  const bare = source.match(/return 'skipped'/gu) || [];
+  assert.equal(bare.length, 1, 'every refusal says `skipped:<reason>` so the reading can be held to it — the lane claim is the one exception');
+});
+
+/**
+ * The economy `planRefusal` was built for, kept: a round spent 51 seconds
+ * walking 38 projects to start one before the plan was asked first. A project
+ * whose plan on main already refuses it must cost no `git status`, no fetch
+ * and no merge — so the reading is given a git that throws.
+ */
+test('a project the plan already refuses costs no git work', () => {
+  const f = fixture({ plans: { memoro: { m: plan({ status: 'blocked' }) } } });
+  const world = createRunner({ deps: f.deps }).queue();
+  const throwing = () => { throw new Error('the reading touched git for a project the plan had already refused'); };
+  const reading = machineState('m', {
+    plans: world.plans, prs: world.prs, root: '/w', exists: throwing, git: throwing, mtime: throwing,
+  });
+  assert.equal(reading.reason, 'blocked');
+  assert.equal(reading.runnable, false);
+  assert.match(reading.detail, /blocked on decision prog-1/u);
+});
+
+/**
+ * A hold at `repairs: 0` is not a refusal. It is one repair session owed,
+ * which is a thing the runner would start — and reading it as a stop would
+ * make `mc status` say a project is waiting on hands the round is about to
+ * pick up itself.
+ */
+test('a held pull request still owed its repair reads as runnable', () => {
+  const f = heldOn(
+    fixture({ plans: { memoro: { m: ready } }, areas: area(), openPrs: prOn('m'), session: okSession() }),
+    [heldEntry()],
+  );
+  const world = createRunner({ deps: f.deps }).queue();
+  const reading = readingOf(f, 'm', world);
+  assert.equal(reading.runnable, true);
+  assert.equal(reading.kind, 'repair');
+  assert.match(reading.detail, /#9 is held before merge — one repair session is owed/u);
+});
+
+/** Nothing in the way, and the reading says so in the word the round would act on. */
+test('a ready project with a clean workarea reads runnable', () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, areas: area(), session: okSession() });
+  const world = createRunner({ deps: f.deps }).queue();
+  const reading = readingOf(f, 'm', world);
+  assert.deepEqual(reading, { runnable: true, reason: null, detail: null, since: null, kind: 'step' });
 });

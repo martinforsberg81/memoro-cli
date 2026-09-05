@@ -111,6 +111,50 @@ export function queueFileText(names) {
   return names.length ? `${names.join('\n')}\n` : '';
 }
 
+/* --------------------------------------------------------------- refusals */
+
+/**
+ * The words a round refuses a project on for a reason that is not in its plan,
+ * in the order `runStepClaimed` asks them — the vocabulary the round and the
+ * reading beside `kindFor` (`machineState`, status-collect.js) share.
+ *
+ * Two lists maintained by hand is the failure this exists to stop. The round
+ * says these words (`refuse` in run.js returns `skipped:<reason>`), the reading
+ * answers with them, and the agreement test drives one case per word through
+ * both — so a reason added to `runStepClaimed` that the reading does not know
+ * fails the suite rather than quietly making `mc status` wrong.
+ *
+ * The plan-shaped words — `blocked`, `done`, `unparseable`, `unmigrated`,
+ * `no-plan` — are not here. They are `chooseKind`'s, already shared through
+ * `kindFor`, and both readings get them from the same call. `no-plan` is the
+ * word for a name with neither a workarea nor a plan on main as well: the
+ * round meets that fact one question later than the reading does, and it is
+ * the same fact.
+ *
+ * `read: false` is a refusal the reading cannot answer, and every one of them
+ * has to say why. They are all the same shape: the outcome of work the round
+ * did and the reading refuses to do — `mc status` may not fetch, merge, create
+ * a worktree or spawn a tool while the runner is working. A reading that says
+ * `ready` and a round that then fails on one of these is not a disagreement
+ * about what is in the way; it is the round finding out something no file on
+ * this machine said beforehand.
+ */
+export const RUN_REFUSALS = Object.freeze([
+  { reason: 'stop', read: true },
+  { reason: 'worktree', read: false, why: 'the round makes a missing worktree; that `git worktree add` failed is the outcome of that action' },
+  { reason: 'dirty', read: true },
+  { reason: 'prs-unknown', read: true },
+  { reason: 'held-after-repair', read: true },
+  { reason: 'in-flight', read: true },
+  { reason: 'branch', read: true },
+  { reason: 'sync', read: false, why: 'the fetch and the merge of origin/main are the round\'s own writes, and their failure is what they returned' },
+  { reason: 'role-missing', read: false, why: 'the kind is only known after the merge, and the role file is read out of the worktree the round has just synced' },
+  { reason: 'tool-missing', read: false, why: 'whether the tool is on this machine is asked of the launch adapter, which spawns it' },
+].map((item) => Object.freeze(item)));
+
+/** The same words, by name, so a call site cannot invent one with a typo. */
+export const REFUSAL = Object.freeze(Object.fromEntries(RUN_REFUSALS.map((item) => [item.reason, item.reason])));
+
 /* ------------------------------------------------------------------- kind */
 
 /**
