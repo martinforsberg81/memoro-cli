@@ -13,14 +13,13 @@
  * test that went red for it would gate ordinary work rather than drift. Run
  * it when a verb is added or removed, and when a directory looks dead.
  *
- * Seeded by hand from the routers' surviving entries rather than by parsing
- * the tables, because while the tables still held the verbs being cut,
- * seeding from them reported the whole session manager as live. `mc status
- * <name>` was the trap: it routes through `src/cli/status.js`, which used to
- * pull in the registry, the broker, the session host and the managed
- * providers. It is a 42-line shim now — it prints where the page went and
- * hands a named project to `mc/commands/status-project.js` — so it is seeded
- * here by name, and the cut kept it.
+ * It was seeded by hand while the cut was running, and had to be: the router's
+ * table still held the verbs being removed, so parsing it reported the whole
+ * session manager as live. That reason expired with the project. What replaced
+ * it is worse than parsing — a hand-kept list nobody updates. `mc deploy` was
+ * routed on 2026-09-04 and never added to it, so on 2026-09-05 this script
+ * called 379 working lines dead. The table is read where it lives now, and the
+ * seed list is only what no import edge can reach.
  *
  * Three seeds are not imported by anyone: `lib/update-check-worker.js`,
  * `mc/nightly-run.js` and `mc/repo-watch-run.js` are spawned as child
@@ -53,27 +52,17 @@ const SRC = join(ROOT, 'src');
 const LIST = args.includes('--list');
 
 /**
- * The surface as it stands: the page, and the twelve verbs `src/mc-cli.js`
- * routes after step 3. Every entry here is a value in that table, or a file
- * one of those values reaches through the router itself.
+ * The surface as it stands: the router, and the three files nothing imports.
+ *
+ * Every verb used to be listed here by hand beside `src/mc-cli.js`, one entry
+ * per value of its `modules` table. That is now read out of the table itself
+ * (see SPECIFIER), because the hand-kept copy had already drifted: `mc deploy`
+ * was routed and never added, so this sweep called a working verb dead. The
+ * only seeds left are the ones no import edge can reach — a router that is the
+ * root of the graph, and three files started as child processes by path.
  */
 const LIVE = [
   'mc-cli.js',                      // the router: the page's flags, `moved()`
-  'mc/commands/home.js',            // bare `mc` — the page
-  'cli/status.js',                  // mc status — the shim in front of…
-  'mc/commands/status-project.js',  // …mc status <name>
-  'mc/commands/work.js',
-  'mc/commands/repo.js',
-  'mc/commands/merge.js',
-  'mc/commands/test.js',
-  'mc/commands/worker.js',
-  'mc/commands/brief.js',
-  'mc/commands/helper.js',
-  'mc/commands/plan.js',
-  'mc/commands/run.js',
-  'mc/commands/roles.js',
-  'mc/commands/log.js',
-  'mc/help-text.js',
   'lib/update-check-worker.js',     // spawned by path from lib/update-check.js
   'mc/nightly-run.js',              // spawned by path from mc/nightly.js
   'mc/repo-watch-run.js',           // spawned by path from mc/repo-watch.js
@@ -110,6 +99,17 @@ const SPECIFIER = [
   /(?:^|\n)\s*(?:import\s[^;]*?from\s*|import\s*|export\s[^;]*?from\s*)['"]([^'"]+)['"]/gu,
   /import\(\s*['"]([^'"]+)['"]\s*\)/gu,
   /runModule\(\s*['"]([^'"]+)['"]/gu,
+  // The router's own table: `verb: './mc/commands/verb.js',`.
+  //
+  // `mc-cli.js` calls `runModule(modules[command], …)` — a lookup, not a
+  // literal — so the pattern above sees nothing of it and every routed verb
+  // looked unreachable unless somebody also wrote it into LIVE by hand. That
+  // hand-kept list is what went wrong: `mc deploy` was routed on 2026-09-04
+  // and never added, so this sweep reported a working verb as 769 dead lines.
+  // A reachability tool whose answer depends on a second list being remembered
+  // is a tool that will eventually recommend deleting something that works —
+  // which is how `mc dev` was cut. The table is now read where it lives.
+  /(?:^|\n)\s*[A-Za-z_$][\w$]*:\s*['"](\.[^'"]+)['"]/gu,
 ];
 
 const all = walk(SRC);

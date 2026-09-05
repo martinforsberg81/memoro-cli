@@ -25,6 +25,7 @@ THE PAGE
   mc test <repo> <pr>              Measure a pull request; merge nothing
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
+  mc dev list                      Which dev server runs in which worktree
   mc status <name>                 One project, whole
   mc work <name>                   Open that workarea
 
@@ -121,6 +122,23 @@ IN FULL
   mc test nightly status [--json]  Whether it is running, how often and where
                                     it writes — and, per repository, what the
                                     last run found: red, and since when
+  mc dev list [--json]             The machine's dev servers: one line each —
+                                    instance, url, session and worktree. A
+                                    registration whose process is gone is swept
+                                    as it is read, so the answer is what is
+                                    running rather than what once was. It exits
+                                    0 on an empty machine, because memoro's dev
+                                    wrapper runs it to find out whether this mc
+                                    speaks the protocol at all
+  mc dev register <manifest> [--json]
+                                    Take a copy of the manifest a project's dev
+                                    wrapper just wrote. mc holds the index; the
+                                    wrapper stays authoritative for how its
+                                    server starts, stops and becomes healthy
+  mc dev unregister <manifest> [--json]
+                                    Forget it. Not an error when nothing was
+                                    registered — the end state is the one asked
+                                    for either way
   mc merge <repo> <pr>             That same measurement, then the landing:
                                     only if nothing new went red and the base
                                     has not moved since, squash-merge, pull the

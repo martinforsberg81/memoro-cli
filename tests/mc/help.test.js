@@ -69,10 +69,21 @@ describe('mc --help', () => {
       // The verb list, cut 2026-09-03: the two V1 maintenance verbs and the
       // thirteen capability verbs, every one of them a door into machinery
       // the page does not reach.
+      //
+      // `dev` was the fourteenth name on this list until 2026-09-05, and it is
+      // the one the cut got wrong — not about this repository, where nothing
+      // reached it, but past its edge, where memoro's `npm run dev` called it
+      // on every start. It is back as three verbs and belongs in the help, so
+      // it is asserted in the list above instead of forbidden here. What is
+      // still gone are the ten sub-verbs it used to carry: `ensure`, `plan`,
+      // `status`, `logs`, `stop` and `restart` among them.
       'doctor', 'migrate', 'setup', 'install-shell', 'auth', 'tool-auth',
-      'connections', 'github', 'coding-profile', 'dev', 'deps',
+      'connections', 'github', 'coding-profile', 'deps',
       'cloud-session', 'cloud-runtime', 'security',
     ];
+    for (const gone of ['mc dev ensure', 'mc dev plan', 'mc dev stop', 'mc dev restart', 'mc dev logs', 'mc dev status', 'mc deps', 'mc storage']) {
+      assert.doesNotMatch(result.stdout, new RegExp(`\\b${gone}\\b`, 'u'), `${gone} went with the cut and is not coming back`);
+    }
     for (const verb of gone) {
       assert.doesNotMatch(result.stdout, new RegExp(`\\bmc ${verb}\\b`, 'u'), `${verb} was cut and is still in the help`);
     }

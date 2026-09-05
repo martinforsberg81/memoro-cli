@@ -35,6 +35,14 @@ import {
 // doors into the session manager, the managed providers and the cloud
 // runtimes that `mc-cut` removes. `mc vault` stays by the project's contract,
 // deliberately and against what reachability says about parts of it.
+//
+// `dev` came back on 2026-09-05, and not as it was. It is three verbs in
+// `mc-cli.js`'s own table — `list`, `register`, `unregister` — because a
+// sibling repository calls them on every `npm run dev` and because
+// `mc test dev` now reads the index they keep. What `reach.mjs` could not see
+// is exactly that: it is a same-repo static import graph, and memoro's
+// `execFile('mc', ['dev', …])` is invisible to it by construction. The cut was
+// right about this repository and blind past its edge.
 const CAPABILITIES = {
   vault: () => import('./cli/vault.js'),
 };
