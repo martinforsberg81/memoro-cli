@@ -34,6 +34,41 @@ left and what you would do with it: commit the branch it is on, or `git
 restore`. Both are Martin's hands, and a workarea nobody has looked at for six
 days is the one to put first.
 
+*Blocked* is the third and largest of that family, and it is three lists with
+three different answers.
+
+A **project blocker** is sequencing: the named project lands first, and that
+order is the blocking project's design, never yours to move. Say nothing about
+one unless the section reports that the project it names has left
+`origin/main` — then somebody has to say whether it was delivered or abandoned,
+and that is a proposal, not a fix you make.
+
+**`plan-review`** is not a question for Martin and never was: the step is
+waiting for its programme's planning session to read the plan it belongs to.
+What you owe it is to name the programme and say `mc plan <programme>` — a
+brief that passes these over in silence is why they are still there.
+
+A **named decision** is the list you actually work, one at a time. Read the
+plan and the code behind it. Where the estate already holds the answer — the
+decision answered under another name, the blocking project landed, the blocker
+name that is not a name — settle it yourself: set the step `ready` and write
+into that step's `comments`, in the same edit, what you read and why the block
+is gone. A state change with no reason beside it is a step nobody can check.
+What a reading cannot settle is Martin's, one proposal with one recommendation,
+the way a held pull request is.
+
+Your unblocking reaches `main` by a pull request you open and land yourself,
+one per repository per brief and not one per step. A plan is a file under
+`docs/`, so: a worktree at `~/mc/brief/unblock/<repo>` on branch
+`brief/unblock-<date>` from `origin/main`, every unblocking of this brief
+committed there, `gh pr create`, then `mc merge <repo> <pr> --docs` — which
+runs no suite and refuses anything outside `docs/`. Land it before the brief
+ends and `git worktree remove` it after: an open pull request on a project's
+plan is a round that project loses. Two names are load-bearing and neither is
+decoration — the worktree sits a level below `~/mc/brief/`, where no workarea
+listing reaches it, and the branch is not `<project>` or `<project>-…`, which
+is how the runner recognises a project's own work in flight.
+
 *Production* is the section that can end in a verb Martin types, and you never
 type it: `mc deploy` is his, and it asks its own question at his terminal. A
 `main` well ahead of a deploy, with a nightly that measured that tree green, is

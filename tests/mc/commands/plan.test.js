@@ -169,6 +169,21 @@ describe('the prompt', () => {
     assert.match(without.prompt, /not a workarea: nothing\n`mc run` does can reach it\.\n\nMartin is at the terminal/u);
   });
 
+  // The receiving end of the brief's hand-off. `plan-review` is the park every
+  // plan converted to the schema carries, and it has never been a question for
+  // Martin: the brief names the programme, and this is the session that reads
+  // the plan. It is a line of the prompt rather than prose in
+  // `canon/roles/plan.md` because that role file has no body and keeps none —
+  // the assertion above it is the one that says so.
+  it('tells the session that a plan-review park is its own', () => {
+    const { prompt } = planLaunch({
+      programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'),
+    });
+    const own = prompt.replace(sharedRoleText(), '');
+    assert.match(own, /`blocked_by:\s*plan-review`/u);
+    assert.match(own, /waiting\s+for\s+this\s+session\s+and\s+no\s+one\s+else/u);
+  });
+
   it('names only the checkout it actually got', () => {
     const launch = planLaunch({ programme: 'mc', repos: ['memoro-cli'], role: readCanonRole('plan') });
     assert.match(launch.prompt, /with `memoro-cli\/` beside you/u);

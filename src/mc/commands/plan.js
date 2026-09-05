@@ -287,6 +287,11 @@ export function programmeLabel(row) {
  * programme's own directory. There is no role overlay behind this — the role
  * file is frontmatter, the model and the tools, and no prose.
  *
+ * The one addition is not a deliverable either: a step parked on `plan-review`
+ * is this session's by definition, and the brief hands it over by name. That is
+ * a fact about work already on `main`, not a guess about what this session will
+ * produce.
+ *
  * The one thing that does come from outside is the text every role session
  * shares — `canon/roles/_common.md`, read here rather than restated. A rule
  * that holds for every session holds for this one, and a planning session is
@@ -307,11 +312,19 @@ export function planLaunch({ programme, repos = [], role, shared = sharedRoleTex
     '`mc run` does can reach it.',
   ];
   if (shared) lines.push('', shared);
+  // The one thing a planning session is told about a plan it has not opened:
+  // `plan-review` is its work. `canon/roles/brief.md` sends it here by name, and
+  // a hand-off nobody at the receiving end has heard of is a hand-off that
+  // stops. It is a line of this prompt rather than prose in
+  // `canon/roles/plan.md` because that role is frontmatter and stays that way —
+  // asserted, with the reason, in `tests/mc/commands/plan.test.js`.
   lines.push(
     '',
     'Martin is at the terminal. Start by reading `docs/project/README.md` and what',
     `\`docs/project/${programme}/\` already holds in each repository, and say what`,
-    'you found.',
+    'you found. A step of this programme stopped on `blocked_by: plan-review` is',
+    'waiting for this session and no one else: the brief names the programme and',
+    'hands it over, and reading that plan is how it comes back.',
   );
   return { overlay: role.overlay || null, prompt: lines.join('\n'), model: role.model || null };
 }
