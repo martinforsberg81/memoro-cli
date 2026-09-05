@@ -61,6 +61,10 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     env,
     now: () => new Date(now),
     sleep: async () => {},
+    // What `lanes.json` says, from the fixture rather than from the machine
+    // running the suite: `runLoop` reads it at start, and without this a test
+    // would answer to whatever `mc run lanes` was last set to on this laptop.
+    laneCount: () => ({ per_repo: 1, total: null }),
     tmuxHas: (name) => live.includes(name.replace(/^mc-/u, '')),
     // The liveness test the loop's own refusal uses. A table, not `ps`: a
     // fixture pid that happened to be a real process on the machine running
@@ -2387,7 +2391,7 @@ test('runLoop: lanes above one split a repository\'s names, and never hold the s
     if (started === 3) f.files['/w/runner/STOP'] = '';
     return inner(call);
   };
-  f.deps.laneCount = () => 2;
+  f.deps.laneCount = () => ({ per_repo: 2, total: null });
   assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
   const names = seen.map((s) => s.name).sort();
   assert.deepEqual(names, ['a', 'b', 'c'], `every project ran once: ${JSON.stringify(seen)}`);
@@ -2398,6 +2402,136 @@ test('runLoop: lanes above one split a repository\'s names, and never hold the s
   assert.match(log, /lanes: 2 per repository/u);
   assert.match(log, /memoro#2: round 1 done \(1 ran\)/u, 'the second lane closed a round of its own');
   assert.match(log, /runner exit on STOP after c/u, 'the first lane walked a then c and left on STOP');
+});
+
+/* ------------------------------------------------------ the total lane cap */
+
+/** Real turns of the event loop, so a polling lane yields to a running one. */
+const turns = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((resolve) => { setImmediate(resolve); }); };
+
+/**
+ * Four ready projects over two repositories at `lanes 2` — four lane loops,
+ * every one of them with a name to run — against a session that blocks until
+ * the test lets it go. `peak` is the most that were ever in flight at once,
+ * which is the number both of these tests are about.
+ */
+function laneRace({ total }) {
+  const f = fixture({
+    plans: { memoro: { a: ready, b: ready }, 'memoro-cli': { c: ready, d: ready } },
+    session: okSession(),
+  });
+  const inner = f.deps.session;
+  const state = { starts: [], live: 0, peak: 0 };
+  let release = null;
+  const held = new Promise((resolve) => { release = resolve; });
+  f.deps.session = async (call) => {
+    state.starts.push(call.cwd.split('/')[2]);
+    state.live += 1;
+    state.peak = Math.max(state.peak, state.live);
+    await held;
+    try { return await inner(call); } finally { state.live -= 1; }
+  };
+  // A sleep that yields a macrotask, not a resolved promise: a lane held back
+  // by the cap polls, and a no-op sleep would spin the microtask queue and
+  // starve the sessions it is waiting for.
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  f.deps.laneCount = () => ({ per_repo: 2, total });
+  return { f, state, release: () => release(), stop: () => { f.files['/w/runner/STOP'] = ''; } };
+}
+
+/**
+ * An operator who sets no total gets what they always got: two repositories
+ * at `lanes 2` is four sessions at once, and nothing counts anything. This is
+ * the picture that started the project — six rows in the RUNNER block from a
+ * setting that says three.
+ */
+test('runLoop: no total set — every lane starts, exactly as before', async () => {
+  const r = laneRace({ total: null });
+  const run = runLoop({ rounds: 0, deps: r.f.deps });
+  await turns();
+  assert.equal(r.state.peak, 4, `four steps in flight at once: ${r.state.starts.join(', ')}`);
+  r.stop();
+  r.release();
+  assert.equal(await run, 0);
+  const log = r.f.files['/w/runner/log/runner.log'];
+  assert.match(log, /lanes: 2 per repository, no total cap/u);
+  assert.doesNotMatch(log, /waiting for a lane/u, 'nothing was held back');
+});
+
+/**
+ * The same four lanes under a total of 2. Two lanes both reading "2 in
+ * flight" and both starting is the failure this asserts against, so the
+ * sessions block: every lane that could start piles up against the cap at
+ * once rather than passing through it one at a time.
+ */
+test('runLoop: a total of 2 — four lanes, a blocking step, and two sessions', async () => {
+  const r = laneRace({ total: 2 });
+  const run = runLoop({ rounds: 0, deps: r.f.deps });
+  await turns();
+  assert.equal(r.state.peak, 2, `only the total ever ran at once: ${r.state.starts.join(', ')}`);
+  assert.equal(r.state.starts.length, 2, `and only the total ever began: ${r.state.starts.join(', ')}`);
+  r.stop();
+  r.release();
+  assert.equal(await run, 0);
+  assert.equal(r.state.starts.length, 2, 'the lanes held back gave up on STOP rather than starting');
+  const log = r.f.files['/w/runner/log/runner.log'];
+  assert.match(log, /lanes: 2 per repository, 2 in total/u);
+  assert.match(log, /2 of 2 steps in flight on this machine — waiting for a lane/u);
+});
+
+/**
+ * The other half of a cap: the slot comes back. One held lane, one waiting,
+ * and the wait ends when the session does — with no line per attempt, only
+ * the one that says the waiting began.
+ */
+test('a lane held back by the total goes through when the slot frees', async () => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
+  const inner = f.deps.session;
+  const starts = [];
+  let release = null;
+  const held = new Promise((resolve) => { release = resolve; });
+  f.deps.session = async (call) => { starts.push(call.cwd.split('/')[2]); await held; return inner(call); };
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  const runner = createRunner({ deps: f.deps, total: 1 });
+  const world = runner.queue();
+  const first = runner.runStep('a', world, { lane: 0 });
+  await turns(4);
+  const second = runner.runStep('b', world, { lane: 1 });
+  await turns();
+  assert.deepEqual(starts, ['a'], 'the second lane is held back by the total');
+  const waiting = f.files['/w/runner/log/runner.log'].match(/waiting for a lane/gu) || [];
+  assert.equal(waiting.length, 1, `one line for the wait, not one per attempt: ${waiting.length}`);
+  release();
+  assert.equal(await first, 'ran');
+  assert.equal(await second, 'ran');
+  assert.deepEqual(starts, ['a', 'b'], 'the freed slot was taken');
+});
+
+/**
+ * A lane waiting for a slot when an UPDATE arrives starts nothing. The drain
+ * is meant to end within one step's length: a lane that waited out somebody
+ * else's step and then launched its own would make it two.
+ */
+test('a lane waiting for a slot gives the wait up on UPDATE, and starts no step', async () => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
+  const inner = f.deps.session;
+  const starts = [];
+  let release = null;
+  const held = new Promise((resolve) => { release = resolve; });
+  f.deps.session = async (call) => { starts.push(call.cwd.split('/')[2]); await held; return inner(call); };
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  const runner = createRunner({ deps: f.deps, total: 1 });
+  const world = runner.queue();
+  const first = runner.runStep('a', world, { lane: 0 });
+  await turns(4);
+  const second = runner.runStep('b', world, { lane: 1 });
+  await turns();
+  f.files['/w/runner/UPDATE'] = '';
+  assert.equal(await second, 'skipped');
+  release();
+  await first;
+  assert.deepEqual(starts, ['a'], 'the waiting lane never launched');
+  assert.match(f.files['/w/runner/log/runner.log'], /b: UPDATE while waiting for a lane — starting no step, skip/u);
 });
 
 /**
@@ -2636,14 +2770,19 @@ test('every reason the round can refuse on is in the table above', () => {
  * The gate that makes the table above bite. A refusal that returns a bare
  * `'skipped'` says no word, so it can be added to `runStepClaimed` without any
  * of this failing — which is the two-lists-by-hand failure in another shape.
- * The one exception is the lane claim in `runStep`: two lanes holding one
- * project is a fact about this process for the length of one round, not about
- * the files `mc status` reads.
+ *
+ * Two are exempt, and they are the same kind of thing: the project claim in
+ * `runStep` (two lanes holding one project) and the machine's slot in
+ * `waitForSlot` (an UPDATE arriving while a lane waits under the total cap).
+ * Both are facts about this process at one instant — how many of its own
+ * lanes are where — and no file on this machine holds either, so `mc status`
+ * could only guess at them. A third one is not exempt: teach the reading, or
+ * argue here why it cannot be taught.
  */
-test('the round refuses in words: no bare `skipped` outside the lane claim', () => {
+test('the round refuses in words: no bare `skipped` outside the two in-process claims', () => {
   const source = readFileSync(new URL('../../src/mc/run.js', import.meta.url), 'utf8');
   const bare = source.match(/return 'skipped'/gu) || [];
-  assert.equal(bare.length, 1, 'every refusal says `skipped:<reason>` so the reading can be held to it — the lane claim is the one exception');
+  assert.equal(bare.length, 2, 'every refusal says `skipped:<reason>` so the reading can be held to it — the two in-process claims are the exceptions');
 });
 
 /**

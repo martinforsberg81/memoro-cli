@@ -361,6 +361,76 @@ started a project because one was answered, and there are none to read now. A
 plan comes back by being set `ready`, which is the job of whoever
 applies the answer.
 
+### The two readings, and what each answers
+
+The round is not the only reader of those two refusals, and since 2026-09-05 it
+is not the only one that gets both. **There are two readings of "can this
+project be worked on now", they answer different questions, and neither can
+answer the other's:**
+
+| | `planState` / `kindFor` | `machineState` |
+|---|---|---|
+| the question | is this plan ready to be worked on? | would the runner start it now? |
+| what it is a fact about | a file on `origin/main` — the state of the first step that is not `done` | this machine, at this moment |
+| what it sees | `ready`, `blocked` and what on, `done`, a file that does not parse | the STOP file, a dirty worktree, a merge stopped in one, a held pull request, work in flight, a branch the workarea does not have |
+| what it costs | nothing — the round has already read the plans | one `git status --porcelain` in the workarea, and only where the plan does not already refuse |
+| where it lives | `plan-schema.js`, flattened by `kindFor` (`status-collect.js`) | `machineState` (`status-collect.js`), beside it |
+
+A plan can be `ready` for days while nothing can start it. On 2026-09-05 both
+of memoro-cli's unfinished plans read `ready` in every surface a person uses
+while `held.json` held #612 and #614 and the whole queue was stopped; the one
+place that knew was `runner.log`, which carried 9 827 `, skip` lines. That is
+what the second reading is for — not that the log said it badly, but that
+nothing else said any of it.
+
+`machineState` asks the reasons in `runStepClaimed`'s own order, because the
+answer has to be the first thing the round would hit and not merely some true
+thing: a project that is both dirty and held reads `dirty`, which is what a
+person has to deal with first. It starts nothing, writes nothing and fetches
+nothing — its `git` is only ever given read-only arguments — and it asks the
+plan first, so a project the plan already refuses costs no git at all. That is
+`planRefusal`'s economy above, applied to the reading.
+
+**The two cannot drift, and that is asserted rather than hoped for.**
+`RUN_REFUSALS` (`run-plan.js`) is the shared vocabulary: every word a round
+refuses on for a reason that is not in the plan, in the order it asks them.
+`runStepClaimed` returns `skipped:<reason>` through one `refuse()` helper and
+the reading answers in the same words. Three tests in `tests/mc/run.test.js`
+hold them together — a table of twelve cases driven through both the round and
+the reading over one fixture, a coverage test asserting every word in
+`RUN_REFUSALS` has a case, and a source check that no refusal returns a bare
+`'skipped'` (the lane claim in `runStep` is the one exception, and it is a fact
+about this process rather than about the files). A reason added to
+`runStepClaimed` without the reading fails the suite.
+
+Four of the words carry `read: false`, and there the reading answers *runnable*
+rather than guessing: `worktree`, `sync`, `role-missing` and `tool-missing` are
+each the outcome of work the round does and the reading may not do — creating a
+worktree, fetching and merging, reading a role out of a worktree it has just
+synced, spawning a tool. So **`runnable: true` means nothing on this machine is
+standing in the way, not that the round is guaranteed to start**: `mc status`
+cannot know a fetch will fail.
+
+Two things are deliberately absent. A **repository lease** is not read: a lease
+held by a gate round or a deploy is a reason a round waits rather than a reason
+a project cannot run, it is gone within minutes, and reading it would make
+`mc status` flicker. And a **merge left in a workarea** is reported as `dirty`
+rather than as a word of its own, because that is what the round does with it —
+an unmerged path makes `git status --porcelain` non-empty and the round skips
+there, before any of its own merge work. The two are told apart in the sentence
+(`a merge stopped in …` against `uncommitted work in …`) and not in the word,
+because a word of its own would be one the two readings could disagree about.
+
+**Which surface says which**, so that a bare `ready` can be read for what it is
+wherever it is met:
+
+| surface | what it says |
+|---|---|
+| `mc status <name>` | both, on one row — `ready · #614 is held before merge after a repair (since 09-03 10:00Z)`, and bare `ready` when this machine has nothing to add ([`mc-status.md`](mc-status.md)) |
+| the page's QUEUE (`mc`) | both — a skipped name is counted under its machine word, and a runnable name is drawn as the kind the runner would actually start, `repair` where a hold is owed one |
+| `mc brief --collect` | both, in a section of its own — *Ready, and the runner cannot start it*, one line per project with what is in the way, since when, and the `runs.tsv` row that left it ([`mc-brief.md`](mc-brief.md)) |
+| the page's PROGRAMMES rows, `mc status`'s step rows, the brief's *Plan status* | the plan alone, and that is right: they are about what the plan says |
+
 ### The session
 
 Fresh, headless, and assembled from the plan's own frontmatter
@@ -634,6 +704,58 @@ logging `left open` and parking the project behind its own pull request,
 which is what a refused round did until 2026-09-03. The lock and the lease
 themselves still refuse: one suite at a time is the guarantee, and it is the
 caller that learnt to wait.
+
+**And the machine has a number of its own — `mc run lanes --total <n>`.** It
+lives beside the first in the same file, and the two are not the same kind of
+thing. `per_repo` bounds how many steps share one `main` — where two landings
+meet at the gate — and is a correctness number. `total` bounds this machine
+across every repository at once: CPU, memory, API quota, and how much of a
+fleet one person can follow. `lanes 3` on two repositories is six sessions,
+and until 2026-09-05 nothing in the code objected. **A count of sessions is a
+proxy for load, not a measurement of it** — memory and quota are the honest
+measurements and neither is read.
+
+Each is absent on its own terms and the file may hold either alone. An absent
+`per_repo` is 1, an absent `total` is no cap, and a machine with neither set —
+which is what `~/.memoro/mc/lanes.json` holds today — runs one lane per
+repository, two sessions, exactly what it ran before the total existed. Set,
+both bind and the smaller wins: `per_repo`
+structurally, because there are that many lane loops per repository, and
+`total` as an in-process claim each lane takes at the last moment before it
+launches a session (`takeSlot`/`waitForSlot`, run.js) and drops in the same
+`finally` that removes its current file. It is a claim rather than a count of
+`current-*.json` because a file is written after a step begins, and two lanes
+counting files in the same tick would both see the same free slot. A lane with
+no slot polls every 15 s and says one line when the wait begins, and gives the
+wait up on STOP or UPDATE — the drain promises that from the moment UPDATE is
+read no lane starts a step. There is no ordering rule between waiting lanes:
+whoever polls first wins, so a busy repository can hold the machine while a
+quiet one waits. That is measured, not designed, and it is the thing to watch
+first if a cap turns out to starve one side.
+
+**Which pair is chosen decides whether that hazard can bite at all**, and this
+is the one arithmetic worth knowing about the two numbers together. `per_repo`
+is structural — there are exactly that many lane loops per repository, so one
+repository can never hold more than `per_repo` slots — while `total` is one
+counter for the machine. With two repositories, whatever one of them holds, the
+other always has at least `total − per_repo` slots it cannot be shut out of.
+`per_repo 3, total 3` therefore guarantees a repository nothing: memoro can
+hold all three and memoro-cli waits for as long as memoro has steps, which
+with 46 memoro step runs against memoro-cli's 10 since 2026-09-02 is most of
+the time. `per_repo 2, total 3` guarantees each of them one, with no ordering
+rule and no scheduler. A `total` at or below `per_repo` is the first thing to
+look at when one side is being starved.
+
+`mc run lanes` with no argument prints both numbers and how many steps are in
+flight while it is read — `3 per repository, 3 in total — 2 in flight`, or
+`1 per repository, no total cap (up to 2 across 2 repositories) — 0 in
+flight`, because a line that names only the per-repository number is the line
+that produced the wrong picture in the first place. `mc run lanes <n>` sets
+the per-repository number as it always has, `--total <n>` sets the machine's
+without touching it, `--total none` takes the cap off, and both may be given
+in one command — each is checked before either is written. A total at or above
+`per_repo × repositories` can never refuse a lane a slot, and the verb says so
+rather than letting an operator believe they capped anything.
 
 ### Why the session is spawned, not `spawnSync`
 

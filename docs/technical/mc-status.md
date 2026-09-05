@@ -55,7 +55,8 @@ OPEN PR
 ```
 
 `--json` prints the same object the renderer takes. `--offline` skips the
-fetch and the `gh` call and the rest is unchanged.
+fetch and the `gh` call; the one thing it changes besides the OPEN PR block is
+the status row, and it says so — see *The status row says the pair* below.
 
 **`next:` gets a block of its own.** On a live plan it is a paragraph —
 docx-editor's was 1 900 characters — so putting it in the label column
@@ -73,6 +74,7 @@ From the page's menu, `s <name>` runs this same verb and redraws
 | the workarea exists | `~/mc/<name>/` holding a checkout with a `.git` | `mc run`, `mc work` — never `mc plan`, whose session lives under `~/mc/plan/` and is not a workarea |
 | the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
+| whether the runner could start it at all | the workarea's `git status --porcelain`, `~/mc/runner/held.json`, the same open pull requests, and whether `~/mc/runner/STOP` is there | `mc run`, and whoever left the workarea dirty |
 
 The readers are shared, not re-implemented: `planFields`, `scanDecisions`,
 `parseDecision`, `runsFor` and `defaultRepos` all come from
@@ -99,6 +101,56 @@ A name that has a workarea but no plan anywhere is answered too — with
 `no plan — this is a workarea without a project`. Those are the closure
 candidates `mc run` will not remove by itself; the page lists them and
 `~/mc/runner/unplanned-workareas.md` keeps them.
+
+## The status row says the pair
+
+`ready` on this row answers *the plan's first unfinished step is ready*, and it
+was read as *this is being worked on, or is about to be*. Those are two
+questions and until 2026-09-05 only the first was answered here: on that day
+`mc status intake-inbox` and `mc status role-instructions` both printed a bare
+`ready` while #612 and #614 sat in `held.json` and nothing could start either
+project. So the row carries both halves, and it carries them on **one** row —
+`ready` with the machine's answer on a row of its own is a row that invites a
+reader to stop at the first one:
+
+```
+  status      ready · #614 is held before merge after a repair — the brief's (since 09-03 10:00Z)
+  status      ready · uncommitted work in ~/mc/connections-section/memoro: hop-measure.mjs,
+              probe.mjs (since 09-05 10:03Z)
+  status      ready
+```
+
+The second half is `machineState` (`status-collect.js`), the same reading the
+page's QUEUE and the brief draw; what the two readings are and why there are two
+is [`mc-run.md`](mc-run.md) § *The two readings, and what each answers*.
+`machineNote` is the rule for when it says nothing, and there are three cases
+and no others:
+
+- **a refusal the plan already names is dropped.** The row exists to stop
+  `ready` being read as runnable, not to print `blocked · blocked`.
+- **`runnable` is silent.** That is most projects, and it is the case that must
+  stay silent: a clause on every row would be noise nobody reads the day it
+  matters. The third example above is exactly what it was before this existed.
+- **the one loud `runnable` case is a hold still owed its repair**, because what
+  the runner would start there is a repair session and not the step the plan
+  names.
+
+The workarea's absolute path is folded to `~`; it is otherwise most of a
+terminal row.
+
+**The machine half is asked of the plan on `origin/main`**, not of the workarea
+copy the rows above it are read from, because `origin/main` is the copy the
+round reads. Where the two differ the plan row already says
+`differs from origin/main`, and a plan that is `ready` in the workarea while
+main's is `blocked` now says so on the status row as well.
+
+**`--offline` changes this row, and that is the honest answer rather than a
+promise.** With no `gh` call the repository lands in `prsFailed`, which is the
+round's own refusal for it, so every project reads
+`ready · GitHub could not be asked what this repository has open` — measured on
+2026-09-05, `mc status total-lane-cap --offline` against `~/mc`. A project with
+something nearer in the way still reads that: the dirty worktree is asked first,
+online or off.
 
 ## The cost estimate
 
@@ -166,7 +218,7 @@ offers**, so it cannot rot back into a menu of things that exit 2.
 | `src/cli/status.js` | the routing: a name, or the sentence saying the page is `mc` |
 | `src/mc/commands/status-project.js` | the two flags, and printing |
 | `src/mc/status-project.js` | what one project is — collect, the builders, the renderer |
-| `src/mc/status-collect.js` | the readers more than one caller needs — `nowBlock`, `kindFor`, `pidAlive`, `decisionsBlock`, `areasWithCheckout` |
+| `src/mc/status-collect.js` | the readers more than one caller needs — `nowBlock`, `kindFor`, `machineState` and `machineDetail`, `pidAlive`, `readCurrents`, `areasWithCheckout` |
 | `src/mc/status-render.js` | the drawing primitives — `painter`, `width`, `pad`, `clip`, `elapsed` |
 | `src/mc/prices.js` | the dated list-price table |
 

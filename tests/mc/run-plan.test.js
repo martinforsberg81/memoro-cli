@@ -611,8 +611,5 @@ test('mcOwnFiles: the two trees a running runner is already holding, and nothing
   assert.deepEqual(mcOwnFiles([undefined, '']), []);
 });
 
-test('parseRunArgs: `lanes` reads or sets the count, and takes one number at most', () => {
-  assert.deepEqual(parseRunArgs(['lanes']), { verb: 'lanes', count: null });
-  assert.deepEqual(parseRunArgs(['lanes', '4']), { verb: 'lanes', count: '4' });
-  assert.match(parseRunArgs(['lanes', '4', '5']).error, /one number/u);
-});
+// `lanes` and its `--total` form are parsed and printed in
+// tests/mc/commands/run-lanes.test.js, beside the verb they belong to.

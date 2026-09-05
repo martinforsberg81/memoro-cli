@@ -12,9 +12,12 @@
  *   mc run stop --force    it ends now, and the session it is holding with it
  *   mc run --update        it finishes the round, fast-forwards mc's own
  *                          checkout, and restarts itself on the new code
- *   mc run lanes [<n>]     how many steps may be in flight per repository;
- *                          no number prints it. Read at start, so a running
- *                          runner takes a new count on `--update`
+ *   mc run lanes [<n>] [--total <n>|none]
+ *                          how many steps may be in flight — the positional
+ *                          per repository, `--total` on this machine across
+ *                          both. No argument prints both and what is running.
+ *                          Read at start, so a running runner takes new
+ *                          counts on `--update`
  *
  * The three orders are files under `~/mc/runner/` read at a round boundary,
  * not signals: a runner ninety minutes into a headless session is given the
@@ -28,9 +31,11 @@
  * `--no-caffeinate` is the way out for somebody who wants the machine to be
  * allowed to sleep.
  */
-import { LANES_MAX, readLaneCount, writeLaneCount } from '../lane-count.js';
+import { LANES_MAX, laneValue, readLaneCount, writeLaneCount } from '../lane-count.js';
+import { runnerDir } from '../paths.js';
 import { requestUpdate, startRunner, stopRunner } from '../run-control.js';
-import { runLoop } from '../run.js';
+import { REPO_NAMES, runLoop } from '../run.js';
+import { pidAlive, readCurrents } from '../status-collect.js';
 import { scanArgs } from './flags.js';
 
 const USAGE = [
@@ -38,7 +43,9 @@ const USAGE = [
   '        mc run start [same flags]   the runner, in the background',
   '        mc run stop [--force]       after the round it is in, or now',
   '        mc run --update             after the round: new code, new process',
-  `        mc run lanes [<n>]          steps in flight per repository, 1–${LANES_MAX}; no number prints it`,
+  `        mc run lanes [<n>] [--total <n>|none]`,
+  `                                    steps in flight: <n> per repository, --total across every`,
+  `                                    repository at once, both 1–${LANES_MAX}; no argument prints both`,
 ].join('\n');
 
 export async function run(argv, deps = {}) {
@@ -71,24 +78,91 @@ function order(opts, deps) {
   return (deps.update || requestUpdate)({ deps: deps.control });
 }
 
-/** `mc run lanes [<n>]` — the count per repository, printed or set. */
+/**
+ * `mc run lanes [<n>] [--total <n>|none]` — both counts, printed or set.
+ *
+ * Printed is the deliverable here, not the afterthought. The old line said
+ * `lanes 3 — 3 steps in flight per repository`, which is true and produced the
+ * wrong picture: it never says there are two repositories, so it never says
+ * the machine is running six. This one says both numbers, what they come to
+ * together, and how many steps are actually in flight while it is read.
+ */
 function lanes(opts, deps) {
   const read = deps.readLanes || readLaneCount;
   const write = deps.writeLanes || writeLaneCount;
-  if (opts.count === null) {
-    const n = read();
-    return { ok: true, code: 0, lines: [`lanes ${n} — ${n === 1 ? 'one step' : `${n} steps`} in flight per repository`] };
+  const check = deps.laneValue || laneValue;
+  const repos = (deps.repos || REPO_NAMES).length;
+
+  if (opts.count === null && opts.total === null) {
+    const pair = read();
+    return { ok: true, code: 0, lines: [`lanes ${phrase(pair, repos)} — ${inFlight(deps)} in flight`, ...neverBinds(pair, repos)] };
   }
-  const set = write(opts.count);
-  if (!set.ok) return { ok: false, code: 2, lines: [set.reason] };
+
+  // Both values are asked about before either is written: `lanes 3 --total 12`
+  // must not land the 3 and then refuse the 12, leaving the operator with half
+  // of what they typed and no line saying which half.
+  for (const [field, value] of [['per_repo', opts.count], ['total', opts.total]]) {
+    if (value === null) continue;
+    const seen = check(value, { field });
+    if (!seen.ok) return { ok: false, code: 2, lines: [seen.reason] };
+  }
+  const written = [];
+  if (opts.count !== null) written.push(write(opts.count));
+  if (opts.total !== null) written.push(write(opts.total, { field: 'total' }));
+  const refused = written.find((set) => !set.ok);
+  if (refused) return { ok: false, code: 2, lines: [refused.reason] };
+  const pair = written[written.length - 1];
   return {
     ok: true,
     code: 0,
     lines: [
-      `lanes ${set.count} — ${set.count === 1 ? 'one step' : `${set.count} steps`} in flight per repository from the next start`,
-      'a running runner keeps its count: mc run --update takes the new one after the round it is in',
+      `lanes ${phrase(pair, repos)} from the next start`,
+      ...neverBinds(pair, repos),
+      'a running runner keeps the counts it started with: mc run --update takes the new ones after the round it is in',
     ],
   };
+}
+
+/**
+ * The pair as one phrase, in the order and the words the runner's own log line
+ * uses (`run.js`: `lanes: 3 per repository, 3 in total`), so the verb and the
+ * log cannot be read as two different settings.
+ *
+ * An absent total is said rather than left out. `3 per repository` alone does
+ * not tell a reader whether the total is unset or happens to be 3, and the
+ * consequence — two repositories at 3 is six sessions at once — is the
+ * sentence whose absence started this.
+ */
+function phrase({ per_repo: per, total }, repos) {
+  const cap = total === null ? `no total cap (up to ${per * repos} across ${repos} repositories)` : `${total} in total`;
+  return `${per} per repository, ${cap}`;
+}
+
+/**
+ * A total at or above `per_repo × repositories` can never refuse a lane a
+ * slot, so setting one is a no-op. Saying so costs a line; not saying so
+ * leaves an operator believing they capped the machine.
+ */
+function neverBinds({ per_repo: per, total }, repos) {
+  if (total === null || total < per * repos) return [];
+  return [`that total never binds: ${per} per repository across ${repos} repositories is at most ${per * repos}`];
+}
+
+/**
+ * How many steps are in flight this second, from the `current-<repo>.json`
+ * files the runner keeps — one per lane, for as long as its session runs. A
+ * file naming a dead pid is a killed runner's leftovers rather than a running
+ * step, which is the test the page applies to the same files (`nowBlock`), so
+ * the two cannot disagree.
+ *
+ * A printed count is a snapshot for a person to read. The count that has to be
+ * race-free is the runner's own in-process slot (`run.js`: `takeSlot`), not
+ * this one.
+ */
+function inFlight(deps) {
+  const currents = deps.currents || (() => readCurrents(runnerDir()));
+  const alive = deps.alive || pidAlive;
+  return currents().filter((current) => alive(current?.pid)).length;
 }
 
 /**
@@ -115,13 +189,23 @@ export function parseRunArgs(argv) {
     return opts.error ? opts : { ...opts, verb: 'start', pass: argv.slice(1) };
   }
 
-  // The count, read or set. `mc run lanes` says it; `mc run lanes 4` writes
-  // it and says a running runner takes it on `--update`.
+  // The counts, read or set. `mc run lanes` says both; `mc run lanes 4` writes
+  // the per-repository one and `--total` the machine's, and either says a
+  // running runner takes it on `--update`.
+  //
+  // A second form rather than a second verb, and the bare positional still
+  // means what it has always meant: nobody's muscle memory changes meaning
+  // under them. `--total` is strict, so `mc run lanes --total` with nothing
+  // after it is an error rather than a silent read.
   if (head === 'lanes') {
-    const scanned = scanArgs(argv.slice(1), {});
+    const scanned = scanArgs(argv.slice(1), { strictValues: ['--total'] });
     if (scanned.error) return { error: scanned.error };
     if (scanned.positional.length > 1) return { error: `lanes takes one number, not ${scanned.positional.join(' ')}` };
-    return { verb: 'lanes', count: scanned.positional.length ? scanned.positional[0] : null };
+    return {
+      verb: 'lanes',
+      count: scanned.positional.length ? scanned.positional[0] : null,
+      total: scanned.flags.total,
+    };
   }
 
   // An order, not a run: it takes nothing else, because everything else it
