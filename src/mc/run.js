@@ -1871,7 +1871,7 @@ export async function runLoop({
       // repository's main, and a landing that meets the other's at the gate
       // waits for it (`landPr`). The count is read here, once — a running
       // runner keeps the count it started with until `--update`.
-      const count = (deps.laneCount || readLaneCount)();
+      const { per_repo: count } = (deps.laneCount || readLaneCount)();
       if (count > 1) runner.say(`lanes: ${count} per repository`);
       //
       // UPDATE drains the runner: from the moment it is read no lane starts

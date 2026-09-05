@@ -76,7 +76,7 @@ function lanes(opts, deps) {
   const read = deps.readLanes || readLaneCount;
   const write = deps.writeLanes || writeLaneCount;
   if (opts.count === null) {
-    const n = read();
+    const { per_repo: n } = read();
     return { ok: true, code: 0, lines: [`lanes ${n} — ${n === 1 ? 'one step' : `${n} steps`} in flight per repository`] };
   }
   const set = write(opts.count);

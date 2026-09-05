@@ -2387,7 +2387,7 @@ test('runLoop: lanes above one split a repository\'s names, and never hold the s
     if (started === 3) f.files['/w/runner/STOP'] = '';
     return inner(call);
   };
-  f.deps.laneCount = () => 2;
+  f.deps.laneCount = () => ({ per_repo: 2, total: null });
   assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
   const names = seen.map((s) => s.name).sort();
   assert.deepEqual(names, ['a', 'b', 'c'], `every project ran once: ${JSON.stringify(seen)}`);
