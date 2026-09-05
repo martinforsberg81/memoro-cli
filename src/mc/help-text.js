@@ -23,6 +23,7 @@ THE PAGE
   mc run --update                  After the round: new code, new process
   mc run lanes [<n>]               Steps in flight per repository; no number prints it
   mc test <repo> <pr>              Measure a pull request; merge nothing
+  mc test dev | prod               The app running, measured — locally or live
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc dev list                      Which dev server runs in which worktree
@@ -122,6 +123,34 @@ IN FULL
   mc test nightly status [--json]  Whether it is running, how often and where
                                     it writes — and, per repository, what the
                                     last run found: red, and since when
+  mc test dev [--here] [--suite <name>] [--json]
+                                    The round no tree can answer: the app
+                                    running, measured by the suites the
+                                    repository declares in .mc/test.json —
+                                    module graphs that link, surfaces that
+                                    settle, routes that render. mc ensures a
+                                    dev server first and reuses the one already
+                                    serving that worktree, decided from the
+                                    inventory rather than from a port
+                                    answering. One shared server, started from
+                                    the installation on main, because ten lanes
+                                    with ten wranglers is a machine nobody can
+                                    work on; --here gives the calling worktree
+                                    its own, for a change that is not on main
+                                    yet. --url prints the address and runs
+                                    nothing
+  mc test prod [--here] [--suite <name>] [--json]
+                                    The same suites against meetmemoro.app,
+                                    for the answers that are only true there:
+                                    real bindings, real assets, real latency.
+                                    The suites that sign in use the managed
+                                    test account and need TEST_SEEDED_TOKEN in
+                                    the shell; without it they report skipped
+                                    rather than passing quietly. Neither of
+                                    these runs by itself — no round, no page
+                                    and no schedule starts one. --here runs
+                                    this worktree's copy of the suites, for
+                                    when the instrument is what changed
   mc dev list [--json]             The machine's dev servers: one line each —
                                     instance, url, session and worktree. A
                                     registration whose process is gone is swept

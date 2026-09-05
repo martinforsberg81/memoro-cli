@@ -31,7 +31,13 @@
  * above, under the verb whose round it runs (`mc repo nightly` was the old
  * spelling and answers with this one).
  */
+import { join } from 'node:path';
+
 import { nightlyReading } from '../nightly-history.js';
+import {
+  accountAvailable, answers, callerWorktree, ensureDevServer, readDeclaration, runSuites,
+  sharedWorktree,
+} from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
 import {
   DEFAULT_INTERVAL_MS as NIGHTLY_INTERVAL_MS, nightlyState, startNightly, stopNightly,
@@ -49,6 +55,12 @@ export async function run(argv, deps = {}) {
   // Before the line is read as a repository and a pull request: no repository
   // is called `nightly`, and none will be.
   if (argv[0] === 'nightly') return nightly(argv.slice(1), { stdout, stderr });
+  // Nor is any repository called `dev` or `prod`. These are the two places a
+  // running memoro can be, and the round they take is the one no tree can
+  // answer: not "does this code parse" but "does this app work".
+  if (argv[0] === 'dev' || argv[0] === 'prod') {
+    return environment(argv[0], argv.slice(1), { stdout, stderr, deps });
+  }
   const opts = parseMergeArgs(argv, { full: true });
   if (opts.error) {
     stderr.write(`mc: ${opts.error.replace(/mc merge <repo> <pr>[^\n]*/u, 'mc test <repo> <pr> | --full')}\n`);
@@ -57,6 +69,171 @@ export async function run(argv, deps = {}) {
   }
   // The round never lands anything from here, whatever else was typed.
   return gate({ ...opts, check: true, verb: 'test' }, { stdout, stderr });
+}
+
+/**
+ * `mc test dev` and `mc test prod` — the round a tree cannot answer.
+ *
+ * Everything else under this verb reads source. Whether a module graph links,
+ * whether a surface reaches a terminal state, whether a route still renders at
+ * 390 pixels: those need the app running, and reaching it used to mean knowing
+ * twenty scripts and eight environment variables. Now it is two words.
+ *
+ * `dev` shares one server, started from the installation on `main`, because
+ * ten lanes with ten wranglers is a machine nobody can work on. A session that
+ * needs to see its *own* unmerged change says `--here` and gets a server for
+ * its own worktree — the shared one serves main and cannot show it. `--here`
+ * works for `prod` too, where it changes only which copy of the suites runs:
+ * production has one address, but the instrument pointed at it can be the one
+ * you are in the middle of changing.
+ *
+ * `prod` is the same suites against `meetmemoro.app`, and it exists because
+ * some of these answers are only true there: a Worker's real bindings, real
+ * assets, real latency. The repository declares that URL; mc does not carry it.
+ *
+ * Neither runs by itself. No round calls this, no page starts it, nothing
+ * schedules it (Martin, 2026-09-05) — it costs minutes and a browser, and it
+ * is for planning, debugging and verifying, when a person or a session asks.
+ */
+async function environment(where, argv, { stdout, stderr, deps = {} }) {
+  const opts = parseEnvironmentArgs(where, argv);
+  if (opts.error) {
+    stderr.write(`mc: ${opts.error}\n`);
+    stderr.write(usage());
+    return 2;
+  }
+
+  // `--here` says which worktree's suites to run, and for `dev` it also says
+  // which server to measure. Those are two different things and only the
+  // second is about production: the suite is the instrument, and running an
+  // instrument you have just changed against the live app is exactly what a
+  // person verifying a change to a suite needs.
+  const env = deps.env || process.env;
+  const worktree = opts.here
+    ? callerWorktree(deps.cwd || process.cwd())
+    : sharedWorktree(env);
+  if (!worktree) {
+    stderr.write(opts.here
+      ? 'mc: --here needs a git worktree, and this is not one\n'
+      : 'mc: no memoro checkout to read a declaration from\n');
+    return 1;
+  }
+
+  const read = readDeclaration(worktree);
+  if (!read.ok) {
+    stderr.write(`mc: ${read.error}\n`);
+    return 1;
+  }
+  const { declaration } = read;
+
+  if (opts.suite && !declaration.suites.some((suite) => suite.name === opts.suite)) {
+    stderr.write(`mc: ${worktree} declares no suite called ${opts.suite}\n`);
+    stderr.write(`mc: it has ${declaration.suites.map((suite) => suite.name).join(', ')}\n`);
+    return 2;
+  }
+
+  // Where to point them.
+  let baseUrl = null;
+  let server = null;
+  if (where === 'prod') {
+    baseUrl = declaration.environments?.prod?.base_url || null;
+    if (!baseUrl) {
+      stderr.write(`mc: ${worktree} declares no production base_url\n`);
+      return 1;
+    }
+  } else {
+    if (!opts.json) stdout.write(`mc: a dev server for ${worktree}…\n`);
+    const ensured = await ensureDevServer(worktree, declaration, deps);
+    if (!ensured.ok) {
+      stderr.write(`mc: ${ensured.error}\n`);
+      return 1;
+    }
+    server = ensured.server;
+    baseUrl = String(server.url).replace(/\/+$/u, '');
+    if (!opts.json) {
+      stdout.write(ensured.started
+        ? `mc: started one — ${baseUrl} (${server.instance_id})\n`
+        : `mc: ${baseUrl} was already serving it (${server.instance_id})\n`);
+    }
+  }
+
+  // `--url` is the whole answer for a caller that wants to run something mc
+  // does not know about. It is why this is not only a test runner.
+  if (opts.url) {
+    stdout.write(`${baseUrl}\n`);
+    return 0;
+  }
+
+  const account = accountAvailable(declaration, env);
+  if (!opts.json && !account.available) stdout.write(`mc: ${account.why}\n`);
+
+  const { results, gone, skipped } = await runSuites({
+    declaration,
+    worktree,
+    baseUrl,
+    only: opts.suite,
+    env,
+    // A dev server can leave in the middle of a six-minute round, and the
+    // suites after it then all report red on a refused connection. Production
+    // is asked too: a deploy mid-round is the same shape of lie.
+    stillThere: () => answers(server || { health_url: `${baseUrl}/api/version` }),
+    // A suite is minutes long, so a terminal says which one is running and
+    // then overwrites that line with its verdict. A pipe gets the verdict
+    // only: a carriage return in a log file is a line nobody can read.
+    onStart: opts.json || !stdout.isTTY ? null : (suite) => stdout.write(`  …  ${suite.name}`),
+    onEnd: opts.json ? null : (result) => stdout.write(
+      `${stdout.isTTY ? '\r\u001b[2K' : ''}  ${result.ok ? 'ok ' : 'RED'}  ${result.name} ${result.seconds}s\n`,
+    ),
+  });
+
+  const red = results.filter((result) => !result.ok && !result.unmeasured);
+  const unmeasured = results.filter((result) => result.unmeasured);
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({
+      where,
+      base_url: baseUrl,
+      worktree,
+      instance_id: server?.instance_id || null,
+      server_gone: gone,
+      results,
+      skipped,
+    }, null, 2)}\n`);
+    return gone || red.length ? 1 : 0;
+  }
+
+  for (const result of red) {
+    stdout.write(`\n${result.name} — exit ${result.status}\n${result.tail}\n`);
+  }
+
+  // A round that lost its server reports that, and never a count of red. Six
+  // suites failing on a refused connection is not a verdict about the app.
+  if (gone) {
+    stdout.write(`\nmc: ${baseUrl} stopped answering — this round measured nothing after that\n`);
+    if (unmeasured.length) stdout.write(`mc: ${unmeasured[0].name} was running when it went and is unmeasured\n`);
+    if (skipped.length) stdout.write(`mc: never ran — ${skipped.join(', ')}\n`);
+    if (where === 'dev') {
+      stdout.write(`mc: the server's own log says why, under ${join(worktree, '.wrangler', 'dev-server', 'logs')}\n`);
+    }
+    stdout.write(`mc: of what did run, ${red.length} red and ${results.length - red.length - unmeasured.length} green\n`);
+    return 1;
+  }
+
+  stdout.write(red.length
+    ? `\nmc: ${red.length} of ${results.length} red against ${baseUrl}\n`
+    : `\nmc: ${results.length} green against ${baseUrl}\n`);
+  return red.length ? 1 : 0;
+}
+
+export function parseEnvironmentArgs(where, argv) {
+  const scanned = scanArgs(argv, { booleans: ['--json', '--here', '--url'], strictValues: ['--suite'] });
+  const opts = {
+    where, json: scanned.flags.json, here: scanned.flags.here, url: scanned.flags.url, suite: scanned.flags.suite,
+  };
+  if (scanned.error) return { ...opts, error: scanned.error };
+  if (scanned.positional.length) {
+    return { ...opts, error: `mc test ${where} takes no repository (${scanned.positional[0]})` };
+  }
+  return opts;
 }
 
 /**
@@ -177,7 +354,9 @@ function every(ms) {
 
 export function usage() {
   return [
-    'usage — mc test <repo> <pr> [<pr>...] [--json]   measure the change; merge nothing\n',
+    'usage — mc test dev [--here] [--suite <name>] [--url] [--json]   the app, running locally\n',
+    '        mc test prod [--here] [--suite <name>] [--json]          the app, in production\n',
+    '        mc test <repo> <pr> [<pr>...] [--json]   measure the change; merge nothing\n',
     '        mc test <repo> --full [--json]           the repository\'s whole suite, on the default branch\n',
     '        mc test nightly start [--interval <seconds>]\n',
     '        mc test nightly stop\n',
