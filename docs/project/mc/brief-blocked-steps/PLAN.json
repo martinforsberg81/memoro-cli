@@ -113,7 +113,7 @@
         "The documentation half is `docs/technical/mc-brief.md`: the section count went twelve to thirteen, *Blocked* has its own row in *What it reads* and its own passage beside *Ready, and the runner cannot start it*, and *How an answer travels* gained § *When the brief itself is the writer* — the route, the two geography facts with the numbers above, and why `mc unblock` was not built. `docs/technical/mc-run.md` was deliberately not touched: the runner does not know the brief exists and nothing about a round changed.",
         "For whoever meets criterion 4: `mc brief --collect` was not run in this session, so the estate's \"since last brief\" window still stands at 2026-09-04T16:10Z. The measurement above came from `listPlans` + `blockedSteps` against both real `origin/main`s directly, which is the same reading the section renders from and writes no brief file."
       ],
-      "pr": null,
+      "pr": 649,
       "blocked_by": null
     }
   ]
