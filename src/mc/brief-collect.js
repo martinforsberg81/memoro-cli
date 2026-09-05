@@ -3,10 +3,11 @@
  * script and written to one file. No model is involved here; the model is
  * the session that reads the file afterwards.
  *
- * Eleven sections, in the order the plan fixes them: merged since the last
+ * Twelve sections, in the order the plan fixes them: merged since the last
  * brief · opened, not merged · the helper's proposals · plan status ·
  * archived without a note · workareas with no plan · plans that do not parse ·
- * runner · production · held before merge · queue. Every line comes from a file the runner
+ * runner · production · held before merge · ready and not started ·
+ * queue. Every line comes from a file the runner
  * or a session already writes (`~/mc/runner/log/runs.tsv`,
  * `~/mc/runner/held.json`,
  * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`,
@@ -32,6 +33,9 @@ import {
   UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerTableLabel, runnerTablePath,
   workRoot,
 } from './paths.js';
+import { PR_FIELDS } from './project-prs.js';
+import { RUN_REFUSALS } from './run-plan.js';
+import { machineDetail, machineState, pidAlive, readCurrents } from './status-collect.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -373,6 +377,71 @@ export function heldForBrief(text) {
     .sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
 }
 
+/* --------------------------------------------- ready, and still not started */
+
+/**
+ * Every project whose plan on `origin/main` says `ready` and which the runner
+ * would nevertheless pass over right now — the reason, since when, and the run
+ * that left it that way.
+ *
+ * `held.json` only knows a pull request the gate refused, so *Held before
+ * merge* above cannot see the larger case: a session killed before it committed
+ * never got as far as a pull request, and what it left is a dirty workarea the
+ * round skips every ten minutes for as long as it stands there.
+ * `no-text-in-code` sat from 2026-09-04T12:37Z on exit 143 with 35 files of
+ * finished work uncommitted; `connections-section` sat from 2026-08-29T21:37Z
+ * on a session that exited 0 and opened no pull request. Neither is in
+ * `held.json`; neither is in *Workareas with no project on main*, because both
+ * have a project on main — which is exactly what makes them a loss; and the
+ * only thing that said so was a `, skip` line in `runner.log`, of which there
+ * were 9 827.
+ *
+ * The reading is `machineState` (status-collect.js), shared with `mc status`
+ * and the page and injected here for the same reason it is injected there:
+ * this module takes read data, and asking a workarea whether it is dirty is
+ * not read data. A plan-shaped refusal is dropped — `blocked` and `done` are
+ * *Plan status*'s rows and the project is not `ready` — by keeping only the
+ * words in `RUN_REFUSALS`, so a reason added to the round arrives here without
+ * a second list to maintain.
+ *
+ * Oldest first: the workarea that has stood longest is the one nobody has
+ * looked at, and six days is the record so far. `running` is what the runner
+ * has a live session on and is dropped — those rows are true and none of them
+ * is anybody's to act on.
+ */
+export function waitingOnHands({
+  plans = [], machine = () => null, tsv = '', running = [], home = homedir(),
+} = {}) {
+  const machineWords = new Set(RUN_REFUSALS.map((item) => item.reason));
+  const live = new Set(running.filter(Boolean));
+  const rows = [];
+  for (const plan of plans) {
+    // A PLAN.md is not a plan the runner reads at all (`assembleQueue`), so it
+    // is not a project waiting on hands — it is one waiting on a migration.
+    if (plan.legacy) continue;
+    // Nor is a project the runner has a session in flight on. Its worktree is
+    // dirty because somebody is working in it this minute, and every row here
+    // is meant to be one a person acts on: 2026-09-05T16:35Z this section named
+    // `sql-w3-email-closure`, whose session had been running for eight minutes.
+    if (live.has(plan.project)) continue;
+    const state = machine(plan.project);
+    if (!state || state.runnable || !machineWords.has(state.reason)) continue;
+    rows.push({
+      project: plan.project,
+      repo: plan.repo || null,
+      reason: state.reason,
+      detail: machineDetail(state, home),
+      since: state.since || null,
+      run: runsFor(tsv, plan.project, 1)[0] || null,
+    });
+  }
+  // A refusal with no `since` — GitHub unasked, a pull request in flight — has
+  // no age to sort on and is not the one that has been waiting; it goes last.
+  return rows.sort((a, b) => (a.since ? 0 : 1) - (b.since ? 0 : 1)
+    || String(a.since ?? '').localeCompare(String(b.since ?? ''))
+    || a.project.localeCompare(b.project));
+}
+
 /* ------------------------------------------------------------- production */
 
 const sha7 = (sha) => (sha ? String(sha).slice(0, 7) : null);
@@ -444,9 +513,40 @@ const INTAKE_CAP = 12;
  * the numbers are the whole value; the row in the intake file keeps the URLs.
  */
 const unlink = (text) => String(text ?? '-').replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1');
+/** `09-04 12:37` — the runner table's own stamp, the year and the seconds dropped. */
+const at11 = (iso) => String(iso || '').slice(5, 16).replace('T', ' ');
+/**
+ * How long something has been true, in the words the page uses for an age
+ * (`ageWords`, page-cache.js — not imported, because page-cache imports this
+ * module). Rounded, because the difference this has to carry is the one
+ * between a minute and six days.
+ */
+function ageWords(ms) {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return '?';
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 90) return `${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h` : `${Math.round(hours / 24)} d`;
+}
 const clip = (text, max = 90) => {
   const one = String(text || '').replace(/\s+/gu, ' ').trim();
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+};
+/**
+ * A sentence too wide for a cell, cut in the middle instead of at the end.
+ *
+ * `machineState`'s detail is `<what> <worktree>: <the files>` and both ends
+ * carry the whole meaning: a merge that stopped is not the same thing as work
+ * somebody left uncommitted, and the files are what a person opens. What sits
+ * between them is the workarea path, which the project column has already
+ * said. Clipped from the right on a long root, the row loses exactly the two
+ * words worth having.
+ */
+const clipMid = (text, max = 110) => {
+  const one = String(text || '').replace(/\s+/gu, ' ').trim();
+  if (one.length <= max) return one;
+  const head = Math.ceil((max - 1) * 0.35);
+  return `${one.slice(0, head)}…${one.slice(one.length - (max - 1 - head))}`;
 };
 
 /**
@@ -500,10 +600,74 @@ function productionLines(out, production) {
   }
 }
 
+/**
+ * *Ready, and the runner cannot start it* — a section of its own rather than
+ * rows inside *Held before merge*.
+ *
+ * They are the same waiting and they are not the same act. Every row of *Held
+ * before merge* is a pull request, and the role allows exactly three answers to
+ * one (`canon/roles/brief.md`): merge it by hand, close it, or block the step.
+ * None of the three is available for a workarea somebody killed at 12:37 with
+ * 35 files uncommitted — there is nothing to merge and nothing to close, and
+ * the act is to open the worktree and decide what the work was. Rows that take
+ * a different act than the prose above them promises are rows a reader applies
+ * the wrong answer to, so they get their own heading and their own prose.
+ *
+ * The held projects still appear here, in the reason word and no further: this
+ * section is the whole answer to "what says ready and does not run", and a
+ * complete list that points at the section with the detail beats a second copy
+ * of the detail that can disagree with it.
+ *
+ * `prs-unknown` is the one reason that is not about a project. It is a fact
+ * about a repository — GitHub did not answer, or `--offline` did not ask it —
+ * and it is true of every ready plan that repository has, so it is one line per
+ * repository and not twenty identical rows that bury the workarea somebody
+ * killed.
+ */
+function waitingLines(out, waiting, now) {
+  if (!waiting.length) {
+    out.push('_none — every plan that says `ready` is one the runner would start_');
+    return;
+  }
+  const unknown = waiting.filter((w) => w.reason === 'prs-unknown');
+  const rows = waiting.filter((w) => w.reason !== 'prs-unknown');
+  for (const repo of [...new Set(unknown.map((w) => w.repo))]) {
+    const n = unknown.filter((w) => w.repo === repo).length;
+    out.push(`- **${repo}: GitHub was not asked what it has open**, so ${n} ready `
+      + `project${n === 1 ? '' : 's'} could not be read past ${n === 1 ? 'its' : 'their'} plan — `
+      + 'a pull request in flight and a hold are both invisible until it answers.');
+  }
+  if (unknown.length) out.push('');
+  if (!rows.length) {
+    out.push('_nothing else — every other ready plan is one the runner would start_');
+    return;
+  }
+  out.push('| project | repo | in the way | since | last run |', '|---|---|---|---|---|');
+  for (const w of rows) {
+    const age = w.since ? `${at11(w.since)} · ${ageWords(now.getTime() - Date.parse(w.since))}` : '—';
+    const run = w.run
+      ? `${w.run.kind} exit ${w.run.exit}, ${clip(w.run.note || '—', 22)} (${at11(w.run.ts)})`
+      : 'no run recorded';
+    // The same width *Plan status* gives `next`, and cut in the middle: the
+    // named files are the end of the sentence and the whole value of it —
+    // `email-window-layout` was skipped 134 rounds on three modified files
+    // nobody had read the names of.
+    out.push(`| ${w.project} | ${w.repo || '?'} | ${clipMid(w.detail, 110)} | ${age} | ${run} |`);
+  }
+  const dirty = rows.filter((w) => w.reason === 'dirty').length;
+  out.push('', `${rows.length} project${rows.length === 1 ? '' : 's'} whose plan on \`origin/main\` says `
+    + `\`ready\` and whose round ends before a session starts — every round, for as long as the row stands. `
+    + `${dirty ? `${dirty} of them ${dirty === 1 ? 'is' : 'are'} a workarea with uncommitted work in it: `
+      + 'open it, and the work is either finished — commit it on the branch it is on — or abandoned, and then '
+      + 'it is Martin\'s `git restore`. No machine removes one, and the runner does not commit it either. ' : ''}`
+    + `\`held-after-repair\` is *Held before merge* above, with what the gate saw and the three answers to it; `
+    + `\`in-flight\` is a pull request already open on the branch, to land or to close.`);
+}
+
 export function renderBrief({
   now, since, firstBrief, merged, opened, proposals = [], plans,
   undocumented = null, unplanned = null, unreadable = null, runs, queue, held = [],
-  production = null, notes = [],
+  waiting = [], production = null, notes = [],
 }) {
   const out = [];
   const stamp = (d) => d.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -621,6 +785,10 @@ export function renderBrief({
   }
   out.push('');
 
+  out.push('## Ready, and the runner cannot start it', '');
+  waitingLines(out, waiting, now);
+  out.push('');
+
   out.push('## Queue', '');
   if (!queue.length) out.push('_empty_');
   for (const name of queue) out.push(`- ${name}`);
@@ -663,6 +831,10 @@ export async function collectBrief({
   repos = defaultRepos(env),
   offline = false,
   git = runGit,
+  // Beside `git` because the plans are the ground every other section stands
+  // on: a test that wants a plan on `origin/main` has to be able to hand one
+  // over without a repository, the way the round does (`showBatch`, run.js).
+  batch = catFileBatch,
   gh = runGh,
   fetch = fetchOrigin,
   nightly = nightlyReading,
@@ -676,25 +848,38 @@ export async function collectBrief({
 
   const merged = [];
   const opened = [];
+  // The repositories whose open pull requests are unknown rather than none.
+  // What nobody asked and what failed read the same to a list, and the reading
+  // below would otherwise call a project runnable on that silence — which is
+  // the round's own rule (`prsFailed`, run.js): a repository GitHub could not
+  // be asked starts nothing.
+  const prsFailed = [];
   const present = repos.filter((repo) => {
     if (existsSync(join(repo.path, '.git'))) return true;
     notes.push(`${repo.name}: no checkout at ${repo.path}`);
     return false;
   });
-  if (!offline) {
+  if (offline) prsFailed.push(...present.map((repo) => repo.name));
+  else {
     await Promise.all(present.flatMap((repo) => [
       fetch(repo.path).then((ok) => { if (!ok) notes.push(`${repo.name}: git fetch failed — plan status may be stale`); }),
       gh(repo.path, ['pr', 'list', '--state', 'merged', '--limit', '100',
         '--search', `merged:>=${since.toISOString()}`, '--json', 'number,title,mergedAt'])
         .then((m) => { if (m) merged.push(...m.map((pr) => ({ repo: repo.name, ...pr }))); else notes.push(`${repo.name}: gh pr list (merged) failed`); }),
-      gh(repo.path, ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,createdAt,headRefName'])
-        .then((o) => { if (o) opened.push(...o.map((pr) => ({ repo: repo.name, ...pr }))); else notes.push(`${repo.name}: gh pr list (open) failed`); }),
+      // The round's own field set plus the date this section prints, so the
+      // reading beside it draws a draft as a draft (`describePr`) rather than
+      // as a pull request nobody marked.
+      gh(repo.path, ['pr', 'list', '--state', 'open', '--limit', '100', '--json', `${PR_FIELDS},createdAt`])
+        .then((o) => {
+          if (o) opened.push(...o.map((pr) => ({ repo: repo.name, ...pr })));
+          else { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list (open) failed`); }
+        }),
     ]));
   }
   merged.sort((a, b) => a.mergedAt.localeCompare(b.mergedAt));
   opened.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-  const plans = present.flatMap((repo) => listPlans(repo, { git }));
+  const plans = present.flatMap((repo) => listPlans(repo, { git, batch }));
 
   let tsv = '';
   try { tsv = read(join(root, 'runner', 'log', 'runs.tsv')); } catch { notes.push('no runner/log/runs.tsv'); }
@@ -707,8 +892,35 @@ export async function collectBrief({
   // No note when the file is not there: the runner writes `held.json` the
   // first time it refuses to land something, and never having refused one is
   // the good answer, not a missing file.
-  let held = [];
-  try { held = heldForBrief(read(heldPath(root))); } catch { held = []; }
+  let heldText = '';
+  try { heldText = read(heldPath(root)); } catch { heldText = ''; }
+  const held = heldForBrief(heldText);
+
+  // Every `ready` plan the runner would pass over now. The whole file is read
+  // here rather than `heldForBrief`'s filtered half: an entry still at
+  // `repairs: 0` is a repair the runner would start, which is the difference
+  // between a project that is waiting on hands and one that is not.
+  const stop = existsSync(join(root, 'runner', 'STOP'));
+  const waiting = waitingOnHands({
+    plans,
+    tsv,
+    // A lane's file whose pid is gone is a crashed runner, not a running step:
+    // that workarea is exactly the one this section is for, so it is not
+    // dropped (`nowBlock` calls the same file stale on the page).
+    running: readCurrents(join(root, 'runner'))
+      .filter((current) => pidAlive(current.pid))
+      .map((current) => current.name),
+    machine: (name) => machineState(name, {
+      plans,
+      prs: opened,
+      prsFailed,
+      held: parseHeld(heldText),
+      stop,
+      root,
+      // `git` answers with a string or null here; the reading wants ok and text.
+      git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
+    }),
+  });
 
   const proposals = listProposals(proposalsDir(env));
 
@@ -730,7 +942,7 @@ export async function collectBrief({
 
   const text = renderBrief({
     now, since, firstBrief: !last, merged, opened, proposals, plans,
-    undocumented, unplanned, unreadable, runs, queue, held, production, notes,
+    undocumented, unplanned, unreadable, runs, queue, held, waiting, production, notes,
   });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
@@ -740,7 +952,7 @@ export async function collectBrief({
     text,
     data: {
       since, merged, opened, proposals, plans, undocumented, unplanned, unreadable,
-      runs, queue, held, production, notes,
+      runs, queue, held, waiting, production, notes,
     },
   };
 }

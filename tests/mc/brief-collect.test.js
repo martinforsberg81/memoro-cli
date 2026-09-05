@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -14,7 +14,7 @@ import {
   UNDOCUMENTED_KEYS, UNPLANNED_KEYS,
   collectBrief, heldForBrief, intakeRows, lastBriefTime, listPlans, parseCatFileBatch, parsePlanFrontmatter,
   listProposals, planFields,
-  queueNames, runsFor, runsSince, showBatch, summariseRuns,
+  queueNames, runsFor, runsSince, showBatch, summariseRuns, waitingOnHands,
 } from '../../src/mc/brief-collect.js';
 import { UNDOCUMENTED_HEADER, undocumentedRow } from '../../src/mc/archive-plan.js';
 import { unplannedFile, unplannedRow } from '../../src/mc/close-workarea.js';
@@ -229,8 +229,82 @@ describe('held before merge', () => {
   });
 });
 
+/**
+ * *Ready, and the runner cannot start it* — the projects whose plan says go and
+ * which this machine stops anyway. `held.json` cannot see them: a session
+ * killed before it committed never got as far as a pull request, and what it
+ * leaves is a workarea the round skips every ten minutes, saying so only in a
+ * `, skip` line in `runner.log`.
+ */
+describe('ready, and the runner cannot start it', () => {
+  const plan = (project, { repo = 'memoro', legacy = false } = {}) => ({ project, repo, legacy });
+  const TSV = [
+    'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
+    '2026-09-04T11:07:00Z\tno-text-in-code\tstep\t143\t5400\t-\t-\t-\t-\t-\t-\t-\tno-json,timeout',
+    '',
+  ].join('\n');
+
+  it('keeps the machine-shaped refusals, oldest first, with the run that left it', () => {
+    const states = {
+      'no-text-in-code': { runnable: false, reason: 'dirty', detail: 'uncommitted work in /home/m/mc/no-text-in-code/memoro: a.js +34', since: '2026-09-04T12:37:00Z' },
+      'connections-section': { runnable: false, reason: 'dirty', detail: 'uncommitted work in /home/m/mc/connections-section/memoro: probe.mjs', since: '2026-08-29T21:37:00Z' },
+      'docx-editor': { runnable: false, reason: 'in-flight', detail: '#10958 is open (paste) — not starting a step', since: null },
+      'avatar-self-serve': { runnable: false, reason: 'blocked', detail: 'the first step waits on decision avatar-1' },
+      'mc-ui': { runnable: true, reason: null, detail: null, since: null, kind: 'step' },
+    };
+    const waiting = waitingOnHands({
+      plans: [plan('no-text-in-code'), plan('connections-section'), plan('docx-editor'),
+        plan('avatar-self-serve'), plan('mc-ui'), plan('old-thing', { legacy: true })],
+      machine: (name) => states[name] || null,
+      tsv: TSV,
+      home: '/home/m',
+    });
+    // Oldest first, and the one with no age to sort on last.
+    assert.deepEqual(waiting.map((w) => w.project), ['connections-section', 'no-text-in-code', 'docx-editor']);
+    // A plan-shaped refusal is *Plan status*'s row: the project is not `ready`,
+    // so it is not a project waiting on hands. Nor is a PLAN.md the runner
+    // never reads at all.
+    assert.equal(waiting.some((w) => w.project === 'avatar-self-serve'), false);
+    assert.equal(waiting.some((w) => w.project === 'old-thing'), false);
+    // The four things a person needs to act, and the home folded.
+    const killed = waiting[1];
+    assert.equal(killed.reason, 'dirty');
+    assert.match(killed.detail, /uncommitted work in ~\/mc\/no-text-in-code\/memoro: a\.js \+34/u);
+    assert.equal(killed.since, '2026-09-04T12:37:00Z');
+    assert.deepEqual([killed.run.kind, killed.run.exit, killed.run.note], ['step', '143', 'no-json,timeout']);
+    // A project the runner never ran has no row to show, and says so rather
+    // than borrowing another project's.
+    assert.equal(waiting[0].run, null);
+  });
+
+  /**
+   * A workarea is dirty while a session is working in it, and that is not a
+   * project waiting on hands. On 2026-09-05T16:35Z this section named
+   * `sql-w3-email-closure`, whose step had been running for eight minutes —
+   * a row nobody could act on, in a section whose whole value is that every
+   * row is one somebody can.
+   */
+  it('drops a project the runner has a live session on, and keeps a dead lane file', () => {
+    const machine = () => ({ runnable: false, reason: 'dirty', detail: 'uncommitted work in /home/m/mc/x/memoro: a.js', since: '2026-09-05T16:27:00Z' });
+    const plans = [plan('sql-w3-email-closure'), plan('no-text-in-code')];
+    assert.deepEqual(waitingOnHands({ plans, machine, running: ['sql-w3-email-closure'] }).map((w) => w.project),
+      ['no-text-in-code']);
+    // The caller drops a lane file whose pid is gone before it gets here, so a
+    // crashed runner hides nothing: `running` is what is alive.
+    assert.deepEqual(waitingOnHands({ plans, machine, running: [] }).map((w) => w.project),
+      ['no-text-in-code', 'sql-w3-email-closure']);
+  });
+
+  it('is empty when every ready plan is one the runner would start', () => {
+    assert.deepEqual(waitingOnHands({
+      plans: [plan('mc-ui')],
+      machine: () => ({ runnable: true, reason: null, detail: null, since: null, kind: 'step' }),
+    }), []);
+  });
+});
+
 describe('collectBrief', () => {
-  it('writes the eleven sections, offline, with a 24 h window on the first run', async () => {
+  it('writes the twelve sections, offline, with a 24 h window on the first run', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
     const now = new Date('2026-08-25T20:00:00Z');
@@ -240,7 +314,8 @@ describe('collectBrief', () => {
     assert.equal(text, result.text);
     const order = ['## Merged since last brief', '## Opened, not merged', '## Proposals',
       '## Plan status', '## Archived without a note', '## Workareas with no project on main',
-      '## Plans that do not parse', '## Runner', '## Production', '## Held before merge', '## Queue'];
+      '## Plans that do not parse', '## Runner', '## Production', '## Held before merge',
+      '## Ready, and the runner cannot start it', '## Queue'];
     let at = -1;
     for (const heading of order) {
       const next = text.indexOf(heading);
@@ -287,7 +362,77 @@ describe('collectBrief', () => {
     // rather than as a deploy that never happened.
     assert.equal(result.data.production, null);
     assert.match(text, /## Production\n\n_no memoro checkout here — nothing to read_/u);
+    // No plans on this fixture's origin/main, so nothing can be waiting: the
+    // empty case is the one that must stay quiet, since most days it is this.
+    assert.deepEqual(result.data.waiting, []);
+    assert.ok(text.includes('## Ready, and the runner cannot start it\n\n'
+      + '_none — every plan that says `ready` is one the runner would start_'));
     assert.ok(lastBriefTime(join(root, 'brief')) instanceof Date);
+  });
+
+  /**
+   * The section this project exists for, end to end: a plan that says `ready`,
+   * a workarea somebody killed with uncommitted work in it, and the round that
+   * has skipped it every ten minutes since. `no-text-in-code` stood like this
+   * from 2026-09-04T12:37Z on exit 143 with 35 files of finished work in the
+   * worktree, and nothing but `runner.log` said so.
+   */
+  it('names a ready project whose workarea is dirty, with the age and the run that left it', async () => {
+    const root = workRoot();
+    const home = mkdtempSync(join(tmpdir(), 'mc-repos-'));
+    mkdirSync(join(home, 'memoro', '.git'), { recursive: true });
+    // The workarea as the runner leaves one: `<name>/<repo>` under the work
+    // root, with the file the killed session never committed still in it.
+    const worktree = join(root, 'no-text-in-code', 'memoro');
+    mkdirSync(join(worktree, '.git'), { recursive: true });
+    mkdirSync(join(worktree, 'src'), { recursive: true });
+    writeFileSync(join(worktree, 'src', 'a.js'), 'export const half = 1;\n');
+    const dirtied = new Date('2026-09-04T12:37:00Z');
+    utimesSync(join(worktree, 'src', 'a.js'), dirtied, dirtied);
+    writeFileSync(join(root, 'runner', 'log', 'runs.tsv'), [
+      'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
+      '2026-09-04T11:07:00Z\tno-text-in-code\tstep\t143\t5400\t-\t-\t-\t-\t-\t-\t-\tno-json,timeout',
+      '',
+    ].join('\n'));
+    const PLAN = JSON.stringify({
+      schema: 'mc-plan',
+      version: 1,
+      goal: ['One thing.'],
+      contract: ['Not without Martin.'],
+      out_of_scope: ['Everything else.'],
+      success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
+      documents: [],
+      steps: [{ title: 'Do it', status: 'ready', done_when: 'the step is finished', instruction: ['Do it.'], pr: null, blocked_by: null }],
+    });
+    const git = (cwd, args) => {
+      if (args[0] === 'ls-tree') return 'docs/project/msr/no-text-in-code/PLAN.json\ndocs/project/msr/typo-sweep/PLAN.json';
+      if (args[0] === 'status') return cwd === worktree ? ' M src/a.js\n?? src/b.js\n' : '';
+      return null;
+    };
+    const result = await collectBrief({
+      env: { MC_WORK_ROOT: root, MC_REPOS_HOME: home },
+      now: new Date('2026-09-05T20:00:00Z'),
+      offline: true,
+      git,
+      batch: (cwd, refs) => new Map(refs.map((ref) => [ref, PLAN])),
+    });
+    assert.deepEqual(result.data.waiting.map((w) => [w.project, w.reason]),
+      [['no-text-in-code', 'dirty'], ['typo-sweep', 'prs-unknown']]);
+    const section = result.text.split('## Ready, and the runner cannot start it')[1].split('## Queue')[0];
+    // The four things a person needs to act: which project, what is in the way,
+    // how long it has been true, and the run that left it that way.
+    const row = section.split('\n').find((line) => line.startsWith('| no-text-in-code '));
+    // Both ends of the sentence survive a work root too long for the cell: what
+    // kind of dirt it is, and the files somebody has to go and look at.
+    assert.match(row, /^\| no-text-in-code \| memoro \| uncommitted work in \//u);
+    assert.match(row, /no-text-in-code\/memoro: src\/a\.js, src\/b\.js \| 09-04 12:37 · 31 h \| step exit 143, no-json,timeout \(09-04 11:07\) \|$/u);
+    assert.match(section, /1 project whose plan on `origin\/main` says `ready` and whose round ends before a session starts/u);
+    assert.match(section, /1 of them is a workarea with uncommitted work in it/u);
+    // `prs-unknown` is a fact about a repository, not about a project. Offline
+    // it is true of every ready plan it has, and twenty identical rows would
+    // bury the one row that is somebody's to act on.
+    assert.match(section, /\*\*memoro: GitHub was not asked what it has open\*\*, so 1 ready project could not be read past its plan/u);
+    assert.doesNotMatch(section, /\| typo-sweep \|/u);
   });
 
   /**

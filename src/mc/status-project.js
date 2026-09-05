@@ -27,7 +27,7 @@ import { heldPath, parseHeld } from './held.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
-import { machineState } from './status-collect.js';
+import { machineDetail, machineState } from './status-collect.js';
 
 /* ---------------------------------------------------------------- builders */
 
@@ -80,10 +80,9 @@ export function machineNote(machine, status, home = homedir()) {
   return sentence(machine, home);
 }
 
-/** The machine's own sentence, with the home directory folded and the date. */
+/** The machine's own sentence (status-collect.js), with the date after it. */
 function sentence(machine, home) {
-  const said = String(machine.detail || machine.reason || '');
-  const short = home ? said.split(home).join('~') : said;
+  const short = machineDetail(machine, home);
   return machine.since ? `${short} (since ${when(machine.since)})` : short;
 }
 

@@ -30,7 +30,7 @@
       "check": "A test drives a table of cases — STOP file, dirty worktree, GitHub unknown, held with a repair spent, open pull request, branch that will not check out, aborted merge — against both the new reading and the round's own path, and asserts the same answer from each. A reason added to `runStepClaimed` without the reading fails it."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A `ready` project skipped for a dirty worktree is named where a person looks, with the age of the dirt and the run that left it.",
       "check": "Make a workarea dirty by hand, run `mc brief --collect`, and read the section: the project, how long it has been dirty, and the `runs.tsv` row that left it. Remove the file afterwards and confirm the line goes."
     },
@@ -106,7 +106,7 @@
     },
     {
       "title": "The brief names what is waiting on hands",
-      "status": "ready",
+      "status": "done",
       "done_when": "`mc brief --collect` has a section listing every `ready` project the runner cannot start, one line each, with the reason and how long it has been true.",
       "instruction": [
         "The brief is the surface that matters most here, because it is the one Martin reads at a decision point and the one a brief session acts on. It already has the shape: *Held before merge* is a short section, one line per project, built from `~/mc/runner/held.json` filtered to what the brief is for (`src/mc/brief-collect.js:360`, `HELD_FILE` at `:437`).",
@@ -117,8 +117,15 @@
         "Verify for real: make a workarea dirty by hand, run `mc brief --collect`, read the section, then clean it up and confirm the line goes. Note that a verification brief left in `~/mc/brief/` moves `lastBriefTime` — it is the mtime of the newest file there — so remove the file you wrote, as step 1 of `intake-inbox` had to.",
         "`npm test`."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "A section of its own, *Ready, and the runner cannot start it*, between *Held before merge* and *Queue* — not rows inside *Held before merge*. The two are the same waiting and not the same act: every row of *Held before merge* is a pull request and takes one of that section's three answers (`canon/roles/brief.md` — merge by hand, close, block the step), and none of the three exists for a workarea a killed session left uncommitted, where the act is to open the worktree and decide what the work was. A row under prose that promises the wrong answer is a row somebody applies the wrong answer to. The held projects still appear in the new section, in the reason word and no further, so it is the whole answer to \"what says ready and does not run\" without a second copy of the gate's detail that could disagree with the first.",
+        "`waitingOnHands` is the builder (`brief-collect.js`), pure like the rest of the module: it takes the plans, an injected `machine` reader and the runs.tsv text, and keeps only the refusals whose word is in `RUN_REFUSALS`. That filter is what makes it *ready* projects — `blocked`, `done` and `unparseable` are `chooseKind`'s words, they are *Plan status*'s rows, and a reason added to the round arrives here without a second list to maintain. `collectBrief` builds the reader from `machineState` over the plans, the open pull requests, the whole `held.json` (not `heldForBrief`'s filtered half — an entry at `repairs: 0` is a repair the runner would start), the STOP file and a read-only `git`.",
+        "Two shapes of noise were designed out, and both are worth keeping. `prs-unknown` is a fact about a repository, not a project — true of every ready plan it has — so it is one line per repository rather than twenty rows burying the one that is somebody's; and a project the runner has a live session on is dropped entirely, because its worktree is dirty precisely because somebody is working in it. That second one was found by running the thing: at 2026-09-05T16:35Z the section named `sql-w3-email-closure`, eight minutes into its step. `readCurrents` moved to `status-collect.js` for it (page-collect.js imports brief-collect.js, so the traffic could only go the other way), and only a lane file whose pid is alive counts — a crashed runner's leftover file is exactly the workarea this section is for.",
+        "`machineDetail(machine, home)` also moved to `status-collect.js`, beside the reading it renders: `mc status <name>` had the home-folding sentence and the brief needed the same one, and status-project.js imports brief-collect.js so it could not be shared from there. `collectBrief` gained a `batch` dependency beside `git` — the round already passes `showBatch(gitOut)` (run.js), and without it no test can put a plan on `origin/main` without a real repository. The open-PR listing now asks for the round's own `PR_FIELDS` plus `createdAt`, so `describePr` draws a draft as a draft.",
+        "Verified live against the estate on 2026-09-05, running this worktree's `node src/mc-cli.js brief --collect`. With `connections-section` dirty as it has been since 09-05 10:03, the section printed `uncommitted work in ~/mc/connections-section/memoro: hop-measure.mjs, probe.mjs | 09-05 10:03 · 7 h | step exit 143, no-json (09-05 10:06)` — the four things the instruction asks for. Then by hand: a file written into the clean `~/mc/cold-restore-integrity/memoro` produced `… mc-verify-scratch.txt | 09-05 16:38 · 0 min | no run recorded` (that project has never run, and the reading says so rather than borrowing another's row), and removing the file took the line away, leaving `connections-section` alone. The seven briefs those runs wrote were deleted from `~/mc/brief/`, so `lastBriefTime` is back at 2026-09-04T16:10:01Z. `npm test`: 1 725 tests, 1 716 pass, 0 fail, 9 skipped.",
+        "For step 5's close-out: the brief's own doc is already written — `docs/technical/mc-brief.md` has the twelfth section in its source table and a paragraph on why it is not rows in *Held before merge*. What is left there is `mc-run.md` and `mc-status.md`. `canon/roles/brief.md` gained the paragraph the instruction asked for, with a test in `tests/mc/commands/brief.test.js` binding it the way the other three sections are bound. No banner at the top of the brief for these rows: *Held before merge*'s banner exists because that section is ninth in a long file and its rows demand a decision the same hour, and the mechanism against skimming past this one is the role file, which is what the instruction named."
+      ],
+      "pr": 632,
       "blocked_by": null
     },
     {

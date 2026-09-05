@@ -26,7 +26,7 @@ lines: collect, then hand the file to `openInWorkArea`.
 
 ## What it reads
 
-Eleven sections, in this order, each from a file something else already
+Twelve sections, in this order, each from a file something else already
 writes:
 
 | section | source |
@@ -41,6 +41,7 @@ writes:
 | Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
 | Production | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, `git rev-list --count <it>..origin/main` in `~/memoro`, the nightly's last measurement, and the `/api/version` in `~/mc/runner/version.json` |
 | Held before merge | `~/mc/runner/held.json`, the entries at `repairs >= 1` |
+| Ready, and the runner cannot start it | `machineState` (`src/mc/status-collect.js`) over every non-legacy plan: the workarea's `git status --porcelain`, `held.json` whole, the open pull requests, the STOP file — less what `current-<repo>.json` says is running |
 | Queue | `~/mc/queue.md` |
 
 The two repositories are `~/memoro` and `~/memoro-cli` (`MC_REPOS_HOME`
@@ -66,6 +67,27 @@ something a session is about to try. When there is one at all the brief says so
 in its opening lines, not only in the section. The three answers the role
 allows are in [`canon/roles/brief.md`](../../canon/roles/brief.md): merge by
 hand, close, or block the step with a decision.
+
+**Ready, and the runner cannot start it** is the rest of the same waiting.
+`held.json` only knows a pull request the gate refused, and a session killed
+before it committed never got as far as one: `no-text-in-code` stood from
+2026-09-04T12:37Z on exit 143 with 35 files of finished work uncommitted, and
+`connections-section` from 2026-08-29T21:37Z on a session that exited 0 and
+opened no pull request. Neither was in `held.json`, neither was in *Workareas
+with no project on main* — both had a project on main, which is what made them
+a loss — and both were skipped every round with one `, skip` line in
+`runner.log`. The section asks `machineState` for the same answer the round
+refuses on and lists what it refuses: the project, what is in the way, since
+when and how long, and the `runs.tsv` row that left it. It is a section of its
+own rather than rows in *Held before merge* because the act differs — a held
+pull request takes one of that section's three answers, and a workarea takes a
+person opening it — and a row under prose that promises the wrong answer is a
+row somebody applies the wrong answer to. `prs-unknown` is a fact about a
+repository rather than a project, so it is one line per repository. A project
+the runner has a live session on is left out: its worktree is dirty because
+somebody is working in it this minute, and every row here has to be one a
+person acts on — a lane file whose pid is dead is not a live session, and that
+workarea is precisely what the section is for.
 
 **Production** is the other section that can end in something being done, and
 what it ends in is Martin typing `mc deploy` — never the session, and never the

@@ -64,6 +64,19 @@ describe('the brief role', () => {
     assert.match(overlay, /One proposal per pull request, never a menu/u);
   });
 
+  /**
+   * The other half of the same waiting: a plan that says `ready` and a machine
+   * that will not start it. A held pull request there takes the three answers
+   * above; a workarea somebody killed takes a person opening it — and the one
+   * thing the session must be told is that the person is not it.
+   */
+  it('proposes what is waiting on hands, and touches no workarea itself', () => {
+    const { overlay } = readCanonRole('brief');
+    assert.match(overlay, /\*Ready, and the runner cannot start it\*/u);
+    assert.match(overlay, /you touch none of them/u);
+    assert.match(overlay, /`git\n?restore`/u);
+  });
+
   it('opens with the brief as the first words', () => {
     const launch = briefLaunch({ ...COLLECTED, role: readCanonRole('brief') });
     assert.match(launch.prompt, /^This is the brief, from \/work\/brief\/2026-08-25T20-00-00Z\.md\. Start the meeting\.\n\n# Brief/u);
