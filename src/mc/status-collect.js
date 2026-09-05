@@ -25,7 +25,7 @@
  * that branch — and it asks through an injected `git` that is only ever given
  * read-only arguments, so its tests feed it a fixture like the rest.
  */
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -234,6 +234,29 @@ export function pidAlive(pid) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return false;
   try { process.kill(n, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+/**
+ * `current-<repo>.json` per lane — the step each lane has in flight, as the
+ * runner wrote it when it started the session.
+ *
+ * It lives here rather than in page-collect.js because two readers need it and
+ * one of them cannot reach that module: the page draws NOW from it, and the
+ * brief drops a project the runner is running from *Ready, and the runner
+ * cannot start it* (brief-collect.js, which page-collect imports).
+ *
+ * A file whose pid is dead is not a running step — `pidAlive` is the test, and
+ * both callers apply it — so a crashed runner's leftover file neither claims a
+ * step on the page nor hides a workarea nobody is in.
+ */
+export function readCurrents(dir, read = readJson, list = readdirSync) {
+  let names = [];
+  try { names = list(dir).filter((name) => /^current-.+\.json$/u.test(name)).sort(); } catch { return []; }
+  return names.map((name) => read(join(dir, name))).filter(Boolean);
+}
+
+function readJson(path) {
+  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
 /**

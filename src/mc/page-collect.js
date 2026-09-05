@@ -46,7 +46,7 @@ import { PRICES_DATED, estimateCost } from './prices.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { staleBlockers } from './stale-blockers.js';
 import {
-  RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive,
+  RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive, readCurrents,
 } from './status-collect.js';
 
 /** How many of each list the page names rather than counts. */
@@ -636,18 +636,6 @@ export function readForeground(dir, read = readJson, list = readdirSync) {
     if (item && item.pid) out.push(item);
   }
   return out;
-}
-
-/**
- * `~/mc/runner/current-<repo>.json` — one file per lane, and one lane per
- * repository. They are read by name rather than counted: a lane that is
- * between steps has no file at all, and a lane whose runner died leaves one
- * behind that `nowBlock` reports as stale.
- */
-export function readCurrents(dir, read = readJson, list = readdirSync) {
-  let names = [];
-  try { names = list(dir).filter((name) => /^current-.+\.json$/u.test(name)).sort(); } catch { return []; }
-  return names.map((name) => read(join(dir, name))).filter(Boolean);
 }
 
 /** The newest `errors-<date>.md` in the intake directory, with its mtime. */

@@ -41,7 +41,7 @@ writes:
 | Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
 | Production | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, `git rev-list --count <it>..origin/main` in `~/memoro`, the nightly's last measurement, and the `/api/version` in `~/mc/runner/version.json` |
 | Held before merge | `~/mc/runner/held.json`, the entries at `repairs >= 1` |
-| Ready, and the runner cannot start it | `machineState` (`src/mc/status-collect.js`) over every non-legacy plan: the workarea's `git status --porcelain`, `held.json` whole, the open pull requests, the STOP file |
+| Ready, and the runner cannot start it | `machineState` (`src/mc/status-collect.js`) over every non-legacy plan: the workarea's `git status --porcelain`, `held.json` whole, the open pull requests, the STOP file — less what `current-<repo>.json` says is running |
 | Queue | `~/mc/queue.md` |
 
 The two repositories are `~/memoro` and `~/memoro-cli` (`MC_REPOS_HOME`
@@ -83,7 +83,11 @@ own rather than rows in *Held before merge* because the act differs — a held
 pull request takes one of that section's three answers, and a workarea takes a
 person opening it — and a row under prose that promises the wrong answer is a
 row somebody applies the wrong answer to. `prs-unknown` is a fact about a
-repository rather than a project, so it is one line per repository.
+repository rather than a project, so it is one line per repository. A project
+the runner has a live session on is left out: its worktree is dirty because
+somebody is working in it this minute, and every row here has to be one a
+person acts on — a lane file whose pid is dead is not a live session, and that
+workarea is precisely what the section is for.
 
 **Production** is the other section that can end in something being done, and
 what it ends in is Martin typing `mc deploy` — never the session, and never the

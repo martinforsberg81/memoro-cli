@@ -35,7 +35,7 @@ import {
 } from './paths.js';
 import { PR_FIELDS } from './project-prs.js';
 import { RUN_REFUSALS } from './run-plan.js';
-import { machineDetail, machineState } from './status-collect.js';
+import { machineDetail, machineState, pidAlive, readCurrents } from './status-collect.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -405,15 +405,25 @@ export function heldForBrief(text) {
  * a second list to maintain.
  *
  * Oldest first: the workarea that has stood longest is the one nobody has
- * looked at, and six days is the record so far.
+ * looked at, and six days is the record so far. `running` is what the runner
+ * has a live session on and is dropped — those rows are true and none of them
+ * is anybody's to act on.
  */
-export function waitingOnHands({ plans = [], machine = () => null, tsv = '', home = homedir() } = {}) {
+export function waitingOnHands({
+  plans = [], machine = () => null, tsv = '', running = [], home = homedir(),
+} = {}) {
   const machineWords = new Set(RUN_REFUSALS.map((item) => item.reason));
+  const live = new Set(running.filter(Boolean));
   const rows = [];
   for (const plan of plans) {
     // A PLAN.md is not a plan the runner reads at all (`assembleQueue`), so it
     // is not a project waiting on hands — it is one waiting on a migration.
     if (plan.legacy) continue;
+    // Nor is a project the runner has a session in flight on. Its worktree is
+    // dirty because somebody is working in it this minute, and every row here
+    // is meant to be one a person acts on: 2026-09-05T16:35Z this section named
+    // `sql-w3-email-closure`, whose session had been running for eight minutes.
+    if (live.has(plan.project)) continue;
     const state = machine(plan.project);
     if (!state || state.runnable || !machineWords.has(state.reason)) continue;
     rows.push({
@@ -894,6 +904,12 @@ export async function collectBrief({
   const waiting = waitingOnHands({
     plans,
     tsv,
+    // A lane's file whose pid is gone is a crashed runner, not a running step:
+    // that workarea is exactly the one this section is for, so it is not
+    // dropped (`nowBlock` calls the same file stale on the page).
+    running: readCurrents(join(root, 'runner'))
+      .filter((current) => pidAlive(current.pid))
+      .map((current) => current.name),
     machine: (name) => machineState(name, {
       plans,
       prs: opened,

@@ -277,6 +277,24 @@ describe('ready, and the runner cannot start it', () => {
     assert.equal(waiting[0].run, null);
   });
 
+  /**
+   * A workarea is dirty while a session is working in it, and that is not a
+   * project waiting on hands. On 2026-09-05T16:35Z this section named
+   * `sql-w3-email-closure`, whose step had been running for eight minutes —
+   * a row nobody could act on, in a section whose whole value is that every
+   * row is one somebody can.
+   */
+  it('drops a project the runner has a live session on, and keeps a dead lane file', () => {
+    const machine = () => ({ runnable: false, reason: 'dirty', detail: 'uncommitted work in /home/m/mc/x/memoro: a.js', since: '2026-09-05T16:27:00Z' });
+    const plans = [plan('sql-w3-email-closure'), plan('no-text-in-code')];
+    assert.deepEqual(waitingOnHands({ plans, machine, running: ['sql-w3-email-closure'] }).map((w) => w.project),
+      ['no-text-in-code']);
+    // The caller drops a lane file whose pid is gone before it gets here, so a
+    // crashed runner hides nothing: `running` is what is alive.
+    assert.deepEqual(waitingOnHands({ plans, machine, running: [] }).map((w) => w.project),
+      ['no-text-in-code', 'sql-w3-email-closure']);
+  });
+
   it('is empty when every ready plan is one the runner would start', () => {
     assert.deepEqual(waitingOnHands({
       plans: [plan('mc-ui')],
