@@ -166,7 +166,7 @@
         "Verified by running, not by reading: `mc status connections-section` prints `ready · uncommitted work in ~/mc/connections-section/memoro: hop-measure.mjs, probe.mjs (since 09-05 10:03Z)` and `mc status total-lane-cap` prints bare `ready`, which are two of the three example rows in `mc-status.md` (the held one is step 2's, measured in a shadow work root and quoted from there rather than re-made — the runner was live). `npm test`: 1 725 tests, 1 716 pass, 0 fail, 9 skipped.",
         "What is left of this project after the close-out is one thing and it is Martin's: the recommendation in #633 — leave a killed session's uncommitted worktree to a person rather than build the runner's own recovery — has been put and not ruled on. If he rules, the entry goes in `docs/project/mc/rulings.md`; if he does not, step 4's own trigger stands, which is to look at the median time-to-clean after a fortnight of the brief naming these workareas. Nothing in the code waits on either."
       ],
-      "pr": null,
+      "pr": 634,
       "blocked_by": null
     }
   ]
