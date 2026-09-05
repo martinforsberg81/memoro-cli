@@ -285,6 +285,58 @@ verb runs and passed to nothing but the suite.
 scope this ruling widened from *decide whether `mc dev` exists* to the two
 verbs above.
 
+## 10 · A round reads the plan from `main` unless the plan itself is the conflict
+
+`ruling · 2026-09-05` · answers `plan-read-from-main-1`, raised by
+`plan-read-from-main` step 1 (#629)
+
+**Decided at the brief, not by Martin.** He asked for the open decisions to be
+taken one at a time and to be brought in where one carries weight; this one is a
+single predicate in the runner's read path, measured, reversible, and costs
+nothing outside mc's own scheduling. It is written here in his file because
+`rulings.md` is the only place a decision about this programme survives, and it
+is marked so nobody later reads it as his word.
+
+`run.js:1265` calls `planOf(worktree, name, { fromHead: conflicts.length > 0 })`.
+The docstring at `run.js:336` defends reading HEAD — *"HEAD is the branch's last
+good copy... Main's own edits to the plan are what the session is merging in"* —
+and it is right about exactly one case: a conflicted `PLAN.json`. The condition
+it is attached to fires on **any** conflicting file. That mismatch is the whole
+defect.
+
+The three options step 1 put: **1** — always read `origin/main`, never the
+worktree. **2** — refuse the step when the worktree could not be brought to base.
+**3** — scope `fromHead` to a conflicted plan, with 2 beside it as a guard.
+
+> **Beslut:** option 3. `conflicts.some(isPlanPath)` in place of
+> `conflicts.length > 0`, and the guard is built as its own step.
+
+The measurement decides it. Over the whole of `~/mc/runner/log/runner.log`
+(24 755 lines), 207 rounds reached a conflict: **27 with a `PLAN.json` among the
+conflicting files and 180 — 87% — with none.** Option 3 removes those 180 with
+one predicate and leaves untouched the case the docstring was written for.
+Option 1 would take that case too, and its cost is not theoretical: it drops the
+branch's own plan edits on the clean path, of which the one that matters is a
+step marked `done` with a `pr` that then did not land. Option 2 alone turns a
+silent wrong answer into a loud one without fixing the answer.
+
+Two findings from step 1 that make option 3 smaller than it looks. It needs no
+`git show origin/main:` read at all — during a merge stopped on some other file,
+git has **already** written main's plan into the worktree, demonstrated in a
+scratch repository rather than assumed. And `isPlanPath`
+(`src/mc/plan-merge.js:159`) is already imported into `run.js`.
+
+**What this does not fix, said out loud:** the 13 of those 27 rounds where
+`fromHead` fires legitimately and still gives a stale answer —
+`sdk-artifact-storage`, whose branch had landed and whose plan main then
+re-planned. That is a different mechanism (`branch-landed.js` answering
+`'unknown'` and `freshBranch` reading it as "not landed"), and it has its own
+proposal in `~/mc/proposals/2026-09-05-branch-landed-unknown-after-replan.md`.
+
+**Carried by [`plan-read-from-main/PLAN.json`](plan-read-from-main/PLAN.json)**
+step 2, whose instruction was already written assuming this answer, with step 3
+building option 2's guard.
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
