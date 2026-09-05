@@ -49,9 +49,14 @@ never moved (2026-09-03). The overview stays complete — every project is
 listed — and what moves sits where the eye already is:
 
 - **QUEUE** — how deep, how much of it is runnable, the next few by name and
-  kind, and the skips counted by reason. Every reason comes from the plan: a
-  session somebody has open in the workarea is not one of them, because the
-  runner does not decline for it either. Under those, in yellow when it is
+  kind, and the skips counted by reason. The reasons are both of the runner's
+  own: what the plan on `origin/main` says (`blocked`, `done`, `unparseable`)
+  and what this machine says (`dirty`, `in-flight`, `held-after-repair`, …) —
+  the two readings of [`mc-run.md`](mc-run.md) § *The two readings, and what
+  each answers*, so a name counted runnable here is one the runner would
+  actually start, and its kind is what it would start it as. A session somebody
+  has open in the workarea is not a reason, because the runner does not decline
+  for it either. Under those, in yellow when it is
   there at all: **blocker finished** — a step that is `blocked` on a project
   whose plan on `origin/main` is `done` or gone, which is a plan waiting for
   nothing (`stale-blockers.js`). Only a `project` blocker; a `decision` waits
@@ -63,8 +68,10 @@ listed — and what moves sits where the eye already is:
   `mc run` would not land (a red gate, a plan trespass, a session that timed
   out with its work pushed). It belongs in QUEUE because it *is* the skip
   nothing counted: a held pull request keeps its project out of the queue
-  entirely (`inFlight`), so the project is in none of the numbers above it.
-  Yellow, like the line under it — nothing in the runner moves it on its own.
+  entirely (`inFlight`), and until the machine reading arrived the project was
+  in none of the numbers above it either. It is counted there now, under
+  `held-after-repair`; these rows are what a person acts on, one pull request at
+  a time. Yellow, like the line under it — nothing in the runner moves it on its own.
   The page draws the first six and counts the rest; `mc --json` carries every
   one whole, with `note`, `since` and `repairs`.
 - **INTAKE** — the newest `~/mc/intake/errors-<date>.md`, its age, what is
