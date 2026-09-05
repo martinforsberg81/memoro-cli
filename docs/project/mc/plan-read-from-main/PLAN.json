@@ -56,7 +56,7 @@
   "steps": [
     {
       "title": "Put the choice to Martin, with the narrow fix measured",
-      "status": "ready",
+      "status": "blocked",
       "done_when": "The PR names the three options, says which the code supports and at what cost, and carries one recommendation; Martin's answer is written into `docs/project/mc/rulings.md` when he gives it.",
       "instruction": [
         "This step writes no fix. It exists because the thing to change is a **deliberate, documented choice**, and a session that quietly reverses one is how a reason gets lost. `run.js:336` argues for reading HEAD in its own words: *\"HEAD is the branch's last good copy, and it is the right one: the step being handed out is the step this branch is on. Main's own edits to the plan are what the session is merging in.\"* Read that comment in full before writing anything.",
@@ -66,9 +66,17 @@
         "Recommend one. The proposal recommended 1 with 2 as a guard; the scoping finding above was not available to it, and 3 may now be the smaller and more honest change. Decide from the code, not from the proposal, and say which you chose and why.",
         "Carry the answer into `docs/project/mc/rulings.md` in the shape that file already uses — the question, the options, Martin's answer quoted verbatim, and the step that builds it. mc keeps no record of a decision anywhere else, so the ruling and this plan are the only two places it survives."
       ],
-      "comments": [],
+      "comments": [
+        "The choice is put, in the PR body and at the workarea root as `plan-read-from-main-1`. Recommendation is **option 3** — `conflicts.some(isPlanPath)` at `run.js:1311` in place of `conflicts.length > 0`, with option 2's guard beside it. Nothing was built; `rulings.md` is untouched because Martin has not answered yet, and that clause of `done_when` is his half of it.",
+        "The scoping finding the instruction predicted is confirmed and measured over the whole of `~/mc/runner/log/runner.log` (24 755 lines): 207 rounds reached a conflict, 27 of them with a `PLAN.json` among the conflicting files and **180 (87%) with none** — 31 distinct projects, led by `intake-inbox` (45 rounds), `role-instructions` (44) and `docx-editor` (36). Against 10 190 project-decisions in the same log (9 828 `, skip` lines plus 362 sessions started), a conflicted round is 2% of the traffic. That ratio is the whole argument for the narrow fix over option 1.",
+        "The `docx-editor` claim in the plan's `goal` is verified independently, not taken from the proposal: 13 consecutive rounds 04:00:53–06:25:55 on 2026-09-05 (runner.log 23192–23566, not 8 rounds from 04:51), and memoro `da4ad27` — the last commit on `origin/main` touching `docs/project/docx-editing-surface/docx-editor/PLAN.json` before that morning — has step 17 `ready` (\"Drive the composition rows that can be driven\") while every round reported it blocked on `docx-ime-input-source`. The project has since been archived off main, so the plan is only reachable through that commit.",
+        "One fact worth having before step 2 is written against a wrong assumption: when `fromHead` does **not** fire, `planOf` reads `deps.read(path)`, and during a merge that stopped on some other file git has *already* written main's plan into the worktree. Demonstrated in a scratch repository — branch and main both edit `doc.md`, main alone edits the plan; the merge conflicts on `doc.md`, and the plan on disk reads main's version while `HEAD` reads the stale one. So under option 3 the fix is genuinely one predicate and needs no `git show origin/main:` read at all.",
+        "The case `fromHead` was built for is also giving wrong answers, which option 3 does not fix and which is worth saying out loud rather than discovering in step 3. `sdk-artifact-storage` (13 of the 27 plan-conflict rounds): its workarea's `HEAD` says step 2 `blocked` on `sdk-storage-deploy-verified` and step 4 `blocked`, while `origin/main` says step 2 `done` (#11404) and steps 3, 4 and 5 all `ready`. `HEAD` is not \"the branch's last good copy\" in either half of the range — it is the copy that lags. Under option 3 that residue is what step 3's guard makes visible instead of silent.",
+        "Option 1's cost, stated where the ruling can weigh it: `queue()` already loads every plan from `origin/main` via `listPlans` (`brief-collect.js:220`, `ref = 'origin/main'`) and hands them to `runStepClaimed` as `world.plans`, so main's parsed plan is in the round already and only `text` would need carrying — cheap. What is not cheap is that option 1 changes the clean path too, dropping the branch's own plan edits, of which the one that matters is a step marked `done` with a `pr` that then did not land. Also checked: every name the round can reach has a plan on main, because `assembleQueue` (`run-plan.js:52`) builds the queue out of `plans` and nothing else — the step 2 instruction's assertion holds.",
+        "Blocked rather than done, following `mc-dev-protocol` step 1 (#628) three hours earlier: step 2 branches on a ruling that does not exist yet. Whoever carries Martin's answer writes it into `docs/project/mc/rulings.md` in that file's shape, cites it as `plan-read-from-main-1`, sets this step `done` and the first unfinished step `ready`, and — if the answer was not option 3 — carries what it changed into step 2's own instruction, which is written assuming 3."
+      ],
       "pr": null,
-      "blocked_by": null
+      "blocked_by": { "kind": "decision", "name": "plan-read-from-main-1" }
     },
     {
       "title": "The round reads the plan the contract says it shares",
