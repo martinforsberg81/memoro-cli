@@ -122,7 +122,7 @@
         "Step 4 inherits two things. First: `docs/technical/mc-run.md` now carries a *Lanes* passage on the total — what it bounds, that a session count is a proxy for load, absent meaning no cap, `takeSlot`/`waitForSlot` and the 15 s poll, the fairness hazard, and all four forms of the verb — so close-out is the interim `per_repo 1` being lifted with Martin and the `project_log.md` row, not a doc written from scratch. `tests/mc/run-doc.test.js` now pins the poll against `TOTAL_POLL_MS` and the bounds against `LANES_MIN`/`LANES_MAX`. Second: the real `~/.memoro/mc/lanes.json` was not touched by this session — the hand-runs wrote to a copy under `MC_HOME`, and it still reads `per_repo: 1`, set 2026-09-05T06:05:18Z, with no total.",
         "Criterion 3 is met and was met by running it, not by reading it. Criterion 1 is still step 4's: it wants a live runner started under a real pair and a busy hour watched against the RUNNER block, which is `mc run --update` and Martin's number."
       ],
-      "pr": null,
+      "pr": 638,
       "blocked_by": null
     },
     {
