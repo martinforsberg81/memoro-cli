@@ -95,7 +95,7 @@
         "**`canon/roles/plan.md` was not edited, and the sentence went into `planLaunch`'s prompt (`src/mc/commands/plan.js`) instead — read this before assuming the file was missed.** That role file is frontmatter with no body by decision, and the decision is asserted: `tests/mc/commands/plan.test.js:41` checks `role.overlay === null`, its comment carrying the reason, and `planLaunch` inlines `canon/roles/_common.md` into the prompt *because* the role has no overlay — so giving plan.md a body would both break that assertion and hand a planning session the shared text twice, once through `instructionsFor` and once inside the prompt. The prompt is what a planning session is told (Martin, 2026-08-31), so that is where the hand-off now is, asserted by a new test beside the guard that keeps the prompt from growing back. The intent of `done_when` is met — a planning session is told a `plan-review` park is its own — but the file it names is not the file that changed.",
         "For step 3: the estate's five named decisions are all genuine questions (measured in step 1), and the two special cases stood at 0 stale and 1 not-a-name, so the settle-by-reading case the route exists for may not be present on the day. The one that is closest is the `sql-goal1-certification` step 4 blocker whose name is a 99-character sentence — a blocker nothing can check, and the step it stops is a real one. If nothing is settleable, the step's instruction says to say so and name what would have to be true rather than manufacture one."
       ],
-      "pr": null,
+      "pr": 647,
       "blocked_by": null
     },
     {
