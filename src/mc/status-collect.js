@@ -5,7 +5,8 @@
  *
  * `nowBlock` turns the files `mc run` keeps into the NOW section;
  * `kindFor` answers what the runner would do with a queued name;
- * `machineState` answers whether it could start it at all right now;
+ * `machineState` answers whether it could start it at all right now, and
+ * `machineDetail` is that answer as the sentence its readers print;
  * `pidAlive`
  * is the one liveness test the page and the foreground register both use;
  * `areasWithCheckout` names
@@ -25,6 +26,7 @@
  * read-only arguments, so its tests feed it a fixture like the rest.
  */
 import { existsSync, readdirSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { openPrsFor } from './project-prs.js';
@@ -157,6 +159,23 @@ export function machineState(name, {
     since: repair ? repair.entry.since || null : null,
     kind: repair ? 'repair' : kind,
   };
+}
+
+/**
+ * What `machineState` said, as a sentence a person reads: the detail when
+ * there is one, the bare word when there is not, with the home directory
+ * folded to `~`.
+ *
+ * A workarea's absolute path is most of a terminal row, and every surface that
+ * draws this reading draws it in a terminal — `mc status <name>`
+ * (status-project.js) and the brief's *Ready, and the runner cannot start it*
+ * (brief-collect.js). It lives here, beside the reading it renders, because
+ * those two modules cannot import each other: status-project already imports
+ * brief-collect, and page-cache imports it too.
+ */
+export function machineDetail(machine, home = homedir()) {
+  const said = String(machine?.detail || machine?.reason || '');
+  return home ? said.split(home).join('~') : said;
 }
 
 /** memoro | memoro-cli | null — an existing workarea first, then the plan's own. `repoOf`'s rule (run.js), over read data. */

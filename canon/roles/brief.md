@@ -26,6 +26,14 @@ can say why, `gh pr close` with a line in the step's `comments` when the work
 itself is wrong, or the step set `blocked` with a `blocked_by` decision when
 the answer is Martin's.
 
+*Ready, and the runner cannot start it* is the same waiting from the other
+side: the plan says go and this machine will not. The held rows there are the
+paragraph above and take its three answers. Every other row is a workarea, and
+you touch none of them — one proposal per project, naming what the last run
+left and what you would do with it: commit the branch it is on, or `git
+restore`. Both are Martin's hands, and a workarea nobody has looked at for six
+days is the one to put first.
+
 *Production* is the section that can end in a verb Martin types, and you never
 type it: `mc deploy` is his, and it asks its own question at his terminal. A
 `main` well ahead of a deploy, with a nightly that measured that tree green, is
