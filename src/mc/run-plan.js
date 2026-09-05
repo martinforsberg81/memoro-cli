@@ -363,9 +363,9 @@ export function mcOwnFiles(files) {
 /* ----------------------------------------------------------- the helper */
 
 /**
- * `mc helper --intake` is a step of the runner's day, not a project: it is logged
- * runs.tsv under its own `kind` with `helper` in the name column, and it runs
- * at most once per calendar day.
+ * `mc helper --collect` is a step of the runner's day, not a project: it is
+ * logged in runs.tsv under its own `kind` with `helper` in the name column, and
+ * it runs at most once per calendar day.
  *
  * The hour is UTC and the day is UTC, so the two agree — the digest's window
  * is the day behind it, and a run before dawn would be measuring against a
@@ -377,9 +377,66 @@ export const HELPER_NAME = 'helper';
 export const HELPER_HOUR_UTC = 5;
 
 /**
- * Is the day's helper run due? The runs.tsv row is the whole state — there is
- * no separate stamp file to fall out of step with it — and the row is written
- * whether the run succeeded or failed. That is what "a failed collect is
+ * The drain is the other half of the same verb and asks a different question,
+ * so it has a gate and a kind of its own.
+ *
+ * `helperDue` is right for the collect: one digest per repository per calendar
+ * day, whatever else happens. It is wrong for the turn, whose question is *is
+ * there a file in the inbox?* — a question a day boundary has nothing to say
+ * about. Sharing the gate meant a round could only ever read one file a day and
+ * only if it had also collected, which is how thirteen digests came to be
+ * waiting in a directory that is supposed to drain.
+ *
+ * `intake` is its own `kind` rather than a second meaning for `helper`: the two
+ * are counted separately in `summariseRuns`, `helperDue` is not closed for the
+ * day by a drain that happened to run, and a reader of runs.tsv can tell the
+ * script that read production from the model that read one file. The cost is
+ * that the twelve `helper` rows written before 2026-09-05 mean both things; the
+ * kind column tells them apart from here on and nothing re-reads the old ones.
+ */
+export const INTAKE_KIND = 'intake';
+
+/**
+ * How many files one round drains. Three, and the number is what a round costs:
+ * a turn is capped at ten minutes (`DEFAULT_TURN_MINUTES`) and measured at two
+ * to three, so a round's drain is bounded at half an hour and typically under
+ * ten minutes — beside a lane's ninety-minute step, that is noise. One file a
+ * round would be smaller still and would take thirteen rounds to work through
+ * the backlog that exists today; the whole inbox in one round is the version
+ * with no bound at all, and an inbox Martin drops forty screenshots into would
+ * stop the runner for a morning.
+ */
+export const INTAKE_PER_ROUND = 3;
+
+/**
+ * The inbox in the order it drains: oldest first, by the date in the name.
+ *
+ * By the date and not by the name itself, because the collector's two
+ * generations of filename do not sort against each other as strings —
+ * `errors-memoro-2026-09-04.md` sorts before `errors-memoro-cli-2026-08-31.md`
+ * on the `2` against the `c`, which would put every memoro digest ahead of every
+ * memoro-cli one whatever day either was written.
+ *
+ * A name with no date in it sorts last, under its own name. That is arrival
+ * order too: the dated files are the collector's, written on the day they name,
+ * and a file Martin dropped in by hand arrived now.
+ *
+ * Pure over a listing of filenames — dotfiles dropped, directories never in it
+ * (`~/mc/intake/decisions-archive/` is an archive already, and the caller lists
+ * files).
+ */
+export function intakeQueue(names = []) {
+  return names
+    .filter((name) => typeof name === 'string' && name && !name.startsWith('.'))
+    .map((name) => ({ name, date: /(\d{4}-\d{2}-\d{2})/u.exec(name)?.[1] || '9999-99-99' }))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name))
+    .map((item) => item.name);
+}
+
+/**
+ * Is the day's collect due? The runs.tsv row is the whole state — there is
+ * no separate stamp file to fall out of step with it — and a row is written
+ * whether the collect succeeded or failed. That is what "a failed collect is
  * logged and never retried within the day" means: the gate does not ask how
  * it went, only that it happened.
  */
@@ -392,12 +449,24 @@ export function helperDue({ tsv = '', now = new Date(), hour = HELPER_HOUR_UTC }
 }
 
 /**
- * The runs.tsv note for a day's helper run. `success,<n>-proposals` keeps the
- * `success,...` shape every other row uses — `summariseRuns` reads a note that
- * does not start with it as a failure, and a quiet day is not a failure.
+ * The runs.tsv note for one repository's collect. The outcome comes first and
+ * the detail after, because `summariseRuns` reads a note that does not start
+ * with `success` as a failure — and every helper row until 2026-09-05 was
+ * `memoro,success,0-proposals`, which it counted as one.
  */
-export function helperNote(turn) {
-  if (!turn) return 'collect-failed';
+export function collectNote({ repo, digest = null }) {
+  if (!digest) return `collect-failed,${repo}`;
+  const delta = digest.data?.delta || {};
+  return `success,${repo},${delta.first ? 'first-digest' : `${delta.fingerprints?.length ?? 0}-new`}`;
+}
+
+/**
+ * The runs.tsv note for one drained file. `success,<n>-proposals` keeps the
+ * `success,...` shape every other row uses; which file it was is the row's
+ * `name` column, which is the column for naming the thing a row is about.
+ */
+export function intakeNote(turn) {
+  if (!turn) return 'turn-missing';
   if (turn.ok) return `success,${turn.wrote?.length ?? 0}-proposals`;
   return turn.reason || turn.note || 'failed';
 }

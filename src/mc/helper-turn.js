@@ -9,6 +9,12 @@
  * standing in `~/mc/intake/`, given one filename and asked for one outcome —
  * one `~/mc/proposals/<date>-<slug>.md`, or none.
  *
+ * `drainIntake` at the bottom is what makes that an inbox rather than a pile:
+ * the oldest files, one turn each, every one archived under
+ * `~/mc/runner/log/intake/<date>/` the moment its turn ends, repeated round
+ * after round until nothing is left. `mc run` and `mc helper --intake` both go
+ * through it, so there is one drain and one archive rather than two.
+ *
  * The bare `mc helper` is the other half of the verb and is not here: it is a
  * session with Martin in it, taking his own reports (`commands/helper.js`).
  * Both write into the same `proposals/`, and neither reads the other.
@@ -29,15 +35,15 @@
  * to be able to say what kind of thing each one is without a model.
  */
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { defaultRepos, listProposals, planFields } from './brief-collect.js';
-import { intakeDir, proposalsDir } from './helper-collect.js';
+import { intakeArchiveDir, intakeDir, proposalsDir } from './helper-collect.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
-import { headlessArgs, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
+import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
 
 /** One turn over one file. Ten minutes is four times the longest measured. */
 export const DEFAULT_TURN_MINUTES = 10;
@@ -283,4 +289,69 @@ export async function runHelperTurn({
     waiting: after,
     groundNotes: ground.notes || [],
   };
+}
+
+/* ------------------------------------------------------------------- drain */
+
+/** The inbox's files, never its directories: `decisions-archive/` is not an item. */
+const listFiles = (dir) => {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => entry.name);
+  } catch { return []; }
+};
+
+/** `~/mc` and `~/mc/runner/log/` are one filesystem, so a rename is the whole move. */
+const moveFile = (from, to) => {
+  try { mkdirSync(dirname(to), { recursive: true }); renameSync(from, to); return true; } catch { return false; }
+};
+
+/**
+ * Drain the inbox: one turn per file, oldest first, up to `limit` of them, and
+ * every file archived the moment its turn ends.
+ *
+ * The archive is unconditional and it is the reason this terminates. A turn
+ * that failed, timed out, hit the quota or threw has still had its turn, and a
+ * file put back for the next round is a file every round after this one takes
+ * again — an inbox that keeps what it could not judge never drains. That is
+ * Martin's word (2026-09-04) and it is also the only version with an end.
+ *
+ * The file's repository is not passed. `repoOfFile` reads it out of the
+ * collector's own names and answers `null` for anything else, which is what the
+ * prompt wants: a file a person dropped in belongs to whichever system its
+ * contents say, and the turn is the only reader that can tell.
+ *
+ * `deps` is the whole of what this touches outside itself — `files`, `move`,
+ * `turn` — so a caller with its own filesystem (the runner, its tests) hands
+ * over its own and the drain is exercised rather than stubbed. `onTurn` is
+ * called after each file's turn *and* its archive, which is where the runner
+ * writes its runs.tsv row; `stop` ends the drain between files, never inside
+ * one.
+ */
+export async function drainIntake({
+  env = process.env,
+  now = () => new Date(),
+  limit = INTAKE_PER_ROUND,
+  model = null,
+  deps = {},
+} = {}) {
+  const dir = intakeDir(env);
+  const waiting = intakeQueue((deps.files || listFiles)(dir));
+  const done = [];
+  for (const file of waiting.slice(0, Math.max(0, limit))) {
+    const started = now().getTime();
+    let turn;
+    try {
+      turn = await (deps.turn || runHelperTurn)({ env, now: now(), file, model });
+    } catch (error) {
+      // The one path that would otherwise skip the archive below. A turn that
+      // threw did not judge the file, but the file has had its turn.
+      turn = { ok: false, reason: 'turn-threw', note: clip(error?.message || String(error), 120), wrote: [], waiting: [] };
+    }
+    const archived = (deps.move || moveFile)(join(dir, file), join(intakeArchiveDir(env, now()), file));
+    const result = { file, turn, archived, seconds: Math.round((now().getTime() - started) / 1000) };
+    done.push(result);
+    if (deps.onTurn) await deps.onTurn(result);
+    if (deps.stop?.()) break;
+  }
+  return { done, left: Math.max(0, waiting.length - done.length) };
 }

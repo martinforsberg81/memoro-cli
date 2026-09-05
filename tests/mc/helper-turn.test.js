@@ -7,13 +7,13 @@
  * that `wrote` comes from the directory and not from what the turn said.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { intakeDir, proposalsDir } from '../../src/mc/helper-collect.js';
-import { helperGround, helperPrompt, repoOfFile, runHelperTurn } from '../../src/mc/helper-turn.js';
+import { intakeArchiveDir, intakeDir, proposalsDir } from '../../src/mc/helper-collect.js';
+import { drainIntake, helperGround, helperPrompt, repoOfFile, runHelperTurn } from '../../src/mc/helper-turn.js';
 import { sharedRoleText } from '../../src/mc/roles.js';
 
 const NOW = new Date('2026-08-29T06:00:00.000Z');
@@ -274,6 +274,105 @@ describe('the ground', () => {
       'memoro: could not list plans on origin/main',
       'no docs/project/project_log.md on origin/main in memoro',
     ]);
+  });
+});
+
+/**
+ * The drain, on a real filesystem: real files in a real inbox, really moved.
+ * The session is still a stub — the point of the measurement is where the file
+ * ends up, and a model would only make that slower to find out.
+ */
+describe('draining the inbox', () => {
+  const ARCHIVE = (e) => join(intakeArchiveDir(e, NOW));
+
+  function inbox(names) {
+    const e = env();
+    mkdirSync(intakeDir(e), { recursive: true });
+    mkdirSync(proposalsDir(e), { recursive: true });
+    // An archive already, and a directory rather than a file: it is skipped,
+    // not drained and not moved.
+    mkdirSync(join(intakeDir(e), 'decisions-archive'), { recursive: true });
+    writeFileSync(join(intakeDir(e), 'decisions-archive', 'mc-2.md'), '# answered\n');
+    for (const name of names) writeFileSync(join(intakeDir(e), name), `# ${name}\n`);
+    return e;
+  }
+
+  const drain = (e, over = {}) => drainIntake({
+    env: e, now: () => NOW, deps: { turn: async () => ({ ok: true, wrote: [], waiting: [] }), ...over },
+  });
+
+  it('takes the oldest files first, one turn each, and archives every one', async () => {
+    const e = inbox(['note.md', 'errors-memoro-cli-2026-08-27.md', 'errors-memoro-2026-08-26.md']);
+    const taken = [];
+    const out = await drain(e, { turn: async ({ file }) => { taken.push(file); return { ok: true, wrote: [], waiting: [] }; } });
+
+    assert.deepEqual(taken, ['errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note.md']);
+    assert.deepEqual(out.done.map((d) => d.archived), [true, true, true]);
+    assert.equal(out.left, 0);
+    assert.deepEqual(readdirSync(intakeDir(e)), ['decisions-archive'], 'nothing but the archive is left');
+    assert.deepEqual(readdirSync(ARCHIVE(e)).sort(), ['errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note.md']);
+    assert.equal(readFileSync(join(ARCHIVE(e), 'note.md'), 'utf8'), '# note.md\n', 'moved, not deleted');
+  });
+
+  /**
+   * The rule the whole thing rests on: a turn whose session came back non-zero
+   * has still had its turn, and the file goes to the archive anyway. A file put
+   * back is a file every round after this one takes again, and again.
+   */
+  it('archives a file whose session returned non-zero', async () => {
+    const e = inbox(['errors-memoro-2026-08-26.md']);
+    const out = await drainIntake({
+      env: e,
+      now: () => NOW,
+      deps: {
+        turn: (options) => runHelperTurn({
+          ...options,
+          deps: {
+            role: () => ROLE, launch: () => LAUNCH, profile: async () => 'PROFILE', ground: GROUND,
+            session: async () => ({ status: 1, stdout: 'not json', stderr: 'claude: fatal', timedOut: false }),
+          },
+        }),
+      },
+    });
+    assert.equal(out.done[0].turn.ok, false, 'the turn failed');
+    assert.equal(out.done[0].turn.note, 'no-json');
+    assert.equal(out.done[0].archived, true);
+    assert.deepEqual(readdirSync(intakeDir(e)), ['decisions-archive']);
+    assert.equal(readFileSync(join(ARCHIVE(e), 'errors-memoro-2026-08-26.md'), 'utf8'), '# errors-memoro-2026-08-26.md\n');
+  });
+
+  it('archives a file whose turn threw, and names it as having thrown', async () => {
+    const e = inbox(['a-2026-08-26.md']);
+    const out = await drain(e, { turn: async () => { throw new Error('claude died'); } });
+    assert.deepEqual([out.done[0].turn.ok, out.done[0].turn.reason], [false, 'turn-threw']);
+    assert.equal(readdirSync(ARCHIVE(e))[0], 'a-2026-08-26.md');
+  });
+
+  it('takes no more than the limit, and says how many are left', async () => {
+    const e = inbox(['a-2026-08-26.md', 'b-2026-08-27.md', 'c-2026-08-28.md']);
+    const out = await drain(e, {});
+    assert.equal(out.done.length, 3, 'INTAKE_PER_ROUND by default');
+
+    const e2 = inbox(['a-2026-08-26.md', 'b-2026-08-27.md']);
+    const one = await drainIntake({ env: e2, now: () => NOW, limit: 1, deps: { turn: async () => ({ ok: true, wrote: [] }) } });
+    assert.deepEqual(one.done.map((d) => d.file), ['a-2026-08-26.md']);
+    assert.equal(one.left, 1);
+    assert.deepEqual(readdirSync(intakeDir(e2)).sort(), ['b-2026-08-27.md', 'decisions-archive']);
+  });
+
+  it('stops between files when asked, and never inside one', async () => {
+    const e = inbox(['a-2026-08-26.md', 'b-2026-08-27.md', 'c-2026-08-28.md']);
+    const out = await drain(e, { stop: () => true });
+    assert.equal(out.done.length, 1);
+    assert.equal(out.done[0].archived, true, 'the file it did take is still archived');
+    assert.equal(out.left, 2);
+  });
+
+  it('is an empty answer for an inbox with nothing in it', async () => {
+    const e = env();
+    const out = await drain(e, {});
+    assert.deepEqual(out.done, []);
+    assert.equal(out.left, 0);
   });
 });
 

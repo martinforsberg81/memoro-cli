@@ -76,6 +76,20 @@ export function intakeDir(env = process.env) {
 }
 
 /**
+ * `~/mc/runner/log/intake/<date>/` — where a file goes the moment its turn
+ * ends, whatever the turn returned and whether or not it succeeded.
+ *
+ * The precedent is `~/mc/runner/log/closed/<name>/`, which is the same idea for
+ * a workarea: what a round is finished with is moved, never deleted. The
+ * unconditional part is what makes the drain terminate — a file kept back
+ * because its turn failed is a file the next round takes again, and the round
+ * after that, forever.
+ */
+export function intakeArchiveDir(env = process.env, now = new Date()) {
+  return join(workRoot(env), 'runner', 'log', 'intake', now.toISOString().slice(0, 10));
+}
+
+/**
  * Where the bare `mc helper` session stands — its own room beside
  * `~/mc/brief/`, and not `~/mc/intake/`: the intake turn's material is not
  * that session's business, and standing in the directory it must not read

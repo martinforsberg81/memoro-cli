@@ -12,11 +12,20 @@ import { sharedRoleText } from '../../src/mc/roles.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
   const dirs = new Set([root]);
+  // `~/mc/intake/` as the drain finds it. `decisions-archive/` is there in
+  // reality and is a directory, so the fixture keeps one: a drain that took it
+  // would archive an archive.
+  if (inbox.length) {
+    dirs.add(`${root}/intake`);
+    dirs.add(`${root}/intake/decisions-archive`);
+    files[`${root}/intake/decisions-archive/mc-2.md`] = '# an answered decision';
+    for (const name of inbox) files[`${root}/intake/${name}`] = `# ${name}`;
+  }
   const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: '/home' };
   const repos = { memoro: '/home/memoro', 'memoro-cli': '/home/memoro-cli' };
   for (const repo of Object.keys(repos)) files[`${repos[repo]}/.git`] = '';
@@ -62,6 +71,15 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       const seen = new Set();
       for (const key of Object.keys(files)) if (key.startsWith(prefix)) seen.add(key.slice(prefix.length).split('/')[0]);
       return [...seen];
+    },
+    // Files only — what `readdirSync(dir, { withFileTypes: true })` filtered to
+    // `isFile()` answers, so the drain never takes a directory for an item.
+    files: (p) => {
+      const prefix = `${p}/`;
+      return Object.keys(files)
+        .filter((key) => key.startsWith(prefix) && !key.slice(prefix.length).includes('/'))
+        .map((key) => key.slice(prefix.length))
+        .filter((name) => !dirs.has(`${p}/${name}`));
     },
     write: (p, t) => { files[p] = t; },
     append: (p, t) => { files[p] = (files[p] || '') + t; },
@@ -1592,12 +1610,12 @@ test('STOP ends both lanes after the step each is in', async () => {
 /* ------------------------------------------------------------- the helper */
 
 /**
- * `mc helper` is the one thing in a round that is not a step. It opens no
- * worktree and touches no branch: what proves it ran is its row in runs.tsv,
- * and that row is also the gate — there is no second stamp file to fall out
- * of step with it.
+ * The collect is one of the two things in a round that are not steps. It opens
+ * no worktree, touches no branch and calls no model: what proves it ran is its
+ * rows in runs.tsv, and those rows are also the gate — there is no second stamp
+ * file to fall out of step with them.
  */
-test('the helper runs once per calendar day, logged as kind helper with helper in the name', async () => {
+test('the collect runs once per calendar day, logged as kind helper with helper in the name', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
   const runner = createRunner({ deps: f.deps });
   await runner.round();
@@ -1609,12 +1627,14 @@ test('the helper runs once per calendar day, logged as kind helper with helper i
   assert.deepEqual(
     first.map((r) => ({ name: r.name, exit: r.exit, pr: r.pr, note: r.note })),
     [
-      { name: 'helper', exit: '0', pr: '-', note: 'memoro,success,1-proposals' },
-      { name: 'helper', exit: '0', pr: '-', note: 'memoro-cli,success,1-proposals' },
+      { name: 'helper', exit: '0', pr: '-', note: 'success,memoro,1-new' },
+      { name: 'helper', exit: '0', pr: '-', note: 'success,memoro-cli,1-new' },
     ],
   );
-  assert.equal(first[0].turns, '3', 'the turn is a model call and its usage is logged like a step');
-  assert.equal(first[0].cache_read, '30');
+  // The outcome first and the repository after, because `summariseRuns` reads a
+  // note that does not start with `success` as a failure — and every helper row
+  // written before 2026-09-05 read `memoro,success,…`, which it counted as one.
+  assert.equal(first[0].turns, '-', 'no model runs in the collect half');
   assert.deepEqual(f.calls.collects.map((c) => c.repo), ['memoro', 'memoro-cli']);
 
   await runner.round();
@@ -1651,10 +1671,9 @@ test('a failed collect is logged and never retried within the day', async () => 
   const f = fixture({ collect: async () => { throw new Error('wrangler is not logged in'); } });
   const runner = createRunner({ deps: f.deps });
   await runner.round();
-  const row = runRows(f.files).find((r) => r.kind === 'helper');
-  assert.equal(row.note, 'collect-failed');
-  assert.equal(row.exit, '1');
-  assert.equal(f.calls.turns.length, 0, 'no turn is run over a digest that was never written');
+  const rows = runRows(f.files).filter((r) => r.kind === 'helper');
+  assert.deepEqual(rows.map((r) => r.note), ['collect-failed,memoro', 'collect-failed,memoro-cli']);
+  assert.deepEqual(rows.map((r) => r.exit), ['1', '1']);
   assert.ok(f.log.some((line) => /memoro: the collect step failed — wrangler is not logged in/u.test(line)));
 
   await runner.round();
@@ -1676,35 +1695,134 @@ test('a repository whose collect throws does not cost the other its digest', asy
   });
   await createRunner({ deps: f.deps }).round();
   const rows = runRows(f.files).filter((r) => r.kind === 'helper');
-  assert.equal(rows.length, 1, 'the repository that worked still logged its turn');
-  assert.match(rows[0].note, /^memoro-cli,/u);
-  assert.equal(f.calls.turns.length, 1, 'a turn ran over the digest that was written');
+  assert.deepEqual(rows.map((r) => r.note), ['collect-failed,memoro', 'success,memoro-cli,first-digest']);
   assert.ok(f.log.some((line) => /memoro: the collect step failed/u.test(line)));
 });
 
-test('a turn that did not finish is logged under its own reason, and still counts as the day\'s run', async () => {
-  const f = fixture({ helperTurn: async () => ({ ok: false, reason: 'no-tool', note: 'claude is not on PATH', wrote: [] }) });
-  const runner = createRunner({ deps: f.deps });
-  await runner.round();
-  const row = runRows(f.files).find((r) => r.kind === 'helper');
-  assert.equal(row.note, 'memoro,no-tool');
-  assert.equal(row.exit, '1');
-  await runner.round();
-  assert.equal(f.calls.collects.length, 2);
-});
-
-test('--once is one step and no helper', async () => {
-  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
+test('--once is one step, no collect and no drain', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } }, inbox: ['errors-memoro-2026-08-28.md'] });
   await createRunner({ deps: f.deps }).round({ once: true });
   assert.equal(f.calls.collects.length, 0, '--once exists to watch one step, not to call production');
-  assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 0);
+  assert.equal(f.calls.turns.length, 0);
+  assert.equal(runRows(f.files).filter((r) => r.kind !== 'step').length, 0);
 });
 
-test('a STOP file stops the helper as well as the steps', async () => {
-  const f = fixture();
+test('a STOP file stops the collect and the drain as well as the steps', async () => {
+  const f = fixture({ inbox: ['errors-memoro-2026-08-28.md'] });
   f.files['/w/runner/STOP'] = '';
   await createRunner({ deps: f.deps }).round();
   assert.equal(f.calls.collects.length, 0);
+  assert.equal(f.calls.turns.length, 0);
+});
+
+/* -------------------------------------------------------------- the drain */
+
+/** The archive a drained file lands in, under the fixture's fixed day. */
+const ARCHIVE = '/w/runner/log/intake/2026-08-29';
+
+const inboxLeft = (files) => Object.keys(files)
+  .filter((key) => key.startsWith('/w/intake/') && !key.slice('/w/intake/'.length).includes('/'))
+  .map((key) => key.slice('/w/intake/'.length))
+  .sort();
+
+/**
+ * The whole of step 3, in one round: one turn per file, oldest first by the
+ * date in the name, the file archived the moment its turn ends, and a row that
+ * names it.
+ */
+test('the drain takes the oldest files first, one turn each, and archives every one', async () => {
+  const f = fixture({
+    inbox: ['note-from-martin.md', 'errors-memoro-cli-2026-08-27.md', 'errors-memoro-2026-08-26.md'],
+  });
+  await createRunner({ deps: f.deps }).runIntakeDrain();
+
+  // Oldest first by the date the name carries. `note-from-martin.md` has no
+  // date and sorts last: the dated files were written on the day they name,
+  // and a file Martin dropped in by hand arrived now.
+  assert.deepEqual(f.calls.turns.map((c) => c.file), [
+    'errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note-from-martin.md',
+  ]);
+  // The repository is not passed. `repoOfFile` reads it out of the collector's
+  // own names, and answers null for anything a person dropped in.
+  assert.deepEqual(f.calls.turns.map((c) => c.repo), [undefined, undefined, undefined]);
+
+  const rows = runRows(f.files).filter((r) => r.kind === 'intake');
+  assert.deepEqual(rows.map((r) => ({ name: r.name, exit: r.exit, note: r.note })), [
+    { name: 'errors-memoro-2026-08-26.md', exit: '0', note: 'success,1-proposals' },
+    { name: 'errors-memoro-cli-2026-08-27.md', exit: '0', note: 'success,1-proposals' },
+    { name: 'note-from-martin.md', exit: '0', note: 'success,1-proposals' },
+  ]);
+  assert.equal(rows[0].turns, '3', 'the turn is a model call and its usage is logged like a step');
+  assert.equal(rows[0].cache_read, '30');
+
+  assert.deepEqual(inboxLeft(f.files), [], 'the inbox drained');
+  for (const name of ['errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note-from-martin.md']) {
+    assert.equal(f.files[`${ARCHIVE}/${name}`], `# ${name}`, `${name} is in the archive, not deleted`);
+  }
+  // A directory in the inbox is not an item. `decisions-archive/` is an
+  // archive already, and draining it would file answered decisions as news.
+  assert.equal(f.files['/w/intake/decisions-archive/mc-2.md'], '# an answered decision');
+});
+
+/**
+ * The rule that makes the drain terminate: a turn that failed has still had its
+ * turn. A file put back is a file every round after this one takes again.
+ */
+test('a turn that failed still archives its file, and the row carries the failure', async () => {
+  const f = fixture({
+    inbox: ['errors-memoro-2026-08-26.md'],
+    helperTurn: async () => ({ ok: false, status: 1, reason: 'no-tool', note: 'claude is not on PATH', wrote: [], waiting: [] }),
+  });
+  await createRunner({ deps: f.deps }).runIntakeDrain();
+
+  const [row] = runRows(f.files).filter((r) => r.kind === 'intake');
+  assert.deepEqual({ name: row.name, exit: row.exit, note: row.note }, {
+    name: 'errors-memoro-2026-08-26.md', exit: '1', note: 'no-tool',
+  });
+  assert.deepEqual(inboxLeft(f.files), []);
+  assert.equal(f.files[`${ARCHIVE}/errors-memoro-2026-08-26.md`], '# errors-memoro-2026-08-26.md');
+  assert.ok(f.log.some((line) => /intake: errors-memoro-2026-08-26\.md — the turn did not finish: no-tool/u.test(line)));
+});
+
+/** A turn that threw is the one path that would otherwise skip the archive. */
+test('a turn that threw is archived too, and named as having thrown', async () => {
+  const f = fixture({
+    inbox: ['errors-memoro-2026-08-26.md'],
+    helperTurn: async () => { throw new Error('claude died'); },
+  });
+  await createRunner({ deps: f.deps }).runIntakeDrain();
+  const [row] = runRows(f.files).filter((r) => r.kind === 'intake');
+  assert.equal(row.note, 'turn-threw');
+  assert.deepEqual(inboxLeft(f.files), []);
+});
+
+/**
+ * The gate the split exists for: the drain asks whether there is a file, not
+ * whether the day's collect has run. Thirteen files is five rounds, not
+ * thirteen days.
+ */
+test('the drain runs every round until the inbox is empty, however the collect went', async () => {
+  const yesterday = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n'
+    + '2026-08-29T05:00:00Z\thelper\thelper\t0\t2\t-\t-\t-\t-\t-\t-\t-\tsuccess,memoro,0-new\n';
+  const f = fixture({
+    runs: yesterday,
+    inbox: ['a-2026-08-20.md', 'b-2026-08-21.md', 'c-2026-08-22.md', 'd-2026-08-23.md'],
+  });
+  const runner = createRunner({ deps: f.deps });
+
+  await runner.round();
+  assert.equal(f.calls.collects.length, 0, 'today\'s collect has already run');
+  assert.equal(f.calls.turns.length, 3, 'three a round, so a round stays bounded');
+  assert.deepEqual(inboxLeft(f.files), ['d-2026-08-23.md']);
+  assert.ok(f.log.some((line) => /intake: 1 file\(s\) still waiting/u.test(line)));
+
+  await runner.round();
+  assert.equal(f.calls.turns.length, 4);
+  assert.deepEqual(inboxLeft(f.files), [], 'and it keeps going across rounds until nothing is left');
+
+  await runner.round();
+  assert.equal(f.calls.turns.length, 4, 'an empty inbox costs a listing and no turn');
+  assert.equal(runRows(f.files).filter((r) => r.kind === 'intake').length, 4);
 });
 
 /* ----------------------------------------------------------- archiving */
