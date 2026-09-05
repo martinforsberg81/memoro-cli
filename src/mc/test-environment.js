@@ -29,6 +29,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
+import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
 import { defaultRepos } from './brief-collect.js';
 import { listServers } from './dev-servers.js';
 
@@ -248,12 +249,28 @@ export function suiteEnv({
   const next = { ...env, [declaration.base_url_env || 'MEMORO_BASE_URL']: baseUrl };
   const account = declaration.account;
   if (!needsAccount || !account?.token_env || !account?.url_env) return next;
+  if (next[account.url_env]) return next;
   const token = String(env[account.token_env] || '').trim();
-  if (!token) return next;
-  if (!next[account.url_env]) {
-    next[account.url_env] = `${baseUrl}${account.route || '/demo/'}${token}`;
-  }
+  if (token) next[account.url_env] = `${baseUrl}${account.route || '/demo/'}${token}`;
   return next;
+}
+
+/**
+ * The exit code a suite uses to say "this did not run".
+ *
+ * Declared by the repository, because inventing one here would make mc's idea
+ * of a skip and memoro's two separate facts. Both wrong readings of a skip
+ * happened within an hour of this verb existing, in both directions: the write
+ * smoke exited 0 against production having skipped every step and was reported
+ * **green**; the fix — mc deciding from `needs_account` whether a suite could
+ * have signed in — then reported a local run that *did* sign in and *did*
+ * write as **never signed in**. A caller cannot know, and should not guess.
+ * The suite is the only thing that knows, so the suite says, in the one
+ * channel that needs no parsing.
+ */
+export function skipExitCode(declaration) {
+  const declared = Number(declaration?.skip_exit_code);
+  return Number.isInteger(declared) && declared > 0 ? declared : null;
 }
 
 /** Whether an account link can be built at all, and what to say when it cannot. */
@@ -261,7 +278,10 @@ export function accountAvailable(declaration, env = process.env) {
   const name = declaration.account?.token_env;
   if (!name) return { available: false, why: 'this repository declares no test account' };
   if (!String(env[name] || '').trim()) {
-    return { available: false, why: `${name} is not set in this shell — the suites that sign in will report skipped` };
+    // Says what is missing, not what will happen: a suite may have a door of
+    // its own — the write smoke signs in through `/dev/login` against a
+    // loopback server and needs no token at all there.
+    return { available: false, why: `no ${name}: mc test token --set, or export it` };
   }
   return { available: true, why: null };
 }
@@ -310,16 +330,20 @@ export async function runSuites({
       shell: false,
       maxBuffer: 32 * 1024 * 1024,
     });
+    const skip = skipExitCode(declaration);
+    const skipped = skip !== null && finished.status === skip;
     const ok = finished.status === 0;
 
     // And after, because the suite that was running when the server left is
     // the one whose red is a lie. It is reported as unmeasured, not as a
-    // failure of the thing it was pointed at.
-    if (!ok && stillThere && !await stillThere()) {
+    // failure of the thing it was pointed at. A suite that skipped itself is
+    // not evidence about the server either way.
+    if (!ok && !skipped && stillThere && !await stillThere()) {
       results.push({
         name: suite.name,
         ok: false,
         unmeasured: true,
+        skipped: false,
         status: finished.status,
         seconds: Math.round((now() - startedAt) / 100) / 10,
         tail: tailOf(finished),
@@ -333,6 +357,9 @@ export async function runSuites({
       name: suite.name,
       ok,
       unmeasured: false,
+      // Not red — the app did not fail — and not a pass either. The round
+      // counts it on its own line so nobody reads it as green.
+      skipped,
       status: finished.status,
       seconds: Math.round((now() - startedAt) / 100) / 10,
       // The tail is what a person reads first, and the whole of a browser
@@ -350,4 +377,50 @@ function tailOf(finished, lines = 12) {
   const text = `${finished.stdout || ''}${finished.stderr || ''}`.trimEnd();
   if (!text) return finished.error ? String(finished.error.message || finished.error) : '';
   return text.split('\n').slice(-lines).join('\n');
+}
+
+/**
+ * The production test-account token, held by mc rather than by a shell.
+ *
+ * Cloudflare cannot give it back. Workers secrets are write-only by design —
+ * `wrangler secret list` returns names and types, never values, and neither
+ * does the API — so "read it from Cloudflare when needed" is not a thing that
+ * exists, however reasonable it sounds. `mc vault` cannot carry it either:
+ * `mc vault get` refuses plaintext export on purpose, and weakening that to
+ * serve a test would be a bad trade.
+ *
+ * What is left, and what Martin asked for — the token stored in mc, never in
+ * a session's environment — is the platform keychain `src/lib/keychain.js`
+ * already speaks: macOS `security`, libsecret on Linux, Credential Manager on
+ * Windows. mc reads it at the moment `mc test prod` runs, hands it to the
+ * suite's environment and to nothing else. It is never printed, never in
+ * `--json`, and never passed to a suite that did not declare it needs one.
+ *
+ * The environment still wins where it is set. A person with the token already
+ * exported has said something, and a tool that overrides that is a tool they
+ * cannot use.
+ */
+export async function tokenFor(declaration, env = process.env) {
+  const name = declaration?.account?.token_env;
+  if (!name) return { name: null, token: null, from: null };
+  const fromEnv = String(env[name] || '').trim();
+  if (fromEnv) return { name, token: fromEnv, from: 'environment' };
+  const stored = String(await getSecret(name).catch(() => '') || '').trim();
+  return stored
+    ? { name, token: stored, from: 'keychain' }
+    : { name, token: null, from: null };
+}
+
+/** Put one there. The value never comes from argv, so it never reaches a history file. */
+export async function storeToken(name, value) {
+  const token = String(value || '').trim();
+  if (!token) return { ok: false, error: 'nothing was given to store' };
+  await setSecret(name, token);
+  return { ok: true, name };
+}
+
+/** Take it out again. */
+export async function forgetToken(name) {
+  await deleteSecret(name);
+  return { ok: true, name };
 }

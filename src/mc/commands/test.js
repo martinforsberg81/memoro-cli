@@ -35,8 +35,8 @@ import { join } from 'node:path';
 
 import { nightlyReading } from '../nightly-history.js';
 import {
-  accountAvailable, answers, callerWorktree, ensureDevServer, readDeclaration, runSuites,
-  sharedWorktree,
+  accountAvailable, answers, callerWorktree, ensureDevServer, forgetToken, readDeclaration,
+  runSuites, sharedWorktree, storeToken, tokenFor,
 } from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
 import {
@@ -61,6 +61,9 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'dev' || argv[0] === 'prod') {
     return environment(argv[0], argv.slice(1), { stdout, stderr, deps });
   }
+  // Where the production test-account token lives, so it does not have to
+  // live in a shell.
+  if (argv[0] === 'token') return token(argv.slice(1), { stdout, stderr, deps });
   const opts = parseMergeArgs(argv, { full: true });
   if (opts.error) {
     stderr.write(`mc: ${opts.error.replace(/mc merge <repo> <pr>[^\n]*/u, 'mc test <repo> <pr> | --full')}\n`);
@@ -164,15 +167,25 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     return 0;
   }
 
-  const account = accountAvailable(declaration, env);
-  if (!opts.json && !account.available) stdout.write(`mc: ${account.why}\n`);
+  // The token may be in this shell, or in mc's keychain, or nowhere. Only the
+  // suites that declared they need one ever see it, and it is never printed.
+  const held = await tokenFor(declaration, env);
+  const suiteEnvironment = held.token ? { ...env, [held.name]: held.token } : env;
+  const account = accountAvailable(declaration, suiteEnvironment);
+  if (!opts.json) {
+    if (account.available) {
+      stdout.write(`mc: signing in with the test account (${held.name} from the ${held.from})\n`);
+    } else {
+      stdout.write(`mc: ${account.why}\n`);
+    }
+  }
 
-  const { results, gone, skipped } = await runSuites({
+  const { results, gone, skipped: neverRan } = await runSuites({
     declaration,
     worktree,
     baseUrl,
     only: opts.suite,
-    env,
+    env: suiteEnvironment,
     // A dev server can leave in the middle of a six-minute round, and the
     // suites after it then all report red on a refused connection. Production
     // is asked too: a deploy mid-round is the same shape of lie.
@@ -182,12 +195,13 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     // only: a carriage return in a log file is a line nobody can read.
     onStart: opts.json || !stdout.isTTY ? null : (suite) => stdout.write(`  …  ${suite.name}`),
     onEnd: opts.json ? null : (result) => stdout.write(
-      `${stdout.isTTY ? '\r\u001b[2K' : ''}  ${result.ok ? 'ok ' : 'RED'}  ${result.name} ${result.seconds}s\n`,
+      `${stdout.isTTY ? '\r\u001b[2K' : ''}  ${verdict(result)}  ${result.name} ${result.seconds}s\n`,
     ),
   });
 
-  const red = results.filter((result) => !result.ok && !result.unmeasured);
+  const red = results.filter((result) => !result.ok && !result.unmeasured && !result.skipped);
   const unmeasured = results.filter((result) => result.unmeasured);
+  const skipped = results.filter((result) => result.skipped);
   if (opts.json) {
     stdout.write(`${JSON.stringify({
       where,
@@ -196,7 +210,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       instance_id: server?.instance_id || null,
       server_gone: gone,
       results,
-      skipped,
+      never_ran: neverRan,
     }, null, 2)}\n`);
     return gone || red.length ? 1 : 0;
   }
@@ -210,7 +224,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   if (gone) {
     stdout.write(`\nmc: ${baseUrl} stopped answering — this round measured nothing after that\n`);
     if (unmeasured.length) stdout.write(`mc: ${unmeasured[0].name} was running when it went and is unmeasured\n`);
-    if (skipped.length) stdout.write(`mc: never ran — ${skipped.join(', ')}\n`);
+    if (neverRan.length) stdout.write(`mc: never ran — ${neverRan.join(', ')}\n`);
     if (where === 'dev') {
       stdout.write(`mc: the server's own log says why, under ${join(worktree, '.wrangler', 'dev-server', 'logs')}\n`);
     }
@@ -218,10 +232,24 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     return 1;
   }
 
+  const green = results.length - red.length - skipped.length;
   stdout.write(red.length
     ? `\nmc: ${red.length} of ${results.length} red against ${baseUrl}\n`
-    : `\nmc: ${results.length} green against ${baseUrl}\n`);
+    : `\nmc: ${green} green against ${baseUrl}\n`);
+  // A suite that said it did not run is not a pass, and counting it as one is
+  // the quiet failure this whole verb exists to stop.
+  if (skipped.length) {
+    stdout.write(`mc: did not run — ${skipped.map((result) => result.name).join(', ')}`
+      + `${account.available ? '' : ` (${account.why})`}\n`);
+  }
   return red.length ? 1 : 0;
+}
+
+/** How one suite's result reads in a line. */
+function verdict(result) {
+  if (result.unmeasured) return 'GONE';
+  if (result.skipped) return '·· ';
+  return result.ok ? 'ok ' : 'RED';
 }
 
 export function parseEnvironmentArgs(where, argv) {
@@ -234,6 +262,83 @@ export function parseEnvironmentArgs(where, argv) {
     return { ...opts, error: `mc test ${where} takes no repository (${scanned.positional[0]})` };
   }
   return opts;
+}
+
+/**
+ * `mc test token` — the production test account's key, kept by mc.
+ *
+ *   mc test token             is one held, and where it came from
+ *   mc test token --set       read one from stdin and keep it
+ *   mc test token --rm        forget it
+ *
+ * It reads from stdin rather than taking an argument, because an argument is
+ * a line in a shell history file and this is a production login. Nothing here
+ * ever prints the value — not on `--set`, not on `--json`, not in an error.
+ *
+ * Why mc holds it at all: Cloudflare will not give it back. Workers secrets
+ * are write-only by design, so "read it from Cloudflare when the verb runs"
+ * does not exist however sensible it sounds, and `mc vault` refuses plaintext
+ * export on purpose. The platform keychain is what is left, and it is what
+ * `src/lib/keychain.js` has spoken since long before this verb.
+ */
+async function token(argv, { stdout, stderr, deps = {} }) {
+  const scanned = scanArgs(argv, { booleans: ['--set', '--rm', '--json'] });
+  if (scanned.error || scanned.positional.length) {
+    stderr.write(`mc: ${scanned.error || `mc test token takes no argument (${scanned.positional[0]})`}\n`);
+    stderr.write('usage — mc test token [--set | --rm] [--json]\n');
+    return 2;
+  }
+
+  const env = deps.env || process.env;
+  const worktree = sharedWorktree(env);
+  const read = worktree ? readDeclaration(worktree) : { ok: false, error: 'no memoro checkout' };
+  if (!read.ok) {
+    stderr.write(`mc: ${read.error}\n`);
+    return 1;
+  }
+  const name = read.declaration.account?.token_env;
+  if (!name) {
+    stderr.write('mc: this repository declares no test account\n');
+    return 1;
+  }
+
+  if (scanned.flags.rm) {
+    await forgetToken(name);
+    stdout.write(`mc: forgot ${name}\n`);
+    return 0;
+  }
+
+  if (scanned.flags.set) {
+    const value = await readStdin(deps.stdin || process.stdin);
+    const stored = await storeToken(name, value);
+    if (!stored.ok) {
+      stderr.write(`mc: ${stored.error} — pipe it in: printf %s "<token>" | mc test token --set\n`);
+      return 2;
+    }
+    stdout.write(`mc: kept ${name} in this machine's keychain\n`);
+    return 0;
+  }
+
+  const held = await tokenFor(read.declaration, env);
+  if (scanned.flags.json) {
+    stdout.write(`${JSON.stringify({ name, held: Boolean(held.token), from: held.from }, null, 2)}\n`);
+    return 0;
+  }
+  stdout.write(held.token
+    ? `mc: ${name} is held, from the ${held.from}\n`
+    : `mc: no ${name} — printf %s "<token>" | mc test token --set\n`);
+  return 0;
+}
+
+/** One line, and never an argument: an argument is a shell history entry. */
+function readStdin(stream) {
+  return new Promise((done) => {
+    let text = '';
+    stream.setEncoding?.('utf8');
+    stream.on('data', (chunk) => { text += chunk; });
+    stream.on('end', () => done(text.trim()));
+    stream.on('error', () => done(''));
+  });
 }
 
 /**
@@ -356,6 +461,7 @@ export function usage() {
   return [
     'usage — mc test dev [--here] [--suite <name>] [--url] [--json]   the app, running locally\n',
     '        mc test prod [--here] [--suite <name>] [--json]          the app, in production\n',
+    '        mc test token [--set | --rm]             the production test account, kept by mc\n',
     '        mc test <repo> <pr> [<pr>...] [--json]   measure the change; merge nothing\n',
     '        mc test <repo> --full [--json]           the repository\'s whole suite, on the default branch\n',
     '        mc test nightly start [--interval <seconds>]\n',

@@ -191,7 +191,7 @@ describe('what a suite is handed', () => {
   it('no token is a sentence, not a crash', () => {
     assert.deepEqual(accountAvailable(DECLARATION, {}), {
       available: false,
-      why: 'TEST_SEEDED_TOKEN is not set in this shell — the suites that sign in will report skipped',
+      why: 'no TEST_SEEDED_TOKEN: mc test token --set, or export it',
     });
     assert.equal(accountAvailable(DECLARATION, { TEST_SEEDED_TOKEN: 'tok' }).available, true);
     assert.equal(
@@ -312,7 +312,7 @@ describe('a server that leaves in the middle', () => {
       { spawnSync: () => ({ status: 1, stdout: 'a real failure\n' }) },
     );
     assert.equal(gone, false);
-    assert.deepEqual(results.map((r) => [r.ok, r.unmeasured]), [[false, false]]);
+    assert.deepEqual(results.map((r) => [r.ok, r.unmeasured, r.skipped]), [[false, false, false]]);
     rmSync(worktree, { recursive: true, force: true });
   });
 });
@@ -355,5 +355,53 @@ describe('is it still there', () => {
       await answers(SERVER, { attempts: 1, delayMs: 0, fetch: async () => ({ ok: false, status: 503 }) }),
       false,
     );
+  });
+});
+
+describe('a suite that says it did not run', () => {
+  const WITH_SKIP = { ...DECLARATION, skip_exit_code: 78 };
+
+  it('is neither green nor red', async () => {
+    // Both wrong readings of a skip happened within an hour of this verb
+    // existing. The write smoke exited 0 against production having skipped
+    // every step, and was reported green. Deciding from `needs_account`
+    // instead then reported a local run that did sign in and did write as
+    // "never signed in". The suite is the only thing that knows.
+    const worktree = worktreeWith();
+    const { results } = await runSuites(
+      { declaration: WITH_SKIP, worktree, baseUrl: 'https://meetmemoro.app', only: 'signs-in' },
+      { spawnSync: () => ({ status: 78, stdout: '○ skipped\n' }) },
+    );
+    assert.deepEqual(results.map((r) => [r.ok, r.skipped]), [[false, true]]);
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('a skip is not evidence that the server went away', async () => {
+    const worktree = worktreeWith();
+    let asked = 0;
+    const { results, gone } = await runSuites(
+      {
+        declaration: WITH_SKIP,
+        worktree,
+        baseUrl: 'https://meetmemoro.app',
+        only: 'signs-in',
+        stillThere: async () => { asked += 1; return true; },
+      },
+      { spawnSync: () => ({ status: 78 }) },
+    );
+    assert.equal(gone, false);
+    assert.equal(asked, 1, 'asked before the suite, and not again after a skip');
+    assert.equal(results[0].skipped, true);
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('without a declared code, 78 is just a failure', async () => {
+    const worktree = worktreeWith();
+    const { results } = await runSuites(
+      { declaration: DECLARATION, worktree, baseUrl: 'https://meetmemoro.app', only: 'signs-in' },
+      { spawnSync: () => ({ status: 78 }) },
+    );
+    assert.deepEqual(results.map((r) => [r.ok, r.skipped]), [[false, false]]);
+    rmSync(worktree, { recursive: true, force: true });
   });
 });
