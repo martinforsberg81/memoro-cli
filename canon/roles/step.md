@@ -28,6 +28,13 @@ Otherwise build it, set your step `done` with its `pr`, and open a PR whose
 body includes the `PLAN.json` diff. Do not merge: the runner lands it after
 you, and its gate re-runs the test selection on the merged tree.
 
+A worktree handed to you with `git merge origin/main` in progress is still
+your step. The prompt names the files it stopped on; resolve them, commit the
+merge, and then do the step — the same session, the same branch, the same
+pull request, and the merge is a paragraph in its body rather than its point.
+If resolving one needs a decision that is not yours, that is the `blocked`
+route above: say which file and what the two sides want.
+
 Stay on the branch you were given, the one the worktree stands on, and open
 the PR from it. The runner knows a project's pull requests by that name: one
 from a branch you named yourself it neither lands nor sees as in flight, and

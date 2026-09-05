@@ -12,11 +12,20 @@ import { sharedRoleText } from '../../src/mc/roles.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
   const dirs = new Set([root]);
+  // `~/mc/intake/` as the drain finds it. `decisions-archive/` is there in
+  // reality and is a directory, so the fixture keeps one: a drain that took it
+  // would archive an archive.
+  if (inbox.length) {
+    dirs.add(`${root}/intake`);
+    dirs.add(`${root}/intake/decisions-archive`);
+    files[`${root}/intake/decisions-archive/mc-2.md`] = '# an answered decision';
+    for (const name of inbox) files[`${root}/intake/${name}`] = `# ${name}`;
+  }
   const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: '/home' };
   const repos = { memoro: '/home/memoro', 'memoro-cli': '/home/memoro-cli' };
   for (const repo of Object.keys(repos)) files[`${repos[repo]}/.git`] = '';
@@ -62,6 +71,15 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       const seen = new Set();
       for (const key of Object.keys(files)) if (key.startsWith(prefix)) seen.add(key.slice(prefix.length).split('/')[0]);
       return [...seen];
+    },
+    // Files only — what `readdirSync(dir, { withFileTypes: true })` filtered to
+    // `isFile()` answers, so the drain never takes a directory for an item.
+    files: (p) => {
+      const prefix = `${p}/`;
+      return Object.keys(files)
+        .filter((key) => key.startsWith(prefix) && !key.slice(prefix.length).includes('/'))
+        .map((key) => key.slice(prefix.length))
+        .filter((name) => !dirs.has(`${p}/${name}`));
     },
     write: (p, t) => { files[p] = t; },
     append: (p, t) => { files[p] = (files[p] || '') + t; },
@@ -131,6 +149,22 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     git: (cwd, args) => {
       calls.git.push([cwd, ...args]);
       const repoName = Object.keys(repos).find((r) => cwd === repos[r]);
+      // The three sides git holds in the index while a merge is in progress:
+      // `:1:` the merge base, `:2:` ours, `:3:` theirs. `stages` is per
+      // workarea, per path — a file it does not name is one git cannot show.
+      if (args[0] === 'show' && /^:[123]:/u.test(args[1] || '')) {
+        const [, stage, path] = args[1].match(/^:([123]):(.*)$/u);
+        const held = (stages[cwd.split('/')[2]] || {})[path];
+        return held ? { ok: true, stdout: held[Number(stage)] ?? '' } : { ok: false, stdout: '' };
+      }
+      // The branch's own last committed copy of a file, which is how the plan
+      // is read while a merge is in progress: `headFiles` per workarea and
+      // path, and by default whatever the workarea has on disk.
+      if (args[0] === 'show' && String(args[1]).startsWith('HEAD:')) {
+        const at = args[1].slice('HEAD:'.length);
+        const held = (headFiles[cwd.split('/')[2]] || {})[at];
+        return { ok: true, stdout: held ?? files[`${cwd}/${at}`] ?? '' };
+      }
       if (args[0] === 'ls-tree' && repoName) {
         return { ok: true, stdout: Object.keys(plans[repoName] || {}).map((n) => `docs/project/prog/${n}/PLAN.json`).join('\n') };
       }
@@ -175,9 +209,12 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
         return conflicts[name] ? { ok: false, stdout: '', stderr: 'CONFLICT' } : { ok: true, stdout: '' };
       }
       if (args[0] === 'diff') return { ok: true, stdout: (conflicts[cwd.split('/')[2]] || []).join('\n') };
-      // `rev-parse -q --verify MERGE_HEAD` is the reconcile check and answers
-      // no; `rev-parse origin/main^{tree}` is branchLanded's base.
+      // `rev-parse -q --verify MERGE_HEAD` asks whether the session left the
+      // merge unfinished — `mergeLeft` names the workareas where it did, and
+      // the answer is otherwise no. `rev-parse origin/main^{tree}` is
+      // branchLanded's base.
       if (args[0] === 'rev-parse') {
+        if (args.at(-1) === 'MERGE_HEAD') return { ok: mergeLeft.includes(cwd.split('/')[2]), stdout: 'mergehead' };
         if (args[1] === 'origin/main^{tree}') return { ok: true, stdout: 'basetree' };
         // `rev-parse --abbrev-ref HEAD` in a workarea's checkout: the branch
         // it actually sits on. `heads` names the ones that are not the folder.
@@ -484,14 +521,200 @@ test('the round asks GitHub once per repository, beside the fetch it already pay
   assert.deepEqual(asked.prsFailed, []);
 });
 
-test('a conflicting merge of origin/main becomes a reconcile step with the files named', async () => {
-  const f = fixture({ areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } }, plans: { memoro: { c: ready } }, conflicts: { c: ['docs/project/project_log.md'] }, session: okSession() });
+/**
+ * The plan conflict, resolved by the plan's own rule and not by a session.
+ *
+ * 29 of the 166 conflicting files measured in runner.log were a plan, always
+ * in this shape: main carries the plan a later round wrote to, the branch
+ * carries the same plan with its own step edited. The rule itself is
+ * plan-merge.js and is tested there; what these two ask is what the round
+ * does with it — that the merge finishes and the project gets its ordinary
+ * step, and that a plan the rule refuses is still left in progress.
+ */
+const PLAN_AT = 'docs/project/prog/c/PLAN.json';
+
+function planStages({ bothOnStepOne = false } = {}) {
+  const twoSteps = [
+    { title: 'One', status: 'ready', done_when: 'x', instruction: ['Do x.'], comments: [], pr: null, blocked_by: null },
+    { title: 'Two', status: 'ready', done_when: 'y', instruction: ['Do y.'], comments: [], pr: null, blocked_by: null },
+  ];
+  const base = JSON.parse(plan({ steps: twoSteps }));
+  const main = structuredClone(base);
+  main.steps[0] = { ...main.steps[0], status: 'done', pr: 601, comments: ['Step one landed.'] };
+  main.success_criteria[0] = { ...main.success_criteria[0], met: true };
+  const branch = structuredClone(base);
+  const at = bothOnStepOne ? 0 : 1;
+  branch.steps[at] = { ...branch.steps[at], comments: ['What this branch found.'] };
+  const text = (value) => `${JSON.stringify(value, null, 2)}\n`;
+  return { base: text(base), branch: text(branch), main: text(main) };
+}
+
+test('a PLAN.json whose two sides changed different steps is merged by the runner, and the project gets its step', async () => {
+  const three = planStages();
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
+    plans: { memoro: { c: three.main } },
+    conflicts: { c: [PLAN_AT] },
+    stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch, 3: three.main } } },
+    session: okSession(), gh: { c: { number: 90, title: 'Step two' } },
+  });
   const runner = createRunner({ deps: f.deps });
-  await runner.round();
+  await runner.round({ once: true });
+
+  const merged = JSON.parse(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json']);
+  assert.deepEqual(merged.steps.map((s) => [s.status, s.pr]), [['done', 601], ['ready', null]], "main's step 1 survived");
+  assert.deepEqual(merged.steps.map((s) => s.comments[0]), ['Step one landed.', 'What this branch found.'], 'and so did the branch\'s step 2');
+  assert.deepEqual(merged.success_criteria.map((c) => c.met), [true]);
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'add' && c.at(-1) === PLAN_AT), 'the resolution is staged');
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'commit'), 'and the merge is committed, in the runner');
+
+  assert.equal(f.calls.sessions.length, 1, 'one session, and it is the step');
+  const [call] = f.calls.sessions;
+  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE step$/u);
+  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tc\tstep\t/u);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json resolved by the plan's own rule — steps\[0\] from main, steps\[1\] from this branch/u);
+  assert.doesNotMatch(log, /c: merge conflict in:/u);
+});
+
+test('a PLAN.json whose two sides changed the same step is left in progress, with the reason', async () => {
+  const three = planStages({ bothOnStepOne: true });
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
+    plans: { memoro: { c: three.main } },
+    conflicts: { c: [PLAN_AT] },
+    stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch, 3: three.main } } },
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+
+  assert.equal(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json'], three.branch, 'the file is untouched — a refusal writes nothing');
+  assert.ok(!f.calls.git.some((c) => c[1] === 'add' && c.at(-1) === PLAN_AT), 'and stages nothing');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json is not resolvable by the plan's rule — steps\[0\]: changed on this branch and on main both/u);
+  assert.match(log, /c: merge conflict in: docs\/project\/prog\/c\/PLAN\.json/u);
+});
+
+/**
+ * What is left after git and the plan's own rule is the step session's, in
+ * the session that had to read that code anyway.
+ *
+ * It used to be a `reconcile` session: a cold session that resolved the
+ * merge, pushed it and stopped, and the round after it paid for a second
+ * session to read the same code again and do the step. The round now reads
+ * the plan while the merge is in progress and hands the conflict to the step
+ * as a preamble — the same files, the same rules, one session.
+ */
+test('a conflicting merge of origin/main goes to the step session, with the files named', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    conflicts: { c: ['docs/project/project_log.md', 'src/a.js'] },
+    session: okSession(), gh: { c: { number: 93, title: 'The one step' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.equal(f.calls.sessions.length, 1, 'one session, not one for the merge and one for the step');
   const call = f.calls.sessions[0];
-  assert.match(call.args[1], /stopped on\nconflicts in: docs\/project\/project_log\.md/u);
-  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE reconcile$/u);
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tc\treconcile\t/u);
+  assert.match(call.args[1], /^A `git merge origin\/main` is in progress in this worktree and stopped on\nconflicts in: docs\/project\/project_log\.md src\/a\.js/u);
+  assert.match(call.args[1], /Your step is `steps\[0\]` — 1, "The one step"/u, 'and the step is still the job');
+  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE step$/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tc\tstep\t/u);
+  assert.ok(!f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'), 'the merge is the session\'s to finish, not aborted under it');
+});
+
+/**
+ * The plan the rule refused is the plan the session is handed — read from
+ * `HEAD`, because the copy on disk is the one with the markers in it.
+ *
+ * And it is judged against the plan on origin/main afterwards: the merge that
+ * stopped *is* main's edits to that file, so judging the session's resolution
+ * against the HEAD it was handed would read every one of them as a step it had
+ * no business touching. Here main added a comment to step 1, which the session
+ * keeps; against HEAD that is `steps[0]: changed by the session that ran step 2`.
+ */
+test('a step session resolves the plan conflict it was handed and its work is judged against main', async () => {
+  const twoSteps = [
+    { title: 'One', status: 'done', done_when: 'x', instruction: ['Do x.'], comments: [], pr: 601, blocked_by: null },
+    { title: 'Two', status: 'ready', done_when: 'y', instruction: ['Do y.'], comments: [], pr: null, blocked_by: null },
+  ];
+  const base = JSON.parse(plan({ steps: twoSteps }));
+  const main = structuredClone(base);
+  main.steps[0] = { ...main.steps[0], comments: ['Step one landed.'] };
+  main.steps[1] = { ...main.steps[1], comments: ['Main touched step two.'] };
+  const branch = structuredClone(base);
+  branch.steps[1] = { ...branch.steps[1], comments: ['This branch touched step two.'] };
+  // What the session leaves behind: main's plan, and its own step delivered.
+  const resolved = structuredClone(main);
+  resolved.steps[1] = { ...resolved.steps[1], status: 'done', pr: 94, comments: ['Both sides kept.'] };
+  const text = (value) => `${JSON.stringify(value, null, 2)}\n`;
+
+  const f = fixture({
+    // On disk: the merge stopped, so the file carries markers. It is HEAD
+    // that has a plan, and HEAD is what the round reads.
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
+    headFiles: { c: { [PLAN_AT]: text(branch) } },
+    plans: { memoro: { c: text(main) } },
+    conflicts: { c: [PLAN_AT] },
+    stages: { c: { [PLAN_AT]: { 1: text(base), 2: text(branch), 3: text(main) } } },
+    gh: { c: { number: 94, title: 'Step two' } },
+    session: (call) => { f.files[`/w/c/memoro/${PLAN_AT}`] = text(resolved); return okSession()(call); },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+
+  const [call] = f.calls.sessions;
+  assert.match(call.args[1], /conflicts in: docs\/project\/prog\/c\/PLAN\.json/u);
+  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u, "HEAD's plan, not the file with the markers");
+  assert.match(call.args[1], /This branch touched step two\./u);
+  const [row] = runRows(f.files).filter((r) => r.name === 'c');
+  assert.equal(row.note, 'success,merged', 'main\'s own edits to the plan are not a trespass');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /left open — the session changed more of the plan/u);
+});
+
+/**
+ * The other half of the same rule: a merge nobody is handed is a merge nobody
+ * finishes, and an unmerged path is a dirty worktree — which skips the project
+ * every round until a person acts. Here the plan the branch is on is blocked,
+ * so there is no step to give the conflict to.
+ */
+test('a conflict with no step to hand it to is aborted, and the files are named', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    headFiles: { c: { [PLAN_AT]: plan({ status: 'blocked' }) } },
+    plans: { memoro: { c: ready } },
+    conflicts: { c: ['src/a.js', 'src/b.js'] },
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.equal(f.calls.sessions.length, 0, 'no session is launched on a half-merged tree');
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
+  assert.match(
+    f.files['/w/runner/log/runner.log'],
+    /c: step 1 is blocked on decision prog-1 — the merge of origin\/main is aborted, still conflicting in: src\/a\.js src\/b\.js/u,
+  );
+});
+
+/**
+ * And a step session that did not finish the merge leaves the worktree as
+ * clean as the `reconcile` abort did — the same check, on the conflict rather
+ * than on a kind.
+ */
+test('a step session that leaves MERGE_HEAD behind has the merge aborted under it', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    conflicts: { c: ['src/a.js'] }, mergeLeft: ['c'],
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.equal(f.calls.sessions.length, 1);
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
+  assert.match(f.files['/w/runner/log/runner.log'], /c: the session left the merge of origin\/main unfinished — merge aborted/u);
 });
 
 /**
@@ -705,6 +928,38 @@ test('a held pull request runs a repair session, told the pull request, the bran
   assert.equal(row.note, 'success,merged');
   assert.deepEqual(f.calls.rounds.map((c) => c.pr), [9]);
   assert.deepEqual(heldFile(f.files), []);
+});
+
+/**
+ * The deadlock this closes, measured on 2026-09-05: a pull request held
+ * *because* it conflicts with main hits that same conflict when the runner
+ * syncs, and the repair used to be refused for a merge in progress — the very
+ * reason it was owed. #612 and #614 both sat at `repairs: 0` with the gate's
+ * reason reading `conflicts with origin/main`, skipped every round, for ever.
+ *
+ * Resolving the merge *is* the repair, so the session is started and handed
+ * the files, and nothing aborts the merge under it.
+ */
+test('a pull request held because it conflicts with main gets its repair, told the files', async () => {
+  const f = heldRound(
+    [heldEntry({ reason: '#9 conflicts with origin/main — CONFLICT (content): Merge conflict in canon/roles/step.md' })],
+    { conflicts: { m: ['canon/roles/reconcile.md', 'canon/roles/step.md'] } },
+  );
+  await createRunner({ deps: f.deps }).round({ once: true });
+
+  assert.equal(f.calls.sessions.length, 1, 'a conflicted sync no longer refuses the repair it is owed');
+  const [call] = f.calls.sessions;
+  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE repair$/u);
+  assert.match(call.args[1], /conflicts in: canon\/roles\/reconcile\.md canon\/roles\/step\.md/u);
+  assert.match(call.args[1], /that is the whole repair/u);
+  // A modify\/delete is the one conflict "keep both" does not answer, and
+  // restoring the file would undo a project that finished on purpose.
+  assert.match(call.args[1], /A file main deleted stays deleted/u);
+  assert.ok(
+    !f.calls.git.some((c) => c[0] === '/w/m/memoro' && c[1] === 'merge' && c[2] === '--abort'),
+    'the merge is the repair session\'s to finish, not aborted under it',
+  );
+  assert.equal(JSON.parse(f.duringSession[0]['/w/runner/held.json'])[0].repairs, 1, 'still one repair, and no loop');
 });
 
 test('a pull request still held after its repair waits for the brief — no second repair', async () => {
@@ -1355,12 +1610,12 @@ test('STOP ends both lanes after the step each is in', async () => {
 /* ------------------------------------------------------------- the helper */
 
 /**
- * `mc helper` is the one thing in a round that is not a step. It opens no
- * worktree and touches no branch: what proves it ran is its row in runs.tsv,
- * and that row is also the gate — there is no second stamp file to fall out
- * of step with it.
+ * The collect is one of the two things in a round that are not steps. It opens
+ * no worktree, touches no branch and calls no model: what proves it ran is its
+ * rows in runs.tsv, and those rows are also the gate — there is no second stamp
+ * file to fall out of step with them.
  */
-test('the helper runs once per calendar day, logged as kind helper with helper in the name', async () => {
+test('the collect runs once per calendar day, logged as kind helper with helper in the name', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
   const runner = createRunner({ deps: f.deps });
   await runner.round();
@@ -1372,12 +1627,14 @@ test('the helper runs once per calendar day, logged as kind helper with helper i
   assert.deepEqual(
     first.map((r) => ({ name: r.name, exit: r.exit, pr: r.pr, note: r.note })),
     [
-      { name: 'helper', exit: '0', pr: '-', note: 'memoro,success,1-proposals' },
-      { name: 'helper', exit: '0', pr: '-', note: 'memoro-cli,success,1-proposals' },
+      { name: 'helper', exit: '0', pr: '-', note: 'success,memoro,1-new' },
+      { name: 'helper', exit: '0', pr: '-', note: 'success,memoro-cli,1-new' },
     ],
   );
-  assert.equal(first[0].turns, '3', 'the turn is a model call and its usage is logged like a step');
-  assert.equal(first[0].cache_read, '30');
+  // The outcome first and the repository after, because `summariseRuns` reads a
+  // note that does not start with `success` as a failure — and every helper row
+  // written before 2026-09-05 read `memoro,success,…`, which it counted as one.
+  assert.equal(first[0].turns, '-', 'no model runs in the collect half');
   assert.deepEqual(f.calls.collects.map((c) => c.repo), ['memoro', 'memoro-cli']);
 
   await runner.round();
@@ -1414,10 +1671,9 @@ test('a failed collect is logged and never retried within the day', async () => 
   const f = fixture({ collect: async () => { throw new Error('wrangler is not logged in'); } });
   const runner = createRunner({ deps: f.deps });
   await runner.round();
-  const row = runRows(f.files).find((r) => r.kind === 'helper');
-  assert.equal(row.note, 'collect-failed');
-  assert.equal(row.exit, '1');
-  assert.equal(f.calls.turns.length, 0, 'no turn is run over a digest that was never written');
+  const rows = runRows(f.files).filter((r) => r.kind === 'helper');
+  assert.deepEqual(rows.map((r) => r.note), ['collect-failed,memoro', 'collect-failed,memoro-cli']);
+  assert.deepEqual(rows.map((r) => r.exit), ['1', '1']);
   assert.ok(f.log.some((line) => /memoro: the collect step failed — wrangler is not logged in/u.test(line)));
 
   await runner.round();
@@ -1439,35 +1695,134 @@ test('a repository whose collect throws does not cost the other its digest', asy
   });
   await createRunner({ deps: f.deps }).round();
   const rows = runRows(f.files).filter((r) => r.kind === 'helper');
-  assert.equal(rows.length, 1, 'the repository that worked still logged its turn');
-  assert.match(rows[0].note, /^memoro-cli,/u);
-  assert.equal(f.calls.turns.length, 1, 'a turn ran over the digest that was written');
+  assert.deepEqual(rows.map((r) => r.note), ['collect-failed,memoro', 'success,memoro-cli,first-digest']);
   assert.ok(f.log.some((line) => /memoro: the collect step failed/u.test(line)));
 });
 
-test('a turn that did not finish is logged under its own reason, and still counts as the day\'s run', async () => {
-  const f = fixture({ helperTurn: async () => ({ ok: false, reason: 'no-tool', note: 'claude is not on PATH', wrote: [] }) });
-  const runner = createRunner({ deps: f.deps });
-  await runner.round();
-  const row = runRows(f.files).find((r) => r.kind === 'helper');
-  assert.equal(row.note, 'memoro,no-tool');
-  assert.equal(row.exit, '1');
-  await runner.round();
-  assert.equal(f.calls.collects.length, 2);
-});
-
-test('--once is one step and no helper', async () => {
-  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
+test('--once is one step, no collect and no drain', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } }, inbox: ['errors-memoro-2026-08-28.md'] });
   await createRunner({ deps: f.deps }).round({ once: true });
   assert.equal(f.calls.collects.length, 0, '--once exists to watch one step, not to call production');
-  assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 0);
+  assert.equal(f.calls.turns.length, 0);
+  assert.equal(runRows(f.files).filter((r) => r.kind !== 'step').length, 0);
 });
 
-test('a STOP file stops the helper as well as the steps', async () => {
-  const f = fixture();
+test('a STOP file stops the collect and the drain as well as the steps', async () => {
+  const f = fixture({ inbox: ['errors-memoro-2026-08-28.md'] });
   f.files['/w/runner/STOP'] = '';
   await createRunner({ deps: f.deps }).round();
   assert.equal(f.calls.collects.length, 0);
+  assert.equal(f.calls.turns.length, 0);
+});
+
+/* -------------------------------------------------------------- the drain */
+
+/** The archive a drained file lands in, under the fixture's fixed day. */
+const ARCHIVE = '/w/runner/log/intake/2026-08-29';
+
+const inboxLeft = (files) => Object.keys(files)
+  .filter((key) => key.startsWith('/w/intake/') && !key.slice('/w/intake/'.length).includes('/'))
+  .map((key) => key.slice('/w/intake/'.length))
+  .sort();
+
+/**
+ * The whole of step 3, in one round: one turn per file, oldest first by the
+ * date in the name, the file archived the moment its turn ends, and a row that
+ * names it.
+ */
+test('the drain takes the oldest files first, one turn each, and archives every one', async () => {
+  const f = fixture({
+    inbox: ['note-from-martin.md', 'errors-memoro-cli-2026-08-27.md', 'errors-memoro-2026-08-26.md'],
+  });
+  await createRunner({ deps: f.deps }).runIntakeDrain();
+
+  // Oldest first by the date the name carries. `note-from-martin.md` has no
+  // date and sorts last: the dated files were written on the day they name,
+  // and a file Martin dropped in by hand arrived now.
+  assert.deepEqual(f.calls.turns.map((c) => c.file), [
+    'errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note-from-martin.md',
+  ]);
+  // The repository is not passed. `repoOfFile` reads it out of the collector's
+  // own names, and answers null for anything a person dropped in.
+  assert.deepEqual(f.calls.turns.map((c) => c.repo), [undefined, undefined, undefined]);
+
+  const rows = runRows(f.files).filter((r) => r.kind === 'intake');
+  assert.deepEqual(rows.map((r) => ({ name: r.name, exit: r.exit, note: r.note })), [
+    { name: 'errors-memoro-2026-08-26.md', exit: '0', note: 'success,1-proposals' },
+    { name: 'errors-memoro-cli-2026-08-27.md', exit: '0', note: 'success,1-proposals' },
+    { name: 'note-from-martin.md', exit: '0', note: 'success,1-proposals' },
+  ]);
+  assert.equal(rows[0].turns, '3', 'the turn is a model call and its usage is logged like a step');
+  assert.equal(rows[0].cache_read, '30');
+
+  assert.deepEqual(inboxLeft(f.files), [], 'the inbox drained');
+  for (const name of ['errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note-from-martin.md']) {
+    assert.equal(f.files[`${ARCHIVE}/${name}`], `# ${name}`, `${name} is in the archive, not deleted`);
+  }
+  // A directory in the inbox is not an item. `decisions-archive/` is an
+  // archive already, and draining it would file answered decisions as news.
+  assert.equal(f.files['/w/intake/decisions-archive/mc-2.md'], '# an answered decision');
+});
+
+/**
+ * The rule that makes the drain terminate: a turn that failed has still had its
+ * turn. A file put back is a file every round after this one takes again.
+ */
+test('a turn that failed still archives its file, and the row carries the failure', async () => {
+  const f = fixture({
+    inbox: ['errors-memoro-2026-08-26.md'],
+    helperTurn: async () => ({ ok: false, status: 1, reason: 'no-tool', note: 'claude is not on PATH', wrote: [], waiting: [] }),
+  });
+  await createRunner({ deps: f.deps }).runIntakeDrain();
+
+  const [row] = runRows(f.files).filter((r) => r.kind === 'intake');
+  assert.deepEqual({ name: row.name, exit: row.exit, note: row.note }, {
+    name: 'errors-memoro-2026-08-26.md', exit: '1', note: 'no-tool',
+  });
+  assert.deepEqual(inboxLeft(f.files), []);
+  assert.equal(f.files[`${ARCHIVE}/errors-memoro-2026-08-26.md`], '# errors-memoro-2026-08-26.md');
+  assert.ok(f.log.some((line) => /intake: errors-memoro-2026-08-26\.md — the turn did not finish: no-tool/u.test(line)));
+});
+
+/** A turn that threw is the one path that would otherwise skip the archive. */
+test('a turn that threw is archived too, and named as having thrown', async () => {
+  const f = fixture({
+    inbox: ['errors-memoro-2026-08-26.md'],
+    helperTurn: async () => { throw new Error('claude died'); },
+  });
+  await createRunner({ deps: f.deps }).runIntakeDrain();
+  const [row] = runRows(f.files).filter((r) => r.kind === 'intake');
+  assert.equal(row.note, 'turn-threw');
+  assert.deepEqual(inboxLeft(f.files), []);
+});
+
+/**
+ * The gate the split exists for: the drain asks whether there is a file, not
+ * whether the day's collect has run. Thirteen files is five rounds, not
+ * thirteen days.
+ */
+test('the drain runs every round until the inbox is empty, however the collect went', async () => {
+  const yesterday = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n'
+    + '2026-08-29T05:00:00Z\thelper\thelper\t0\t2\t-\t-\t-\t-\t-\t-\t-\tsuccess,memoro,0-new\n';
+  const f = fixture({
+    runs: yesterday,
+    inbox: ['a-2026-08-20.md', 'b-2026-08-21.md', 'c-2026-08-22.md', 'd-2026-08-23.md'],
+  });
+  const runner = createRunner({ deps: f.deps });
+
+  await runner.round();
+  assert.equal(f.calls.collects.length, 0, 'today\'s collect has already run');
+  assert.equal(f.calls.turns.length, 3, 'three a round, so a round stays bounded');
+  assert.deepEqual(inboxLeft(f.files), ['d-2026-08-23.md']);
+  assert.ok(f.log.some((line) => /intake: 1 file\(s\) still waiting/u.test(line)));
+
+  await runner.round();
+  assert.equal(f.calls.turns.length, 4);
+  assert.deepEqual(inboxLeft(f.files), [], 'and it keeps going across rounds until nothing is left');
+
+  await runner.round();
+  assert.equal(f.calls.turns.length, 4, 'an empty inbox costs a listing and no turn');
+  assert.equal(runRows(f.files).filter((r) => r.kind === 'intake').length, 4);
 });
 
 /* ----------------------------------------------------------- archiving */

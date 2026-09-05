@@ -57,11 +57,14 @@
  * to that shape and a name leaves it the moment its step has run, so a queue
  * everything ran from is an empty file.
  *
- * One thing that is not a step rides along: `mc helper --intake`, once per calendar
- * day at the top of the first round after 05:00Z, logged in runs.tsv under
- * its own kind. It opens no worktree and touches no branch — it reads
- * production, writes a digest and proposals into `~/mc/intake/`, and that is
- * all. `runHelperDay` below is the whole of it.
+ * Two things that are not steps ride along, and neither opens a worktree or
+ * touches a branch. `runHelperDay` is the collect: once per calendar day at the
+ * top of the first round after 05:00Z, one digest per repository into
+ * `~/mc/intake/`, no model. `runIntakeDrain` is the inbox: every round, the
+ * oldest files in `~/mc/intake/` up to `INTAKE_PER_ROUND`, one headless turn
+ * each, each file archived under `~/mc/runner/log/intake/<date>/` the moment its
+ * turn ends. They used to be one gate and one row, which meant one file could be
+ * read a day and only if the collect had also run.
  *
  * The runner is worked from another terminal by three files under
  * `~/mc/runner/`, all read at a round boundary and never mid-session: `STOP`
@@ -92,11 +95,12 @@ import {
 } from './held.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
+import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { handOver, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
-import { describeTurn, runHelperTurn } from './helper-turn.js';
+import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import {
   UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerTablePath, workRoot,
 } from './paths.js';
@@ -110,9 +114,10 @@ import { instructionsFor, readCanonRole } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
-  HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
-  heldRepair, helperDue, helperNote, inFlight, landingNote, mcOwnFiles, nextBranch, queueFileNames,
-  queueFileText, readSessionOutput, reconcilePrompt, repairPrompt, sessionSettings, stackOrder,
+  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, TIMEOUT_EXIT,
+  assembleQueue, chooseKind, collectNote, headlessArgs,
+  heldRepair, helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, queueFileNames,
+  queueFileText, readSessionOutput, repairPrompt, sessionSettings, stackOrder,
   stepOfPr, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from './run-plan.js';
 
@@ -152,6 +157,11 @@ export function realDeps(env = process.env) {
     alive: pidAlive,
     read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
     list: (path) => { try { return readdirSync(path); } catch { return []; } },
+    // Files only, for the one caller that must not mistake a directory for an
+    // item: `~/mc/intake/decisions-archive/` is an archive, not an inbox entry.
+    files: (path) => {
+      try { return readdirSync(path, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name); } catch { return []; }
+    },
     write: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); },
     append: (path, text) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, text); },
     // Closing a workarea moves what it kept beside its worktree; it never
@@ -173,7 +183,10 @@ export function realDeps(env = process.env) {
     role: readCanonRole,
     launch: resolveLaunch,
     // The two halves of `mc helper --intake`, so a round can be driven in a test with
-    // no production behind it and no model in it.
+    // no production behind it and no model in it. The drain itself is not a
+    // dependency — it is handed `files`, `move` and `helperTurn` above, so a
+    // test's filesystem is the one it archives into and the loop is measured
+    // rather than replaced.
     collect: (options) => collectHelper({ env, ...options }),
     helperTurn: (options) => runHelperTurn({ env, ...options }),
     // The one door work lands through. `mc merge`'s round and `mc merge
@@ -332,13 +345,25 @@ export function createRunner({
   }
   const quotaHold = async () => { if (quotaSleep) await quotaSleep; };
 
-  function planOf(worktree, name) {
+  /**
+   * The plan the workarea carries. `fromHead` reads the branch's own last
+   * committed copy (`git show HEAD:<path>`) instead of the file on disk.
+   *
+   * That is for a worktree with a merge in progress. The file there may carry
+   * conflict markers — after the plan rule (plan-merge.js) that is only the
+   * case it refuses, two sides editing the same step, but it is exactly the
+   * case a session is then handed. HEAD is the branch's last good copy, and
+   * it is the right one: the step being handed out is the step this branch is
+   * on. Main's own edits to the plan are what the session is merging in.
+   */
+  function planOf(worktree, name, { fromHead = false } = {}) {
     const base = join(worktree, 'docs', 'project');
     for (const programme of deps.list(base)) {
       const dir = join(base, programme, name);
       const path = join(dir, 'PLAN.json');
       if (deps.exists(path)) {
-        const text = deps.read(path) || '';
+        const at = ['docs', 'project', programme, name, 'PLAN.json'].join('/');
+        const text = (fromHead ? gitOut(worktree, ['show', `HEAD:${at}`]) : deps.read(path)) || '';
         const { plan, problems } = readPlanText(text);
         return { path, programme, text, plan, problems, legacy: false };
       }
@@ -360,9 +385,43 @@ export function createRunner({
   }
 
   /**
-   * Merge origin/main into the area branch — never rebase. The one conflict
-   * resolved here is an identical .gitignore hunk; anything else is left in
-   * progress for a reconcile step.
+   * A conflicted `PLAN.json`, merged by the plan's own rule about who may
+   * write what (`plan-merge.js`) rather than by a session.
+   *
+   * The three sides come out of the index, which is where git keeps them
+   * while a merge is in progress: `:1:` the merge base, `:2:` ours — this
+   * project's branch — and `:3:` theirs, origin/main. Resolved means written
+   * and staged; the commit is `syncMain`'s, once every conflict is gone.
+   *
+   * Returns true when the file is resolved. Every other answer is a line in
+   * runner.log saying which side of the rule it fell off, because the next
+   * reader of that file is deciding whether the refusal was right.
+   */
+  function resolvePlanConflict(worktree, name, path) {
+    const stage = (n) => {
+      const shown = deps.git(worktree, ['show', `:${n}:${path}`]);
+      return shown.ok ? String(shown.stdout ?? '') : null;
+    };
+    const merged = mergePlanText({ base: stage(1), branch: stage(2), main: stage(3) });
+    if (!merged.ok) {
+      say(`${name}: ${path} is not resolvable by the plan's rule — ${merged.why}`);
+      return false;
+    }
+    deps.write(join(worktree, path), merged.text);
+    if (!deps.git(worktree, ['add', '--', path]).ok) {
+      say(`${name}: ${path} was merged by the plan's rule but could not be staged`);
+      return false;
+    }
+    const took = merged.took.length ? merged.took.join(', ') : 'nothing either side had changed';
+    say(`${name}: ${path} resolved by the plan's own rule — ${took}`);
+    return true;
+  }
+
+  /**
+   * Merge origin/main into the area branch — never rebase. Two conflicts are
+   * resolved here without a session: an identical .gitignore hunk, and a
+   * PLAN.json whose two sides wrote to different steps. Anything else — and
+   * any plan the rule refuses — is left in progress for the step session.
    */
   function syncMain(worktree, name) {
     if (!deps.git(worktree, ['fetch', '-q', 'origin']).ok) return { ok: false, conflicts: [] };
@@ -371,8 +430,17 @@ export function createRunner({
     if (conflicts.length === 1 && conflicts[0] === '.gitignore') {
       if (deps.git(worktree, ['checkout', '--theirs', '.gitignore']).ok && deps.git(worktree, ['add', '.gitignore']).ok && deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
     }
-    say(`${name}: merge conflict in: ${conflicts.join(' ')}`);
-    return { ok: false, conflicts };
+    const left = conflicts.filter((path) => !(isPlanPath(path) && resolvePlanConflict(worktree, name, path)));
+    if (!left.length) {
+      if (deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
+      // Resolved, staged, and the commit refused: not a conflict any more and
+      // not a merge either. The round skips the project rather than start a
+      // session in a worktree mid-merge.
+      say(`${name}: ${conflicts.join(' ')} resolved, but the merge would not commit`);
+      return { ok: false, conflicts: [] };
+    }
+    say(`${name}: merge conflict in: ${left.join(' ')}`);
+    return { ok: false, conflicts: left };
   }
 
   /**
@@ -590,8 +658,10 @@ export function createRunner({
    * from MERGEABLE to CONFLICT the moment the first one landed.
    *
    * `git rebase --onto origin/main <the old base's head>` replays only what
-   * has not landed. A conflict is not resolved here and is not what
-   * `reconcile` is for: abort, name the files, and stop on this project.
+   * has not landed. A conflict is not resolved here, and it is not the
+   * conflicted `git merge origin/main` a step session is handed: a squashed
+   * base breaking the branch above it is a different cause with a different
+   * answer. Abort, name the files, and stop on this project.
    */
   function replayOnto(worktree, name, pr, wasAt) {
     if (!wasAt) return { ok: false, why: `where ${pr.headRefName} left ${pr.baseRefName} could not be read` };
@@ -1027,18 +1097,20 @@ export function createRunner({
   }
 
   /**
-   * The day's `mc helper --intake`, run at the top of a round. Returns 'ran',
-   * 'failed' or null when it was not due.
+   * The day's collect, run at the top of a round. Returns 'ran', 'failed' or
+   * null when it was not due.
    *
    * It is not a step and not a project: it opens no worktree, touches no
-   * branch, and its row in runs.tsv carries `helper` in both the name and the
-   * kind column. `helperDue` is the whole gate, and that row is the whole
-   * state — written whether the run succeeded or failed, which is how a
-   * failed collect stays unretried for the rest of the day.
+   * branch, calls no model, and its rows in runs.tsv carry `helper` in both the
+   * name and the kind column. `helperDue` is the whole gate, and those rows are
+   * the whole state — one per repository, written whether the collect succeeded
+   * or failed, which is how a failed collect stays unretried for the rest of the
+   * day.
    *
-   * The collect half reads production and the turn half calls a model, so the
-   * two are timed together and logged once: what a reader of runs.tsv wants
-   * to know is what the day's helper cost and what came out of it.
+   * Reading the digest is no longer part of this. The digest lands in the inbox
+   * like anything else somebody put there, and `runIntakeDrain` takes it in its
+   * turn — which is what lets a round drain without collecting, and collect
+   * without the day's reading being the only reading there is.
    */
   async function runHelperDay() {
     const due = helperDue({ tsv: deps.read(paths.runs) || '', now: deps.now() });
@@ -1047,10 +1119,9 @@ export function createRunner({
     const took = () => Math.round((deps.now().getTime() - t0) / 1000);
     say('helper: the day\'s digest');
 
-    // One digest and one turn per repository. memoro's production is the
-    // deployed service; memoro-cli's is this machine, and until 2026-08-30
-    // nothing read the second — every failure in mc itself was found by a
-    // person noticing it.
+    // One digest per repository. memoro's production is the deployed service;
+    // memoro-cli's is this machine, and until 2026-08-30 nothing read the
+    // second — every failure in mc itself was found by a person noticing it.
     //
     // A repository that fails does not take the other down with it. The whole
     // reason the collect step reports per section instead of failing as a
@@ -1064,33 +1135,66 @@ export function createRunner({
       } catch (error) {
         say(`helper: ${repo}: the collect step failed — ${error?.message || error}. Not retried today.`);
         outcome = 'failed';
-        continue;
       }
-      say(`helper: ${digest.path} — ${describeDigest(digest.data)}`);
-      for (const note of digest.data.notes || []) say(`helper: ${repo}: ${note}`);
-      for (const [section, source] of unreadableSections(digest.data)) say(`helper: ${repo}: ${section} not read — ${source.error}`);
-
-      const turn = await deps.helperTurn({ digestPath: digest.path, digestText: digest.text, repo, now: deps.now() });
+      if (digest) {
+        say(`helper: ${digest.path} — ${describeDigest(digest.data)}`);
+        for (const note of digest.data.notes || []) say(`helper: ${repo}: ${note}`);
+        for (const [section, source] of unreadableSections(digest.data)) say(`helper: ${repo}: ${section} not read — ${source.error}`);
+        if (outcome !== 'failed') outcome = 'ran';
+      }
       logRun({
-        ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: turn.status ?? 1, seconds: took(), pr: '-',
-        turns: turn.turns ?? '-', input: turn.input ?? '-', output: turn.output ?? '-',
-        cacheRead: turn.cacheRead ?? '-', cacheWrite: turn.cacheWrite ?? '-', session: turn.session ?? '-',
-        note: `${repo},${helperNote(turn)}`,
+        ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: digest ? 0 : 1, seconds: took(), pr: '-',
+        ...dashes, note: collectNote({ repo, digest }),
       });
-      for (const note of turn.groundNotes || []) say(`helper: ${note}`);
-      say(turn.ok
-        ? `helper: ${repo}: ${describeTurn(turn)} (${took()}s)`
-        : `helper: ${repo}: the turn did not finish — ${turn.reason || turn.note} (${took()}s)`);
-      if (turn.quota) await quotaPause();
-      if (!turn.ok) outcome = 'failed';
-      else if (outcome !== 'failed') outcome = 'ran';
-    }
-    // Every repository's collect step threw: nothing was written and nothing
-    // read it, which is the one case that never logged a row above.
-    if (outcome === 'failed' && !deps.read(paths.runs)?.includes(HELPER_NAME)) {
-      logRun({ ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: 1, seconds: took(), pr: '-', ...dashes, note: helperNote(null) });
     }
     return outcome;
+  }
+
+  /**
+   * The inbox, drained: the oldest files in `~/mc/intake/` up to
+   * `INTAKE_PER_ROUND`, one headless turn each, each one archived under
+   * `~/mc/runner/log/intake/<date>/` the moment its turn ends.
+   *
+   * There is no day gate here and there is not meant to be — the question is
+   * *is there a file?*, and a round asks it every time. Thirteen files is
+   * therefore five rounds rather than thirteen days, and a round with an empty
+   * inbox costs a directory listing.
+   *
+   * The row is `kind: intake` with the **file** in the name column: a reader of
+   * runs.tsv who cannot tell thirteen turns apart has no record at all, and the
+   * name column is the column for naming the thing a row is about. `intakeNote`
+   * carries the outcome.
+   */
+  async function runIntakeDrain() {
+    const out = await drainIntake({
+      env: deps.env,
+      now: deps.now,
+      limit: INTAKE_PER_ROUND,
+      deps: {
+        files: deps.files,
+        move: deps.move,
+        turn: deps.helperTurn,
+        stop: stopRequested,
+        onTurn: async ({ file, turn, archived, seconds }) => {
+          logRun({
+            ts: stamp(), name: file, kind: INTAKE_KIND, exit: turn.status ?? 1, seconds, pr: '-',
+            turns: turn.turns ?? '-', input: turn.input ?? '-', output: turn.output ?? '-',
+            cacheRead: turn.cacheRead ?? '-', cacheWrite: turn.cacheWrite ?? '-', session: turn.session ?? '-',
+            note: intakeNote(turn),
+          });
+          for (const note of turn.groundNotes || []) say(`intake: ${note}`);
+          say(turn.ok
+            ? `intake: ${file} — ${describeTurn(turn)} (${seconds}s)`
+            : `intake: ${file} — the turn did not finish: ${turn.reason || turn.note} (${seconds}s)`);
+          // The one way the drain fails to terminate, so it is said out loud
+          // rather than inferred from the same file appearing every round.
+          if (!archived) say(`intake: ${file} could not be moved out of the inbox — the next round will take it again`);
+          if (turn.quota) await quotaPause();
+        },
+      },
+    });
+    if (out.left) say(`intake: ${out.left} file(s) still waiting`);
+    return out;
   }
 
   /**
@@ -1200,28 +1304,47 @@ export function createRunner({
 
     const sync = syncMain(worktree, name);
     if (!sync.ok && !sync.conflicts.length) { say(`${name}: fetch/merge failed, skip`); return 'skipped'; }
-    const plan = sync.conflicts.length ? null : planOf(worktree, name);
-    // A conflicted merge is reconciled first whatever else is true — a repair
-    // cannot run in a worktree with a merge in progress, and its pull request
-    // is still held next round.
-    const choice = repair && !sync.conflicts.length
-      ? { kind: 'repair' }
-      : chooseKind({ plan, conflicts: sync.conflicts });
+    // What git and the plan's own rule could not resolve. It no longer makes
+    // the plan unreadable to the runner: the plan is read from HEAD and the
+    // conflict goes to the step session as something to do first.
+    const conflicts = sync.conflicts;
+    const plan = planOf(worktree, name, { fromHead: conflicts.length > 0 });
+    // A merge nobody is handed is a merge nobody finishes, and an unmerged
+    // path is a dirty worktree — which skips the project every round until a
+    // person acts. So every way out of this round that is not the step
+    // session goes through here: abort, and leave the workarea as clean as
+    // the old merge-only session's abort did.
+    const abandonMerge = (why) => {
+      if (!conflicts.length) return;
+      deps.git(worktree, ['merge', '--abort']);
+      say(`${name}: ${why} — the merge of origin/main is aborted, still conflicting in: ${conflicts.join(' ')}`);
+    };
+    // A repair used to be refused in a worktree with a merge in progress, on
+    // the reasoning that the merge was not its job. That deadlocked the most
+    // common hold there is: a pull request held *because* it conflicts with
+    // main hits the same conflict when the runner syncs, so the repair was
+    // refused for the very reason it was owed — every round, for ever.
+    // Measured 2026-09-05: #612 and #614 both sat at `repairs: 0` with the
+    // gate's reason reading `conflicts with origin/main`. Resolving the merge
+    // is the repair; `repairPrompt` is handed the files.
+    const choice = repair ? { kind: 'repair' } : chooseKind({ plan });
+    if (conflicts.length && choice.kind !== 'step' && choice.kind !== 'repair') {
+      abandonMerge(choice.skip || 'no session to hand it to');
+      return 'skipped';
+    }
     // A null `skip` is a skip nobody would read — see `chooseKind`.
     if (!choice.kind) { if (choice.skip) say(`${name}: ${choice.skip}, skip`); return 'skipped'; }
     const { kind } = choice;
 
     const role = deps.role(kind);
-    if (!role?.overlay) { say(`${name}: canon/roles/${kind}.md is missing — skip`); return 'skipped'; }
+    if (!role?.overlay) { abandonMerge(`canon/roles/${kind}.md is missing`); say(`${name}: canon/roles/${kind}.md is missing — skip`); return 'skipped'; }
     const settings = sessionSettings(plan?.plan?.runner || {});
     const launch = deps.launch(settings.tool);
-    if (!launch?.ok) { say(`${name}: ${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); return 'skipped'; }
+    if (!launch?.ok) { abandonMerge(`${settings.tool} is not available`); say(`${name}: ${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); return 'skipped'; }
     const now = deps.now();
-    const prompt = kind === 'reconcile'
-      ? reconcilePrompt({ name, repo: repo.name, conflicts: sync.conflicts })
-      : kind === 'repair'
-        ? repairPrompt({ name, repo: repo.name, ...repair.entry })
-        : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, step: choice.step, index: choice.index, now });
+    const prompt = kind === 'repair'
+      ? repairPrompt({ name, repo: repo.name, ...repair.entry, conflicts })
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, step: choice.step, index: choice.index, conflicts, now });
     // Counted before the session runs, not after: a repair killed on its budget
     // still had its one turn, and a count written afterwards would give the next
     // round a second repair for the same pull request.
@@ -1256,9 +1379,15 @@ export function createRunner({
     deps.write(out, result.stdout);
     deps.write(`${out}.err`, result.stderr);
 
-    if (kind === 'reconcile' && deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
+    // The abort survives the kind it was written for, and for the reason it
+    // was written: a merge the session did not commit leaves unmerged paths,
+    // and an unmerged path is a dirty worktree that skips the project every
+    // round until a person acts. It is only reached when the session left
+    // `MERGE_HEAD` behind — a step session that resolved the conflict and
+    // committed it has none, and nothing of its work is touched here.
+    if (conflicts.length && deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
       deps.git(worktree, ['merge', '--abort']);
-      say(`${name}: reconcile did not finish — merge aborted`);
+      say(`${name}: the session left the merge of origin/main unfinished — merge aborted`);
     }
     const branch = gitOut(worktree, ['branch', '--show-current']) || name;
     // What this project has open *now* — the same question `queue()` asked
@@ -1300,10 +1429,19 @@ export function createRunner({
     // judging the repair by it would call the trespass repaired the moment
     // nothing more was touched, and the runner would land what it refused to
     // land an hour earlier.
+    //
+    // A step session whose conflict was in the plan itself is judged against
+    // the plan on origin/main for the same reason, the other way round: the
+    // copy it was handed is the branch's HEAD, and the merge that stopped is
+    // precisely main's edits to that file. Judging by HEAD would read every
+    // one of them — a step somebody else finished, a criterion somebody else
+    // met — as a step this session had no business touching.
     let problems = [];
+    const onMain = plans.find((p) => p.project === name)?.plan || null;
+    const planConflicted = Boolean(plan?.path) && conflicts.some((path) => plan.path.endsWith(`/${path}`));
     const judged = kind === 'repair'
-      ? repairBaseline(repair.entry, plan, plans.find((p) => p.project === name)?.plan || null)
-      : (kind === 'step' ? { before: plan.plan, index: choice.index } : null);
+      ? repairBaseline(repair.entry, plan, onMain)
+      : (kind === 'step' ? { before: (planConflicted && onMain) || plan.plan, index: choice.index } : null);
     if (judged && note === 'success') {
       const after = readPlanText(deps.read(plan.path) || '');
       const trespass = after.plan
@@ -1339,9 +1477,11 @@ export function createRunner({
     // The queue is Martin's "these first", and it empties itself: this
     // project has had its step, so its name leaves the file now.
     dropFromQueue(name);
-    // A merged step or a finished reconcile both leave the project ready for
-    // its next step now; 'merged' is the round's cue to stay on it.
-    return note === 'success,merged' || (kind === 'reconcile' && note === 'success') ? 'merged' : 'ran';
+    // A merged step leaves the project ready for its next step now; 'merged'
+    // is the round's cue to stay on it. There is no second way to earn it:
+    // the only other session that used to — one that finished a merge and
+    // stopped — is gone, and its work is the first thing a step session does.
+    return note === 'success,merged' ? 'merged' : 'ran';
   }
 
   /**
@@ -1427,9 +1567,9 @@ export function createRunner({
    * - **A name with no plan on main at all.** `assembleQueue` drops those, so
    *   it can only happen when a plan leaves main mid-round; `runStep` has the
    *   line for it, and this leaves it there.
-   * - **A conflicted merge left in a workarea.** That is `reconcile`, and it
-   *   lives in a worktree no plan on main can see. A project whose plan is
-   *   stopped keeps its half-finished merge until the plan is `ready` again —
+   * - **A conflicted merge left in a workarea.** It lives in a worktree no
+   *   plan on main can see, and it is the step session's to resolve — so a
+   *   project whose plan on main is stopped never reaches the merge at all,
    *   which is the round it would have been able to use it in anyway.
    */
   function planRefusal(name, plans = []) {
@@ -1539,10 +1679,13 @@ export function createRunner({
     // other's names from queue.md, and `closeWorkareas` would file the
     // other's workareas as unplanned. `chores()` runs them beside the lanes.
     const chores = only == null;
-    // The day's helper first, and only in a round that is a round: `--once`
-    // exists to watch a single step, and a two-minute model turn over
-    // production is not what somebody typing it asked for.
-    if (chores && !once && !stopRequested()) await runHelperDay();
+    // The day's collect first, then the inbox it just added to, and only in a
+    // round that is a round: `--once` exists to watch a single step, and a
+    // model turn over production is not what somebody typing it asked for.
+    if (chores && !once && !stopRequested()) {
+      await runHelperDay();
+      await runIntakeDrain();
+    }
     const world = queue({ only });
     const { names, plans } = world;
     if (chores && !once) tidyQueue(plans);
@@ -1588,10 +1731,10 @@ export function createRunner({
 
   /**
    * What a whole round did around its lanes, for the unattended loop where
-   * the lanes no longer share a round: the day's helper, queue.md tidied,
-   * the unreadable plans filed, finished plans archived, finished workareas
-   * closed. Read from the whole queue — which is why it is not in a lane's
-   * round.
+   * the lanes no longer share a round: the day's collect, the inbox drained,
+   * queue.md tidied, the unreadable plans filed, finished plans archived,
+   * finished workareas closed. Read from the whole queue — which is why it is
+   * not in a lane's round.
    *
    * Archiving lands a docs PR through the gate, and the gate refuses a
    * second round rather than queueing it (gate-lock.js): a lane landing its
@@ -1603,6 +1746,7 @@ export function createRunner({
   async function chores() {
     if (stopRequested()) return;
     await runHelperDay();
+    await runIntakeDrain();
     const { plans } = queue();
     tidyQueue(plans);
     writeUnreadable(plans);
@@ -1619,7 +1763,7 @@ export function createRunner({
   };
 
   return {
-    paths, repos, say, round, chores, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
+    paths, repos, say, round, chores, runStep, runLane, splitLanes, runHelperDay, runIntakeDrain, archiveDone, queue, stopRequested,
     held: heldNow,
     writeUnreadable,
     updateRequested, syncMain, freshBranch, landProject, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,

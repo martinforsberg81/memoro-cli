@@ -47,7 +47,7 @@ DECISIONS
 
 LAST RUNS
   08-29 06:42Z  step        880s  #427    success,merged
-  08-30 11:31Z  reconcile   384s  —       success
+  08-30 11:31Z  repair      384s  —       success
   08-30 11:44Z  step        737s  #476    success,merged
 
 OPEN PR

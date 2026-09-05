@@ -7,17 +7,17 @@
  * that `wrote` comes from the directory and not from what the turn said.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { intakeDir, proposalsDir } from '../../src/mc/helper-collect.js';
-import { helperGround, helperPrompt, runHelperTurn } from '../../src/mc/helper-turn.js';
+import { intakeArchiveDir, intakeDir, proposalsDir } from '../../src/mc/helper-collect.js';
+import { drainIntake, helperGround, helperPrompt, repoOfFile, runHelperTurn } from '../../src/mc/helper-turn.js';
 import { sharedRoleText } from '../../src/mc/roles.js';
 
 const NOW = new Date('2026-08-29T06:00:00.000Z');
-const DIGEST = '# Errors and maintenance — 2026-08-29T06:00:00Z\n\n- ! `aaa111` — 34× new — D1_ERROR\n';
+const FILE = 'errors-memoro-2026-08-29.md';
 const ROLE = { name: 'helper', model: 'sonnet', tools: ['claude'], overlay: 'You are the helper turn.' };
 const LAUNCH = {
   ok: true, id: 'claude-code', shortName: 'claude',
@@ -61,7 +61,7 @@ async function turn(overrides = {}, options = {}) {
   const e = options.env || env();
   const seen = {};
   const result = await runHelperTurn({
-    env: e, now: NOW, digestPath: join(intakeDir(e), 'errors-2026-08-29.md'), digestText: DIGEST,
+    env: e, now: NOW, file: options.file || join(intakeDir(e), FILE),
     deps: {
       role: () => ROLE, launch: () => LAUNCH, profile: async () => 'PROFILE',
       ground: GROUND, session: fakeSession(seen, options.session), ...overrides,
@@ -93,9 +93,18 @@ describe('the helper turn', () => {
     assert.equal(seen.args[at + 1], `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nYou are the helper turn.`);
   });
 
-  it('gives the turn the digest whole', async () => {
-    const { seen } = await turn();
-    assert.ok(seen.args[1].includes(DIGEST), 'the evidence is not clipped');
+  it('names the one file and leaves the reading to the turn', async () => {
+    const { seen, env: e } = await turn();
+    assert.ok(seen.args[1].includes(FILE), 'the file is named');
+    assert.ok(!seen.args[1].includes(intakeDir(e)), 'by its bare name — the turn stands in the directory');
+    assert.ok(!seen.args[1].includes('----- DIGEST -----'), 'nothing is pasted in for it');
+  });
+
+  it('takes a file whose name says nothing, and a name that is not a path', async () => {
+    const dropped = await turn({}, { file: 'screenshot.png', session: { write: null } });
+    assert.ok(dropped.seen.args[1].includes('screenshot.png'));
+    assert.match(dropped.seen.args[1], /decide it from what you read/u);
+    assert.equal(dropped.result.ok, true);
   });
 
   it('measures what was written instead of believing the turn', async () => {
@@ -155,7 +164,7 @@ describe('the helper turn', () => {
     const e = env();
     const seen = {};
     await runHelperTurn({
-      env: e, now: NOW, digestPath: 'x', digestText: DIGEST, model: 'opus',
+      env: e, now: NOW, file: FILE, model: 'opus',
       deps: { role: () => ROLE, launch: () => LAUNCH, profile: async () => '', ground: GROUND, session: fakeSession(seen, { write: null }) },
     });
     assert.equal(seen.args[seen.args.indexOf('--model') + 1], 'opus');
@@ -166,25 +175,68 @@ describe('what the turn is told', () => {
   const PLANS = [{ repo: 'memoro-cli', programme: 'mc', project: 'mc-helper', status: 'ready', next: 'Step 2 — the proposal turn' }];
 
   it('names the date, the file to write and the directory to write it in', () => {
-    const prompt = helperPrompt({ digestPath: '/tmp/errors-2026-08-29.md', digestText: DIGEST, now: NOW });
+    const prompt = helperPrompt({ file: FILE, now: NOW });
     assert.match(prompt, /Today is 2026-08-29/u);
     assert.match(prompt, /2026-08-29-<slug>\.md/u);
-    assert.match(prompt, /Write no file at all if nothing warrants one/u);
+    assert.match(prompt, /or none at all/u);
+  });
+
+  /**
+   * The whole of step 2: one file by name, read by the turn, one outcome for
+   * that file alone. A prompt that pasted the file in could not carry a
+   * screenshot, and one that asked for "the proposals" would get two.
+   */
+  it('names one file and asks for one outcome about it', () => {
+    const prompt = helperPrompt({ file: '/Users/m/mc/intake/note.txt', now: NOW });
+    assert.match(prompt, /One file in the directory you are standing in is yours this turn:\n\n {4}note\.txt\n/u);
+    assert.ok(!prompt.includes('/Users/m/mc/intake/'), 'the path is not the instruction — the name is');
+    assert.match(prompt, /Read it — yourself, and whole —/u);
+    assert.match(prompt, /One file, one outcome: either \*\*one\*\* proposal/u);
+    assert.match(prompt, /Not two from one file/u);
+  });
+
+  it('tells the turn to say when it could not read the file whole', () => {
+    const prompt = helperPrompt({ file: 'huge.log', now: NOW });
+    assert.match(prompt, /past your tool's read limit[\s\S]*a proposal that names the limit, or no proposal/u);
+  });
+
+  it('says which repository a digest is, and leaves any other file to the turn', () => {
+    assert.match(helperPrompt({ file: FILE, now: NOW }), /It is \*\*memoro\*\*'s, so a proposal you write about it has `repo: memoro`/u);
+    assert.match(helperPrompt({ file: 'errors-memoro-cli-2026-08-29.md', now: NOW }), /`repo: memoro-cli`/u);
+    // What a person dropped in belongs to whichever system the contents say,
+    // and the turn is the only reader that can tell.
+    const dropped = helperPrompt({ file: 'screenshot.png', now: NOW });
+    assert.ok(!dropped.includes('in its frontmatter'), 'no repository is asserted for it');
+    assert.match(dropped, /Nothing in that name says which system[\s\S]*decide it from what you read/u);
+    // And a caller that knows better than the name — the collector — is obeyed.
+    assert.match(helperPrompt({ file: 'screenshot.png', repo: 'memoro-cli', now: NOW }), /`repo: memoro-cli`/u);
   });
 
   it('carries the plans on main and the project log as the ground to judge against', () => {
     const prompt = helperPrompt({
-      digestPath: 'x', digestText: DIGEST, plans: PLANS, projectLog: '| 2026-08-26 | msr-core | main-red-fix |', now: NOW,
+      file: FILE, plans: PLANS, projectLog: '| 2026-08-26 | msr-core | main-red-fix |', now: NOW,
     });
     assert.match(prompt, /\| memoro-cli \| mc \/ mc-helper \| ready \| Step 2 — the proposal turn \|/u);
     assert.match(prompt, /PROJECT LOG \(closed projects\)[\s\S]*main-red-fix/u);
   });
 
   it('says a source is absent rather than leaving a section that reads as empty', () => {
-    const prompt = helperPrompt({ digestPath: 'x', digestText: DIGEST, now: NOW });
+    const prompt = helperPrompt({ file: FILE, now: NOW });
     assert.match(prompt, /PLANS ON MAIN -----\n_none read_/u);
     assert.match(prompt, /PROJECT LOG \(closed projects\) -----\n_none read_/u);
     assert.match(prompt, /PROPOSALS ALREADY WAITING -----\n_none_/u);
+  });
+});
+
+describe('which system a file in the inbox belongs to', () => {
+  it('is read from the collector\'s own names and from no others', () => {
+    assert.equal(repoOfFile('/w/intake/errors-memoro-2026-08-29.md'), 'memoro');
+    assert.equal(repoOfFile('errors-memoro-cli-2026-08-29.md'), 'memoro-cli');
+    // The unprefixed name from before memoro-cli had a digest of its own.
+    assert.equal(repoOfFile('errors-2026-08-29.md'), 'memoro');
+    assert.equal(repoOfFile('screenshot.png'), null);
+    assert.equal(repoOfFile('errors-memoro-2026-08-29.md.bak'), null);
+    assert.equal(repoOfFile(''), null);
   });
 });
 
@@ -222,6 +274,105 @@ describe('the ground', () => {
       'memoro: could not list plans on origin/main',
       'no docs/project/project_log.md on origin/main in memoro',
     ]);
+  });
+});
+
+/**
+ * The drain, on a real filesystem: real files in a real inbox, really moved.
+ * The session is still a stub — the point of the measurement is where the file
+ * ends up, and a model would only make that slower to find out.
+ */
+describe('draining the inbox', () => {
+  const ARCHIVE = (e) => join(intakeArchiveDir(e, NOW));
+
+  function inbox(names) {
+    const e = env();
+    mkdirSync(intakeDir(e), { recursive: true });
+    mkdirSync(proposalsDir(e), { recursive: true });
+    // An archive already, and a directory rather than a file: it is skipped,
+    // not drained and not moved.
+    mkdirSync(join(intakeDir(e), 'decisions-archive'), { recursive: true });
+    writeFileSync(join(intakeDir(e), 'decisions-archive', 'mc-2.md'), '# answered\n');
+    for (const name of names) writeFileSync(join(intakeDir(e), name), `# ${name}\n`);
+    return e;
+  }
+
+  const drain = (e, over = {}) => drainIntake({
+    env: e, now: () => NOW, deps: { turn: async () => ({ ok: true, wrote: [], waiting: [] }), ...over },
+  });
+
+  it('takes the oldest files first, one turn each, and archives every one', async () => {
+    const e = inbox(['note.md', 'errors-memoro-cli-2026-08-27.md', 'errors-memoro-2026-08-26.md']);
+    const taken = [];
+    const out = await drain(e, { turn: async ({ file }) => { taken.push(file); return { ok: true, wrote: [], waiting: [] }; } });
+
+    assert.deepEqual(taken, ['errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note.md']);
+    assert.deepEqual(out.done.map((d) => d.archived), [true, true, true]);
+    assert.equal(out.left, 0);
+    assert.deepEqual(readdirSync(intakeDir(e)), ['decisions-archive'], 'nothing but the archive is left');
+    assert.deepEqual(readdirSync(ARCHIVE(e)).sort(), ['errors-memoro-2026-08-26.md', 'errors-memoro-cli-2026-08-27.md', 'note.md']);
+    assert.equal(readFileSync(join(ARCHIVE(e), 'note.md'), 'utf8'), '# note.md\n', 'moved, not deleted');
+  });
+
+  /**
+   * The rule the whole thing rests on: a turn whose session came back non-zero
+   * has still had its turn, and the file goes to the archive anyway. A file put
+   * back is a file every round after this one takes again, and again.
+   */
+  it('archives a file whose session returned non-zero', async () => {
+    const e = inbox(['errors-memoro-2026-08-26.md']);
+    const out = await drainIntake({
+      env: e,
+      now: () => NOW,
+      deps: {
+        turn: (options) => runHelperTurn({
+          ...options,
+          deps: {
+            role: () => ROLE, launch: () => LAUNCH, profile: async () => 'PROFILE', ground: GROUND,
+            session: async () => ({ status: 1, stdout: 'not json', stderr: 'claude: fatal', timedOut: false }),
+          },
+        }),
+      },
+    });
+    assert.equal(out.done[0].turn.ok, false, 'the turn failed');
+    assert.equal(out.done[0].turn.note, 'no-json');
+    assert.equal(out.done[0].archived, true);
+    assert.deepEqual(readdirSync(intakeDir(e)), ['decisions-archive']);
+    assert.equal(readFileSync(join(ARCHIVE(e), 'errors-memoro-2026-08-26.md'), 'utf8'), '# errors-memoro-2026-08-26.md\n');
+  });
+
+  it('archives a file whose turn threw, and names it as having thrown', async () => {
+    const e = inbox(['a-2026-08-26.md']);
+    const out = await drain(e, { turn: async () => { throw new Error('claude died'); } });
+    assert.deepEqual([out.done[0].turn.ok, out.done[0].turn.reason], [false, 'turn-threw']);
+    assert.equal(readdirSync(ARCHIVE(e))[0], 'a-2026-08-26.md');
+  });
+
+  it('takes no more than the limit, and says how many are left', async () => {
+    const e = inbox(['a-2026-08-26.md', 'b-2026-08-27.md', 'c-2026-08-28.md']);
+    const out = await drain(e, {});
+    assert.equal(out.done.length, 3, 'INTAKE_PER_ROUND by default');
+
+    const e2 = inbox(['a-2026-08-26.md', 'b-2026-08-27.md']);
+    const one = await drainIntake({ env: e2, now: () => NOW, limit: 1, deps: { turn: async () => ({ ok: true, wrote: [] }) } });
+    assert.deepEqual(one.done.map((d) => d.file), ['a-2026-08-26.md']);
+    assert.equal(one.left, 1);
+    assert.deepEqual(readdirSync(intakeDir(e2)).sort(), ['b-2026-08-27.md', 'decisions-archive']);
+  });
+
+  it('stops between files when asked, and never inside one', async () => {
+    const e = inbox(['a-2026-08-26.md', 'b-2026-08-27.md', 'c-2026-08-28.md']);
+    const out = await drain(e, { stop: () => true });
+    assert.equal(out.done.length, 1);
+    assert.equal(out.done[0].archived, true, 'the file it did take is still archived');
+    assert.equal(out.left, 2);
+  });
+
+  it('is an empty answer for an inbox with nothing in it', async () => {
+    const e = env();
+    const out = await drain(e, {});
+    assert.deepEqual(out.done, []);
+    assert.equal(out.left, 0);
   });
 });
 

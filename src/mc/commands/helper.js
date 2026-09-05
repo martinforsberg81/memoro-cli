@@ -8,10 +8,11 @@
  * proposals already waiting — adding is all it does.
  *
  * `--intake` is **the eye**: the script that reads the five sources memoro
- * already records into `~/mc/intake/errors-<date>.md`, and then one headless
- * turn with the `intake` role that reads that digest and proposes from it.
- * `--collect` stops after the digest — no model, no network writes.
- * `mc run` runs that half once a day, through the modules, not this verb.
+ * already records into `~/mc/intake/errors-<repo>-<date>.md`, and then the
+ * inbox drained — one headless turn with the `intake` role per file, oldest
+ * first, each file archived after its turn. `--collect` stops after the digest
+ * — no model, no network writes. `mc run` runs both halves on its own cadence,
+ * through the modules, not this verb.
  *
  * Nothing here writes `queue.md`. Whichever half wrote a proposal, it is read
  * at the next `mc brief` and Martin queues it or drops it; that is the whole
@@ -23,8 +24,9 @@ import {
   collectHelper, DEFAULT_LIMIT, DEFAULT_THRESHOLD, describeDigest, helperDir, HELPER_REPOS, proposalsDir,
   unreadableSections,
 } from '../helper-collect.js';
-import { describeTurn, runHelperTurn } from '../helper-turn.js';
+import { describeTurn, drainIntake } from '../helper-turn.js';
 import { readCanonRole } from '../roles.js';
+import { INTAKE_PER_ROUND } from '../run-plan.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
 
@@ -94,34 +96,40 @@ export async function run(argv, deps = {}) {
   }
   if (flags.collect) return 0;
 
-  // One turn per digest. A digest with nothing new in it is still read —
-  // "nothing new" is a judgement about fingerprints, and a condition failing
-  // for three days is exactly what a fresh reader should still propose
-  // fixing. Zero proposals is the answer on a quiet day, not a failure.
+  // The inbox, drained — the same drain the runner does, the same cap and the
+  // same archive. Not a turn per digest just written: what stands in front of
+  // the turn is an inbox, and the two files collected a second ago are at the
+  // back of it behind anything that has been waiting longer. A file with
+  // nothing new in it is still read — "nothing new" is a judgement about
+  // fingerprints, and a condition failing for three days is exactly what a
+  // fresh reader should still propose fixing. Zero proposals is the answer on
+  // a quiet day, not a failure.
   //
-  // Per digest and not one turn over both: a single reader would have to
-  // guess which repository each finding belongs to, and `repo:` is the
-  // frontmatter key everything downstream routes on. A turn that fails does
-  // not stop the other — losing memoro-cli's proposals because wrangler was
+  // One file per turn, so a turn that fails costs that file's judgement and
+  // no other's — losing memoro-cli's proposals because wrangler was
   // unauthenticated is the exact failure shape this file is written against.
+  const drained = await (deps.drain || drainIntake)({
+    limit: INTAKE_PER_ROUND,
+    model: flags.model || null,
+    deps: { turn: deps.turn, files: deps.files, move: deps.move },
+  });
   let wrote = 0;
-  for (const { repo, result } of results) {
-    const t1 = Date.now();
-    const turn = await (deps.turn || runHelperTurn)({
-      digestPath: result.path, digestText: result.text, model: flags.model || null, repo,
-    });
-    const took = ((Date.now() - t1) / 1000).toFixed(1);
+  for (const { file, turn, archived, seconds } of drained.done) {
     for (const note of turn.groundNotes || []) stderr.write(`mc: ${note}\n`);
     if (!turn.ok) {
-      stderr.write(`mc: ${repo}: the intake turn did not finish — ${turn.note || turn.reason}\n`);
+      stderr.write(`mc: ${file}: the intake turn did not finish — ${turn.note || turn.reason}\n`);
       if (turn.stderr?.trim()) stderr.write(`mc: ${turn.stderr.trim().split('\n').at(-1)}\n`);
       worst = 1;
-      continue;
+    } else {
+      stdout.write(`mc: ${file}: ${describeTurn(turn)} (${seconds}s, ${turn.tool} ${turn.model})\n`);
+      for (const p of turn.wrote) stdout.write(`mc:   ${p.file}\n`);
+      wrote += turn.wrote.length;
     }
-    stdout.write(`mc: ${repo}: ${describeTurn(turn)} (${took}s, ${turn.tool} ${turn.model})\n`);
-    for (const p of turn.wrote) stdout.write(`mc:   ${p.file}\n`);
-    wrote += turn.wrote.length;
+    // Archiving is what makes the drain terminate, so a file that stayed put
+    // is said out loud rather than left to be noticed as a file read twice.
+    if (!archived) stderr.write(`mc: ${file}: could not be moved out of the inbox — it will be taken again\n`);
   }
+  if (drained.left) stdout.write(`mc: ${drained.left} more in the inbox — run it again to take the next ${INTAKE_PER_ROUND}\n`);
   // Only when there is something to read. A quiet day that still points at
   // the proposals directory is a line that trains people to ignore the line.
   if (wrote) stdout.write(`mc: read them at the next brief — ${proposalsDir()}\n`);

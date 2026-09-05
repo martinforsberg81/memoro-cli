@@ -981,7 +981,7 @@ describe('the palette', () => {
   });
 
   it('gives a step kind one colour wherever a kind is printed', () => {
-    for (const [kind, tone] of [['step', 'green'], ['reconcile', 'magenta'], ['triage', 'blue'], ['brief', 'cyan'], ['plan', 'cyan']]) {
+    for (const [kind, tone] of [['step', 'green'], ['triage', 'blue'], ['brief', 'cyan'], ['plan', 'cyan']]) {
       const data = pageData({
         runner: runnerSection({
           runner: { pid: 4242, started: '2026-08-29T11:00:00Z' },

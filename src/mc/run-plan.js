@@ -203,9 +203,16 @@ export function nextBranch(name, taken = []) {
 
 /**
  * What a project gets this round. `openPrs` non-empty means its work is
- * already in flight and nothing is started; `conflicts` non-empty means the
- * merge of origin/main stopped and is left in progress; `plan` is null when
- * no PLAN.md exists in the worktree.
+ * already in flight and nothing is started; `plan` is null when no PLAN.md
+ * exists in the worktree.
+ *
+ * A merge left in conflict is not one of the answers here. It used to be the
+ * first of them — `conflicts.length` returned a kind of its own before the
+ * plan was so much as looked at, and the round did not even read the plan
+ * while a merge was in progress. A conflict is now something the step session
+ * is *told* about (`stepPrompt`'s preamble): it resolves the merge and then
+ * does its step, in the session that had to read the code anyway, rather than
+ * a cold session that finishes a merge and stops.
  *
  * Two things the runner used to do here and does not any more, both on
  * Martin's word of 2026-08-29:
@@ -225,10 +232,9 @@ export function nextBranch(name, taken = []) {
  *   väntande beslut är ej ready.") A plan comes back by being set `ready`,
  *   which is the job of whoever applies the answer.
  */
-export function chooseKind({ plan, conflicts = [], openPrs = [] }) {
+export function chooseKind({ plan, openPrs = [] }) {
   const flight = inFlight(openPrs);
   if (flight) return flight;
-  if (conflicts.length) return { kind: 'reconcile' };
   if (!plan) return { kind: null, skip: null };
   if (plan.legacy) return { kind: null, reason: 'unmigrated', skip: 'still a PLAN.md — migrate it to PLAN.json' };
   if (!plan.plan) {
@@ -357,9 +363,9 @@ export function mcOwnFiles(files) {
 /* ----------------------------------------------------------- the helper */
 
 /**
- * `mc helper --intake` is a step of the runner's day, not a project: it is logged
- * runs.tsv under its own `kind` with `helper` in the name column, and it runs
- * at most once per calendar day.
+ * `mc helper --collect` is a step of the runner's day, not a project: it is
+ * logged in runs.tsv under its own `kind` with `helper` in the name column, and
+ * it runs at most once per calendar day.
  *
  * The hour is UTC and the day is UTC, so the two agree — the digest's window
  * is the day behind it, and a run before dawn would be measuring against a
@@ -371,9 +377,66 @@ export const HELPER_NAME = 'helper';
 export const HELPER_HOUR_UTC = 5;
 
 /**
- * Is the day's helper run due? The runs.tsv row is the whole state — there is
- * no separate stamp file to fall out of step with it — and the row is written
- * whether the run succeeded or failed. That is what "a failed collect is
+ * The drain is the other half of the same verb and asks a different question,
+ * so it has a gate and a kind of its own.
+ *
+ * `helperDue` is right for the collect: one digest per repository per calendar
+ * day, whatever else happens. It is wrong for the turn, whose question is *is
+ * there a file in the inbox?* — a question a day boundary has nothing to say
+ * about. Sharing the gate meant a round could only ever read one file a day and
+ * only if it had also collected, which is how thirteen digests came to be
+ * waiting in a directory that is supposed to drain.
+ *
+ * `intake` is its own `kind` rather than a second meaning for `helper`: the two
+ * are counted separately in `summariseRuns`, `helperDue` is not closed for the
+ * day by a drain that happened to run, and a reader of runs.tsv can tell the
+ * script that read production from the model that read one file. The cost is
+ * that the twelve `helper` rows written before 2026-09-05 mean both things; the
+ * kind column tells them apart from here on and nothing re-reads the old ones.
+ */
+export const INTAKE_KIND = 'intake';
+
+/**
+ * How many files one round drains. Three, and the number is what a round costs:
+ * a turn is capped at ten minutes (`DEFAULT_TURN_MINUTES`) and measured at two
+ * to three, so a round's drain is bounded at half an hour and typically under
+ * ten minutes — beside a lane's ninety-minute step, that is noise. One file a
+ * round would be smaller still and would take thirteen rounds to work through
+ * the backlog that exists today; the whole inbox in one round is the version
+ * with no bound at all, and an inbox Martin drops forty screenshots into would
+ * stop the runner for a morning.
+ */
+export const INTAKE_PER_ROUND = 3;
+
+/**
+ * The inbox in the order it drains: oldest first, by the date in the name.
+ *
+ * By the date and not by the name itself, because the collector's two
+ * generations of filename do not sort against each other as strings —
+ * `errors-memoro-2026-09-04.md` sorts before `errors-memoro-cli-2026-08-31.md`
+ * on the `2` against the `c`, which would put every memoro digest ahead of every
+ * memoro-cli one whatever day either was written.
+ *
+ * A name with no date in it sorts last, under its own name. That is arrival
+ * order too: the dated files are the collector's, written on the day they name,
+ * and a file Martin dropped in by hand arrived now.
+ *
+ * Pure over a listing of filenames — dotfiles dropped, directories never in it
+ * (`~/mc/intake/decisions-archive/` is an archive already, and the caller lists
+ * files).
+ */
+export function intakeQueue(names = []) {
+  return names
+    .filter((name) => typeof name === 'string' && name && !name.startsWith('.'))
+    .map((name) => ({ name, date: /(\d{4}-\d{2}-\d{2})/u.exec(name)?.[1] || '9999-99-99' }))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name))
+    .map((item) => item.name);
+}
+
+/**
+ * Is the day's collect due? The runs.tsv row is the whole state — there is
+ * no separate stamp file to fall out of step with it — and a row is written
+ * whether the collect succeeded or failed. That is what "a failed collect is
  * logged and never retried within the day" means: the gate does not ask how
  * it went, only that it happened.
  */
@@ -386,12 +449,24 @@ export function helperDue({ tsv = '', now = new Date(), hour = HELPER_HOUR_UTC }
 }
 
 /**
- * The runs.tsv note for a day's helper run. `success,<n>-proposals` keeps the
- * `success,...` shape every other row uses — `summariseRuns` reads a note that
- * does not start with it as a failure, and a quiet day is not a failure.
+ * The runs.tsv note for one repository's collect. The outcome comes first and
+ * the detail after, because `summariseRuns` reads a note that does not start
+ * with `success` as a failure — and every helper row until 2026-09-05 was
+ * `memoro,success,0-proposals`, which it counted as one.
  */
-export function helperNote(turn) {
-  if (!turn) return 'collect-failed';
+export function collectNote({ repo, digest = null }) {
+  if (!digest) return `collect-failed,${repo}`;
+  const delta = digest.data?.delta || {};
+  return `success,${repo},${delta.first ? 'first-digest' : `${delta.fingerprints?.length ?? 0}-new`}`;
+}
+
+/**
+ * The runs.tsv note for one drained file. `success,<n>-proposals` keeps the
+ * `success,...` shape every other row uses; which file it was is the row's
+ * `name` column, which is the column for naming the thing a row is about.
+ */
+export function intakeNote(turn) {
+  if (!turn) return 'turn-missing';
   if (turn.ok) return `success,${turn.wrote?.length ?? 0}-proposals`;
   return turn.reason || turn.note || 'failed';
 }
@@ -400,9 +475,45 @@ export function helperNote(turn) {
 
 const today = (now) => now.toISOString().slice(0, 10);
 
-export function stepPrompt({ name, repo, planPath, planText, step, index, now = new Date() }) {
+/**
+ * What a step session is told before anything else when the worktree it is
+ * handed has a merge in progress: which files, that it stopped there, and
+ * that the merge is the first thing it does rather than the job.
+ *
+ * It goes above the body and the body does not change — the step, its
+ * `done_when` and what may be written in the plan are all still true. That is
+ * the whole of what the runner used to spend a session of its own on: a cold
+ * session that read the conflicting code, resolved it, and stopped. This
+ * session has to read that code anyway.
+ */
+function conflictPreamble(conflicts, then = null) {
+  if (!conflicts.length) return [];
+  return [
+    'A `git merge origin/main` is in progress in this worktree and stopped on',
+    `conflicts in: ${conflicts.join(' ')}`,
+    '',
+    "Resolve them first: keep this branch's intent and main's changes both,",
+    ...(then || [
+      'commit the merge, and then do your step below. It is the first thing you',
+      'do and not the job — one session, one pull request, and the step is what',
+      'the pull request is for.',
+    ]),
+    '',
+    // A modify/delete is the one conflict "keep both" does not answer, and
+    // guessing it wrong restores something a finished project removed on
+    // purpose. `role-instructions`' #614 is exactly this: its branch edits
+    // `canon/roles/reconcile.md`, which `no-reconcile` deleted from main.
+    'A file main deleted stays deleted — `git rm` it and carry whatever your',
+    'branch was doing to it wherever main moved it, if anywhere. Restoring it',
+    'undoes a project that finished on purpose, and no test will say so.',
+    '',
+  ];
+}
+
+export function stepPrompt({ name, repo, planPath, planText, step, index, conflicts = [], now = new Date() }) {
   const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
+    ...conflictPreamble(conflicts),
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
     `is merged in). Below is your plan, \`${planPath}\`.`,
     '',
@@ -443,7 +554,7 @@ export function stepPrompt({ name, repo, planPath, planText, step, index, now = 
  * command gate that failed. A session told `sql:pr-ci — exit 1` and nothing
  * else guesses; that is what happened on 2026-09-03, three rounds long.
  */
-export function repairPrompt({ name, repo, pr, branch, reason, note = null, red = [], gates = [] }) {
+export function repairPrompt({ name, repo, pr, branch, reason, note = null, red = [], gates = [], conflicts = [] }) {
   const lines = [
     `You are in the \`${name}\` workarea of ${repo} (this worktree), on branch`,
     `\`${branch}\`, whose pull request #${pr} the runner would not land:`,
@@ -457,6 +568,15 @@ export function repairPrompt({ name, repo, pr, branch, reason, note = null, red 
   for (const gate of gates) {
     lines.push(`The gate \`${gate.name}\` failed. What it printed:`, ...String(gate.output).split('\n').map((line) => `  ${line}`), '');
   }
+  // A pull request held *because* it conflicts with main is the common case:
+  // the gate refused it for the conflict, and the runner's own sync then hits
+  // the same one. Resolving it is not a detour from the repair, it is the
+  // repair — see `runProject`, where a conflict no longer refuses this session.
+  lines.push(...conflictPreamble(conflicts, [
+    'commit the merge, and push. For a pull request held because it conflicts',
+    'with main, that is the whole repair; where the reason names something else',
+    'as well, it is the first thing and the reason below is the rest.',
+  ]));
   lines.push(
     'Make it green and push to the same branch — the runner lands it after you.',
     'Do not open another pull request, do not merge it yourself, do not lower a',
@@ -485,16 +605,6 @@ export function repairPrompt({ name, repo, pr, branch, reason, note = null, red 
     'way.',
   );
   return lines.join('\n');
-}
-
-export function reconcilePrompt({ name, repo, conflicts }) {
-  return [
-    `You are working in the \`${name}\` workarea of ${repo} (this worktree). A`,
-    '`git merge origin/main` is in progress on this branch and stopped on',
-    `conflicts in: ${conflicts.join(' ')}`,
-    '',
-    'Resolve them as your role says, commit the merge, push, and stop.',
-  ].join('\n');
 }
 
 /* --------------------------------------------------------------- headless */

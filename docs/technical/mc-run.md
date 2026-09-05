@@ -120,32 +120,40 @@ A **round** is one pass over the queue. A **step** is one fresh headless
 session in one workarea, followed by the merge of the pull request that
 session opened.
 
-1. **The day's `mc helper --intake`**, if it is due: once per calendar day, at
-   the top of the first round after 05:00Z. It is not a step and not a
-   project — it opens no worktree and touches no branch, it reads production
-   and writes a digest and proposals into `~/mc/intake/`. Its runs.tsv row is
-   its whole state, which is why a failed collect stays unretried for the rest
-   of the day. See [`mc-helper.md`](mc-helper.md).
-2. **Read the queue**: `~/mc/queue.md`, then every `PLAN.json` on both
+1. **The day's collect**, if it is due: once per calendar day, at the top of
+   the first round after 05:00Z. It is not a step and not a project — it opens
+   no worktree, touches no branch and calls no model; it reads production and
+   writes one digest per repository into `~/mc/intake/`. Its two runs.tsv rows
+   (`kind: helper`) are its whole state, which is why a failed collect stays
+   unretried for the rest of the day. See [`mc-helper.md`](mc-helper.md).
+2. **The inbox, drained**, every round and with no day gate: the oldest files
+   in `~/mc/intake/` — the collector's digests and whatever Martin dropped
+   there — up to three of them, one headless turn each, every one moved to
+   `~/mc/runner/log/intake/<date>/` the moment its turn ends whatever the turn
+   returned. One row per file (`kind: intake`, the file in the name column).
+   The question here is *is there a file?*, not *has today's collect run?*, and
+   the two were one gate until 2026-09-05 — which is how thirteen digests came
+   to be waiting in a directory that is supposed to drain.
+3. **Read the queue**: `~/mc/queue.md`, then every `PLAN.json` on both
    `origin/main`s, and — once per repository, on the same trip to the network —
    `gh pr list --state open`. That third reading is the round's answer to what
    is in flight, and it is asked *before* anything is started rather than after
    the session. A repository whose `gh` could not answer starts nothing that
    round and says so; the other repository's lane is untouched. An idle round
    costs ten minutes of sleep, a blind one bought a 120-minute Opus session.
-3. **Tidy `queue.md`** against that reading, and write
+4. **Tidy `queue.md`** against that reading, and write
    `~/mc/runner/unreadable-plans.md` from it.
-4. **Archive** every plan that says `status: done` — the directory removed and
+5. **Archive** every plan that says `status: done` — the directory removed and
    a `project_log.md` row left behind it, one PR per repository, landed through
    `mc merge --docs`. See [`mc-tidy.md`](mc-tidy.md).
-5. **Run the steps**, one lane per repository at the same time.
-6. **Close** the workareas whose project is finished — whose archive PR merged
-   in step 4, or whose plan an earlier round already archived, which
+6. **Run the steps**, one lane per repository at the same time.
+7. **Close** the workareas whose project is finished — whose archive PR merged
+   in step 5, or whose plan an earlier round already archived, which
    `project_log.md` is what still knows.
 
-Steps 1, 4 and 6 and the tidying half of 3 are skipped under `--once`: that
-flag exists to watch one step, and a two-minute model turn over production is
-not what somebody typing it asked for. The unreadable-plans table is written
+Steps 1, 2, 5 and 7 and the tidying half of 4 are skipped under `--once`: that
+flag exists to watch one step, and a model turn over production is not what
+somebody typing it asked for. The unreadable-plans table is written
 either way — it is a write of what the round has already read, not a pass over
 anything.
 
@@ -215,9 +223,11 @@ in that window should not have to wait for the next one — and the same answer
 is what makes a lane let go of a project whose merged step left it stopped.
 
 One thing it deliberately does not answer: a **conflicted merge** left in a
-workarea is `reconcile`, and it lives where no plan on main can see it. So a
-project whose plan is stopped keeps its half-finished merge until the plan is
-`ready` again — which is the first round it could have used it in anyway.
+workarea lives where no plan on main can see it. It does not need to be
+answered here any more — a conflict is not a kind, it is something a step
+session is told about — and a project whose plan is stopped simply keeps its
+half-finished merge until the plan is `ready` again, which is the first round
+it could have used it in anyway.
 
 Those refusals leave **one line for the round**, counted by reason in the
 page's own shape:
@@ -289,10 +299,30 @@ should leave alone says so by being `blocked` in its own plan.
 
 Then a missing workarea is created rather than skipped: `mc work add <name>
 <repo> <name> --from origin/main`. Then `git merge origin/main` — **never** a
-rebase, which is what nights 1–2 of the shell runner cost to learn. The one
-conflict resolved without a session is an identical `.gitignore` hunk; anything
-else is left in progress and the project gets a `reconcile` step instead of a
-`step`, with the conflicting paths named in its prompt.
+rebase, which is what nights 1–2 of the shell runner cost to learn. Two
+conflicts are resolved without a session. One is an identical `.gitignore`
+hunk. The other is a **`PLAN.json` whose two sides wrote to different steps** —
+29 of the 166 conflicting files measured in `runner.log`, always the same
+shape: main carries the plan a later round wrote to, the branch carries the
+same plan with its own step edited. `plan-merge.js` merges it from the three
+sides git holds in the index while the merge is in progress (`:1:` the base,
+`:2:` ours, `:3:` origin/main), by the rule the plan already has about who may
+write what: each step goes to whichever side changed it, a criterion is met if
+either side met it, and `goal`, `contract`, `out_of_scope` and the criteria
+themselves are main's, because a step session may not change them. It refuses
+rather than guesses — both sides on the same step, a side that is not JSON, a
+step added or removed, or a result `validatePlan` would reject leaves the file
+conflicted, with the reason in `runner.log`. What it refuses is left in
+progress and handed to the step session: the round reads the plan from `HEAD`
+(`git show HEAD:<plan path>`, the branch's own last good copy) and
+`stepPrompt` puts a preamble above the body naming the conflicting files,
+saying the merge stopped there, and saying it is the first thing the session
+does and not the job. One session resolves the merge and delivers the step,
+and one pull request carries both. If there is no step to hand it to — a
+plan that is blocked, done or unreadable, a held pull request waiting for its
+repair, a missing role, a tool that is not installed — the merge is aborted
+and the project skipped with the conflicting files named, because a merge
+nobody is handed is a merge nobody finishes.
 
 **A project's branches are `<name>` or `<name>-<suffix>`.** That convention is
 what lets a pull request be matched back to a project at all, and rule 5 is
@@ -316,8 +346,7 @@ expensive one holds the decision.
 | state | kind |
 |---|---|
 | an open pull request | nothing, one line naming it |
-| merge left in conflict | `reconcile` |
-| plan says `status: ready` | `step` |
+| plan says `status: ready` | `step` — with the conflicting files in its prompt if a merge is in progress |
 | plan says anything else | nothing, one skip line |
 | the plan does not parse | nothing — and a row in `~/mc/runner/unreadable-plans.md` |
 | no plan in the worktree | nothing, silently |
@@ -353,8 +382,9 @@ criterion, say in the PR body how you verified it, and — if the Contract must
 change — stop with the step `blocked` and say so in the PR. It ends "Do not merge.
 Do not ask questions. Stop when the PR exists."
 
-Around that body go the Coding Profile and `canon/roles/{step,reconcile}.md`,
-joined into one instruction text and passed through the channel each tool
+Around that body go the Coding Profile and `canon/roles/step.md` (over
+`canon/roles/_common.md`, which every role inherits), joined into one
+instruction text and passed through the channel each tool
 already has: `--append-system-prompt` for claude, `-c instructions=` for
 codex. Nothing is written into the worktree to carry them.
 
@@ -500,7 +530,7 @@ its problems named, a session that timed out with its work pushed, a tool that
 printed no result.
 
 **One death.** An entry leaves when its pull request is no longer open. `landPr`
-releases what it lands, and `queue()` reconciles the file against the open list
+releases what it lands, and `queue()` checks the file against the open list
 the round has already fetched, so a pull request somebody merged or closed by
 hand leaves by itself with a line saying so. A repository `gh` could not be
 asked for is *unknown* rather than empty: nothing of its is dropped on a bad
@@ -516,9 +546,10 @@ branch, the reason, every red test by name and every failed gate's output
 pushes to the same branch — the runner lands it afterwards through the same
 `landPr` — or it sets its step `blocked` with a `blocked_by` and says what the
 answer is about. It never merges, never lowers a threshold, never deletes a
-test to pass: the gate decides and the repair obeys it. A conflicted
-`git merge origin/main` still gives `reconcile` first, and the pull request is
-still held the next round.
+test to pass: the gate decides and the repair obeys it. A repair never runs
+in a worktree with a merge in progress — a conflicted `git merge origin/main`
+is aborted, the project skipped, and the pull request still held the next
+round; the merge is not the repair's job.
 
 The repair is counted **before** the session starts, not after. A repair killed
 on its budget still had its turn, and a count written afterwards would hand the
@@ -583,8 +614,8 @@ sat idle for hours while memoro's walked thirty names, and a memoro-cli step
 that became ready in that time waited for a round boundary nobody needed. Now
 the unattended loop (`runLoop`, `rounds === 0`) runs one loop per lane, each
 calling `round({ only: repo })` and sleeping on its own clock; the chores a
-shared round did around its lanes — the helper, `tidyQueue`, the unreadable
-plans, archiving, closing workareas — run in `chores()` in a loop beside them,
+shared round did around its lanes — the collect, the drain, `tidyQueue`, the
+unreadable plans, archiving, closing workareas — run in `chores()` in a loop beside them,
 from the whole queue. `--rounds N` and `--once` keep the shared round, for a
 person watching one.
 
@@ -621,7 +652,9 @@ not parse as JSON either way.
 
 Everything lives under `~/mc/runner/`.
 
-- **`log/runs.tsv`** — one row per step, reconcile and helper run:
+- **`log/runs.tsv`** — one row per step, repair, collect and drained inbox
+  file, and the
+  history keeps the kinds the runner no longer produces:
   `ts name kind exit seconds pr turns input output cache_read cache_write
   session note land_seconds`. `seconds` is the session; `land_seconds` is the
   gated round that followed it, `-` when there was none. It is appended rather
@@ -742,8 +775,9 @@ nothing about it.
 `scripts/measure-steps.py --since <day or instant> --until <day>` is the instrument: per step session, wall-clock against model time, turns, cost, test commands, the tool-time classes, Bash against native calls, and — since 2026-09-04 — the turns that carried more than one tool call, which is the number that says whether a session batches. The baseline it produced on 2026-09-03 is in `project_log.md` (step-parallelism) and that plan's history.
 
 `mc run` has been the runner since 2026-08-28T23:28Z. Through 2026-08-30 that
-is 115 rows in runs.tsv — 92 `step`, 20 `reconcile`, 2 `helper` and one
-`triage` from before the rules changed — with **84 merged and none left
+is 115 rows in runs.tsv — 92 `step`, 20 merge-only sessions of a kind this
+era later removed, 2 `helper` and one `triage`, both from before the rules
+changed — with **84 merged and none left
 open**, one quota sleep, and not one `rebase failed, skip`. Every failure mode
 nights 1–2 recorded is gone.
 

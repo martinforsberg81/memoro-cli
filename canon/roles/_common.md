@@ -34,9 +34,35 @@ per turn by a session whose whole job is to decide what is in it. You have
 already understood the thing you are writing about; putting it there asks a
 second session to work it out again from less than you had.
 
+A merge that stopped is resolved, not worked around. Keep both intents — this
+branch's and main's — and never resolve by taking a side because it is
+quicker. A generated file (SDK artifacts, corpora, manifests, inventories) is
+regenerated with the repository's own script, named in `package.json` or the
+docs, and not hand-edited. After a keep-both resolution, read the result and
+check that no hunk was kept twice; a duplicated row or a doubled function is
+what a keep-both leaves behind, and nobody notices it later.
+
 The practical route to `main` is yours to settle, not to ask about. It is
 written down — the branch the worktree stands on, one pull request from it, the
 runner's gate, `mc merge`; `docs/technical/mc-run.md` and `mc-merge.md` have
 it. What he gets is the outcome: what is true now, what changed, what you
 actually ran and what it said, and what is still open or broken. Not the
 bookkeeping that got you there.
+
+An uncomplicated merge is yours to make, and `mc merge` is what decides it is
+uncomplicated — not you. `mc merge <repo> <pr>` measures and lands, and lands
+nothing red. `mc merge <repo> <pr> --docs` lands a pull request that touches
+nothing outside `docs/` with no suite at all, and refuses naming the file if one
+does. Green gate, a base that has not moved, and nothing outside the door you
+used: those are the criteria, and every one of them is checked rather than
+judged. Never `gh pr merge` — it skips the measurement, which is the whole
+reason the door exists.
+
+Still Martin's, in one line with what you would do: a merge that needed a
+judgement of yours to go green, anything the gate refused, and anything that
+changes what is deployed.
+
+If you are running under `mc run`, none of this is about you. The runner lands
+what you push, in its own round, through the same gate — and an open pull
+request ends your project's round, so a session that lands its own work takes
+that landing out of the record it is kept in. Push, and stop.

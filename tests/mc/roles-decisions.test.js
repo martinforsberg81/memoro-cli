@@ -120,11 +120,11 @@ describe('the decision shape every role writes', () => {
  *
  * These are not one role's rules, so they are not in a role file. They are in
  * `canon/roles/_common.md`, and this asserts they arrive — through the
- * assembler for the seven roles with a body, and through `planLaunch` for the
+ * assembler for the six roles with a body, and through `planLaunch` for the
  * one without.
  */
 describe('the rules every session gets, whichever role it is', () => {
-  const CANON_ROLES = ['brief', 'helper', 'intake', 'plan', 'reconcile', 'repair', 'step', 'worker'];
+  const CANON_ROLES = ['brief', 'helper', 'intake', 'plan', 'repair', 'step', 'worker'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
   const ROUTE = phrase('The practical route to `main` is yours to settle');
 

@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  MC_OWN_TREES, assembleQueue, chooseKind, headlessArgs, heldRepair, helperDue, helperNote,
-  inFlight, landingNote, mcOwnFiles, nextBranch, queueFileNames, queueFileText, quotaSeen,
+  MC_OWN_TREES, assembleQueue, chooseKind, collectNote, headlessArgs, heldRepair, helperDue,
+  inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, queueFileNames,
+  queueFileText, quotaSeen,
   readSessionOutput, repairPrompt, sessionSettings, stackOrder, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
@@ -111,10 +112,9 @@ test('inFlight: a draft counts as open, and the rest are counted', () => {
   );
 });
 
-test('chooseKind: an open pull request comes before the plan and before a conflict', () => {
+test('chooseKind: an open pull request comes before the plan', () => {
   const open = [{ number: 11246, title: 'Step 4' }];
   assert.equal(chooseKind({ plan: record(), openPrs: open }).reason, 'in-flight');
-  assert.equal(chooseKind({ plan: record(), conflicts: ['x.md'], openPrs: open }).reason, 'in-flight');
   assert.equal(chooseKind({ plan: record(), openPrs: [] }).kind, 'step');
 });
 
@@ -126,8 +126,15 @@ test('nextBranch: the smallest number no branch is using', () => {
   assert.equal(nextBranch('action-window'), 'action-window-2');
 });
 
-test('chooseKind: reconcile beats everything; a ready first step is the only thing that runs', () => {
-  assert.equal(chooseKind({ plan: null, conflicts: ['x.md'] }).kind, 'reconcile');
+/**
+ * A conflicted merge used to be the first answer here, before the plan was
+ * looked at: `{ kind: 'reconcile' }`. It is not an answer at all any more —
+ * the plan decides what the round does, and a conflict is something the step
+ * session is told about (`stepPrompt`'s preamble, and the round in run.js).
+ */
+test('chooseKind: a ready first step is the only thing that runs, conflict or not', () => {
+  assert.deepEqual(chooseKind({ plan: null, conflicts: ['x.md'] }), { kind: null, skip: null });
+  assert.equal(chooseKind({ plan: record(), conflicts: ['x.md'] }).kind, 'step');
   const ready = chooseKind({ plan: record() });
   assert.equal(ready.kind, 'step');
   assert.equal(ready.index, 0);
@@ -218,12 +225,32 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
   // `{ kind, name }` at 10:18, and `msr-track-3` rewrote a criterion's own text
   // at 12:27. Both are checked on the way back in, so both are said here.
   assert.match(p, /its\n`comments` — an array of paragraph strings/u);
+  assert.doesNotMatch(p, /merge origin\/main` is in progress/u, 'no conflict, no preamble');
   assert.match(p, /"kind": "decision" \| "project", "name"/u);
   assert.match(p, /only `met` is yours/u);
   assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);
   // The runner only ever starts a plan whose first unfinished step is ready, so
   // a step is never handed an answered decision to apply (Martin, 2026-08-29).
   assert.doesNotMatch(p, /Decisions answered by Martin/u);
+});
+
+/**
+ * What `reconcile` used to be told, told to the session that is going to read
+ * that code anyway. The body below the preamble is untouched — the step, its
+ * `done_when` and the plan boundary are all still exactly true.
+ */
+test('stepPrompt: a conflicted worktree is a preamble, and the step is still the job', () => {
+  const step = { title: 'The hero object', status: 'ready', done_when: 'it draws', instruction: ['Do it.'], pr: null, blocked_by: null };
+  const p = stepPrompt({
+    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', planText: '{"schema":"mc-plan"}',
+    step, index: 1, conflicts: ['src/a.js', 'docs/project/p/x/PLAN.json'],
+    now: new Date('2026-09-04T00:00:00Z'),
+  });
+  assert.match(p, /^A `git merge origin\/main` is in progress in this worktree and stopped on\nconflicts in: src\/a\.js docs\/project\/p\/x\/PLAN\.json\n/u);
+  assert.match(p, /It is the first thing you\ndo and not the job/u);
+  assert.match(p, /Your step is `steps\[1\]` — 2, "The hero object"/u, 'the body is the same body');
+  assert.match(p, /Done when: it draws/u);
+  assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);
 });
 
 test('headlessArgs: claude is -p with json output; codex is exec --json', () => {
@@ -361,12 +388,48 @@ test('helperDue: a failed run still closes the day, and only a helper row counts
   assert.equal(helperDue({ tsv: steps, now: new Date('2026-08-29T12:00:00Z') }).due, true);
 });
 
-test('helperNote keeps the success, shape every other row uses', () => {
-  assert.equal(helperNote(null), 'collect-failed');
-  assert.equal(helperNote({ ok: true, wrote: [] }), 'success,0-proposals');
-  assert.equal(helperNote({ ok: true, wrote: [1, 2, 3] }), 'success,3-proposals');
-  assert.equal(helperNote({ ok: false, reason: 'no-role' }), 'no-role');
-  assert.equal(helperNote({ ok: false, note: 'timeout' }), 'timeout');
+/**
+ * Both notes put the outcome first, because `summariseRuns` reads a note that
+ * does not start with `success` as a failure — and every helper row written
+ * before 2026-09-05 read `memoro,success,0-proposals`, which it counted as one.
+ */
+test('collectNote and intakeNote keep the success, shape every other row uses', () => {
+  const digest = (delta) => ({ data: { delta } });
+  assert.equal(collectNote({ repo: 'memoro', digest: null }), 'collect-failed,memoro');
+  assert.equal(collectNote({ repo: 'memoro', digest: digest({ first: true }) }), 'success,memoro,first-digest');
+  assert.equal(collectNote({ repo: 'memoro-cli', digest: digest({ first: false, fingerprints: [1, 2] }) }), 'success,memoro-cli,2-new');
+
+  assert.equal(intakeNote(null), 'turn-missing');
+  assert.equal(intakeNote({ ok: true, wrote: [] }), 'success,0-proposals');
+  assert.equal(intakeNote({ ok: true, wrote: [1, 2, 3] }), 'success,3-proposals');
+  assert.equal(intakeNote({ ok: false, reason: 'no-role' }), 'no-role');
+  assert.equal(intakeNote({ ok: false, note: 'timeout' }), 'timeout');
+});
+
+/**
+ * The order the inbox drains in. By the date the name carries and not by the
+ * name itself: the collector's two generations of filename sort wrongly against
+ * each other as strings, which would put every memoro digest ahead of every
+ * memoro-cli one whatever day either was written.
+ */
+test('intakeQueue is oldest first by the date in the name, with dateless names last', () => {
+  assert.deepEqual(intakeQueue([
+    'errors-memoro-cli-2026-08-31.md',
+    'screenshot.png',
+    'errors-memoro-2026-09-04.md',
+    '.DS_Store',
+    'errors-2026-08-29.md',
+    'note.md',
+  ]), [
+    'errors-2026-08-29.md',
+    'errors-memoro-cli-2026-08-31.md',
+    'errors-memoro-2026-09-04.md',
+    // No date in the name, so under its own name, after everything dated.
+    'note.md',
+    'screenshot.png',
+  ]);
+  assert.deepEqual(intakeQueue([]), []);
+  assert.deepEqual(intakeQueue(['.hidden']), [], 'a dotfile is not an inbox item');
 });
 
 /* --------------------------------------------------------------- landing */
