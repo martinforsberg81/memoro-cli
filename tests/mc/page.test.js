@@ -341,6 +341,52 @@ describe('QUEUE', () => {
     ]);
   });
 
+  /**
+   * The plans said `ready` for both of memoro-cli's unfinished projects on
+   * 2026-09-05 while `held.json` held both of their pull requests, and this
+   * block reported two runnable. What the machine refuses is counted here
+   * now, in the same words the round refuses in (`RUN_REFUSALS`).
+   */
+  it('counts what this machine refuses, not only what the plans do', () => {
+    const machine = (name) => (name === 'mc-ui'
+      ? { runnable: false, reason: 'dirty', detail: 'uncommitted work in /w/mc-ui/memoro-cli: a.js', since: '2026-09-05T10:00:00Z', kind: null }
+      : { runnable: true, reason: null, detail: null, since: null, kind: 'step' });
+    const queue = queueSection({ queue: ['mc-ui', 'docx-editor', 'avatar-self-serve'], plans: PLANS, machine });
+    assert.equal(queue.depth, 3);
+    assert.equal(queue.runnable, 1);
+    assert.deepEqual(queue.next.map((item) => item.name), ['docx-editor']);
+    assert.deepEqual(queue.skipped.reasons, { dirty: 1, blocked: 1 });
+    assert.equal(queue.items.find((item) => item.name === 'mc-ui').machine.since, '2026-09-05T10:00:00Z');
+  });
+
+  // A plan the runner already refuses is never asked about this machine: that
+  // is `machineState`'s own economy, and the page keeps it.
+  it('asks nothing of the machine for a name the plan has already refused', () => {
+    const asked = [];
+    const queue = queueSection({
+      queue: ['mc-ui', 'avatar-self-serve', 'brand-new'],
+      plans: PLANS,
+      machine: (name) => { asked.push(name); return { runnable: true, kind: 'step' }; },
+    });
+    assert.deepEqual(asked, ['mc-ui']);
+    assert.equal(queue.runnable, 1);
+  });
+
+  /**
+   * A hold still owed its repair is not a skip — the runner would start it —
+   * and what it would start is a repair. The kind beside the name is what the
+   * runner would do, so the page does not say `step` where none is coming.
+   */
+  it('names the kind the runner would actually start', () => {
+    const queue = queueSection({
+      queue: ['mc-ui'],
+      plans: PLANS,
+      machine: () => ({ runnable: true, reason: null, detail: '#440 is held before merge — one repair session is owed', since: null, kind: 'repair' }),
+    });
+    assert.deepEqual(queue.next.map((item) => [item.name, item.kind]), [['mc-ui', 'repair']]);
+    assert.equal(queue.runnable, 1);
+  });
+
   it('has nothing held when the file is missing or not a list', () => {
     assert.deepEqual(queueSection({ queue: [], plans: [] }).held, { count: 0, items: [] });
     assert.equal(queueSection({ queue: [], plans: [], held: null }).held.count, 0);
@@ -784,12 +830,18 @@ describe('collectPage', () => {
   it('builds every section from the files, offline, without git, gh or tmux', async () => {
     const root = workRootFixture();
     const asked = [];
+    const gitArgs = [];
     const data = await collectPage({
       env: { MC_WORK_ROOT: root },
       now: NOW,
       repos: [],
       exec: async (cmd) => { asked.push(cmd); return { ok: false, stdout: '' }; },
       run: (cmd) => { asked.push(cmd); return { status: 1, stdout: '' }; },
+      // The queue reading asks each queued workarea whether it is dirty, which
+      // is the one thing on the page that has to ask git anything. Null is how
+      // this git says it could not answer, and the reading then reads the
+      // worktree as clean — the same thing the round does.
+      git: (cwd, args) => { gitArgs.push(args.join(' ')); return null; },
       cache: {
         loadPlans: () => ({ plans: PLANS, sources: [{ repo: 'memoro-cli', sha: 'aaa', cached: true }] }),
         loadPrs: () => ({ prs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }], fetched: '2026-08-29T10:00:00Z', age_seconds: 7200 }),
@@ -806,7 +858,15 @@ describe('collectPage', () => {
     assert.equal(data.runner.production.live.short, 'b3e65b6');
     assert.equal(data.runner.production.differs, true);
     assert.equal(data.queue.depth, 2, 'the comment line is not a project');
-    assert.equal(data.queue.runnable, 2);
+    // Both plans say `ready`, and #440 is open on mc-ui's branch — so the
+    // runner would start one of the two, and the block says one. It said two
+    // until the machine was read here, which is the defect this project is
+    // about: a partial answer is read as the whole one.
+    assert.equal(data.queue.runnable, 1);
+    assert.deepEqual(data.queue.skipped.reasons, { 'in-flight': 1 });
+    assert.deepEqual(data.queue.next.map((item) => item.name), ['docx-editor']);
+    assert.deepEqual([...new Set(gitArgs)], ['status --porcelain'],
+      'the reading asks the worktree one read-only question and nothing else');
     // The runner's own file, read where the runner writes it: nobody has to
     // open runner.log to see which pull request is standing still.
     assert.deepEqual(data.queue.held.items.map((item) => [item.project, item.pr, item.reason]),

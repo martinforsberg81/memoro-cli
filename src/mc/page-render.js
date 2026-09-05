@@ -48,6 +48,9 @@ const STATUS_TONE = {
 /** What is being done, one colour each, wherever a kind is printed. */
 const KIND_TONE = {
   step: ['green'],
+  // A repair is the runner's next move on a held pull request, not new work —
+  // yellow, the same as the held rows further down the section.
+  repair: ['yellow'],
   triage: ['blue'],
   brief: ['cyan'],
   plan: ['cyan'],
@@ -387,10 +390,10 @@ export const HELD_DRAWN = 6;
  *
  * Yellow, like `blocker finished` under it: nothing in the runner is going to
  * move this on its own — it waits on a repair session or on a person. Drawn
- * under the skips because that is what it is, the skip nothing counted: a held
- * pull request keeps its project out of the queue entirely (`inFlight`), so
- * the project is not among the names above and not among the reasons beside
- * them.
+ * under the skips because that is what it is: the skips now count a held
+ * project too (`held-after-repair`, `in-flight` — queueSection reads the
+ * machine as well as the plans), and these rows say which pull request and
+ * why, which a count of two never could.
  *
  * The reason is clipped rather than the row: the project and the number are
  * what a person acts on, and `mc --json` carries every entry whole.
