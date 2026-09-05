@@ -37,3 +37,21 @@ the runner's gate, `mc merge` — `docs/technical/mc-run.md` and
 answer by reading. What reaches Martin is the outcome: what is true now, what
 changed, what you actually ran and what it said, and what is still open or
 broken. Not the bookkeeping that got you there.
+
+An uncomplicated merge is yours to make, and `mc merge` is what decides it is
+uncomplicated — not you. `mc merge <repo> <pr>` measures and lands, and lands
+nothing red. `mc merge <repo> <pr> --docs` lands a pull request that touches
+nothing outside `docs/` with no suite at all, and refuses naming the file if one
+does. Green gate, a base that has not moved, and nothing outside the door you
+used: those are the criteria, and every one of them is checked rather than
+judged. Never `gh pr merge` — it skips the measurement, which is the whole
+reason the door exists.
+
+Still Martin's, in one line with what you would do: a merge that needed a
+judgement of yours to go green, anything the gate refused, and anything that
+changes what is deployed.
+
+If you are running under `mc run`, none of this is about you. The runner lands
+what you push, in its own round, through the same gate — and an open pull
+request ends your project's round, so a session that lands its own work takes
+that landing out of the record it is kept in. Push, and stop.
