@@ -1,0 +1,95 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`mc dev` either exists because something needs it, or does not exist and nothing calls it. Whichever it is, it is decided deliberately and the dead path stops being carried.",
+    "Since 2026-09-03 19:44 it has been neither. `07b626d` (\"Delete the v1 command surface (mc-cut step 4)\") removed the verb; memoro still shells out to it before every dev-service register and unregister, gets exit 2, logs a warning and carries on. Verified 2026-09-05: `mc dev list --json` → `mc: unknown command \"dev\"`, exit 2."
+  ],
+  "contract": [
+    "The cut is not presumed wrong. `mc-cut` removed thirteen verbs on a measurement that was correct inside `memoro-cli` — `reach.mjs` is a same-repo static import graph and nothing left in this repository calls `dev`. What it could not see is a sibling repository's shell-out. The question is what should exist now, not whether the cut was a mistake.",
+    "Whatever is decided, no caller is left probing a verb that does not exist. A path that fails softly and logs a warning nobody tails is the state this project ends, in both directions.",
+    "If `mc dev` comes back it is `list`, `register` and `unregister` and nothing else — the three `scripts/lib/mc-dev-service.mjs` actually calls. Not a revival of the thirteen-verb session manager.",
+    "The protocol's shape is memoro's to keep or drop: `invokeMcDev` probes with `mc dev list --json` and then calls `mc dev <verb> <manifestPath> --json`. Any restoration matches that contract rather than inventing a new one."
+  ],
+  "out_of_scope": [
+    "The other twelve verbs `mc-cut` removed — `setup`, `install-shell`, `auth`, `tool-auth`, `connections`, `github`, `coding-profile`, `deps`, `cloud-session`, `cloud-runtime`, `security`, `migrate`. Nothing is known to call any of them and this project does not go looking.",
+    "Building a same-repo replacement for the cross-worktree inventory if the ruling is to remove. That is memoro's design question and memoro's plan; this project names it and hands it over.",
+    "`reach.mjs` and whether it should learn about cross-repo shell-outs. It is a real gap and a much larger one; if the step session thinks it is worth doing, that is a proposal.",
+    "The dev server itself, port allocation, and the per-worktree lock. They are untouched by any option here — see step 1's measurement."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "Nothing on this machine calls a verb `mc` does not have.",
+      "check": "Run `npm run dev` in a memoro worktree and read the wrapper's log: no `mc dev inventory unavailable` line, and no `mc dev` invocation that exits non-zero. Check `~/.memoro/mc/logs/mc.log` for `mc failed: dev exited` over the following day — zero."
+    },
+    {
+      "met": false,
+      "criterion": "What the cross-worktree inventory was for is written down, and either works or is recorded as gone on purpose.",
+      "check": "The close-out names it in a document a reader can find, with which of the two it is. Not left as an implication of a diff."
+    },
+    {
+      "met": false,
+      "criterion": "The test that pinned the old contract says what is now true.",
+      "check": "`tests/scripts/mc-dev-service.test.js` in memoro passes and its assertions describe the shipped behaviour, not the removed one. Run memoro's suite, not this repository's."
+    }
+  ],
+  "documents": [
+    {
+      "label": "The commit that removed the verb, and its reasoning",
+      "path": "../../../../src/bin-mc.js"
+    },
+    {
+      "label": "What `mc-cut` was and what it measured",
+      "path": "../../../technical/mc-cut.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "Measure what was actually lost, then put the choice",
+      "status": "ready",
+      "done_when": "The PR says what the dev-service registration did that nothing else does, names which repository does the remaining work under each option, and carries one recommendation for Martin.",
+      "instruction": [
+        "Start by narrowing the claim, because the proposal that raised this overstated it and the overstatement points the decision the wrong way. It says every workarea's *\"mechanism that detects a colliding second instance\"* has been a no-op since the cut. Read `scripts/dev.mjs` in memoro before accepting that: the same-worktree collision check is a **local lock file** — `LOCK_FILE` at `dev.mjs:51` is `<REPO_ROOT>/.wrangler/dev-server/run/dev.lock.json`, claimed with `fsp.open(…, \"wx\")` at `:361`, with a stale-pid sweep and a `verifySameWorktreeWrapper` check at `:373`–`:406`. It never touches mc and it still works. What went with the verb is the **cross-worktree inventory**: mc's own record of which dev servers are running in which workareas.",
+        "So the real question is what that inventory was for, and the honest answer may be \"nothing that is still true\". Find out rather than assume: `git log -S\"mc dev\"` in memoro and `git log` around the `minor-fixes` project (closed 2026-08-29, which built the probe-then-register path deliberately) will say what problem it was answering. If it was answering \"two workareas both bound port 8787\", check whether `PORT_FALLBACK_BASE`/`PORT_FALLBACK_SPAN` (`dev.mjs:41`) already handle that without any inventory at all.",
+        "Measure the cost of the dead path as it stands. It is not free: `invokeMcDev` (`scripts/lib/mc-dev-service.mjs:115`) spawns `mc dev list --json` before every register and unregister, with `MC_PROBE_TIMEOUT_MS`, and every one of those is a process spawn that exits 2. The digest that raised this counted 22 in one day across five memoro workareas.",
+        "Then put the two options with what each costs. **Restore** — `list`, `register`, `unregister` next to `mc work` and `mc repo`, matching `invokeMcDev`'s existing contract exactly (`mc dev list --json` as the probe, `mc dev <verb> <manifestPath> --json` as the call). Small and self-contained, and it means mc carries an inventory again, which is a thing to maintain. **Remove** — pull the calls out of `scripts/dev.mjs` and `scripts/lib/mc-dev-service.mjs`, and rewrite `tests/scripts/mc-dev-service.test.js:176`, which currently pins the removed contract in its own name: *\"capability must be decided by running mc dev list, not by grepping --help text\"*. Cheaper, and it makes the loss of the inventory explicit instead of silent.",
+        "Say plainly which repository does the work under each, because it decides where the next plan lives and this repository's runner cannot do memoro's half. A project's plan determines its repository — `repoOf` resolves the plan's location to one repository and the workarea is `~/mc/<name>/<repo>` — so a step here can only change `memoro-cli`. Under *restore*, step 2 of this plan is the whole of it and memoro changes nothing. Under *remove*, the work is entirely memoro's and needs a plan under memoro's `docs/project/`, which is Martin's planning session to open, not this step's to create.",
+        "One recommendation, in the PR body. On the evidence so far — the same-worktree guard is intact and local, and nothing in `memoro-cli` has wanted the inventory since the cut — *remove* is the shorter road and the one the cut already chose; say so if the measurement agrees, and say so if it does not.",
+        "Carry Martin's answer into `docs/project/mc/rulings.md` in the shape that file uses. Nothing else in mc records a decision."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Build what was decided, in this repository's half",
+      "status": "ready",
+      "done_when": "Either `mc dev list|register|unregister` exists and answers `invokeMcDev`'s contract, or this repository is confirmed to need no change and the step says so with what it checked.",
+      "instruction": [
+        "If the ruling was *remove*, this step is short and must not be padded: confirm that `memoro-cli` needs no change, say what you checked to be sure of it — `git grep -n \"'dev'\" src/`, the help text, `docs/technical/mc-cut.md` — and hand over to memoro's plan by name in the PR. A step that finds nothing to do and says so precisely is finished; a step that invents work to justify itself is worse than no step.",
+        "If the ruling was *restore*, build exactly three verbs against the contract `invokeMcDev` already speaks, because memoro's caller is not being changed to suit mc: `mc dev list --json` must exit 0 and print JSON (it is a capability probe as much as a listing — that is what `minor-fixes` built it for, replacing a grep of rewritten help text); `mc dev register <manifestPath> --json` and `mc dev unregister <manifestPath> --json` take a path to the manifest `writeMcDevManifest` wrote and answer in JSON.",
+        "Read the manifest's shape from the writer rather than from the old implementation: `publishMcDevService` in `scripts/dev.mjs:440` builds it — `sessionName`, `codingSessionId`, `worktreePath`, `pid`, `processGroupId`, `url`, `port`, `logPath`, `startedAt`, `nodePath`, `scriptPath`, `restartArgs` — and `assertMcDevManifestPath` (`dev.mjs:120`) already constrains where it may live. The old thirteen-verb surface is in `07b626d^` if you want to see what it did, but it is history, not a specification.",
+        "Where the inventory lives, if it comes back: `~/.memoro/mc/` beside the leases and `lanes.json`, written with `writeJsonAtomic` and mode `0o600` like everything else there. A registration whose pid is gone is stale, and the liveness test is `pidAlive` (`src/mc/status-collect.js`) — one test, already the only one mc uses, because a tmux session name and a `pgrep` pattern both lied on 2026-08-29.",
+        "Verify by running it, not by asserting about it: start `npm run dev` in a memoro worktree and read the wrapper's log for the `mc dev: registered <instance_id> for <session_name>` line at `dev.mjs:459`, then stop it and confirm the unregister. Put both lines in the PR.",
+        "`npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close out",
+      "status": "ready",
+      "done_when": "`docs/technical/mc-cut.md` records what the cut cost and how it was found, the cross-worktree inventory's fate is written down, and `docs/project/project_log.md` has the row.",
+      "instruction": [
+        "The lasting finding is not about `dev`. It is that `reach.mjs` decided thirteen verbs were unreachable from a same-repo static import graph, and a sibling repository's `execFile('mc', ['dev', …])` is invisible to that by construction. Write that into `docs/technical/mc-cut.md` beside the account of what the cut did, so the next person who runs a reachability sweep over `memoro-cli` knows what it cannot see. Do not build the fix — that is named in `out_of_scope` — but do not leave the lesson only in a closed project's history either.",
+        "Say what happened to the cross-worktree inventory, in one sentence a reader can act on: it exists again, or it is gone and the same-worktree lock is what remains. \"Gone on purpose\" is a fine answer and an unrecorded one is not.",
+        "Add the row to `docs/project/project_log.md`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
