@@ -35,7 +35,15 @@ const STOPPED = new Set(['blocked']);
 
 const TOOL_RE = /^[a-z][a-z0-9_-]{0,63}$/u;
 const MODEL_RE = /^[a-z][a-z0-9._-]{0,63}$/u;
-const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/u;
+/**
+ * What a blocker's name looks like when it is a name: a project or a decision
+ * somebody can look up. Nothing refuses a blocker for failing it — `sql-goal1-
+ * certification` step 4 carries a 79-character sentence, and a schema that
+ * started refusing those would park every plan holding one the moment it
+ * landed. The brief reports them instead (`blockedSteps`, brief-collect.js),
+ * which is why this is exported rather than private to the validation.
+ */
+export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
 const PLAN_KEYS = Object.freeze([
   'schema',

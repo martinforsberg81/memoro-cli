@@ -21,12 +21,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "The brief document has a *Blocked* section that tells the three kinds apart and does not make a reader open a plan to see what a step waits on.",
       "check": "Run `mc brief --collect` against the real estate and read the section: every blocked step appears with its programme, project, step number, blocker kind and the blocker's full name, grouped so that project blockers, `plan-review` blockers and named decisions are three separate lists with a count each. Asserted in `tests/mc/brief-collect.test.js` against a fixture holding one of each."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A blocker naming a project that is not on main, and a blocker whose name is not a name, are each reported as themselves rather than folded into the others.",
       "check": "The fixture carries a blocker naming a project that has landed and one carrying a sentence; the rendered section names both cases in their own words. Measured against the real estate at the same time and the count written into the pull request — it was 0 and 1 respectively on 2026-09-05."
     },
@@ -62,7 +62,7 @@
   "steps": [
     {
       "title": "The brief gathers blocked steps, and tells the three kinds apart",
-      "status": "ready",
+      "status": "done",
       "done_when": "`renderBrief` writes a *Blocked* section, `mc brief --collect` shows it against the real estate, and the counts in the pull request body match a hand count of `~/mc/runner/plans.json`.",
       "instruction": [
         "Start by reading what is already there rather than adding beside it. `listPlans` (`brief-collect.js:224`) already parses every `PLAN.json` on `origin/main` for both repositories and `planFields` (`:169`) already reduces each to the fields the *Plan status* table shows. The blocked steps are in that same parsed plan and are being thrown away — nothing new needs fetching, and this section costs no extra git call.",
@@ -71,8 +71,13 @@
         "Where the section goes matters for how the brief reads top to bottom. *Held before merge* and *Ready, and the runner cannot start it* are the two sections that already mean \"a project is standing still and it is yours\"; blocked steps are the third and largest of that family, and belong beside them rather than after *Queue*.",
         "The counts in the pull request body should be measured, not copied from this plan: it was 48/28/20 with 12 `plan-review` on 2026-09-05 and the estate moves daily."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "Measured against `~/mc/runner/plans.json` (memoro `38e5b57`, memoro-cli `d443915`, read 2026-09-05T20:33Z) and confirmed by a real `mc brief --collect` the same evening: **45 blocked steps**, not the plan's 48 — 28 project, 12 `plan-review` across six programmes (not eight), 5 named decisions. The five are `i18n-legacy-pages`, `i18n-text-leaf-fallback`, `msr-core-email-verified`, `lanes-pair` and the sql promotion ruling; `mc-dev-1`, `plan-read-from-main-1` and the two mail/phone decisions the plan's out_of_scope names are no longer blocking anything on main. The two special cases stand at 0 stale and 1 not-a-name, as the plan predicted — and the sql promotion ruling's blocker name is 99 characters, not 79.",
+        "The section is `blockedSteps` (brief-collect.js) plus `blockedLines`, and it costs no git call: it reads the same parsed plans `listPlans` already fetched for *Plan status*, and reuses `staleBlockers` for the not-on-main case rather than recomputing it. Grouping is by what the reader does, not by `blocked_by.kind`: `plan-review` is a `decision` by kind and a hand-off by meaning, so `row.group` is one of `project` / `plan-review` / `decision` while `row.kind` stays the schema's word. Step 2 has the fields it needs to build a route on — repo, programme, project, step number, title, kind, full blocker name, `stale`, `unnamed`.",
+        "`NAME_RE` in `plan-schema.js` was defined and used by nothing; it is now exported and read by `blockedSteps`, which is the only reader. No validation was added — that is out of scope and stays so.",
+        "The verification run of `mc brief --collect` wrote `~/mc/brief/2026-09-05T20-43-27Z.md` and I deleted it again afterwards, so the estate's \"since last brief\" window still stands at 2026-09-04T16:10Z and the next real brief does not lose a day of merged pull requests."
+      ],
+      "pr": 644,
       "blocked_by": null
     },
     {

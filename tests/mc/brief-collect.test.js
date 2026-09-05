@@ -12,8 +12,9 @@ import { describe, it } from 'node:test';
 
 import {
   UNDOCUMENTED_KEYS, UNPLANNED_KEYS,
+  blockedSteps,
   collectBrief, heldForBrief, intakeRows, lastBriefTime, listPlans, parseCatFileBatch, parsePlanFrontmatter,
-  listProposals, planFields,
+  listProposals, planFields, renderBrief,
   queueNames, runsFor, runsSince, showBatch, summariseRuns, waitingOnHands,
 } from '../../src/mc/brief-collect.js';
 import { UNDOCUMENTED_HEADER, undocumentedRow } from '../../src/mc/archive-plan.js';
@@ -303,8 +304,98 @@ describe('ready, and the runner cannot start it', () => {
   });
 });
 
+/**
+ * *Blocked* — the third and largest member of the family *Held before merge*
+ * and *Ready, and the runner cannot start it* belong to: a project standing
+ * still, and Martin's. Nothing gathered these until now; the only trace of one
+ * was inside *Plan status*, where the blocker arrives clipped to 110 characters
+ * inside a `next` cell.
+ */
+describe('blocked steps', () => {
+  const step = (title, name, kind = 'decision') => ({
+    title, status: 'blocked', done_when: 'it is done', instruction: ['Do it.'], pr: null,
+    blocked_by: { kind, name },
+  });
+  const record = (project, { programme = 'sql', repo = 'memoro', steps = [], status = 'blocked' } = {}) => ({
+    repo, programme, project, status, legacy: false, plan: { steps },
+  });
+  const SENTENCE = "promotion of sql_migration_ready on the certified commit — Martin's explicit ruling, never inferred";
+  // One of each: sequencing that is live, sequencing whose project has left
+  // main, the `plan-review` park, a decision with a name, and a decision whose
+  // name is a sentence.
+  const PLANS = [
+    record('sql-goal1-certification', {
+      steps: [
+        { title: 'Measured', status: 'done', done_when: 'measured', instruction: [], pr: 11, blocked_by: null },
+        step('Wait for the family', 'sql-w3-email-closure', 'project'),
+        step('Wait for a project that landed', 'inbox-finish', 'project'),
+        step('Promote it', SENTENCE),
+      ],
+    }),
+    record('sql-w3-email-closure', { status: 'ready', steps: [{ title: 'Close it', status: 'ready', done_when: 'closed', instruction: ['Do it.'], pr: null, blocked_by: null }] }),
+    record('avatar-image-animation', { programme: 'assistant-avatar', steps: [step('Publish a release', 'plan-review')] }),
+    record('lanes', { programme: 'mc', repo: 'memoro-cli', steps: [step('Pair the lanes', 'lanes-pair')] }),
+  ];
+
+  it('tells the three kinds apart, and marks the two cases nothing else sees', () => {
+    const rows = blockedSteps(PLANS);
+    assert.deepEqual(rows.map((b) => [b.project, b.step, b.group]), [
+      ['sql-goal1-certification', 2, 'project'],
+      ['sql-goal1-certification', 3, 'project'],
+      ['sql-goal1-certification', 4, 'decision'],
+      ['avatar-image-animation', 1, 'plan-review'],
+      ['lanes', 1, 'decision'],
+    ]);
+    // `plan-review` is a `decision` by kind and a hand-off by meaning, so the
+    // group is not the kind: it is what the reader does with it.
+    assert.equal(rows[3].kind, 'decision');
+    // Reused from `staleBlockers`, not recomputed: the page and the brief
+    // cannot disagree about which blocking project is gone.
+    assert.deepEqual(rows.filter((b) => b.stale).map((b) => [b.blocker, b.stale]), [['inbox-finish', 'is not on main']]);
+    assert.deepEqual(rows.filter((b) => b.unnamed).map((b) => b.step), [4]);
+    assert.equal(blockedSteps([]).length, 0);
+  });
+
+  it('renders the three lists with a count each, and both cases in their own words', () => {
+    const text = renderBrief({
+      now: new Date('2026-09-05T20:00:00Z'),
+      since: new Date('2026-09-04T20:00:00Z'),
+      firstBrief: true,
+      merged: [], opened: [], plans: [], queue: [],
+      runs: { rows: [], summary: summariseRuns([]) },
+      blocked: blockedSteps(PLANS),
+    });
+    const section = text.split('## Blocked')[1].split('## Queue')[0];
+    assert.match(section, /5 steps on `origin\/main` are `blocked`: \*\*2 named decisions\*\* to work, 1 waiting on a programme's planning session, 2 sequencing\./u);
+    assert.match(section, /### Named decisions — 2/u);
+    // The whole name, uncut: it is what a session looks the answer up by, and
+    // the one that does not fit a cell is the one worth seeing whole.
+    assert.ok(section.includes(`| memoro | sql / sql-goal1-certification | 4 | ${SENTENCE} | Promote it |`));
+    assert.ok(section.includes('| memoro-cli | mc / lanes | 1 | lanes-pair | Pair the lanes |'));
+    // The hand-off names the programme, because `mc plan <programme>` is the act.
+    assert.match(section, /### Waiting on a programme's planning session — 1/u);
+    assert.match(section, /- \*\*assistant-avatar\*\* — 1 step: avatar-image-animation step 1 · `mc plan assistant-avatar`/u);
+    assert.match(section, /### Sequencing — 2 project blockers/u);
+    // Neither case is folded into the lists above it.
+    assert.match(section, /### Waiting on a project that is not on `origin\/main` — 1\n\n- memoro · sql \/ sql-goal1-certification step 3 waits on `inbox-finish`, which is not on main/u);
+    assert.match(section, /### A blocker name that is not a name — 1\n\n- memoro · sql \/ sql-goal1-certification step 4 waits on decision “promotion of sql_migration_ready/u);
+    assert.match(section, /— 99 characters, not a name/u);
+  });
+
+  it('says so plainly when nothing is blocked', () => {
+    const text = renderBrief({
+      now: new Date('2026-09-05T20:00:00Z'),
+      since: new Date('2026-09-04T20:00:00Z'),
+      firstBrief: true,
+      merged: [], opened: [], plans: [], queue: [],
+      runs: { rows: [], summary: summariseRuns([]) },
+    });
+    assert.ok(text.includes('## Blocked\n\n_none — no step on `origin/main` is blocked_'));
+  });
+});
+
 describe('collectBrief', () => {
-  it('writes the twelve sections, offline, with a 24 h window on the first run', async () => {
+  it('writes the thirteen sections, offline, with a 24 h window on the first run', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
     const now = new Date('2026-08-25T20:00:00Z');
@@ -315,7 +406,7 @@ describe('collectBrief', () => {
     const order = ['## Merged since last brief', '## Opened, not merged', '## Proposals',
       '## Plan status', '## Archived without a note', '## Workareas with no project on main',
       '## Plans that do not parse', '## Runner', '## Production', '## Held before merge',
-      '## Ready, and the runner cannot start it', '## Queue'];
+      '## Ready, and the runner cannot start it', '## Blocked', '## Queue'];
     let at = -1;
     for (const heading of order) {
       const next = text.indexOf(heading);

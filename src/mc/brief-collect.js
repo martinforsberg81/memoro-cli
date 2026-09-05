@@ -3,10 +3,10 @@
  * script and written to one file. No model is involved here; the model is
  * the session that reads the file afterwards.
  *
- * Twelve sections, in the order the plan fixes them: merged since the last
+ * Thirteen sections, in the order the plan fixes them: merged since the last
  * brief · opened, not merged · the helper's proposals · plan status ·
  * archived without a note · workareas with no plan · plans that do not parse ·
- * runner · production · held before merge · ready and not started ·
+ * runner · production · held before merge · ready and not started · blocked ·
  * queue. Every line comes from a file the runner
  * or a session already writes (`~/mc/runner/log/runs.tsv`,
  * `~/mc/runner/held.json`,
@@ -28,13 +28,14 @@ import { heldPath, parseHeld } from './held.js';
 import { proposalsDir } from './helper-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { nightlyReading } from './nightly-history.js';
-import { planSummary, readPlanText } from './plan-schema.js';
+import { NAME_RE, planSummary, readPlanText } from './plan-schema.js';
 import {
   UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerTableLabel, runnerTablePath,
   workRoot,
 } from './paths.js';
 import { PR_FIELDS } from './project-prs.js';
 import { RUN_REFUSALS } from './run-plan.js';
+import { staleBlockers } from './stale-blockers.js';
 import { machineDetail, machineState, pidAlive, readCurrents } from './status-collect.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -442,6 +443,68 @@ export function waitingOnHands({
     || a.project.localeCompare(b.project));
 }
 
+/* ----------------------------------------------------------------- blocked */
+
+/**
+ * The `decision` blocker that is not a question. Every plan converted to the
+ * schema was parked on it, and none of them has ever been put to Martin: it
+ * names the programme's own planning session, which is `mc plan <programme>`
+ * and not an hour of his.
+ */
+export const PLAN_REVIEW = 'plan-review';
+
+/**
+ * Every `blocked` step on `origin/main`, told apart by what a reader would do
+ * with it — which is not the same question as what `blocked_by.kind` says.
+ *
+ * Three groups. A **project** blocker is sequencing: the named project has to
+ * land first, and that order is the blocking project's design, so the whole
+ * list is worth a count and no more. **`plan-review`** is a `decision` blocker
+ * by kind and a hand-off by meaning — the programme's planning session has not
+ * read the plan yet — so it is separated from the decisions that are decisions.
+ * What is left is the **named decisions**, and that short list is the one a
+ * brief session actually works through.
+ *
+ * Two facts ride along because both are invisible today and neither costs a
+ * read. `stale` is `staleBlockers`'s (stale-blockers.js), reused rather than
+ * recomputed so the page and the brief cannot disagree about which blocking
+ * project is gone. `unnamed` is a blocker name that is not a name (`NAME_RE`,
+ * plan-schema.js): `sql-goal1-certification` step 4 waits on a 79-character
+ * sentence, which is neither a live blocker nor a finished one but a plan
+ * nothing can check. Reported, not refused — refusing one is a decision with a
+ * proposal of its own.
+ *
+ * Plan order, which is `listPlans`'s order: the plans are read from a ref in
+ * one batch and nothing here re-sorts them, so two runs against the same ref
+ * render the same file.
+ */
+export function blockedSteps(plans = []) {
+  const stale = new Map();
+  for (const item of staleBlockers(plans)) stale.set(`${item.repo}/${item.project}/${item.step}`, item.why);
+  const rows = [];
+  for (const record of plans) {
+    const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
+    steps.forEach((step, index) => {
+      if (step?.status !== 'blocked') return;
+      const blocker = step.blocked_by || {};
+      const name = typeof blocker.name === 'string' ? blocker.name.trim() : '';
+      rows.push({
+        repo: record.repo,
+        programme: record.programme,
+        project: record.project,
+        step: index + 1,
+        title: step.title || '',
+        kind: blocker.kind || null,
+        blocker: name || null,
+        group: blocker.kind === 'project' ? 'project' : (name === PLAN_REVIEW ? 'plan-review' : 'decision'),
+        stale: stale.get(`${record.repo}/${record.project}/${index + 1}`) || null,
+        unnamed: Boolean(name) && !NAME_RE.test(name),
+      });
+    });
+  }
+  return rows;
+}
+
 /* ------------------------------------------------------------- production */
 
 const sha7 = (sha) => (sha ? String(sha).slice(0, 7) : null);
@@ -664,10 +727,109 @@ function waitingLines(out, waiting, now) {
     + `\`in-flight\` is a pull request already open on the branch, to land or to close.`);
 }
 
+/**
+ * *Blocked* — every step on `origin/main` that is stopped, grouped by what the
+ * reader does with it.
+ *
+ * It sits beside *Held before merge* and *Ready, and the runner cannot start
+ * it* because it is the third and largest member of that family: a project
+ * standing still, and yours. Until now the only trace of one was inside *Plan
+ * status*, where a plan gets one row and its blocker arrives clipped to 110
+ * characters inside the `next` cell — which is how a step waiting on a project
+ * that landed months ago stays invisible.
+ *
+ * The named decisions get a table and the full blocker name uncut, because
+ * that is the list a session works through and the name is the thing it looks
+ * up. `plan-review` gets one line per programme, because the act is
+ * `mc plan <programme>` and the programme is the whole address. Project
+ * blockers get a count, because the order they close in is the blocking
+ * project's design and not this brief's business — except where the project
+ * they name has left main, which is the one project-blocker fact somebody has
+ * to answer.
+ */
+function blockedLines(out, blocked) {
+  if (!blocked.length) {
+    out.push('_none — no step on `origin/main` is blocked_');
+    return;
+  }
+  const named = blocked.filter((b) => b.group === 'decision');
+  const review = blocked.filter((b) => b.group === 'plan-review');
+  const project = blocked.filter((b) => b.group === 'project');
+  const stale = blocked.filter((b) => b.stale);
+  const unnamed = blocked.filter((b) => b.unnamed);
+  const where = (b) => `${b.repo} · ${b.programme} / ${b.project} step ${b.step}`;
+
+  out.push(`${blocked.length} step${blocked.length === 1 ? '' : 's'} on \`origin/main\` `
+    + `${blocked.length === 1 ? 'is' : 'are'} \`blocked\`: `
+    + `**${named.length} named decision${named.length === 1 ? '' : 's'}** to work, `
+    + `${review.length} waiting on a programme's planning session, `
+    + `${project.length} sequencing.`, '');
+
+  out.push(`### Named decisions — ${named.length}`, '');
+  if (!named.length) out.push('_none — every decision blocker on main is a `plan-review` park_');
+  else {
+    out.push('| repo | programme / project | step | waits on | the step |', '|---|---|---|---|---|');
+    // The name uncut: it is what a session looks the answer up by, and the one
+    // that does not fit a cell is exactly the one worth seeing whole.
+    for (const b of named) {
+      out.push(`| ${b.repo} | ${b.programme} / ${b.project} | ${b.step} | ${b.blocker} | ${clip(b.title, 60)} |`);
+    }
+    out.push('', 'Each is this brief\'s to sort. Read the plan and the code behind it: where the estate '
+      + 'already holds the answer — the decision answered under another name, the blocking project '
+      + 'landed — settle it and write what you read into the step\'s `comments`. What a reading cannot '
+      + 'settle goes to Martin as one proposal with one recommendation, the way a held pull request does.');
+  }
+  out.push('');
+
+  out.push(`### Waiting on a programme's planning session — ${review.length}`, '');
+  if (!review.length) out.push('_none_');
+  else {
+    for (const programme of [...new Set(review.map((b) => b.programme))]) {
+      const rows = review.filter((b) => b.programme === programme);
+      out.push(`- **${programme}** — ${rows.length} step${rows.length === 1 ? '' : 's'}: `
+        + `${rows.map((b) => `${b.project} step ${b.step}`).join(', ')} · \`mc plan ${programme}\``);
+    }
+    out.push('', `\`${PLAN_REVIEW}\` is not a question for Martin and never was: it is the park every plan `
+      + 'converted to the schema carries until its programme\'s planning session reads it. Name the '
+      + 'programme and hand it over — a brief that passes these over silently is why they are still here.');
+  }
+  out.push('');
+
+  out.push(`### Sequencing — ${project.length} project blocker${project.length === 1 ? '' : 's'}`, '');
+  out.push(project.length
+    ? `${project.length} step${project.length === 1 ? '' : 's'} waiting on another project to land. `
+      + 'That order is the blocking project\'s own design — this section reads it and never moves it — '
+      + `so ${project.length === 1 ? 'it is' : 'they are'} a count and nothing more, except for the two `
+      + 'cases below.'
+    : '_none_');
+  out.push('');
+
+  out.push(`### Waiting on a project that is not on \`origin/main\` — ${stale.length}`, '');
+  if (!stale.length) out.push('_none — every project blocker names a project main still has_');
+  else {
+    for (const b of stale) out.push(`- ${where(b)} waits on \`${b.blocker}\`, which ${b.stale}`);
+    out.push('', 'A project leaves main when it is delivered and when it is abandoned, and only a person '
+      + 'can say which happened. Delivered: unblock the step and say so in its `comments`. Abandoned: '
+      + 'the step\'s premise is dead and the plan needs its programme.');
+  }
+  out.push('');
+
+  out.push(`### A blocker name that is not a name — ${unnamed.length}`, '');
+  if (!unnamed.length) out.push('_none — every blocker names a project or a decision_');
+  else {
+    for (const b of unnamed) {
+      out.push(`- ${where(b)} waits on ${b.kind} “${b.blocker}” — ${b.blocker.length} characters, not a name`);
+    }
+    out.push('', 'Nothing can look one of these up: it is neither a live blocker nor a finished one, but a '
+      + 'plan no reader can check. The schema does not refuse it — every plan carrying one would be '
+      + 'unrunnable the moment it landed — so it is answered here, by name, or rewritten as one.');
+  }
+}
+
 export function renderBrief({
   now, since, firstBrief, merged, opened, proposals = [], plans,
   undocumented = null, unplanned = null, unreadable = null, runs, queue, held = [],
-  waiting = [], production = null, notes = [],
+  waiting = [], blocked = [], production = null, notes = [],
 }) {
   const out = [];
   const stamp = (d) => d.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -787,6 +949,10 @@ export function renderBrief({
 
   out.push('## Ready, and the runner cannot start it', '');
   waitingLines(out, waiting, now);
+  out.push('');
+
+  out.push('## Blocked', '');
+  blockedLines(out, blocked);
   out.push('');
 
   out.push('## Queue', '');
@@ -922,6 +1088,10 @@ export async function collectBrief({
     }),
   });
 
+  // Every blocked step on the same ref, from the same parsed plans: no git
+  // call of its own, and the same records the runner obeys.
+  const blocked = blockedSteps(plans);
+
   const proposals = listProposals(proposalsDir(env));
 
   // The three files `mc run` writes and never reads. Absent is its own answer —
@@ -942,7 +1112,7 @@ export async function collectBrief({
 
   const text = renderBrief({
     now, since, firstBrief: !last, merged, opened, proposals, plans,
-    undocumented, unplanned, unreadable, runs, queue, held, waiting, production, notes,
+    undocumented, unplanned, unreadable, runs, queue, held, waiting, blocked, production, notes,
   });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
@@ -952,7 +1122,7 @@ export async function collectBrief({
     text,
     data: {
       since, merged, opened, proposals, plans, undocumented, unplanned, unreadable,
-      runs, queue, held, waiting, production, notes,
+      runs, queue, held, waiting, blocked, production, notes,
     },
   };
 }
