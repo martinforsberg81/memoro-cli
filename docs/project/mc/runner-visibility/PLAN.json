@@ -1,0 +1,139 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A project that reads `ready` is one the runner would actually start. Where it would not, the same reading names what is in the way, since when, and which run left it — in `mc status <name>`, on the page and in the brief.",
+    "Measured 2026-09-05: memoro-cli's only two unfinished plans, `intake-inbox` and `role-instructions`, both read `ready` in every surface while `~/mc/runner/held.json` held #612 and #614 at `repairs: 0`. The whole repository's queue was stopped and no reading said so. The one place that knew was `runner.log`, which carried 9 827 `, skip` lines."
+  ],
+  "contract": [
+    "Martin, 2026-09-05: *\"Om något är 'ready' så ska det kunna köras av runner. Som det är nu är flera projekt 'ready' enligt status, men i praktiken 'blocked'.\"*",
+    "No new status value in the plan schema, and no machine state written into a repository. The plan is on `main` and the reasons are on this machine; a step session may not write plan state anyway. `planState` and `planSummary` (`src/mc/plan-schema.js:258`, `:273`) keep exactly the meaning they have — the state of the first step that is not done.",
+    "The new reading and `runStepClaimed` may not drift. Whatever the round refuses on is what the reading reports, and that is asserted by a test over a table of cases rather than by two lists maintained by hand.",
+    "The reading starts nothing, writes nothing and asks no model — the rule `status-collect.js` opens with, because `mc status` and the page are read while the runner is working."
+  ],
+  "out_of_scope": [
+    "The 12 plans blocked on `plan-review`. Martin, 2026-09-05: *\"Plan-review = djup genomgång per projekt för att se om det ska startas upp på nytt och isf i vilken form. Med största sannolikhet behöver projektet arbetas om. Jag sätter igång ett i taget.\"* They are a backlog worked one at a time, `blocked` is the honest status for each, and nothing here changes it.",
+    "Building the runner's own recovery of a killed session's uncommitted work. Step 4 measures the question and puts it; whether the runner commits such a worktree itself is a later project, if Martin wants one.",
+    "What the gate holds and how a repair session runs. `heldRepair` and the one-repair rule are read by this project and changed by it in no way.",
+    "The plan schema, `chooseKind`, and the order the runner walks projects in. This project adds a second reading beside the existing one; it moves no decision into it.",
+    "`runner.log`'s own lines. They stay exactly as they are — the defect is that nothing else says any of it, not that the log says it badly."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A project the runner cannot start does not read `ready` alone in any surface a person uses.",
+      "check": "With #612 and #614 held as they are today, `mc status intake-inbox` and `mc status role-instructions` each name the held pull request beside the plan state, and the page's queue block does too. Run both commands and read them."
+    },
+    {
+      "met": false,
+      "criterion": "The reading and the round agree on every reason the round refuses.",
+      "check": "A test drives a table of cases — STOP file, dirty worktree, GitHub unknown, held with a repair spent, open pull request, branch that will not check out, aborted merge — against both the new reading and the round's own path, and asserts the same answer from each. A reason added to `runStepClaimed` without the reading fails it."
+    },
+    {
+      "met": false,
+      "criterion": "A `ready` project skipped for a dirty worktree is named where a person looks, with the age of the dirt and the run that left it.",
+      "check": "Make a workarea dirty by hand, run `mc brief --collect`, and read the section: the project, how long it has been dirty, and the `runs.tsv` row that left it. Remove the file afterwards and confirm the line goes."
+    },
+    {
+      "met": false,
+      "criterion": "The reading costs no git work on a project the plan already refuses.",
+      "check": "The function short-circuits on `kindFor`'s answer before touching a worktree; asserted by a test whose git dependency throws if called."
+    }
+  ],
+  "documents": [
+    {
+      "label": "The plan-shaped half of the same question, already shared with the page",
+      "path": "../../../../src/mc/status-collect.js"
+    },
+    {
+      "label": "The order the round refuses in, which the reading must mirror",
+      "path": "../../../../src/mc/run.js"
+    },
+    {
+      "label": "How a plan is read and what its state means",
+      "path": "../../../technical/mc-run.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "The machine-state reading, beside kindFor",
+      "status": "ready",
+      "done_when": "One function answers \"would the runner start this project now, and if not what is in the way\" from the files on this machine, and a test asserts it agrees with the round over a table of cases.",
+      "instruction": [
+        "Half of this already exists and is already shared. `kindFor(name, { plans })` in `src/mc/status-collect.js:48` flattens `chooseKind` to one string — the kind, or `skip:<reason>` for a plan that is blocked, done, unparseable or unmigrated — and both the page (`page-collect.js:281`) and the runner (`run.js:1532`, as `planRefusal`) call it. That is the plan-shaped half and it is correct. Do not touch it.",
+        "The missing half is named by the code itself. `refusedLine`'s comment at `run.js:1544` says it outright: *\"What it costs is the lines that are not on the page: a dirty worktree, a pull request in flight, a merge that conflicted. Those are facts about this machine at this moment, they keep their own named line in `runStep`.\"* Those lines are the whole defect. Write the sibling function beside `kindFor` in `status-collect.js`, because that is where the page's readers live and the module's own rule — no model, nothing written, nothing started — is the rule this needs.",
+        "The reasons, in the order `runStepClaimed` (`src/mc/run.js:1198`) asks them, because the reading has to answer with the first one the round would hit and not merely with some true one: the STOP file (`stopRequested()`, `paths.stop`); no workarea and no plan on main (`repoOf`); a dirty worktree (`git status --porcelain` in the workarea, `run.js:1222`); the repository GitHub could not be asked (`prsFailed`); a held pull request whose repair is spent (`heldRepair` over `heldNow()`, and note that a held entry at `repairs: 0` is *not* a refusal — it is one repair session owed, which is a thing the runner would start); an open pull request (`inFlight(openPrs)`); a branch the workarea could not check out (`freshBranch`, and the repair path's `git checkout` at `run.js:1250`); and a merge of `origin/main` that conflicted (`syncMain`, `run.js:414`).",
+        "Return enough for a person, not just a word. `{ runnable, reason, detail, since }` at least: `reason` a word the page can count, the way `kindFor`'s is; `detail` the sentence — the held pull request's number, the first three dirty files, the conflicted paths; `since` when it started being true, read from `held.json`'s `since` for a hold and from the mtime of the oldest dirty path for a worktree. `since` is what makes the difference between a project that stalled a minute ago and `connections-section`, which stood six days.",
+        "Order matters for cost as well as for truth. Ask `kindFor` first and return its answer without touching the workarea — a project whose plan on main already refuses it must cost no `git status`, no fetch and no merge. That is the same economy `planRefusal` was built for (`run.js:1509`: a round spent 51 seconds walking 38 projects to start one). Assert it with a test whose git dependency throws if it is called.",
+        "The agreement test is the point of the step, not an extra. Build the table of cases once and drive both the new function and the round's own path from it, so a reason added to `runStepClaimed` without the reading fails the suite. Two lists maintained by hand is the failure this is meant to prevent, and a test that only exercises the new function does not prevent it. `tests/mc/run.test.js` already fixtures the round with injected `deps` — reuse that shape rather than inventing a second one.",
+        "Do not read a lease. A repository lease held by a gate round or a deploy is a reason a round waits rather than a reason a project cannot run, and it is gone within minutes; putting it in this reading would make `mc status` flicker. If reading `repo-lease.js` convinces you otherwise, say so in the PR rather than adding it quietly.",
+        "`npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "mc status and the page say the pair",
+      "status": "ready",
+      "done_when": "`mc status <name>` and the page show the plan state and the machine state together, and `ready` on its own means the runner would start it.",
+      "instruction": [
+        "`mc status <name>` today prints `planSummary(plan).status` and nothing about this machine: `fieldRows` in `src/mc/status-project.js:41` builds the rows, and the file's own header says the plan is read from the workarea when there is one and from `origin/main` otherwise. It shows open pull requests on the branch (`openPrsFor`) but never `held.json` and never the worktree. That is why `mc status role-instructions` reads `ready` while #614 is held.",
+        "Put the pair in the status row rather than in a new row below it. `ready · held #614` is the shape the proposal asked for and it reads correctly aloud; a second row named something like `runnable` invites a reader to take the first row as the answer and stop. Where the machine has nothing to say, the row is exactly what it is today — that is the case that must not get noisier.",
+        "The page's queue block already counts plan-shaped skips: `queueSection` in `src/mc/page-collect.js:277` maps each queued name through `kindFor` and groups `skip:<reason>` into `skipped: { count, reasons }`. Extend that with the machine-state reasons from step 1 so the block's counts stop being a partial answer — a queue that reports two runnable names while both are held is worse than one that reports none.",
+        "Keep the page's discipline: `page-collect.js` and `status-collect.js` are pure and take read data. If the new reading needs `held.json` and the open pull requests, they are already read on the page's path (`heldEntries(readJson(heldPath(root)))` at `page-collect.js:746`) — pass them in, do not read the filesystem from a builder.",
+        "Verify against the estate as it actually stands: run `mc status intake-inbox`, `mc status role-instructions` and the page, and put what they print in the PR. If both holds have been repaired by the time you run it, make one by hand instead and say so.",
+        "`npm test` — `tests/mc/status-project.test.js` and the page tests read these."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The brief names what is waiting on hands",
+      "status": "ready",
+      "done_when": "`mc brief --collect` has a section listing every `ready` project the runner cannot start, one line each, with the reason and how long it has been true.",
+      "instruction": [
+        "The brief is the surface that matters most here, because it is the one Martin reads at a decision point and the one a brief session acts on. It already has the shape: *Held before merge* is a short section, one line per project, built from `~/mc/runner/held.json` filtered to what the brief is for (`src/mc/brief-collect.js:360`, `HELD_FILE` at `:437`).",
+        "What it does not cover is everything else in step 1's reading, and the gap is not theoretical: `held.json` is *for a pull request the gate refused*, and a session killed before it committed never got as far as a pull request. `no-text-in-code` sat from 2026-09-04T12:37Z on exit 143 with 35 files of finished work uncommitted; `connections-section` sat from 2026-08-29T21:37Z on a session that exited 0 and opened no pull request. Neither is in `held.json`, neither is in *Workareas with no project on main* — both have a project on main, which is exactly why they are a loss — and both were skipped every round with one log line nothing reads.",
+        "One line per project, with the four things a person needs to act: the name, the reason, since when, and the run that left it. `no-text-in-code: uncommitted since 12:37, step exit 143` is the proposal's own example and it is the right density. The run comes from `runsFor` in `brief-collect.js`, which the brief already reads.",
+        "Decide from the code whether this is a new section or rows inside *Held before merge*, and say which and why in the PR. A held pull request and a dirty worktree are both \"the runner is waiting on hands\", which argues for one section; they need different actions from the reader, which argues for two. Either is defensible — an undefended choice is not.",
+        "The brief session has to be told what to do with it, or a new section is a new thing to skim past. Whatever `canon/roles/brief.md` says about *Held before merge* is the precedent to follow for the new rows.",
+        "Verify for real: make a workarea dirty by hand, run `mc brief --collect`, read the section, then clean it up and confirm the line goes. Note that a verification brief left in `~/mc/brief/` moves `lastBriefTime` — it is the mtime of the newest file there — so remove the file you wrote, as step 1 of `intake-inbox` had to.",
+        "`npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Measure the killed-session question and put it",
+      "status": "ready",
+      "done_when": "The PR carries the measurement of how often a session leaves work uncommitted, what it leaves, and one recommendation on whether the runner should commit it itself — with the cost of each option named.",
+      "instruction": [
+        "This step writes no recovery mechanism. It answers whether one is wanted, with numbers, because the honest position today is that a killed session's worktree is not obviously the runner's to commit — the work may be half a refactor — and not obviously a person's either, and so it is nobody's.",
+        "Measure the estate rather than reasoning about it. `~/mc/runner/log/runs.tsv` has every run: find every row that ended `no-json`, exit 143, or exit 0 with `pr=-`, and for each check whether its workarea was left dirty and for how long it stayed that way before somebody acted. `mail-window-overlay-integrity` ended exit 143, 5 408 s, `no-json` at 2026-09-05T08:02:48Z and left its worktree **clean** — that session had committed — so the answer is not \"every killed session\", and the proportion is the number this step exists to produce.",
+        "Two instances of the pattern already exist in the estate and both are evidence: `09cfbfa655` on `no-text-in-code`, a WIP commit made by hand, and `ac32169675` on `connections-section` — *\"WIP: org in the portrait tile — superseded by ruling 4, kept for the record\"* — made by a session by itself. Read both and say what they cost and what they saved.",
+        "Name the options and the cost of each: leave it to a person and rely on step 3's brief line to find it; commit it to the branch as a WIP commit named for the run that left it, so the next step session inherits it; or refuse the project until a person acts, which is what happens today but loudly. The middle one has the hazard worth stating plainly — a WIP commit of half a refactor is work the next session must judge before it can proceed, and a session that cannot tell finished work from abandoned work will build on top of it.",
+        "One recommendation, not three options and a shrug. Put it in the PR body where Martin reads it. If he rules, carry the ruling into `docs/project/mc/rulings.md` in the same shape the file already uses — the question, the options, his answer quoted verbatim — because mc keeps no record of an answer anywhere else.",
+        "Nothing in this step changes behaviour, so there is nothing to verify beyond the measurement being reproducible: say in the PR which commands produced the numbers."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close out",
+      "status": "ready",
+      "done_when": "`docs/technical/mc-run.md` and `docs/technical/mc-status.md` describe the two readings and what each answers, and `docs/project/project_log.md` has the row.",
+      "instruction": [
+        "Write the distinction down where the next reader meets it, because it is the thing this project exists to make legible and it is not obvious from either function's name: `planState` answers *is this plan ready to be worked on*, and it is a fact about a file on `main`; the new reading answers *would the runner start it now*, and it is a fact about this machine at this moment. Neither can answer the other's question, and that is why there are two.",
+        "Say which surfaces show the pair and which show only the plan, so a reader knows what a bare `ready` means wherever they meet one.",
+        "Add the row to `docs/project/project_log.md`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
