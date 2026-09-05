@@ -75,7 +75,7 @@
         "Option 1's cost, stated where the ruling can weigh it: `queue()` already loads every plan from `origin/main` via `listPlans` (`brief-collect.js:220`, `ref = 'origin/main'`) and hands them to `runStepClaimed` as `world.plans`, so main's parsed plan is in the round already and only `text` would need carrying — cheap. What is not cheap is that option 1 changes the clean path too, dropping the branch's own plan edits, of which the one that matters is a step marked `done` with a `pr` that then did not land. Also checked: every name the round can reach has a plan on main, because `assembleQueue` (`run-plan.js:52`) builds the queue out of `plans` and nothing else — the step 2 instruction's assertion holds.",
         "Blocked rather than done, following `mc-dev-protocol` step 1 (#628) three hours earlier: step 2 branches on a ruling that does not exist yet. Whoever carries Martin's answer writes it into `docs/project/mc/rulings.md` in that file's shape, cites it as `plan-read-from-main-1`, sets this step `done` and the first unfinished step `ready`, and — if the answer was not option 3 — carries what it changed into step 2's own instruction, which is written assuming 3."
       ],
-      "pr": null,
+      "pr": 629,
       "blocked_by": { "kind": "decision", "name": "plan-read-from-main-1" }
     },
     {
