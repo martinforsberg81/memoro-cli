@@ -255,15 +255,14 @@ test can look at one row.
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
 page bends to: **a step kind and a plan status have one colour each, wherever
-they are printed.** RUNNER, QUEUE and PROGRAMMES all say `reconcile` in the same
-magenta, so a kind is recognised before it is read. They are `KIND_TONE` and
+they are printed.** RUNNER, QUEUE and PROGRAMMES all say `step` in the same
+green, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
 through all three sections.
 
 | step kind | colour |
 |---|---|
 | `step` | green |
-| `reconcile` | magenta |
 | `triage` | blue |
 | `brief` | cyan |
 | `plan` | cyan |

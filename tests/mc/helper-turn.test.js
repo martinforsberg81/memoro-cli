@@ -14,6 +14,7 @@ import { describe, it } from 'node:test';
 
 import { intakeDir, proposalsDir } from '../../src/mc/helper-collect.js';
 import { helperGround, helperPrompt, repoOfFile, runHelperTurn } from '../../src/mc/helper-turn.js';
+import { sharedRoleText } from '../../src/mc/roles.js';
 
 const NOW = new Date('2026-08-29T06:00:00.000Z');
 const FILE = 'errors-memoro-2026-08-29.md';
@@ -83,11 +84,13 @@ describe('the helper turn', () => {
     assert.equal(result.ok, true);
   });
 
-  it('carries the Coding Profile and the role overlay in one instruction body', async () => {
+  // Assembled by `instructionsFor` like every other launch: the profile, the
+  // text every role session shares, then this role's own body.
+  it('carries the Coding Profile, the shared text and the role overlay in one instruction body', async () => {
     const { seen } = await turn();
     const at = seen.args.indexOf('--append-system-prompt');
     assert.ok(at > 0, 'claude takes instructions on --append-system-prompt');
-    assert.equal(seen.args[at + 1], 'PROFILE\n\n---\n\nYou are the helper turn.');
+    assert.equal(seen.args[at + 1], `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nYou are the helper turn.`);
   });
 
   it('names the one file and leaves the reading to the turn', async () => {

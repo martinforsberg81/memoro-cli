@@ -36,7 +36,7 @@ import { resolveLaunch } from '../adapters/index.js';
 import { defaultRepos, listProposals, planFields } from './brief-collect.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { loadProfile, profileArgs } from './portrait.js';
-import { readCanonRole } from './roles.js';
+import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
 
 /** One turn over one file. Ten minutes is four times the longest measured. */
@@ -248,7 +248,8 @@ export async function runHelperTurn({
     file, proposalsPath: proposals, projectLog: ground.projectLog, plans: ground.plans,
     proposals: [...before].map((name) => ({ file: name, title: '' })), repo, now,
   });
-  const instructions = [await (deps.profile || (() => loadProfile({ env })))(), role.overlay].filter(Boolean).join('\n\n---\n\n');
+  const profile = await (deps.profile || (() => loadProfile({ env })))();
+  const instructions = instructionsFor(launch.id, profile, role.overlay);
   const args = headlessArgs({
     toolId: launch.id, adapter: launch.adapter, model: model || role.model, instructions, prompt, profileArgs,
   });

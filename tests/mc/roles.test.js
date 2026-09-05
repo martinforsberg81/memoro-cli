@@ -8,22 +8,26 @@
  * are a fixed, small set.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
   RESERVED_ROLE_NAMES,
+  SHARED_ROLE_FILE,
   areaRole,
   areaRoleName,
+  canonRolesDir,
   instructionsFor,
   listRoles,
   markAreaRole,
   parseRole,
+  readCanonRole,
   readRole,
   reservedRoleHint,
   reservedRoleName,
+  sharedRoleText,
 } from '../../src/mc/roles.js';
 import { discardWorkArea, releaseWorkArea } from '../../src/mc/work-area.js';
 
@@ -142,14 +146,21 @@ describe('the mark on an area', () => {
 });
 
 describe('what a conversation is told', () => {
-  it('claude gets the overlay behind the profile', () => {
-    assert.equal(instructionsFor('claude-code', 'PROFILE', 'OVERLAY'), 'PROFILE\n\n---\n\nOVERLAY');
-    assert.equal(instructionsFor('claude-code', null, 'OVERLAY'), 'OVERLAY');
+  const SHARED = sharedRoleText();
+
+  it('claude gets the shared text and then the overlay, behind the profile', () => {
+    assert.equal(
+      instructionsFor('claude-code', 'PROFILE', 'OVERLAY'),
+      `PROFILE\n\n---\n\n${SHARED}\n\n---\n\nOVERLAY`,
+    );
+    assert.equal(instructionsFor('claude-code', null, 'OVERLAY'), `${SHARED}\n\n---\n\nOVERLAY`);
   });
 
   it('codex gets the same body, on its own instruction channel', () => {
-    assert.equal(instructionsFor('codex', 'PROFILE', 'OVERLAY'), 'PROFILE\n\n---\n\nOVERLAY');
-    assert.equal(instructionsFor('codex', null, 'OVERLAY'), 'OVERLAY');
+    assert.equal(
+      instructionsFor('codex', 'PROFILE', 'OVERLAY'),
+      `PROFILE\n\n---\n\n${SHARED}\n\n---\n\nOVERLAY`,
+    );
   });
 
   it('is one body of text, whichever tool is asked', () => {
@@ -159,9 +170,57 @@ describe('what a conversation is told', () => {
     );
   });
 
+  // The parallel-operation guarantee: an ordinary area has no role, and a
+  // conversation there is told the profile and nothing mc added.
+  it('no overlay is no role, and no role is no shared text', () => {
+    assert.equal(instructionsFor('claude-code', 'PROFILE', null), 'PROFILE');
+    assert.equal(instructionsFor('codex', 'PROFILE', null), 'PROFILE');
+  });
+
   it('nothing to say is nothing, for both', () => {
     assert.equal(instructionsFor('claude-code', null, null), null);
     assert.equal(instructionsFor('codex', null, null), null);
+  });
+});
+
+/**
+ * The rules that hold for every role session, written once.
+ *
+ * The turn-cost rule was in six role files — four byte-identical copies and
+ * two variants — which is six places for one rule to drift.
+ */
+describe('the text every role session shares', () => {
+  const SHARED = sharedRoleText();
+  const TURN_COST = /A turn is the unit of cost/u;
+
+  it('is written in exactly one file in the catalogue mc ships', () => {
+    assert.match(SHARED, TURN_COST);
+    const carriers = readdirSync(canonRolesDir())
+      .filter((file) => file.endsWith('.md'))
+      .filter((file) => TURN_COST.test(readFileSync(join(canonRolesDir(), file), 'utf8')));
+    assert.deepEqual(carriers, [SHARED_ROLE_FILE]);
+  });
+
+  it('reaches every canon role that has a body of its own', () => {
+    for (const name of ['brief', 'helper', 'intake', 'repair', 'step', 'worker']) {
+      const role = readCanonRole(name);
+      assert.ok(role?.overlay, `${name} has no overlay`);
+      assert.match(instructionsFor('claude-code', 'PROFILE', role.overlay), TURN_COST, name);
+    }
+  });
+
+  // A file named `_common.md` in a catalogue directory is text, not a role:
+  // `listRoles` would otherwise hand `mc roles list` a role named `_common`.
+  it('is not mistaken for a role, even sitting in the catalogue', () => {
+    const { env } = catalogue({ 'worker.md': WORKER_MD, [SHARED_ROLE_FILE]: SHARED });
+    assert.deepEqual(listRoles(env).map((role) => role.name), ['worker']);
+  });
+
+  // The runner's only test that a role file is installed at all is the role's
+  // own body — folding the shared text in ahead of it would make a missing
+  // `repair.md` look present.
+  it('stays out of a role\'s own overlay', () => {
+    assert.doesNotMatch(readCanonRole('step').overlay, TURN_COST);
   });
 });
 

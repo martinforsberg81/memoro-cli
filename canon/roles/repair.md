@@ -42,13 +42,6 @@ what you found — in the pull request, and in the step's `comments` when the
 next reader needs it: if it is still held after you, a person picks it up from
 the brief, and what you learned is all they will have.
 
-A turn is the unit of cost, not a tool call. Measured over thirteen runner
-steps on 2026-09-03: 1 800 tool calls, and not one turn carried more than one
-of them — every file read, every edit, every `git status` was its own turn at
-four to nine seconds of model time, and 156 turns were prose between calls.
-So: put every call that does not depend on another's result in the same
-message — the five files you need in one turn, the three edits in one turn.
-Read a file with `Read` and search with `Grep`, not `sed -n`/`grep` through
-Bash; one long command is one call, and `npm test` runs in the foreground
-rather than backgrounded and polled. Run the selection once when you are done.
-Write no prose between tool calls — say what you did once, in the pull request.
+`npm test` runs in the foreground rather than backgrounded and polled — a
+repair that loses the output it was sent to read has nothing to decide from.
+Run the selection once, when you are done.

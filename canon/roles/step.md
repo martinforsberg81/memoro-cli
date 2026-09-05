@@ -33,6 +33,13 @@ its gate runs the selection again on the merged tree, so the gate is the
 measurement and your run is the check that you are not handing it something
 red. Decide from the code and say what you decided; there is nobody to ask.
 
+A worktree handed to you with `git merge origin/main` in progress is still
+your step. The prompt names the files it stopped on; resolve them, commit the
+merge, and then do the step — the same session, the same branch, the same
+pull request, and the merge is a paragraph in its body rather than its point.
+If resolving one needs a decision that is not yours, that is the `blocked`
+route above: say which file and what the two sides want.
+
 Stay on the branch you were given — `<project>` or `<project>-N`, the one
 the worktree stands on — and open the PR from it. The runner knows a project's
 pull requests by that name: a PR from a branch you named yourself is one it
@@ -41,25 +48,12 @@ your unlanded work.
 
 How you spend your turns is most of what a step costs. Measured over 59 step
 sessions (2026-09-01..03): a median step was 72 turns and 12 minutes, the long
-ones 250–350 turns and an hour, and half of that was not the work —
+ones 250–350 turns and an hour, and half of that was not the work. Two of
+those hours are yours to take back —
 
-- **A turn is the cost, not a call — batch.** Thirteen steps on 2026-09-03
-  made 1 800 tool calls and not one turn carried more than one of them. Put
-  every call that does not depend on another's result in the same message:
-  the five files you need in one turn, the three edits in one turn, `git
-  status` beside the test run. Half the turns go away and nothing else
-  changes.
-- **No prose between tool calls.** 156 of those turns were text and nothing
-  else. The PR body is where you explain, once.
-- **Read whole files, not screens.** Use `Read` for a file and `Grep` for a
-  search; each `sed -n 40,80p` is a model turn on a large context, and the
-  sessions averaged 46 of them.
 - **Run the tests you are changing while you build; run the selection once at
   the end.** The sessions ran a test command 11 times per step (up to 33), and
   one in four was the same command again.
-- **One long command is one call.** Bash has a ten-minute ceiling here. Run
-  `npm test` in the foreground and read its output; never background it and
-  poll with `sleep` loops.
 - **Verify what `done_when` names and stop.** Screenshots, dev servers and
   proof scripts are for a `done_when` that asks for them.
 
