@@ -78,7 +78,7 @@
         "Run against the estate on 2026-09-05 with a read-only script (`listPlans` over both repos, `gh pr list`, the real `held.json`, real git): 43 unfinished plans, and the two that read `ready` while nothing could start them are named — `connections-section` as `dirty since 2026-09-05T10:03:51Z — uncommitted work in /Users/martinforsberg/mc/connections-section/memoro: hop-measure.mjs, probe.mjs`, and this workarea itself. Nothing else disagreed with its plan state.",
         "For step 2's check: `held.json` is now `[]` — #612 and #614 have both been repaired and landed, and `intake-inbox` and `role-instructions` are off main entirely. The estate example that survives is `connections-section`'s dirty worktree; a hold to look at will have to be made by hand, as that step's instruction allows."
       ],
-      "pr": null,
+      "pr": 630,
       "blocked_by": null
     },
     {
