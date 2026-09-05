@@ -153,15 +153,20 @@
     },
     {
       "title": "Close out",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/technical/mc-run.md` and `docs/technical/mc-status.md` describe the two readings and what each answers, and `docs/project/project_log.md` has the row.",
       "instruction": [
         "Write the distinction down where the next reader meets it, because it is the thing this project exists to make legible and it is not obvious from either function's name: `planState` answers *is this plan ready to be worked on*, and it is a fact about a file on `main`; the new reading answers *would the runner start it now*, and it is a fact about this machine at this moment. Neither can answer the other's question, and that is why there are two.",
         "Say which surfaces show the pair and which show only the plan, so a reader knows what a bare `ready` means wherever they meet one.",
         "Add the row to `docs/project/project_log.md`."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The distinction is written where the round's own two refusals already are: `docs/technical/mc-run.md` § *The two readings, and what each answers*, at the end of *One step*, so a reader meets it having just read what the plan on main decides and what the worktree decides. It is a five-row table — the question each answers, what it is a fact about, what it sees, what it costs, where it lives — followed by why they cannot drift (`RUN_REFUSALS`, the one `refuse()` helper, the three tests), what `read: false` means for four of the words, and the two deliberate absences (a lease is not read; a stopped merge is `dirty` and not a word of its own). `mc-status.md` gained *The status row says the pair* with the three `machineNote` cases and the three example rows, and both docs carry the same table of which surface says which — a reader who meets a bare `ready` anywhere can find out what it promises.",
+        "Three docs were left saying something this project had made untrue, and correcting them is part of the same close-out. `mc-status.md` said `--offline` changed nothing but the fetch and the `gh` call; it now changes the status row, because a repository GitHub was not asked lands in `prsFailed`, which is the round's own refusal — verified 2026-09-05, `mc status total-lane-cap --offline` reads `ready · GitHub could not be asked what this repository has open` while the live run reads bare `ready`. `mc-ui.md`'s QUEUE bullet said *\"every reason comes from the plan\"* and that held pull requests were in none of the numbers above them; both stopped being true when step 2 gave `queueSection` the machine reading. And `mc-brief.md` now says what the new section deliberately cannot show — a dirty workarea under a plan that does not parse, which is step 4's `inbox-finish` finding.",
+        "Verified by running, not by reading: `mc status connections-section` prints `ready · uncommitted work in ~/mc/connections-section/memoro: hop-measure.mjs, probe.mjs (since 09-05 10:03Z)` and `mc status total-lane-cap` prints bare `ready`, which are two of the three example rows in `mc-status.md` (the held one is step 2's, measured in a shadow work root and quoted from there rather than re-made — the runner was live). `npm test`: 1 725 tests, 1 716 pass, 0 fail, 9 skipped.",
+        "What is left of this project after the close-out is one thing and it is Martin's: the recommendation in #633 — leave a killed session's uncommitted worktree to a person rather than build the runner's own recovery — has been put and not ruled on. If he rules, the entry goes in `docs/project/mc/rulings.md`; if he does not, step 4's own trigger stands, which is to look at the median time-to-clean after a fortnight of the brief naming these workareas. Nothing in the code waits on either."
+      ],
+      "pr": 634,
       "blocked_by": null
     }
   ]

@@ -89,6 +89,16 @@ somebody is working in it this minute, and every row here has to be one a
 person acts on — a lane file whose pid is dead is not a live session, and that
 workarea is precisely what the section is for.
 
+**And a plan that does not parse is not in it either**, which is correct and has
+a cost worth knowing. The section keeps only the refusals whose word is in
+`RUN_REFUSALS` — the machine-shaped ones — so `blocked`, `done` and
+`unparseable` stay *Plan status* rows, where the plan is the first thing to fix.
+`inbox-finish` is what that costs: six files and 165 insertions of apparently
+finished work have stood in its workarea since its session was killed at
+2026-09-02T20:59:43Z, and no surface names the workarea, because the plan above
+it does not parse (measured 2026-09-05). The row that would send somebody there
+is the *Plans that do not parse* one.
+
 **Production** is the other section that can end in something being done, and
 what it ends in is Martin typing `mc deploy` — never the session, and never the
 runner. It carries three readings and no verdict: the last deploy mc made, how
