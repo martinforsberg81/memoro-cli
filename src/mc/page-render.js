@@ -446,37 +446,50 @@ function staleLine(lines, c, wide, stale) {
 }
 
 /**
- * INTAKE — the helper's block: when it last looked, what it found, and how
- * many proposals nobody has queued or dropped.
+ * INTAKE — the helper's block: one row per repository that has a digest, and
+ * how many proposals nobody has queued or dropped.
  *
- * The `!` lines come first and whole, before anything else in the section.
- * The digest marks a new fingerprint `!` when it crossed the threshold, or a
- * condition `!` when it has just started failing; a count of those is a
- * number somebody has to go and look up, and the line is what makes them look.
+ * One row each rather than the newest of the two. There are two digests a day
+ * since the collect was split per repository, and showing the newer silently
+ * hid whichever was collected first — which in practice was memoro-cli's, the
+ * digest about this machine. The section is one row longer and says both.
+ *
+ * The `!` lines come under their own repository's row and whole. The digest
+ * marks a new fingerprint `!` when it crossed the threshold, or a condition
+ * `!` when it has just started failing; a count of those is a number somebody
+ * has to go and look up, and the line is what makes them look.
  */
 function intakeLines(lines, c, wide, intake) {
-  if (!intake.digest) {
+  const repos = intake.repos || [];
+  if (!repos.length) {
     heading(lines, c, wide, 'INTAKE', 'no digest yet — mc helper --intake has not run', null);
     if (intake.proposals) say(lines, c, wide, 7, `${intake.proposals} proposal(s) waiting`, 'yellow');
     return;
   }
-  const age = intake.age_seconds == null ? '' : ` (${ageWords(intake.age_seconds)} old)`;
-  const errors = intake.first
-    ? 'first digest — no baseline'
-    : `${intake.new_errors} new error${intake.new_errors === 1 ? '' : 's'}${intake.loud ? ` (${intake.loud} loud)` : ''}`;
-  // A digest under a day old is green because somebody has looked; older, and
-  // the age itself is the thing to see.
-  const fresh = intake.age_seconds != null && intake.age_seconds < 24 * 60 * 60;
   heading(lines, c, wide, 'INTAKE', between([
-    { text: `${intake.date}${age}`, styles: intake.age_seconds == null ? ['grey'] : (fresh ? ['green'] : ['yellow']) },
-    { text: errors, styles: !intake.first && intake.new_errors ? ['red'] : ['grey'] },
+    { text: `${repos.length} digest${repos.length === 1 ? '' : 's'}`, styles: ['grey'] },
     { text: `${intake.proposals} proposal${intake.proposals === 1 ? '' : 's'}`, styles: intake.proposals ? ['yellow'] : ['grey'] },
   ], ' · '), 'mc helper --intake');
-  for (const line of intake.loud_lines || []) {
-    lines.push(`  ${c('  !', 'red')}  ${c(clip(one(line), wide - 7), 'bold', 'white')}`);
+  for (const repo of repos) {
+    const age = repo.age_seconds == null ? '' : ` (${ageWords(repo.age_seconds)} old)`;
+    const errors = repo.first
+      ? 'first digest — no baseline'
+      : `${repo.new_errors} new error${repo.new_errors === 1 ? '' : 's'}${repo.loud ? ` (${repo.loud} loud)` : ''}`;
+    // A digest under a day old is green because somebody has looked; older,
+    // and the age itself is the thing to see.
+    const fresh = repo.age_seconds != null && repo.age_seconds < 24 * 60 * 60;
+    lines.push(`       ${paint(c, between([
+      { text: repo.repo, styles: ['bold', 'white'] },
+      { text: `${repo.date}${age}`, styles: repo.age_seconds == null ? ['grey'] : (fresh ? ['green'] : ['yellow']) },
+      { text: errors, styles: !repo.first && repo.new_errors ? ['red'] : ['grey'] },
+    ], ' · '), wide - 7)}`);
+    for (const line of repo.loud_lines || []) {
+      lines.push(`  ${c('  !', 'red')}  ${c(clip(one(line), wide - 7), 'bold', 'white')}`);
+    }
+    if (repo.more_loud) say(lines, c, wide, 7, `… ${repo.more_loud} more above the threshold`);
   }
-  if (intake.more_loud) say(lines, c, wide, 7, `… ${intake.more_loud} more above the threshold`);
 }
+
 
 /**
  * The fixed columns of a project row, sized to the terminal rather than to a

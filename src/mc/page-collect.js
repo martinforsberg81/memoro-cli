@@ -383,33 +383,30 @@ export function countNewErrors(text) {
  * With no digest the section says so. It never prints a zero — a zero here
  * would read as "production is quiet" when it means "nobody has looked".
  */
-export function intakeSection({ digest = null, proposals = [], now = new Date(), named = INTAKE_LOUD_NAMED } = {}) {
-  if (!digest) {
+export function intakeSection({ digests = [], proposals = [], now = new Date(), named = INTAKE_LOUD_NAMED } = {}) {
+  const repos = digests.map((digest) => {
+    const { lines, first } = newErrorLines(digest.text);
+    const loud = lines.filter((line) => line.loud);
+    const age = digest.mtime_ms == null ? null : Math.max(0, Math.round((now.getTime() - digest.mtime_ms) / 1000));
     return {
-      digest: null, date: null, age_seconds: null, new_errors: 0, loud: 0, loud_lines: [], more_loud: 0,
-      first: false, proposals: proposals.length,
+      repo: digest.repo,
+      digest: digest.name,
+      // The date is read off the end of the name: `errors-<repo>-<date>.md`
+      // does not match a pattern anchored on `errors-` and a digit, which is
+      // why the section showed no date at all once the prefix landed.
+      date: dateOf(digest.name) || null,
+      age_seconds: age,
+      new_errors: lines.length,
+      loud: loud.length,
+      // The `!` lines themselves, not just how many. A count of loud errors is
+      // a number somebody has to go and look up; the line is the thing that
+      // makes them look. Everything below the first few is a number again.
+      loud_lines: loud.slice(0, named).map((line) => line.text),
+      more_loud: Math.max(0, loud.length - named),
+      first,
     };
-  }
-  const { lines, first } = newErrorLines(digest.text);
-  const loud = lines.filter((line) => line.loud);
-  const age = digest.mtime_ms == null ? null : Math.max(0, Math.round((now.getTime() - digest.mtime_ms) / 1000));
-  return {
-    digest: digest.name,
-    // The date is read off the end of the name: `errors-<repo>-<date>.md`
-    // does not match a pattern anchored on `errors-` and a digit, which is
-    // why the section showed no date at all once the prefix landed.
-    date: dateOf(digest.name) || null,
-    age_seconds: age,
-    new_errors: lines.length,
-    loud: loud.length,
-    // The `!` lines themselves, not just how many. A count of loud errors is a
-    // number somebody has to go and look up; the line is the thing that makes
-    // them look. Everything below the first few is a number again.
-    loud_lines: loud.slice(0, named).map((line) => line.text),
-    more_loud: Math.max(0, loud.length - named),
-    first,
-    proposals: proposals.length,
-  };
+  });
+  return { repos, digests: repos.length, proposals: proposals.length };
 }
 
 /* ---------------------------------------------------------------- PROJECTS */
@@ -642,27 +639,22 @@ export function readForeground(dir, read = readJson, list = readdirSync) {
 }
 
 /**
- * The newest digest on the machine, whichever repository wrote it.
+ * Every digest on the machine, one per repository, in `HELPER_REPOS` order.
  *
- * It read `~/mc/intake/` alone and matched `errors-<date>.md` alone, which
- * stopped being a digest's name when the two-repository digest landed: the
- * section named a file from 2026-08-30 for six days, then said *no digest yet*
- * on a day the collect had run twice, because the drain had archived the two
- * legacy files it was still matching. Both halves are `findDigest`'s now, so
- * the page and the delta cannot drift apart again.
+ * It read one directory and one name shape until 2026-09-05, which stopped
+ * being a digest's name when the two-repository digest landed and stopped
+ * being a digest's home when the inbox began to drain. Both are `findDigest`'s
+ * now, so the page and the delta cannot drift apart again.
  *
- * With two digests a day the section shows the newer, and memoro on a tie
- * because it is the one with a production to read. That is a provisional
- * answer to a question the prefix opened and nobody has decided: a line each
- * is the honest alternative and is one row longer.
+ * It returns them all rather than the newest, because the newest silently hid
+ * whichever repository was collected first — and memoro-cli's digest is about
+ * this machine, which is the one nobody else is watching.
  */
-export function readDigest(env) {
+export function readDigests(env) {
   const dirs = digestDirs(env);
-  const found = HELPER_REPOS.map((repo) => findDigest(dirs, { repo })).filter(Boolean);
-  if (!found.length) return null;
-  // Newest first; memoro leads HELPER_REPOS, so a stable sort gives it the tie.
-  found.sort((a, b) => dateOf(b.name).localeCompare(dateOf(a.name)));
-  return found[0];
+  return HELPER_REPOS
+    .map((repo) => { const found = findDigest(dirs, { repo }); return found && { repo, ...found }; })
+    .filter(Boolean);
 }
 
 function dateOf(name) {
@@ -792,7 +784,7 @@ export async function collectPage({
         git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
       }),
     }),
-    intake: intakeSection({ digest: readDigest(env), proposals: proposalFiles(proposalsDir(env)), now }),
+    intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({
       plans, areas, rows, openPrs: prs.prs, live: liveNames,
       planning: sessions.planning,
