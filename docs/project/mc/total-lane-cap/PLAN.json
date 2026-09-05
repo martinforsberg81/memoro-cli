@@ -127,16 +127,25 @@
     },
     {
       "title": "Close out",
-      "status": "ready",
+      "status": "blocked",
       "done_when": "`docs/technical/mc-run.md` describes both numbers and how they interact, the interim `per_repo 1` is lifted, and `docs/project/project_log.md` has the row.",
       "instruction": [
         "Write both numbers down together, because the reason they are two is the thing a reader will otherwise try to simplify away: `per_repo` bounds how many landings meet at one `main` and is about correctness; `total` bounds this machine and is about load, and it is a proxy. Say what the machine does today with each unset.",
         "`~/.memoro/mc/lanes.json` currently holds `per_repo: 1`, set 2026-09-05T06:05:18Z. That is a holding position taken because there was no total cap, and it costs memoro two of its three lanes while memoro-cli has two plans and memoro has ~28. Once the total works, set the real pair with Martin — do not simply raise `per_repo` back to 3 on your own judgement — and record in the PR what it was set to and what the machine then did.",
         "Add the row to `docs/project/project_log.md`."
       ],
-      "comments": [],
-      "pr": null,
-      "blocked_by": null
+      "comments": [
+        "The documentation half is done and is in this PR. `docs/technical/mc-run.md` § *Lanes* already carried the total from step 3; what it did not carry was the two numbers' arithmetic together, which is the thing this step's first instruction asks for. Added: each number is absent on its own terms (`per_repo` absent is 1, `total` absent is no cap, neither set — which is what the machine holds today — is one lane per repository and two sessions), and the interaction that matters, below.",
+        "**A repository can never hold more than `per_repo` slots, because `per_repo` is structural — that many lane loops per repository (`run.js:1856`) — while `total` is one counter for the process (`running`/`takeSlot`, `run.js:1239`).** So with two repositories, whatever one holds, the other always has at least `total − per_repo` slots it cannot be shut out of. That makes the pair, not the cap, the thing that decides whether step 2's fairness hazard can bite: `per_repo 3, total 3` guarantees a repository nothing, and `per_repo 2, total 3` guarantees each of them one with no ordering rule and no scheduler. This was read out of the code in this step; it is not something either earlier step said.",
+        "The other two done_when clauses are not done and this step is `blocked` on the same answer for both. Lifting the interim `per_repo 1` is the step's own instruction reserved for Martin — *\"set the real pair with Martin — do not simply raise `per_repo` back to 3 on your own judgement\"* — and a headless step session is exactly the case that reserves it. `~/.memoro/mc/lanes.json` is therefore untouched and still reads `per_repo: 1`, set 2026-09-05T06:05:18Z, no total. The `project_log.md` row waits on the same answer rather than on more work: the log is one row per project closed out and is append-only, never edited, and the row's summary has to say what the pair was set to and what the machine then did. Writing it now would put a sentence in a file nobody may correct.",
+        "The question, with the recommendation, is in the PR. In one line: **`per_repo 2, total 3`**, not the `3`/`3` that criterion 1 names — 3/3 is the right pair to *check the cap with*, but as the operating pair it leaves memoro-cli with no guaranteed slot where the interim `per_repo 1` guaranteed it one, and 46 of the 56 attributable step runs since 2026-09-02 were memoro's (`~/mc/runner/log/runs.tsv` against `plans.json`; memoro has 9 plans with a ready first step to memoro-cli's 1 as of 2026-09-05T17:34Z). 2/3 lifts the interim, gives memoro two lanes instead of one, and makes the starvation structurally impossible instead of something to watch.",
+        "Criterion 1 stays unmet for the same reason: it wants a live runner under a real pair and a busy hour watched against the RUNNER block, which is `mc run --update` after Martin's answer. Criteria 2, 3 and 4 were met by steps 1–3 and are marked so. Whoever takes this step up next needs only three things after the answer: write the pair with `mc run lanes <per_repo> --total <total>`, `mc run --update`, then watch `~/mc/runner/current-*.json` and the page's RUNNER block over a busy hour and add the `project_log.md` row saying what it did."
+      ],
+      "pr": 639,
+      "blocked_by": {
+        "kind": "decision",
+        "name": "lanes-pair"
+      }
     }
   ]
 }

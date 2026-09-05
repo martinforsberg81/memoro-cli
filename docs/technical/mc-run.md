@@ -715,8 +715,11 @@ and until 2026-09-05 nothing in the code objected. **A count of sessions is a
 proxy for load, not a measurement of it** — memory and quota are the honest
 measurements and neither is read.
 
-Absent means no total cap, so an operator who sets nothing gets exactly what
-they got before it existed. Set, both bind and the smaller wins: `per_repo`
+Each is absent on its own terms and the file may hold either alone. An absent
+`per_repo` is 1, an absent `total` is no cap, and a machine with neither set —
+which is what `~/.memoro/mc/lanes.json` holds today — runs one lane per
+repository, two sessions, exactly what it ran before the total existed. Set,
+both bind and the smaller wins: `per_repo`
 structurally, because there are that many lane loops per repository, and
 `total` as an in-process claim each lane takes at the last moment before it
 launches a session (`takeSlot`/`waitForSlot`, run.js) and drops in the same
@@ -729,6 +732,19 @@ read no lane starts a step. There is no ordering rule between waiting lanes:
 whoever polls first wins, so a busy repository can hold the machine while a
 quiet one waits. That is measured, not designed, and it is the thing to watch
 first if a cap turns out to starve one side.
+
+**Which pair is chosen decides whether that hazard can bite at all**, and this
+is the one arithmetic worth knowing about the two numbers together. `per_repo`
+is structural — there are exactly that many lane loops per repository, so one
+repository can never hold more than `per_repo` slots — while `total` is one
+counter for the machine. With two repositories, whatever one of them holds, the
+other always has at least `total − per_repo` slots it cannot be shut out of.
+`per_repo 3, total 3` therefore guarantees a repository nothing: memoro can
+hold all three and memoro-cli waits for as long as memoro has steps, which
+with 46 memoro step runs against memoro-cli's 10 since 2026-09-02 is most of
+the time. `per_repo 2, total 3` guarantees each of them one, with no ordering
+rule and no scheduler. A `total` at or below `per_repo` is the first thing to
+look at when one side is being starved.
 
 `mc run lanes` with no argument prints both numbers and how many steps are in
 flight while it is read — `3 per repository, 3 in total — 2 in flight`, or
