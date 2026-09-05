@@ -155,6 +155,18 @@ function validateBlocker(step, at, problems) {
     for (const key of unknownKeys(blocker, BLOCKER_KEYS)) problems.push(`${at}.blocked_by.${key}: unknown key`);
     if (!KINDS.has(blocker.kind)) problems.push(`${at}.blocked_by.kind: one of ${BLOCKER_KINDS.join(', ')}`);
     if (!text(blocker.name)) problems.push(`${at}.blocked_by.name: the decision or the project it waits for`);
+    // A name, and the same shape as a project directory — because that is what
+    // it is matched against. Three plans wrote a whole sentence here instead:
+    // a project name, an em dash, and a paragraph saying which *step* of it
+    // was meant, because the field cannot say so. A sentence matches no
+    // project, and `stale-blockers.js` reads no match as "not on main", so the
+    // page reported three live blockers as ones that had finished. Ruled
+    // 2026-09-05: the name stays a name and the qualification goes in the
+    // step's `comments`, which is where a person reads it anyway.
+    else if (!NAME_RE.test(blocker.name)) {
+      problems.push(`${at}.blocked_by.name: a name, not a sentence — lower-case letters, digits and hyphens, `
+        + `like the project directory it is matched against. What it waits for in more words goes in this step's comments.`);
+    }
     return;
   }
   if (blocker !== null && blocker !== undefined) {
