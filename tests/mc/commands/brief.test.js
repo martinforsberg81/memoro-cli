@@ -77,6 +77,38 @@ describe('the brief role', () => {
     assert.match(overlay, /`git\n?restore`/u);
   });
 
+  /**
+   * The third section of that family, and the largest: 45 blocked steps on
+   * `origin/main` when this was written. Three kinds, three answers, and a
+   * session that had only ever read the role has to take the same three — a
+   * project blocker it leaves alone, a `plan-review` it hands to the
+   * programme's planning session, a named decision it works itself.
+   */
+  it('takes the blocked steps, and knows which of the three it settles', () => {
+    const { overlay } = readCanonRole('brief');
+    assert.match(overlay, /\*Blocked\*/u);
+    assert.match(overlay, /project\s+blocker\*{2}\s+is\s+sequencing/u);
+    assert.match(overlay, /`mc\s+plan\s+<programme>`/u);
+    assert.match(overlay, /named\s+decision\*{2}\s+is\s+the\s+list\s+you\s+actually\s+work/u);
+    assert.match(overlay, /write\n?into\s+that\s+step's\s+`comments`/u);
+  });
+
+  /**
+   * The route, which is the part no other section needs: the brief has no
+   * workarea, so where its own edit goes and how it lands has to be in the
+   * role or it will not be taken. One pull request per repository per brief,
+   * landed by the session with `--docs`, and the two names that keep the
+   * runner from mistaking it for a project's own work.
+   */
+  it('says how its own unblocking reaches main', () => {
+    const { overlay } = readCanonRole('brief');
+    assert.match(overlay, /~\/mc\/brief\/unblock\/<repo>/u);
+    assert.match(overlay, /`brief\/unblock-<date>`/u);
+    assert.match(overlay, /`mc\s+merge\s+<repo>\s+<pr>\s+--docs`/u);
+    assert.match(overlay, /one\s+per\s+repository\s+per\s+brief/u);
+    assert.match(overlay, /Land\s+it\s+before\s+the\s+brief\n?ends/u);
+  });
+
   it('opens with the brief as the first words', () => {
     const launch = briefLaunch({ ...COLLECTED, role: readCanonRole('brief') });
     assert.match(launch.prompt, /^This is the brief, from \/work\/brief\/2026-08-25T20-00-00Z\.md\. Start the meeting\.\n\n# Brief/u);
