@@ -1,0 +1,102 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "The `blocker finished` line says only what the code knows. A blocked step whose project blocker names no plan on main, one whose named plan is `done`, and one whose name was never a name are three different facts, and the page tells them apart instead of printing the first sentence for all three.",
+    "Both times this line has ever fired in the estate it was the third fact. On 2026-09-05 it drew `blocker finished 2` against `sql-w1-universe-closure` steps 31 and 32, whose `blocked_by.name` each held a 155-character sentence — a project name, an em dash, and a paragraph explaining which step of it was meant. Neither blocker was finished; both were live. memoro #11444 renamed them, and the same line came back on Martin's page the same evening off a plan cache from before that landed.",
+    "Measured on `origin/main` 2026-09-05 after #11444, both repositories, 45 plans: **0 project blockers naming a plan that is not on main, and 1 blocker name that is not a name** — `sql-goal1-certification` step 4, a 97-character sentence, `kind: decision`. The estate is clean of the case that draws the line and holds exactly one of the case that opens the door."
+  ],
+  "contract": [
+    "**The module's care is the standard, not the exception.** `stale-blockers.js` already refuses to say *is done* where it can only know *is not on main*, and says why in its own docstring: those are different facts and only a person can tell which applies. The header line above it — *\"a blocked step is waiting on a project that is not coming\"* — throws that away and predicts. The wording that survives is `describeStale`'s, and the summary is brought down to it.",
+    "**Reporting before refusing.** A `NAME_RE` check in `validatePlan` makes every plan already carrying a malformed name unrunnable the moment it lands, which parks the project rather than fixing it. So the page learns to say it first, and the schema only refuses once the estate is known clean — which is a measurement this project repeats rather than a claim it inherits.",
+    "**`kind: decision` stays out of the staleness check.** A machine that claimed a decision was stale would be guessing, and 12 of the decision blockers on main are the deliberate `plan-review` park. That exclusion is right and this project does not touch it — but a decision blocker's *name* is checkable even when its answer is not, and the one malformed name in the estate is a decision's.",
+    "**Nothing here writes a plan.** The page reports and a person edits, which is `stale-blockers.js`'s own rule. The one plan edit this project makes is the malformed name in step 2, and it is made deliberately and named."
+  ],
+  "out_of_scope": [
+    "The plan cache being behind `origin/main`. The page is offline by default and says so; the line Martin saw was a correct reading of a snapshot taken before #11444. Refreshing is `mc --fresh` and there is no defect here — said out loud so nobody re-investigates it.",
+    "Whether `plan-review` should be a blocker kind of its own. 12 of the 20 decision blockers carry that one name across eight programmes and it is a park, not a question; that is `brief-blocked-steps`'s ground.",
+    "Flipping any blocked step. This project makes the page honest about what a blocker says; whether a given step's premise is dead is a person's reading, one step at a time.",
+    "`describeStale`'s callers outside the page. `mc status` and the brief may want the same three-way distinction later; this project changes the page and the module, and does not go looking."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A blocker whose name is not a name is reported as itself, not as a finished project.",
+      "check": "A fixture carries three blocked steps — one naming a plan that is `done`, one naming nothing on main, one carrying a sentence — and the rendered page names three different things. Asserted in `tests/mc/page.test.js`; the third case is the one that fails against today's code."
+    },
+    {
+      "met": false,
+      "criterion": "The summary line claims no more than the rows beneath it.",
+      "check": "Read the line. `is not on main` is not rendered as *finished* or *not coming* anywhere in the section, and a reader who saw only the header would not conclude something the module refused to conclude."
+    },
+    {
+      "met": false,
+      "criterion": "The estate holds no blocker name that is not a name.",
+      "check": "The sweep in this plan's goal, re-run against `origin/main` at close-out: every `blocked_by.name` in both repositories matches `NAME_RE`. It was 1 on 2026-09-05."
+    },
+    {
+      "met": false,
+      "criterion": "A plan carrying a malformed blocker name cannot land unnoticed again.",
+      "check": "Either `validateBlocker` applies `NAME_RE` and a test asserts a sentence is refused, or step 2 recorded why it must not and what stands instead. One of the two is written down; silence is not an outcome."
+    }
+  ],
+  "documents": [
+    {
+      "label": "What the check does and the wording it is careful about",
+      "path": "../../../../src/mc/stale-blockers.js"
+    },
+    {
+      "label": "The line as it is drawn today",
+      "path": "../../../../src/mc/page-render.js"
+    },
+    {
+      "label": "`NAME_RE`, and the one place it is not applied",
+      "path": "../../../../src/mc/plan-schema.js"
+    }
+  ],
+  "steps": [
+    {
+      "title": "The third fact, and a header that claims no more than its rows",
+      "status": "ready",
+      "done_when": "The page tells a malformed blocker name apart from a missing project and from a finished one, and the summary line no longer says *finished* or *not coming* of a blocker the code only knows is not on main.",
+      "instruction": [
+        "Read `stale-blockers.js`'s docstring before touching anything. It is the reason this defect is worth fixing carefully rather than quickly: the author thought hard about false positives, excluded `kind: decision` on the grounds that a machine claiming a decision was stale would be guessing, and chose the words *is not on main* over *is done* deliberately. The same care was not applied one field over, and the header line undoes it. Do not rewrite the module's reasoning; extend it.",
+        "`staleBlockers` (`stale-blockers.js:52`) computes `why` as `'is done'` or `'is not on main'` and returns nothing for anything else. Add the third: a `project` blocker whose `name` does not match `NAME_RE` (`plan-schema.js:38`) is not a blocker that finished, it is a plan that cannot be checked. It needs its own `why` — the wording matters, and *cannot be checked* is closer than *malformed*, because what a reader must do is open the plan, not fix a syntax error. Do not import the regex by copying it; export it from `plan-schema.js` and use the one definition.",
+        "Then the header. `staleLine` (`page-render.js:431`) prints `blocker finished ${count} — a blocked step is waiting on a project that is not coming`. Both halves overclaim: `finished` is one of the two things `why` can say and `not coming` is neither. The rows beneath already say it correctly, so the header's job is to count and point, not to summarise a fact it does not have. If the three kinds now have different counts, the honest header is the one that says so — but keep it one line: the comment above `staleLine` explains that a second name was already being clipped at 120 columns.",
+        "Colour: the yellow is right and stays. `page-render.js`'s own note says yellow is what waits on a person, and all three of these do.",
+        "Test all three in `tests/mc/page.test.js` beside the existing assertion, and one unit test per `why` in the stale-blockers test. The malformed case is the one that fails against today's code; write it first and watch it fail, because the whole defect is that it currently passes as something else.",
+        "`npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The last sentence in a name field, and whether the schema should refuse the next one",
+      "status": "ready",
+      "done_when": "`origin/main` holds no `blocked_by.name` that fails `NAME_RE` in either repository, and either the schema refuses one or the reason it must not is written down.",
+      "instruction": [
+        "Re-run the sweep first — the estate moves daily and the number this plan carries is from 2026-09-05. Every `PLAN.json` on `origin/main` in both repositories, every step with `status: blocked`, every `blocked_by.name` against `NAME_RE`. It was one: `memoro/docs/project/sql-readiness/sql-goal1-certification` step 4, `kind: decision`, holding *\"promotion of sql_migration_ready on the certified commit — Martin's explicit ruling, never inferred\"*.",
+        "That name is a sentence because the field could not say what the step actually waits on, and the same is true of the two that started this: `sql-w1-universe-closure` steps 31 and 32 each waited on a *step* of a project, not on the project as a whole, and wrote the qualification into the name because there was nowhere else. So answer the design question before the rename, or the next author does the same thing for the same reason. Two honest shapes: the name stays a name and the qualification moves into the step's own `comments` where a reader of the plan finds it; or `blocked_by` gains a field that can say which part is meant. The first costs nothing and loses the qualification from the field a machine reads; the second is a schema change that every plan and every reader inherits. Pick one, say why in the pull request, and make the estate match it.",
+        "Only then the guard. With the estate clean, `validateBlocker` (`plan-schema.js:140`) applying `NAME_RE` costs one line and closes the door — and it is not free: a plan that lands with a malformed name becomes unreadable to the runner rather than merely wrong on the page, which parks the project. That trade is why the proposal behind this project said the data first and the validation last. If the answer is that the guard should not exist, write that down with the reason; an unanswered question here is how this recurs.",
+        "`npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close out",
+      "status": "ready",
+      "done_when": "`docs/technical/` records what the three kinds of stale blocker mean and which the page can tell apart, and `docs/project/project_log.md` has the row.",
+      "instruction": [
+        "Write down the distinction, not the change: what a project blocker naming nothing on main means, what a `done` one means, what an unreadable name means, and which of the three a person has to resolve by reading the plan rather than by trusting the page. That is the fact the next reader needs, and it is the one this project exists to make sayable.",
+        "Re-run the sweep once more and put the number in the pull request, so the close-out records the estate's state rather than asserting it.",
+        "Add the row to `docs/project/project_log.md`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
