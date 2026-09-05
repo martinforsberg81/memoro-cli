@@ -1,0 +1,122 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`mc run lanes` can express \"at most three steps running anywhere on this machine\". The runner honours it, an operator who sets nothing sees exactly today's behaviour, and the bare command prints both numbers and what they mean together.",
+    "Today there is one number and it is per repository. `mc run lanes 3` on two repositories is six concurrent Opus sessions, and no line of code objects — `LANES_MAX` is 8, so the setting can ask for sixteen. Martin saw six rows in the RUNNER block and meant three in total."
+  ],
+  "contract": [
+    "`per_repo` keeps its meaning and its reason. `src/mc/lane-count.js:13` is right: memoro's lane and memoro-cli's never touch — different mains, different worktrees — so the number that bounds how many landings meet at one gate is per repository. That is a correctness number and the total is not a substitute for it.",
+    "Absent reads as no total cap. An operator who has never set one gets exactly what they get today, the way `per_repo` already treats an absent file (`readLaneCount` returns `DEFAULT_LANES` on anything it cannot read).",
+    "Both bound, and the smaller binds. A lane starts a step only while its repository is under `per_repo` and the machine is under `total`.",
+    "One number, one file: `total` beside `per_repo` in `~/.memoro/mc/lanes.json`. Not a second file, not an environment variable.",
+    "The count is still read once, at start (`run.js:1813`), with `mc run --update` taking a new value after the round in flight. That contract does not change."
+  ],
+  "out_of_scope": [
+    "Bounding what the sessions consume rather than how many there are. Memory and API quota are the honest measurements and neither is read today; a count is a proxy and this project names it as one in the code rather than pretending it is a resource guard.",
+    "The RUNNER block's rows. That six rows do not say which repository each belongs to may be the whole cause of the original confusion, and it is cheaper than the cap — but it is not what was asked for, and the cap is wanted regardless. If the step session wants it, it is a proposal, not a widening of this.",
+    "`LANES_MAX` and `LANES_MIN`. The bounds on a single number stay 1..8.",
+    "The quota sleep and how lanes share it. `quotaHold`/`quotaPause` bound what a refused lane does, not how many lanes start."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "With `total` set to 3 and `per_repo` set to 3, at most three steps run anywhere.",
+      "check": "Set both, start the runner, and watch `~/mc/runner/current-*.json`: never more than three files at once over a busy hour. Confirmed against the page's RUNNER block at the same time, not from the code path alone."
+    },
+    {
+      "met": false,
+      "criterion": "An operator who sets no total sees no change.",
+      "check": "A `lanes.json` with only `per_repo` produces the same lane behaviour as today; asserted by a test, and by reading the file mc actually has before the change is made."
+    },
+    {
+      "met": false,
+      "criterion": "`mc run lanes` with no argument says both numbers and what they mean together.",
+      "check": "Run it. The line reads like `3 per repository, 3 in total — 3 in flight`, and a reader who had only ever seen the old line would not have had to ask the question that started this."
+    },
+    {
+      "met": false,
+      "criterion": "The cap cannot be raced past.",
+      "check": "A test starts more lanes than the total permits against a step that blocks, and asserts the number that actually began equals the total. Two lanes both reading `2 in flight` and both starting is the failure being asserted against."
+    }
+  ],
+  "documents": [
+    {
+      "label": "The setting, its file and why it is per repository",
+      "path": "../../../../src/mc/lane-count.js"
+    },
+    {
+      "label": "The lane loops and where the count is read",
+      "path": "../../../../src/mc/run.js"
+    },
+    {
+      "label": "What `mc run` is and what its verbs do",
+      "path": "../../../technical/mc-run.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "A second number in the same file",
+      "status": "ready",
+      "done_when": "`readLaneCount` returns both numbers, `writeLaneCount` can set either without disturbing the other, and an absent `total` reads as no cap.",
+      "instruction": [
+        "`src/mc/lane-count.js` is 55 lines and holds the whole setting: `readLaneCount` returns a bare integer, `writeLaneCount` writes `{ per_repo, set }` whole. Both signatures change here, and the callers are few — `run.js:1813` (`deps.laneCount || readLaneCount`) and `src/mc/commands/run.js`'s `lanes` verb. Find them all before you start; the file's exports are the search.",
+        "Return a shape rather than a second bare integer, so a caller cannot get the two the wrong way round. `{ per_repo, total }` with `total` as `null` when unset is the smallest thing that reads correctly at every call site. Keep the file's existing discipline exactly: never throw, and a broken or nonsense file reads as the default — `readLaneCount`'s contract is that a bad file is the default, not a wall, and that must still hold when the file has one good number and one bad one.",
+        "`writeLaneCount` writes the file whole today, so setting one number must not clear the other. Read, merge, write — and keep `writeJsonAtomic` and mode `0o600`, which is what the gate lock and the leases beside it use.",
+        "Validate `total` on the same rule as `per_repo` — a whole number in `LANES_MIN..LANES_MAX` — and decide what an explicit unset looks like. `mc run lanes --total 0` and `--total none` are both defensible ways to say \"no cap\"; pick one, say why in the PR, and make the refusal message name the accepted forms the way `writeLaneCount`'s already does.",
+        "Say in the module comment what the second number is and what it is not. The comment at `:13` already argues per-repo well; add beside it that `total` bounds this machine — CPU, memory, API quota, and how much a person can follow — and that a **count of sessions is a proxy for load, not a measurement of it**. That sentence is a contract term (it is in `out_of_scope`), and the module comment is where a reader who is about to build a resource guard on top of it will meet it.",
+        "`npm test` — `tests/mc/lane-count.test.js` reads this."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The runner honours both",
+      "status": "ready",
+      "done_when": "A lane starts a step only while its repository is under `per_repo` and the machine is under `total`, and no two lanes can both start on the same free slot.",
+      "instruction": [
+        "The lanes are independent async loops in one process: `run.js:1856` builds `repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)))` and runs them under one `Promise.all`. `per_repo` is enforced structurally — there are exactly that many loops per repository — which is why nothing counts anything today. A total cap cannot be structural, so it has to be a claim.",
+        "It has to be an in-process claim, not a count of files. `paths.currents()` (`run.js:292`) lists `current-*.json` and is what `quiet()` uses, but a file is written after a step begins, so two lanes checking it in the same tick both see a free slot and both start. The precedent for the right shape is twelve hundred lines up: the `claims` Set at `run.js:1185`, which exists for exactly this — *\"Two sessions in one worktree is the failure this refuses; the claim lives in this process, where the lanes are.\"* Follow it.",
+        "Decide where the claim is taken and defend the choice in the PR. Taking it before `runStepClaimed` does its reading means a slot is held while the round decides it has nothing to run, which starves the other repository for the length of a `git status` and a fetch; taking it at the moment a session is about to launch means the reading is done and thrown away. The second is more nearly correct and slightly more code. Say which and why.",
+        "A lane that cannot claim must not spin. It has to wait and try again, or end its round and sleep — whichever, the log must not gain a line per attempt: `runner.log` already carries 9 827 `, skip` lines and this is the kind of change that adds ten thousand more. If it says anything at all, say it once per round.",
+        "**Name the fairness hazard even if you do not solve it here.** memoro has ~28 active plans and memoro-cli has 2. With a total of 3 and no ordering rule, whichever lane asks first wins, every time — and the lane that asks first is whichever finished its last step. That is not obviously wrong (the repository with work to do gets the machine) and it is not obviously right (memoro-cli's queue can be starved indefinitely by a busy memoro). Measure what actually happens over a few hours with the cap on and put the finding in the PR. Do not build a scheduler in this step.",
+        "Read the count once, at start, where it is read now (`run.js:1813`) — `mc run --update` is how a new value takes effect and that contract does not change. The `lanes: N per repository` line the runner says at `:1814` should say both numbers when a total is set.",
+        "Test the race directly: more lanes than the total permits, a step that blocks, and an assertion on how many actually began. A test that only checks the arithmetic will pass on a version that races.",
+        "`npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The verb says both, and what they mean together",
+      "status": "ready",
+      "done_when": "`mc run lanes` prints both numbers and the number in flight in one line, and `mc run lanes --total <n>` sets the total without touching `per_repo`.",
+      "instruction": [
+        "`mc run lanes [<n>]` lives in `src/mc/commands/run.js`: `parseRunArgs` at `:120` takes one positional number, `lanes()` at `:75` prints or sets it, and the usage line at `:41` describes it. A second form rather than a second verb — `mc run lanes --total 3` — is what the proposal asked for and it keeps the bare positional meaning what it has always meant, so nobody's muscle memory changes meaning under them.",
+        "The bare line is the deliverable, not an afterthought. Today it says `lanes 3 — 3 steps in flight per repository`, which is a true sentence that produced the wrong picture: it does not say there are two repositories, so it does not say the machine is running six. `3 per repository, 3 in total — 3 in flight` is the line that would have made this a non-question. Read the in-flight number from `paths.currents()`; a printed count is a snapshot for a person and the race that matters for correctness is step 2's, not this one's.",
+        "Say what happens when no total is set, in the line itself rather than by omission — a reader who sees only `3 per repository` cannot tell whether the total is unset or is 3. Something that names the absence, and names the consequence: with two repositories, no total means up to six.",
+        "The refusal messages are part of the surface. `mc run lanes --total 12` must say what it accepts, and `mc run lanes 3 --total 5` should be refused or explained rather than silently setting a total no repository can reach — a total above `per_repo × repositories` is a no-op and telling the operator so is cheaper than letting them believe they set something.",
+        "Update the usage line at `:41` and `docs/technical/mc-run.md` in this step rather than at close-out: the verb's own help text is the documentation most readers will ever see.",
+        "`npm test`, and run all four forms by hand — bare, positional, `--total`, and a refused value — and put the output in the PR."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close out",
+      "status": "ready",
+      "done_when": "`docs/technical/mc-run.md` describes both numbers and how they interact, the interim `per_repo 1` is lifted, and `docs/project/project_log.md` has the row.",
+      "instruction": [
+        "Write both numbers down together, because the reason they are two is the thing a reader will otherwise try to simplify away: `per_repo` bounds how many landings meet at one `main` and is about correctness; `total` bounds this machine and is about load, and it is a proxy. Say what the machine does today with each unset.",
+        "`~/.memoro/mc/lanes.json` currently holds `per_repo: 1`, set 2026-09-05T06:05:18Z. That is a holding position taken because there was no total cap, and it costs memoro two of its three lanes while memoro-cli has two plans and memoro has ~28. Once the total works, set the real pair with Martin — do not simply raise `per_repo` back to 3 on your own judgement — and record in the PR what it was set to and what the machine then did.",
+        "Add the row to `docs/project/project_log.md`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
