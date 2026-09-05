@@ -100,7 +100,7 @@
         "One thing for step 3 to know: `runLoop` now says `lanes: <n> per repository, <n> in total` (or `no total cap`) whenever a total is set or `per_repo` is above one — the log line, not the verb's. The verb's line is still the old one until step 3 changes it, and the two should end up saying the same thing in the same order.",
         "The fixture in `tests/mc/run.test.js` now stubs `deps.laneCount` by default (`{ per_repo: 1, total: null }`). Before this, any `runLoop` test without its own stub read the real `~/.memoro/mc/lanes.json` off whatever machine ran the suite; with the total now read on every path that mattered more."
       ],
-      "pr": null,
+      "pr": 637,
       "blocked_by": null
     },
     {
