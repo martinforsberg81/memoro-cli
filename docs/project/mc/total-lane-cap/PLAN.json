@@ -25,7 +25,7 @@
       "check": "Set both, start the runner, and watch `~/mc/runner/current-*.json`: never more than three files at once over a busy hour. Confirmed against the page's RUNNER block at the same time, not from the code path alone."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "An operator who sets no total sees no change.",
       "check": "A `lanes.json` with only `per_repo` produces the same lane behaviour as today; asserted by a test, and by reading the file mc actually has before the change is made."
     },
@@ -35,7 +35,7 @@
       "check": "Run it. The line reads like `3 per repository, 3 in total — 3 in flight`, and a reader who had only ever seen the old line would not have had to ask the question that started this."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The cap cannot be raced past.",
       "check": "A test starts more lanes than the total permits against a step that blocks, and asserts the number that actually began equals the total. Two lanes both reading `2 in flight` and both starting is the failure being asserted against."
     }
@@ -79,7 +79,7 @@
     },
     {
       "title": "The runner honours both",
-      "status": "ready",
+      "status": "done",
       "done_when": "A lane starts a step only while its repository is under `per_repo` and the machine is under `total`, and no two lanes can both start on the same free slot.",
       "instruction": [
         "The lanes are independent async loops in one process: `run.js:1856` builds `repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)))` and runs them under one `Promise.all`. `per_repo` is enforced structurally — there are exactly that many loops per repository — which is why nothing counts anything today. A total cap cannot be structural, so it has to be a claim.",
@@ -91,7 +91,15 @@
         "Test the race directly: more lanes than the total permits, a step that blocks, and an assertion on how many actually began. A test that only checks the arithmetic will pass on a version that races.",
         "`npm test`."
       ],
-      "comments": [],
+      "comments": [
+        "The claim is a counter in `createRunner` (`running`, `takeSlot`, `dropSlot`, `waitForSlot`), sitting immediately above the `claims` Set it is modelled on. `runLoop` reads `lanes.json` once, before it builds the runner, and hands `total` in as an option — so every path that can start a step carries the cap, not only the unattended one. With no total set nothing is counted and `takeSlot` always succeeds; that is the whole of \"an operator who sets nothing sees today's behaviour\".",
+        "The slot is taken at the last moment before the session (after the tool check, before the prompt is built) and dropped in the same `finally` that removes `current-<repo>.json` — the slot's life and the current file's life are the same interval, so the RUNNER block and the cap cannot disagree about how many are in flight. The alternative, claiming before `runStepClaimed` reads anything, would hold a slot through a fetch, a merge and a `git status` for readings that mostly end in a refusal spending no session. What this costs instead is a reading thrown away when the machine turns out to be full: seconds against the hour a session is.",
+        "A lane that cannot claim polls every `TOTAL_POLL_MS` (15s) and says one line when the wait begins, never one per attempt. It gives the wait up on STOP (returns `stop`, as the STOP check at the top of the round does) and on UPDATE — the second is a contract point, not tidiness: the drain promises that from the moment UPDATE is read no lane starts a step and the handover comes within one step's length, and a lane that waited out somebody else's step and then launched its own would make that two. The UPDATE give-up returns a bare `skipped`, which made it the second exception to `no bare skipped outside the lane claim`; that test now allows exactly two and names both, and both are the same kind of fact — how many of this process's own lanes are where, which no file on this machine holds and `mc status` could only guess at.",
+        "The fairness hazard, measured but not with the cap on — it cannot be, the code is not landed and the live runner is on `per_repo: 1` with no total. From `~/mc/runner/plans.json` and `runs.tsv` on 2026-09-05: memoro has 26 plans with a ready step, memoro-cli 3; of the last three days' steps whose project is still on main, 41 were memoro's and 8 memoro-cli's; a step is a median of 14 minutes, p90 58, max 120 (the budget). So a waiting lane waits a quarter of an hour typically and up to two hours worst case, and whoever polls first wins. Under a cap of 3 memoro-cli can wait behind memoro for as long as memoro has steps. Step 4 sets the real pair with Martin; that is the moment to watch a busy hour and decide whether an ordering rule is owed. Do not build one before it has been watched.",
+        "Criterion 1 (three set, at most three run, confirmed against the RUNNER block over a busy hour) is deliberately not marked met: it wants a live runner under the cap, which is step 4's `mc run --update` and Martin's number, not this session's. Criterion 3 is step 3's verb line.",
+        "One thing for step 3 to know: `runLoop` now says `lanes: <n> per repository, <n> in total` (or `no total cap`) whenever a total is set or `per_repo` is above one — the log line, not the verb's. The verb's line is still the old one until step 3 changes it, and the two should end up saying the same thing in the same order.",
+        "The fixture in `tests/mc/run.test.js` now stubs `deps.laneCount` by default (`{ per_repo: 1, total: null }`). Before this, any `runLoop` test without its own stub read the real `~/.memoro/mc/lanes.json` off whatever machine ran the suite; with the total now read on every path that mattered more."
+      ],
       "pr": null,
       "blocked_by": null
     },
