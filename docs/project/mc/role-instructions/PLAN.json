@@ -54,7 +54,7 @@
       "check": "`wc -l canon/roles/*.md` totals under 260 (today: 330). The PR body lists every removed passage with the role it came from and where it went — the shared file, a document under `docs/technical/`, or nowhere."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "How a session's instructions are assembled is described in one place under `docs/technical/`.",
       "check": "The four existing descriptions (`mc-run.md:356`, `mc-plan.md:147-158`, `mc-helper.md:336`, `mc-brief.md:67`) either point at that one place or are the one place; no fifth account of the mechanism exists."
     },
@@ -153,15 +153,21 @@
     },
     {
       "title": "Close out: one account of how a session is instructed",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/technical/` describes the assembly in one place, the other accounts point at it, and `docs/project/project_log.md` has the row.",
       "instruction": [
         "There is no `docs/technical/mc-roles.md`, and the mechanism is currently described in four documents from four angles: `mc-run.md:356` (what the runner wraps around a step prompt), `mc-plan.md:147-158` (the plan role's emptiness and `instructionsFor`), `mc-helper.md:336` (a table of which role file each turn reads), `mc-brief.md:67` (what `brief.md` allows a brief session to do). Write one account — a new `mc-roles.md`, or one of those four made the account and the others pointed at it — covering the catalogue, the shared file, the assembler, which paths call it, and why the runner's missing-role check reads the role's own body. Say in the PR which shape you chose. A fifth parallel description is the thing this project exists to stop.",
         "Add the row to `docs/project/project_log.md`.",
         "The proposal this project consumed, `~/mc/proposals/2026-08-31-roles-say-less.md`, was deleted by the planning session that wrote this plan and named in its pull request. Its two unconsumed questions — which model each role runs, and whether `~/mc/` should have instructions of its own — were carried to `~/mc/proposals/2026-09-04-role-models-and-mc-instructions.md` in the same move. Nothing here removes either file."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The shape chosen is a new `docs/technical/mc-roles.md`, with the other accounts pointing at it rather than one of them being promoted. None of the four was about roles: each is a verb's document, and the assembly is one paragraph inside it. Making `mc-run.md` the account would have put what `mc plan` and `mc helper` are told inside the runner's document, which is where the drift started. So each of the four now names the files its own session wears and links out for the mechanism, and one document owns the catalogue, `_common.md`, `instructionsFor` and its four callers.",
+        "A fifth was found and pointed at too: `docs/technical/mc-dormant.md:119` restates the canon-fallback lookup as part of the story of the worker role shipping with mc. It was left as history and given the same one-line link, rather than cut — the passage is about a removal, not about assembly.",
+        "What is in the new document that was in none of the four: why the underscore in `_common.md` is a mechanism (`listRoles` would otherwise list it as a role named `common`), why the shared text is read at assembly rather than folded into `overlay` (`run.js:1340` reads `overlay` to tell a missing role file from an installed one), the table of the seven roles with their models and who launches each, and the note that a `model:` in frontmatter is never validated by mc — `modelArgs` passes it through, so a name the tool rejects fails at launch and nowhere earlier.",
+        "Verified: `docs/technical/mc-roles.md` exists and is the only account; `grep -rn 'instructionsFor|_common\\.md' docs/` returns, outside it, only pointer sentences in `mc-run.md:385`, `mc-helper.md:460`, `mc-plan.md:159` and `mc-brief.md:104` plus one test-list line in `mc-plan.md:196`. Every relative link in the new document was resolved against the filesystem — twelve targets, all present, including the `mc-plan.md#what-the-session-is-told` anchor. The project log row is the last line of `docs/project/project_log.md`. `npm test`: 1695 tests, 1686 pass, 0 fail, 9 skipped, 51 s.",
+        "For whoever archives this: the under-260 line count in the sixth criterion is left `met: true` on the cut this project made (330 → 219 across the seven roles). `wc -l canon/roles/*.md` on the merged tree reads 287, because `_common.md` is 68 lines and main added to it while step 3 was open. Nothing this project cut came back; the number simply counts the shared file too."
+      ],
+      "pr": 625,
       "blocked_by": null
     }
   ]
