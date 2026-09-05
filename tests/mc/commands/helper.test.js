@@ -45,6 +45,11 @@ const TURN = (over = {}) => ({
 
 const ROLE = { name: 'helper', model: 'sonnet', tools: ['claude', 'codex'], overlay: 'You are the helper: the desk…' };
 
+/**
+ * The inbox as the drain finds it, and where it puts a file afterwards. The
+ * real `drainIntake` runs — only its filesystem and its turn are the test's —
+ * so the loop, the order and the archive are measured rather than replaced.
+ */
 async function invoke(argv, data = {}, turn = TURN(), over = {}) {
   const stdout = sink();
   const stderr = sink();
@@ -52,17 +57,21 @@ async function invoke(argv, data = {}, turn = TURN(), over = {}) {
   const turned = {};
   const opened = {};
   const made = [];
+  const { inbox = ['errors-2026-08-29.md'], ...rest } = over;
+  const moved = [];
   const code = await run(argv, {
     stdout,
     stderr,
     collect: async (options) => { Object.assign(seen, options, { called: true }); return RESULT(data); },
     turn: async (options) => { Object.assign(turned, options, { called: true }); return turn; },
+    files: () => inbox,
+    move: (from, to) => { moved.push([from, to]); return true; },
     open: async (options) => { Object.assign(opened, options, { called: true }); return { ok: true, code: 0 }; },
     role: () => ROLE,
     mkdir: (path) => made.push(path),
-    ...over,
+    ...rest,
   });
-  return { code, stdout: stdout.text, stderr: stderr.text, seen, turned, opened, made };
+  return { code, stdout: stdout.text, stderr: stderr.text, seen, turned, opened, made, moved };
 }
 
 describe('mc helper — the desk', () => {
@@ -172,7 +181,7 @@ describe('the helper role', () => {
 });
 
 describe('mc helper --intake', () => {
-  it('collects and then runs the turn over the digest it just wrote', async () => {
+  it('collects and then drains the inbox, archiving each file after its turn', async () => {
     const result = await invoke(['--intake'], {}, TURN({
       wrote: [{ file: '2026-08-29-expose-operations.md' }],
       waiting: [{ file: '2026-08-29-expose-operations.md' }],
@@ -180,12 +189,32 @@ describe('mc helper --intake', () => {
     assert.equal(result.code, 0);
     assert.equal(result.turned.called, true);
     assert.equal(result.opened.called, undefined, 'the intake half opens no session');
-    // The file, not its text: the turn opens it itself.
-    assert.equal(result.turned.file, '/tmp/mc/intake/errors-2026-08-29.md');
+    // The file, not its text and not its path: the turn stands in the inbox
+    // and opens it itself.
+    assert.equal(result.turned.file, 'errors-2026-08-29.md');
     assert.equal(result.turned.digestText, undefined);
-    assert.match(result.stdout, /1 proposal, 1 waiting \(\d+\.\ds, claude sonnet\)/u);
+    assert.equal(result.moved.length, 1);
+    assert.match(result.moved[0][0], /\/intake\/errors-2026-08-29\.md$/u);
+    assert.match(result.moved[0][1], /\/runner\/log\/intake\/\d{4}-\d{2}-\d{2}\/errors-2026-08-29\.md$/u);
+    assert.match(result.stdout, /errors-2026-08-29\.md: 1 proposal, 1 waiting \(\d+s, claude sonnet\)/u);
     assert.match(result.stdout, /2026-08-29-expose-operations\.md/u);
     assert.match(result.stdout, /read them at the next brief/u);
+  });
+
+  /**
+   * The cap is the runner's, and the verb's for the same reason: three turns is
+   * a bounded wait, and an inbox somebody dropped forty screenshots into is not
+   * a thing to hold a terminal open through.
+   */
+  it('takes three, oldest first, and says how many are still waiting', async () => {
+    const taken = [];
+    const result = await invoke(['--intake'], {}, TURN(), {
+      inbox: ['errors-2026-08-30.md', 'note.md', 'errors-2026-08-28.md', 'errors-2026-08-29.md'],
+      turn: async (options) => { taken.push(options.file); return TURN(); },
+    });
+    assert.deepEqual(taken, ['errors-2026-08-28.md', 'errors-2026-08-29.md', 'errors-2026-08-30.md']);
+    assert.equal(result.moved.length, 3);
+    assert.match(result.stdout, /1 more in the inbox — run it again to take the next 3/u);
   });
 
   it('--collect is the script half and never reaches the model', async () => {
@@ -303,8 +332,12 @@ describe('mc helper --intake — both repositories', () => {
   const both = async (argv, turn = TURN(), over = {}) => {
     const repos = [];
     const turnedRepos = [];
+    const turnedFiles = [];
     const stdout = sink();
     const stderr = sink();
+    // The two digests the collect just wrote, waiting in the inbox like
+    // anything else somebody put there.
+    const inbox = ['errors-memoro-2026-08-29.md', 'errors-memoro-cli-2026-08-29.md'];
     const code = await run(argv, {
       stdout,
       stderr,
@@ -312,12 +345,14 @@ describe('mc helper --intake — both repositories', () => {
         repos.push(options.repo);
         return { ...RESULT({}), repo: options.repo, path: `/tmp/mc/intake/errors-${options.repo}-2026-08-29.md` };
       },
-      turn: async (options) => { turnedRepos.push(options.repo); return turn; },
+      turn: async (options) => { turnedRepos.push(options.repo); turnedFiles.push(options.file); return turn; },
+      files: () => inbox,
+      move: () => true,
       role: () => ROLE,
       mkdir: () => {},
       ...over,
     });
-    return { code, repos, turnedRepos, stdout: stdout.text, stderr: stderr.text };
+    return { code, repos, turnedRepos, turnedFiles, stdout: stdout.text, stderr: stderr.text };
   };
 
   it('--collect writes a digest for each repository, memoro first', async () => {
@@ -328,28 +363,31 @@ describe('mc helper --intake — both repositories', () => {
     assert.match(result.stdout, /errors-memoro-cli-2026-08-29\.md/u);
   });
 
-  it('runs one turn per digest, each told which repository it is reading', async () => {
+  it('runs one turn per file, and lets the name say which repository it is', async () => {
     const result = await both(['--intake']);
-    // `repo:` is the frontmatter key everything downstream routes on. A
-    // single turn over both digests would have to guess it.
-    assert.deepEqual(result.turnedRepos, ['memoro', 'memoro-cli']);
-    assert.match(result.stdout, /memoro: 0 proposals?|memoro: no proposal/u);
-    assert.match(result.stdout, /memoro-cli: /u);
+    assert.deepEqual(result.turnedFiles, ['errors-memoro-2026-08-29.md', 'errors-memoro-cli-2026-08-29.md']);
+    // `repo:` is the frontmatter key everything downstream routes on, and
+    // `repoOfFile` reads it out of the collector's own names — the drain does
+    // not carry it, because most of what an inbox holds has no repository in
+    // its name at all.
+    assert.deepEqual(result.turnedRepos, [undefined, undefined]);
+    assert.match(result.stdout, /errors-memoro-2026-08-29\.md: no proposal/u);
+    assert.match(result.stdout, /errors-memoro-cli-2026-08-29\.md: /u);
   });
 
-  it('a turn that fails does not cost the other repository its turn', async () => {
+  it('a turn that fails does not cost the next file its turn', async () => {
     let call = 0;
     const result = await both(['--intake'], TURN(), {
-      turn: async (options) => {
+      turn: async () => {
         call += 1;
         return call === 1
           ? { ok: false, reason: 'quota', note: 'weekly limit reached', wrote: [], waiting: [] }
-          : { ...TURN(), repo: options.repo };
+          : TURN();
       },
     });
     assert.equal(result.code, 1, 'the failure is still reported in the exit code');
-    assert.match(result.stderr, /memoro: the intake turn did not finish — weekly limit reached/u);
-    assert.match(result.stdout, /memoro-cli: /u, 'the second repository still ran');
+    assert.match(result.stderr, /errors-memoro-2026-08-29\.md: the intake turn did not finish — weekly limit reached/u);
+    assert.match(result.stdout, /errors-memoro-cli-2026-08-29\.md: /u, 'the second file still ran');
   });
 
   it('names the repository on every stderr line, so a failure can be attributed', async () => {

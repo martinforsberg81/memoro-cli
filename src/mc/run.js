@@ -57,11 +57,14 @@
  * to that shape and a name leaves it the moment its step has run, so a queue
  * everything ran from is an empty file.
  *
- * One thing that is not a step rides along: `mc helper --intake`, once per calendar
- * day at the top of the first round after 05:00Z, logged in runs.tsv under
- * its own kind. It opens no worktree and touches no branch — it reads
- * production, writes a digest and proposals into `~/mc/intake/`, and that is
- * all. `runHelperDay` below is the whole of it.
+ * Two things that are not steps ride along, and neither opens a worktree or
+ * touches a branch. `runHelperDay` is the collect: once per calendar day at the
+ * top of the first round after 05:00Z, one digest per repository into
+ * `~/mc/intake/`, no model. `runIntakeDrain` is the inbox: every round, the
+ * oldest files in `~/mc/intake/` up to `INTAKE_PER_ROUND`, one headless turn
+ * each, each file archived under `~/mc/runner/log/intake/<date>/` the moment its
+ * turn ends. They used to be one gate and one row, which meant one file could be
+ * read a day and only if the collect had also run.
  *
  * The runner is worked from another terminal by three files under
  * `~/mc/runner/`, all read at a round boundary and never mid-session: `STOP`
@@ -97,7 +100,7 @@ import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-worka
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { handOver, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
-import { describeTurn, runHelperTurn } from './helper-turn.js';
+import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import {
   UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerTablePath, workRoot,
 } from './paths.js';
@@ -111,8 +114,9 @@ import { instructionsFor, readCanonRole } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
-  HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
-  heldRepair, helperDue, helperNote, inFlight, landingNote, mcOwnFiles, nextBranch, queueFileNames,
+  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, TIMEOUT_EXIT,
+  assembleQueue, chooseKind, collectNote, headlessArgs,
+  heldRepair, helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, queueFileNames,
   queueFileText, readSessionOutput, repairPrompt, sessionSettings, stackOrder,
   stepOfPr, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from './run-plan.js';
@@ -153,6 +157,11 @@ export function realDeps(env = process.env) {
     alive: pidAlive,
     read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
     list: (path) => { try { return readdirSync(path); } catch { return []; } },
+    // Files only, for the one caller that must not mistake a directory for an
+    // item: `~/mc/intake/decisions-archive/` is an archive, not an inbox entry.
+    files: (path) => {
+      try { return readdirSync(path, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name); } catch { return []; }
+    },
     write: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); },
     append: (path, text) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, text); },
     // Closing a workarea moves what it kept beside its worktree; it never
@@ -174,7 +183,10 @@ export function realDeps(env = process.env) {
     role: readCanonRole,
     launch: resolveLaunch,
     // The two halves of `mc helper --intake`, so a round can be driven in a test with
-    // no production behind it and no model in it.
+    // no production behind it and no model in it. The drain itself is not a
+    // dependency — it is handed `files`, `move` and `helperTurn` above, so a
+    // test's filesystem is the one it archives into and the loop is measured
+    // rather than replaced.
     collect: (options) => collectHelper({ env, ...options }),
     helperTurn: (options) => runHelperTurn({ env, ...options }),
     // The one door work lands through. `mc merge`'s round and `mc merge
@@ -1085,18 +1097,20 @@ export function createRunner({
   }
 
   /**
-   * The day's `mc helper --intake`, run at the top of a round. Returns 'ran',
-   * 'failed' or null when it was not due.
+   * The day's collect, run at the top of a round. Returns 'ran', 'failed' or
+   * null when it was not due.
    *
    * It is not a step and not a project: it opens no worktree, touches no
-   * branch, and its row in runs.tsv carries `helper` in both the name and the
-   * kind column. `helperDue` is the whole gate, and that row is the whole
-   * state — written whether the run succeeded or failed, which is how a
-   * failed collect stays unretried for the rest of the day.
+   * branch, calls no model, and its rows in runs.tsv carry `helper` in both the
+   * name and the kind column. `helperDue` is the whole gate, and those rows are
+   * the whole state — one per repository, written whether the collect succeeded
+   * or failed, which is how a failed collect stays unretried for the rest of the
+   * day.
    *
-   * The collect half reads production and the turn half calls a model, so the
-   * two are timed together and logged once: what a reader of runs.tsv wants
-   * to know is what the day's helper cost and what came out of it.
+   * Reading the digest is no longer part of this. The digest lands in the inbox
+   * like anything else somebody put there, and `runIntakeDrain` takes it in its
+   * turn — which is what lets a round drain without collecting, and collect
+   * without the day's reading being the only reading there is.
    */
   async function runHelperDay() {
     const due = helperDue({ tsv: deps.read(paths.runs) || '', now: deps.now() });
@@ -1105,10 +1119,9 @@ export function createRunner({
     const took = () => Math.round((deps.now().getTime() - t0) / 1000);
     say('helper: the day\'s digest');
 
-    // One digest and one turn per repository. memoro's production is the
-    // deployed service; memoro-cli's is this machine, and until 2026-08-30
-    // nothing read the second — every failure in mc itself was found by a
-    // person noticing it.
+    // One digest per repository. memoro's production is the deployed service;
+    // memoro-cli's is this machine, and until 2026-08-30 nothing read the
+    // second — every failure in mc itself was found by a person noticing it.
     //
     // A repository that fails does not take the other down with it. The whole
     // reason the collect step reports per section instead of failing as a
@@ -1122,33 +1135,66 @@ export function createRunner({
       } catch (error) {
         say(`helper: ${repo}: the collect step failed — ${error?.message || error}. Not retried today.`);
         outcome = 'failed';
-        continue;
       }
-      say(`helper: ${digest.path} — ${describeDigest(digest.data)}`);
-      for (const note of digest.data.notes || []) say(`helper: ${repo}: ${note}`);
-      for (const [section, source] of unreadableSections(digest.data)) say(`helper: ${repo}: ${section} not read — ${source.error}`);
-
-      const turn = await deps.helperTurn({ file: digest.path, repo, now: deps.now() });
+      if (digest) {
+        say(`helper: ${digest.path} — ${describeDigest(digest.data)}`);
+        for (const note of digest.data.notes || []) say(`helper: ${repo}: ${note}`);
+        for (const [section, source] of unreadableSections(digest.data)) say(`helper: ${repo}: ${section} not read — ${source.error}`);
+        if (outcome !== 'failed') outcome = 'ran';
+      }
       logRun({
-        ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: turn.status ?? 1, seconds: took(), pr: '-',
-        turns: turn.turns ?? '-', input: turn.input ?? '-', output: turn.output ?? '-',
-        cacheRead: turn.cacheRead ?? '-', cacheWrite: turn.cacheWrite ?? '-', session: turn.session ?? '-',
-        note: `${repo},${helperNote(turn)}`,
+        ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: digest ? 0 : 1, seconds: took(), pr: '-',
+        ...dashes, note: collectNote({ repo, digest }),
       });
-      for (const note of turn.groundNotes || []) say(`helper: ${note}`);
-      say(turn.ok
-        ? `helper: ${repo}: ${describeTurn(turn)} (${took()}s)`
-        : `helper: ${repo}: the turn did not finish — ${turn.reason || turn.note} (${took()}s)`);
-      if (turn.quota) await quotaPause();
-      if (!turn.ok) outcome = 'failed';
-      else if (outcome !== 'failed') outcome = 'ran';
-    }
-    // Every repository's collect step threw: nothing was written and nothing
-    // read it, which is the one case that never logged a row above.
-    if (outcome === 'failed' && !deps.read(paths.runs)?.includes(HELPER_NAME)) {
-      logRun({ ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: 1, seconds: took(), pr: '-', ...dashes, note: helperNote(null) });
     }
     return outcome;
+  }
+
+  /**
+   * The inbox, drained: the oldest files in `~/mc/intake/` up to
+   * `INTAKE_PER_ROUND`, one headless turn each, each one archived under
+   * `~/mc/runner/log/intake/<date>/` the moment its turn ends.
+   *
+   * There is no day gate here and there is not meant to be — the question is
+   * *is there a file?*, and a round asks it every time. Thirteen files is
+   * therefore five rounds rather than thirteen days, and a round with an empty
+   * inbox costs a directory listing.
+   *
+   * The row is `kind: intake` with the **file** in the name column: a reader of
+   * runs.tsv who cannot tell thirteen turns apart has no record at all, and the
+   * name column is the column for naming the thing a row is about. `intakeNote`
+   * carries the outcome.
+   */
+  async function runIntakeDrain() {
+    const out = await drainIntake({
+      env: deps.env,
+      now: deps.now,
+      limit: INTAKE_PER_ROUND,
+      deps: {
+        files: deps.files,
+        move: deps.move,
+        turn: deps.helperTurn,
+        stop: stopRequested,
+        onTurn: async ({ file, turn, archived, seconds }) => {
+          logRun({
+            ts: stamp(), name: file, kind: INTAKE_KIND, exit: turn.status ?? 1, seconds, pr: '-',
+            turns: turn.turns ?? '-', input: turn.input ?? '-', output: turn.output ?? '-',
+            cacheRead: turn.cacheRead ?? '-', cacheWrite: turn.cacheWrite ?? '-', session: turn.session ?? '-',
+            note: intakeNote(turn),
+          });
+          for (const note of turn.groundNotes || []) say(`intake: ${note}`);
+          say(turn.ok
+            ? `intake: ${file} — ${describeTurn(turn)} (${seconds}s)`
+            : `intake: ${file} — the turn did not finish: ${turn.reason || turn.note} (${seconds}s)`);
+          // The one way the drain fails to terminate, so it is said out loud
+          // rather than inferred from the same file appearing every round.
+          if (!archived) say(`intake: ${file} could not be moved out of the inbox — the next round will take it again`);
+          if (turn.quota) await quotaPause();
+        },
+      },
+    });
+    if (out.left) say(`intake: ${out.left} file(s) still waiting`);
+    return out;
   }
 
   /**
@@ -1633,10 +1679,13 @@ export function createRunner({
     // other's names from queue.md, and `closeWorkareas` would file the
     // other's workareas as unplanned. `chores()` runs them beside the lanes.
     const chores = only == null;
-    // The day's helper first, and only in a round that is a round: `--once`
-    // exists to watch a single step, and a two-minute model turn over
-    // production is not what somebody typing it asked for.
-    if (chores && !once && !stopRequested()) await runHelperDay();
+    // The day's collect first, then the inbox it just added to, and only in a
+    // round that is a round: `--once` exists to watch a single step, and a
+    // model turn over production is not what somebody typing it asked for.
+    if (chores && !once && !stopRequested()) {
+      await runHelperDay();
+      await runIntakeDrain();
+    }
     const world = queue({ only });
     const { names, plans } = world;
     if (chores && !once) tidyQueue(plans);
@@ -1682,10 +1731,10 @@ export function createRunner({
 
   /**
    * What a whole round did around its lanes, for the unattended loop where
-   * the lanes no longer share a round: the day's helper, queue.md tidied,
-   * the unreadable plans filed, finished plans archived, finished workareas
-   * closed. Read from the whole queue — which is why it is not in a lane's
-   * round.
+   * the lanes no longer share a round: the day's collect, the inbox drained,
+   * queue.md tidied, the unreadable plans filed, finished plans archived,
+   * finished workareas closed. Read from the whole queue — which is why it is
+   * not in a lane's round.
    *
    * Archiving lands a docs PR through the gate, and the gate refuses a
    * second round rather than queueing it (gate-lock.js): a lane landing its
@@ -1697,6 +1746,7 @@ export function createRunner({
   async function chores() {
     if (stopRequested()) return;
     await runHelperDay();
+    await runIntakeDrain();
     const { plans } = queue();
     tidyQueue(plans);
     writeUnreadable(plans);
@@ -1713,7 +1763,7 @@ export function createRunner({
   };
 
   return {
-    paths, repos, say, round, chores, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
+    paths, repos, say, round, chores, runStep, runLane, splitLanes, runHelperDay, runIntakeDrain, archiveDone, queue, stopRequested,
     held: heldNow,
     writeUnreadable,
     updateRequested, syncMain, freshBranch, landProject, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,

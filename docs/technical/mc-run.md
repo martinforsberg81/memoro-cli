@@ -120,32 +120,40 @@ A **round** is one pass over the queue. A **step** is one fresh headless
 session in one workarea, followed by the merge of the pull request that
 session opened.
 
-1. **The day's `mc helper --intake`**, if it is due: once per calendar day, at
-   the top of the first round after 05:00Z. It is not a step and not a
-   project — it opens no worktree and touches no branch, it reads production
-   and writes a digest and proposals into `~/mc/intake/`. Its runs.tsv row is
-   its whole state, which is why a failed collect stays unretried for the rest
-   of the day. See [`mc-helper.md`](mc-helper.md).
-2. **Read the queue**: `~/mc/queue.md`, then every `PLAN.json` on both
+1. **The day's collect**, if it is due: once per calendar day, at the top of
+   the first round after 05:00Z. It is not a step and not a project — it opens
+   no worktree, touches no branch and calls no model; it reads production and
+   writes one digest per repository into `~/mc/intake/`. Its two runs.tsv rows
+   (`kind: helper`) are its whole state, which is why a failed collect stays
+   unretried for the rest of the day. See [`mc-helper.md`](mc-helper.md).
+2. **The inbox, drained**, every round and with no day gate: the oldest files
+   in `~/mc/intake/` — the collector's digests and whatever Martin dropped
+   there — up to three of them, one headless turn each, every one moved to
+   `~/mc/runner/log/intake/<date>/` the moment its turn ends whatever the turn
+   returned. One row per file (`kind: intake`, the file in the name column).
+   The question here is *is there a file?*, not *has today's collect run?*, and
+   the two were one gate until 2026-09-05 — which is how thirteen digests came
+   to be waiting in a directory that is supposed to drain.
+3. **Read the queue**: `~/mc/queue.md`, then every `PLAN.json` on both
    `origin/main`s, and — once per repository, on the same trip to the network —
    `gh pr list --state open`. That third reading is the round's answer to what
    is in flight, and it is asked *before* anything is started rather than after
    the session. A repository whose `gh` could not answer starts nothing that
    round and says so; the other repository's lane is untouched. An idle round
    costs ten minutes of sleep, a blind one bought a 120-minute Opus session.
-3. **Tidy `queue.md`** against that reading, and write
+4. **Tidy `queue.md`** against that reading, and write
    `~/mc/runner/unreadable-plans.md` from it.
-4. **Archive** every plan that says `status: done` — the directory removed and
+5. **Archive** every plan that says `status: done` — the directory removed and
    a `project_log.md` row left behind it, one PR per repository, landed through
    `mc merge --docs`. See [`mc-tidy.md`](mc-tidy.md).
-5. **Run the steps**, one lane per repository at the same time.
-6. **Close** the workareas whose project is finished — whose archive PR merged
-   in step 4, or whose plan an earlier round already archived, which
+6. **Run the steps**, one lane per repository at the same time.
+7. **Close** the workareas whose project is finished — whose archive PR merged
+   in step 5, or whose plan an earlier round already archived, which
    `project_log.md` is what still knows.
 
-Steps 1, 4 and 6 and the tidying half of 3 are skipped under `--once`: that
-flag exists to watch one step, and a two-minute model turn over production is
-not what somebody typing it asked for. The unreadable-plans table is written
+Steps 1, 2, 5 and 7 and the tidying half of 4 are skipped under `--once`: that
+flag exists to watch one step, and a model turn over production is not what
+somebody typing it asked for. The unreadable-plans table is written
 either way — it is a write of what the round has already read, not a pass over
 anything.
 
@@ -606,8 +614,8 @@ sat idle for hours while memoro's walked thirty names, and a memoro-cli step
 that became ready in that time waited for a round boundary nobody needed. Now
 the unattended loop (`runLoop`, `rounds === 0`) runs one loop per lane, each
 calling `round({ only: repo })` and sleeping on its own clock; the chores a
-shared round did around its lanes — the helper, `tidyQueue`, the unreadable
-plans, archiving, closing workareas — run in `chores()` in a loop beside them,
+shared round did around its lanes — the collect, the drain, `tidyQueue`, the
+unreadable plans, archiving, closing workareas — run in `chores()` in a loop beside them,
 from the whole queue. `--rounds N` and `--once` keep the shared round, for a
 person watching one.
 
@@ -644,7 +652,8 @@ not parse as JSON either way.
 
 Everything lives under `~/mc/runner/`.
 
-- **`log/runs.tsv`** — one row per step, repair and helper run, and the
+- **`log/runs.tsv`** — one row per step, repair, collect and drained inbox
+  file, and the
   history keeps the kinds the runner no longer produces:
   `ts name kind exit seconds pr turns input output cache_read cache_write
   session note land_seconds`. `seconds` is the session; `land_seconds` is the

@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  MC_OWN_TREES, assembleQueue, chooseKind, headlessArgs, heldRepair, helperDue, helperNote,
-  inFlight, landingNote, mcOwnFiles, nextBranch, queueFileNames, queueFileText, quotaSeen,
+  MC_OWN_TREES, assembleQueue, chooseKind, collectNote, headlessArgs, heldRepair, helperDue,
+  inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, queueFileNames,
+  queueFileText, quotaSeen,
   readSessionOutput, repairPrompt, sessionSettings, stackOrder, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
@@ -387,12 +388,48 @@ test('helperDue: a failed run still closes the day, and only a helper row counts
   assert.equal(helperDue({ tsv: steps, now: new Date('2026-08-29T12:00:00Z') }).due, true);
 });
 
-test('helperNote keeps the success, shape every other row uses', () => {
-  assert.equal(helperNote(null), 'collect-failed');
-  assert.equal(helperNote({ ok: true, wrote: [] }), 'success,0-proposals');
-  assert.equal(helperNote({ ok: true, wrote: [1, 2, 3] }), 'success,3-proposals');
-  assert.equal(helperNote({ ok: false, reason: 'no-role' }), 'no-role');
-  assert.equal(helperNote({ ok: false, note: 'timeout' }), 'timeout');
+/**
+ * Both notes put the outcome first, because `summariseRuns` reads a note that
+ * does not start with `success` as a failure — and every helper row written
+ * before 2026-09-05 read `memoro,success,0-proposals`, which it counted as one.
+ */
+test('collectNote and intakeNote keep the success, shape every other row uses', () => {
+  const digest = (delta) => ({ data: { delta } });
+  assert.equal(collectNote({ repo: 'memoro', digest: null }), 'collect-failed,memoro');
+  assert.equal(collectNote({ repo: 'memoro', digest: digest({ first: true }) }), 'success,memoro,first-digest');
+  assert.equal(collectNote({ repo: 'memoro-cli', digest: digest({ first: false, fingerprints: [1, 2] }) }), 'success,memoro-cli,2-new');
+
+  assert.equal(intakeNote(null), 'turn-missing');
+  assert.equal(intakeNote({ ok: true, wrote: [] }), 'success,0-proposals');
+  assert.equal(intakeNote({ ok: true, wrote: [1, 2, 3] }), 'success,3-proposals');
+  assert.equal(intakeNote({ ok: false, reason: 'no-role' }), 'no-role');
+  assert.equal(intakeNote({ ok: false, note: 'timeout' }), 'timeout');
+});
+
+/**
+ * The order the inbox drains in. By the date the name carries and not by the
+ * name itself: the collector's two generations of filename sort wrongly against
+ * each other as strings, which would put every memoro digest ahead of every
+ * memoro-cli one whatever day either was written.
+ */
+test('intakeQueue is oldest first by the date in the name, with dateless names last', () => {
+  assert.deepEqual(intakeQueue([
+    'errors-memoro-cli-2026-08-31.md',
+    'screenshot.png',
+    'errors-memoro-2026-09-04.md',
+    '.DS_Store',
+    'errors-2026-08-29.md',
+    'note.md',
+  ]), [
+    'errors-2026-08-29.md',
+    'errors-memoro-cli-2026-08-31.md',
+    'errors-memoro-2026-09-04.md',
+    // No date in the name, so under its own name, after everything dated.
+    'note.md',
+    'screenshot.png',
+  ]);
+  assert.deepEqual(intakeQueue([]), []);
+  assert.deepEqual(intakeQueue(['.hidden']), [], 'a dotfile is not an inbox item');
 });
 
 /* --------------------------------------------------------------- landing */
