@@ -26,7 +26,7 @@ lines: collect, then hand the file to `openInWorkArea`.
 
 ## What it reads
 
-Twelve sections, in this order, each from a file something else already
+Thirteen sections, in this order, each from a file something else already
 writes:
 
 | section | source |
@@ -42,6 +42,7 @@ writes:
 | Production | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, `git rev-list --count <it>..origin/main` in `~/memoro`, the nightly's last measurement, and the `/api/version` in `~/mc/runner/version.json` |
 | Held before merge | `~/mc/runner/held.json`, the entries at `repairs >= 1` |
 | Ready, and the runner cannot start it | `machineState` (`src/mc/status-collect.js`) over every non-legacy plan: the workarea's `git status --porcelain`, `held.json` whole, the open pull requests, the STOP file — less what `current-<repo>.json` says is running |
+| Blocked | the `blocked` steps of the same plans *Plan status* already parsed, plus `staleBlockers` (`src/mc/stale-blockers.js`) |
 | Queue | `~/mc/queue.md` |
 
 The two repositories are `~/memoro` and `~/memoro-cli` (`MC_REPOS_HOME`
@@ -98,6 +99,45 @@ finished work have stood in its workarea since its session was killed at
 2026-09-02T20:59:43Z, and no surface names the workarea, because the plan above
 it does not parse (measured 2026-09-05). The row that would send somebody there
 is the *Plans that do not parse* one.
+
+**Blocked** is the third and largest section of that same family, and the one
+that carries the most work. A `blocked` step is a project standing still with
+nobody looking: the runner hands out `ready` steps and reads no further, so a
+blocker does not flip itself and nothing in mc ever read one a second time
+until `staleBlockers` did. Measured on `origin/main` 2026-09-05, **45 steps
+were `blocked`** across both repositories and the only trace of any of them was
+one clipped `next` cell in *Plan status*.
+
+The section groups by what the reader does next, which is not what
+`blocked_by.kind` says. **Named decisions** (5 on 2026-09-05) get a table with
+the blocker's full name uncut, because that name is what a session looks the
+answer up by; that is the list a brief works through. **`plan-review`** (12,
+across six programmes) is a `decision` by kind and a hand-off by meaning — the
+park every plan converted to the schema carries until its programme's planning
+session reads it — so it is one line per programme ending in `mc plan
+<programme>`, and never a question for Martin. **Project blockers** (28, of
+which 26 are the sql-readiness families closing in a deliberate order) are
+sequencing: the order is the blocking project's design, the section reads it
+and never moves it, so they are a count.
+
+Two facts ride along under the count because both were invisible and neither
+costs a read. A project blocker whose named project has left `origin/main` is
+`staleBlockers`'s answer, reused rather than recomputed so the page and the
+brief cannot disagree about which blocking project is gone — and the line says
+*is not on main* rather than *is done*, because a project also leaves main when
+it is abandoned, and only a person can say which happened. And a blocker name
+that is not a name (`NAME_RE`, `src/mc/plan-schema.js`, exported for this one
+reader) is neither a live blocker nor a finished one but a plan nothing can
+check: `sql-goal1-certification` step 4 waits on a 99-character sentence. It is
+reported, not refused — making the schema reject one would make every plan
+carrying one unrunnable the moment it landed, which is a separate decision.
+
+The three routes a session takes are in
+[`canon/roles/brief.md`](../../canon/roles/brief.md), and so is the one thing
+that is new: **the brief may write a plan.** Where the estate already holds the
+answer — a decision answered under another name, a blocking project landed — a
+brief session sets that step `ready` itself and writes what it read into the
+step's `comments` in the same edit. Everything else it only reports.
 
 **Production** is the other section that can end in something being done, and
 what it ends in is Martin typing `mc deploy` — never the session, and never the
@@ -164,6 +204,45 @@ That is a deliberate loss of a round trip. The old shape wrote the answer as a
 was the whole reason the line had a fixed shape. Removing the reader removes
 the shape with it.
 
+### When the brief itself is the writer
+
+One case does not wait for whoever next opens the plan. A blocked step the
+brief settles by reading is answered in the session that read it, and that
+makes the brief a fourth writer beside the step session, the planning session
+and the runner ([`docs/project/README.md`](../project/README.md) § *Who writes
+what*). It reaches `main` by a route the role names, because a route that is
+not written down will not be taken:
+
+- **One pull request per repository per brief**, not one per unblocked step.
+  Every unblocking that brief made travels together and reads as one decision.
+- A worktree at **`~/mc/brief/unblock/<repo>`**, on branch
+  **`brief/unblock-<date>`**, cut from `origin/main`.
+- `gh pr create`, then **`mc merge <repo> <pr> --docs`** — a plan is a file
+  under `docs/`, so the docs door lands it with no suite at all and refuses by
+  GitHub's own file list if anything outside `docs/` crept in
+  ([`mc-merge.md`](mc-merge.md)). Landed before the brief ends, and the
+  worktree removed after: an open pull request on a project's plan costs that
+  project a round.
+
+Both names are load-bearing and neither is decoration, and both were checked by
+running them rather than by reading (2026-09-05, against the real `~/mc` with
+the worktree in place). The worktree sits a level below `~/mc/brief/`, where
+`areasWithCheckout` and the runner's `workareas()` cannot see it — both list a
+top-level directory only when `<area>/<repo>/.git` exists, which is why
+`~/mc/plan/` and `~/mc/gate/` are invisible too; with the worktree at
+`~/mc/brief/unblock/memoro-cli`, `areasWithCheckout` listed 80 areas and
+neither `brief` nor `unblock` was among them. And the branch is not `<project>`
+or `<project>-…`, which is the shape `projectForBranch`
+(`src/mc/project-prs.js`) claims for a project: against the 46 project names on
+main, `brief/unblock-2026-09-05` returned `null` where `brief-blocked-steps-4`
+returned `brief-blocked-steps`. A branch of the claimed shape would read as
+that project's own work in flight and end its round.
+
+No verb was built for this. `mc unblock <repo> <project> <step>` was the
+alternative and was rejected: the route above needs no new code and no new
+authority, and a route that has to be built first cannot be walked by the step
+that walks it.
+
 ## What is deliberately wide
 
 Nothing, any more. The section that stood here explained how loosely a
@@ -198,6 +277,14 @@ answered and unanswered, the wide heading rule and the bookkeeping names,
 frontmatter including folded scalars, `cat-file --batch` framing on bytes
 rather than characters, the runs.tsv window, and both intake tables
 including absent-versus-empty.
+
+*Blocked* is driven from one fixture holding one of each — sequencing that is
+live, sequencing whose project has left main, the `plan-review` park, a named
+decision, and a decision whose name is a 99-character sentence — through both
+`blockedSteps` and `renderBrief`: that the group is what the reader does and
+not `blocked_by.kind`, that the three counts are right, that the blocker name
+is printed uncut, that the hand-off names its programme, and that neither
+special case is folded into the list above it.
 
 `tests/mc/commands/brief.test.js` covers the verb: that `--collect` stops
 after the file, that the bare verb opens a new foreground conversation in
