@@ -71,6 +71,65 @@ describe('the plan fields', () => {
     assert.deepEqual(fieldRows(null), []);
   });
 
+  /**
+   * The pair, in one row. `ready` is the plan's word and it was the whole
+   * answer this page gave on 2026-09-05, for two projects the runner could
+   * not have started — the machine's half rides on the same row so a person
+   * who reads one row has read the answer.
+   */
+  it('says the plan state and what this machine has to say about it, in one row', () => {
+    const plan = JSON.parse(PLAN('ready', 'One project'));
+    const held = {
+      runnable: false,
+      reason: 'held-after-repair',
+      detail: '#614 is held before merge after a repair — the brief\'s',
+      since: '2026-09-03T10:00:00Z',
+      kind: null,
+    };
+    assert.deepEqual(fieldRows(plan, [], held), [
+      ['status', 'ready · #614 is held before merge after a repair — the brief\'s (since 09-03 10:00Z)'],
+    ]);
+    // The home directory is folded: the row is read in a terminal, and the
+    // absolute path of a workarea is most of its width.
+    const dirty = {
+      runnable: false, reason: 'dirty', kind: null, since: '2026-09-05T10:03:51Z',
+      detail: 'uncommitted work in /Users/m/mc/connections-section/memoro: probe.mjs',
+    };
+    assert.deepEqual(fieldRows(plan, [], dirty, '/Users/m'), [
+      ['status', 'ready · uncommitted work in ~/mc/connections-section/memoro: probe.mjs (since 09-05 10:03Z)'],
+    ]);
+  });
+
+  /**
+   * The silent cases, which matter as much: most projects have nothing in the
+   * way, and a row that grew a clause for every one of them would be noise on
+   * the day it had something to say.
+   */
+  it('adds nothing when the machine has nothing to say, or only what the plan already says', () => {
+    const ready = JSON.parse(PLAN('ready', 'One project'));
+    const blocked = JSON.parse(PLAN('blocked', 'Wait for mc-2'));
+    const runnable = { runnable: true, reason: null, detail: null, since: null, kind: 'step' };
+    assert.deepEqual(fieldRows(ready, [], runnable), [['status', 'ready']]);
+    assert.deepEqual(fieldRows(ready, [], null), [['status', 'ready']]);
+    // `blocked · blocked` is the row this rule exists to stop.
+    assert.deepEqual(fieldRows(blocked, [], {
+      runnable: false, reason: 'blocked', detail: 'blocked on decision mc-1', since: null, kind: null,
+    }), [['status', 'blocked']]);
+  });
+
+  /**
+   * A hold still owed its one repair session is not a refusal — the runner
+   * would start it — but what it would start is a repair, not the step the
+   * plan names, and that is worth a row saying so.
+   */
+  it('says a repair is what the runner would start, on a plan that reads ready', () => {
+    const plan = JSON.parse(PLAN('ready', 'One project'));
+    assert.deepEqual(fieldRows(plan, [], {
+      runnable: true, reason: null, kind: 'repair', since: '2026-09-03T10:00:00Z',
+      detail: '#614 is held before merge — one repair session is owed',
+    }), [['status', 'ready · #614 is held before merge — one repair session is owed (since 09-03 10:00Z)']]);
+  });
+
   it('folds a paragraph and indents its continuation', () => {
     assert.equal(wrap('one two three four', 9, 3), 'one two\n   three\n   four');
     assert.equal(wrap('  spaced\n\nout ', 40, 2), 'spaced out');
@@ -150,6 +209,51 @@ describe('collectProject', () => {
     assert.equal(orphan.repo, null);
     assert.match(orphan.workarea, /jobbet$/u);
     assert.equal(await collectProject('never-existed', opts), null);
+  });
+
+  /**
+   * The whole defect, end to end: on 2026-09-05 this printed `ready` for
+   * `role-instructions` while #614 was held with its one repair spent and the
+   * runner could not have started it. The plan is still `ready` — that is a
+   * fact about the file on main — and the row now says both.
+   */
+  it('names the held pull request beside the plan state', async () => {
+    const root = workRoot();
+    writeFileSync(join(root, 'runner', 'held.json'), JSON.stringify([{
+      project: 'mc-status', repo: 'memoro-cli', pr: 427, branch: 'mc-status',
+      reason: 'two tests the change reaches are red', note: 'open,gate-red',
+      since: '2026-09-03T10:00:00Z', repairs: 1,
+    }]));
+    const exec = async (cmd) => (cmd === 'gh'
+      ? { ok: true, stdout: JSON.stringify([{ number: 427, title: 'mc status <name>', headRefName: 'mc-status' }]) }
+      : { ok: true, stdout: '' });
+    const data = await collectProject('mc-status', {
+      env: { MC_WORK_ROOT: root },
+      repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
+      git,
+      exec,
+    });
+    assert.equal(data.machine.runnable, false);
+    assert.equal(data.machine.reason, 'held-after-repair');
+    assert.equal(data.machine.since, '2026-09-03T10:00:00Z');
+    assert.match(renderProject(data), /status +ready · #427 is held before merge after a repair/u);
+  });
+
+  /**
+   * `--offline` did not ask GitHub, and what nobody asked is not the same as
+   * nothing being open — the reading says so rather than promising a `ready`
+   * it cannot stand behind. It is the round's own word for it.
+   */
+  it('will not call a project startable on a GitHub it was not allowed to ask', async () => {
+    const root = workRoot();
+    const data = await collectProject('mc-status', {
+      env: { MC_WORK_ROOT: root },
+      repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
+      offline: true,
+      git,
+    });
+    assert.equal(data.machine.reason, 'prs-unknown');
+    assert.match(renderProject(data), /status +ready · GitHub could not be asked/u);
   });
 
   // `--head <name>` printed nothing for a project whose three branches all

@@ -46,7 +46,7 @@ import { PRICES_DATED, estimateCost } from './prices.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { staleBlockers } from './stale-blockers.js';
 import {
-  RUNNER_MODEL, areasWithCheckout, kindFor, nowBlock, pidAlive,
+  RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive,
 } from './status-collect.js';
 
 /** How many of each list the page names rather than counts. */
@@ -273,13 +273,31 @@ export function sessionsSection({
  * (stale-blockers.js). It is drawn from the same `origin/main` plans the
  * runner obeys, and it names rather than only counts, because a count of two
  * does not say which two a person has to go and read.
+ *
+ * `machine` is the other half of "would the runner start this" — a dirty
+ * worktree, a held pull request, work already in flight (`machineState`,
+ * status-collect.js). Without it this block counted only what the plans say,
+ * and on 2026-09-05 it reported two names runnable while `held.json` held both
+ * of them: a count that is a partial answer is read as the whole one. It is
+ * injected rather than read here because this module takes read data and
+ * `machineState` has to ask a worktree whether it is dirty; a caller with no
+ * reader gets the plan-shaped answer alone, exactly as before.
  */
 export function queueSection({
   queue = [], plans = [], held = [], named = QUEUE_NAMED, staleNamed = STALE_NAMED,
+  machine = () => null,
 } = {}) {
   const items = queue.map((name) => {
     const kind = kindFor(name, { plans });
-    return { name, kind, runnable: !kind.startsWith('skip') };
+    // The plan first, and no machine reading at all for a name it already
+    // refuses: that is `machineState`'s own economy and the reason a round
+    // walks 38 projects in a second rather than a minute.
+    if (kind.startsWith('skip')) return { name, kind, runnable: false, machine: null };
+    const state = machine(name) || null;
+    if (state && !state.runnable) return { name, kind: `skip:${state.reason}`, runnable: false, machine: state };
+    // `repair` rather than `step` where a held pull request is owed one: the
+    // kind drawn beside the name is what the runner would actually start.
+    return { name, kind: state?.kind || kind, runnable: true, machine: state };
   });
   const runnable = items.filter((item) => item.runnable);
   const skipped = items.filter((item) => !item.runnable);
@@ -685,6 +703,10 @@ export async function collectPage({
   const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
 
   let prs = { prs: [], fetched: null, age_seconds: null };
+  // The repositories whose open pull requests are unknown rather than none:
+  // what nobody asked and what failed read the same to a list, and the queue
+  // reading below would otherwise call a project runnable on that silence.
+  const prsFailed = [];
   if (fresh) {
     // Fetch and gh per repository, side by side: serial they were the whole
     // budget on their own.
@@ -694,13 +716,14 @@ export async function collectPage({
       exec('gh', PR_LIST_ARGS, { cwd: repo.path }).then((r) => {
         try {
           if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
-          else notes.push(`${repo.name}: gh pr list failed`);
-        } catch { notes.push(`${repo.name}: gh pr list unreadable`); }
+          else { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list failed`); }
+        } catch { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list unreadable`); }
       }),
     ]));
     prs = cache.savePrs({ root, prs: asked, now });
   } else {
     prs = cache.loadPrs({ root, now });
+    if (!prs.fetched) prsFailed.push(...present.map((repo) => repo.name));
     notes.push(prs.fetched
       ? `PRs from cache, ${ageWords(prs.age_seconds)} old — --fresh asks GitHub`
       : 'no PR cache yet — --fresh asks GitHub and fills it');
@@ -720,10 +743,15 @@ export async function collectPage({
   // PROGRAMMES reads from both of these — which programme has a planning
   // session open, and which projects the runner has a step in flight on — so
   // they are built before it rather than beside it.
+  // Read once, for NOW and for the queue reading both: they are the same two
+  // facts, and asking twice is how two answers on one page come to differ.
+  const stop = existsSync(join(root, 'runner', 'STOP'));
+  const held = heldEntries(readJson(heldPath(root)));
+
   const runner = runnerSection({
     runner: readJson(join(root, 'runner', 'runner.json')),
     currents: readCurrents(join(root, 'runner')),
-    stop: existsSync(join(root, 'runner', 'STOP')),
+    stop,
     rows,
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
@@ -743,7 +771,21 @@ export async function collectPage({
   return {
     runner,
     sessions,
-    queue: queueSection({ queue, plans, held: heldEntries(readJson(heldPath(root))) }),
+    queue: queueSection({
+      queue,
+      plans,
+      held,
+      machine: (name) => machineState(name, {
+        plans,
+        prs: prs.prs,
+        prsFailed,
+        held,
+        stop,
+        root,
+        // `git` answers with a string or null here; the reading wants ok and text.
+        git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
+      }),
+    }),
     intake: intakeSection({ digest: readDigest(intakeDir(env)), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({
       plans, areas, rows, openPrs: prs.prs, live: liveNames,

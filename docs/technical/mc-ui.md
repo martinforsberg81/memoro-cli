@@ -263,6 +263,7 @@ through all three sections.
 | step kind | colour |
 |---|---|
 | `step` | green |
+| `repair` | yellow |
 | `triage` | blue |
 | `brief` | cyan |
 | `plan` | cyan |
