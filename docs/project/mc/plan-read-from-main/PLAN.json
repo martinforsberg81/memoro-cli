@@ -120,7 +120,7 @@
         "Two things a later step should know. The reason sentence deliberately stops at the files — the brief clips that cell from the middle at 110 characters, and with the `why` on the end the clip ate the filename (`origin/main could not be merged into /t…LAN.json is one of the conflicts`), which is the one thing a person opens; the `why` stays in the entry and in runner.log. And the per-round `runner.log` line was kept: the instruction's *say it once* is answered by the surface being state with a `since` rather than by silencing the round's own record of what it did that round.",
         "Not fixed here, and still true: the round aborts a merge for four other reasons (role missing, tool missing, STOP, an UPDATE while waiting for a lane) and records nothing, because in those the merge is not what a person has to act on and a round with the role back would hand the conflict to a session. If that turns out to strand a workarea, the mark is one call at those sites. Step 1's other residue — `fromHead` firing legitimately and still handing out a stale `HEAD` plan (`sdk-artifact-storage`, 13 of 27 plan-conflict rounds) — is `branch-landed.js` and its own proposal, and this step's guard is what makes that case visible rather than silent."
       ],
-      "pr": null,
+      "pr": 669,
       "blocked_by": null
     },
     {
