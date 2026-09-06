@@ -22,8 +22,8 @@ import { describe, it } from 'node:test';
 
 import { registerManifest } from '../../src/mc/dev-servers.js';
 import {
-  accountAvailable, answers, builtFromMoved, ensureDevServer, isLoopback, readDeclaration, runSuites, serversFor,
-  servingWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
+  accountAvailable, answers, builtFromMoved, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
+  serversFor, servingWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
 
 const DEAD_PID = 2_147_483_646;
@@ -753,5 +753,46 @@ describe('a service built from a tree that is gone', () => {
     assert.equal(ensured.started, false);
     assert.equal(spawned, 0);
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+});
+
+describe('what does not work in dev', () => {
+  it('the declaration may name it, and a round reads it as lines', () => {
+    const worktree = worktreeWith({
+      declaration: {
+        ...DECLARATION,
+        environments: {
+          ...DECLARATION.environments,
+          dev: {
+            ...DECLARATION.environments.dev,
+            not_in_dev: [
+              { name: 'weather', why: 'needs OPENWEATHER_API_KEY; home reports degraded without it' },
+              { name: 'avatar motion clips', why: 'served from production; the local CSP blocks them' },
+            ],
+          },
+        },
+      },
+    });
+    const read = readDeclaration(worktree);
+    assert.equal(read.ok, true, read.error);
+    assert.deepEqual(notInDev(read.declaration), [
+      'weather — needs OPENWEATHER_API_KEY; home reports degraded without it',
+      'avatar motion clips — served from production; the local CSP blocks them',
+    ]);
+    assert.deepEqual(notInDev(DECLARATION), [], 'a declaration that names nothing says nothing');
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('a gap without a reason is refused, with the field', () => {
+    const worktree = worktreeWith({
+      declaration: {
+        ...DECLARATION,
+        environments: { ...DECLARATION.environments, dev: { ...DECLARATION.environments.dev, not_in_dev: [{ name: 'weather' }] } },
+      },
+    });
+    const read = readDeclaration(worktree);
+    assert.equal(read.ok, false);
+    assert.match(read.error, /not_in_dev is a list of \{ name, why \}/u);
+    rmSync(worktree, { recursive: true, force: true });
   });
 });

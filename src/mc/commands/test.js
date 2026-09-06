@@ -36,7 +36,7 @@ import { join } from 'node:path';
 import { nightlyReading } from '../nightly-history.js';
 import { listServers } from '../dev-servers.js';
 import {
-  accountAvailable, answers, callerWorktree, ensureDevServer, forgetToken, isLoopback, readDeclaration,
+  accountAvailable, answers, callerWorktree, ensureDevServer, forgetToken, isLoopback, notInDev, readDeclaration,
   runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
 } from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
@@ -227,6 +227,15 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   // Said only when a suite in this round signs in. A static-only round has
   // nobody to sign in as, and "signing in with the test account" above six
   // suites that never will is a line that misleads.
+  // Said once per dev round, before the verdicts, so a red that lands on one
+  // of these is read as the laptop's and not the app's.
+  if (where === 'dev' && !opts.json) {
+    const gaps = notInDev(declaration);
+    if (gaps.length) {
+      stdout.write(`mc: in dev, ${gaps.length === 1 ? 'one thing is' : `${gaps.length} things are`} known not to work:\n`);
+      for (const line of gaps) stdout.write(`mc:   ${line}\n`);
+    }
+  }
   const anyoneSignsIn = chosen.some((suite) => suite.needs_account);
   if (!opts.json && anyoneSignsIn) {
     if (isLoopback(baseUrl)) {
@@ -278,6 +287,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       static_instance_id: staticServer?.instance_id || null,
       server_gone: gone.length > 0,
       gone_tiers: gone,
+      not_in_dev: where === 'dev' ? (declaration.environments?.dev?.not_in_dev || []) : [],
       results,
       never_ran: neverRan,
     }, null, 2)}\n`);
