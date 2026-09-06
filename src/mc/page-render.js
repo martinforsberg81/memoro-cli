@@ -363,41 +363,78 @@ function elapsedTone(step) {
   return [];
 }
 
-function queueLines(lines, c, wide, queue) {
-  const counts = queue.depth
-    ? `${queue.runnable} runnable of ${queue.depth}`
-    : 'empty — mc brief queues the next thing';
-  // A pull request the runner would not land is not a queue depth, but it is
-  // the reason a project is not in the queue at all — so it rides on the
-  // heading's own count line, where the section's answer already is.
-  const held = queue.held?.count
-    ? [{ text: ' · ', styles: ['grey'] }, { text: `held before merge ${queue.held.count}`, styles: ['yellow', 'bold'] }]
+/** The widths of a NEXT row: the project, then what the runner would start. */
+const NEXT_NAME = 26;
+const NEXT_KIND = 12;
+
+/**
+ * NEXT — the order `mc run` would take, one block per lane.
+ *
+ * It was QUEUE and it drew `~/mc/queue.md` alone, so an empty file said *empty*
+ * while the runner walked 41 projects. The list is `assembleQueue`'s now
+ * (page-collect.js), and the heading says how much of it `queue.md` chose: with
+ * the file empty that reads *the order is alphabetical*, which is what the
+ * runner is actually doing, rather than a queue that is not there.
+ *
+ * One block per lane, because the lanes run at the same time: the head of each
+ * one starts now, and a flat list would put one of them second. Three deep,
+ * with the rest of the lane a count on its own heading — past the third, what
+ * is coming has usually changed by the time it arrives.
+ */
+function nextLines(lines, c, wide, next) {
+  const counts = next.depth
+    ? `${next.runnable} runnable of ${next.depth}`
+    : 'nothing on main to run';
+  // Where the order came from, said on the heading: `queue.md` is Martin's
+  // *these first* and it empties itself, so its own count is the difference
+  // between an order somebody chose and one that fell out alphabetically.
+  const order = next.depth
+    ? [{ text: ' · ', styles: ['grey'] }, {
+      text: next.from_queue
+        ? `${next.from_queue} from queue.md, then alphabetical`
+        : 'the order is alphabetical',
+      styles: ['grey'],
+    }]
     : [];
-  heading(lines, c, wide, 'QUEUE', [{ text: counts, styles: ['grey'] }, ...held], 'mc status <name>');
-  for (const [index, item] of queue.next.entries()) {
-    // The head of the queue is bold; the rest are the terminal's own text, and
-    // painting them at all only made the first one harder to find.
-    const label = pad(clip(item.name, 25), 26);
-    const name = index === 0 ? c(label, 'bold') : label;
-    const kind = paint(c, [{ text: item.kind, styles: kindTone(item.kind) }], wide - 34);
-    lines.push(`  ${c(String(index + 1).padStart(3), 'grey')}  ${name}${kind}`);
+  // A pull request the runner would not land is not a lane's depth, but it is
+  // the reason a project is not in the order at all — so it rides on the
+  // heading's own count line, where the section's answer already is.
+  const held = next.held?.count
+    ? [{ text: ' · ', styles: ['grey'] }, { text: `held before merge ${next.held.count}`, styles: ['yellow', 'bold'] }]
+    : [];
+  heading(lines, c, wide, 'NEXT', [{ text: counts, styles: ['grey'] }, ...order, ...held], 'mc status <name>');
+
+  for (const lane of next.lanes || []) {
+    lines.push(`     ${paint(c, between([
+      { text: lane.repo || 'no repository', styles: ['bold'] },
+      { text: `${lane.count} runnable`, styles: ['grey'] },
+      { text: lane.more ? `… ${lane.more} more` : '', styles: ['grey'] },
+    ], ' · '), wide - 5)}`);
+    for (const [index, item] of lane.items.entries()) {
+      // The head of the lane is bold — it is the one starting now; the rest are
+      // the terminal's own text, and painting them made the first harder to
+      // find. `step 2/5` is where in its plan the project is, which a name and
+      // a kind never said.
+      const label = pad(clip(item.name, NEXT_NAME - 1), NEXT_NAME);
+      const name = index === 0 ? c(label, 'bold') : label;
+      const at = item.step && item.steps ? ` ${item.step}/${item.steps}` : '';
+      const kind = paint(c, [{ text: pad(`${item.kind}${at}`, NEXT_KIND), styles: kindTone(item.kind) }]);
+      lines.push(row(c, wide, `       ${name}${kind}`, item.title || '', null));
+    }
   }
-  const more = queue.more ? `… ${queue.more} more runnable` : '';
-  const skipped = queue.skipped.count
-    ? `skipped ${queue.skipped.count} (${Object.entries(queue.skipped.reasons).map(([why, n]) => `${why} ${n}`).join(', ')})`
-    : '';
-  if (more || skipped) {
+
+  if (next.skipped.count) {
     // What was passed over is the quietest thing in the section: it is the
-    // reason a name is *not* below. Grey is how the page says so — it recedes
+    // reason a name is *not* above. Grey is how the page says so — it recedes
     // by sitting under the rows and by being the one grey line among them,
     // which is a step a person can still read.
-    lines.push(`       ${paint(c, between([
-      { text: more, styles: ['grey'] },
-      { text: skipped, styles: ['grey'] },
-    ], ' · '), wide - 7)}`);
+    const reasons = Object.entries(next.skipped.reasons).map(([why, n]) => `${why} ${n}`).join(', ');
+    lines.push(`       ${paint(c, [
+      { text: `skipped ${next.skipped.count} (${reasons})`, styles: ['grey'] },
+    ], wide - 7)}`);
   }
-  heldLines(lines, c, wide, queue.held);
-  staleLine(lines, c, wide, queue.stale);
+  heldLines(lines, c, wide, next.held);
+  staleLine(lines, c, wide, next.stale);
 }
 
 /** How many held pull requests the page names before it only counts them. */
@@ -410,7 +447,7 @@ export const HELD_DRAWN = 6;
  * Yellow, like `blocker finished` under it: nothing in the runner is going to
  * move this on its own — it waits on a repair session or on a person. Drawn
  * under the skips because that is what it is: the skips now count a held
- * project too (`held-after-repair`, `in-flight` — queueSection reads the
+ * project too (`held-after-repair`, `in-flight` — nextSection reads the
  * machine as well as the plans), and these rows say which pull request and
  * why, which a count of two never could.
  *
@@ -668,9 +705,17 @@ export function renderPageLines(data, {
 
   const cost = money(data.runner?.day?.cost);
   const brand = `${c('MEMORO·CLI', 'bold')}${version ? c(`  ${version}`, 'grey') : ''}`;
+  // What is true of the work, in three numbers that are all on the page below:
+  // the steps the runner has in flight (RUNNER), and the plans that are ready
+  // and blocked (PROGRAMMES). It said `N of M queued` until 2026-09-06, which
+  // on an empty `queue.md` was `0 of 0 queued` while 41 projects had plans and
+  // the runner was stepping one of them. The three ride in one part so that a
+  // narrow terminal drops the cost rather than half of the answer.
+  const statuses = data.programmes?.statuses || {};
+  const flight = (data.runner?.steps || []).length;
   // Counted on the plain text, and the narrowest terminal keeps the count it
   const parts = [
-    { text: `${data.queue.runnable} of ${data.queue.depth} queued` },
+    { text: `${flight} in flight · ${statuses.ready || 0} ready · ${statuses.blocked || 0} blocked` },
     cost ? { text: `${cost} today`, styles: ['grey'] } : null,
   ].filter(Boolean);
   const plain = () => parts.map((part) => part.text).join('  ·  ');
@@ -682,7 +727,7 @@ export function renderPageLines(data, {
   lines.push('');
 
   const sessions = data.sessions || { desks: {}, others: [] };
-  queueLines(lines, c, wide, data.queue);
+  nextLines(lines, c, wide, data.next);
   lines.push('');
   intakeLines(lines, c, wide, data.intake);
   lines.push('');

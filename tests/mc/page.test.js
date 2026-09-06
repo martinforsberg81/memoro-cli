@@ -11,9 +11,10 @@ import { describe, it } from 'node:test';
 
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
-  collectPage, countNewErrors, intakeSection, newErrorLines, queueSection,
+  collectPage, countNewErrors, intakeSection, newErrorLines, nextSection,
   programmesSection, readDigests, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
+import { planSummary } from '../../src/mc/plan-schema.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
@@ -25,12 +26,19 @@ const NOW = new Date('2026-08-29T12:00:00Z');
  * Plans as `listPlans` returns them: the record the page reads, with the parsed
  * plan on it. A status is not a field any more — it is the state of the first
  * step that is not done — so a fixture says which step it is on by building one.
+ *
+ * `done` steps in front of it where the fixture asks for them, because
+ * `step n/m` on a NEXT row is only worth drawing when a plan can be part-way
+ * through: `2/3` has to come from somewhere real.
  */
-function planRecord({ repo, programme, project, status, title }) {
+function planRecord({ repo, programme, project, status, title, done = 0 }) {
   const stopped = status === 'blocked' || status === 'blocked';
+  const before = Array.from({ length: done }, (_, n) => ({
+    title: `Step ${n + 1}`, status: 'done', done_when: 'it was done', instruction: [], pr: null, blocked_by: null,
+  }));
   const steps = status === 'done'
     ? [{ title, status: 'done', done_when: 'it was done', instruction: [], pr: null, blocked_by: null }]
-    : [{
+    : [...before, {
       title,
       status,
       done_when: 'the step is finished',
@@ -48,6 +56,9 @@ function planRecord({ repo, programme, project, status, title }) {
     documents: [],
     steps,
   };
+  // Through `planSummary`, exactly as `listPlans` builds it: `status`, `next`,
+  // the step's number, how many there are, and its title. A fixture that wrote
+  // those by hand would be asserting its own arithmetic.
   return {
     repo,
     programme,
@@ -56,14 +67,13 @@ function planRecord({ repo, programme, project, status, title }) {
     legacy: false,
     plan,
     problems: [],
-    status,
-    next: status === 'ready' ? `Step 1, ${title} — done when the step is finished` : title,
+    ...planSummary(plan),
   };
 }
 
 const PLANS = [
   planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'blocked', title: 'Answer decision 4' }),
-  planRecord({ repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', title: 'Measure paste and IME' }),
+  planRecord({ repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', title: 'Measure paste and IME', done: 1 }),
   planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', title: 'The page' }),
   planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-run', status: 'done', title: 'nothing' }),
 ];
@@ -288,19 +298,72 @@ describe('SESSIONS', () => {
   });
 });
 
-describe('QUEUE', () => {
-  it('counts the depth and what is runnable, names the next few, and counts the skips by reason', () => {
-    const queue = queueSection({
-      queue: ['mc-ui', 'docx-editor', 'avatar-self-serve', 'mc-run', 'brand-new'],
-      plans: PLANS,
-      named: 2,
-    });
-    assert.equal(queue.depth, 5);
-    assert.equal(queue.runnable, 2);
-    assert.deepEqual(queue.next.map((item) => [item.name, item.kind]), [['mc-ui', 'step'], ['docx-editor', 'step']]);
-    assert.equal(queue.more, 0);
-    assert.equal(queue.skipped.count, 3);
-    assert.deepEqual(queue.skipped.reasons, { blocked: 1, done: 1, 'no-plan': 1 });
+describe('NEXT', () => {
+  it('walks the runner\'s own order, counts what is runnable, and counts the skips by reason', () => {
+    // Every non-legacy plan on main is in the walk, not only what `queue.md`
+    // names: `mc-run` is done and `avatar-self-serve` is blocked, and the
+    // runner reaches both and passes them over.
+    const next = nextSection({ queueText: 'mc-ui\nbrand-new\n', plans: PLANS });
+    assert.deepEqual(next.items.map((item) => item.name),
+      ['mc-ui', 'avatar-self-serve', 'docx-editor', 'mc-run'],
+      'queue.md first — brand-new has no plan and is not in the order at all');
+    assert.equal(next.depth, 4);
+    assert.equal(next.from_queue, 1);
+    assert.equal(next.runnable, 2);
+    assert.equal(next.skipped.count, 2);
+    assert.deepEqual(next.skipped.reasons, { blocked: 1, done: 1 });
+  });
+
+  /**
+   * The defect this section was rebuilt for. With `~/mc/queue.md` empty the
+   * page said *"empty — mc brief queues the next thing"* and the brand row said
+   * `0 of 0 queued`, while the runner was walking 41 projects and running one.
+   * Nothing about the runner's order needs the file to say anything.
+   */
+  it('names what the runner would step with queue.md empty, one block per lane', () => {
+    const next = nextSection({ queueText: '', plans: PLANS });
+    assert.equal(next.from_queue, 0);
+    assert.deepEqual(next.lanes.map((lane) => [lane.repo, lane.count, lane.items.map((item) => item.name)]), [
+      ['memoro', 1, ['docx-editor']],
+      ['memoro-cli', 1, ['mc-ui']],
+    ], 'one lane per repository, in the order the runner would drive them');
+    // The row's own content: where in its plan the project is, and the title of
+    // the step that would run — read off the record, never parsed out of `next`.
+    assert.deepEqual(next.lanes.flatMap((lane) => lane.items).map((item) => [item.step, item.steps, item.title]), [
+      [2, 2, 'Measure paste and IME'],
+      [1, 1, 'The page'],
+    ]);
+    const lines = renderPageLines(pageData({ next }), { columns: 120 });
+    assert.ok(lines.some((line) => /NEXT {2}2 runnable of 4 · the order is alphabetical/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {7}docx-editor\s+step 2\/2\s+Measure paste and IME$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {7}mc-ui\s+step 1\/1\s+The page$/u.test(line)), lines.join('\n'));
+    assert.ok(!lines.some((line) => /empty — mc brief/u.test(line)), 'the queue file is not the queue');
+    // And the brand row above it counts the work rather than the file: with
+    // `queue.md` empty it said `0 of 0 queued` while all of this was true.
+    const brand = renderPageLines(pageData({ next, programmes: programmesSection({ plans: PLANS, areas: [] }) }),
+      { columns: 120, version: '0.7.11' })[1];
+    assert.match(brand, /0 in flight · 2 ready · 1 blocked/u);
+    assert.doesNotMatch(brand, /queued/u);
+  });
+
+  it('says on the heading how much of the order queue.md chose', () => {
+    const named = renderPageLines(pageData({
+      next: nextSection({ queueText: 'mc-ui\ndocx-editor\n', plans: PLANS }),
+    }), { columns: 120 });
+    assert.ok(named.some((line) => /NEXT {2}2 runnable of 4 · 2 from queue\.md, then alphabetical/u.test(line)), named.join('\n'));
+  });
+
+  it('draws three deep per lane and counts the rest of that lane', () => {
+    const many = ['a', 'b', 'c', 'd'].map((name) => planRecord({
+      repo: 'memoro', programme: 'p', project: name, status: 'ready', title: `Do ${name}`,
+    }));
+    const next = nextSection({ queueText: '', plans: [...many, PLANS[2]] });
+    assert.deepEqual(next.lanes.map((lane) => [lane.repo, lane.count, lane.items.length, lane.more]), [
+      ['memoro', 4, 3, 1], ['memoro-cli', 1, 1, 0],
+    ]);
+    assert.equal(next.more, 1);
+    const lines = renderPageLines(pageData({ next }), { columns: 120 });
+    assert.ok(lines.some((line) => /^ {5}memoro · 4 runnable · … 1 more$/u.test(line)), lines.join('\n'));
   });
 
   // The page used to answer "somebody has a session open here" as a skip of its
@@ -308,16 +371,10 @@ describe('QUEUE', () => {
   // a page that predicts a skip the runner will not make reads as the runner's
   // own answer while being nobody's.
   it('does not pass a project over because somebody has a session open in it', () => {
-    const queue = queueSection({ queue: ['docx-editor'], plans: PLANS, live: ['docx-editor'] });
-    assert.equal(queue.runnable, 1);
-    assert.equal(queue.skipped.count, 0);
-    assert.deepEqual(queue.skipped.reasons, {});
-  });
-
-  it('says how many runnable it did not name', () => {
-    const queue = queueSection({ queue: ['mc-ui', 'docx-editor'], plans: PLANS, named: 1 });
-    assert.deepEqual(queue.next.map((item) => item.name), ['mc-ui']);
-    assert.equal(queue.more, 1);
+    const next = nextSection({ queueText: 'docx-editor\n', plans: [PLANS[1]], live: ['docx-editor'] });
+    assert.equal(next.runnable, 1);
+    assert.equal(next.skipped.count, 0);
+    assert.deepEqual(next.skipped.reasons, {});
   });
 
   /**
@@ -327,8 +384,8 @@ describe('QUEUE', () => {
    * and this is where a person reads it without opening runner.log.
    */
   it('carries every held pull request with its reason, oldest first', () => {
-    const queue = queueSection({
-      queue: ['mc-ui'],
+    const queue = nextSection({
+      queueText: 'mc-ui\n',
       plans: PLANS,
       held: [
         { project: 'mc-run', repo: 'memoro-cli', pr: 561, branch: 'mc-run-2', reason: 'the session changed more of the plan than its step', note: 'plan-trespass', since: '2026-08-29T11:00:00Z', repairs: 1 },
@@ -354,11 +411,11 @@ describe('QUEUE', () => {
     const machine = (name) => (name === 'mc-ui'
       ? { runnable: false, reason: 'dirty', detail: 'uncommitted work in /w/mc-ui/memoro-cli: a.js', since: '2026-09-05T10:00:00Z', kind: null }
       : { runnable: true, reason: null, detail: null, since: null, kind: 'step' });
-    const queue = queueSection({ queue: ['mc-ui', 'docx-editor', 'avatar-self-serve'], plans: PLANS, machine });
-    assert.equal(queue.depth, 3);
+    const queue = nextSection({ queueText: 'mc-ui\ndocx-editor\navatar-self-serve\n', plans: PLANS, machine });
+    assert.equal(queue.depth, 4);
     assert.equal(queue.runnable, 1);
-    assert.deepEqual(queue.next.map((item) => item.name), ['docx-editor']);
-    assert.deepEqual(queue.skipped.reasons, { dirty: 1, blocked: 1 });
+    assert.deepEqual(queue.lanes.flatMap((lane) => lane.items).map((item) => item.name), ['docx-editor']);
+    assert.deepEqual(queue.skipped.reasons, { dirty: 1, blocked: 1, done: 1 });
     assert.equal(queue.items.find((item) => item.name === 'mc-ui').machine.since, '2026-09-05T10:00:00Z');
   });
 
@@ -366,12 +423,12 @@ describe('QUEUE', () => {
   // is `machineState`'s own economy, and the page keeps it.
   it('asks nothing of the machine for a name the plan has already refused', () => {
     const asked = [];
-    const queue = queueSection({
-      queue: ['mc-ui', 'avatar-self-serve', 'brand-new'],
-      plans: PLANS,
+    const queue = nextSection({
+      queueText: 'mc-ui\navatar-self-serve\nbrand-new\n',
+      plans: [PLANS[0], PLANS[2], PLANS[3]],
       machine: (name) => { asked.push(name); return { runnable: true, kind: 'step' }; },
     });
-    assert.deepEqual(asked, ['mc-ui']);
+    assert.deepEqual(asked, ['mc-ui'], 'blocked, done and nameless cost no reading at all');
     assert.equal(queue.runnable, 1);
   });
 
@@ -381,18 +438,28 @@ describe('QUEUE', () => {
    * runner would do, so the page does not say `step` where none is coming.
    */
   it('names the kind the runner would actually start', () => {
-    const queue = queueSection({
-      queue: ['mc-ui'],
-      plans: PLANS,
+    const queue = nextSection({
+      queueText: 'mc-ui\n',
+      plans: [PLANS[2]],
       machine: () => ({ runnable: true, reason: null, detail: '#440 is held before merge — one repair session is owed', since: null, kind: 'repair' }),
     });
-    assert.deepEqual(queue.next.map((item) => [item.name, item.kind]), [['mc-ui', 'repair']]);
+    assert.deepEqual(queue.lanes.flatMap((lane) => lane.items).map((item) => [item.name, item.kind]), [['mc-ui', 'repair']]);
     assert.equal(queue.runnable, 1);
+    // And the row says it: `repair 1/1`, in the yellow a repair is drawn in.
+    const lines = renderPageLines(pageData({ next: queue }), { columns: 120 });
+    assert.ok(lines.some((line) => /^ {7}mc-ui\s+repair 1\/1\s+The page$/u.test(line)), lines.join('\n'));
   });
 
   it('has nothing held when the file is missing or not a list', () => {
-    assert.deepEqual(queueSection({ queue: [], plans: [] }).held, { count: 0, items: [] });
-    assert.equal(queueSection({ queue: [], plans: [], held: null }).held.count, 0);
+    assert.deepEqual(nextSection({ plans: [] }).held, { count: 0, items: [] });
+    assert.equal(nextSection({ plans: [], held: null }).held.count, 0);
+  });
+
+  // The whole section is empty only when there is nothing on main at all, and
+  // then it says that rather than blaming the queue file for it.
+  it('says so when there is no plan on main to run', () => {
+    const lines = renderPageLines(pageData({ next: nextSection({ plans: [] }) }), { columns: 120 });
+    assert.ok(lines.some((line) => /NEXT {2}nothing on main to run/u.test(line)), lines.join('\n'));
   });
 });
 
@@ -410,9 +477,9 @@ describe('the stale-blocker line', () => {
       PLAN('waiting-on-gone', [BLOCKED('never-heard-of-it')]),
       { ...PLAN('already-done', [{ title: 'x', status: 'done' }]), status: 'done' },
     ];
-    const queue = queueSection({ queue: [], plans });
+    const queue = nextSection({ plans });
     assert.equal(queue.stale.count, 2);
-    const lines = renderPageLines(pageData({ queue }), { columns: 120 });
+    const lines = renderPageLines(pageData({ next: queue }), { columns: 120 });
     const header = lines.find((line) => /blocker finished/u.test(line));
     assert.match(header, /blocker finished 2 — a blocked step names a project that is done or no longer on main/u);
     assert.doesNotMatch(header, /not coming/u, 'the page predicts nothing the module refused to');
@@ -707,7 +774,7 @@ function pageData(over = {}) {
   return {
     runner: runnerSection({ rows: [], now: NOW, alive: () => false }),
     sessions: sessionsSection({ now: NOW, alive: () => false }),
-    queue: queueSection({ queue: [], plans: [] }),
+    next: nextSection({ plans: [] }),
     intake: intakeSection({ digests: [], proposals: [], now: NOW }),
     programmes: programmesSection({ areas: [], plans: [] }),
     caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },
@@ -738,8 +805,8 @@ const DATA = pageData({
     now: NOW,
     alive: live,
   }),
-  queue: queueSection({
-    queue: ['mc-ui', 'docx-editor', 'mc-run'],
+  next: nextSection({
+    queueText: 'mc-ui\ndocx-editor\nmc-run\n',
     plans: PLANS,
     held: [{
       project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor',
@@ -775,10 +842,13 @@ describe('the page', () => {
     // RUNNER and the desks are the rows that change while the page is open,
     // and the live loop can only rewrite rows still on the screen; at the
     // top they scrolled off under the projects and never moved (2026-09-03).
-    const at = ['QUEUE', 'INTAKE', 'PROGRAMMES', 'WORK', 'RUNNER', 'HELPER', 'BRIEF'].map((head) => text.indexOf(`  ${head}`));
+    const at = ['NEXT', 'INTAKE', 'PROGRAMMES', 'WORK', 'RUNNER', 'HELPER', 'BRIEF'].map((head) => text.indexOf(`  ${head}`));
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
-    assert.match(text, /2 of 3 queued/u);
+    // What is true of the work, and never `0 of 0 queued`: the step in flight,
+    // and the plans PROGRAMMES counts ready and blocked, in the same numbers.
+    assert.match(text, /1 in flight · 2 ready · 1 blocked/u);
+    assert.doesNotMatch(text, /queued/u);
     assert.match(text, /● mc-ui\s+step · claude opus · 20 min of 90 min · pid 4242/u);
     assert.match(text, /■ STOP requested — the runner exits after the steps it is in/u);
     assert.match(text, /HELPER {2}● open 60 min · claude sonnet · pid 99\s+mc helper/u);
@@ -786,8 +856,12 @@ describe('the page', () => {
     assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
     assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
     assert.match(text, /runner up 120 min · 3 steps in 24 h — merged 1, open 1, failed 0, timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)/u);
-    assert.match(text, /QUEUE {2}2 runnable of 3 · held before merge 1\s+mc status <name>/u);
-    assert.match(text, /skipped 1 \(done 1\)/u);
+    assert.match(text, /NEXT {2}2 runnable of 4 · 3 from queue\.md, then alphabetical · held before merge 1\s+mc status <name>/u);
+    // One block per lane, three deep, and the row says where in its plan the
+    // project is. The lanes run at the same time: both heads start now.
+    assert.match(text, /^ {5}memoro-cli · 1 runnable\n {7}mc-ui\s+step 1\/1\s+The page$/mu);
+    assert.match(text, /^ {5}memoro · 1 runnable\n {7}docx-editor\s+step 2\/2\s+Measure paste and IME$/mu);
+    assert.match(text, /skipped 2 \(done 1, blocked 1\)/u);
     assert.match(text, /· docx-editor {2}#10958 {2}two tests the change reaches are red/u);
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /INTAKE {2}1 digest · 1 proposal\s+mc helper --intake/u);
@@ -836,9 +910,15 @@ describe('the page', () => {
     const code = await page(['--json'], { collect: async () => DATA, stdout: { write: (s) => { out += s; } } });
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
-    assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'queue', 'intake', 'programmes', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'next', 'intake', 'programmes', 'caches', 'notes']);
     assert.equal(parsed.programmes.programmes[0].projects[0].name, 'avatar-self-serve');
-    assert.equal(parsed.queue.runnable, 2);
+    assert.equal(parsed.next.runnable, 2);
+    // Every field the section draws is in the object, lanes and all: the page
+    // is rendered from `--json` alone and the two cannot say different things.
+    assert.deepEqual(parsed.next.lanes.map((lane) => [lane.repo, lane.items.map((item) => `${item.name} ${item.kind} ${item.step}/${item.steps} ${item.title}`)]), [
+      ['memoro-cli', ['mc-ui step 1/1 The page']],
+      ['memoro', ['docx-editor step 2/2 Measure paste and IME']],
+    ]);
     // Rendering the parsed JSON gives the same page: the two cannot drift.
     assert.equal(renderPage(parsed, { columns: 100, now: NOW }), renderPage(DATA, { columns: 100, now: NOW }));
   });
@@ -918,19 +998,27 @@ describe('collectPage', () => {
     assert.equal(data.runner.production.short, '1a2b3c4');
     assert.equal(data.runner.production.live.short, 'b3e65b6');
     assert.equal(data.runner.production.differs, true);
-    assert.equal(data.queue.depth, 2, 'the comment line is not a project');
-    // Both plans say `ready`, and #440 is open on mc-ui's branch — so the
-    // runner would start one of the two, and the block says one. It said two
-    // until the machine was read here, which is the defect this project is
+    // Every non-legacy plan on main is in the walk — the two `queue.md` names
+    // first, then the rest alphabetically — and the comment line is not a
+    // project. The file used to be the whole section, which is why an empty one
+    // said `empty` while the runner walked forty.
+    assert.deepEqual(data.next.items.map((item) => item.name),
+      ['mc-ui', 'docx-editor', 'avatar-self-serve', 'mc-run']);
+    assert.equal(data.next.depth, 4);
+    assert.equal(data.next.from_queue, 2, 'the comment line is not a project');
+    // Both queued plans say `ready`, and #440 is open on mc-ui's branch — so
+    // the runner would start one of the two, and the block says one. It said
+    // two until the machine was read here, which is the defect this project is
     // about: a partial answer is read as the whole one.
-    assert.equal(data.queue.runnable, 1);
-    assert.deepEqual(data.queue.skipped.reasons, { 'in-flight': 1 });
-    assert.deepEqual(data.queue.next.map((item) => item.name), ['docx-editor']);
+    assert.equal(data.next.runnable, 1);
+    assert.deepEqual(data.next.skipped.reasons, { 'in-flight': 1, blocked: 1, done: 1 });
+    assert.deepEqual(data.next.lanes.map((lane) => [lane.repo, lane.items.map((item) => item.name)]),
+      [['memoro', ['docx-editor']]]);
     assert.deepEqual([...new Set(gitArgs)], ['status --porcelain'],
       'the reading asks the worktree one read-only question and nothing else');
     // The runner's own file, read where the runner writes it: nobody has to
     // open runner.log to see which pull request is standing still.
-    assert.deepEqual(data.queue.held.items.map((item) => [item.project, item.pr, item.reason]),
+    assert.deepEqual(data.next.held.items.map((item) => [item.project, item.pr, item.reason]),
       [['docx-editor', 10958, 'two tests the change reaches are red']]);
     assert.equal(data.intake.repos[0].new_errors, 1);
     assert.deepEqual(data.intake.repos[0].loud_lines, ['`abc` — 41x 500 — loud']);
@@ -1030,10 +1118,12 @@ describe('the palette', () => {
     '',
     'bold grey grey grey grey', //               MEMORO·CLI 0.7.11 ── 2 of 3 queued · ≈$7.28 today
     '',
-    'bold+cyan grey grey yellow+bold grey', //                     QUEUE  2 runnable of 3 · held before merge 1   mc status <name>
-    'grey bold green', //                                            1  mc-ui  step
-    'grey green', //                                                 2  docx-editor  step
-    'grey', //                                                       skipped 1 (done 1)
+    'bold+cyan grey grey grey grey yellow+bold grey', //            NEXT  2 runnable of 4 · 3 from queue.md, then alphabetical · held before merge 1   mc status <name>
+    'bold grey grey', //                                             memoro-cli · 1 runnable
+    'bold green', //                                                   mc-ui        step 1/1  The page
+    'bold grey grey', //                                             memoro · 1 runnable
+    'bold green', //                                                   docx-editor  step 2/2  Measure paste and IME
+    'grey', //                                                       skipped 2 (done 1, blocked 1)
     'yellow+bold yellow', //                                         · docx-editor  #10958  two tests the change reaches are red
     '',
     'bold+cyan grey grey yellow grey', //                          INTAKE  1 digest · 1 proposal
@@ -1120,7 +1210,7 @@ describe('the palette', () => {
     });
     assert.equal(code, 0);
     assert.ok(!out.includes(ESC), '--json is bytes for a program, never for an eye');
-    assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'queue', 'intake', 'programmes', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'next', 'intake', 'programmes', 'caches', 'notes']);
   });
 
   it('gives a step kind one colour wherever a kind is printed', () => {
@@ -1135,8 +1225,14 @@ describe('the palette', () => {
           now: NOW,
           alive: live,
         }),
-        queue: {
-          depth: 1, runnable: 1, items: [], next: [{ name: 'thing', kind }], more: 0, skipped: { count: 0, reasons: {} },
+        next: {
+          depth: 1,
+          from_queue: 0,
+          runnable: 1,
+          items: [],
+          lanes: [{ repo: 'memoro-cli', count: 1, more: 0, items: [{ name: 'thing', kind, step: 1, steps: 2, title: 'carry on' }] }],
+          more: 0,
+          skipped: { count: 0, reasons: {} },
         },
         programmes: programmesSection({
           plans: [{ repo: 'memoro-cli', programme: 'mc', project: 'thing', status: 'ready', next: 'go on' }],
@@ -1147,7 +1243,7 @@ describe('the palette', () => {
       const lines = paintedPage(data);
       const now = signature(rowWith(lines, `● thing  `)).split(' ');
       assert.equal(now[2], tone, `NOW says ${kind} in ${now[2]}`);
-      assert.equal(signature(rowWith(lines, `  1  thing`)).split(' ').at(-1), tone, `QUEUE says ${kind} in its colour`);
+      assert.equal(signature(rowWith(lines, `${kind} 1/2`)).split(' ').at(-1), tone, `NEXT says ${kind} in its colour`);
       assert.equal(signature(rowWith(lines, 'go on')).split(' ').at(-1), tone, `PROJECTS says ${kind} in its colour`);
     }
   });

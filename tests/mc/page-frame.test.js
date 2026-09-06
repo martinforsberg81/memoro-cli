@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  intakeSection, programmesSection, queueSection, runnerSection, sessionsSection,
+  intakeSection, nextSection, programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { frameWrites, reprintPlan } from '../../src/mc/page-frame.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
@@ -19,7 +19,7 @@ function emptyPage(ageSeconds) {
   return {
     runner: runnerSection({ rows: [], now: NOW, alive: () => false }),
     sessions: sessionsSection({ now: NOW, alive: () => false }),
-    queue: queueSection({ queue: [], plans: [] }),
+    next: nextSection({ plans: [] }),
     intake: intakeSection({ digest: null, proposals: [], now: NOW }),
     programmes: programmesSection({ areas: [], plans: [] }),
     caches: {

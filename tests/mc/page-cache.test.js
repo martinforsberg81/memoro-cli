@@ -6,7 +6,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ageWords, cachePath, loadPlans, loadPrs, savePrs } from '../../src/mc/page-cache.js';
+import {
+  PLANS_SHAPE, ageWords, cachePath, loadPlans, loadPrs, savePrs,
+} from '../../src/mc/page-cache.js';
 
 const ROOT = '/w';
 const REPOS = [{ name: 'memoro', path: '/r/memoro' }, { name: 'memoro-cli', path: '/r/memoro-cli' }];
@@ -75,6 +77,28 @@ describe('plans.json', () => {
       { repo: 'memoro', sha: 'aaa', cached: true }, { repo: 'memoro-cli', sha: 'ccc', cached: false },
     ]);
     assert.deepEqual(calls.map((c) => c[1]), ['rev-parse', 'rev-parse', 'ls-tree', 'cat-file']);
+  });
+
+  /**
+   * The sha answers for `main`; it cannot answer for the reader. On 2026-09-06
+   * `listPlans` began carrying the step's number and title, and memoro's entry
+   * — a hit, written the day before, main unmoved — drew six NEXT rows with no
+   * `n/m` and no title on them.
+   */
+  it('re-reads an entry written by an older shape of the record', () => {
+    const fs = files();
+    const shas = { '/r/memoro': 'aaa' };
+    loadPlans({ root: ROOT, repos: [REPOS[0]], now: NOW, git: fakeGit(shas, []), batch: batchOf([]), ...fs });
+    const path = cachePath(ROOT, 'plans.json');
+    const held = JSON.parse(fs.held[path]);
+    delete held.memoro.shape; // the file as every machine already holds it
+    fs.held[path] = JSON.stringify(held);
+
+    const calls = [];
+    const after = loadPlans({ root: ROOT, repos: [REPOS[0]], now: NOW, git: fakeGit(shas, calls), batch: batchOf(calls), ...fs });
+    assert.deepEqual(after.sources, [{ repo: 'memoro', sha: 'aaa', cached: false }]);
+    assert.deepEqual(calls.map((c) => c[1]), ['rev-parse', 'ls-tree', 'cat-file']);
+    assert.equal(JSON.parse(fs.held[path]).memoro.shape, PLANS_SHAPE, 'and it is stamped on the way back in');
   });
 
   it('reads a repository without a sha straight through and files nothing under it', () => {

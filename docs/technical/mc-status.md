@@ -121,7 +121,7 @@ reader to stop at the first one:
 ```
 
 The second half is `machineState` (`status-collect.js`), the same reading the
-page's QUEUE and the brief draw; what the two readings are and why there are two
+page's NEXT and the brief draw; what the two readings are and why there are two
 is [`mc-run.md`](mc-run.md) § *The two readings, and what each answers*.
 `machineNote` is the rule for when it says nothing, and there are three cases
 and no others:
