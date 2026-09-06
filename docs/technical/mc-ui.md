@@ -48,8 +48,21 @@ of projects, they had scrolled into history before the prompt was printed and
 never moved (2026-09-03). The overview stays complete — every project is
 listed — and what moves sits where the eye already is:
 
-- **QUEUE** — how deep, how much of it is runnable, the next few by name and
-  kind, and the skips counted by reason. The reasons are both of the runner's
+- **NEXT** — the order `mc run` would actually take, and how much of it is
+  runnable. The order is `assembleQueue`'s, the runner's own (`run-plan.js`):
+  the names `~/mc/queue.md` puts first, then **every other non-legacy plan on
+  `origin/main`, alphabetically**. The heading says how many came from the file,
+  so an empty `queue.md` reads as *the order is alphabetical* — which is what
+  the runner is doing — and never as an empty queue. It said *"empty — mc brief
+  queues the next thing"* until 2026-09-06, with the brand row on `0 of 0
+  queued`, while the runner walked 41 projects and ran one; `queue.md` is
+  Martin's *these first*, it empties itself, and it was never the queue.
+  Under the heading, **one block per lane**: `mc run` drives one lane per
+  repository at the same time (`splitLanes`), so the head of *each* lane starts
+  now and a flat list would say one of them is second. Three deep per lane, the
+  rest of that lane a count on its own row, and every row is the project,
+  `step n/m` in the kind's own colour, and that step's title. The skips are
+  counted by reason underneath, and the reasons are both of the runner's
   own: what the plan on `origin/main` says (`blocked`, `done`, `unparseable`)
   and what this machine says (`dirty`, `in-flight`, `held-after-repair`, …) —
   the two readings of [`mc-run.md`](mc-run.md) § *The two readings, and what
@@ -66,7 +79,7 @@ listed — and what moves sits where the eye already is:
   heading's own count line, with a row under the skips for each — project,
   pull request, reason. That is `~/mc/runner/held.json`, every pull request
   `mc run` would not land (a red gate, a plan trespass, a session that timed
-  out with its work pushed). It belongs in QUEUE because it *is* the skip
+  out with its work pushed). It belongs in NEXT because it *is* the skip
   nothing counted: a held pull request keeps its project out of the queue
   entirely (`inFlight`), and until the machine reading arrived the project was
   in none of the numbers above it either. It is counted there now, under
@@ -127,7 +140,7 @@ the helper and the sessions already write.
 | stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
 | a pull request left unlanded | `~/mc/runner/held.json` (project, repo, pr, branch, reason, note, since, repairs, and — when a gate held it — `red` and `gates` for the repair session to read) | `mc run`, whenever a landing does not land |
-| the queue | `~/mc/queue.md` | Martin, at the brief |
+| the head of the order | `~/mc/queue.md` — the rest of NEXT is the plans themselves | Martin, at the brief |
 | what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
 | what mc deployed | `~/mc/runner/log/deploys.tsv` (sha, build, holder, outcome, the live version verified) | `mc deploy`, before and after |
 | what production answers it is | `~/mc/runner/version.json` (`GET /api/version`, with the moment it was asked) | `mc helper --collect` |
@@ -262,7 +275,7 @@ test can look at one row.
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
 page bends to: **a step kind and a plan status have one colour each, wherever
-they are printed.** RUNNER, QUEUE and PROGRAMMES all say `step` in the same
+they are printed.** RUNNER, NEXT and PROGRAMMES all say `step` in the same
 green, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
 through all three sections.
@@ -291,9 +304,9 @@ person set it to.
 | where | what | colour |
 |---|---|---|
 | header | `MEMORO·CLI` | bold |
-| header | `N of M queued` | plain |
+| header | `N in flight · N ready · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `RUNNER` `HELPER` `BRIEF` `QUEUE` `INTAKE` `PROGRAMMES` `WORK` | bold cyan |
+| section titles | `RUNNER` `HELPER` `BRIEF` `NEXT` `INTAKE` `PROGRAMMES` `WORK` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | RUNNER | the live step's `●`, its name | green, bold |
 | RUNNER | elapsed: under ¾ of budget, from ¾, past it | plain, yellow, bold red |
@@ -310,10 +323,11 @@ person set it to.
 | WORK | a session's `●` and its area | cyan, bold |
 | WORK | a tmux window's `◆` | yellow |
 | WORK | how long it has been open, under a day, from a day | grey, yellow |
-| QUEUE | the next name, the first of them | plain, bold |
-| QUEUE | the number, `… N more runnable` | grey |
-| QUEUE | why a project was skipped | grey |
-| QUEUE | `blocker finished N` and the steps under it | bold yellow, yellow |
+| NEXT | a lane's repository, how much of it is runnable | bold, grey |
+| NEXT | the project starting now, the ones behind it | bold, plain |
+| NEXT | `step n/m` on a row | the step kind's colour |
+| NEXT | how the order was arrived at, `… N more`, why a project was skipped | grey |
+| NEXT | `blocker finished N` and the steps under it | bold yellow, yellow |
 | INTAKE | the digest's date, under 24 h old, older | green, yellow |
 | INTAKE | new errors, when > 0 | red |
 | INTAKE | proposals, when > 0 | yellow |
@@ -342,7 +356,8 @@ Five things hold that table up:
   `dim grey` was `ESC[2m` over `ESC[90m` — two steps down from the foreground —
   and it drew the repository cell of all 41 project rows, `no plan session` on
   every programme heading, `·  not open` on a desk, and the skip line under
-  QUEUE. On Martin's terminal that is at or below the background: a cell nobody
+  what was then QUEUE. On Martin's terminal that is at or below the
+  background: a cell nobody
   can read is not a quiet cell, it is a missing one. `white` was `ESC[37m`, one
   fixed colour a theme never chose — the wrong end of the scale on a light
   theme, dimmer than its neighbours on a dark one. Both are gone from the page.

@@ -56,7 +56,7 @@ describe('bare mc', () => {
     try {
       const result = runMcCli([], fx.env);
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROGRAMMES', 'WORK']) {
+      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'NEXT', 'INTAKE', 'PROGRAMMES', 'WORK']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
       // The numbers the menu opens, on the rows the menu opens them from.
@@ -71,7 +71,7 @@ describe('bare mc', () => {
       const result = runMcCli(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'sessions', 'queue', 'intake', 'programmes', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'sessions', 'next', 'intake', 'programmes', 'caches', 'notes']);
       // No plan on main here, so there are no projects and both folders are
       // under the heading for the ones nothing explains — numbered from 1,
       // because the projects above them are none.
@@ -114,7 +114,7 @@ describe('bare mc', () => {
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
       const printed = runMcCli([], fx.env).stdout;
-      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROGRAMMES', 'WORK']) {
+      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'NEXT', 'INTAKE', 'PROGRAMMES', 'WORK']) {
         const seen = printed.match(new RegExp(`^\\s+${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }

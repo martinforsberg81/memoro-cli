@@ -10,7 +10,9 @@
  * hit costs one `git rev-parse` — the sha *is* the question "did anything
  * change?", so there is no staleness to reason about and no age to print: a
  * hit is exactly what a fresh read would have returned. A miss reads the
- * plans with one `cat-file --batch` and rewrites the entry.
+ * plans with one `cat-file --batch` and rewrites the entry. The sha answers
+ * for main and `PLANS_SHAPE` answers for the reader: a record written before
+ * the reader gained a field is not what a fresh read would return either.
  *
  * **prs.json** has no such key — an open PR closes without moving any sha —
  * so it is stamped instead, written only by `--fresh`, and the page says how
@@ -28,6 +30,21 @@ import { catFileBatch, listPlans } from './brief-collect.js';
 
 export const PLANS_FILE = 'plans.json';
 export const PRS_FILE = 'prs.json';
+
+/**
+ * What shape the cached plan records are in. The sha answers *did anything
+ * change on main*, and answers it perfectly — but it says nothing about a
+ * change on **this** side: when `listPlans` starts carrying a field, every
+ * entry already in the file is a hit that lacks it.
+ *
+ * Measured 2026-09-06, the day `step`, `steps` and `title` arrived on the
+ * record (`planSummary`): the page's NEXT drew `step 2/4` for memoro-cli, whose
+ * main had moved since, and a bare `step` with no title for all six of memoro's
+ * rows, whose entry was a hit written the day before. Bump this whenever a
+ * record gains, loses or renames a field, and the next page re-reads instead of
+ * drawing half a row.
+ */
+export const PLANS_SHAPE = 2;
 
 export function cachePath(root, file) {
   return join(root, 'runner', file);
@@ -67,7 +84,7 @@ export function loadPlans({
   for (const repo of repos) {
     const sha = git(repo.path, ['rev-parse', ref]);
     const entry = sha ? cache[repo.name] : null;
-    if (entry && entry.sha === sha && Array.isArray(entry.plans)) {
+    if (entry && entry.sha === sha && entry.shape === PLANS_SHAPE && Array.isArray(entry.plans)) {
       plans.push(...entry.plans);
       sources.push({ repo: repo.name, sha, cached: true });
       continue;
@@ -75,7 +92,7 @@ export function loadPlans({
     const fresh = listPlans(repo, { ref, git, batch });
     plans.push(...fresh);
     sources.push({ repo: repo.name, sha, cached: false });
-    if (sha) { cache[repo.name] = { sha, read: now.toISOString(), plans: fresh }; dirty = true; }
+    if (sha) { cache[repo.name] = { sha, shape: PLANS_SHAPE, read: now.toISOString(), plans: fresh }; dirty = true; }
   }
   if (dirty) { try { write(path, cache); } catch { /* a cache that cannot be written is still a page */ } }
   return { plans, sources };

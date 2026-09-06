@@ -205,7 +205,7 @@ worktree decides after.**
 Reading the queue (step 2 of the round) has already fetched every `PLAN.json`
 on both `origin/main`s, so *would the runner act on this project at all* is
 answered before a lane starts walking. `planRefusal` asks it with `kindFor` —
-the same reading `mc status`'s QUEUE draws the page from — and a name it
+the same reading the page's NEXT draws its order from — and a name it
 refuses never reaches `runStep` and costs no git at all:
 
 | the plan on main says | the lane |
@@ -427,7 +427,7 @@ wherever it is met:
 | surface | what it says |
 |---|---|
 | `mc status <name>` | both, on one row — `ready · #614 is held before merge after a repair (since 09-03 10:00Z)`, and bare `ready` when this machine has nothing to add ([`mc-status.md`](mc-status.md)) |
-| the page's QUEUE (`mc`) | both — a skipped name is counted under its machine word, and a runnable name is drawn as the kind the runner would actually start, `repair` where a hold is owed one |
+| the page's NEXT (`mc`) | both — a skipped name is counted under its machine word, and a runnable name is drawn as the kind the runner would actually start, `repair` where a hold is owed one |
 | `mc brief --collect` | both, in a section of its own — *Ready, and the runner cannot start it*, one line per project with what is in the way, since when, and the `runs.tsv` row that left it ([`mc-brief.md`](mc-brief.md)) |
 | the page's PROGRAMMES rows, `mc status`'s step rows, the brief's *Plan status* | the plan alone, and that is right: they are about what the plan says |
 
@@ -639,9 +639,9 @@ held before merge after a repair — the brief's`. No loop: a pull request its
 one repair could not save is a person's decision, and it reaches Martin in
 `mc brief`'s *Held before merge* section — merge by hand, close, or block the
 step with a decision, one proposal each (see
-[`mc-brief.md`](mc-brief.md)). Between briefs it is on the page: QUEUE draws
+[`mc-brief.md`](mc-brief.md)). Between briefs it is on the page: NEXT draws
 `held before merge N` with project, pull request and reason under it, and
-`mc --json` carries `queue.held` whole (see [`mc-ui.md`](mc-ui.md)).
+`mc --json` carries `next.held` whole (see [`mc-ui.md`](mc-ui.md)).
 
 One gap worth knowing: `planRefusal` passes over a project whose plan on
 `origin/main` is blocked, done or unparseable *before* `runStep` is reached, so

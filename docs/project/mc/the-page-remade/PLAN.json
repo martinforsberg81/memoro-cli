@@ -33,7 +33,7 @@
       "check": "`grep -n \"'dim'\" src/mc/page-render.js` returns nothing, and the per-row signature snapshot in `tests/mc/page.test.js` is updated to match — the snapshot is the assertion that the palette is a table and not a habit."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "With `~/mc/queue.md` empty and ready plans on `main`, the page names the projects the runner would step next rather than saying the queue is empty.",
       "check": "A test feeds `queueSection` an empty queue file and a fixture of plans, and asserts NEXT's rows are `assembleQueue`'s order per lane with `step n/m` on each, and that the heading says the order is alphabetical. The brand row asserts in-flight, ready and blocked counts, never `0 of 0 queued`."
     },
@@ -103,7 +103,7 @@
     },
     {
       "title": "NEXT replaces QUEUE: the order the runner would actually take",
-      "status": "ready",
+      "status": "done",
       "done_when": "The section draws `assembleQueue`'s outcome — `queue.md` first, then the alphabetical ready plans — one block per lane, three deep, each row naming the project and `step n/m` with the step's title; the heading says how many came from `queue.md`; and the brand row counts in flight, ready and blocked.",
       "instruction": [
         "`collectPage` reads `~/mc/queue.md` through `queueNames` and passes that alone to `queueSection`, so an empty file makes the section say *\"empty — mc brief queues the next thing\"* and the brand row say *\"0 of 0 queued\"* — while the runner is walking 41 projects. The runner's own order is `assembleQueue` (`src/mc/run-plan.js`): the queue file's names that have a non-legacy plan on `main`, then every other such plan alphabetically, split one lane per repository by `splitLanes` (`src/mc/run.js`). It is a pure function of the plans the page already holds.",
@@ -113,7 +113,12 @@
         "The brand row counts what is true: how many steps are in flight, how many projects are ready, how many are blocked. Those three are on the page already; `N of M queued` is not one of them.",
         "`mc --json` carries the whole section, as it does today: the parity test is what keeps the two surfaces from drifting."
       ],
-      "comments": [],
+      "comments": [
+        "The section's key in `mc --json` is `next` now, not `queue`, and `queueSection` is `nextSection` — the page and the object are one surface and the section is not the queue any more. Anything of Martin's that reads `.queue` off `mc --json` reads `.next` after this. Its fields also moved: `depth` is how far the runner's order reaches (44 on this machine, every non-legacy plan on main) rather than how many lines `queue.md` holds, `from_queue` is how many of them the file chose, `lanes` replaced `next` as the drawn rows, and `more` is what the lanes did not draw.",
+        "One thing the instruction could not have known, found by running the real page: `plans.json` is keyed by the `origin/main` sha, so the new `step`/`steps`/`title` fields on a plan record only exist for a repository whose main has moved since the cache was written. The first real run drew `step 2/4` for memoro-cli and a bare `step` with no title for all six of memoro's rows. The sha answers for main and cannot answer for the reader, so `loadPlans` entries now carry `shape: PLANS_SHAPE` and a record written by an older shape is a miss (`page-cache.js`, with the test). **Bump `PLANS_SHAPE` whenever a plan record gains, loses or renames a field** — step 4 adds nothing to the record as written, but if it carries `blocked_by` onto it, that is a bump.",
+        "The brand row and the NEXT heading count two different things on purpose, in two different words. The brand says `2 in flight · 11 ready · 33 blocked` from `runner.steps` and PROGRAMMES' own `statuses`, so it cannot disagree with the section under it; NEXT says `8 runnable of 44`, which is the machine reading as well as the plan (`machineState`) and is therefore smaller — the skip line under the lanes is what accounts for the difference (`skipped 36 (blocked 33, in-flight 2, dirty 1)`). Step 4's rollup line is about the same 33 and should use `blocked`, the plan's word, rather than inventing a third.",
+        "The machine reading now runs for every plan the order reaches that says `ready` — 11 here, where an empty `queue.md` used to mean none — so the page asks up to 11 `git status --porcelain` it did not ask before. Measured 2026-09-06, warm, alternating: this branch 3.2 s / 3.7 s, `main`'s page 4.0 s / 4.3 s. It does not show above the noise of the read the page was already doing. Note that a `main` checkout's page rewrites `plans.json` without the shape stamp, so a page from each in turn costs one re-read each way until this lands."
+      ],
       "pr": null,
       "blocked_by": null
     },

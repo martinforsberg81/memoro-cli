@@ -274,12 +274,27 @@ export function readPlanText(text) {
  * `next` is not a field any more. It was one, written by hand and restated
  * with its own "done when" each time, and it disagreed with the steps below it
  * in several plans. Here it is read off the step the runner would hand out.
+ *
+ * The step's **number** comes back as a number. It was spent building the
+ * sentence and thrown away, so a reader that wanted `2/5` had to parse the
+ * prose back apart — which is what the page's NEXT would have had to do to say
+ * how far into a plan its next step is. `title` likewise: the sentence carries
+ * it, and a column cannot use a sentence.
  */
 export function planSummary(plan) {
+  const total = Array.isArray(plan?.steps) ? plan.steps.length : 0;
   const { step, index, why } = deliverableStep(plan);
-  if (step) return { status: 'ready', next: `Step ${index + 1}, ${step.title} — done when ${step.done_when}` };
+  const at = { step: index >= 0 ? index + 1 : null, steps: total || null };
+  if (step) {
+    return {
+      status: 'ready',
+      next: `Step ${index + 1}, ${step.title} — done when ${step.done_when}`,
+      title: step.title,
+      ...at,
+    };
+  }
   const state = planState(plan);
-  return { status: state.status, next: why };
+  return { status: state.status, next: why, title: state.step?.title || null, ...at };
 }
 
 /**

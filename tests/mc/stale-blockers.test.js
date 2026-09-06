@@ -13,19 +13,19 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { queueSection, runnerSection, sessionsSection } from '../../src/mc/page-collect.js';
+import { nextSection, runnerSection, sessionsSection } from '../../src/mc/page-collect.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { describeStale, staleBlockers } from '../../src/mc/stale-blockers.js';
 
 const FIXTURE = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'fixtures', 'stale-blockers-main-2026-09-03.json'), 'utf8'));
 const PLANS = FIXTURE.plans;
 
-/** The page as `mc` prints it, from a queue section and nothing else. */
-function pageText(queue) {
+/** The page as `mc` prints it, from the NEXT section and nothing else. */
+function pageText(next) {
   return renderPageLines({
     runner: runnerSection({ now: new Date('2026-09-03T12:00:00Z'), alive: () => false }),
     sessions: sessionsSection({ now: new Date('2026-09-03T12:00:00Z'), alive: () => false }),
-    queue,
+    next,
     intake: { digest: null, proposals: 0, loud: [], fresh: 0 },
     programmes: { repos: [], unplanned: [] },
     caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },
@@ -85,22 +85,22 @@ describe('stale blockers', () => {
     assert.equal(JSON.stringify(PLANS), before);
   });
 
-  it('puts the count and the first names on the page, under QUEUE', () => {
-    const text = pageText(queueSection({ queue: [], plans: PLANS }));
+  it('puts the count and the first names on the page, under NEXT', () => {
+    const text = pageText(nextSection({ plans: PLANS }));
     assert.match(text, /blocker finished 2/u);
     assert.match(text, /home-on-msr step 2 on inbox-finish, which is not on main/u);
     assert.match(text, /time-axis step 1 on inbox-finish, which is not on main/u);
   });
 
   it('counts the rest rather than listing them', () => {
-    const section = queueSection({ queue: [], plans: PLANS, staleNamed: 1 });
+    const section = nextSection({ plans: PLANS, staleNamed: 1 });
     assert.equal(section.stale.count, 2);
     assert.equal(section.stale.more, 1);
     assert.match(pageText(section), /… 1 more/u);
   });
 
   it('says nothing at all when no blocker is stale', () => {
-    const text = pageText(queueSection({ queue: [], plans: [] }));
+    const text = pageText(nextSection({ plans: [] }));
     assert.equal(/blocker finished/u.test(text), false);
   });
 });

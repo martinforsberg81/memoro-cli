@@ -5,8 +5,9 @@
  *
  * NOW      — the steps in flight, one per lane, a pending STOP, the live
  *            tmux areas, the foreground verbs, and the day behind it.
- * QUEUE    — how deep, how much of it is runnable, what comes next, and what
- *            is skipped, counted by reason.
+ * NEXT     — the order `mc run` would take (`assembleQueue`), one block per
+ *            lane and three deep: what each lane starts now, how much of the
+ *            walk is runnable, and what is skipped, counted by reason.
  * DECISIONS— how many wait on Martin, and the first few by name.
  * INTAKE   — the helper's newest digest, what is new in it, the `!` lines
  *            themselves, and how many proposals nobody has queued or dropped.
@@ -34,7 +35,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
-  DAY_MS, defaultRepos, listProgrammes, queueNames, runsSince, summariseRuns,
+  DAY_MS, defaultRepos, listProgrammes, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { lastAttempt, lastDeploy } from './deploys.js';
 import { heldEntries, heldPath } from './held.js';
@@ -44,13 +45,14 @@ import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
+import { assembleQueue, queueFileNames } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
 import {
   RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive, readCurrents,
 } from './status-collect.js';
 
 /** How many of each list the page names rather than counts. */
-export const QUEUE_NAMED = 6;
+export const LANE_DEEP = 3;
 export const DECISIONS_NAMED = 3;
 /** How many stale blockers the line names before it only counts them. */
 export const STALE_NAMED = 3;
@@ -253,11 +255,27 @@ export function sessionsSection({
   };
 }
 
-/* ------------------------------------------------------------------- QUEUE */
+/* -------------------------------------------------------------------- NEXT */
 
 /**
- * The queue as the runner would read it: every name with the kind it would be
- * run as, or the reason it would be passed over.
+ * The order the runner would actually take: every name with the kind it would
+ * be run as, or the reason it would be passed over.
+ *
+ * It read `~/mc/queue.md` and nothing else until 2026-09-06, so with that file
+ * empty the section said *"empty — mc brief queues the next thing"* while the
+ * runner was walking 41 projects and running one. `queue.md` is not the queue —
+ * it is Martin's *these first*, and it empties itself. The order is
+ * `assembleQueue`'s (run-plan.js), which is the runner's own: the file's names
+ * that have a non-legacy plan on `main`, then every other such plan
+ * alphabetically. The section reads the runner's function rather than repeating
+ * its rule, so the page and the round cannot come to disagree about what is
+ * next.
+ *
+ * Lanes are why it is blocks rather than a list: `mc run` drives one lane per
+ * repository at the same time (`splitLanes`, run.js), so the head of *each*
+ * lane starts now and a flat list would say one of them is second. Three deep
+ * per lane is what is coming; past that it is a count, and the whole order is
+ * in `items` for `mc --json`.
  *
  * A live area used to be a skip with a reason of its own, because the runner
  * would not start a step where somebody had a session open. It no longer
@@ -283,21 +301,42 @@ export function sessionsSection({
  * `machineState` has to ask a worktree whether it is dirty; a caller with no
  * reader gets the plan-shaped answer alone, exactly as before.
  */
-export function queueSection({
-  queue = [], plans = [], held = [], named = QUEUE_NAMED, staleNamed = STALE_NAMED,
+export function nextSection({
+  queueText = '', plans = [], held = [], deep = LANE_DEEP, staleNamed = STALE_NAMED,
   machine = () => null,
 } = {}) {
-  const items = queue.map((name) => {
+  const order = assembleQueue(queueText, plans);
+  // What `queue.md` actually put at the front: its own lines, minus the ones
+  // `assembleQueue` dropped for having no plan on main. The heading says how
+  // many, so an empty file reads as *the order is alphabetical* rather than as
+  // an empty queue.
+  const queued = new Set(queueFileNames(queueText));
+  const byProject = new Map(plans.map((plan) => [plan.project, plan]));
+
+  const items = order.map((name) => {
+    const plan = byProject.get(name) || null;
+    // The step number and its title come off the plan record (`planSummary`),
+    // where they are numbers and a string; the row draws `step 2/5` from them
+    // rather than parsing the `next` sentence back apart.
+    const base = {
+      name,
+      repo: plan?.repo || null,
+      programme: plan?.programme || null,
+      step: plan?.step ?? null,
+      steps: plan?.steps ?? null,
+      title: plan?.title ?? null,
+      queued: queued.has(name),
+    };
     const kind = kindFor(name, { plans });
     // The plan first, and no machine reading at all for a name it already
     // refuses: that is `machineState`'s own economy and the reason a round
     // walks 38 projects in a second rather than a minute.
-    if (kind.startsWith('skip')) return { name, kind, runnable: false, machine: null };
+    if (kind.startsWith('skip')) return { ...base, kind, runnable: false, machine: null };
     const state = machine(name) || null;
-    if (state && !state.runnable) return { name, kind: `skip:${state.reason}`, runnable: false, machine: state };
+    if (state && !state.runnable) return { ...base, kind: `skip:${state.reason}`, runnable: false, machine: state };
     // `repair` rather than `step` where a held pull request is owed one: the
     // kind drawn beside the name is what the runner would actually start.
-    return { name, kind: state?.kind || kind, runnable: true, machine: state };
+    return { ...base, kind: state?.kind || kind, runnable: true, machine: state };
   });
   const runnable = items.filter((item) => item.runnable);
   const skipped = items.filter((item) => !item.runnable);
@@ -306,16 +345,43 @@ export function queueSection({
     const reason = item.kind.slice('skip:'.length);
     reasons[reason] = (reasons[reason] || 0) + 1;
   }
+  const lanes = lanesOf(runnable, deep);
   return {
+    // How far the runner's order reaches: every non-legacy plan on `main`,
+    // `queue.md`'s names first. Not a depth anybody types — a depth it walks.
     depth: items.length,
+    from_queue: order.filter((name) => queued.has(name)).length,
     runnable: runnable.length,
     items,
-    next: runnable.slice(0, named),
-    more: Math.max(0, runnable.length - named),
+    lanes,
+    more: lanes.reduce((n, lane) => n + lane.more, 0),
     skipped: { count: skipped.length, reasons },
     held: heldSection(held),
     stale: staleSection(plans, staleNamed),
   };
+}
+
+/**
+ * The runnable names split one lane per repository, each lane in the order the
+ * runner would take it and `deep` of them named — `splitLanes`' rule (run.js)
+ * over the same list, with the lanes in the order their first name appears.
+ */
+function lanesOf(runnable, deep) {
+  const lanes = [];
+  const byRepo = new Map();
+  for (const item of runnable) {
+    const repo = item.repo || null;
+    if (!byRepo.has(repo)) {
+      const lane = { repo, count: 0, items: [], more: 0 };
+      byRepo.set(repo, lane);
+      lanes.push(lane);
+    }
+    const lane = byRepo.get(repo);
+    lane.count += 1;
+    if (lane.items.length < deep) lane.items.push(item);
+  }
+  for (const lane of lanes) lane.more = lane.count - lane.items.length;
+  return lanes;
 }
 
 /**
@@ -731,8 +797,10 @@ export async function collectPage({
   let tsv = '';
   try { tsv = readFileSync(join(root, 'runner', 'log', 'runs.tsv'), 'utf8'); } catch { notes.push('no runner/log/runs.tsv'); }
   const rows = runsSince(tsv, new Date(now.getTime() - DAY_MS));
-  let queue = [];
-  try { queue = queueNames(readFileSync(join(root, 'queue.md'), 'utf8')); } catch { notes.push('no queue.md'); }
+  // The file's text, not its names: `assembleQueue` reads it the way the round
+  // does, and a second parser here is a second answer waiting to happen.
+  let queueText = '';
+  try { queueText = readFileSync(join(root, 'queue.md'), 'utf8'); } catch { notes.push('no queue.md'); }
 
   const live = liveAreas(run);
   const liveNames = live.map((item) => item.name);
@@ -769,8 +837,8 @@ export async function collectPage({
   return {
     runner,
     sessions,
-    queue: queueSection({
-      queue,
+    next: nextSection({
+      queueText,
       plans,
       held,
       machine: (name) => machineState(name, {
