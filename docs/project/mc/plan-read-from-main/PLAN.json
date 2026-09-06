@@ -138,7 +138,7 @@
         "Verified: `npm test` — 1860 tests, 1851 pass, 0 fail, 9 skipped, including `docs/technical/mc-run.md says what the runner does` (`tests/mc/run-doc.test.js`), which pins this note's numbers against the exports they describe. The two `done_when` clauses were read back out of the files after editing. Nothing in `src/` was touched by this step.",
         "For whoever archives this: the `project_log.md` row is written and the archive will not write a second (`rowFor`, `archive-plan.js`). Two things it leaves open on purpose, both stated in the row itself — the legitimate `fromHead` case is still stale in its own way (`sdk-artifact-storage`, `branch-landed.js`, its own proposal), and the four other reasons a round aborts a merge record nothing."
       ],
-      "pr": null,
+      "pr": 670,
       "blocked_by": null
     }
   ]
