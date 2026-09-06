@@ -240,6 +240,37 @@ describe('collectProject', () => {
   });
 
   /**
+   * A pull request a hand `mc merge` left for the runner's merge lane is not
+   * in the machine row: nothing about this project is in the way, and nobody
+   * has to type anything. What a person asking about the project wants to know
+   * is that the merge is somebody's — so it is said under the pull requests.
+   *
+   * The entry is matched by branch, the same longest-name rule pull requests
+   * are matched by (project-prs.js), so it holds with GitHub unreachable.
+   */
+  it('says a queued pull request is going to be landed by the runner', async () => {
+    const root = workRoot();
+    writeFileSync(join(root, 'runner', 'merges.json'), JSON.stringify([
+      {
+        repo: 'memoro-cli', pr: 427, branch: 'mc-status-2', reason: 'another gate round is running',
+        stopped_at: 'busy', since: '2026-09-06T18:00:00Z', holder: 'martin@laptop',
+      },
+      {
+        repo: 'memoro-cli', pr: 999, branch: 'somebody-else', reason: 'memoro-cli is held by mc-run',
+        stopped_at: 'lease', since: '2026-09-06T18:00:00Z', holder: 'martin@laptop',
+      },
+    ]));
+    const data = await collectProject('mc-status', {
+      env: { MC_WORK_ROOT: root },
+      repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
+      offline: true,
+      git,
+    });
+    assert.deepEqual(data.queued.map((entry) => entry.pr), [427], 'another project\'s branch is not this project\'s');
+    assert.match(renderProject(data), /#427 is queued for merge \(since 09-06 18:00Z\) — another gate round is running/u);
+  });
+
+  /**
    * `--offline` did not ask GitHub, and what nobody asked is not the same as
    * nothing being open — the reading says so rather than promising a `ready`
    * it cannot stand behind. It is the round's own word for it.
