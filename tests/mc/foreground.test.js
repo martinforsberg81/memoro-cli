@@ -16,6 +16,7 @@ import { describe, it } from 'node:test';
 
 import { foregroundDir, registerForeground } from '../../src/mc/foreground.js';
 import { readForeground, sessionsSection } from '../../src/mc/page-collect.js';
+import { roleRecord, textDigest } from '../../src/mc/roles.js';
 
 function root() {
   return mkdtempSync(join(tmpdir(), 'mc-foreground-'));
@@ -33,10 +34,30 @@ describe('the foreground register', () => {
     const path = join(foregroundDir(env), '4711.json');
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), {
       verb: 'brief', area: null, tool: 'claude', model: 'opus', pid: 4711,
-      started: '2026-08-29T12:00:00Z',
+      started: '2026-08-29T12:00:00Z', role: null,
     });
     release();
     assert.equal(existsSync(path), false);
+  });
+
+  // A digest, never the text: the page parses this directory on every draw,
+  // and a role overlay is kilobytes of prose it would never print.
+  it('carries the role a session was launched with, and the digests of its text', () => {
+    const env = { MC_WORK_ROOT: root() };
+    const role = roleRecord({
+      name: 'brief', source: 'canon', overlay: 'OVERLAY', instructions: 'PROFILE\n\n---\n\nOVERLAY',
+    });
+    registerForeground({
+      verb: 'brief', tool: 'claude', role, env, pid: 4715, now: () => NOW, onExit: () => {},
+    });
+    const written = JSON.parse(readFileSync(join(foregroundDir(env), '4715.json'), 'utf8'));
+    assert.deepEqual(written.role, {
+      name: 'brief',
+      source: 'canon',
+      digest: textDigest('PROFILE\n\n---\n\nOVERLAY'),
+      text_digest: textDigest('OVERLAY'),
+    });
+    assert.ok(!JSON.stringify(written).includes('OVERLAY'), 'the text itself never goes in');
   });
 
   it('releases once, however many times it is asked', () => {

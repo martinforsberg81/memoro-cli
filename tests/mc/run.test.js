@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createRunner, runLoop } from '../../src/mc/run.js';
 import { parseHeld } from '../../src/mc/held.js';
 import { RUN_REFUSALS } from '../../src/mc/run-plan.js';
-import { sharedRoleText } from '../../src/mc/roles.js';
+import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { machineState } from '../../src/mc/status-collect.js';
 
 /**
@@ -379,6 +379,21 @@ function plan({ status = 'ready', title = 'The one step', done_when = 'do x', ru
 }
 
 const ready = plan();
+
+/**
+ * What the lane records about the text its session is running on. `kind` has
+ * always named the role; this names the revision — the digest is over the
+ * assembled instructions, profile and `_common.md` and the overlay joined the
+ * way `instructionsFor` joins them, and `text_digest` is over the role's own
+ * body alone. `mc roles check step` holds both against the files on disk, so a
+ * role edited during an hour-long session is something a person can see.
+ */
+const stepRole = {
+  name: 'step',
+  source: 'canon',
+  digest: textDigest(`PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nROLE step`),
+  text_digest: textDigest('ROLE step'),
+};
 const okSession = (json = {}) => () => ({ status: 0, stdout: JSON.stringify({ subtype: 'success', num_turns: 4, session_id: 'sid', usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, ...json }), stderr: '', timedOut: false });
 
 test('queue: queue.md first, then plans on origin/main of both repositories', () => {
@@ -1384,7 +1399,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
   const during = f.duringSession[0];
   assert.deepEqual(JSON.parse(during['/w/runner/current-memoro.json']), {
     name: 'alpha', kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', budget_minutes: 90,
-    started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro',
+    started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro', role: stepRole,
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z' });
 
@@ -1401,6 +1416,9 @@ test('the current file carries the project frontmatter, and is removed even when
   assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current-memoro-cli.json']), {
     name: 'cx', kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', budget_minutes: 20,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
+    // The same text whichever tool it is handed to: `instructionsFor` assembles
+    // one body and only the flag that carries it differs (portrait.js).
+    role: stepRole,
   });
   assert.equal('/w/runner/current-memoro-cli.json' in f.files, false);
 });

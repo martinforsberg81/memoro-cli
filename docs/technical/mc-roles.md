@@ -56,7 +56,7 @@ What canon holds today:
 | `brief` | opus | `mc brief`, a foreground session in `~/mc/` |
 | `helper` | sonnet | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | the inbox drain, one headless turn per file |
-| `plan` | fable | `mc plan <programme>` — **frontmatter only**, see below |
+| `plan` | fable | `mc plan <programme>`, a foreground session in `~/mc/plan/<programme>/` |
 | `repair` | opus | `mc run`, on a pull request whose landing failed |
 | `step` | opus | `mc run`, one step of a `PLAN.json` |
 | `worker` | opus | `mc worker`, and every conversation in that area after |
@@ -176,14 +176,97 @@ already decided and it therefore does not take, and the shared passage above.
 body, the shared text arrives through the assembler like every other session's,
 and pasting it in as well would say it twice.
 
+## What a session is running on, afterwards
+
+A role file can be edited while a session launched from it is still running,
+and until #660 nothing on the machine could say so. The brief that planned
+*this* is the proof: its role text on 2026-09-06 held two sentences that
+`canon/roles/brief.md` had not held since #614 landed the day before. The
+launcher had exited with its argv; there was nothing to compare and nothing to
+compare it against.
+
+So every launch that writes a register writes a **role record** beside the
+rest of it (`roleRecord`, `roles.js`):
+
+```json
+"role": {
+  "name": "step",
+  "source": "canon",
+  "digest": "sha256:345f6ea5956c",
+  "text_digest": "sha256:43046c402ec7"
+}
+```
+
+Four fields and no text. The registers are `~/mc/runner/foreground/<pid>.json`
+(a verb holding a terminal — `foreground.js`) and
+`~/mc/runner/current-<repo>.json` (a lane of the runner — `run.js`), and the
+page parses both on every draw: a kilobyte of overlay in there would be a cost
+for nothing.
+
+**Two digests, because two different things can move.** `digest` is over the
+assembled instructions — profile, `_common.md`, overlay, joined as
+`instructionsFor` joins them — and answers *is this session running what a
+launch would produce now*. `text_digest` is over the role's own body with its
+includes expanded, and answers *is this session running the role file on disk
+today*. Only the second is the fault: a Coding Profile edited at lunchtime
+moves the first and not the second, and one digest could not have told those
+apart — it would have reported every live session as drifted every time Martin
+touched his profile.
+
+`source` is there because `areaRole` prefers the user's catalogue over canon on
+purpose. A session running the catalogue's `worker` is not running a stale copy
+of canon's; it is running the rulebook, and it is compared against the file it
+actually came from. (An `@include` always resolves in canon, whichever
+catalogue the role itself came from.)
+
+A launch that assembled nothing records the role and no digests. That is the
+resumed conversation: its instructions are in its own history, and a digest of
+today's file would be a claim about it nobody checked.
+
+`mc roles check [<role>]` is the reader:
+
+```
+$ mc roles check step
+step  (canon)  …/canon/roles/step.md
+  role text     sha256:43046c402ec7
+  instructions  sha256:345f6ea5956c   profile + _common.md + overlay, as a launch joins them
+
+2 live sessions: 1 ok, 1 drift
+  55012  step the-page-remade     2026-09-06T10:06:46Z  step   ok
+  55130  step total-lane-cap      2026-09-06T09:34:57Z  step   drift — started on sha256:9c1…, step.md is sha256:430… now
+
+----- what a launch would hand a step session today -----
+…
+```
+
+Named, it prints the whole assembled text — the same object the digests are
+taken from, so the two halves of the comparison cannot be different things —
+and checks the sessions running that role. Bare, it checks every live session
+against the role each one names. `--json` for both. The verdicts are `ok`,
+`drift` (the role file has moved under it), `profile` (the role text matches,
+the Coding Profile has changed), `resumed`, `no-role-file`, and `unrecorded` —
+an ordinary session with no role, or one started before this existed.
+
+**Two launches write no register and so cannot be checked:** a tmux session
+(`startInBackground` — there is no mc process holding it, and the foreground
+register is keyed by the pid of the mc process that is waiting) and the intake
+turn (`helper-turn.js`, which writes to neither register). Both were outside
+the registers before this and still are; what they launch on is not knowable
+from the outside.
+
+The foreground path also puts `role` and `role_digest` in its `work.open` log
+line. The register lives exactly as long as the session; the log is still there
+tomorrow, which is what the brief above needed and did not have.
+
 ## Where the code is
 
 | file | what |
 |---|---|
-| `src/mc/roles.js` | `parseRole`, the two catalogues, `sharedRoleText`, `expandRoleIncludes`, `instructionsFor`, the `.mc-role` mark, the reserved names |
+| `src/mc/roles.js` | `parseRole`, the two catalogues, `sharedRoleText`, `expandRoleIncludes`, `instructionsFor`, `textDigest`/`roleRecord`/`roleSourceOf`, the `.mc-role` mark, the reserved names |
 | `src/mc/canon.js` | `canonRoot` — where the packaged `canon/` is, resolved from the module's own path |
 | `src/mc/portrait.js` | `profileArgs` — the per-tool launch argument the assembled text rides on |
-| `src/mc/commands/roles.js` | `mc roles list`, `mc roles show <role>` over the user's catalogue |
+| `src/mc/commands/roles.js` | `mc roles list`, `mc roles show <role>` over the user's catalogue; `mc roles check` over both catalogues and the two registers |
+| `src/mc/foreground.js` | `~/mc/runner/foreground/<pid>.json` — the register a verb holding a terminal writes, role record and all |
 | `canon/roles/_common.md` | the text every role session shares |
 | `canon/roles/_plan-writing.md` | the passage `plan` and `brief` share about writing a `PLAN.json` |
 | `canon/roles/<name>.md` | one role's frontmatter and its own words |
@@ -222,6 +305,18 @@ The delivered text is asserted at each launch path too, against
 [`run.test.js`](../../tests/mc/run.test.js),
 [`helper-turn.test.js`](../../tests/mc/helper-turn.test.js) and
 [`commands/plan.test.js`](../../tests/mc/commands/plan.test.js).
+
+The record and the reader are tested from both ends.
+[`work-open.test.js`](../../tests/mc/work-open.test.js) asserts the digest the
+register receives is the hash of the very string handed to the tool on the
+command line, and that a resumed conversation records the role and no digests;
+[`foreground.test.js`](../../tests/mc/foreground.test.js) asserts the record
+reaches the file and the overlay text does not;
+[`run.test.js`](../../tests/mc/run.test.js) asserts the lane's current file
+carries it. [`commands/roles-cli.test.js`](../../tests/mc/commands/roles-cli.test.js)
+drives the fault itself: a session is registered on a fixture role's text, the
+file is edited under it, and `mc roles check` names it by pid — and says
+nothing about the same session while the file is untouched.
 
 **Not asserted from the file:** that a `model:` a role names is a model the
 tool will accept. `modelArgs` in

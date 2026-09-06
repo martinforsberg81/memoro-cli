@@ -289,6 +289,8 @@ IN FULL
                                     overlay and the model default
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
+  mc roles check [<role>]          What a launch would hand a session today,
+                                    and any live session running other text
   mc vault <verb>                  The Memoro token vault: setup, unlock,
                                     lock, status, set, get, list, rm, rotate,
                                     bind, bindings, import, scan, audit,

@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { sharedRoleText } from '../../src/mc/roles.js';
+import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { openInWorkArea, startInBackground } from '../../src/mc/work-open.js';
 import { markStopped, readStopMark } from '../../src/mc/work-stop-marker.js';
 
@@ -202,9 +202,52 @@ describe('openInWorkArea and the foreground register', () => {
       areaRoot, worktree, env, verb: 'plan', areaName: 'mc-ui', model: 'opus', register, ...options,
     });
     assert.deepEqual(events, [
-      { event: 'register', verb: 'plan', area: 'mc-ui', tool: 'claude', model: 'opus', env },
+      { event: 'register', verb: 'plan', area: 'mc-ui', tool: 'claude', model: 'opus', env, role: null },
       { event: 'release' },
     ]);
+  });
+
+  /**
+   * The whole of what a session can be asked afterwards: which role it was
+   * given, out of which catalogue, and a digest of the text it was handed.
+   * The launcher exits with its argv; without this nobody could tell a
+   * session running today's `brief.md` from one running last week's — which
+   * is exactly what happened to this project's own brief on 2026-09-06.
+   */
+  it('records the role, its catalogue, and a digest of the very text handed to the tool', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { events, register } = registering();
+    const { calls, options } = opening();
+    await openInWorkArea({
+      areaRoot, worktree, env, verb: 'brief', overlay: 'OVERLAY',
+      roleName: 'brief', roleSource: 'canon', register, ...options,
+    });
+    const handed = calls[0].args[calls[0].args.indexOf('--append-system-prompt') + 1];
+    assert.equal(handed, `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nOVERLAY`);
+    assert.deepEqual(events[0].role, {
+      name: 'brief',
+      source: 'canon',
+      // The profile, the shared text and the overlay, joined as a launch
+      // joins them — asserted against the string the tool actually got.
+      digest: textDigest(handed),
+      text_digest: textDigest('OVERLAY'),
+    });
+  });
+
+  it('a resumed conversation records the role and no digest — it was handed nothing', async () => {
+    const { areaRoot, worktree, env } = fixture({
+      entries: [{ type: 'user', message: { content: 'first' } }],
+    });
+    const { events, register } = registering();
+    const { options } = opening();
+    const result = await openInWorkArea({
+      areaRoot, worktree, env, verb: 'work', overlay: 'OVERLAY',
+      roleName: 'worker', roleSource: 'catalogue', register, ...options,
+    });
+    assert.equal(result.resumed, true);
+    assert.deepEqual(events[0].role, {
+      name: 'worker', source: 'catalogue', digest: null, text_digest: null,
+    });
   });
 
   it('releases even when the tool throws on the way out', async () => {
@@ -223,7 +266,7 @@ describe('openInWorkArea and the foreground register', () => {
     const { options } = opening();
     await openInWorkArea({ areaRoot, worktree, env, register, ...options });
     assert.deepEqual(events, [
-      { event: 'register', verb: null, area: null, tool: 'claude', model: null, env },
+      { event: 'register', verb: null, area: null, tool: 'claude', model: null, env, role: null },
       { event: 'release' },
     ]);
   });

@@ -29,6 +29,7 @@
  *   ---
  *   You are a worker: …
  */
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -252,6 +253,58 @@ export function instructionsFor(toolId, profile, overlay) {
   const body = expandRoleIncludes(overlay);
   const combined = [profile, shared, body].filter(Boolean).join('\n\n---\n\n');
   return combined || null;
+}
+
+/* ------------------------------------------------- what a session ran on */
+
+/**
+ * A short fingerprint of a body of text, for a register to keep.
+ *
+ * The registers are read on every draw of the page, so what goes in them is a
+ * hash and not the text: a role overlay is kilobytes of prose and a session's
+ * instructions are more, and none of it is anything the page would print.
+ * Twelve hex characters of sha256 is enough to tell two revisions of one file
+ * apart, which is the only comparison anyone makes with it.
+ */
+export function textDigest(text) {
+  if (typeof text !== 'string' || !text) return null;
+  return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12)}`;
+}
+
+/** Where a role's file was read from — mc's own canon, or the user's catalogue. */
+export function roleSourceOf(role) {
+  if (!role?.path) return null;
+  return role.path.startsWith(`${canonRolesDir()}/`) ? 'canon' : 'catalogue';
+}
+
+/**
+ * What a register keeps about the text a session was launched on: which role
+ * it was, which catalogue that role came from, and a digest of each of the two
+ * things that can change under it.
+ *
+ * Two digests, because the two answers are different questions and only one of
+ * them is a fault. `digest` is over the assembled instructions — profile,
+ * `_common.md` and the overlay, joined the way `instructionsFor` joins them —
+ * and is the honest answer to *is this session running what a launch would
+ * produce now*. `text_digest` is over the role's own body alone, expanded, and
+ * is the answer to *is this session running the role file on disk today*. A
+ * Coding Profile edited at lunchtime moves the first and not the second, and a
+ * verb that could not tell those apart would report every live session as
+ * drifted every time Martin touched his profile.
+ *
+ * A launch that assembled nothing — a resumed conversation, which carries its
+ * instructions in its own history — records the role and no digests: what that
+ * session is running is not knowable from here, and a digest of today's file
+ * would be a claim about it that nobody checked.
+ */
+export function roleRecord({ name = null, source = null, overlay = null, instructions = null } = {}) {
+  if (!name) return null;
+  return {
+    name,
+    source: source || 'canon',
+    digest: textDigest(instructions),
+    text_digest: textDigest(expandRoleIncludes(overlay)),
+  };
 }
 
 function readFile(path) {

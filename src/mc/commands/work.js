@@ -43,7 +43,7 @@ import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
 import {
-  areaRole, areaRoleName, reservedRoleHint, reservedRoleName,
+  areaRole, areaRoleName, reservedRoleHint, reservedRoleName, roleSourceOf,
 } from '../roles.js';
 import { scanArgs } from './flags.js';
 import {
@@ -431,6 +431,11 @@ export async function openArea(name, opts, deps) {
   }
   const overlay = role?.missing ? null : role?.overlay || null;
   const roleModel = role?.missing ? null : role?.model || null;
+  // Recorded beside the digest, because `areaRole` prefers the user's
+  // catalogue over canon on purpose: a session running the catalogue's `brief`
+  // is not running canon's, and that is a choice rather than a fault.
+  const roleName = role?.missing ? null : role?.name || null;
+  const roleSource = role?.missing ? null : roleSourceOf(role);
 
   // A piece of work nobody has opened yet has no tool to inherit, so that is
   // asked once, here, rather than defaulting quietly to one of them. In a
@@ -619,7 +624,7 @@ export async function openArea(name, opts, deps) {
     // line asked for ('open', 'send', 'add'), and NOW wants the verb the
     // person typed — which for `mc worker <name>` is a different door into
     // this same function.
-    verb: opts.opener || 'work', areaName: name,
+    verb: opts.opener || 'work', areaName: name, roleName, roleSource,
   });
   if (!opened.ok) {
     stderr.write(`mc: could not open ${name} (${opened.reason})\n`);

@@ -25,7 +25,7 @@ import {
   unreadableSections,
 } from '../helper-collect.js';
 import { describeTurn, drainIntake } from '../helper-turn.js';
-import { readCanonRole } from '../roles.js';
+import { readCanonRole, roleSourceOf } from '../roles.js';
 import { INTAKE_PER_ROUND } from '../run-plan.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
@@ -175,6 +175,8 @@ async function openDesk({ flags, stdout, stderr, deps }) {
     // NOW says "mc helper" while this is up. Its room is nobody's workarea,
     // so there is no area name to give it.
     verb: 'helper',
+    roleName: role.name || 'helper',
+    roleSource: roleSourceOf(role),
     model: flags.model,
     overlay: role.overlay,
     prompt: launch.prompt,
