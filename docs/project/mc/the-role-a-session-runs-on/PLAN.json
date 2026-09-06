@@ -94,7 +94,7 @@
         "`mc status <name>` is untouched on purpose — the step says where the answer belongs on the page is not this step's to decide, and `the-page-remade` owns the section order. Everything needed for a drift line there is already in the register and in `verdictFor` (exported from `src/mc/commands/roles.js`), so that line is a read, not a rebuild.",
         "Two documents still said `canon/roles/plan.md` was frontmatter only, which #659 ended: `docs/mc-command-matrix.md`'s `mc plan` row and `docs/technical/mc-roles.md`'s canon table. Both corrected here rather than left standing, since this step was editing both files anyway."
       ],
-      "pr": null,
+      "pr": 661,
       "blocked_by": null
     }
   ]
