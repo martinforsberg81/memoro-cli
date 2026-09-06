@@ -146,7 +146,7 @@
         "The second departure is the check's other half, and it failed for a reason that is not the cap's. *\"Confirmed against the page's RUNNER block at the same time\"* cannot be done: since #665 the block draws one row per **repository** (`lanesOfRunner`, `page-collect.js:225`, `steps.find`), so a repository running two lanes contributes one row and the other step is drawn nowhere. Measured at 2026-09-06T15:07Z — three live current files, `mc run lanes` saying `3 in flight`, `mc --json` carrying all three under `runner.steps`, and the block showing two rows. Nothing ever showed more than three; the page simply cannot corroborate the third. The RUNNER block's rows are in `out_of_scope`, so this is written up as a proposal rather than fixed here: `~/mc/proposals/2026-09-06-runner-block-drops-lanes.md`. It is worth someone's hour — six sessions at once, the thing that started this project, would today draw two rows.",
         "Left open and deliberately not built: no ordering rule between waiting lanes. It has not been needed yet — there is not one `steps in flight on this machine` line in the whole of `runner.log`, so no lane has ever had to wait for a slot, and the ceiling is measured while the waiting is still only tested (`waitForSlot`'s test). Under `2/3` each repository is guaranteed a slot structurally, so the starvation step 2 named cannot bite; it would return if `per_repo` were ever raised to meet `total`."
       ],
-      "pr": 639,
+      "pr": 673,
       "blocked_by": null
     }
   ]
