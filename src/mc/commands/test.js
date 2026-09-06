@@ -36,7 +36,7 @@ import { join } from 'node:path';
 import { nightlyReading } from '../nightly-history.js';
 import { listServers } from '../dev-servers.js';
 import {
-  accountAvailable, answers, callerWorktree, ensureDevServer, forgetToken, readDeclaration,
+  accountAvailable, answers, callerWorktree, ensureDevServer, forgetToken, isLoopback, readDeclaration,
   runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
 } from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
@@ -223,7 +223,11 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   // suites that never will is a line that misleads.
   const anyoneSignsIn = chosen.some((suite) => suite.needs_account);
   if (!opts.json && anyoneSignsIn) {
-    if (account.available) {
+    if (isLoopback(baseUrl)) {
+      // The token is a production login and is not handed to a local server;
+      // memoro's suites sign in through /dev/login there, on their own.
+      stdout.write('mc: a local server — the suites sign in through its own door, not the test account\n');
+    } else if (account.available) {
       stdout.write(`mc: signing in with the test account (${held.name} from the ${held.from})\n`);
     } else {
       stdout.write(`mc: ${account.why}\n`);
@@ -305,7 +309,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   // the quiet failure this whole verb exists to stop.
   if (skipped.length) {
     stdout.write(`mc: did not run — ${skipped.map((result) => result.name).join(', ')}`
-      + `${account.available ? '' : ` (${account.why})`}\n`);
+      + `${account.available || isLoopback(baseUrl) ? '' : ` (${account.why})`}\n`);
   }
   return red.length ? 1 : 0;
 }

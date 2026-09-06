@@ -22,7 +22,7 @@ import { describe, it } from 'node:test';
 
 import { registerManifest } from '../../src/mc/dev-servers.js';
 import {
-  accountAvailable, answers, ensureDevServer, readDeclaration, runSuites, serversFor, servingWorktree,
+  accountAvailable, answers, ensureDevServer, isLoopback, readDeclaration, runSuites, serversFor, servingWorktree,
   startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
 
@@ -200,6 +200,27 @@ describe('what a suite is handed', () => {
       env: { TEST_SEEDED_TOKEN: 'tok', MEMORO_TEST_ACCOUNT_URL: 'http://127.0.0.1:9000/demo/other' },
     });
     assert.equal(env.MEMORO_TEST_ACCOUNT_URL, 'http://127.0.0.1:9000/demo/other');
+  });
+
+  it('the production token is never handed to a local server', () => {
+    // The first full round on the two tiers (2026-09-06): the write smoke got
+    // `http://127.0.0.1:8920/demo/<prod token>`, asked the fixture, and read
+    // the 404 as "is TEST_ACCOUNT_ENABLED on, and is the token current?".
+    // Locally it has /dev/login, and takes it when no link is set.
+    for (const baseUrl of ['http://127.0.0.1:8920', 'http://localhost:8787', 'http://[::1]:8787']) {
+      const env = suiteEnv({
+        declaration: DECLARATION, baseUrl, env: { TEST_SEEDED_TOKEN: 'tok' }, needsAccount: true,
+      });
+      assert.equal(env.MEMORO_TEST_ACCOUNT_URL, undefined, `${baseUrl}: no link, the suite finds its own door`);
+      assert.equal(env.MEMORO_BASE_URL, baseUrl);
+    }
+    const prod = suiteEnv({
+      declaration: DECLARATION, baseUrl: 'https://meetmemoro.app', env: { TEST_SEEDED_TOKEN: 'tok' }, needsAccount: true,
+    });
+    assert.equal(prod.MEMORO_TEST_ACCOUNT_URL, 'https://meetmemoro.app/demo/tok', 'production is what the token is for');
+    assert.equal(isLoopback('http://127.0.0.1:1'), true);
+    assert.equal(isLoopback('https://meetmemoro.app'), false);
+    assert.equal(isLoopback('not a url'), false);
   });
 
   it('the account link is built only for the suites that sign in', () => {
