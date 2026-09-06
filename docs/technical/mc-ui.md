@@ -496,6 +496,19 @@ all**. That is what makes a page taller than the terminal safe: the page is
 scrolled off the top is history. History is not rewritten and not scrolled
 back to.
 
+**The footprint is taken from the print, never from the page's length.** The
+first print ends with a newline, so the cursor comes to rest one row below the
+last row and the footprint is the number of lines. A growth frame *joins* its
+lines instead, so the cursor rests **on** the last row — one row higher — and
+on a page taller than the screen it also printed fewer rows than the page has
+lines. `page-frame.js` exports `reprintPlan` for exactly this: the reprint and
+the loop that has to know where it ended up read the same arithmetic rather
+than each deriving it. Counting `next.length + tailRows` again after a growth
+frame is one row out, and one row out is a page that lies: `CSI 2K` clears the
+neighbour of every row it meant to rewrite and the row that changed keeps its
+old text. Measured at 45 rows × 120 columns on a 97-line page, 2026-09-06 —
+eleven `sql-readiness` rows reached the screen as four.
+
 **Narrower than 60 columns, the page is not live.** `columnsFor` clamps to a
 floor of 60, so below that every row is wider than the screen and wraps, and
 every row of the arithmetic above is then off by the number of wrapped rows

@@ -58,7 +58,9 @@
  *     at all and silently discards the bottom line of the screen. The cost is
  *     stated rather than hidden: after a growth frame the cursor is at the end
  *     of the last page row, everything below it has been erased, and the
- *     caller reprints its own rows and recomputes `above`.
+ *     caller reprints its own rows and recomputes `above`. `reprintPlan` is
+ *     that recomputation, exported rather than described, because a caller
+ *     that derives it a second time derives it differently — see below.
  *
  * **A page taller than the terminal.** The page is 87 lines at the current
  * `~/mc`, and rows that have scrolled off the top cannot be addressed —
@@ -97,7 +99,7 @@ export function frameWrites(previous, next, { above = 0, rows = Infinity, anchor
   const after = next || [];
   const reach = Number.isFinite(rows) ? Math.max(0, rows - 1) : Infinity;
 
-  if (after.length > before.length) return reprint(after, { above, reach, anchor });
+  if (after.length > before.length) return reprint(after, { above, rows, anchor });
 
   const writes = [];
   // Where the cursor is, in rows below the row it started on. Unused when the
@@ -123,15 +125,39 @@ export function frameWrites(previous, next, { above = 0, rows = Infinity, anchor
   return `\r${writes.join('')}${vertical(-row)}`;
 }
 
+/**
+ * What a reprint of `next` would do, for the caller that has to know where the
+ * page ended up. Same arguments as `frameWrites`, describing the page as it
+ * stands *before* the reprint.
+ *
+ * `skip` is how many of the page's first lines are not printed again: they are
+ * above the top of the screen, which is history and stays there. `printed` is
+ * how many rows the reprint therefore draws.
+ *
+ * `below` is the one a caller cannot get from the page's length, and the
+ * reason this is exported rather than left inside: the lines are *joined*, not
+ * terminated, so the cursor comes to rest on the last row of the page rather
+ * than on the row under it — one row higher than the first print of the same
+ * page leaves it. `below` is where the cursor ends up, counted in rows below
+ * the page's first line (that line may itself have scrolled off; the count is
+ * still the one the arithmetic needs). A caller that recomputes `above` as
+ * `next.length + tail` after a growth frame is one row out, `CSI 2K` clears
+ * the neighbour of every row it meant to rewrite, and the row that changed
+ * keeps its old text. Measured at 45×120 on a 97-line page, 2026-09-06.
+ */
+export function reprintPlan(next, { above = 0, rows = Infinity, anchor = null } = {}) {
+  const after = next || [];
+  const reach = Number.isFinite(rows) ? Math.max(0, rows - 1) : Infinity;
+  // The page's first row is `anchor - above`, or `reach` rows above the cursor
+  // at the furthest, and what would be above the top of the screen is dropped.
+  const skip = anchor ? Math.max(0, 1 - (anchor - above)) : Math.max(0, above - reach);
+  const printed = Math.max(0, after.length - skip);
+  return { skip, printed, below: skip + Math.max(0, printed - 1) };
+}
+
 /** A frame that has outgrown its footprint: erase from the top of what can be reached, print it again. */
-function reprint(after, { above, reach, anchor }) {
-  if (anchor) {
-    // The page's first row is `anchor - above`; what would be above row 1 has
-    // scrolled off and is not printed again.
-    const top = anchor - above;
-    const skip = Math.max(0, 1 - top);
-    return `${CSI}${Math.max(1, top)};1H${ERASE_BELOW}${after.slice(skip).join('\n')}`;
-  }
-  const first = Math.max(0, above - reach);
-  return `\r${up(above - first)}${ERASE_BELOW}${after.slice(first).join('\n')}`;
+function reprint(after, { above, rows, anchor }) {
+  const { skip } = reprintPlan(after, { above, rows, anchor });
+  if (anchor) return `${CSI}${Math.max(1, anchor - above)};1H${ERASE_BELOW}${after.slice(skip).join('\n')}`;
+  return `\r${up(above - skip)}${ERASE_BELOW}${after.slice(skip).join('\n')}`;
 }

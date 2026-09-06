@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import {
   intakeSection, programmesSection, queueSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
-import { frameWrites } from '../../src/mc/page-frame.js';
+import { frameWrites, reprintPlan } from '../../src/mc/page-frame.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 
 const NOW = new Date('2026-08-29T12:00:00Z');
@@ -149,5 +149,39 @@ describe('the difference between two frames', () => {
     // Four rows tall: three rows above the cursor are addressable, so the
     // reprint starts at row 1 and row 0 is left in the scrollback.
     assert.equal(frameWrites(before, after, { above: 4, rows: 4 }), '\r\x1b[3A\x1b[0Jb\nc\nd');
+  });
+});
+
+describe('where a reprint leaves the page', () => {
+  /** The shape Martin was looking at: 45 rows, and 98 lines to put in them. */
+  const page = Array.from({ length: 98 }, (unused, index) => `row ${index}`);
+
+  it('says how much of a page taller than the screen is printed again', () => {
+    // The page's first row is 56 rows above the top of the screen, so 57 lines
+    // are history; the 41 that are left are what the reprint draws.
+    const plan = reprintPlan(page, { above: 101, rows: 45, anchor: 45 });
+    assert.deepEqual(plan, { skip: 57, printed: 41, below: 97 });
+    // And by count it is the same arithmetic through `reach`.
+    assert.deepEqual(reprintPlan(page, { above: 101, rows: 45 }), { skip: 57, printed: 41, below: 97 });
+  });
+
+  it('counts the cursor onto the last row it printed, not under it', () => {
+    // The lines are joined, not terminated: three rows printed leaves the
+    // cursor two rows below the first of them, which is one less than the
+    // first print of the same page — that one row is the whole of the fault.
+    assert.deepEqual(reprintPlan(['a', 'b', 'c'], { above: 4, anchor: 10 }), { skip: 0, printed: 3, below: 2 });
+    assert.deepEqual(reprintPlan([], { above: 0 }), { skip: 0, printed: 0, below: 0 });
+  });
+
+  it('is the arithmetic the reprint itself uses', () => {
+    // Said as an assertion rather than as a comment: the bytes start at the
+    // row `skip` names, so a caller reading `reprintPlan` is reading what the
+    // page did, not a second opinion about it.
+    for (const at of [{ above: 101, rows: 45, anchor: 45 }, { above: 101, rows: 45 }]) {
+      const { skip } = reprintPlan(page, at);
+      const writes = frameWrites(page.slice(0, 97), page, at);
+      assert.ok(writes.endsWith(page.slice(skip).join('\n')), JSON.stringify(writes.slice(0, 40)));
+      assert.ok(!writes.includes(page[skip - 1]), 'and nothing above it');
+    }
   });
 });
