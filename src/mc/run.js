@@ -902,14 +902,129 @@ export function createRunner({
       say(`merge lane: #${entry.pr} is queued for ${entry.repo || 'no repository'}, which this machine does not have — dropped`);
       return 'no-repo';
     }
-    const name = projectForBranch(entry.branch, workareas()) || entry.branch || `#${entry.pr}`;
+    const project = projectForBranch(entry.branch, workareas());
+    const name = project || entry.branch || `#${entry.pr}`;
     merging += 1;
     try {
       say(`merge lane: landing ${repo.name} #${entry.pr} (queued ${entry.since || 'at some point'} — ${entry.reason})`);
-      return await landPr(repo, name, entry.pr, { branch: entry.branch });
+      const note = await landPr(repo, name, entry.pr, { branch: entry.branch });
+      // A project's own held pull request is its round's to repair — that rule
+      // is `heldRepair`, it runs in the project's workarea, and nothing here
+      // duplicates it. A pull request that belongs to no project is reached by
+      // no round at all, so the lane is the only thing that can give it the one
+      // repair every held pull request is owed; see `laneRepair`.
+      if (note === 'merged' || project) return note;
+      // The repaired landing is what the lane's answer about this pull request
+      // is, when there was one. Null means no repair was launched, and then the
+      // answer is the landing that held it.
+      return (await laneRepair(repo, entry)) ?? note;
     } finally {
       merging -= 1;
     }
+  }
+
+  /**
+   * The one repair of a held pull request no round will ever reach.
+   *
+   * `heldRepair` finds a repair *per project*, inside a round, and runs it in
+   * that project's workarea: a held entry whose `project` is not a name the
+   * queue walks is never looked at, so it stood at `repairs: 0` for ever and
+   * nobody was told. That is every pull request a person queued by hand off a
+   * branch mc did not name — which is the ordinary case for `mc merge`, since
+   * `mc merge` is what a person types about their own branch.
+   *
+   * So the lane reaches it. A workarea keyed on the branch (the call `mc work
+   * add` makes), the same `repair` role and the same `repairPrompt` the round
+   * hands out, `countRepair` before the session because a session killed on its
+   * budget still had its turn, and one more `landPr`. After that the entry
+   * reads `repairs: 1` and it is the brief's — the lane has dropped it from the
+   * queue already, so nothing brings it back here.
+   *
+   * It takes no slot, for the reason the lane takes none: the requirement is
+   * that a merge does not wait for a step lane, and this is the merge's own
+   * second try at the same pull request. The lane is one loop and runs one
+   * session at a time, so what it adds to the machine is one — `total + 1`.
+   *
+   * Returns the landing note of the repaired pull request, or null when no
+   * repair was launched at all.
+   */
+  async function laneRepair(repo, entry) {
+    const pr = Number(entry.pr);
+    const branch = entry.branch;
+    const done = (why) => { say(`merge lane: #${pr} is held and gets no repair here — ${why}; it is the brief's`); return null; };
+    if (!branch) return done('the entry names no branch to stand on');
+    // What `landPr` has just written, read back rather than assumed: an entry
+    // that is not there is a landing that held nothing (an `off-main` merge),
+    // and one that already carries a repair has had its turn. The second is
+    // also the guard against the one overlap there is — a branch named after a
+    // project whose plan is on main but which has no workarea on this machine
+    // reads as project-less here and as its own to `heldRepair` there, and
+    // `countRepair` below is what stops the two giving it two repairs.
+    const held = heldNow().find((item) => samePr(item, { repo: repo.name, pr }));
+    if (!held) return null;
+    if (held.repairs) return done('it has had its one repair already');
+    if (stopRequested()) return done('STOP is present');
+    // The same refusal `waitForSlot` makes: from the moment an UPDATE is read
+    // nothing starts a session, or a drain meant to end within one session's
+    // length becomes two.
+    if (updateRequested()) return done('an UPDATE is pending');
+    const worktree = join(root, branch, repo.name);
+    if (!deps.exists(worktree)) {
+      say(`merge lane: #${pr} belongs to no project — making a ${repo.name} workarea from ${branch} for its one repair`);
+      deps.git(repo.path, ['fetch', '-q', 'origin']);
+      const added = deps.addWorktree({ name: branch, repo: repo.path, branch, from: `origin/${branch}`, env: deps.env });
+      if (!added.ok) return done(`a workarea for ${branch} could not be made (${added.reason})`);
+    }
+    const on = gitOut(worktree, ['branch', '--show-current']);
+    if (on !== branch) return done(`${worktree} stands on ${on || 'no branch'}, not on ${branch}`);
+    // Asserted rather than handled: a repair may not run in a worktree with a
+    // merge in progress (`mc-run.md`, *Held before merge*), and the workarea
+    // this repair runs in was just made from the branch — nothing has merged
+    // anything into it. A worktree that is mid-merge anyway is one this lane
+    // did not make, and the answer to that is a person, not a second rule.
+    if (deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
+      return done(`a merge is in progress in ${worktree}, which a fresh workarea cannot have`);
+    }
+    const role = deps.role('repair');
+    if (!role?.overlay) return done('canon/roles/repair.md is missing');
+    // No plan to read the session's settings off — a pull request with no
+    // project has none — so it is the defaults, which is what every plan that
+    // says nothing gets.
+    const settings = sessionSettings({});
+    const launch = deps.launch(settings.tool);
+    if (!launch?.ok) return done(`${settings.tool} is not available (${launch?.hint || launch?.reason})`);
+    await quotaHold();
+    const prompt = repairPrompt({ name: branch, repo: repo.name, ...held });
+    // Counted before the session, the rule `held.js` states: a repair killed on
+    // its budget still had its one turn.
+    countRepair(repo.name, pr);
+    say(`${branch}: #${pr} is held before merge and belongs to no project — the merge lane's one repair session: ${held.reason}`);
+    const instructions = instructionsFor(launch.id, await deps.profile(), role.overlay);
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, instructions, prompt, profileArgs });
+    const ts = stamp().replace(/[-:]/gu, '');
+    const out = join(paths.log, `${branch}-${ts}.json`);
+    say(`${branch}: repair starting (${launch.shortName} ${settings.model || 'own default model'}, ${settings.budgetMinutes} min)`);
+    const t0 = deps.now().getTime();
+    // No `current-<repo>.json`: this is not a step, and the page's RUNNER block
+    // draws that file as one. What says the lane is busy is `mergeBusy`, and it
+    // covers the session because `merging` is held around the whole of
+    // `mergeQueued` — including this.
+    const result = await deps.session({ bin: launch.spec.bin, args, cwd: worktree, timeoutMs: settings.budgetMinutes * 60_000 });
+    const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+    deps.write(out, result.stdout);
+    deps.write(`${out}.err`, result.stderr);
+    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut });
+    logRun({
+      ts: stamp(), name: branch, kind: 'repair', exit: result.status, seconds, pr: String(pr),
+      turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite,
+      session: read.session, note: read.note,
+    });
+    say(`${branch}: repair done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${read.note}`);
+    if (read.quota) await quotaPause();
+    // And the gate decides, as it did the first time. Held again keeps
+    // `repairs: 1` (`holdPr`), which is what makes this the last word the
+    // runner has on this pull request.
+    return landPr(repo, branch, pr, { branch });
   }
 
   /**

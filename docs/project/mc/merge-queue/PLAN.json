@@ -112,7 +112,7 @@
     },
     {
       "title": "A held pull request with no project gets its one repair from the merge lane",
-      "status": "ready",
+      "status": "done",
       "done_when": "A pull request queued by hand whose branch belongs to no project is repaired once, in a workarea named after its branch, by the same repair role, and is then the brief's — with `held.json` showing `repairs: 1`.",
       "instruction": [
         "Today a repair is found per project inside the round (`heldRepair`, `run.js:1406`) and runs in that project's workarea on the entry's branch. A pull request with no project is never reached by a round, so its held entry sits at `repairs: 0` for ever. Check this against the code before building: it is what the code reads as on 2026-09-06 and it may have moved.",
@@ -121,7 +121,12 @@
         "A repair may not run in a worktree with a merge in progress (`mc-run.md`, *Held before merge*); the workarea made from the branch is fresh, so this cannot happen on the first repair, and there is no second. Assert it rather than handle it.",
         "Tests: a held entry with no project gets one repair from the lane and no second; the workarea is made from the branch; a project's own held entry is left to its round as today. Then a real one: queue a pull request with a deliberately red test and read `held.json` and the session's log. `npm test`."
       ],
-      "comments": [],
+      "comments": [
+        "What decides \"no project\" is the name the lane already computes: `projectForBranch(entry.branch, workareas())`. Non-null and the entry is that project's round's — `heldRepair` reaches it there and nothing here duplicates it; null and no round will ever reach it, because the hold `landPr` wrote carries the branch as its `project` and no queue walks that name. There is one branch where the two readings could overlap: a branch named exactly after a plan that is on main but has no workarea on this machine. `laneRepair` re-reads `held.json` before it launches and refuses an entry that already carries a repair, and `countRepair` runs before the session — so whichever of the two gets there first spends the one repair and the other says `held-after-repair`.",
+        "The repair session writes no `current-<repo>.json`, for the reason the lane writes none: the page's RUNNER block draws that file as a step, and this is not one. What says the machine is busy is `mergeBusy`, which covers the session because `merging` is held around the whole of `mergeQueued` — step 2's comment asked for exactly that and it is where the repair sits. What makes the session visible afterwards is a runs.tsv row with `kind: repair` and the branch in the name column, so an hour of model time in the merge lane is in the same table as every other hour.",
+        "It takes no slot and it is not counted by `total`, so the machine's ceiling with a merge lane in it is `total + 1` — the sentence step 4 owes `mc-run.md` § *Lanes*. Two refusals were added that the instruction did not name and the contract does: STOP and a pending UPDATE stop a repair *starting* (the landing it follows has already finished by then), the same rule `waitForSlot` makes for a step, because a 90-minute session started under a drain stretches the drain into two.",
+        "Not measured against a live runner, and the third criterion is left `met: false` because of it: its check wants a real queued pull request, the page's *held before merge* row and an hour of later rounds, and the runner on this machine is still on main's code, which has no merge lane. What was measured is in the pull request — the whole suite green, and one real runner process with a real git repository, a real `git worktree add` from the branch and the real `canon/roles/repair.md`, with only the model session and `mc merge`'s round faked at the deps edge. Step 4 is where the live measurement belongs."
+      ],
       "pr": null,
       "blocked_by": null
     },

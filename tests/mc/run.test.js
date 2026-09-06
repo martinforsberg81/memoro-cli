@@ -2950,6 +2950,118 @@ test('a step lane\'s landing takes the same pull request off the queue', async (
   assert.match(f.files['/w/runner/log/runner.log'], /merge lane: #77 is off the queue — merged/u);
 });
 
+/* --------------------------- the repair of a pull request with no project */
+
+/** A red round, as `mc merge`'s own report gives it to `landPr`. */
+const redRound = { ok: false, merged: false, stopped_at: 'red', reason: '1 red: a.test.js', gate: { candidate: { red: ['a.test.js'] } } };
+
+/**
+ * A pull request queued by hand off a branch mc did not name is reached by no
+ * round at all: `heldRepair` finds a repair *per project*, and this entry's
+ * project is a branch name the queue does not walk — so it sat at `repairs: 0`
+ * for ever. The lane is what reaches it: one workarea made from the branch, the
+ * same repair role a round hands out, one more landing.
+ */
+test('the merge lane repairs a held pull request that belongs to no project', async () => {
+  const f = fixture({ session: okSession() });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 5, branch: 'hand-fix', reason: 'the gate is red', stopped_at: 'red' }]);
+  const added = [];
+  f.deps.addWorktree = ((inner) => (options) => { added.push(options); return inner(options); })(f.deps.addWorktree);
+  // Red the first time and green the second: the repair is what happened in
+  // between, and the second landing is the lane's answer.
+  let round = 0;
+  f.deps.mergeRound = ((inner) => async (options) => {
+    const report = await inner(options);
+    round += 1;
+    return round === 1 ? { ...report, ...redRound } : report;
+  })(f.deps.mergeRound);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.mergeQueued(), 'merged');
+  assert.deepEqual(
+    added.map((call) => [call.name, call.branch, call.from]),
+    [['hand-fix', 'hand-fix', 'origin/hand-fix']],
+    'a workarea keyed on the branch, made from the branch',
+  );
+  assert.equal(f.calls.sessions.length, 1, 'one repair session');
+  const [session] = f.calls.sessions;
+  assert.equal(session.cwd, '/w/hand-fix/memoro-cli', 'in the workarea it just made');
+  const prompt = session.args[session.args.indexOf('-p') + 1];
+  assert.match(prompt, /whose pull request #5 the runner would not land/u);
+  assert.match(prompt, /1 red: a\.test\.js/u, 'told what the gate saw, by name');
+  assert.ok(session.args.some((arg) => /ROLE repair/u.test(String(arg))), 'the same repair role a round hands out');
+  assert.deepEqual(f.calls.rounds.map((call) => call.pr), [5, 5], 'landed, repaired, landed again');
+  assert.deepEqual(parseHeld(f.files['/w/runner/held.json']), [], 'it landed, so nothing holds it any more');
+  assert.deepEqual(queueOf(f), []);
+  const rows = runRows(f.files).filter((row) => row.kind === 'repair');
+  assert.deepEqual(rows.map((row) => [row.name, row.pr, row.note]), [['hand-fix', '5', 'success']], 'the session is in runs.tsv like every other');
+});
+
+/**
+ * Still red after it, and it is the brief's: `repairs: 1` is the whole memory
+ * of that, and a second `mc merge` on the same pull request does not buy a
+ * second session.
+ */
+test('the merge lane gives a project-less pull request one repair and never a second', async () => {
+  const f = fixture({ session: okSession(), rounds: { 5: redRound } });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 5, branch: 'hand-fix' }]);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.mergeQueued(), 'open,gate-red');
+  const [entry, ...rest] = parseHeld(f.files['/w/runner/held.json']);
+  assert.equal(rest.length, 0);
+  assert.deepEqual([entry.project, entry.repo, entry.pr, entry.branch, entry.repairs], ['hand-fix', 'memoro-cli', 5, 'hand-fix', 1]);
+  assert.equal(f.calls.sessions.length, 1);
+  assert.deepEqual(queueOf(f), [], 'it is held now, not queued');
+  // Somebody types `mc merge` again and the refusal is queued again. The
+  // landing is the lane's; the repair is not.
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 5, branch: 'hand-fix' }]);
+  assert.equal(await runner.mergeQueued(), 'open,gate-red');
+  assert.equal(f.calls.sessions.length, 1, 'still the one');
+  assert.equal(parseHeld(f.files['/w/runner/held.json'])[0].repairs, 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /merge lane: #5 is held and gets no repair here — it has had its one repair already; it is the brief's/u);
+});
+
+/** A project's own held pull request stays its round's, exactly as today. */
+test('the merge lane leaves a project\'s own held pull request to its round', async () => {
+  const f = fixture({ areas: { alpha: { repo: 'memoro-cli' } }, session: okSession(), rounds: { 42: redRound } });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 42, branch: 'alpha-2' }]);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.mergeQueued(), 'open,gate-red');
+  assert.deepEqual(f.calls.sessions, [], 'no session here — `heldRepair` gives alpha its repair in alpha\'s own round');
+  assert.equal(parseHeld(f.files['/w/runner/held.json'])[0].repairs, 0, 'and the count is the round\'s to spend');
+  assert.deepEqual(f.calls.added, [], 'and no workarea was made for a branch that has one');
+});
+
+/**
+ * A repair may not run in a worktree with a merge in progress (`mc-run.md`,
+ * *Held before merge*). The workarea this one runs in was just made from the
+ * branch, so it cannot be mid-merge — which is why this is asserted rather than
+ * handled: a worktree that is anyway is one this lane did not make.
+ */
+test('the merge lane refuses to repair in a worktree with a merge in progress', async () => {
+  const f = fixture({ session: okSession(), rounds: { 5: redRound }, mergeLeft: ['hand-fix'] });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 5, branch: 'hand-fix' }]);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.mergeQueued(), 'open,gate-red');
+  assert.deepEqual(f.calls.sessions, [], 'nothing was started');
+  assert.equal(parseHeld(f.files['/w/runner/held.json'])[0].repairs, 0, 'and no repair was spent');
+  assert.match(f.files['/w/runner/log/runner.log'], /a merge is in progress in \/w\/hand-fix\/memoro-cli/u);
+});
+
+/** STOP and UPDATE stop a repair starting, the way they stop a step starting. */
+test('the merge lane starts no repair under STOP or a pending UPDATE', async () => {
+  for (const [file, why] of [['STOP', 'STOP is present'], ['UPDATE', 'an UPDATE is pending']]) {
+    const f = fixture({ session: okSession(), rounds: { 5: redRound } });
+    f.files['/w/runner/merges.json'] = queueFile([{ pr: 5, branch: 'hand-fix' }]);
+    const inner = f.deps.mergeRound;
+    f.deps.mergeRound = async (options) => { f.files[`/w/runner/${file}`] = ''; return inner(options); };
+    const runner = createRunner({ deps: f.deps });
+    assert.equal(await runner.mergeQueued(), 'open,gate-red');
+    assert.deepEqual(f.calls.sessions, [], `${file}: no session`);
+    assert.equal(parseHeld(f.files['/w/runner/held.json'])[0].repairs, 0, `${file}: the repair is the next runner's`);
+    assert.ok(f.files['/w/runner/log/runner.log'].includes(`gets no repair here — ${why}`));
+  }
+});
+
 /* ------------------------------------------- the round and the reading agree */
 
 /**
