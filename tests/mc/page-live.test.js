@@ -11,7 +11,11 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 
+import headless from '@xterm/headless';
+
 import { liveReader, plainReader, readLine, screenRows } from '../../src/mc/page-live.js';
+
+const { Terminal } = headless;
 
 const ESC = '\x1b';
 const SAVE = '\x1b7';
@@ -70,6 +74,11 @@ function clock() {
     clear(which) {
       const index = pending.findIndex((timer) => timer.id === which);
       if (index >= 0) pending.splice(index, 1);
+    },
+    /** When the next timer falls due, for a caller that has to be there when it does. */
+    next() {
+      pending.sort((a, b) => a.due - b.due);
+      return pending.length ? pending[0].due : null;
     },
     async advance(ms) {
       const target = at + ms;
@@ -395,6 +404,169 @@ describe('the live page under the prompt', () => {
     assert.equal(it_.input.destroyed, true, 'the terminal is handed back');
     await it_.time.advance(120_000);
     assert.equal(it_.collected.length, 0, 'and nothing refreshes after it');
+  });
+});
+
+/**
+ * The one thing the tests above cannot say.
+ *
+ * Everything else here asserts bytes, and bytes are right or wrong against a
+ * number the test worked out itself — which is the same arithmetic the page
+ * does, so a test that gets it wrong the same way agrees with the bug. Here
+ * the bytes go into `@xterm/headless`, the terminal answers `CSI 6n` with the
+ * row the cursor is actually on, and "the row that line is on" is read off a
+ * screen instead. 45 rows, 120 columns, 97 lines of page: the shape Martin was
+ * looking at on 2026-09-06 when one growth frame turned eleven rows into four.
+ */
+describe('a page taller than the screen', () => {
+  const HEIGHT = 45;
+  const WIDTH = 120;
+  const TALL = 97;
+
+  /** A page of `count` rows, each of them its own text and none of them wide. */
+  const tallPage = (count, changed = -1) => Array.from({ length: count }, (_, index) => (
+    `  ${String(index + 1).padStart(2, '0')}  sql-readiness  ${index === changed ? 'in flight' : 'blocked'}`
+  ));
+
+  /**
+   * The page printed into a real terminal, and the reader that keeps it true.
+   * `answers: false` is a terminal that ignores `CSI 6n` — the by-count path,
+   * which has the same arithmetic and had the same fault.
+   */
+  function tall({ answers = true, pages = [] } = {}) {
+    const term = new Terminal({ cols: WIDTH, rows: HEIGHT, scrollback: 500, allowProposedApi: true });
+    const input = keyboard();
+    // The terminal's reply arrives on the stream the typing arrives on, which
+    // is where a real one puts it and why `readLine` is what reads it.
+    if (answers) term.onData((data) => input.emit('data', data));
+
+    const written = [];
+    const stdout = {
+      columns: WIDTH,
+      rows: HEIGHT,
+      write(text) {
+        written.push(String(text));
+        // A tty turns the newline mc writes into carriage-return-newline on
+        // its way out; a parser handed the bytes directly does not, so the
+        // translation belongs here rather than in the page.
+        term.write(String(text).replace(/\n/gu, '\r\n'));
+        return true;
+      },
+      on() {},
+      off() {},
+    };
+
+    const time = clock();
+    const first = tallPage(TALL);
+    // Printed the way `run()` prints it, before it knows anybody is watching.
+    stdout.write(`${first.join('\n')}\n`);
+    const reader = liveReader({
+      stdout,
+      lines: first,
+      page: async () => ({ data: {}, lines: pages.shift() }),
+      intervalMs: 30_000,
+      input: () => input,
+      setTimer: (fn, ms) => time.set(fn, ms),
+      clearTimer: (which) => time.clear(which),
+    });
+
+    const flush = () => new Promise((resolve) => { term.write('', resolve); });
+    const rowAt = (row) => (
+      term.buffer.active.getLine(term.buffer.active.baseY + row - 1)?.translateToString(true).trimEnd() ?? ''
+    );
+    const screen = () => Array.from({ length: HEIGHT }, (unused, index) => rowAt(index + 1));
+    return {
+      input,
+      reader,
+      flush,
+      rowAt,
+      screen,
+      /** Where a line is, asked of the screen rather than counted again. */
+      rowOf: (text) => screen().indexOf(text) + 1,
+      cursorRow: () => term.buffer.active.cursorY + 1,
+      at: () => written.length,
+      since: (mark) => written.slice(mark).join(''),
+      /**
+       * Fake time forward, one timer at a time, with the terminal let run in
+       * between. A real terminal answers `CSI 6n` in about a millisecond and
+       * the page waits `ANCHOR_MS` for it; a clock that jumps from the frame
+       * that asked straight past that timeout would have the page drawing by
+       * count for reasons that belong to the test and not to the page.
+       */
+      async advance(ms) {
+        const target = time.now() + ms;
+        for (let guard = 0; guard < 100; guard += 1) {
+          const due = time.next();
+          if (due === null || due > target) break;
+          await time.advance(Math.max(1, due - time.now()));
+          await flush();
+          await settle();
+        }
+        await time.advance(Math.max(0, target - time.now()));
+        await flush();
+        await settle();
+      },
+    };
+  }
+
+  it('rewrites the row the line is really on after the page has grown', async () => {
+    const grown = tallPage(TALL + 1);
+    const changed = tallPage(TALL + 1, 80);
+    const it_ = tall({ pages: [grown, changed] });
+    const answer = it_.reader.ask(TAIL, '>');
+    await it_.flush();
+    await settle();
+    assert.equal(it_.cursorRow(), HEIGHT, 'the prompt is on the last row of the screen');
+
+    // One growth frame. The page is reprinted from the top of the screen, its
+    // first 57 lines are history and stay in the scrollback, and the 41 that
+    // fit above the menu are what is on the screen.
+    await it_.advance(31_000);
+    assert.equal(it_.rowAt(1), grown[57], 'the first row on screen');
+    assert.equal(it_.rowAt(41), grown[97], 'and the last, just above the keys');
+
+    // Then one row changes. Where it is, is read off the terminal.
+    const was = it_.rowOf(grown[80]);
+    assert.equal(was, 24);
+    const mark = it_.at();
+    await it_.advance(31_000);
+
+    const writes = it_.since(mark);
+    assert.ok(writes.includes(`${ESC}[${was};1H${ESC}[2K${changed[80]}`), JSON.stringify(writes));
+    assert.ok(
+      !writes.includes(`${ESC}[${was - 1};1H`),
+      'and not its neighbour, which is the row a footprint taken from the page\'s length gives',
+    );
+    // Which is the whole of it: the page on the screen is the page it drew.
+    assert.deepEqual(it_.screen().slice(0, 41), changed.slice(57));
+
+    it_.input.type('q\r');
+    assert.equal(await answer, 'q');
+  });
+
+  it('does the same by count, when the terminal will not say where the page is', async () => {
+    const grown = tallPage(TALL + 1);
+    const changed = tallPage(TALL + 1, 80);
+    const it_ = tall({ answers: false, pages: [grown, changed] });
+    const answer = it_.reader.ask(TAIL, '>');
+    // Long enough for the unanswered question to give up and say so, once.
+    await it_.advance(1_000);
+    await it_.advance(31_000);
+    assert.equal(it_.rowAt(41), grown[97], 'the growth frame landed the same way');
+
+    const was = it_.rowOf(grown[80]);
+    assert.equal(was, 24);
+    const mark = it_.at();
+    await it_.advance(31_000);
+
+    const writes = it_.since(mark);
+    assert.ok(!/\x1b\[\d+;1H/u.test(writes), `nothing absolute: the terminal never answered — ${JSON.stringify(writes)}`);
+    assert.ok(writes.includes(`${ESC}[${HEIGHT - was}A`), JSON.stringify(writes));
+    assert.ok(!writes.includes(`${ESC}[${HEIGHT - was + 1}A`), 'and not one row further up, which `reach` gave');
+    assert.deepEqual(it_.screen().slice(0, 41), changed.slice(57));
+
+    it_.input.type('q\r');
+    assert.equal(await answer, 'q');
   });
 });
 

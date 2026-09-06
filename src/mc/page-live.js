@@ -28,14 +28,26 @@
  * rather than most of them. The price is that the echo, the backspace and
  * ctrl-c are ours, and they are the whole of `readLine` below.
  *
- * **Two numbers hold the geometry.** `footprint` is how many rows the page
- * occupies on screen — set when the page is printed, and unchanged by a frame
- * with fewer rows, because a shrinking frame blanks its surplus rows where
- * they stand rather than pulling the menu up. `above` is `footprint` plus the
- * rows the block the menu prints under the page occupies *on screen*, which is
- * how many rows above the cursor the page's first row sits. Both are derived,
- * never assumed: change what the menu prints under the page and the arithmetic
- * follows.
+ * **Two numbers hold the geometry.** `footprint` is how many rows below the
+ * page's first row the cursor came to rest when the page was last printed —
+ * unchanged by a frame with fewer rows, because a shrinking frame blanks its
+ * surplus rows where they stand rather than pulling the menu up. `above` is
+ * `footprint` plus the rows the block the menu prints under the page occupies
+ * *on screen*, which is how many rows above the cursor the page's first row
+ * sits. Both are derived, never assumed: change what the menu prints under the
+ * page and the arithmetic follows.
+ *
+ * **And `footprint` is taken from the print, not from the page's length.** A
+ * first print ends with a newline, so the cursor is one row below the last row
+ * and the footprint is the number of lines. A growth frame is a reprint that
+ * *joins* the lines, so the cursor rests on the last row and the footprint is
+ * one less — and on a page taller than the screen it is also a page whose top
+ * has scrolled off, which is why `page-frame.js` exports `reprintPlan` and
+ * this module asks it rather than counting again. Deriving it from
+ * `next.length` a second time is the fault Martin saw on 2026-09-06: every
+ * absolute target after the first growth frame was one row too high, `CSI 2K`
+ * cleared the neighbour, and eleven `sql-readiness` rows arrived on screen as
+ * four.
  *
  * **And the terminal is asked where that is.** Deriving alone was not enough,
  * and the way it failed is why this module now asks. `tailRows` counted the
@@ -61,7 +73,7 @@
 import { closeSync, constants, openSync, readSync } from 'node:fs';
 import { ReadStream } from 'node:tty';
 
-import { frameWrites } from './page-frame.js';
+import { frameWrites, reprintPlan } from './page-frame.js';
 import { ask as askTerminal } from './prompt.js';
 import { clip, width } from './status-render.js';
 
@@ -146,8 +158,12 @@ export function liveReader({
 }) {
   // Always exactly as long as the page's footprint: a frame with fewer rows
   // blanks the surplus where it stands, so the rows are still ours and still
-  // have to be compared against something.
+  // have to be compared against something. It says what the rows contain; it
+  // is not asked where they are — `footprint` is.
   let current = [...lines];
+  // The page was printed by the caller, with a newline after it, so the cursor
+  // is one row below its last line.
+  let footprint = lines.length;
   let tailRows = 0;
   let typed = '';
   let holding = false;
@@ -163,6 +179,7 @@ export function liveReader({
   function show(next) {
     stdout.write(`${next.join('\n')}\n`);
     current = [...next];
+    footprint = next.length;
     holding = false;
   }
 
@@ -278,7 +295,7 @@ export function liveReader({
     /** The frame, written where the page stands. */
     function draw(next) {
       const rows = Number(stdout.rows) || Infinity;
-      const above = current.length + tailRows;
+      const above = footprint + tailRows;
 
       if (dirty || next.length > current.length) {
         // Grown past its footprint, or drawn for a terminal that has since
@@ -288,6 +305,11 @@ export function liveReader({
         // answer among them.
         stdout.write(`${frameWrites([], next, { above, rows, anchor })}${tail}${promptText}${typed}`);
         current = [...next];
+        // Where that reprint left the cursor, asked of the module that wrote
+        // it. A page taller than the screen has printed fewer rows than it
+        // has lines, and it did not end with a newline: both are in `below`,
+        // and neither is in `next.length`.
+        footprint = reprintPlan(next, { above, rows, anchor }).below;
         dirty = false;
         holding = false;
         // The reprint scrolled the screen and reprinted the block under the
