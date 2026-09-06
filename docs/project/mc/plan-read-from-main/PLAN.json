@@ -125,14 +125,19 @@
     },
     {
       "title": "Close out",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/technical/mc-run.md` says which copy of a plan the round reads and when, and `docs/project/project_log.md` has the row.",
       "instruction": [
         "Write down which copy the round reads, in which case, and why — this is the fact that was true, documented, deliberate, and wrong at the same time, and the documentation is where the next person deciding to change it will look.",
         "Say it beside the contract it serves: the planning session and the runner share a `PLAN.json` on `main` and nothing else. `docs/project/README.md` already carries that sentence; the technical doc should say how the runner honours it.",
         "Add the row to `docs/project/project_log.md`."
       ],
-      "comments": [],
+      "comments": [
+        "`mc-run.md` grew a section of its own — *Which copy of the plan the round reads, and when* — because the fact needed a table rather than a clause: the three states of a workarea (no merge, a merge stopped elsewhere, a merge stopped on the plan), the copy each reads, and why. It is placed where the old wrong sentence was, immediately after the merge paragraph and before `chooseKind`, and it quotes the contract from `docs/project/README.md` § Who writes what rather than restating it, so the two cannot drift apart in wording. The reason the middle row is the surprising one is written out: git merges the files it can, so a merge that stopped on `src/a.js` has already put main's plan on disk.",
+        "Three stale sentences elsewhere in the same note were fixed because they were part of the same defect rather than tidying. The merge paragraph still said the round reads the plan from `HEAD` when a merge is in progress, and still listed *a plan that is blocked, done or unreadable* among the reasons a merge finds no session — which `planRefusal` now takes before a worktree is touched, so the surviving case is a branch whose own plan is the conflicted file. The `machineState` row of the two-readings table did not mention a workarea that could not take main, and the agreement table's case count had gone from twelve to thirteen when step 3 added `unmergeable`; both now match the code.",
+        "Verified: `npm test` — 1860 tests, 1851 pass, 0 fail, 9 skipped, including `docs/technical/mc-run.md says what the runner does` (`tests/mc/run-doc.test.js`), which pins this note's numbers against the exports they describe. The two `done_when` clauses were read back out of the files after editing. Nothing in `src/` was touched by this step.",
+        "For whoever archives this: the `project_log.md` row is written and the archive will not write a second (`rowFor`, `archive-plan.js`). Two things it leaves open on purpose, both stated in the row itself — the legitimate `fromHead` case is still stale in its own way (`sdk-artifact-storage`, `branch-landed.js`, its own proposal), and the four other reasons a round aborts a merge record nothing."
+      ],
       "pr": null,
       "blocked_by": null
     }

@@ -313,16 +313,17 @@ themselves are main's, because a step session may not change them. It refuses
 rather than guesses — both sides on the same step, a side that is not JSON, a
 step added or removed, or a result `validatePlan` would reject leaves the file
 conflicted, with the reason in `runner.log`. What it refuses is left in
-progress and handed to the step session: the round reads the plan from `HEAD`
-(`git show HEAD:<plan path>`, the branch's own last good copy) and
-`stepPrompt` puts a preamble above the body naming the conflicting files,
-saying the merge stopped there, and saying it is the first thing the session
-does and not the job. One session resolves the merge and delivers the step,
-and one pull request carries both. If there is no step to hand it to — a
-plan that is blocked, done or unreadable, a held pull request waiting for its
-repair, a missing role, a tool that is not installed — the merge is aborted
-and the project skipped with the conflicting files named, because a merge
-nobody is handed is a merge nobody finishes.
+progress and handed to the step session: `stepPrompt` puts a preamble above the
+body naming the conflicting files, saying the merge stopped there, and saying
+it is the first thing the session does and not the job. One session resolves
+the merge and delivers the step, and one pull request carries both. If there is
+no step to hand it to — a held pull request waiting for its repair, a missing
+role, a tool that is not installed, a branch whose own plan is the conflicted
+file and carries no step — the merge is aborted and the project skipped with
+the conflicting files named, because a merge nobody is handed is a merge nobody
+finishes. That workarea is then written into `~/mc/runner/unmergeable.json`, so
+it reaches a person: `git merge --abort` leaves the worktree *clean*, and
+without the record the only trace is one `runner.log` line per round.
 
 **A project's branches are `<name>` or `<name>-<suffix>`.** That convention is
 what lets a pull request be matched back to a project at all, and rule 5 is
@@ -333,13 +334,53 @@ because `mc`, `mc-cut`, `mc-log` and `mc-test` are all project names and
 branch is invisible to this, and there is no second rule for a case nobody has
 seen: every open pull request on 2026-09-02 followed the convention.
 
+### Which copy of the plan the round reads, and when
+
 **And then `runStep` reads the plan again**, out of the worktree, after that
 merge. This is not the same reading twice over. The plan on main was read to
-decide *whether to start*; the plan in the worktree is what decides *what to
-do*, and the two can differ by exactly one merge — `syncMain` may have just
+decide *whether to start*; the plan the worktree carries is what decides *what
+to do*, and the two can differ by exactly one merge — `syncMain` may have just
 brought a newer plan down. It is also the file the step session will edit, so
 it is the one that must be obeyed. The cheap reading gates the walk; the
 expensive one holds the decision.
+
+Which is why *which copy* is a rule and not an accident. **What a planning
+session and the runner share is a `PLAN.json` on `main`, and nothing else**
+([`docs/project/README.md`](../project/README.md), § Who writes what) — so the
+step a round hands out is the step main names, and `planOf` (`run.js`) has
+exactly one exception:
+
+| the state of the workarea | the copy the round reads | why |
+|---|---|---|
+| no merge in progress | the file on disk | the workarea stands on `origin/main`, so the file on disk *is* main's copy |
+| the merge stopped, but not on the `PLAN.json` | the file on disk | git merges the files it can, so it has **already written main's plan into the worktree** — the conflict is elsewhere |
+| the merge stopped *on the `PLAN.json`* | `git show HEAD:<plan path>` | the file on disk carries conflict markers and parses as nothing; HEAD is the last copy of it that is a plan at all |
+
+So `fromHead` is `conflicts.some(isPlanPath)`, never `conflicts.length > 0`.
+That distinction is the whole of ruling 10 (`docs/project/mc/rulings.md`), and
+it is written here because the wrong version of it was documented, deliberate
+and wrong at the same time: the docstring argued that "HEAD is the branch's last
+good copy", which is true of a conflicted plan and false of every other
+conflicting file, while the condition it sat on fired on any of them. Measured
+over the whole of `runner.log` to 2026-09-05: **207 rounds reached a conflict,
+180 of them (87 %) with no `PLAN.json` among the conflicting files**, and every
+one of those 180 was handed the branch's plan when main's was on disk beside it.
+`docx-editor` reported *"step 17 is blocked on decision docx-ime-input-source"*
+for 13 consecutive rounds about a step main had re-planned the evening before,
+and the only conflicting file was a technical note.
+
+The third row is the case that survives, and it survives on its own merits: a
+plan that will not parse cannot be read from disk, and the session handed that
+merge needs a plan to work from. Its residue is known and is not this rule's to
+fix — HEAD there is not "the branch's last good copy" so much as the copy that
+lags, and a step it says is `blocked` may be `done` on main (`sdk-artifact-storage`,
+13 of the 27 plan-conflict rounds). What that costs is now visible rather than
+silent: the round refuses such a project as `unmergeable` and records the
+workarea, instead of reporting whatever the stale plan said.
+
+A step session's own edits to its plan in its worktree are untouched by all of
+this. This is about which copy the *round* reads to decide what to hand out —
+not about what the session then edits, or what its pull request carries.
 
 `chooseKind` is the whole of what a project gets:
 
@@ -372,7 +413,7 @@ answer the other's:**
 |---|---|---|
 | the question | is this plan ready to be worked on? | would the runner start it now? |
 | what it is a fact about | a file on `origin/main` — the state of the first step that is not `done` | this machine, at this moment |
-| what it sees | `ready`, `blocked` and what on, `done`, a file that does not parse | the STOP file, a dirty worktree, a merge stopped in one, a held pull request, work in flight, a branch the workarea does not have |
+| what it sees | `ready`, `blocked` and what on, `done`, a file that does not parse | the STOP file, a dirty worktree, a merge stopped in one, a workarea an earlier round could not bring to `origin/main`, a held pull request, work in flight, a branch the workarea does not have |
 | what it costs | nothing — the round has already read the plans | one `git status --porcelain` in the workarea, and only where the plan does not already refuse |
 | where it lives | `plan-schema.js`, flattened by `kindFor` (`status-collect.js`) | `machineState` (`status-collect.js`), beside it |
 
@@ -396,7 +437,7 @@ plan first, so a project the plan already refuses costs no git at all. That is
 refuses on for a reason that is not in the plan, in the order it asks them.
 `runStepClaimed` returns `skipped:<reason>` through one `refuse()` helper and
 the reading answers in the same words. Three tests in `tests/mc/run.test.js`
-hold them together — a table of twelve cases driven through both the round and
+hold them together — a table of thirteen cases driven through both the round and
 the reading over one fixture, a coverage test asserting every word in
 `RUN_REFUSALS` has a case, and a source check that no refusal returns a bare
 `'skipped'` (the lane claim in `runStep` is the one exception, and it is a fact
@@ -420,6 +461,16 @@ an unmerged path makes `git status --porcelain` non-empty and the round skips
 there, before any of its own merge work. The two are told apart in the sentence
 (`a merge stopped in …` against `uncommitted work in …`) and not in the word,
 because a word of its own would be one the two readings could disagree about.
+
+A merge the round **aborted** is the opposite case and does have a word,
+`unmergeable`, and it is the one word the reading answers out of a file rather
+than out of the machine as it stands. `git merge --abort` leaves the worktree
+clean, so a second later there is nothing here to see: `git status --porcelain`
+says nothing, and every surface would call the project runnable while the round
+conflicts and aborts again ten minutes on. So the round writes what it did —
+`~/mc/runner/unmergeable.json`, one entry per workarea with the files and a
+`since`, in the shape `held.json` already has — and the reading reads it. Its
+own merge cannot be predicted; its outcome can be recorded.
 
 **Which surface says which**, so that a bare `ready` can be read for what it is
 wherever it is met:
