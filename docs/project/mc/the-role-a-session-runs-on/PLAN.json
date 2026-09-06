@@ -71,7 +71,7 @@
         "Two technical documents said the opposite of the tree and were corrected rather than left: `docs/technical/mc-roles.md` § *The one session that cannot inherit it* (now § *A passage two roles share*) and `docs/technical/mc-plan.md` § *What the session is told*. `docs/project/README.md` needed nothing — § *Who writes what* already said what `plan.md` now says. The project log and `docs/project/mc/rulings.md` are untouched; ruling 13 already describes both steps and the close-out row belongs to whoever writes it after step 2.",
         "Not done and not in this step's `done_when`: nothing verifies that a *user catalogue* role carrying an include marker resolves against canon rather than against the catalogue it came from. `expandRoleIncludes` resolves in `canonRolesDir()` unconditionally, which is right — shared passages ship with mc — but step 2 records which source a role's text came from beside the digest, and that reading should note an included passage always comes from canon even when the role does not."
       ],
-      "pr": null,
+      "pr": 659,
       "blocked_by": null
     },
     {
