@@ -337,6 +337,76 @@ proposal in `~/mc/proposals/2026-09-05-branch-landed-unknown-after-replan.md`.
 step 2, whose instruction was already written assuming this answer, with step 3
 building option 2's guard.
 
+## 11 · The brief writes the plans it decides, and there is no general rulings file
+
+`ruling · 2026-09-06` · raised at the brief, over the page remake below
+
+The brief had written a proposal, taken Martin's GO, recorded the decision, and
+then stopped — because `canon/roles/brief.md` said a proposal *"goes when the
+project is created, deleted by the session that writes the `PLAN.json`"*, which
+sent the work to an `mc plan` session that would have to read the same code
+again. It had also carried the decision into `~/mc/rulings.md`, a general file
+the same role text told it to keep.
+
+> **Beslut:** "Brief får skriva projekt-planer precis som plan. Det finns ingen
+> anledning att dra detta i en session till." … "Hela filen rulings.md som skulle
+> vara generell ska raderas. Rulings ska finnas per program. Generella regler ska
+> leda till uppdaterade promptar eller AGENTS.md eller nya tester/funktioner."
+> (Martin, 2026-09-06)
+
+Both halves are rules and not rulings, so neither is carried by a plan: they
+land as changes to the thing that enforces them, in the same pull request as
+this entry. `canon/roles/brief.md` now says the brief writes the `PLAN.json`
+itself and deletes the proposal in the same commit, under the same rules as a
+planning session, and `docs/project/README.md` § *Who writes what* says so from
+the other side — what stays the planning session's is thinking a programme
+through and reading a `plan-review`. The same role text now says a ruling
+belongs to its programme's `rulings.md`, that there is no general one, and that
+a decision belonging to no programme is a rule: it lands in `canon/roles/`,
+`AGENTS.md`, a test or a feature, and if that is more than an edit it is a
+project with a plan like any other.
+
+`~/mc/rulings.md` was deleted with this. Its three entries each named the pull
+request that had already carried them into a plan — memoro #11371, #11505 and
+#11506 — and its fourth is ruling 12 below.
+
+## 12 · The page is remade, and the live frame is fixed first
+
+`ruling · 2026-09-06` · raised at the brief
+
+Martin's screen showed `sql-w3-email-closure` running in RUNNER and only four of
+`sql-readiness`' eleven projects under PROGRAMMES. The numbers proved the render
+was whole — a number is a position in the numbered list, so dropped rows would
+have renumbered without gaps — and the fault was in the live loop.
+`page-live.js`'s `above = current.length + tailRows` counts rows that
+`reprint()` never printed on a page taller than the screen, so after one growth
+frame every write lands a row high, `CSI 2K` clears the neighbour, and the row
+that changed keeps its old text. Driven against the real 97-line page at
+45 × 120: three changed rows, three projects erased, two drawn twice.
+
+Reading the rest of the page against that found more. QUEUE reads only
+`~/mc/queue.md`, so it says *"empty"* while the runner walks 41 projects.
+`dim grey` — the dim attribute over bright black — draws the repository column
+of every row and `no plan session` on eleven headings, at or below the
+background. Thirty-two projects are `blocked` and nothing says `plan-review`
+holds twelve of them and `home-on-msr` seven, though every step carries
+`blocked_by`. A step row's `pid` is the runner's own. `production.differs`
+compares a 7-character sha with a 40-character one, so identical commits read as
+a mismatch.
+
+> **Beslut:** "Vi gör en rejäl remake av hela sidan som redan har stora
+> brister." … "Ja, kör." (Martin, 2026-09-06)
+
+Five steps in that order — the frame fix first, then the palette, NEXT in place
+of QUEUE, PROGRAMMES with per-programme counts and the blocked collapsed, then
+the lanes, production, WORK, INTAKE and the section order. Explicitly out: no
+new colour space, the page stays offline and instant, the menu gains one key,
+the helper's digest keeps its own sha fix with the
+`deploy-mismatch-shows-identical-shas` proposal, and every project stays listed
+— the page does not become one that fits a terminal.
+
+**Carried by [`the-page-remade/PLAN.json`](the-page-remade/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som

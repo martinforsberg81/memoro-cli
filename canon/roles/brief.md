@@ -15,9 +15,26 @@ Never lay out options for him to choose between — if you cannot name one thing
 to do, the question is not ready, so say that and say what you would go and
 find out. A question that reading the code would settle is not his to answer.
 
-A proposal's life ends with the decision. Dropped, the file goes now; taken, it
-goes when the project is created, deleted by the session that writes the
-`PLAN.json` — so anything in it the plan will need has to be in the plan first.
+A proposal's life ends with the decision, in this session, and no work is
+handed to a session that would have to read it all again. Dropped, the file
+goes now. Taken, **you write the project**: a `PLAN.json` under
+`docs/project/<programme>/<project>/` in the repository the work is in, and
+the proposal deleted in the same commit, named in the pull request body — it
+is not in that repository, so the PR is the only place that record can live.
+You write a plan exactly as `mc plan` does and under the same rules
+(`docs/project/README.md` § *Who writes what*): every field and its meaning is
+in `src/mc/plan-schema.js`, every step carries the instruction the session
+will be sent off with, and a plan that does not validate is refused at the
+runner's door rather than run. Validate before you push — `readPlanText`
+prints every problem at once, and `mc status <project>` prints them for a plan
+already on `main`.
+
+The programme is a directory that exists, or it is one you make; the
+`<project>` directory name is what the runner will call that project's branch
+and its workarea. `mc plan <programme>` stays what it is — the session Martin
+opens to think a programme through — and it is where a plan-review belongs.
+Writing the plan a decision at this brief already settled is not that, and
+opening a second session to retype what you have just read is waste.
 
 *Held before merge* is yours to decide, and until you say something that
 project runs nothing. One proposal per pull request, never a menu, and one of
@@ -57,12 +74,14 @@ is gone. A state change with no reason beside it is a step nobody can check.
 What a reading cannot settle is Martin's, one proposal with one recommendation,
 the way a held pull request is.
 
-Your unblocking reaches `main` by a pull request you open and land yourself,
-one per repository per brief and not one per step. A plan is a file under
-`docs/`, so: a worktree at `~/mc/brief/unblock/<repo>` on branch
-`brief/unblock-<date>` from `origin/main`, every unblocking of this brief
-committed there, `gh pr create`, then `mc merge <repo> <pr> --docs` — which
-runs no suite and refuses anything outside `docs/`. Land it before the brief
+Everything you write to `main` — the plans, the unblocking, the rulings —
+goes by one pull request you open and land yourself, one per repository per
+brief and not one per thing. A plan is a file under `docs/`, so: a worktree at
+`~/mc/brief/unblock/<repo>` on branch `brief/unblock-<date>` from
+`origin/main`, everything committed there, `gh pr create`, then `mc merge
+<repo> <pr> --docs` — which runs no suite and refuses anything outside
+`docs/`. A pull request that also touches code, a role or a test goes through
+`mc merge <repo> <pr>` and the full gate instead. Land it before the brief
 ends and `git worktree remove` it after: an open pull request on a project's
 plan is a round that project loses. Two names are load-bearing and neither is
 decoration — the worktree sits a level below `~/mc/brief/`, where no workarea
@@ -80,6 +99,13 @@ never this session. *Workareas with no project on main* asks for a plan or for
 Martin's own `rm`; `branch: landed` means main already holds everything, and
 anything else means read the branch first. You remove nothing.
 
-What he decides goes into the plan it is about, written by whoever next opens
-that plan. mc keeps no record of it, so if it is worth remembering, carry it
-into `rulings.md` while you have it.
+**A ruling belongs to a programme.** What Martin decides goes into the plan it
+is about and into `docs/project/<programme>/rulings.md`, in the same pull
+request as everything else you land — the question in a sentence or two, his
+answer quoted, and the plan that carries it. There is no general rulings file
+and there is not to be one: a decision that belongs to no programme is not a
+ruling, it is a rule, and a rule that is written down where nobody is sent to
+read it changes nothing. So a general decision lands as a change to the thing
+that enforces it — the role files in `canon/roles/`, `AGENTS.md`, a test, or a
+feature — and if that is more than an edit, it is a project, which you write
+the plan for like any other.
