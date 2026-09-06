@@ -29,3 +29,18 @@ in `runner.log` and GitHub's merge — is in the close-out pull request of this
 project (`docs/project/mc/merge-queue/PLAN.json`, step 4) and in the criteria
 it flips. The project's architecture is
 [`docs/technical/mc-run.md`](../../../technical/mc-run.md) § *The merge*.
+
+## The first attempt landed, which is the other half of the contract
+
+2026-09-06T23:45Z. The gate round meant to hold the lock (`mc test memoro-cli
+680`) took 7 s — the selection for a docs-only change is 9 files and 296 tests
+— so by the time `mc merge memoro-cli 680` ran the lock was free, the round
+was not refused at all, and #680 landed the ordinary way: green in 4 s,
+squashed as `856a8e8`, `merges.json` still absent afterwards. That is the
+contract's first line measured rather than assumed: **a round that landed
+prints what it printed before this project and touches no queue.**
+
+The refusal the project is about needs a gate that is busy for longer than a
+docs selection takes, so the second attempt holds it with the repository's
+whole suite (`mc test memoro-cli --full`) and queues this pull request against
+it.
