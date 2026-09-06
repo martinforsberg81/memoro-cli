@@ -214,25 +214,14 @@ function row(c, wide, left, middle, right, tone = null) {
 function runnerLines(lines, c, wide, runner) {
   const now = runner;
   heading(lines, c, wide, 'RUNNER', null, 'mc run');
-  // One line per lane: `mc run` drives one lane per repository at the same
-  // time, and each of them is a step somebody may want to look at.
-  const steps = now.steps || [];
-  if (steps.length) {
-    for (const s of steps) {
-      const budget = s.budget_seconds == null ? '' : ` of ${duration(s.budget_seconds)}`;
-      const meta = paint(c, between([
-        { text: s.kind, styles: kindTone(s.kind) },
-        { text: [s.tool, s.model].filter(Boolean).join(' '), styles: ['grey'] },
-        {
-          text: `${duration(s.elapsed_seconds)}${budget}${s.over_budget ? ' — over budget' : ''}`,
-          styles: elapsedTone(s),
-        },
-        { text: s.pid ? `pid ${s.pid}` : '', styles: ['grey'] },
-      ], ' · '), wide - 28);
-      lines.push(`  ${c(MARK.running, 'green')} ${c(pad(clip(s.name, 21), 22), 'bold')} ${meta}`);
-    }
-  } else if (now.process?.alive) {
-    lines.push(`  ${c(MARK.quiet, 'grey')} ${c(pad('runner', 22), 'grey')} ${c('between steps — nothing in flight', 'grey')}`);
+  // One row per lane, step or no step. `mc run` drives one lane per repository
+  // at the same time, and a lane is a lane between steps as much as during one:
+  // with a row only where there was a step, a lane waiting for its next project
+  // and a lane whose process had died looked exactly alike, which is nothing at
+  // all. A runner that is not running has no lanes, and says so in one line.
+  const lanes = now.lanes || [];
+  if (lanes.length && (now.process?.alive || lanes.some((lane) => lane.step))) {
+    for (const lane of lanes) lines.push(laneLine(c, wide, lane));
   } else {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c('the runner is not running — mc run starts it', 'grey')}`);
   }
@@ -260,15 +249,54 @@ function runnerLines(lines, c, wide, runner) {
   }
 }
 
+/** The two columns of a lane: the repository it is, and the project it has. */
+const LANE_REPO = 11;
+const LANE_NAME = 22;
+
 /**
- * What is in production, in one line under the runner's day: the sha mc last
- * deployed, how long ago, and who typed it.
+ * One lane: the repository, then the project the runner has in flight there.
+ *
+ * The repository leads because it is what the lane *is* — there is one per
+ * repository and no other way to tell two of them apart. The pid used to sit at
+ * the end of the row and was the runner's own: `current-memoro.json` and
+ * `current-memoro-cli.json` both carry `"pid": 11480` because both lanes are
+ * that one process, so the same number was drawn on every row and killed
+ * nothing. It stays in `mc --json` and in `mc status`, where a number is a
+ * thing to use rather than a thing to read.
+ */
+function laneLine(c, wide, lane) {
+  const repo = c(pad(clip(lane.repo || 'unplaced', LANE_REPO - 1), LANE_REPO), 'grey');
+  const s = lane.step;
+  if (!s) return `  ${c(MARK.quiet, 'grey')} ${repo} ${c('nothing in flight', 'grey')}`;
+  const budget = s.budget_seconds == null ? '' : ` of ${duration(s.budget_seconds)}`;
+  const meta = paint(c, between([
+    { text: s.kind, styles: kindTone(s.kind) },
+    { text: [s.tool, s.model].filter(Boolean).join(' '), styles: ['grey'] },
+    {
+      text: `${duration(s.elapsed_seconds)}${budget}${s.over_budget ? ' — over budget' : ''}`,
+      styles: elapsedTone(s),
+    },
+  ], ' · '), wide - 6 - LANE_REPO - LANE_NAME);
+  return `  ${c(MARK.running, 'green')} ${repo} ${c(pad(clip(s.name, LANE_NAME - 1), LANE_NAME), 'bold')} ${meta}`
+    .replace(/[ ]+$/u, '');
+}
+
+/**
+ * What is in production, in one line under the runner's day — and what is wrong
+ * with it first.
  *
  * The mismatch is the reason the line is worth its row. What mc shipped and
  * what `/api/version` answers should be the same sha; when they are not,
  * something happened outside the record — a deploy made another way, a deploy
  * that did not take — and no machine here can say which of the two to believe.
  * That is the page's yellow exactly: it waits on a person.
+ *
+ * So what is wrong leads, and the settled fact follows it. The width is spent
+ * left to right, and it was being spent on the holder's hostname first: on
+ * 2026-09-06 a failed deploy's own `stopped_at` — `Deploy source preflight`,
+ * the one word on the row that says what to go and look at — was clipped off
+ * the end while `by martin@laptop` sat in the middle of the line. The holder is
+ * bookkeeping; it is in `mc --json` and in `mc status`, and it is not here.
  *
  * Absent when neither source knows anything, which is the state before the
  * first `mc deploy` and before the helper has ever collected.
@@ -277,37 +305,54 @@ function productionLine(lines, c, wide, production) {
   if (!production) return;
   const live = production.live;
   const liveAge = live ? ` (${ageWords(live.age_seconds)} old)` : '';
+  const room = wide - 2;
   const parts = [];
-  if (production.sha) {
-    parts.push({ text: `production ${production.short}` });
-    parts.push({
-      text: `${production.build ? ` build ${production.build}` : ''} · deployed ${ageWords(production.age_seconds)} ago`
-        + `${production.holder ? ` by ${production.holder}` : ''}`,
-      styles: ['grey'],
-    });
-  } else {
-    // Nothing mc deployed, but production answers something: say what it
-    // answers and where that came from, rather than nothing at all.
-    parts.push({ text: `production ${live.short}` });
-    parts.push({ text: ` · /api/version${liveAge} — mc has deployed nothing`, styles: ['grey'] });
-  }
-  if (production.differs) {
-    parts.push({ text: ` · /api/version says ${live.short}${liveAge}`, styles: ['yellow', 'bold'] });
-  }
+  // Each part carries its own leading separator, so `fitting` can drop the tail
+  // without leaving one dangling.
+  const sep = () => (parts.length ? ' · ' : '');
+  // An attempt first of all: a deploy that failed is an event with a place to
+  // go and look, and `stopped_at` is that place. A mismatch is a state, and
+  // survives being read a line later.
   const running = production.running;
   if (running) {
     parts.push({
-      text: ` · deploying ${running.short} since ${ageWords(running.age_seconds)}${running.late ? ' — no end recorded' : ''}`,
+      text: `${sep()}deploying ${running.short} since ${ageWords(running.age_seconds)}${running.late ? ' — no end recorded' : ''}`,
       styles: running.late ? ['yellow', 'bold'] : ['green'],
     });
   } else if (production.failed) {
     parts.push({
-      text: ` · a deploy failed ${ageWords(production.failed.age_seconds)} ago`
+      text: `${sep()}a deploy failed ${ageWords(production.failed.age_seconds)} ago`
         + `${production.failed.stopped_at ? ` at ${production.failed.stopped_at}` : ''}`,
       styles: ['yellow'],
     });
   }
-  lines.push(`  ${paint(c, parts, wide - 2)}`);
+  if (production.differs) {
+    // Both readings, in one statement: the page cannot say which to believe, so
+    // it says what each of them is. How old the reading is comes after them —
+    // it weighs the answer, and a narrow terminal can lose it and still have
+    // been told.
+    parts.push({
+      text: `${sep()}production answers ${live.short}, mc deployed ${production.short}`,
+      styles: ['yellow', 'bold'],
+    });
+    parts.push({ text: ` · /api/version ${ageWords(live.age_seconds)} old`, styles: ['grey'] });
+  }
+  if (production.sha && !production.differs) {
+    parts.push({ text: `${sep()}production ${production.short}` });
+  } else if (!production.sha) {
+    // Nothing mc deployed, but production answers something: say what it
+    // answers and where that came from, rather than nothing at all.
+    parts.push({ text: `${sep()}production ${live.short}` });
+    parts.push({ text: ` · /api/version${liveAge} — mc has deployed nothing`, styles: ['grey'] });
+  }
+  if (production.sha) {
+    parts.push({ text: `${sep()}deployed ${ageWords(production.age_seconds)} ago`, styles: ['grey'] });
+    if (production.build) parts.push({ text: ` · build ${production.build}`, styles: ['grey'] });
+  }
+  // The lead is clipped rather than dropped: `fitting` keeps whole parts, and a
+  // part too long for a 60-column terminal would take the whole line with it.
+  if (parts[0]) parts[0] = { ...parts[0], text: clip(one(parts[0].text), room) };
+  lines.push(`  ${paint(c, fitting(parts, room), room)}`);
 }
 
 /** Past this, the age is the thing on the row worth looking at. */
@@ -371,13 +416,23 @@ function workLines(lines, c, wide, sessions, unplanned) {
   // questions — where the work stands, and which directories are left over —
   // and the second is this one's: a workarea with nothing to explain it is
   // work in exactly the sense WORK means, and often the same folder somebody
-  // has a session open in. Nothing removes them (close-workarea.js), which is
-  // why they are counted where somebody looks; `mc run` writes the whole list,
-  // with whether each branch has landed, to `~/mc/runner/unplanned-workareas.md`.
+  // has a session open in.
+  //
+  // One line, not one row each. Twelve of them were drawn every time, and the
+  // twelve rows never changed: nothing removes such a folder (close-workarea.js)
+  // and no page can decide whether one should go. The count is on the heading
+  // above, the numbers still open them, and `mc run` writes the whole list —
+  // with the one fact the page could not have, whether the branch has landed —
+  // to `~/mc/runner/unplanned-workareas.md` once a round. It is raised at every
+  // brief besides.
   if (!folders.count) return;
-  if (others.length) lines.push('');
-  for (const area of folders.shown) lines.push(orphanLine(c, wide, area));
-  if (folders.more) say(lines, c, wide, 7, `… ${folders.more} more — ~/mc/runner/unplanned-workareas.md has them all`);
+  const room = wide - 7;
+  const numbers = numberRanges((folders.shown || []).map((area) => area.number));
+  lines.push(`       ${paint(c, fitting([
+    { text: numbers, styles: ['grey'] },
+    { text: `${numbers ? '  ·  ' : ''}~/mc/runner/unplanned-workareas.md`, styles: ['grey'] },
+    { text: '  has them all', styles: ['grey'] },
+  ], room), room)}`);
 }
 
 /** How the clock reads: plain, then yellow near the budget, then red past it. */
@@ -535,6 +590,9 @@ function staleLine(lines, c, wide, stale) {
   if (stale.more) lines.push(`       ${paint(c, [{ text: `· … ${stale.more} more`, styles: ['yellow'] }], wide - 7)}`);
 }
 
+/** How much of a `!` line the message must keep for the fingerprint to stay. */
+const MESSAGE_SHARE = 0.6;
+
 /**
  * INTAKE — the helper's block: one row per repository that has a digest, and
  * how many proposals nobody has queued or dropped.
@@ -573,8 +631,22 @@ function intakeLines(lines, c, wide, intake) {
       { text: `${repo.date}${age}`, styles: repo.age_seconds == null ? ['grey'] : (fresh ? ['green'] : ['yellow']) },
       { text: errors, styles: !repo.first && repo.new_errors ? ['red'] : ['grey'] },
     ], ' · '), wide - 7)}`);
+    // The message first. The digest writes the fingerprint first — `` `abc` — 41×
+    // 500 — <message>` `` — and a `!` line drawn in that order spends the row on
+    // a hash nobody reads and a count that means nothing until the message has
+    // been read; at 100 columns the clip was taking exactly the half that makes
+    // somebody look. The fingerprint is what you grep the digest for once you
+    // have decided to, so it comes after, and gives way to the width first.
     for (const line of repo.loud_lines || []) {
-      lines.push(`  ${c('  !', 'red')}  ${c(clip(one(line), wide - 7), 'bold')}`);
+      const room = wide - 7;
+      const tail = [line.count, line.fingerprint && `\`${line.fingerprint}\``].filter(Boolean).join(' ');
+      const behind = tail ? ` — ${tail}` : '';
+      // The fingerprint is how a person looks the error up once they have
+      // decided to, so it stays while the message still has most of the row. On
+      // a narrow terminal it goes altogether rather than take half the line.
+      const keep = Boolean(behind) && room - behind.length >= Math.round(room * MESSAGE_SHARE);
+      const message = { text: clip(one(line.message), keep ? room - behind.length : room), styles: ['bold'] };
+      lines.push(`  ${c('  !', 'red')}  ${paint(c, keep ? [message, { text: behind, styles: ['grey'] }] : [message], room)}`);
     }
     if (repo.more_loud) say(lines, c, wide, 7, `… ${repo.more_loud} more above the threshold`);
   }
@@ -651,24 +723,6 @@ function projectLine(c, wide, project) {
       { text: project.last ? project.last.kind : '', styles: kindTone(project.last?.kind) },
     ]);
   return row(c, wide, left, project.next || '', right);
-}
-
-/**
- * One row for a workarea that no project explains. Grey through and through:
- * the missing project is the whole content of the row, and nothing in it is
- * state. The middle carries what would be lost by removing it, because that is
- * the only question such a folder poses.
- */
-function orphanLine(c, wide, area) {
-  const column = projectColumns(wide);
-  const mark = area.live ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
-  const left = `  ${c(String(area.number).padStart(3), 'grey')} ${mark} `
-    + `${c(pad(clip(area.name, column.name), column.name), 'grey')} `
-    + `${c(pad(clip(area.repo || '—', column.repo || column.status), column.repo || column.status), 'grey')}`;
-  const parts = [];
-  if (area.uncommitted) parts.push(`${area.uncommitted} uncommitted`);
-  if (area.last_commit) parts.push(`last commit ${area.last_commit}`);
-  return row(c, wide, left, parts.join(' · ') || 'no project on main', null, ['grey']);
 }
 
 /**
@@ -901,26 +955,26 @@ export function renderPageLines(data, {
   lines.push('');
 
   const sessions = data.sessions || { desks: {}, others: [] };
+  // The order is one rule, kept by the whole page: **what does not move sits
+  // above what does.** The live loop rewrites only rows still on the screen
+  // (page-frame.js), so a row that changes has to be near the prompt or it
+  // scrolls into history and stands there with its old text (Martin,
+  // 2026-09-03: "Tid för runner ligger kvar"). PROGRAMMES, INTAKE and WORK are
+  // the page as a listing — a project's status changes when a round lands, and
+  // not between two frames. NEXT changes every round, RUNNER changes every
+  // frame, and the two desks change while somebody is sitting at them.
+  programmesLines(lines, c, wide, data.programmes, expand);
+  lines.push('');
+  intakeLines(lines, c, wide, data.intake);
+  lines.push('');
+  workLines(lines, c, wide, sessions, data.programmes?.unplanned);
+  lines.push('');
   nextLines(lines, c, wide, data.next);
-  // PROGRAMMES' rollup, under NEXT: the section below counts the stopped
+  // PROGRAMMES' rollup, under NEXT: the section above counts the stopped
   // projects and this is the line that says what would move them, drawn where
   // somebody asking what to do next is already looking.
   blockedLines(lines, c, wide, data.programmes?.blocked);
   lines.push('');
-  intakeLines(lines, c, wide, data.intake);
-  lines.push('');
-  programmesLines(lines, c, wide, data.programmes, expand);
-  lines.push('');
-  workLines(lines, c, wide, sessions, data.programmes?.unplanned);
-  lines.push('');
-  // The machine last, nearest the prompt. RUNNER and the two desks are the
-  // rows that change while the page is left open — a step's minutes, a
-  // session's age — and the live loop rewrites only rows still on the
-  // screen (page-frame.js). At the top, under a hundred rows of projects,
-  // they had scrolled into history before the prompt was printed and never
-  // changed again (Martin, 2026-09-03: "Tid för runner ligger kvar"). The
-  // listing above is the overview and stays whole; what moves sits where
-  // the eye already is.
   runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
   lines.push('');
   deskLine(lines, c, wide, 'HELPER', sessions.desks?.helper, 'mc helper');

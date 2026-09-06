@@ -59,9 +59,11 @@ describe('bare mc', () => {
       for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'NEXT', 'INTAKE', 'PROGRAMMES', 'WORK']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
-      // The numbers the menu opens, on the rows the menu opens them from.
-      assert.match(result.stdout, /\balpha\b/u);
-      assert.match(result.stdout, /\bbeta\b/u);
+      // The two workareas nothing explains are one line in WORK — the numbers
+      // the menu still opens them by, and the file that names them. Twelve rows
+      // that never change were twelve rows; their names are in `mc --json`.
+      assert.match(result.stdout, /^ +WORK {2}2 workareas with no project\b/mu);
+      assert.match(result.stdout, /^ +1–2 {2}· {2}~\/mc\/runner\/unplanned-workareas\.md/mu);
     } finally { fx.cleanup(); }
   });
 
