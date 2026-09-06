@@ -2568,10 +2568,11 @@ const turns = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promi
  * the test lets it go. `peak` is the most that were ever in flight at once,
  * which is the number both of these tests are about.
  */
-function laneRace({ total }) {
+function laneRace({ total, openPrs = {} }) {
   const f = fixture({
     plans: { memoro: { a: ready, b: ready }, 'memoro-cli': { c: ready, d: ready } },
     session: okSession(),
+    openPrs,
   });
   const inner = f.deps.session;
   const state = { starts: [], live: 0, peak: 0 };
@@ -2751,6 +2752,202 @@ test('a project already in flight in one lane is skipped by another', async () =
   assert.equal(f.calls.sessions.length, 1, 'one session, not two');
   const third = await runner.runStep('a', world, { lane: 1 });
   assert.notEqual(third, 'skipped', 'the claim is released when the step is over');
+});
+
+/* ------------------------------------------------------- the merge lane */
+
+/**
+ * `merges.json` as a refused `mc merge` leaves it. `since` is before the
+ * fixture's clock, so a round's `gh pr list` is entitled to judge it — an
+ * entry queued after the list was read is a case of its own, below.
+ */
+const queueFile = (entries) => JSON.stringify(entries.map((entry) => ({
+  repo: 'memoro-cli', branch: null, reason: 'the gate is busy', stopped_at: 'busy', since: '2026-08-29T09:00:00Z', holder: 'martin', ...entry,
+})), null, 2);
+
+const queueOf = (f) => JSON.parse(f.files['/w/runner/merges.json'] || '[]');
+
+/**
+ * The requirement the whole project is for: a merge does not wait for a step
+ * lane. Four lane loops under a total of 2, every session blocked, so no step
+ * lane can start or finish anything — and the queued pull request lands
+ * anyway, between two steps that are still running.
+ */
+test('the merge lane lands a queued pull request while every step lane is busy', async () => {
+  const r = laneRace({ total: 2, openPrs: { 'memoro-cli': [{ number: 671, headRefName: 'merge-queue', baseRefName: 'main' }] } });
+  r.f.files['/w/runner/merges.json'] = queueFile([{ pr: 671, branch: 'merge-queue' }]);
+  const run = runLoop({ rounds: 0, deps: r.f.deps });
+  await turns();
+  assert.equal(r.state.peak, 2, `the total was still the ceiling on steps: ${r.state.starts.join(', ')}`);
+  assert.deepEqual(
+    r.f.calls.rounds.map((call) => [call.repoPath, call.pr]),
+    [['/home/memoro-cli', 671]],
+    'the lane landed it through mc merge\'s own round, and took no slot to do it',
+  );
+  assert.deepEqual(queueOf(r.f), [], 'and it is off the queue');
+  assert.equal(r.state.live, 2, 'both steps were still in flight while it landed');
+  r.stop();
+  r.release();
+  assert.equal(await run, 0);
+  const log = r.f.files['/w/runner/log/runner.log'];
+  assert.match(log, /merge lane: landing memoro-cli #671 \(queued 2026-08-29T09:00:00Z — the gate is busy\)/u);
+  assert.match(log, /merged #671 into main through the gate/u);
+  assert.doesNotMatch(log, /waiting for a lane[\s\S]*merge lane: landing/u, 'the lane never queued behind a step');
+});
+
+/**
+ * A queued pull request the gate refuses is `held.json`'s, at `repairs: 0` —
+ * the same entry a step's own pull request would get, so the repair rule and
+ * the page's *held before merge* row need to know nothing about where it came
+ * from. And it leaves the queue: one pull request is in one file.
+ *
+ * The oldest entry is the one taken, and the name in the line is the project
+ * whose workarea stands on the branch — `alpha` for `alpha-2`, which is the
+ * one rule mc has for reading a branch as a project.
+ */
+test('the merge lane: a queued pull request that goes red is held with repairs: 0 and leaves the queue', async () => {
+  const f = fixture({
+    areas: { alpha: { repo: 'memoro-cli' } },
+    rounds: { 42: { ok: false, merged: false, stopped_at: 'red', reason: '3 red: a.test.js' } },
+    session: okSession(),
+  });
+  f.files['/w/runner/merges.json'] = queueFile([
+    { pr: 9, since: '2026-09-06T11:00:00Z' },
+    { pr: 42, branch: 'alpha-2', since: '2026-09-06T08:00:00Z', reason: 'the gate is red' },
+  ]);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.mergeQueued(), 'open,gate-red');
+  assert.deepEqual(f.calls.rounds.map((call) => call.pr), [42], 'the oldest entry is the one taken');
+  assert.deepEqual(f.calls.rounds.map((call) => call.holder), [{ name: 'alpha', kind: 'work-area' }]);
+  const [entry, ...rest] = parseHeld(f.files['/w/runner/held.json']);
+  assert.equal(rest.length, 0);
+  assert.deepEqual(
+    [entry.project, entry.repo, entry.pr, entry.branch, entry.repairs, entry.note],
+    ['alpha', 'memoro-cli', 42, 'alpha-2', 0, 'open,gate-red'],
+  );
+  assert.deepEqual(queueOf(f).map((item) => item.pr), [9], 'it is held now, not queued; the other entry stays');
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: #42 left open — 3 red: a\.test\.js/u);
+});
+
+/** A queued entry for a repository this machine does not have goes, rather than being read for ever. */
+test('the merge lane drops a queued pull request whose repository is not on this machine', async () => {
+  const f = fixture({ session: okSession() });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 5, repo: 'not-a-repo' }]);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.mergeQueued(), 'no-repo');
+  assert.deepEqual(queueOf(f), []);
+  assert.deepEqual(f.calls.rounds, [], 'nothing was landed');
+});
+
+/** Nothing queued is the ordinary case, and it costs a read and no round. */
+test('the merge lane with an empty queue does nothing at all', async () => {
+  const f = fixture({ session: okSession() });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.mergeQueued(), null);
+  assert.equal(runner.mergeBusy(), false);
+  assert.deepEqual(f.calls.rounds, []);
+});
+
+/** STOP ends the merge lane like every other lane — the round it is in first. */
+test('runLoop: the merge lane ends the run on STOP', async () => {
+  const f = fixture({
+    plans: { memoro: {}, 'memoro-cli': {} },
+    openPrs: { 'memoro-cli': [{ number: 671, headRefName: 'x', baseRefName: 'main' }] },
+    session: okSession(),
+  });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 671 }]);
+  const inner = f.deps.mergeRound;
+  f.deps.mergeRound = async (options) => { f.files['/w/runner/STOP'] = ''; return inner(options); };
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.deepEqual(queueOf(f), [], 'the round it was in finished, and the entry left');
+  assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP/u);
+});
+
+/**
+ * UPDATE stops the lane taking anything new, and the queue keeps it for the
+ * runner that comes back — a merge lane that landed one more pull request on
+ * code the update exists to replace is the failure `askForUpdate` is for.
+ */
+test('runLoop: an UPDATE leaves the queue alone and hands over', async () => {
+  const f = fixture({ plans: { memoro: {}, 'memoro-cli': {} }, session: okSession() });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 671 }]);
+  f.files['/w/runner/UPDATE'] = '';
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  const handovers = [];
+  f.deps.handOver = async () => { handovers.push(true); return { ok: true, pid: 9001 }; };
+  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(handovers.length, 1, 'the update handed over');
+  assert.deepEqual(f.calls.rounds, [], 'the lane started no round under a pending UPDATE');
+  assert.deepEqual(queueOf(f).map((item) => item.pr), [671], 'the entry is the next runner\'s');
+});
+
+/**
+ * A landing that changed mc's own code asks for the update whether a step
+ * brought it in or a person did — #671 on 2026-09-06 was merged by hand and
+ * the runner went on running the code it replaced.
+ */
+test('the merge lane: a queued landing that changes mc\'s own code asks for the update', async () => {
+  const f = fixture({ session: okSession(), prFiles: { 671: ['src/mc/run.js'] } });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 671 }]);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.mergeQueued(), 'merged');
+  assert.ok('/w/runner/UPDATE' in f.files, 'the runner asked to be replaced by one on the new code');
+  assert.deepEqual(queueOf(f), []);
+});
+
+/**
+ * The queue is reconciled where `held.json` is, against the same `gh pr list`
+ * the round has already paid for: a queued pull request somebody merged or
+ * closed by hand leaves, and a repository GitHub could not be asked for is
+ * unknown rather than empty.
+ */
+test('a queued pull request that is no longer open leaves the queue with the round', () => {
+  const f = fixture({ openPrs: { 'memoro-cli': [{ number: 9, headRefName: 'x', baseRefName: 'main' }] } });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 9 }, { pr: 42 }]);
+  createRunner({ deps: f.deps }).queue();
+  assert.deepEqual(queueOf(f).map((item) => item.pr), [9], '#42 is not open any more');
+  assert.match(f.files['/w/runner/log/runner.log'], /merge lane: memoro-cli #42 is no longer open — no longer queued for merge/u);
+});
+
+test('a queue entry survives a repository GitHub could not be asked about', () => {
+  const f = fixture({ prsFail: ['memoro-cli'] });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 42 }]);
+  createRunner({ deps: f.deps }).queue();
+  assert.deepEqual(queueOf(f).map((item) => item.pr), [42], 'unknown is not empty');
+});
+
+/**
+ * The one difference between the two files. `mc merge` writes the queue from
+ * another process, so an entry can arrive between the round's `gh pr list` and
+ * the reconciliation of it — and a list taken before the entry existed is no
+ * evidence that its pull request is closed. Losing it there would lose exactly
+ * the refusal this project exists to keep.
+ */
+test('a pull request queued after the round read GitHub is not judged by that reading', () => {
+  const f = fixture({ openPrs: { 'memoro-cli': [] } });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 42, since: '2026-08-29T10:00:01Z' }]);
+  createRunner({ deps: f.deps }).queue();
+  assert.deepEqual(queueOf(f).map((item) => item.pr), [42], 'a second later than the list, and kept');
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 42, since: '2026-08-29T09:59:59Z' }]);
+  createRunner({ deps: f.deps }).queue();
+  assert.deepEqual(queueOf(f), [], 'a second earlier, and the list is entitled to say it is gone');
+});
+
+/**
+ * A step lane's own landing answers a queued pull request too: the ordinary
+ * case is a hand `mc merge` refused *because* the project's lane was landing
+ * the same pull request at that moment.
+ */
+test('a step lane\'s landing takes the same pull request off the queue', async () => {
+  const f = fixture({ areas: { alpha: { repo: 'memoro' } }, session: okSession() });
+  f.files['/w/runner/merges.json'] = queueFile([{ pr: 77, repo: 'memoro' }, { pr: 78, repo: 'memoro' }]);
+  const runner = createRunner({ deps: f.deps });
+  const repo = runner.repos.find((item) => item.name === 'memoro');
+  const landed = await runner.landProject('/w/alpha/memoro', repo, 'alpha', [{ number: 77, headRefName: 'alpha', baseRefName: 'main' }]);
+  assert.equal(landed.note, 'merged');
+  assert.deepEqual(queueOf(f).map((item) => item.pr), [78], 'only the one that landed left');
+  assert.match(f.files['/w/runner/log/runner.log'], /merge lane: #77 is off the queue — merged/u);
 });
 
 /* ------------------------------------------- the round and the reading agree */
