@@ -34,11 +34,7 @@ const REPOS = [
 ];
 
 describe('the plan role', () => {
-  // Frontmatter and nothing else. The role used to carry an overlay that told
-  // the session what to deliver and how to land it; none of that is knowable
-  // when the session opens, so what a planning session is told is the first
-  // prompt and only the first prompt.
-  it('is the model and the tools, with no prose behind it', () => {
+  it('is the model and the tools, and a body of its own', () => {
     const role = readCanonRole('plan');
     assert.equal(role.name, 'plan');
     // `fable`, not `opus` (Martin, 2026-09-04). mc passes `--model` through
@@ -46,7 +42,53 @@ describe('the plan role', () => {
     // fable` was run and resolved to `claude-fable-5-1`.
     assert.equal(role.model, 'fable');
     assert.deepEqual(role.tools, ['claude', 'codex']);
-    assert.equal(role.overlay, null);
+    assert.ok(role.overlay, 'the plan role has no overlay body');
+  });
+
+  /**
+   * What the body is for, and the line it must not cross.
+   *
+   * The role had none for months, so an `mc plan` session was told its model,
+   * `_common.md` and the first prompt — nothing about planning at all. What it
+   * says now is only what is already settled elsewhere: the programme is the
+   * unit, a `plan-review` park is this session's, and a project the brief has
+   * decided is not. It still predicts nothing about *this* programme's
+   * deliverable, which is the rule the prompt is held to below.
+   */
+  it('says what a planning session is for, and what is not its work', () => {
+    const { overlay } = readCanonRole('plan');
+    assert.match(overlay, /programme is the unit, not a project/u);
+    assert.match(overlay, /`blocked_by:\s*plan-review`/u);
+    assert.match(overlay, /not\s+yours\s+is\s+a\s+project\s+the\s+brief\s+has\s+already\s+decided/u);
+    assert.match(overlay, /not\s+a\s+workarea/u);
+  });
+
+  // The plan-writing rules are not restated in the role file: they are the
+  // passage `canon/roles/brief.md` carries too, pulled in at assembly.
+  it('carries the plan-writing rules by reference, not by copy', () => {
+    const { overlay } = readCanonRole('plan');
+    assert.match(overlay, /^@include _plan-writing\.md$/mu);
+    assert.doesNotMatch(overlay, /readPlanText/u);
+    const told = instructionsFor('claude-code', 'PROFILE', overlay);
+    assert.match(told, /readPlanText/u);
+    assert.doesNotMatch(told, /@include/u);
+  });
+
+  // A body that is missing is a session told nothing, so the verb refuses
+  // rather than launching — the same refusal `mc brief` and `mc worker` make.
+  it('is refused when the install has no body for it', async () => {
+    const stdout = sink();
+    const stderr = sink();
+    const code = await run(['msr-core'], {
+      stdout,
+      stderr,
+      repos: REPOS,
+      role: () => ({ name: 'plan', model: 'fable', tools: ['claude'], overlay: null }),
+      ensure: () => { throw new Error('must not reach the area'); },
+      open: () => { throw new Error('must not launch'); },
+    });
+    assert.equal(code, 1);
+    assert.match(stderr.out.text, /canon\/roles\/plan\.md with an overlay body/u);
   });
 });
 
@@ -128,7 +170,7 @@ describe('the prompt', () => {
     assert.match(launch.prompt, /docs\/project\/README\.md/u);
     assert.match(launch.prompt, /docs\/project\/msr-core\//u);
     assert.equal(launch.model, 'fable');
-    assert.equal(launch.overlay, null);
+    assert.equal(launch.overlay, readCanonRole('plan').overlay);
   });
 
   // The assertion that keeps this prompt from growing back. None of these is
@@ -136,52 +178,48 @@ describe('the prompt', () => {
   // what they are called, whether a plan comes out of it at all, or by what
   // route it reaches main. A prompt that answers them in advance is guessing.
   //
-  // It is asserted on what this function composes, with the shared text taken
-  // out. The rules every role session is told — `canon/roles/_common.md` —
-  // reach a planning session through here, because a role with no overlay
-  // cannot inherit them; they say what any session does with a loose thread
-  // and that the route to main is read rather than asked, and they name `mc
-  // merge` in saying so. That is a rule about conduct, not a prediction about
-  // this programme, and the guard below is for the prediction.
+  // Asserted on the prompt whole now. It used to have `canon/roles/_common.md`
+  // pasted into it — the only way a role with no overlay could inherit the
+  // rules every session gets — and that had to be subtracted before the guard
+  // could look. The role has a body since #656, so the shared text arrives
+  // through `instructionsFor` like everyone else's and this is the prompt and
+  // nothing but.
   it('predicts nothing about the deliverable or how it lands', () => {
     const { prompt } = planLaunch({
       programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
     });
-    const own = prompt.replace(sharedRoleText(), '');
-    assert.notEqual(own, prompt, 'the shared text should be in the prompt');
+    assert.ok(!prompt.includes(sharedRoleText()), 'the shared text is the overlay\'s to carry now');
     for (const guess of ['PLAN.json', '<project>', 'PR', 'pull request', 'mc merge', 'push', 'programme document', 'Then stop']) {
-      assert.ok(!own.includes(guess), `the prompt should not predict "${guess}": ${own}`);
+      assert.ok(!prompt.includes(guess), `the prompt should not predict "${guess}": ${prompt}`);
     }
   });
 
-  // A planning session is the one session that cannot be told this by its role
-  // file, and the rules are not restated here — they are read from the file
-  // they are written in.
-  it('carries the text every role session shares', () => {
-    const { prompt } = planLaunch({
+  // The rules every role session shares reach this one the way they reach the
+  // other seven: on the overlay, through the single door. Told twice is the
+  // failure this replaced — the prompt pasting them in *and* the role
+  // inheriting them.
+  it('leaves the shared text to the overlay, and is told it exactly once', () => {
+    const launch = planLaunch({
       programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
     });
-    assert.ok(prompt.includes(sharedRoleText()), prompt);
-    // Missing from the install, it is left out rather than faked.
-    const without = planLaunch({
-      programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'), shared: null,
-    });
-    assert.match(without.prompt, /not a workarea: nothing\n`mc run` does can reach it\.\n\nMartin is at the terminal/u);
+    const told = instructionsFor('claude-code', 'PROFILE', launch.overlay);
+    const shared = sharedRoleText();
+    assert.ok(told.includes(shared), told);
+    assert.equal(told.split(shared).length - 1, 1, 'the shared text should appear once');
+    assert.ok(!launch.prompt.includes(shared), launch.prompt);
   });
 
   // The receiving end of the brief's hand-off. `plan-review` is the park every
   // plan converted to the schema carries, and it has never been a question for
   // Martin: the brief names the programme, and this is the session that reads
-  // the plan. It is a line of the prompt rather than prose in
-  // `canon/roles/plan.md` because that role file has no body and keeps none —
-  // the assertion above it is the one that says so.
+  // the plan. The role file says it in general; the prompt says it about the
+  // programme on the screen.
   it('tells the session that a plan-review park is its own', () => {
     const { prompt } = planLaunch({
       programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'),
     });
-    const own = prompt.replace(sharedRoleText(), '');
-    assert.match(own, /`blocked_by:\s*plan-review`/u);
-    assert.match(own, /waiting\s+for\s+this\s+session\s+and\s+no\s+one\s+else/u);
+    assert.match(prompt, /`blocked_by:\s*plan-review`/u);
+    assert.match(prompt, /waiting\s+for\s+this\s+session\s+and\s+no\s+one\s+else/u);
   });
 
   it('names only the checkout it actually got', () => {
@@ -215,8 +253,12 @@ describe('the launch', () => {
     const [call] = calls;
     assert.deepEqual(call.args.slice(0, 2), ['--model', 'opus']);
     assert.equal(call.args[2], '--append-system-prompt');
-    // The profile alone: there is no role overlay to ride behind it.
-    assert.equal(call.args[3], 'PROFILE');
+    // The profile, then the shared text, then the role's own body — the same
+    // assembly every other role session gets, which this one did not have
+    // until `canon/roles/plan.md` grew one.
+    assert.equal(call.args[3], instructionsFor('claude-code', 'PROFILE', launch.overlay));
+    assert.match(call.args[3], /^PROFILE\n\n---\n\n/u);
+    assert.match(call.args[3], /You are the planning session for one programme/u);
     assert.equal(call.args.at(-1), launch.prompt);
     assert.ok(!call.args.includes('--resume'));
     assert.equal(call.options.stdio, 'inherit');
@@ -230,7 +272,10 @@ describe('the launch', () => {
     const args = profileArgs('codex', instructionsFor('codex', 'PROFILE', launch.overlay));
     assert.equal(args[0], '-c');
     assert.match(args[1], /^instructions=/u);
-    assert.equal(JSON.parse(args[1].slice('instructions='.length)), 'PROFILE');
+    assert.equal(
+      JSON.parse(args[1].slice('instructions='.length)),
+      instructionsFor('claude-code', 'PROFILE', launch.overlay),
+    );
   });
 
   it('opens the programme directory itself, not one of its checkouts', async () => {

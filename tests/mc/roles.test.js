@@ -19,6 +19,7 @@ import {
   areaRole,
   areaRoleName,
   canonRolesDir,
+  expandRoleIncludes,
   instructionsFor,
   listRoles,
   markAreaRole,
@@ -222,6 +223,98 @@ describe('the text every role session shares', () => {
   it('stays out of a role\'s own overlay', () => {
     assert.doesNotMatch(readCanonRole('step').overlay, TURN_COST);
   });
+});
+
+/**
+ * A passage two roles share, written once.
+ *
+ * `_common.md` is the text *every* role session is told, and the rules for
+ * writing a `PLAN.json` are not that: the planning session and the brief write
+ * plans, the other six do not, and telling a `step` session how to write a plan
+ * it may never write is worse than telling it nothing. So the passage is its
+ * own file, and each of the two names it on a line of its own.
+ */
+describe('a passage two roles share', () => {
+  const PLAN_WRITING = '_plan-writing.md';
+  // Three sentences that define it — one from each half of the passage.
+  const DEFINING = [
+    /A plan is instructions for a headless session that has read nothing else/u,
+    /`readPlanText` prints every\nproblem at once/u,
+    /A proposal that becomes a project is deleted in the same commit/u,
+  ];
+  const read = (file) => readFileSync(join(canonRolesDir(), file), 'utf8');
+
+  it('is written in exactly one file, and neither role file holds a copy', () => {
+    for (const sentence of DEFINING) {
+      const carriers = readdirSync(canonRolesDir())
+        .filter((file) => file.endsWith('.md'))
+        .filter((file) => sentence.test(read(file)));
+      assert.deepEqual(carriers, [PLAN_WRITING], `${sentence} is not in exactly ${PLAN_WRITING}`);
+    }
+    for (const file of ['plan.md', 'brief.md']) {
+      assert.match(read(file), /^@include _plan-writing\.md$/mu, `${file} does not include the passage`);
+    }
+  });
+
+  // It is not a role, for the same reason `_common.md` is not: `listRoles`
+  // makes a role out of every `*.md` without a leading underscore.
+  it('is text and not a role, even sitting in a catalogue', () => {
+    assert.equal(parseRole(read(PLAN_WRITING)), null);
+    const { env } = catalogue({ 'worker.md': WORKER_MD, [PLAN_WRITING]: read(PLAN_WRITING) });
+    assert.deepEqual(listRoles(env).map((role) => role.name), ['worker']);
+  });
+
+  // Expanded at the one door, and not before it: `run.js` and `mc roles show`
+  // read `overlay` as the role's own words.
+  it('reaches a session through instructionsFor, and the marker does not', () => {
+    for (const name of ['plan', 'brief']) {
+      const { overlay } = readCanonRole(name);
+      assert.match(overlay, /@include/u, `${name} should carry the marker in its own words`);
+      const told = instructionsFor('claude-code', 'PROFILE', overlay);
+      assert.doesNotMatch(told, /@include/u, `${name} was told an unexpanded marker`);
+      assert.match(told, DEFINING[0], name);
+    }
+  });
+
+  it('leaves a marker nobody can resolve standing, rather than dropping the rule', () => {
+    assert.equal(expandRoleIncludes('a\n@include _nothing-here.md\nb'), 'a\n@include _nothing-here.md\nb');
+    // Only an underscored name, so a role cannot include a role.
+    assert.equal(expandRoleIncludes('@include step.md'), '@include step.md');
+    // A line of its own, not a mention inside a sentence.
+    assert.equal(expandRoleIncludes('see @include _plan-writing.md there'), 'see @include _plan-writing.md there');
+  });
+});
+
+/**
+ * The guard that stops a role shipping with nothing to say.
+ *
+ * `canon/roles/plan.md` was six lines of frontmatter and no body for months:
+ * an `mc plan <programme>` session was told its model and `_common.md`, and
+ * nothing about planning. Nothing failed, because nothing looked. This looks.
+ *
+ * A leading underscore is the convention that says "text, not a role" —
+ * `_common.md` and the passages roles include — and it is the same filter
+ * `listRoles` applies, so the two cannot drift apart.
+ */
+describe('every canon role has a body', () => {
+  const files = readdirSync(canonRolesDir()).filter((file) => file.endsWith('.md')).sort();
+  const roleFiles = files.filter((file) => !file.startsWith('_'));
+
+  it('and the files that are not roles are exactly the underscored ones', () => {
+    const shared = files.filter((file) => file.startsWith('_'));
+    assert.ok(shared.includes(SHARED_ROLE_FILE), `${SHARED_ROLE_FILE} is missing from canon/roles/`);
+    for (const file of shared) assert.equal(parseRole(readFileSync(join(canonRolesDir(), file), 'utf8')), null);
+    assert.ok(roleFiles.length >= 7, `only ${roleFiles.length} canon roles`);
+  });
+
+  for (const file of roleFiles) {
+    it(`${file} parses to a role with overlay text of its own`, () => {
+      const role = readCanonRole(file.replace(/\.md$/u, ''));
+      assert.ok(role, `${file} does not parse as a role`);
+      assert.equal(typeof role.overlay, 'string', `${file} has no overlay body`);
+      assert.ok(role.overlay.trim().length > 0, `${file} has an empty overlay body`);
+    });
+  }
 });
 
 describe('reserved names', () => {

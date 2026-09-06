@@ -144,23 +144,34 @@ Martin is at the terminal. Start by reading `docs/project/README.md` and what
 found.
 ```
 
-And nothing else. `canon/roles/plan.md` is **frontmatter only** — `model:
-opus`, `tools: claude, codex` — with no overlay behind the prompt. mc reads it
-for the defaults a launch needs and for nothing else.
+And nothing else, because nothing else is knowable when the session opens.
 
 `docs/project/README.md` is named because that is where the convention and the
 `PLAN.json` schema actually live, in the repository being planned, the same
 text in memoro and memoro-cli. Naming the file rather than restating it is what
 keeps this from becoming a second copy that drifts.
 
-The user's Coding Profile still reaches the session the way it reaches every
-other, and with no overlay that body is the profile alone
-([`mc-roles.md`](mc-roles.md)). The one thing this prompt carries that it did
-not write is `canon/roles/_common.md`, the text every role session shares:
-`planLaunch` reads it and folds it in, because a role with no overlay cannot
-inherit it through the assembler and a rule that holds for every session holds
-for this one. The prompt rides as the **last positional argument**, which is
-how both tools take opening words, and only for a new conversation.
+Behind the prompt is the Coding Profile, `canon/roles/_common.md` and
+`canon/roles/plan.md`, assembled by `instructionsFor` the way every other role
+session's instructions are ([`mc-roles.md`](mc-roles.md)). The role file was
+frontmatter and no body until #656 — the model and the tools, and nothing about
+planning — and `planLaunch` had to read `sharedRoleText()` and fold it into the
+prompt itself, because a role with no overlay inherits nothing through the
+assembler. With a body it inherits like the rest, so that fold is gone and the
+`shared` parameter with it; folding it in as well would tell the session the
+same rules twice.
+
+What the role says is what a planning session *is*: the programme as the unit,
+`~/mc/plan/<programme>/` and why it is not a workarea, the two kinds of work
+that are its own — thinking a programme through, and a step parked on
+`blocked_by: plan-review` — and the project the brief has already decided,
+which it does not take. How a plan is written is the passage it shares with
+`canon/roles/brief.md`, pulled in by `@include _plan-writing.md`. None of that
+predicts this programme's deliverable, which is what the prompt is still held
+to.
+
+The prompt rides as the **last positional argument**, which is how both tools
+take opening words, and only for a new conversation.
 
 ## Questions
 
@@ -184,17 +195,21 @@ of which starts a session:
   back;
 - the prompt does name the programme, the directory, the branch, both
   checkouts, and the two things to read;
-- the role is frontmatter, with `overlay === null`;
+- the role has a body: it says what a planning session is for and what is not
+  its work, carries the plan-writing rules by `@include` rather than by copy,
+  and a launch with no body behind the role is refused rather than started;
+- the shared text is the overlay's to carry — it is not in the prompt, and the
+  assembled instructions hold it exactly once;
 - the picker: every programme on main in either repository, a programme whose
   projects are all archived kept on the list, and the unfinished count;
 - the launch opens the **programme directory itself**, not one of its
   checkouts;
 - the claude launch, through `openInWorkArea` with a stubbed `spawn`:
-  `--model opus`, then `--append-system-prompt` whose body is the profile
-  alone, then the prompt as the final argument, no `--resume`, `stdio:
-  'inherit'`;
+  `--model opus`, then `--append-system-prompt` whose body is the profile, the
+  shared text and the role's own words, then the prompt as the final argument,
+  no `--resume`, `stdio: 'inherit'`;
 - the codex launch as argv only — `profileArgs('codex', instructionsFor(…))` is
-  `-c instructions=<json>` carrying the profile. Asserted on the arguments
+  `-c instructions=<json>` carrying the same body. Asserted on the arguments
   rather than through `openInWorkArea` because resolving a codex launch needs
   the codex binary, and a test must not depend on one;
 - no name without a terminal, a reserved name, and the retired `--repo` are
