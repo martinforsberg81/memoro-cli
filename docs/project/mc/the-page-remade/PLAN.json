@@ -119,7 +119,7 @@
         "The brand row and the NEXT heading count two different things on purpose, in two different words. The brand says `2 in flight · 11 ready · 33 blocked` from `runner.steps` and PROGRAMMES' own `statuses`, so it cannot disagree with the section under it; NEXT says `8 runnable of 44`, which is the machine reading as well as the plan (`machineState`) and is therefore smaller — the skip line under the lanes is what accounts for the difference (`skipped 36 (blocked 33, in-flight 2, dirty 1)`). Step 4's rollup line is about the same 33 and should use `blocked`, the plan's word, rather than inventing a third.",
         "The machine reading now runs for every plan the order reaches that says `ready` — 11 here, where an empty `queue.md` used to mean none — so the page asks up to 11 `git status --porcelain` it did not ask before. Measured 2026-09-06, warm, alternating: this branch 3.2 s / 3.7 s, `main`'s page 4.0 s / 4.3 s. It does not show above the noise of the read the page was already doing. Note that a `main` checkout's page rewrites `plans.json` without the shape stamp, so a page from each in turn costs one re-read each way until this lands."
       ],
-      "pr": null,
+      "pr": 663,
       "blocked_by": null
     },
     {
