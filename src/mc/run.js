@@ -110,7 +110,7 @@ import { kindFor, pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
-import { instructionsFor, readCanonRole } from './roles.js';
+import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
@@ -1464,6 +1464,17 @@ export function createRunner({
     writeJson(currentPath, {
       name, kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
       budget_minutes: settings.budgetMinutes, started: stamp(), pid, worktree,
+      // Which role text this session is actually running on. `kind` already
+      // names the role, but a name is not a revision: `mc roles check step`
+      // compares this digest with what `canon/roles/step.md` assembles to now,
+      // and an hour-long session started before an edit lands is exactly the
+      // case nobody could see (#659's goal).
+      role: roleRecord({
+        name: role.name || kind,
+        source: roleSourceOf(role) || 'canon',
+        overlay: role.overlay,
+        instructions,
+      }),
     });
     let result;
     try {

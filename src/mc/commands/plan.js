@@ -39,7 +39,7 @@ import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea } from '../work-area.js';
 import { openInWorkArea } from '../work-open.js';
 import { PLAN_HOME, planHome } from '../paths.js';
-import { readCanonRole, reservedRoleHint, reservedRoleName } from '../roles.js';
+import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
 import { scanArgs } from './flags.js';
 
@@ -116,6 +116,8 @@ export async function run(argv, deps = {}) {
     pick: 'new',
     verb: 'plan',
     areaName: planArea(programme),
+    roleName: role.name || 'plan',
+    roleSource: roleSourceOf(role),
     model: opts.model,
     overlay: launch.overlay,
     prompt: launch.prompt,

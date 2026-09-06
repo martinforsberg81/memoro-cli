@@ -22,7 +22,7 @@ import { resolveLaunch } from '../adapters/index.js';
 import { conversationModel, listConversations } from './conversations.js';
 import { log } from './logger.js';
 import { workAreaPath } from './paths.js';
-import { instructionsFor } from './roles.js';
+import { instructionsFor, roleRecord, textDigest } from './roles.js';
 import { loadProfile, profileArgs, readCached as loadProfileSync } from './portrait.js';
 import { askToolToLeave } from './work-stop.js';
 import { registerForeground } from './foreground.js';
@@ -43,6 +43,11 @@ export async function openInWorkArea({
   // nothing: this is what the verbs know and the opener does not.
   verb = null,
   areaName = null,
+  // Which role the overlay came from, and out of which catalogue. The opener
+  // is handed the text and could never say what it was; the register that
+  // outlives this launch has to (see `roleRecord`).
+  roleName = null,
+  roleSource = null,
   env = process.env,
   spawn = spawnSync,
   register = registerForeground,
@@ -88,9 +93,8 @@ export async function openInWorkArea({
     : null;
   const chosenModel = chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
-  const profile = resuming
-    ? []
-    : profileArgs(toolId, instructionsFor(toolId, await readProfile({ env }), overlay));
+  const instructions = resuming ? null : instructionsFor(toolId, await readProfile({ env }), overlay);
+  const profile = resuming ? [] : profileArgs(toolId, instructions);
   const args = resuming
     ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || []
     : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...profile, ...(prompt ? [prompt] : [])];
@@ -104,6 +108,10 @@ export async function openInWorkArea({
     resuming: chosen?.id || null,
     model: chosenModel || null,
     overlay: !resuming && Boolean(overlay),
+    // The register goes when the session does; the log is the one record of
+    // which role text this launch handed over that is still there tomorrow.
+    role: roleName || null,
+    role_digest: textDigest(instructions),
     prompt: !resuming && Boolean(prompt),
     profile: profile.length > 0,
     known_here: before.length,
@@ -121,6 +129,15 @@ export async function openInWorkArea({
   // same tool two things.
   const release = register({
     verb, area: areaName, tool: launch.shortName || toolId, model: chosenModel || null, env,
+    // A resumed conversation is handed no instructions at all — its own
+    // history holds them — so it records the role and no digests rather than
+    // a digest of today's file, which would be a claim nobody checked.
+    role: roleRecord({
+      name: roleName,
+      source: roleSource,
+      overlay: resuming ? null : overlay,
+      instructions,
+    }),
   });
   let result;
   try {

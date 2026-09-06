@@ -16,7 +16,7 @@
  */
 import { collectBrief } from '../brief-collect.js';
 import { workRoot } from '../paths.js';
-import { readCanonRole } from '../roles.js';
+import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
 
@@ -55,6 +55,11 @@ export async function run(argv, deps = {}) {
     // NOW says "mc brief" while this is up. It stands in the work root, which
     // is nobody's area, so there is no name to give it.
     verb: 'brief',
+    // What it was told it is, kept in the register the session outlives — so
+    // `mc roles check brief` can say whether the text it is running on is the
+    // one in `canon/roles/brief.md` today.
+    roleName: role.name || 'brief',
+    roleSource: roleSourceOf(role),
     model: flags.model,
     overlay: launch.overlay,
     prompt: launch.prompt,
