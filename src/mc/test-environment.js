@@ -339,6 +339,15 @@ export async function answers(server, deps = {}) {
  * and the token is in the environment. mc never stores it, never reads it out
  * of a file and never prints it: it is a production login, it belongs to the
  * shell that has it, and the whole of mc's part is passing it through.
+ *
+ * And it is built only for a server that can honour it. The token is a login
+ * to production; a loopback server has a different door — memoro's is
+ * `/dev/login?account=seeded`, which its write smoke takes when no link is
+ * set. The first full round on the two tiers (2026-09-06) handed the
+ * production link to the local fixture, and the smoke reported 404 with a
+ * question about `TEST_ACCOUNT_ENABLED` — a red about a token that had no
+ * business being there. Against loopback mc sets no link and the suite finds
+ * its own way in. A link a person exported themselves is still theirs.
  */
 export function suiteEnv({
   declaration, baseUrl, env = process.env, needsAccount = false,
@@ -347,9 +356,19 @@ export function suiteEnv({
   const account = declaration.account;
   if (!needsAccount || !account?.token_env || !account?.url_env) return next;
   if (next[account.url_env]) return next;
+  if (isLoopback(baseUrl)) return next;
   const token = String(env[account.token_env] || '').trim();
   if (token) next[account.url_env] = `${baseUrl}${account.route || '/demo/'}${token}`;
   return next;
+}
+
+/** A server on this machine: the production token means nothing to it. */
+export function isLoopback(baseUrl) {
+  try {
+    return ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 /**
