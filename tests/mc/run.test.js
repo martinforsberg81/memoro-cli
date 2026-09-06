@@ -675,7 +675,9 @@ test('a conflicting merge of origin/main goes to the step session, with the file
 
 /**
  * The plan the rule refused is the plan the session is handed — read from
- * `HEAD`, because the copy on disk is the one with the markers in it.
+ * `HEAD`, because the copy on disk is the one with the markers in it. This is
+ * the one case `fromHead` survives ruling 10 for, and the test above is the
+ * other side of that line.
  *
  * And it is judged against the plan on origin/main afterwards: the merge that
  * stopped *is* main's edits to that file, so judging the session's resolution
@@ -723,17 +725,61 @@ test('a step session resolves the plan conflict it was handed and its work is ju
 });
 
 /**
+ * What the round hands out when the conflict is not the plan: the plan on
+ * `main`, which is the copy the contract says the planning session and the
+ * runner share — and which git has already written into the worktree, because
+ * a merge that stopped on `src/a.js` merged every file it could.
+ *
+ * This is the defect ruling 10 answers. `fromHead` fired on *any* conflicting
+ * file, so a round whose only conflict was an unrelated document reported
+ * whatever the branch's last commit said: `docx-editor`, 13 rounds on
+ * 2026-09-05, blocked on a decision main had replaced the evening before.
+ */
+test('a conflict outside the plan hands out the step main says, not the one HEAD says', async () => {
+  const twoSteps = [
+    { title: 'One', status: 'done', done_when: 'x', instruction: [], comments: [], pr: 601, blocked_by: null },
+    { title: 'Two', status: 'ready', done_when: 'y', instruction: ['Do y.'], comments: [], pr: null, blocked_by: null },
+  ];
+  // HEAD is the branch's stale copy: step 2 stopped on a decision. Main
+  // re-planned it, and the merge that stopped elsewhere put main's plan on disk.
+  const stale = JSON.parse(plan({ steps: twoSteps }));
+  stale.steps[1] = { ...stale.steps[1], status: 'blocked', blocked_by: { kind: 'decision', name: 'prog-1' } };
+  const text = (value) => `${JSON.stringify(value, null, 2)}\n`;
+
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: plan({ steps: twoSteps }) } },
+    headFiles: { c: { [PLAN_AT]: text(stale) } },
+    plans: { memoro: { c: plan({ steps: twoSteps }) } },
+    conflicts: { c: ['docs/technical/a.md'] },
+    session: okSession(), gh: { c: { number: 95, title: 'Step two' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+
+  assert.equal(f.calls.sessions.length, 1, "main's plan has a ready step, so the project gets its session");
+  const [call] = f.calls.sessions;
+  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u, "main's step, not the blocked one HEAD carries");
+  assert.match(call.args[1], /conflicts in: docs\/technical\/a\.md/u, 'and the merge is still the session\'s to finish');
+  assert.ok(!f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'show' && String(c[2]).startsWith('HEAD:')), 'HEAD is not read at all here');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /blocked on decision prog-1/u);
+});
+
+/**
  * The other half of the same rule: a merge nobody is handed is a merge nobody
  * finishes, and an unmerged path is a dirty worktree — which skips the project
  * every round until a person acts. Here the plan the branch is on is blocked,
  * so there is no step to give the conflict to.
+ *
+ * The conflict is the plan itself, and since ruling 10 that is the only way
+ * this arises: main's copy is what the round reads otherwise, and a project
+ * main's plan refuses is stopped by `planRefusal` before a worktree is touched.
  */
 test('a conflict with no step to hand it to is aborted, and the files are named', async () => {
   const f = fixture({
-    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
     headFiles: { c: { [PLAN_AT]: plan({ status: 'blocked' }) } },
     plans: { memoro: { c: ready } },
-    conflicts: { c: ['src/a.js', 'src/b.js'] },
+    conflicts: { c: [PLAN_AT, 'src/a.js'] },
     session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
@@ -742,7 +788,7 @@ test('a conflict with no step to hand it to is aborted, and the files are named'
   assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
   assert.match(
     f.files['/w/runner/log/runner.log'],
-    /c: step 1 is blocked on decision prog-1 — the merge of origin\/main is aborted, still conflicting in: src\/a\.js src\/b\.js/u,
+    /c: step 1 is blocked on decision prog-1 — the merge of origin\/main is aborted, still conflicting in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u,
   );
 });
 

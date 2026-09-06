@@ -355,12 +355,21 @@ export function createRunner({
    * The plan the workarea carries. `fromHead` reads the branch's own last
    * committed copy (`git show HEAD:<path>`) instead of the file on disk.
    *
-   * That is for a worktree with a merge in progress. The file there may carry
-   * conflict markers — after the plan rule (plan-merge.js) that is only the
-   * case it refuses, two sides editing the same step, but it is exactly the
-   * case a session is then handed. HEAD is the branch's last good copy, and
-   * it is the right one: the step being handed out is the step this branch is
-   * on. Main's own edits to the plan are what the session is merging in.
+   * It is for one case and only one: a `PLAN.json` the plan's own rule refused,
+   * two sides editing the same step, whose copy on disk therefore carries
+   * conflict markers and parses as nothing. HEAD is then the last copy of that
+   * file which is a plan at all, and it is what the session is handed along
+   * with the merge it has to finish.
+   *
+   * What it is *not* for is any other conflicting file. A merge that stopped on
+   * `src/a.js` has already written main's plan into the worktree — git merges
+   * the files it can — so the file on disk is main's copy, which is the one the
+   * contract says the round and the planning session share (`docs/project/
+   * README.md`, § Who writes what). Reading HEAD there hands out a step main
+   * has replaced: measured over `runner.log` to 2026-09-05, 180 of 207
+   * conflicting rounds had no plan among their conflicts, and `docx-editor`
+   * reported a blocker from a step main had re-planned for 13 rounds running.
+   * Ruling 10 in `docs/project/mc/rulings.md`.
    */
   function planOf(worktree, name, { fromHead = false } = {}) {
     const base = join(worktree, 'docs', 'project');
@@ -1386,10 +1395,13 @@ export function createRunner({
     const sync = syncMain(worktree, name);
     if (!sync.ok && !sync.conflicts.length) return refuse(REFUSAL.sync, 'fetch/merge failed, skip');
     // What git and the plan's own rule could not resolve. It no longer makes
-    // the plan unreadable to the runner: the plan is read from HEAD and the
-    // conflict goes to the step session as something to do first.
+    // the project unreadable to the runner: the conflict goes to the step
+    // session as something to do first.
     const conflicts = sync.conflicts;
-    const plan = planOf(worktree, name, { fromHead: conflicts.length > 0 });
+    // And the plan is read from HEAD only when the plan itself is one of them
+    // — see `planOf`. Every other conflict leaves main's plan on disk already
+    // merged, and that is the copy the round hands out.
+    const plan = planOf(worktree, name, { fromHead: conflicts.some(isPlanPath) });
     // A merge nobody is handed is a merge nobody finishes, and an unmerged
     // path is a dirty worktree — which skips the project every round until a
     // person acts. So every way out of this round that is not the step

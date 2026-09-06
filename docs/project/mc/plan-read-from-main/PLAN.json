@@ -19,7 +19,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A round whose merge conflicted in a file that is not the plan hands out the step `origin/main` says, not the step the branch says.",
       "check": "A test drives a round with a conflict in one non-plan path and a plan that differs between HEAD and `origin/main`, and asserts the step chosen is main's. Failing today with the branch's step."
     },
@@ -29,7 +29,7 @@
       "check": "Read `runner.log` after a round over a genuinely conflicted workarea: the project-level line names the workarea and the files, and no line reports a blocker read out of the stale plan."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The case `fromHead` exists for still works.",
       "check": "A test with the conflict in the `PLAN.json` itself asserts the plan is read from HEAD and the step session is handed the merge, exactly as today."
     },
@@ -81,7 +81,7 @@
     },
     {
       "title": "The round reads the plan the contract says it shares",
-      "status": "ready",
+      "status": "done",
       "done_when": "The round hands out the step `origin/main` names, except in whatever case step 1's ruling preserved, and a test covers both sides of that line.",
       "instruction": [
         "Build what step 1 settled and nothing else. If the ruling was option 3, the change at `run.js:1265` is one predicate — `conflicts.some(isPlanPath)` in place of `conflicts.length > 0` — plus whatever step 1 decided about reading `origin/main` rather than the worktree file in the clean case. If it was option 1, `planOf` grows a read through `git show origin/main:<path>` and `fromHead` goes; say in the PR what a mid-merge step session is handed instead.",
@@ -91,7 +91,12 @@
         "Two tests, both driving the round rather than `planOf` alone: a conflict in a non-plan path with HEAD and main disagreeing about the plan, asserting main's step is handed out; and a conflict in the `PLAN.json` itself, asserting the behaviour step 1's ruling preserved. `tests/mc/run.test.js` already fixtures the round with injected `deps` and has conflict cases at `:928` — extend that shape.",
         "`npm test`."
       ],
-      "comments": [],
+      "comments": [
+        "Built as ruling 10 settled it: one predicate, `conflicts.some(isPlanPath)` in place of `conflicts.length > 0` at the `planOf` call, plus the docstring above `planOf` rewritten to say what is now true and why — it was a good comment that had become a wrong one, and that is how the defect survived. No `git show origin/main:` read was added: step 1's finding holds, git has already written main's plan into the worktree when the merge stopped on some other file, so the disk copy *is* main's. The clean path is untouched, so a step session's own plan edits in its worktree are as they were.",
+        "One existing test had to change shape, and the reason is a fact about the round that is not visible from `run.js` alone. `a conflict with no step to hand it to is aborted` used to put a `ready` plan on disk and a `blocked` one at HEAD with the conflict in `src/a.js` — under the fix that combination can no longer occur at all, because `planRefusal` in `runLane` (`run.js:1752`) refuses a project whose plan *on main* is blocked before a worktree, status or fetch is spent. So a blocked plan and a non-plan conflict never meet in the same round. The conflict in that test is now the `PLAN.json` itself, which since this change is the only shape in which the round reads a blocked plan while main's says `ready`, and `abandonMerge` is still what it asserts.",
+        "A consequence worth having before step 3 builds the guard: with this fix, `abandonMerge` on a *non-plan* conflict is now only reachable through the refusals that come after `chooseKind` — role missing, tool missing, STOP, quota — because every plan-shaped refusal is now taken by `planRefusal` before the merge is attempted. The workarea that cannot take main therefore leaves runner.log's `still conflicting in:` line in fewer cases than before, which strengthens rather than weakens step 3's argument that a log line is the wrong audience.",
+        "Verified: `node --test tests/mc/run.test.js` — 130 pass, 0 fail, including the new `a conflict outside the plan hands out the step main says, not the one HEAD says`. That test was run against the old predicate too (reverted by hand, run, restored) and fails there on `main's plan has a ready step, so the project gets its session`, so it covers the defect rather than the fix. Full `npm test`: 1853 tests, 1844 pass, 0 fail, 9 skipped. Criteria 2 and 4 are step 3's — nothing here was measured against a real conflicted workarea or a live runner.log."
+      ],
       "pr": null,
       "blocked_by": null
     },
