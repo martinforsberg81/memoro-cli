@@ -91,7 +91,7 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
 import {
   bumpRepairs, heldPath, holdDetails, holdPr, holdReason, holdsAfterSession, parseHeld,
-  reconcileHeld, releasePr,
+  reconcileHeld, releasePr, samePr,
 } from './held.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
@@ -108,7 +108,8 @@ import { runDocsMerge } from './docs-merge.js';
 import { clearUnmergeable, markUnmergeable, parseUnmergeable, unmergeablePath } from './unmergeable.js';
 import { runMergeRound } from './repo-merge.js';
 import { kindFor, pidAlive } from './status-collect.js';
-import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
+import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
+import { dequeue, mergesPath, parseQueue, queueOrder } from './merge-queue.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
@@ -304,6 +305,10 @@ export function createRunner({
     // not. mc's own state beside the two above, never a status in a plan —
     // see held.js.
     held: heldPath(root),
+    // Every pull request a hand `mc merge` could not land and handed to the
+    // merge lane. The same kind of state again, and the one file the lane
+    // reads to know it has work — see merge-queue.js.
+    merges: mergesPath(root),
     // Every workarea a round could not bring to origin/main. The same kind of
     // state as `held.json` and for the same reason: an aborted merge leaves
     // the worktree clean, so without this nothing outside runner.log says the
@@ -531,17 +536,65 @@ export function createRunner({
   }
 
   /**
-   * The file against what the round has just asked GitHub. A pull request
-   * somebody merged or closed by hand is not held any more, and nothing else
-   * would ever have taken it out of the file.
+   * `merges.json` — what a refused `mc merge` handed the lane, read and
+   * written with the discipline `held.json` has and for the same reason: the
+   * verb writes it from another process, the merge lane writes it from this
+   * one, so it is read, changed and written whole in one turn. The rules are
+   * pure, in merge-queue.js.
    */
-  function reconcileHold({ prs = [], repos: asked = [] }) {
+  const queuedNow = () => parseQueue(deps.read(paths.merges));
+
+  /**
+   * This pull request is not the lane's to try any more — because the lane has
+   * just had an answer about it, or because it is no longer open at all. One
+   * entry per pull request in one file is the rule: what would not land is
+   * `held.json`'s, with its one-repair count, and the queue holds only what
+   * has not been tried yet.
+   */
+  function dropQueued(repo, pr) {
+    const entries = queuedNow();
+    const kept = dequeue(entries, { repo, pr: Number(pr) });
+    if (kept.length === entries.length) return false;
+    writeJson(paths.merges, kept);
+    return true;
+  }
+
+  /**
+   * Both files against what the round has just asked GitHub. A pull request
+   * somebody merged or closed by hand is not held any more and is not queued
+   * any more, and nothing else would ever have taken it out of either file.
+   *
+   * The queue is reconciled here rather than in a second function of its own:
+   * it is the same question about the same `gh pr list` the round has already
+   * paid for, and a repository GitHub could not be asked for is unknown rather
+   * than empty in both — `reconcileHeld` is pure over `{ repo, pr }` and knows
+   * nothing about which file the entries came out of.
+   *
+   * With one difference, and it is what `since` is for. The held file is
+   * written by this process alone, so an entry in it is always older than the
+   * list; `merges.json` is written by whatever terminal ran `mc merge`, and an
+   * entry that arrived *after* the list was read is not absent from it, it is
+   * younger than it. Dropping it would throw away the one thing this project
+   * exists to keep — a refusal nobody is going to retype — for a round's worth
+   * of `gh pr list` over two repositories. So only what was queued before the
+   * list was taken is judged by it.
+   */
+  function reconcileHold({ prs = [], repos: asked = [], since = null }) {
     const entries = heldNow();
-    if (!entries.length) return;
-    const { kept, dropped } = reconcileHeld(entries, { prs, repos: asked });
+    if (entries.length) {
+      const { kept, dropped } = reconcileHeld(entries, { prs, repos: asked });
+      if (dropped.length) {
+        for (const entry of dropped) say(`held: ${entry.project} #${entry.pr} is no longer open — no longer held before merge`);
+        writeJson(paths.held, kept);
+      }
+    }
+    const queued = queuedNow();
+    if (!queued.length) return;
+    const judged = queued.filter((entry) => !since || !entry.since || entry.since <= since);
+    const { dropped } = reconcileHeld(judged, { prs, repos: asked });
     if (!dropped.length) return;
-    for (const entry of dropped) say(`held: ${entry.project} #${entry.pr} is no longer open — no longer held before merge`);
-    writeJson(paths.held, kept);
+    for (const entry of dropped) say(`merge lane: ${entry.repo} #${entry.pr} is no longer open — no longer queued for merge`);
+    writeJson(paths.merges, queued.filter((entry) => !dropped.some((gone) => samePr(gone, entry))));
   }
 
   /* ------------------------------------------- workareas that cannot merge */
@@ -642,6 +695,14 @@ export function createRunner({
       hold({ project: name, repo: repo.name, pr: Number(pr), branch, reason, note, ...holdDetails(report) });
       say(`${name}: #${pr} left open — ${reason}`);
     }
+    // And whatever the answer was, this pull request is not waiting for the
+    // merge lane any more: it landed, or it is `held.json`'s now with its
+    // one-repair rule. Written after the hold rather than before, so a crash
+    // between the two leaves the pull request in a file rather than in
+    // neither. It is here and not in the lane because a step lane's landing
+    // answers a queued pull request just as well — a hand `mc merge` that was
+    // refused on the project's own step is the ordinary case.
+    if (dropQueued(repo.name, pr)) say(`merge lane: #${pr} is off the queue — ${note}`);
     return note;
   }
 
@@ -807,6 +868,58 @@ export function createRunner({
     else say(`${name}: #${pr} left open — ${report?.reason || 'the docs merge said nothing'}`);
     return false;
   }
+
+  /* ------------------------------------------------------------ merge lane */
+
+  /**
+   * One turn of the merge lane: the oldest queued pull request, landed through
+   * the same `landPr` a step's own pull request goes through. Returns the
+   * landing note, or null when there is nothing queued.
+   *
+   * It takes no slot. `takeSlot` counts steps, this is not one — no session,
+   * no workarea, no plan — and the requirement the queue exists for is that a
+   * merge does not wait for a step lane to come free: the refusals it answers
+   * are the ones a person was retrying by hand while every lane was busy. What
+   * it does share is what every landing shares and cannot not share: this
+   * machine's one gate lock and the repository's lease, both of which `landPr`
+   * already waits for rather than gives up on (`BUSY_STOPS`, `LAND_WAIT_MS`).
+   *
+   * `name` is what the log line calls this landing. The project whose workarea
+   * stands on the entry's branch when there is one — `projectForBranch` over
+   * the workareas, the one rule for reading a branch as a project, rather than
+   * a second matcher of its own — and the branch itself when there is none, so
+   * that the line still names something a person can go and find.
+   */
+  let merging = 0;
+  async function mergeQueued() {
+    const [entry] = queueOrder(queuedNow());
+    if (!entry) return null;
+    const repo = repos.find((item) => item.name === entry.repo) || null;
+    if (!repo) {
+      // Nothing on this machine can land it, and leaving it would make the
+      // lane read the same unlandable entry every LAND_RETRY_MS for ever.
+      dropQueued(entry.repo, entry.pr);
+      say(`merge lane: #${entry.pr} is queued for ${entry.repo || 'no repository'}, which this machine does not have — dropped`);
+      return 'no-repo';
+    }
+    const name = projectForBranch(entry.branch, workareas()) || entry.branch || `#${entry.pr}`;
+    merging += 1;
+    try {
+      say(`merge lane: landing ${repo.name} #${entry.pr} (queued ${entry.since || 'at some point'} — ${entry.reason})`);
+      return await landPr(repo, name, entry.pr, { branch: entry.branch });
+    } finally {
+      merging -= 1;
+    }
+  }
+
+  /**
+   * Is the lane inside a round right now? The drain asks: an UPDATE hands the
+   * runner over when nothing is in flight anywhere, and a handover in the
+   * middle of a squash is exactly what `landPr`'s lease exists to prevent.
+   * The lane leaves no `current-<repo>.json` — it is not a step and the page's
+   * RUNNER block would draw it as one — so this is how it counts as in flight.
+   */
+  const mergeBusy = () => merging > 0;
 
   const lastLine = (r) => String(r.stderr || '').trim().split('\n').at(-1) || String(r.stdout || '').trim() || 'no reason given';
 
@@ -1682,6 +1795,9 @@ export function createRunner({
     const prs = [];
     const prsFailed = [];
     const askedRepos = [];
+    // When the list below was taken, for the one reader that needs to know a
+    // pull request could have been queued after it — `reconcileHold`.
+    const askedAt = stamp();
     for (const repo of repos) {
       if (only && repo.name !== only) continue;
       if (!deps.exists(join(repo.path, '.git'))) continue;
@@ -1701,7 +1817,7 @@ export function createRunner({
     // has just paid for it. A repository GitHub could not be asked for is
     // unknown rather than empty, so nothing of its is dropped on a bad
     // network.
-    reconcileHold({ prs, repos: askedRepos.filter((repo) => !prsFailed.includes(repo)) });
+    reconcileHold({ prs, repos: askedRepos.filter((repo) => !prsFailed.includes(repo)), since: askedAt });
     return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans, prs, prsFailed };
   }
 
@@ -1953,6 +2069,7 @@ export function createRunner({
   return {
     paths, repos, say, round, chores, runStep, runLane, splitLanes, runHelperDay, runIntakeDrain, archiveDone, queue, stopRequested,
     held: heldNow,
+    queued: queuedNow, mergeQueued, mergeBusy,
     writeUnreadable,
     updateRequested, syncMain, freshBranch, landProject, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
@@ -2075,7 +2192,11 @@ export async function runLoop({
       // UPDATE the runner wrote for itself at 09:30 was still pending two
       // hours later, running old code the whole time. Martin chose the drain
       // (A) over an immediate handover with two runners (B).
-      const quiet = () => runner.paths.currents().length === 0;
+      // Nothing in flight anywhere: no step lane in a session, and the merge
+      // lane not inside a round. The merge lane counts because a handover mid
+      // squash is what its lease exists to prevent, and it leaves no
+      // `current-<repo>.json` to be counted by.
+      const quiet = () => runner.paths.currents().length === 0 && !runner.mergeBusy();
       const lane = async (repo, index) => {
         const tag = count > 1 ? `${repo.name}#${index + 1}` : repo.name;
         let draining = false;
@@ -2095,6 +2216,32 @@ export async function runLoop({
           if (runner.stopRequested()) return { stop: true };
         }
       };
+      /**
+       * The merge lane: one loop for the whole process, beside the repository
+       * lanes and the chore loop, that takes no step and only lands what a
+       * refused `mc merge` queued.
+       *
+       * One and not one per repository: the gate is one round at a time on
+       * this machine anyway (gate-lock.js), so a second merge lane could only
+       * ever wait for the first — with the difference that it would do its
+       * waiting inside `landPr`, holding a round open for a pull request in
+       * the other repository that has nothing to do with it.
+       *
+       * STOP and UPDATE are read where every other lane reads them: at a round
+       * boundary, which for this lane is between two queued pull requests.
+       * Never inside `landPr` — a landing that is handed over halfway is the
+       * failure the lease exists to prevent — so a handover waits out the
+       * round in flight, and `quiet()` above is what makes it wait.
+       */
+      const mergeLane = async () => {
+        for (;;) {
+          if (runner.stopRequested()) return { stop: true };
+          if (runner.updateRequested()) return { update: true };
+          // Nothing queued is the ordinary case: look again in
+          // LAND_RETRY_MS, the same clock `landPr` waits on a busy gate with.
+          if (!await runner.mergeQueued()) await deps.sleep(LAND_RETRY_MS);
+        }
+      };
       const choreLoop = async () => {
         for (;;) {
           if (runner.stopRequested() || runner.updateRequested()) return {};
@@ -2103,7 +2250,7 @@ export async function runLoop({
         }
       };
       const lanes = runner.repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)));
-      const results = await Promise.all([...lanes, choreLoop()]);
+      const results = await Promise.all([...lanes, choreLoop(), mergeLane()]);
       if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
       if (results.some((r) => r.update) && await update()) return 0;
       runner.say('runner exit — the update did not hand over');
