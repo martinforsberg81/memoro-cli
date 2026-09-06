@@ -1,24 +1,33 @@
 /**
- * The page — the five sections `mc` prints, gathered from files the runner,
- * the helper and the sessions already write. No model, nothing started; the
- * only writes are the two read-through caches in page-cache.js.
+ * The page — the sections `mc` prints, gathered from files the runner, the
+ * helper and the sessions already write. No model, nothing started; the only
+ * writes are the two read-through caches in page-cache.js.
  *
- * NOW      — the steps in flight, one per lane, a pending STOP, the live
- *            tmux areas, the foreground verbs, and the day behind it.
- * NEXT     — the order `mc run` would take (`assembleQueue`), one block per
- *            lane and three deep: what each lane starts now, how much of the
- *            walk is runnable, and what is skipped, counted by reason.
- * DECISIONS— how many wait on Martin, and the first few by name.
- * INTAKE   — the helper's newest digest, what is new in it, the `!` lines
- *            themselves, and how many proposals nobody has queued or dropped.
- * PROJECTS — one numbered row per project on `origin/main`, grouped by
- *            repository and sorted repo, programme, project: the plan's
- *            status, how many of its steps are done, `next`, the open PR, and
- *            whether it has a workarea at all. The number is the one the menu
- *            opens. The workareas that no project explains come last, under a
- *            heading of their own — nothing removes them, and what they are
- *            judged by is how much is uncommitted and when they were last
- *            committed to.
+ * One key per section, and this is all of them — the header named a
+ * `DECISIONS` section for a while that `collectPage` never returned:
+ *
+ * runner     — one lane per repository whether or not it has a step, the
+ *              runner process behind them, a pending STOP, the lane files
+ *              whose process is gone, what is in production, and the day.
+ * sessions   — the two desks, the planning session of each programme, and
+ *              everything else somebody has open, oldest first.
+ * next       — the order `mc run` would take (`assembleQueue`), one block per
+ *              lane and three deep: what each lane starts now, how much of the
+ *              walk is runnable, and what is skipped, counted by reason.
+ * intake     — the helper's newest digest per repository, what is new in it,
+ *              the `!` lines split into message, fingerprint and count, and
+ *              how many proposals nobody has queued or dropped.
+ * programmes — one heading per programme with its own counts and its planning
+ *              session, and under it one numbered row per project on
+ *              `origin/main`: the plan's status, how many of its steps are
+ *              done, `next`, the open PR, whether it has a workarea, and what
+ *              holds it when it is blocked. The number is the one the menu
+ *              opens, whether or not a row is drawn for it. The workareas no
+ *              project explains are counted here too, numbered after the
+ *              projects.
+ *
+ * Plus `caches` (what the two read-through caches did) and `notes` (whatever
+ * could not be read).
  *
  * The builders are pure: each takes read data and returns the section, so the
  * tests feed them fixtures and never touch git, gh or tmux. `collectPage` is
@@ -49,7 +58,8 @@ import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { assembleQueue, queueFileNames } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
 import {
-  RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive, readCurrents,
+  REPO_NAMES, RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive,
+  readCurrents,
 } from './status-collect.js';
 
 /** How many of each list the page names rather than counts. */
@@ -86,6 +96,28 @@ export const STALE_NAMED = 3;
 export const DEPLOY_LATE_S = 60 * 60;
 
 const shortSha = (sha) => (sha ? String(sha).slice(0, 7) : null);
+
+/** The shortest sha two readings may be compared on: git's own abbreviation. */
+const SHA_MIN = 7;
+
+/**
+ * Are these two readings the same commit? Compared on the shorter of the two.
+ *
+ * `deploys.tsv` records the full 40-character sha and `/api/version` answers
+ * the 7-character one, so `!==` said *mismatch* on every deploy this machine
+ * ever made — the line was bold-yellow with `919de24` printed on both sides of
+ * it. Below git's own abbreviation nothing is compared at all: a prefix that
+ * short matches too much to mean anything, so two readings that disagree in
+ * length there are reported as they are.
+ */
+function sameCommit(a, b) {
+  const one = String(a || '').toLowerCase();
+  const two = String(b || '').toLowerCase();
+  if (!one || !two) return false;
+  const n = Math.min(one.length, two.length);
+  if (n < SHA_MIN) return one === two;
+  return one.slice(0, n) === two.slice(0, n);
+}
 
 /**
  * What is in production, from the two readings that know: the last `deployed`
@@ -136,8 +168,11 @@ export function productionSection({ deploy = null, attempt = null, live = null, 
     age_seconds: when ? age(when) : null,
     live,
     // Yellow on the page: what mc last shipped is not what production answers,
-    // and no machine here can tell which of the two is the one to believe.
-    differs: Boolean(live?.commit && deploy?.sha && live.commit !== deploy.sha),
+    // and no machine here can tell which of the two is the one to believe. On
+    // the shorter of the two, which is `/api/version`'s seven characters
+    // against `deploys.tsv`'s forty — compared whole, every deploy mc ever made
+    // was a mismatch.
+    differs: Boolean(live?.commit && deploy?.sha && !sameCommit(live.commit, deploy.sha)),
     running,
     failed: since?.outcome === 'failed' ? attemptState(since) : null,
   };
@@ -145,7 +180,7 @@ export function productionSection({ deploy = null, attempt = null, live = null, 
 
 export function runnerSection({
   runner = null, currents = [], stop = false, rows = [],
-  deploy = null, attempt = null, live = null,
+  deploy = null, attempt = null, live = null, repos = REPO_NAMES,
   now = new Date(), alive = pidAlive,
 } = {}) {
   const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, now, alive });
@@ -157,6 +192,7 @@ export function runnerSection({
   }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   return {
     ...base,
+    lanes: lanesOfRunner(base.steps, repos),
     process,
     // What is in production, under the day it took to get there.
     production: productionSection({ deploy, attempt, live, now }),
@@ -168,6 +204,32 @@ export function runnerSection({
       prices_dated: PRICES_DATED,
     },
   };
+}
+
+/**
+ * The lanes, one per repository, whether or not that lane has a step.
+ *
+ * A lane is what `mc run` drives — one per repository, at the same time
+ * (`splitLanes`, run.js) — and it exists between steps as much as during one.
+ * The section drew a row only where there was a step, so a lane between steps
+ * and a lane that had died looked exactly alike: nothing.
+ *
+ * The repositories are the ones mc knows, plus any a lane file names that they
+ * do not: a `current-<repo>.json` is the runner saying it is in that
+ * repository, and the page believes it whether or not there is a checkout of it
+ * here.
+ *
+ * The step is the same object `steps` carries, not a copy — the two cannot
+ * disagree about a lane, because there is one of it.
+ */
+function lanesOfRunner(steps = [], repos = []) {
+  const names = [...new Set([...repos, ...steps.map((step) => step.repo)].filter(Boolean))].sort();
+  return [
+    ...names.map((repo) => ({ repo, step: steps.find((step) => step.repo === repo) || null })),
+    // A `current.json` from before the lanes had repositories: it is a step in
+    // flight and belongs on the page, in a lane with no name.
+    ...steps.filter((step) => !step.repo).map((step) => ({ repo: null, step })),
+  ];
 }
 
 /* ---------------------------------------------------------------- SESSIONS */
@@ -415,11 +477,33 @@ const NEW_SINCE = /^##\s+New since the last digest\b/iu;
 export const INTAKE_LOUD_NAMED = 3;
 
 /**
+ * The three parts of a digest bullet, in the order the digest writes them:
+ * `` `<fingerprint>` — 41× 500 — <message> ``.
+ *
+ * They are split apart here so the page can put the **message** first. The
+ * bullet's own order buries it behind a hash nobody reads and a count that only
+ * means something once the message has been read, and at 100 columns the clip
+ * was eating exactly the half that makes somebody look.
+ *
+ * A bullet that is not that shape — a condition that has just started failing
+ * has no fingerprint and no count — is all message, which is the right answer
+ * for it too.
+ */
+function splitError(text) {
+  const full = /^`([^`]+)`\s+—\s+([^—]+?)\s+—\s+(.*)$/u.exec(text);
+  if (full) return { message: full[3].trim(), fingerprint: full[1], count: full[2].trim() };
+  const bare = /^`([^`]+)`\s+—\s+(.*)$/u.exec(text);
+  if (bare) return { message: bare[2].trim(), fingerprint: bare[1], count: null };
+  return { message: text, fingerprint: null, count: null };
+}
+
+/**
  * The bullets under "New since the last digest", as the digest wrote them:
  * `- ! \`<fingerprint>\` — 41× 500 — <message>` for a new fingerprint at or
  * above the threshold or a condition that has just started failing, `- ·` for
  * the rest. The marker is dropped here and kept as `loud`, so the page can
- * draw it in its own way.
+ * draw it in its own way, and the rest is split into its three parts so the
+ * page can draw those in an order of its own.
  */
 export function newErrorLines(text) {
   const lines = String(text || '').replace(/\r\n/gu, '\n').split('\n');
@@ -432,7 +516,8 @@ export function newErrorLines(text) {
     if (/^_first digest/u.test(line.trim())) { first = true; continue; }
     const bullet = /^-\s+(!|·)?\s*(.*)$/u.exec(line);
     if (!bullet) continue;
-    out.push({ loud: bullet[1] === '!', text: bullet[2].trim() });
+    const body = bullet[2].trim();
+    out.push({ loud: bullet[1] === '!', text: body, ...splitError(body) });
   }
   return { lines: out, first };
 }
@@ -468,7 +553,11 @@ export function intakeSection({ digests = [], proposals = [], now = new Date(), 
       // The `!` lines themselves, not just how many. A count of loud errors is
       // a number somebody has to go and look up; the line is the thing that
       // makes them look. Everything below the first few is a number again.
-      loud_lines: loud.slice(0, named).map((line) => line.text),
+      //
+      // In their three parts rather than as the digest's one string: the page
+      // leads with the message, and a renderer that had to take the bullet
+      // apart again would be a second parser of the same line.
+      loud_lines: loud.slice(0, named).map(({ message, fingerprint, count }) => ({ message, fingerprint, count })),
       more_loud: Math.max(0, loud.length - named),
       first,
     };
@@ -478,7 +567,15 @@ export function intakeSection({ digests = [], proposals = [], now = new Date(), 
 
 /* ---------------------------------------------------------------- PROJECTS */
 
-/** How many workareas with no project the page draws before it counts them. */
+/**
+ * How many workareas with no project keep a number of their own.
+ *
+ * They had a row each, and the row never changed: twelve folders, twelve lines,
+ * the same twelve every day, and `~/mc/runner/unplanned-workareas.md` holds
+ * them whole with what the page could not say anyway — whether the branch has
+ * landed. WORK draws one line now, and this is how many of them a number still
+ * opens; the file is what the line names for the rest.
+ */
 export const UNPLANNED_SHOWN = 12;
 
 /**
@@ -586,10 +683,10 @@ function collapsedOf(projects) {
  *
  * The workarea has not stopped mattering — it is where a session runs — so
  * every row says whether the project has one, and the folders that no project
- * explains keep a list of their own underneath. Nothing removes those
+ * explains are counted here for WORK to draw. Nothing removes those
  * (close-workarea.js), which is exactly why they are counted where somebody
- * looks; only the first `UNPLANNED_SHOWN` are drawn, because fifty-seven rows
- * would be the page again.
+ * looks; the first `UNPLANNED_SHOWN` keep a number, and WORK draws one line for
+ * all of them.
  *
  * Numbering runs through the projects and then the drawn folders, so every row
  * is openable by the number beside it. A project with no workarea is numbered
@@ -611,7 +708,7 @@ function collapsedOf(projects) {
  * and every number openable (`commands/home.js` § `menu`).
  */
 export function programmesSection({
-  plans = [], areas = [], rows = [], openPrs = [], live = [], detail = () => ({}),
+  plans = [], areas = [], rows = [], openPrs = [], live = [],
   planning = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN,
 } = {}) {
   const lastRun = {};
@@ -680,12 +777,13 @@ export function programmesSection({
   let number = 0;
   for (const project of projects) { number += 1; project.number = number; }
   const drawn = orphans.slice(0, Math.max(0, shown));
-  // `detail` is asked here and nowhere else, of the rows that are actually
-  // drawn. It is two `git` calls per folder, and it was being paid for all of
-  // them: 81 folders on 2026-08-30, which was 15 s of the page's 8 s — most of
-  // it for rows the page then did not print. The cap turned a slow section into
-  // a wasteful one, so the reading follows the cap.
-  for (const orphan of drawn) { number += 1; orphan.number = number; Object.assign(orphan, detail(orphan.name)); }
+  // Numbered, and nothing else asked about them. Each used to cost two `git`
+  // calls for how much was uncommitted and when it was last committed to —
+  // 81 folders on 2026-08-30, 15 s of the page's 8 s — and WORK draws one line
+  // for all of them now, so nothing on the page reads that answer. The file the
+  // line names has it, with what the page could never say anyway: whether the
+  // branch has landed (`mc run`, once a round).
+  for (const orphan of drawn) { number += 1; orphan.number = number; }
 
   // Every programme that has a project, plus every one that exists only as an
   // open planning session or as a directory on main with nothing runnable
@@ -734,33 +832,6 @@ export function programmesSection({
     no_workarea: projects.filter((project) => !project.workarea).length,
     unplanned: { count: orphans.length, shown: drawn, more: Math.max(0, orphans.length - drawn.length) },
   };
-}
-
-/**
- * The two facts an unplanned workarea is judged by, asked of git — how much
- * is uncommitted, and when it was last committed to. Asked one folder at a
- * time, of the few the section actually draws: it is two `git` calls each, and
- * paying them for all 81 folders under `~/mc` was 15 s of an 8 s page — most
- * of it for rows nothing printed.
- *
- * Whether the branch's content is already on main is deliberately not here:
- * `git merge-tree` is another process per area, and the page is offline and
- * fast. `mc run` writes that into `~/mc/runner/unplanned-workareas.md` once a
- * round, which is where the question gets answered.
- */
-export function readUnplanned(root, areas, git = runGit) {
-  const out = {};
-  for (const area of areas) {
-    const repo = (area.repos || [])[0];
-    if (!repo) continue;
-    const dir = join(root, area.name, repo);
-    const status = git(dir, ['status', '--porcelain']);
-    out[area.name] = {
-      uncommitted: status == null ? null : status.split('\n').filter(Boolean).length,
-      last_commit: git(dir, ['log', '-1', '--format=%cs']) || null,
-    };
-  }
-  return out;
 }
 
 /* ----------------------------------------------------------------- readers */
@@ -925,6 +996,10 @@ export async function collectPage({
     currents: readCurrents(join(root, 'runner')),
     stop,
     rows,
+    // One lane per repository this machine has a checkout of, drawn whether or
+    // not it has a step: a lane between steps and a lane that has died were the
+    // same absence until the row existed.
+    repos: present.map((repo) => repo.name),
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
     deploy: lastDeploy(env),
@@ -964,7 +1039,6 @@ export async function collectPage({
       planning: sessions.planning,
       running: runner.steps.map((step) => step.name).filter(Boolean),
       programmes: present.flatMap((repo) => listProgrammes(repo)),
-      detail: (name) => readUnplanned(root, areas.filter((area) => area.name === name), git)[name] || {},
     }),
     caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length } },
     notes,

@@ -43,12 +43,12 @@
       "check": "A test over a plans fixture asserts the programme row's counts, the collapsed row's number ranges, and the rollup line's figures; and that `a` at the menu draws every project uncollapsed with the same numbers."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "RUNNER draws one row per lane whether or not that lane has a step, naming the repository rather than the runner's own pid; the production line says what a failed deploy stopped at; and two shas that are the same commit are not reported as a mismatch.",
       "check": "Tests over `runnerSection`/`productionSection` fixtures: an idle lane produces a row, the step row carries `repo` and no `pid`, `productionSection({ deploy: { sha: <40 chars> }, live: { commit: <its first 7> } })` returns `differs: false`, and `failed.stopped_at` survives the width at 100 columns."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc --json` carries every field the redrawn page draws, and the page is rendered from it alone.",
       "check": "The existing `--json`/render parity test in `tests/mc/page.test.js` passes with the new sections, and `mc --json | node -e '…renderPageLines…'` reproduces the page byte for byte."
     }
@@ -145,7 +145,7 @@
     },
     {
       "title": "The rest of the page: the lanes, production, WORK, INTAKE, and the order of the sections",
-      "status": "ready",
+      "status": "done",
       "done_when": "RUNNER draws one row per lane naming its repository and not the runner's pid; the production line leads with what is wrong and two shas that are the same commit do not read as a mismatch; WORK's orphan workareas are one line; INTAKE's `!` lines lead with the message; the sections that move sit below the sections that do not; and `page-collect.js`'s header no longer documents a section that does not exist.",
       "instruction": [
         "**The lanes.** `runnerLines` draws a row only for a step in flight, so an idle lane and a dead lane look identical. Draw one row per lane, always. The `pid` on a step row is the runner's own — `~/mc/runner/current-<repo>.json` writes `\"pid\": 11480` and `runner.json` says 11480 too, so with two lanes both rows carry the same number and it kills nothing useful. `repo` and `lane` are in that file and are not drawn; put the repository there instead.",
@@ -156,7 +156,13 @@
         "**The header.** `page-collect.js`'s module comment documents a `DECISIONS` section that `collectPage` does not return. Say what the file actually gathers.",
         "Run the page at six widths against the fixtures, as `tests/mc/page.test.js` already does, and check the plain page against the painted one row for row."
       ],
-      "comments": [],
+      "comments": [
+        "Four things moved in `mc --json`, and a reader of it should know all four. `runner.lanes` is new — `[{ repo, step }]`, one entry per lane, `step` null when that lane has none and otherwise **the same object `runner.steps` holds**, not a copy, so the two cannot come to disagree about a lane; `steps` itself is untouched. `intake.repos[].loud_lines` is no longer an array of strings but of `{ message, fingerprint, count }` (the last two null for a bullet that is not the digest's `` `fp` — count — message `` shape, such as a condition that has just started failing) — anything of Martin's that printed those strings prints `[object Object]` after this. `programmes.unplanned.shown[]` entries lose `uncommitted` and `last_commit`, because nothing draws them any more (below). And `runner.production` is unchanged in shape but `differs` now means something narrower.",
+        "`differs` compares the two readings **on the shorter of them**, with a floor of seven characters — `deploys.tsv` writes the whole sha and `/api/version` answers git's abbreviation, so the old `!==` was true of every deploy this machine ever made. Below seven it falls back to equality, because a prefix that short matches too much to mean anything. The identical fault is still in `src/mc/helper-collect.js` and stays there, with the `deploy-mismatch-shows-identical-shas` proposal, as the contract says.",
+        "The production line spends its width in one order — a deploy that failed or one running now, then the mismatch, then the settled sha, then how long ago and which build — and `fitting` drops from the tail, so the bookkeeping goes first and the fault last. The lead part is clipped rather than dropped, because `fitting` keeps whole parts and a long `stopped_at` at 60 columns would otherwise take the whole line with it. One consequence worth knowing before it is read as a bug: **at 100 columns a failed deploy and a mismatch do not both fit**, and the failure wins. That is this machine's real state today (a failed `Deploy source preflight` at 09:18 and a `/api/version` cached before the last deploy), and both are in `mc --json`. The holder is off the line entirely.",
+        "WORK's twelve orphan rows became one line, and with them went the only reader of `readUnplanned` — two `git` calls per folder for `uncommitted` and `last_commit`, which nothing drew any more. The function is deleted rather than left unread, and `programmesSection` no longer takes `detail`. What did **not** change is the numbering: `unplanned.shown` is still the first `UNPLANNED_SHOWN` (12) orphans with a number each, still what `commands/home.js` § `menu` opens by number, and the line draws those numbers as a range beside the file. On this machine that is 42 folders, 12 of them numbered, and `~/mc/runner/unplanned-workareas.md` has all 42 with the one fact the page cannot have — whether the branch has landed.",
+        "Left open and not mine to take: step 1's recommendation that `reprint()` end with a newline. After a growth frame the page still sits one row lower than a first print, `footprint` still carries `below` rather than `printed` to absorb it, the blank separator row between the page and the key lines is still missing, and `note()`/`hold()` still write onto the page's last row instead of that blank. Step 1's comments have the whole shape of it. It changes `frameWrites`' documented bytes and five asserted byte strings in `tests/mc/page-frame.test.js`, which is why it is a decision rather than a tidy-up — and nothing in this step's `done_when` touches it. Also left alone deliberately: the heading `docs/technical/mc-ui.md` § *The five sections* now covers seven, but the contract of this plan cites that heading by name, so renaming it belongs to whoever closes the project out."
+      ],
       "pr": null,
       "blocked_by": null
     }
