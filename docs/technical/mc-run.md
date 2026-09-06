@@ -812,6 +812,15 @@ Everything lives under `~/mc/runner/`.
 - **`held.json`** — every pull request a landing did not land, with the reason
   and how many repairs it has had. One file for the machine, written by
   whichever lane held or released something; see *Held before merge*.
+- **`unmergeable.json`** — every workarea a round could not bring to
+  `origin/main`, with the files the merge stopped on and a `since`. Written
+  where the round aborts a merge nothing could be handed, dropped the round
+  that workarea takes main. It exists because `git merge --abort` leaves the
+  worktree *clean*: without it, the only trace is one `runner.log` line per
+  round, and `docx-editor` produced thirteen of them on 2026-09-05 while every
+  surface called the project ready. `machineState` reads it, so a stuck
+  workarea is a row in `mc status <name>` and in the brief's *Ready, and the
+  runner cannot start it* rather than something only the log knows.
 - **`log/closed/<name>/`** — whatever a closed workarea kept beside its
   checkout. Moved, never deleted.
 

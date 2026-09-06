@@ -41,7 +41,7 @@ writes:
 | Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
 | Production | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, `git rev-list --count <it>..origin/main` in `~/memoro`, the nightly's last measurement, and the `/api/version` in `~/mc/runner/version.json` |
 | Held before merge | `~/mc/runner/held.json`, the entries at `repairs >= 1` |
-| Ready, and the runner cannot start it | `machineState` (`src/mc/status-collect.js`) over every non-legacy plan: the workarea's `git status --porcelain`, `held.json` whole, the open pull requests, the STOP file — less what `current-<repo>.json` says is running |
+| Ready, and the runner cannot start it | `machineState` (`src/mc/status-collect.js`) over every non-legacy plan: the workarea's `git status --porcelain`, `held.json` whole, `unmergeable.json` whole, the open pull requests, the STOP file — less what `current-<repo>.json` says is running |
 | Blocked | the `blocked` steps of the same plans *Plan status* already parsed, plus `staleBlockers` (`src/mc/stale-blockers.js`) |
 | Queue | `~/mc/queue.md` |
 

@@ -24,7 +24,7 @@
       "check": "A test drives a round with a conflict in one non-plan path and a plan that differs between HEAD and `origin/main`, and asserts the step chosen is main's. Failing today with the branch's step."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A workarea that could not be brought to base is reported as such, by name, and not as whatever its stale plan said.",
       "check": "Read `runner.log` after a round over a genuinely conflicted workarea: the project-level line names the workarea and the files, and no line reports a blocker read out of the stale plan."
     },
@@ -34,7 +34,7 @@
       "check": "A test with the conflict in the `PLAN.json` itself asserts the plan is read from HEAD and the step session is handed the merge, exactly as today."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A workarea stuck this way is visible without reading `runner.log`.",
       "check": "With one workarea deliberately unable to take main, it is named in the brief or in `mc status` with the files it conflicts on. Run the surface and read it."
     }
@@ -102,7 +102,7 @@
     },
     {
       "title": "A workarea that cannot take main says so, once, where somebody looks",
-      "status": "ready",
+      "status": "done",
       "done_when": "A workarea whose merge of `origin/main` aborted is reported as a project waiting on hands, with the conflicting files, and is visible without reading `runner.log`.",
       "instruction": [
         "This is step 1's option 2 — the guard — and it is worth having whichever way the ruling went, because a worktree that will not take main is a thing a person has to fix either way and today nothing tells them so.",
@@ -112,7 +112,14 @@
         "Verify against a real one: make a workarea conflict with main by hand, let a round run, read the surface, then clean it up. Put what it printed in the PR.",
         "`npm test`."
       ],
-      "comments": [],
+      "comments": [
+        "`runner-visibility` had landed (project_log.md, 2026-09-05, #630–#634), so this added the reason to `machineState` and built no second surface of its own — the instruction's first branch. What it had to add underneath it is a record, and that is the fact this step turned on: `git merge --abort` leaves the worktree **clean**, so after an abandoned merge there is nothing on this machine for a reading to see. `machineState` asks `git status --porcelain`, gets nothing, and calls the project runnable while the round merges, conflicts and aborts again ten minutes later. No predicate over the files could have answered it, and the reading may not merge to find out — so the round writes `~/mc/runner/unmergeable.json` (one entry per workarea, the files, a `since`), in the shape `held.json` already has and for the same reason, and `machineState` reads it. Both surfaces then say it with no line of their own: `mc status <name>` on its status row, and the brief's *Ready, and the runner cannot start it*, which keeps only words in `RUN_REFUSALS`.",
+        "`unmergeable` is a new word in `RUN_REFUSALS` and the only one whose reading comes out of a file the round wrote rather than out of the machine as it stands. That is why it is `read: true` while `sync` beside it is `read: false`: the round's own merge cannot be predicted, but its outcome can be recorded. The agreement test's case seeds the record the round before it left — which is exactly the state every surface reads from the second round onwards.",
+        "The round now refuses `unmergeable` where the `PLAN.json` is itself among the conflicts and the branch's copy has no step, and the abort line no longer quotes the stale plan. That line was the defect in its other half: `docx-editor` had `step 17 is blocked on decision docx-ime-input-source` in runner.log for 13 rounds about a step main had replaced. It now says why the merge could not be handed anywhere instead. Where the plan on disk (main's copy) is what refuses, the plan keeps its own word and nothing is recorded — `machineState` reads that same plan on main and answers it before it asks anything of this machine.",
+        "Verified live, not only in the suite. A scratch estate under `/tmp` with a real bare origin, a real workarea on a branch whose `PLAN.json` edits the same step main did (so `mergePlanText` refuses it, the `sdk-artifact-storage` shape): `runStep` driven with real deps logged `stuckproj: its PLAN.json is one of the conflicts and the copy on this branch has no step to hand out — the merge of origin/main is aborted, still conflicting in: docs/project/prog/stuckproj/PLAN.json`, answered `skipped:unmergeable`, wrote the entry, and left `git status --porcelain` empty. `mc status stuckproj` then read `blocked · origin/main could not be merged into /tmp/mcv/stuckproj/memoro-cli: docs/project/prog/stuckproj/PLAN.json (since 09-06 14:22Z)` and `mc brief --collect` put the same sentence in *Ready, and the runner cannot start it* with the `since`. Resolving the merge by hand and running the round again dropped the entry and both surfaces went quiet. The scratch is removed.",
+        "Two things a later step should know. The reason sentence deliberately stops at the files — the brief clips that cell from the middle at 110 characters, and with the `why` on the end the clip ate the filename (`origin/main could not be merged into /t…LAN.json is one of the conflicts`), which is the one thing a person opens; the `why` stays in the entry and in runner.log. And the per-round `runner.log` line was kept: the instruction's *say it once* is answered by the surface being state with a `since` rather than by silencing the round's own record of what it did that round.",
+        "Not fixed here, and still true: the round aborts a merge for four other reasons (role missing, tool missing, STOP, an UPDATE while waiting for a lane) and records nothing, because in those the merge is not what a person has to act on and a round with the role back would hand the conflict to a session. If that turns out to strand a workarea, the mark is one call at those sites. Step 1's other residue — `fromHead` firing legitimately and still handing out a stale `HEAD` plan (`sdk-artifact-storage`, 13 of 27 plan-conflict rounds) — is `branch-landed.js` and its own proposal, and this step's guard is what makes that case visible rather than silent."
+      ],
       "pr": null,
       "blocked_by": null
     },

@@ -105,6 +105,7 @@ import {
   UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerTablePath, workRoot,
 } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
+import { clearUnmergeable, markUnmergeable, parseUnmergeable, unmergeablePath } from './unmergeable.js';
 import { runMergeRound } from './repo-merge.js';
 import { kindFor, pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
@@ -303,6 +304,11 @@ export function createRunner({
     // not. mc's own state beside the two above, never a status in a plan —
     // see held.js.
     held: heldPath(root),
+    // Every workarea a round could not bring to origin/main. The same kind of
+    // state as `held.json` and for the same reason: an aborted merge leaves
+    // the worktree clean, so without this nothing outside runner.log says the
+    // project is standing still — see unmergeable.js.
+    unmergeable: unmergeablePath(root),
     // With more than one lane per repository (`mc lanes`), the first keeps
     // the file's old name and the rest number themselves, so the page —
     // which reads `current-*.json` by name — needs no new rule.
@@ -536,6 +542,32 @@ export function createRunner({
     if (!dropped.length) return;
     for (const entry of dropped) say(`held: ${entry.project} #${entry.pr} is no longer open — no longer held before merge`);
     writeJson(paths.held, kept);
+  }
+
+  /* ------------------------------------------- workareas that cannot merge */
+
+  /**
+   * `~/mc/runner/unmergeable.json`, read-modify-written through these two and
+   * nowhere else — the same one-turn discipline `held.json` has, because any
+   * lane may write it.
+   *
+   * `markStuck` is called where the round aborts a merge nothing could be
+   * handed, `clearStuck` where the workarea took main. The clear writes only
+   * when it changes something: it runs on every project of every round, and a
+   * file rewritten ten times a minute for nothing is a file whose mtime says
+   * nothing either.
+   */
+  const unmergeableNow = () => parseUnmergeable(deps.read(paths.unmergeable));
+
+  function markStuck(entry) {
+    writeJson(paths.unmergeable, markUnmergeable(unmergeableNow(), { ...entry, since: stamp() }));
+  }
+
+  function clearStuck(project, repo) {
+    const entries = unmergeableNow();
+    if (!entries.length) return;
+    const kept = clearUnmergeable(entries, { project, repo });
+    if (kept.length !== entries.length) writeJson(paths.unmergeable, kept);
   }
 
   /* --------------------------------------------------------------- landing */
@@ -1398,6 +1430,11 @@ export function createRunner({
     // the project unreadable to the runner: the conflict goes to the step
     // session as something to do first.
     const conflicts = sync.conflicts;
+    // The workarea took main, so whatever an earlier round recorded about it
+    // is over. Only here: a conflict that goes to a session is not resolved
+    // yet, and `markStuck` below keeps the first round's `since` — how long
+    // this has been standing still is the fact the record is kept for.
+    if (!conflicts.length) clearStuck(name, repo.name);
     // And the plan is read from HEAD only when the plan itself is one of them
     // — see `planOf`. Every other conflict leaves main's plan on disk already
     // merged, and that is the copy the round hands out.
@@ -1422,6 +1459,28 @@ export function createRunner({
     // is the repair; `repairPrompt` is handed the files.
     const choice = repair ? { kind: 'repair' } : chooseKind({ plan });
     if (conflicts.length && choice.kind !== 'step' && choice.kind !== 'repair') {
+      // Since ruling 10 there is one way to arrive here: the `PLAN.json` is
+      // itself among the conflicts, so the plan was read from HEAD — every
+      // other conflict leaves main's plan on disk, and a project main's plan
+      // refuses is stopped by `planRefusal` before a worktree is touched.
+      //
+      // What is said is *not* `choice.skip`. That sentence is the branch's own
+      // stale plan talking, and reporting it is the defect ruling 10 answered
+      // in another shape: `docx-editor` had `step 17 is blocked on decision
+      // docx-ime-input-source` in runner.log for 13 rounds about a step main
+      // had replaced the evening before. What is true is that this workarea
+      // cannot take main and nothing can be handed the merge — which is a
+      // person's, so it is written down where a person looks and not only here.
+      if (conflicts.some(isPlanPath)) {
+        abandonMerge('its PLAN.json is one of the conflicts and the copy on this branch has no step to hand out');
+        markStuck({ project: name, repo: repo.name, worktree, files: conflicts, why: 'the PLAN.json is one of the conflicts and nothing could be handed the merge' });
+        return refuse(REFUSAL.unmergeable);
+      }
+      // The other way here is a round driven by hand past `planRefusal` — the
+      // plan on disk is main's and it refuses the project itself. That is the
+      // plan's word, not the merge's, and nothing is recorded: `machineState`
+      // reads the same plan on main and answers it before it asks anything of
+      // this machine.
       abandonMerge(choice.skip || 'no session to hand it to');
       return refuse(choice.reason || 'no-plan');
     }

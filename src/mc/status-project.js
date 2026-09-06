@@ -28,6 +28,7 @@ import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { machineDetail, machineState } from './status-collect.js';
+import { parseUnmergeable, unmergeablePath } from './unmergeable.js';
 
 /* ---------------------------------------------------------------- builders */
 
@@ -299,6 +300,7 @@ export async function collectProject(name, {
     prs: asked,
     prsFailed,
     held: readHeld(root, read),
+    unmergeable: readUnmergeable(root, read),
     stop: existsSync(join(root, 'runner', 'STOP')),
     root,
     // `git` here answers with a string or null; the reading wants ok and text.
@@ -350,6 +352,12 @@ function mainPlansFor(name, main, mainPlan) {
 /** `~/mc/runner/held.json` as the runner reads it: unreadable means empty. */
 function readHeld(root, read) {
   try { return parseHeld(read(heldPath(root))); } catch { return []; }
+}
+
+/** `~/mc/runner/unmergeable.json`, the same way: never written a round that
+ * could not merge is the good answer, not a missing file. */
+function readUnmergeable(root, read) {
+  try { return parseUnmergeable(read(unmergeablePath(root))); } catch { return []; }
 }
 
 /** `~/mc/x` reads better than the absolute path on a page a person reads. */

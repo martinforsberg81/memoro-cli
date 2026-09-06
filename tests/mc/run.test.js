@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { createRunner, runLoop } from '../../src/mc/run.js';
 import { parseHeld } from '../../src/mc/held.js';
+import { parseUnmergeable } from '../../src/mc/unmergeable.js';
 import { RUN_REFUSALS } from '../../src/mc/run-plan.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { machineState } from '../../src/mc/status-collect.js';
@@ -786,10 +787,77 @@ test('a conflict with no step to hand it to is aborted, and the files are named'
   await runner.round({ once: true });
   assert.equal(f.calls.sessions.length, 0, 'no session is launched on a half-merged tree');
   assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
+  const log = f.files['/w/runner/log/runner.log'];
   assert.match(
-    f.files['/w/runner/log/runner.log'],
-    /c: step 1 is blocked on decision prog-1 — the merge of origin\/main is aborted, still conflicting in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u,
+    log,
+    /c: its PLAN\.json is one of the conflicts and the copy on this branch has no step to hand out — the merge of origin\/main is aborted, still conflicting in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u,
   );
+  // And not the branch's stale plan talking. `docx-editor` reported `step 17 is
+  // blocked on decision docx-ime-input-source` for 13 rounds on 2026-09-05
+  // about a step main had replaced the evening before; the copy HEAD carries is
+  // the one that could not be merged, not the one that says what is true.
+  assert.doesNotMatch(log, /blocked on decision prog-1/u);
+});
+
+/**
+ * The half of that abort nobody could see. `git merge --abort` leaves the
+ * worktree *clean*, so the next round finds a ready plan on main, a clean
+ * checkout and nothing open — and every surface calls the project ready while
+ * it merges, conflicts and aborts again, ten minutes later, for ever.
+ *
+ * So the round writes what it found, in the shape `held.json` has: one entry
+ * per workarea, with the files and a `since`, dropped the round the workarea
+ * takes main. `machineState` reads it, which is what puts the project in
+ * `mc status` and in the brief's *Ready, and the runner cannot start it*.
+ */
+test('a workarea that could not take main is recorded, with the files, and dropped when it can', async () => {
+  const stuck = {
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
+    headFiles: { c: { [PLAN_AT]: plan({ status: 'blocked' }) } },
+    plans: { memoro: { c: ready } },
+    conflicts: { c: [PLAN_AT, 'src/a.js'] },
+    session: okSession(),
+  };
+  const f = fixture(stuck);
+  await createRunner({ deps: f.deps }).round({ once: true });
+  const [entry] = JSON.parse(f.files['/w/runner/unmergeable.json']);
+  assert.deepEqual(
+    [entry.project, entry.repo, entry.worktree, entry.files, entry.since],
+    ['c', 'memoro', '/w/c/memoro', [PLAN_AT, 'src/a.js'], '2026-08-29T10:00:00Z'],
+  );
+
+  // What a person is told, through the same reading `mc status` and the brief
+  // draw: the project is not runnable, the word is the merge and the sentence
+  // names the workarea and the files.
+  const world = createRunner({ deps: f.deps }).queue();
+  const reading = machineState('c', {
+    plans: world.plans,
+    prs: world.prs,
+    unmergeable: parseUnmergeable(f.files['/w/runner/unmergeable.json']),
+    root: '/w',
+    exists: f.deps.exists,
+    git: f.deps.git,
+  });
+  assert.equal(reading.runnable, false);
+  assert.equal(reading.reason, 'unmergeable');
+  assert.equal(reading.since, '2026-08-29T10:00:00Z');
+  assert.match(reading.detail, /origin\/main could not be merged into \/w\/c\/memoro: docs\/project\/prog\/c\/PLAN\.json, src\/a\.js/u);
+
+  // A second round that still cannot merge keeps the first round's `since`:
+  // eight rounds of one condition is one thing standing still, not eight.
+  const again = fixture({ ...stuck, now: '2026-08-29T12:00:00Z' });
+  again.files['/w/runner/unmergeable.json'] = f.files['/w/runner/unmergeable.json'];
+  await createRunner({ deps: again.deps }).round({ once: true });
+  assert.equal(JSON.parse(again.files['/w/runner/unmergeable.json'])[0].since, '2026-08-29T10:00:00Z');
+
+  // And the round the workarea takes main, the entry goes — nobody has to
+  // remember to clear it, and a stale row would be a project reported as
+  // waiting on hands that nothing is waiting for.
+  const fixed = fixture({ ...stuck, conflicts: {}, areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } }, gh: { c: { number: 96 } } });
+  fixed.files['/w/runner/unmergeable.json'] = f.files['/w/runner/unmergeable.json'];
+  await createRunner({ deps: fixed.deps }).round({ once: true });
+  assert.deepEqual(JSON.parse(fixed.files['/w/runner/unmergeable.json']), []);
+  assert.equal(fixed.calls.sessions.length, 1, 'and the project gets its step');
 });
 
 /**
@@ -2694,6 +2762,9 @@ const readingOf = (f, name, world) => machineState(name, {
   prs: world.prs,
   prsFailed: world.prsFailed,
   held: parseHeld(f.files['/w/runner/held.json'] ?? null),
+  // The one input here that is a round's own record rather than a fact about
+  // the machine now: an aborted merge leaves nothing on disk to read.
+  unmergeable: parseUnmergeable(f.files['/w/runner/unmergeable.json'] ?? null),
   stop: '/w/runner/STOP' in f.files,
   root: '/w',
   exists: f.deps.exists,
@@ -2774,6 +2845,33 @@ const CASES = [
     reason: 'sync',
     what: 'origin could not be fetched',
     make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), fetchFails: ['m'], session: okSession() }),
+  },
+  // The one case whose reading comes out of a file the round wrote rather than
+  // out of the machine as it stands, and it has to: `git merge --abort` leaves
+  // the worktree clean, and `mc status` may not merge to find out. So the
+  // fixture carries the record of the round before this one — which is exactly
+  // the state the surfaces read on the second round and every round after.
+  {
+    reason: 'unmergeable',
+    what: 'a workarea that cannot be brought to origin/main',
+    make: () => {
+      const f = fixture({
+        areas: { m: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
+        headFiles: { m: { 'docs/project/prog/m/PLAN.json': plan({ status: 'blocked' }) } },
+        plans: { memoro: { m: ready } },
+        conflicts: { m: ['docs/project/prog/m/PLAN.json'] },
+        session: okSession(),
+      });
+      f.files['/w/runner/unmergeable.json'] = JSON.stringify([{
+        project: 'm', repo: 'memoro', worktree: '/w/m/memoro',
+        files: ['docs/project/prog/m/PLAN.json'],
+        why: 'the PLAN.json is one of the conflicts and nothing could be handed the merge',
+        since: '2026-08-29T08:00:00Z',
+      }]);
+      return f;
+    },
+    detail: /origin\/main could not be merged into \/w\/m\/memoro: docs\/project\/prog\/m\/PLAN\.json/u,
+    since: '2026-08-29T08:00:00Z',
   },
   {
     reason: 'role-missing',

@@ -31,6 +31,7 @@ import { join } from 'node:path';
 
 import { openPrsFor } from './project-prs.js';
 import { REFUSAL, chooseKind, heldRepair, inFlight } from './run-plan.js';
+import { describeUnmergeable, unmergeableFor } from './unmergeable.js';
 
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
 export const RUNNER_MODEL = 'opus';
@@ -96,12 +97,13 @@ export function kindFor(name, { plans }) {
  *
  * Returns `{ runnable, reason, detail, since, kind }`: `reason` a word the
  * page can count, `detail` the sentence for a person, `since` when it started
- * being true (a hold's own `since`, the oldest dirty file's mtime), and `kind`
+ * being true (a hold's own `since`, the oldest dirty file's mtime, the round
+ * that first could not merge origin/main into the workarea), and `kind`
  * what the runner would start — `step`, or `repair` for a held pull request
  * that is still owed its one repair session.
  */
 export function machineState(name, {
-  plans = [], prs = [], prsFailed = [], held = [], stop = false,
+  plans = [], prs = [], prsFailed = [], held = [], unmergeable = [], stop = false,
   root = null, repoNames = REPO_NAMES,
   exists = existsSync, git = () => ({ ok: false, stdout: '' }), mtime = fileMtime,
 } = {}) {
@@ -152,6 +154,16 @@ export function machineState(name, {
       return no(REFUSAL.branch, `#${repair.entry.pr} is on ${wanted}, which this workarea has no branch for`, repair.entry.since);
     }
   }
+  // Where the round's own merge of origin/main sits, which is the one thing
+  // here that is asked of the last round rather than of the machine as it
+  // stands. An aborted merge leaves the worktree clean, so `git status` above
+  // says nothing about it and no reading could work it out without merging —
+  // `mc status` may not. `unmergeable.json` is the round's record, dropped the
+  // next time that project gets past the merge, and it sits here because that
+  // is where the round meets it: after the branch, before the role and the
+  // tool (`runStepClaimed`).
+  const stuck = unmergeableFor(unmergeable, { project: name, repo });
+  if (stuck) return no(REFUSAL.unmergeable, describeUnmergeable(stuck), stuck.since);
   return {
     runnable: true,
     reason: null,
