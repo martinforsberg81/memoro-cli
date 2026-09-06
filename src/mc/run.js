@@ -1820,6 +1820,15 @@ export function createRunner({
         }
         if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true, refused }; }
         if (r !== 'merged' || stayed >= 8) break;
+        // An UPDATE drains the runner from the moment it is read, and the
+        // lane loop reads it between rounds — but this loop is inside one.
+        // A lane that stays on its project after a merge would start up to
+        // eight more steps here while the other lanes sit idle waiting for
+        // it. Seen 2026-09-06: #668 wrote UPDATE at 14:11Z; by 14:38Z both
+        // idle lanes had said so, while the two busy lanes each merged and
+        // started a further 90-minute step on the project they were on.
+        // Letting go here is what makes the handover one step long.
+        if (updateRequested()) { say(`${name}: UPDATE is pending — the lane lets go of ${name}`); break; }
         // Re-read: the plan the merge advanced, and what GitHub has open now
         // — the step that just landed may have left a second pull request.
         known = queue({ only: repo });

@@ -1644,6 +1644,27 @@ test('a plan that stopped while the lane stayed on it is not stepped again', asy
 });
 
 /**
+ * The drain reaches inside a round: a lane that just merged a step lets go of
+ * its project when an UPDATE is pending, instead of chaining up to eight more
+ * steps on it while every other lane waits for the quiet moment.
+ */
+test('a lane does not stay on its project after a merge once an UPDATE is pending', async () => {
+  const plans = { memoro: { go: ready } };
+  const f = fixture({ plans, gh: { go: { number: 7 } }, session: okSession() });
+  // The step's own landing is what writes UPDATE in the real case; here the
+  // flag appears while the step runs, as it would from `mc run --update`.
+  const inner = f.deps.session;
+  f.deps.session = (call) => { f.files['/w/runner/UPDATE'] = ''; return inner(call); };
+  const r = await createRunner({ deps: f.deps }).round();
+
+  assert.equal(r.ran, 1);
+  assert.equal(f.calls.sessions.length, 1, 'the lane stayed on go with an UPDATE pending');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /go: UPDATE is pending — the lane lets go of go/u);
+  assert.doesNotMatch(log, /staying on go/u);
+});
+
+/**
  * What a round *says*. A plan-shaped refusal is already drawn by `mc status`'s
  * QUEUE, from the same `kindFor` — so the twenty-first `blocked on decision
  * plan-review` in runner.log is a line nobody reads, and it buries the ones
