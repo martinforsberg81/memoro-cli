@@ -37,6 +37,7 @@ import { PR_FIELDS } from './project-prs.js';
 import { RUN_REFUSALS } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
 import { machineDetail, machineState, pidAlive, readCurrents } from './status-collect.js';
+import { parseUnmergeable, unmergeablePath } from './unmergeable.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -1061,6 +1062,8 @@ export async function collectBrief({
   let heldText = '';
   try { heldText = read(heldPath(root)); } catch { heldText = ''; }
   const held = heldForBrief(heldText);
+  let unmergeableNow = [];
+  try { unmergeableNow = parseUnmergeable(read(unmergeablePath(root))); } catch { unmergeableNow = []; }
 
   // Every `ready` plan the runner would pass over now. The whole file is read
   // here rather than `heldForBrief`'s filtered half: an entry still at
@@ -1081,6 +1084,11 @@ export async function collectBrief({
       prs: opened,
       prsFailed,
       held: parseHeld(heldText),
+      // The workareas the last round could not bring to origin/main. Read the
+      // same way and for the same reason as `held.json`: an aborted merge
+      // leaves nothing on disk to see, so the round's own record is the only
+      // thing that says the project is standing still.
+      unmergeable: unmergeableNow,
       stop,
       root,
       // `git` answers with a string or null here; the reading wants ok and text.
