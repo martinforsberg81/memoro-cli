@@ -37,7 +37,7 @@ import { nightlyReading } from '../nightly-history.js';
 import { listServers } from '../dev-servers.js';
 import {
   accountAvailable, answers, callerWorktree, ensureDevServer, forgetToken, readDeclaration,
-  runSuites, servingWorktree, sharedWorktree, stopServer, storeToken, tokenFor,
+  runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
 } from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
 import {
@@ -142,9 +142,22 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
 
   if (opts.stop) return stop(worktree, { stdout, stderr });
 
+  // Which tiers this round touches. A suite that says `server: "static"`
+  // never talks to the app, and the repository may give it a file server of
+  // its own; everything else is the app. Six of memoro's ten are static, so
+  // `--suite msr-modality` starts no Worker at all — which is the point.
+  const chosen = opts.suite
+    ? declaration.suites.filter((suite) => suite.name === opts.suite)
+    : declaration.suites;
+  const staticService = where === 'dev' ? serviceFor(declaration, 'static') : null;
+  const wantsApp = opts.url || chosen.some((suite) => tierOf(suite) === 'app' || !staticService);
+  const wantsStatic = Boolean(staticService) && chosen.some((suite) => tierOf(suite) === 'static');
+
   // Where to point them.
   let baseUrl = null;
   let server = null;
+  let staticBaseUrl = null;
+  let staticServer = null;
   if (where === 'prod') {
     baseUrl = declaration.environments?.prod?.base_url || null;
     if (!baseUrl) {
@@ -152,26 +165,44 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       return 1;
     }
   } else {
-    if (!opts.json) stdout.write(`mc: a dev server for ${worktree}…\n`);
-    const ensured = await ensureDevServer(worktree, declaration, {
-      ...deps,
-      // A cold start is minutes — build, migrations, then wrangler — and
-      // silence for three of them reads as a hang. Say the moment the wrapper
-      // registers, which is when mc knows it is alive.
-      onRegistered: opts.json ? null : (registered) => stdout.write(
-        `mc: ${registered.instance_id} is starting on ${registered.url} — waiting for it to answer\n`,
-      ),
-    });
-    if (!ensured.ok) {
-      stderr.write(`mc: ${ensured.error}\n`);
-      return 1;
+    // The file server first: it is up in a second, and a round that is only
+    // static suites is done with servers right here.
+    if (wantsStatic) {
+      const ensured = await ensureDevServer(worktree, declaration, { ...deps, service: staticService });
+      if (!ensured.ok) {
+        stderr.write(`mc: ${ensured.error}\n`);
+        return 1;
+      }
+      staticServer = ensured.server;
+      staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');
+      if (!opts.json) {
+        stdout.write(ensured.started
+          ? `mc: static tier — ${staticBaseUrl} (${staticServer.instance_id})\n`
+          : `mc: static tier — ${staticBaseUrl} was already up (${staticServer.instance_id})\n`);
+      }
     }
-    server = ensured.server;
-    baseUrl = String(server.url).replace(/\/+$/u, '');
-    if (!opts.json) {
-      stdout.write(ensured.started
-        ? `mc: started one — ${baseUrl} (${server.instance_id})\n`
-        : `mc: ${baseUrl} was already serving it (${server.instance_id})\n`);
+    if (wantsApp) {
+      if (!opts.json) stdout.write(`mc: a dev server for ${worktree}…\n`);
+      const ensured = await ensureDevServer(worktree, declaration, {
+        ...deps,
+        // A cold start is minutes — build, migrations, then wrangler — and
+        // silence for three of them reads as a hang. Say the moment the wrapper
+        // registers, which is when mc knows it is alive.
+        onRegistered: opts.json ? null : (registered) => stdout.write(
+          `mc: ${registered.instance_id} is starting on ${registered.url} — waiting for it to answer\n`,
+        ),
+      });
+      if (!ensured.ok) {
+        stderr.write(`mc: ${ensured.error}\n`);
+        return 1;
+      }
+      server = ensured.server;
+      baseUrl = String(server.url).replace(/\/+$/u, '');
+      if (!opts.json) {
+        stdout.write(ensured.started
+          ? `mc: started one — ${baseUrl} (${server.instance_id})\n`
+          : `mc: ${baseUrl} was already serving it (${server.instance_id})\n`);
+      }
     }
   }
 
@@ -187,7 +218,11 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   const held = await tokenFor(declaration, env);
   const suiteEnvironment = held.token ? { ...env, [held.name]: held.token } : env;
   const account = accountAvailable(declaration, suiteEnvironment);
-  if (!opts.json) {
+  // Said only when a suite in this round signs in. A static-only round has
+  // nobody to sign in as, and "signing in with the test account" above six
+  // suites that never will is a line that misleads.
+  const anyoneSignsIn = chosen.some((suite) => suite.needs_account);
+  if (!opts.json && anyoneSignsIn) {
     if (account.available) {
       stdout.write(`mc: signing in with the test account (${held.name} from the ${held.from})\n`);
     } else {
@@ -195,22 +230,28 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     }
   }
 
+  const probeFor = (suite) => (tierOf(suite) === 'static' && staticServer
+    ? staticServer
+    : server || { health_url: `${baseUrl}/api/version` });
   const { results, gone, skipped: neverRan } = await runSuites({
     declaration,
     worktree,
     baseUrl,
+    staticBaseUrl,
     only: opts.suite,
     env: suiteEnvironment,
     // A dev server can leave in the middle of a six-minute round, and the
     // suites after it then all report red on a refused connection. Production
-    // is asked too: a deploy mid-round is the same shape of lie.
-    stillThere: () => answers(server || { health_url: `${baseUrl}/api/version` }),
+    // is asked too: a deploy mid-round is the same shape of lie. Each suite
+    // asks after its own tier's server, because the other one leaving is not
+    // its news.
+    stillThere: (suite) => answers(probeFor(suite)),
     // A suite is minutes long, so a terminal says which one is running and
     // then overwrites that line with its verdict. A pipe gets the verdict
     // only: a carriage return in a log file is a line nobody can read.
     onStart: opts.json || !stdout.isTTY ? null : (suite) => stdout.write(`  …  ${suite.name}`),
     onEnd: opts.json ? null : (result) => stdout.write(
-      `${stdout.isTTY ? '\r\u001b[2K' : ''}  ${verdict(result)}  ${result.name} ${result.seconds}s\n`,
+      `${stdout.isTTY ? '\r\u001b[2K' : ''}  ${verdict(result)}  ${result.name}${tierMark(result)} ${result.seconds}s\n`,
     ),
   });
 
@@ -221,24 +262,32 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     stdout.write(`${JSON.stringify({
       where,
       base_url: baseUrl,
+      static_base_url: staticBaseUrl,
       worktree,
       instance_id: server?.instance_id || null,
-      server_gone: gone,
+      static_instance_id: staticServer?.instance_id || null,
+      server_gone: gone.length > 0,
+      gone_tiers: gone,
       results,
       never_ran: neverRan,
     }, null, 2)}\n`);
-    return gone || red.length ? 1 : 0;
+    return gone.length || red.length ? 1 : 0;
   }
 
   for (const result of red) {
     stdout.write(`\n${result.name} — exit ${result.status}\n${result.tail}\n`);
   }
 
-  // A round that lost its server reports that, and never a count of red. Six
+  // A round that lost a server reports that, and never a count of red. Six
   // suites failing on a refused connection is not a verdict about the app.
-  if (gone) {
-    stdout.write(`\nmc: ${baseUrl} stopped answering — this round measured nothing after that\n`);
-    if (unmeasured.length) stdout.write(`mc: ${unmeasured[0].name} was running when it went and is unmeasured\n`);
+  // A tier's server going takes that tier's suites; the other tier's verdicts
+  // stand, and are said.
+  if (gone.length) {
+    for (const tier of gone) {
+      const url = tier === 'static' ? staticBaseUrl : baseUrl;
+      stdout.write(`\nmc: ${url} (${tier}) stopped answering — its suites measured nothing after that\n`);
+    }
+    if (unmeasured.length) stdout.write(`mc: ${unmeasured.map((r) => r.name).join(', ')} running when it went — unmeasured\n`);
     if (neverRan.length) stdout.write(`mc: never ran — ${neverRan.join(', ')}\n`);
     if (where === 'dev') {
       stdout.write(`mc: the server's own log says why, under ${join(worktree, '.wrangler', 'dev-server', 'logs')}\n`);
@@ -248,9 +297,10 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   }
 
   const green = results.length - red.length - skipped.length;
+  const against = [baseUrl, staticBaseUrl && `static ${staticBaseUrl}`].filter(Boolean).join(', ');
   stdout.write(red.length
-    ? `\nmc: ${red.length} of ${results.length} red against ${baseUrl}\n`
-    : `\nmc: ${green} green against ${baseUrl}\n`);
+    ? `\nmc: ${red.length} of ${results.length} red against ${against}\n`
+    : `\nmc: ${green} green against ${against}\n`);
   // A suite that said it did not run is not a pass, and counting it as one is
   // the quiet failure this whole verb exists to stop.
   if (skipped.length) {
@@ -265,6 +315,11 @@ function verdict(result) {
   if (result.unmeasured) return 'GONE';
   if (result.skipped) return '·· ';
   return result.ok ? 'ok ' : 'RED';
+}
+
+/** The tier beside the name, so a line says which server a verdict is about. */
+function tierMark(result) {
+  return result.server === 'static' ? ' (static)' : '';
 }
 
 /** Every dev server on this machine, from the same index `mc dev list` reads. */
@@ -289,18 +344,24 @@ function listing(opts, { stdout }) {
  * out. Nothing running is not an error: the end state is the one asked for.
  */
 function stop(worktree, { stdout, stderr }) {
-  const server = servingWorktree(worktree);
-  if (!server) {
+  const servers = serversFor(worktree);
+  if (!servers.length) {
     stdout.write(`mc: nothing is serving ${worktree}\n`);
     return 0;
   }
-  const stopped = stopServer(server);
-  if (!stopped.ok) {
-    stderr.write(`mc: ${stopped.error}\n`);
-    return 1;
+  // Both tiers, when both are up: a person saying stop means the worktree,
+  // not whichever of its servers registered first.
+  let failed = 0;
+  for (const server of servers) {
+    const stopped = stopServer(server);
+    if (!stopped.ok) {
+      stderr.write(`mc: ${stopped.error}\n`);
+      failed += 1;
+      continue;
+    }
+    stdout.write(`mc: stopped ${stopped.instance_id} (${server.url})\n`);
   }
-  stdout.write(`mc: stopped ${stopped.instance_id} (${server.url})\n`);
-  return 0;
+  return failed ? 1 : 0;
 }
 
 export function parseEnvironmentArgs(where, argv) {

@@ -154,9 +154,15 @@ Schema version 1:
 }
 ```
 
-`worktree_path` is the field reuse turns on: `mc test dev` looks for a live
-server whose worktree is the one it is about to measure, and nothing else
-counts. The plan identity fields (`profile`, `definition_fingerprint`,
+`worktree_path` and `service` are the fields reuse turns on: `mc test dev`
+looks for a live server whose worktree is the one it is about to measure *and*
+whose service is the one the tier needs, and nothing else counts. Since
+2026-09-06 a worktree may have two — the app's service, and the one
+`.mc/test.json` names as `environments.dev.static_service`, a file server the
+suites marked `server: "static"` are measured against. Both register through
+this protocol; a profile's `readiness.timeout_ms` is now the window mc gives
+that service to register (the app's never declared one and keeps the long
+default). The plan identity fields (`profile`, `definition_fingerprint`,
 `start_argv`, `resource_class`) and `coding_session_id` are optional and
 carried through as they come — the exact-match reuse they were added for went
 with `mc dev ensure`, and a manifest without them is a first-class citizen
