@@ -23,7 +23,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "On a page taller than the screen, after any number of growth frames, an in-place write lands on the screen row that holds the line it is rewriting.",
       "check": "A test in `tests/mc/page-frame.test.js` or a new `page-live` test: a 97-line page at 45 rows × 120 columns, first print, one growth frame, then one changed row — asserting the absolute row in the emitted `CSI n;1H` is the row that line occupies. Fails today by one."
     },
@@ -65,7 +65,7 @@
   "steps": [
     {
       "title": "The frame tells the truth about where the page is",
-      "status": "ready",
+      "status": "done",
       "done_when": "After a growth reprint on a page taller than the screen, `frameWrites` addresses the screen row that actually holds each line, and a test at 45 rows × 120 columns with a 97-line page proves it.",
       "instruction": [
         "`page-live.js`'s `draw` computes `const above = current.length + tailRows` (around line 281) — the whole page assumed to be above the cursor. That is true for the first print and stops being true the first time the page grows: `reprint()` in `page-frame.js` (around line 127) drops `skip = Math.max(0, 1 - (anchor - above))` rows on a page taller than the screen and prints only `after.slice(skip)`, so the page then occupies `next.length - skip` screen rows. `draw` sets `current = [...next]` and the next frame derives `above` from the full length again, so every absolute target `anchor - above + index` (`page-frame.js`, around line 110) is one row too high — `CSI 2K` clears the neighbour, writes the new text there, and leaves the row that should have changed standing with its old text.",
@@ -74,8 +74,12 @@
         "The test is the point of the step: a 97-line page, `stdout.rows = 45`, `columns = 120`, the first print, one growth frame, then one changed row — asserting the absolute row in the emitted `CSI n;1H` is the row that line occupies on the screen. Assert the non-anchor (drawn-by-count) path too; it has the same defect through `reach`.",
         "This step goes first because every step after it is invisible on a page that redraws wrong."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The instruction's arithmetic and the screen's do not agree about *why*, and the difference matters for the next reader. The `skip` cancels: with `above` measured from the page's first line, `anchor - above + index` is correct for every index whether or not the top of the page scrolled off, because `skip` moves the start row and the index together. What is actually wrong is that `reprint()` *joins* its lines and does not terminate them, so the cursor comes to rest on the page's last row, while the first print — `run()` and `show()` both write a trailing newline — leaves it one row below. So after any growth frame the page sits one row lower than `next.length + tailRows` says, on a page of any height. Fixed as the instruction asked in shape: `page-frame.js` exports `reprintPlan`, `reprint()` uses it, `page-live.js` holds `footprint` and derives `above` from it — but `footprint` is `below` (where the cursor ended up), not `printed`. `printed` would have put the page 56 rows out at 45×120 rather than one.",
+        "Two things left by that same missing newline are still on the page and are not this step's to fix. After a growth frame the blank separator row between the page and the key lines is gone — the keys land directly under the page's last row, and stay there until something reprints from a first print. And `note()`/`hold()` write `up(tailRows)` from the prompt, which after a growth frame is the page's last row rather than that blank: a `holding the last frame` line or the by-count line then lands on a page row, and the frame after it blanks the row rather than restoring it, because `current` still holds the text so nothing looks changed. My recommendation for whoever takes step 5: end the reprint with a newline, so both prints leave the same geometry — the blank row comes back, the note row is right, and `footprint` collapses back to `next.length`. It is a decision rather than a tidy-up, because it changes `frameWrites`' documented bytes and five asserted byte strings in `tests/mc/page-frame.test.js`.",
+        "The test is a real terminal, not a model of one: `@xterm/headless` (already a dependency, `scripts/mc-live-page-check.mjs` uses it) parses what the page writes and answers `CSI 6n` from its own cursor, so the row a line is on is read off a screen instead of being counted a second time by the test — a test that counts it the same way the page does agrees with the bug. Two things the harness has to do that are not obvious: a tty turns `\\n` into CRLF on output and a parser handed the bytes directly does not, so the fake stdout translates; and the fake clock is advanced timer by timer with the terminal let run in between, or the `ANCHOR_MS` timeout runs before the parser has seen the question and the page draws by count for reasons belonging to the test."
+      ],
+      "pr": 657,
       "blocked_by": null
     },
     {
