@@ -49,6 +49,7 @@ import {
 import { lastAttempt, lastDeploy } from './deploys.js';
 import { heldEntries, heldPath } from './held.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
+import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
 import { readLiveVersion } from './live-version.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
@@ -365,7 +366,7 @@ export function sessionsSection({
  * reader gets the plan-shaped answer alone, exactly as before.
  */
 export function nextSection({
-  queueText = '', plans = [], held = [], deep = LANE_DEEP, staleNamed = STALE_NAMED,
+  queueText = '', plans = [], held = [], queued: forMerge = [], deep = LANE_DEEP, staleNamed = STALE_NAMED,
   machine = () => null,
 } = {}) {
   const order = assembleQueue(queueText, plans);
@@ -420,6 +421,7 @@ export function nextSection({
     more: lanes.reduce((n, lane) => n + lane.more, 0),
     skipped: { count: skipped.length, reasons },
     held: heldSection(held),
+    queued: queuedSection(forMerge),
     stale: staleSection(plans, staleNamed),
   };
 }
@@ -460,6 +462,22 @@ function lanesOf(runnable, deep) {
 function heldSection(held) {
   const items = heldEntries(held)
     .sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
+  return { count: items.length, items };
+}
+
+/**
+ * The pull requests a hand `mc merge` could not land and left for the runner's
+ * merge lane (`~/mc/runner/merges.json`), oldest first — the order the lane
+ * itself takes them in.
+ *
+ * Beside the held rows because they are the two halves of one answer: what
+ * nothing will move until a person acts, and what the runner is going to land
+ * without being asked again. Every entry is carried for the reason
+ * `heldSection` carries every one of its own — `mc --json` is read by programs,
+ * and the page is where a cap belongs.
+ */
+function queuedSection(queued) {
+  const items = queueOrder(queueEntries(queued));
   return { count: items.length, items };
 }
 
@@ -990,6 +1008,7 @@ export async function collectPage({
   // facts, and asking twice is how two answers on one page come to differ.
   const stop = existsSync(join(root, 'runner', 'STOP'));
   const held = heldEntries(readJson(heldPath(root)));
+  const queuedForMerge = queueEntries(readJson(mergesPath(root)));
 
   const runner = runnerSection({
     runner: readJson(join(root, 'runner', 'runner.json')),
@@ -1022,6 +1041,7 @@ export async function collectPage({
       queueText,
       plans,
       held,
+      queued: queuedForMerge,
       machine: (name) => machineState(name, {
         plans,
         prs: prs.prs,

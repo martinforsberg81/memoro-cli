@@ -24,9 +24,10 @@ import { join } from 'node:path';
 
 import { defaultRepos, runsFor } from './brief-collect.js';
 import { heldPath, parseHeld } from './held.js';
+import { mergesPath, parseQueue } from './merge-queue.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
-import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
+import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { machineDetail, machineState } from './status-collect.js';
 import { parseUnmergeable, unmergeablePath } from './unmergeable.js';
 
@@ -121,7 +122,8 @@ export function wrap(text, width, pad) {
 }
 
 export function renderProject({
-  name, repo, programme, path, source, unmerged, plan, problems = [], workarea, runs, prs, machine = null, notes = [],
+  name, repo, programme, path, source, unmerged, plan, problems = [], workarea, runs, prs, machine = null,
+  queued = [], notes = [],
 }) {
   const out = [];
   out.push(`${name} — ${[repo, programme].filter(Boolean).join(' · ') || 'no repository'}`);
@@ -159,6 +161,12 @@ export function renderProject({
   out.push('OPEN PR');
   if (!prs.length) out.push('  none for this project');
   for (const pr of prs) out.push(`  #${pr.number}  ${clip(pr.title, 70)}${pr.headRefName ? `  (${pr.headRefName})` : ''}`);
+  // What is going to happen to it without anybody typing again. A queued pull
+  // request is not in the machine row above — nothing about this project is in
+  // the way; the merge is simply somebody else's now.
+  for (const entry of queued) {
+    out.push(`  #${entry.pr} is queued for merge${entry.since ? ` (since ${when(entry.since)})` : ''} — ${entry.reason}`);
+  }
   for (const note of notes) out.push('', `note: ${note}`);
   return `${out.join('\n')}\n`;
 }
@@ -320,8 +328,20 @@ export async function collectProject(name, {
     runs: runsFor(tsv, name, 3),
     prs,
     machine,
+    // The entries waiting for the runner's merge lane whose branch is this
+    // project's — the same longest-name rule the pull requests above are
+    // matched by (project-prs.js), so it holds with GitHub unreachable too.
+    queued: queuedFor(root, read, { name, repo, names: main?.names || [name] }),
     notes,
   };
+}
+
+/** This project's entries in `~/mc/runner/merges.json`, oldest first. */
+function queuedFor(root, read, { name, repo, names }) {
+  let entries = [];
+  try { entries = parseQueue(read(mergesPath(root))); } catch { return []; }
+  return entries.filter((entry) => (!entry.repo || !repo || entry.repo === repo)
+    && projectForBranch(entry.branch, names) === name);
 }
 
 /**

@@ -573,6 +573,36 @@ describe('NEXT', () => {
     assert.equal(nextSection({ plans: [], held: null }).held.count, 0);
   });
 
+  /**
+   * The other half of the same answer: a pull request a hand `mc merge` could
+   * not land and left for the runner's merge lane. Held is what waits for a
+   * person; queued is what does not — and until this row existed the only
+   * trace of a queued merge was a file nobody opens.
+   */
+  it('carries every queued pull request with its reason, oldest first', () => {
+    const queue = nextSection({
+      queueText: 'mc-ui\n',
+      plans: PLANS,
+      queued: [
+        { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', reason: 'memoro-cli is held by mc-run', stopped_at: 'lease', since: '2026-08-29T11:00:00Z', holder: 'martin@laptop' },
+        { repo: 'memoro', pr: 11541, branch: 'docx-editor', reason: 'another gate round is running', stopped_at: 'busy', since: '2026-08-29T09:30:00Z', holder: 'martin@laptop' },
+      ],
+    });
+    assert.equal(queue.queued.count, 2);
+    assert.deepEqual(queue.queued.items.map((item) => [item.repo, item.pr]), [['memoro', 11541], ['memoro-cli', 671]]);
+    // The rows say which repository, which number, why the round it was given
+    // did not land, and how long it has been waiting.
+    const lines = renderPageLines(pageData({ next: queue }), { columns: 120 });
+    assert.ok(lines.some((line) => /NEXT.*queued for merge 2/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {7}· memoro {2}#11541 {2}another gate round is running {2}\(since 08-29 09:30Z\)$/u.test(line)),
+      lines.join('\n'));
+  });
+
+  it('has nothing queued when the file is missing or not a list', () => {
+    assert.deepEqual(nextSection({ plans: [] }).queued, { count: 0, items: [] });
+    assert.equal(nextSection({ plans: [], queued: null }).queued.count, 0);
+  });
+
   // The whole section is empty only when there is nothing on main at all, and
   // then it says that rather than blaming the queue file for it.
   it('says so when there is no plan on main to run', () => {
@@ -1247,6 +1277,10 @@ describe('collectPage', () => {
       reason: 'two tests the change reaches are red', note: 'open,gate-red',
       since: '2026-08-29T09:10:00Z', repairs: 0,
     }]));
+    writeFileSync(join(root, 'runner', 'merges.json'), JSON.stringify([{
+      repo: 'memoro-cli', pr: 674, branch: 'mc-ui', reason: 'another gate round is running',
+      stopped_at: 'busy', since: '2026-08-29T11:30:00Z', holder: 'martin@laptop',
+    }]));
     writeFileSync(join(root, 'queue.md'), '# the queue\nmc-ui\ndocx-editor\n');
     mkdirSync(join(root, 'proposals'), { recursive: true });
     mkdirSync(join(root, 'intake'), { recursive: true });
@@ -1308,6 +1342,10 @@ describe('collectPage', () => {
     // open runner.log to see which pull request is standing still.
     assert.deepEqual(data.next.held.items.map((item) => [item.project, item.pr, item.reason]),
       [['docx-editor', 10958, 'two tests the change reaches are red']]);
+    // And beside it, `merges.json`: what a hand `mc merge` handed to the
+    // runner's merge lane rather than to whoever typed it.
+    assert.deepEqual(data.next.queued.items.map((item) => [item.repo, item.pr, item.stopped_at]),
+      [['memoro-cli', 674, 'busy']]);
     assert.equal(data.intake.repos[0].new_errors, 1);
     assert.deepEqual(data.intake.repos[0].loud_lines, [{ message: 'loud', fingerprint: 'abc', count: '41x 500' }]);
     assert.equal(data.intake.proposals, 1);

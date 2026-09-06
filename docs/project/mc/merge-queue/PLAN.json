@@ -36,12 +36,12 @@
       "check": "Queue a pull request with a deliberately red test: `held.json` gains the entry with `repairs: 0`, one repair session starts and is counted, and the entry then reads `repairs: 1` with the page's *held before merge* row naming it. No second repair over the next hour of rounds."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Without a runner, `mc merge` is unchanged.",
       "check": "`mc run stop`, then a refused `mc merge`: stderr is what it was before this project, plus at most one line saying no runner is there to take it. A test asserts the queue file is untouched."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The queue is visible where a person looks.",
       "check": "With one entry queued, the page's NEXT block and `mc --json` carry it with repository, number, reason and since; `mc status <name>` says so for a pull request whose branch belongs to a project."
     }
@@ -75,7 +75,7 @@
   "steps": [
     {
       "title": "A refused `mc merge` queues the pull request",
-      "status": "ready",
+      "status": "done",
       "done_when": "`mc merge <repo> <pr>` whose round stopped anywhere short of merged writes one entry to `~/mc/runner/merges.json` when a runner is running, says so in one line, and is byte-for-byte today's command when none is; the page shows the queue.",
       "instruction": [
         "Read `held.js` first and copy its shape, not its file: a new `src/mc/merge-queue.js` with pure rules — `enqueue`, `dequeue`, `queuedFor(repo, pr)` — over `~/mc/runner/merges.json`, one entry per pull request `{ repo, pr, branch, reason, stopped_at, since, holder }`. `repo` is part of the identity for the reason `held.js` gives: memoro #9 and memoro-cli #9 are different work.",
@@ -86,7 +86,7 @@
         "Tests: the pure rules in `tests/mc/merge-queue.test.js` in the style of `held.test.js`; the command in a test that drives `gate()` with a fake `runMergeRound` — there is none today, so it is a new file beside `tests/mc/repo-merge.test.js` — refused with a runner writes the entry, refused without one does not and prints the extra line, landed writes nothing. `npm test`."
       ],
       "comments": [],
-      "pr": null,
+      "pr": 676,
       "blocked_by": null
     },
     {

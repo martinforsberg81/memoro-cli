@@ -484,7 +484,12 @@ function nextLines(lines, c, wide, next) {
   const held = next.held?.count
     ? [{ text: ' · ', styles: ['grey'] }, { text: `held before merge ${next.held.count}`, styles: ['yellow', 'bold'] }]
     : [];
-  heading(lines, c, wide, 'NEXT', [{ text: counts, styles: ['grey'] }, ...order, ...held], 'mc status <name>');
+  // Beside it, and green rather than yellow: a queued merge is the runner's
+  // own next move — nobody has to type anything for it to land.
+  const queued = next.queued?.count
+    ? [{ text: ' · ', styles: ['grey'] }, { text: `queued for merge ${next.queued.count}`, styles: ['green', 'bold'] }]
+    : [];
+  heading(lines, c, wide, 'NEXT', [{ text: counts, styles: ['grey'] }, ...order, ...held, ...queued], 'mc status <name>');
 
   for (const lane of next.lanes || []) {
     lines.push(`     ${paint(c, between([
@@ -516,6 +521,7 @@ function nextLines(lines, c, wide, next) {
     ], wide - 7)}`);
   }
   heldLines(lines, c, wide, next.held);
+  queuedLines(lines, c, wide, next.queued);
   staleLine(lines, c, wide, next.stale);
 }
 
@@ -548,6 +554,36 @@ function heldLines(lines, c, wide, held) {
   }
   const more = held.count - Math.min(held.count, HELD_DRAWN);
   if (more) lines.push(`       ${paint(c, [{ text: `· … ${more} more`, styles: ['yellow'] }], wide - 7)}`);
+}
+
+/** How many queued pull requests the page names before it only counts them. */
+export const QUEUED_DRAWN = 6;
+
+/**
+ * One row per pull request a hand `mc merge` left for the runner's merge lane:
+ * the repository, the number, why the round it was given did not land, and how
+ * long it has been waiting.
+ *
+ * Under the held rows, and green where those are yellow, because the two say
+ * opposite things to the person reading them: a held pull request waits for
+ * them, a queued one does not. The repository is drawn rather than a project —
+ * a queued pull request need not belong to one, and the number is only a
+ * number until the repository is beside it.
+ */
+function queuedLines(lines, c, wide, queued) {
+  if (!queued?.count) return;
+  for (const item of queued.items.slice(0, QUEUED_DRAWN)) {
+    const left = `· ${item.repo || 'unknown'}  #${item.pr}  `;
+    const since = item.since ? `  (since ${when(item.since)})` : '';
+    const reason = clip(one(item.reason), Math.max(8, wide - 7 - left.length - since.length));
+    lines.push(`       ${paint(c, [
+      { text: left, styles: ['green', 'bold'] },
+      { text: reason, styles: ['green'] },
+      { text: since, styles: ['grey'] },
+    ], wide - 7)}`);
+  }
+  const more = queued.count - Math.min(queued.count, QUEUED_DRAWN);
+  if (more) lines.push(`       ${paint(c, [{ text: `· … ${more} more`, styles: ['green'] }], wide - 7)}`);
 }
 
 /**

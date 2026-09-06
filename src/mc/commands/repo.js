@@ -17,8 +17,14 @@
  * lease writes one file under mc's home and never inside a repository, and it
  * blocks nothing: git and gh are untouched by anything here.
  */
+import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
+import { writeJsonAtomic } from '../atomic-write.js';
+import { enqueue, mergesPath, parseQueue, queuedFor, queueable } from '../merge-queue.js';
+import { controlPaths, readRunner } from '../run-control.js';
+import { pidAlive } from '../status-collect.js';
+import { workRoot } from '../paths.js';
 import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
@@ -269,8 +275,56 @@ export function helperMergeRefusal(holder, { check = false } = {}) {
   return 'REFUSED — the helper\'s tool does not carry mc merge without --check: the helper produces evidence, it does not land code';
 }
 
-export async function gate(opts, { stdout, stderr }) {
-  const repoPath = await resolveRepoPath(opts.repo);
+/**
+ * A refused round, written down for the runner's merge lane.
+ *
+ * The round has already run and already said what it said — nothing here
+ * changes the ordinary process. What it changes is what becomes of the
+ * refusal: instead of being the caller's problem (fourteen hand retries on
+ * #671 in twenty minutes, 2026-09-06), it becomes an entry in
+ * `~/mc/runner/merges.json` that the lane lands, or holds after one repair.
+ *
+ * Three refusals are not queued. A round that landed has nothing to queue; a
+ * stop the lane could do nothing about stays as it is (`queueable`,
+ * merge-queue.js); and a batch is out of this project's scope — it already
+ * falls back to one round per pull request, and one entry per pull request out
+ * of a batch is a later question.
+ *
+ * "A runner is running" is `runner.json` with a live pid, read through the
+ * same `readRunner` the runner's own loop reads it with. Without one nothing
+ * would ever pick the entry up, so nothing is written and the caller is told.
+ *
+ * @returns {{running: boolean, entry: object|null}|null} — null when there is
+ *   nothing to queue and nothing to say about it.
+ */
+function queueRefusal(report, { repoPath, holder, root, deps = {} }) {
+  if (!report || report.ok || report.batch) return null;
+  if (!queueable(report.stopped_at)) return null;
+  const read = deps.read || ((path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } });
+  const runner = (deps.readRunner || readRunner)({
+    paths: controlPaths(root), read, alive: deps.alive || pidAlive,
+  });
+  if (!runner?.alive) return { running: false, entry: null };
+  const repo = basename(String(repoPath).replace(/\/+$/u, ''));
+  const now = deps.now ? deps.now() : new Date();
+  const entries = enqueue(parseQueue(read(mergesPath(root))), {
+    repo,
+    pr: Number(report.pr?.number),
+    // The branch is the gate's — the lane needs it to find the workarea the
+    // pull request stands on. A round refused before the gate ran (a lease
+    // somebody else holds) has no branch to give, and the lane says so.
+    branch: report.gate?.pr?.head || null,
+    reason: report.reason || `the round stopped at ${report.stopped_at}`,
+    stopped_at: report.stopped_at,
+    since: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'),
+    holder: holder?.name || null,
+  });
+  (deps.writeJson || writeJsonAtomic)(mergesPath(root), entries);
+  return { running: true, entry: queuedFor(entries, repo, Number(report.pr?.number)) };
+}
+
+export async function gate(opts, { stdout, stderr, ...deps }) {
+  const repoPath = await (deps.resolveRepo || resolveRepoPath)(opts.repo);
   if (!repoPath) {
     stderr.write(`mc: no repository called "${opts.repo}" — mc repo status lists the ones mc can see\n`);
     return 1;
@@ -297,19 +351,38 @@ export async function gate(opts, { stdout, stderr }) {
     prs: opts.prs?.length ? opts.prs : [opts.pr].filter(Boolean),
   });
   const round = { repoPath, pr: opts.pr, prs: opts.prs, full: Boolean(opts.full), holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
-  const report = opts.check ? await runGate(round) : await runMergeRound(round);
+  const report = opts.check ? await runGate(round) : await (deps.mergeRound || runMergeRound)(round);
   // Every round leaves a line — merged, stopped, refused — so "has the gate
   // ever caught anything?" is a count, not a reading of survivors (A7).
   recordRound(report, { mode });
 
+  // Only a landing round queues: `--check` measures and was never asked to
+  // land anything, so a red check is a verdict and not a refusal.
+  const queued = opts.check ? null : queueRefusal(report, {
+    repoPath, holder, root: deps.root || workRoot(process.env), deps,
+  });
+  // Exit 0 when queued: the caller asked for a merge, and the merge is now
+  // somebody's rather than nobody's.
+  const code = report.ok || queued?.entry ? 0 : 1;
+  // On stderr, so a no-runner terminal is byte-for-byte what it was before
+  // this project on the channel the verdict is read from.
+  const noRunner = queued && !queued.running
+    ? 'mc: no runner is running to take the refusal — start one, or run this again\n'
+    : null;
+
   if (opts.json) {
-    stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    return report.ok ? 0 : 1;
+    stdout.write(`${JSON.stringify(queued?.entry ? { ...report, queued: true, queue_entry: queued.entry } : report, null, 2)}\n`);
+    if (noRunner) stderr.write(noRunner);
+    return code;
   }
 
   const lines = opts.check ? gateLines(report) : mergeLines(report);
   for (const line of lines) stdout.write(`${line}\n`);
-  return report.ok ? 0 : 1;
+  if (queued?.entry) {
+    stdout.write(`mc: queued — the runner's merge lane lands #${queued.entry.pr}, or holds it after one repair (mc shows the queue)\n`);
+  }
+  if (noRunner) stderr.write(noRunner);
+  return code;
 }
 
 /**
