@@ -444,6 +444,40 @@ recoverable, which is precisely why the record is the fix.
 
 **Carried by [`the-role-a-session-runs-on/PLAN.json`](the-role-a-session-runs-on/PLAN.json).**
 
+## 14 · The lane pair is `per_repo 2, total 3`
+
+`ruling · 2026-09-05` · answers `lanes-pair`, raised by `total-lane-cap`
+step 4 (#639)
+
+Step 4 reserved this for Martin — *"set the real pair with Martin — do not
+simply raise `per_repo` back to 3 on your own judgement"* — and the brief put it
+to him the same evening with one recommendation: `per_repo 2, total 3`, not the
+`3/3` that criterion 1 names. The reason is the imbalance in the queue: memoro
+had twelve projects with a `ready` first step to memoro-cli's two to four, and
+under `3/3` memoro can hold all three lanes most rounds. A repository can never
+hold more than `per_repo` slots, so under `2/3` memoro-cli always has at least
+`3 − 2 = 1` it cannot be shut out of. The total still binds — `2 + 2 = 4` is
+more than 3 — so criterion 1 is measurable at `2/3` and needs no separate
+`3/3` round. The cost weighed: at most three sessions at once instead of two,
+roughly half again the concurrent spend of a day that cost ≈$525 at two.
+
+> **Beslut:** "Beslut #3: Enligt din rekommendation." (Martin, 2026-09-05,
+> at the brief)
+
+He ran it himself in the same message: `mc run lanes 2 --total 3` wrote
+`~/.memoro/mc/lanes.json` at 2026-09-05T20:41:42Z and `mc run --update` asked
+the running runner to take the pair after its round. The runner that started
+2026-09-06T12:03Z runs on it, and `mc run lanes` reads *"lanes 2 per
+repository, 3 in total"*.
+
+The answer was given and applied but never written into the plan, so the
+runner kept reporting step 4 as blocked on a decision that had been taken for a
+day. This entry is that record, a day late.
+
+**Carried by [`total-lane-cap/PLAN.json`](total-lane-cap/PLAN.json)** step 4,
+which now only has to watch a busy hour against the RUNNER block, flip
+criterion 1 from that measurement, and add the `project_log.md` row.
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
