@@ -91,7 +91,24 @@ export function readDeclaration(worktree) {
       return { ok: false, error: `${path}: ${suite.name}'s argv is a list of arguments, never a shell string` };
     }
   }
+  // What the repository says does not work against a local server — a
+  // weather key nobody has on a laptop, media served from production and
+  // blocked by the local origin's policy. Not a list of reds to explain
+  // away: `mc test dev` is not production and is not asked to be (Martin,
+  // 2026-09-06). It is told, once, at the top of a dev round.
+  const gaps = declaration.environments?.dev?.not_in_dev;
+  if (gaps !== undefined) {
+    if (!Array.isArray(gaps) || gaps.some((gap) => !gap?.name || !gap?.why
+      || typeof gap.name !== 'string' || typeof gap.why !== 'string')) {
+      return { ok: false, error: `${path}: environments.dev.not_in_dev is a list of { name, why }` };
+    }
+  }
   return { ok: true, declaration };
+}
+
+/** The dev gaps a declaration names, as lines a person reads once. */
+export function notInDev(declaration) {
+  return (declaration?.environments?.dev?.not_in_dev || []).map((gap) => `${gap.name} — ${gap.why}`);
 }
 
 /** The worktree `mc test dev` shares by default: the installation, on main. */
