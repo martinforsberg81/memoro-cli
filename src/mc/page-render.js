@@ -19,7 +19,19 @@
  * same wherever they are printed: `KIND_TONE` for what the runner is doing
  * (step, triage, the foreground verbs) and `STATUS_TONE` for where
  * a plan stands. Everything else is structure — cyan headings, grey for the
- * bookkeeping, white for the name a person is looking for.
+ * bookkeeping, and the terminal's own foreground for the text a person is
+ * reading, with `bold` on the name a row is about.
+ *
+ * Two colours this file does not use, and will not: `dim` and `white`. `dim
+ * grey` is `ESC[2m` over `ESC[90m`, two steps away from the foreground, and it
+ * drew the repository of all 41 project rows at or below the background of
+ * Martin's terminal — a cell nobody could read is not a quiet cell. `white` is
+ * `ESC[37m`, one fixed colour a theme never chose: on a light theme it is the
+ * wrong end of the scale, on a dark one it is dimmer than the text beside it.
+ * A part with no styles at all is returned untouched by `paint` and `painter`,
+ * and that — whatever the person set their terminal to — is what primary text
+ * is here. Where something must recede it does so by position, by the `·`
+ * glyph, or by plain `grey`, which is one step and not two.
  *
  * Every escape is added **after** `clip` and `pad` have decided the width:
  * `paint` measures the plain text, and only paints when it fits, so a
@@ -61,9 +73,9 @@ function kindTone(kind) {
   return KIND_TONE[String(kind || '').replace(/^mc /u, '')] || ['grey'];
 }
 
-/** A plan status's colour; no plan at all is the dimmest thing on the page. */
+/** A plan status's colour; no plan at all is bookkeeping, and grey says so. */
 function statusTone(status) {
-  return STATUS_TONE[status] || ['dim', 'grey'];
+  return STATUS_TONE[status] || ['grey'];
 }
 
 /** How long a quota answer stays worth looking at. */
@@ -190,7 +202,7 @@ function runnerLines(lines, c, wide, runner) {
         },
         { text: s.pid ? `pid ${s.pid}` : '', styles: ['grey'] },
       ], ' · '), wide - 28);
-      lines.push(`  ${c(MARK.running, 'green')} ${c(pad(clip(s.name, 21), 22), 'bold', 'white')} ${meta}`);
+      lines.push(`  ${c(MARK.running, 'green')} ${c(pad(clip(s.name, 21), 22), 'bold')} ${meta}`);
     }
   } else if (now.process?.alive) {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c(pad('runner', 22), 'grey')} ${c('between steps — nothing in flight', 'grey')}`);
@@ -240,7 +252,7 @@ function productionLine(lines, c, wide, production) {
   const liveAge = live ? ` (${ageWords(live.age_seconds)} old)` : '';
   const parts = [];
   if (production.sha) {
-    parts.push({ text: `production ${production.short}`, styles: ['white'] });
+    parts.push({ text: `production ${production.short}` });
     parts.push({
       text: `${production.build ? ` build ${production.build}` : ''} · deployed ${ageWords(production.age_seconds)} ago`
         + `${production.holder ? ` by ${production.holder}` : ''}`,
@@ -249,7 +261,7 @@ function productionLine(lines, c, wide, production) {
   } else {
     // Nothing mc deployed, but production answers something: say what it
     // answers and where that came from, rather than nothing at all.
-    parts.push({ text: `production ${live.short}`, styles: ['white'] });
+    parts.push({ text: `production ${live.short}` });
     parts.push({ text: ` · /api/version${liveAge} — mc has deployed nothing`, styles: ['grey'] });
   }
   if (production.differs) {
@@ -285,7 +297,7 @@ const openFor = (seconds) => (seconds == null ? 'open' : `open ${ageWords(second
  */
 function deskLine(lines, c, wide, title, session, verb) {
   if (!session) {
-    heading(lines, c, wide, title, [{ text: `${MARK.quiet}  not open`, styles: ['dim', 'grey'] }], verb);
+    heading(lines, c, wide, title, [{ text: `${MARK.quiet}  not open`, styles: ['grey'] }], verb);
     return;
   }
   heading(lines, c, wide, title, [
@@ -324,7 +336,7 @@ function workLines(lines, c, wide, sessions, unplanned) {
     // Cyan for a verb somebody typed, yellow for a tmux window nobody is
     // necessarily in — the same two meanings those colours carried before.
     const mark = item.verb ? c(MARK.running, 'cyan') : c(MARK.waiting, 'yellow');
-    lines.push(`  ${mark} ${c(pad(clip(item.area || '?', 21), 22), 'bold', 'white')} ${meta}`);
+    lines.push(`  ${mark} ${c(pad(clip(item.area || '?', 21), 22), 'bold')} ${meta}`);
   }
 
   // The folders no project explains, under the same heading as the sessions.
@@ -341,12 +353,14 @@ function workLines(lines, c, wide, sessions, unplanned) {
   if (folders.more) say(lines, c, wide, 7, `… ${folders.more} more — ~/mc/runner/unplanned-workareas.md has them all`);
 }
 
-/** How the clock reads: white, then yellow near the budget, then red past it. */
+/** How the clock reads: plain, then yellow near the budget, then red past it. */
 function elapsedTone(step) {
   if (step.over_budget) return ['red', 'bold'];
   const spent = step.elapsed_seconds;
   if (step.budget_seconds && spent != null && spent >= step.budget_seconds * 0.75) return ['yellow'];
-  return ['white'];
+  // Not white: a clock inside its budget is text to read, and reads in the
+  // colour the rest of the row does.
+  return [];
 }
 
 function queueLines(lines, c, wide, queue) {
@@ -361,7 +375,10 @@ function queueLines(lines, c, wide, queue) {
     : [];
   heading(lines, c, wide, 'QUEUE', [{ text: counts, styles: ['grey'] }, ...held], 'mc status <name>');
   for (const [index, item] of queue.next.entries()) {
-    const name = c(pad(clip(item.name, 25), 26), ...(index === 0 ? ['bold', 'white'] : ['white']));
+    // The head of the queue is bold; the rest are the terminal's own text, and
+    // painting them at all only made the first one harder to find.
+    const label = pad(clip(item.name, 25), 26);
+    const name = index === 0 ? c(label, 'bold') : label;
     const kind = paint(c, [{ text: item.kind, styles: kindTone(item.kind) }], wide - 34);
     lines.push(`  ${c(String(index + 1).padStart(3), 'grey')}  ${name}${kind}`);
   }
@@ -371,10 +388,12 @@ function queueLines(lines, c, wide, queue) {
     : '';
   if (more || skipped) {
     // What was passed over is the quietest thing in the section: it is the
-    // reason a name is *not* below, and dim grey is how the page says so.
+    // reason a name is *not* below. Grey is how the page says so — it recedes
+    // by sitting under the rows and by being the one grey line among them,
+    // which is a step a person can still read.
     lines.push(`       ${paint(c, between([
       { text: more, styles: ['grey'] },
-      { text: skipped, styles: ['dim', 'grey'] },
+      { text: skipped, styles: ['grey'] },
     ], ' · '), wide - 7)}`);
   }
   heldLines(lines, c, wide, queue.held);
@@ -486,12 +505,12 @@ function intakeLines(lines, c, wide, intake) {
     // and the age itself is the thing to see.
     const fresh = repo.age_seconds != null && repo.age_seconds < 24 * 60 * 60;
     lines.push(`       ${paint(c, between([
-      { text: repo.repo, styles: ['bold', 'white'] },
+      { text: repo.repo, styles: ['bold'] },
       { text: `${repo.date}${age}`, styles: repo.age_seconds == null ? ['grey'] : (fresh ? ['green'] : ['yellow']) },
       { text: errors, styles: !repo.first && repo.new_errors ? ['red'] : ['grey'] },
     ], ' · '), wide - 7)}`);
     for (const line of repo.loud_lines || []) {
-      lines.push(`  ${c('  !', 'red')}  ${c(clip(one(line), wide - 7), 'bold', 'white')}`);
+      lines.push(`  ${c('  !', 'red')}  ${c(clip(one(line), wide - 7), 'bold')}`);
     }
     if (repo.more_loud) say(lines, c, wide, 7, `… ${repo.more_loud} more above the threshold`);
   }
@@ -540,18 +559,22 @@ function projectColumns(wide) {
  */
 function projectLine(c, wide, project) {
   const mark = project.running ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
-  const nameTone = project.running ? ['bold', 'white'] : ['white'];
   // A plan still on the old markdown file has no steps to count and is said to
   // be what it is, rather than drawn as a fraction of nothing.
   const steps = project.steps
     ? `${project.steps.done}/${project.steps.total}`
     : (project.legacy ? 'PLAN.md' : '—');
   const column = projectColumns(wide);
+  // The repository is bookkeeping and grey; it was `dim grey`, which on this
+  // terminal put the same cell on 41 rows at the background's own brightness.
   const repo = column.repo
-    ? `${c(pad(clip(project.repo || '—', column.repo), column.repo), 'dim', 'grey')} `
+    ? `${c(pad(clip(project.repo || '—', column.repo), column.repo), 'grey')} `
     : '';
+  // The name is what the row is about: bold while the runner is on it, and
+  // otherwise the terminal's own foreground rather than a colour of ours.
+  const name = pad(clip(project.name, column.name), column.name);
   const left = `  ${c(String(project.number).padStart(3), 'grey')} ${mark} `
-    + `${c(pad(clip(project.name, column.name), column.name), ...nameTone)} `
+    + `${project.running ? c(name, 'bold') : name} `
     + repo
     + `${c(pad(clip(project.status || '—', column.status), column.status), ...statusTone(project.status))} `
     + `${c(pad(steps, column.steps), 'grey')}`;
@@ -577,7 +600,7 @@ function orphanLine(c, wide, area) {
   const mark = area.live ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
   const left = `  ${c(String(area.number).padStart(3), 'grey')} ${mark} `
     + `${c(pad(clip(area.name, column.name), column.name), 'grey')} `
-    + `${c(pad(clip(area.repo || '—', column.repo || column.status), column.repo || column.status), 'dim', 'grey')}`;
+    + `${c(pad(clip(area.repo || '—', column.repo || column.status), column.repo || column.status), 'grey')}`;
   const parts = [];
   if (area.uncommitted) parts.push(`${area.uncommitted} uncommitted`);
   if (area.last_commit) parts.push(`last commit ${area.last_commit}`);
@@ -605,7 +628,7 @@ function programmeLine(c, wide, group) {
         { text: session.pid ? `pid ${session.pid}` : '', styles: ['grey'] },
       ], ' · '),
     ], wide - 34)
-    : c(`${MARK.quiet}  no plan session`, 'dim', 'grey');
+    : c(`${MARK.quiet}  no plan session`, 'grey');
   return `${left} ${meta}`;
 }
 
@@ -644,10 +667,10 @@ export function renderPageLines(data, {
   const lines = [];
 
   const cost = money(data.runner?.day?.cost);
-  const brand = `${c('MEMORO·CLI', 'bold', 'white')}${version ? c(`  ${version}`, 'grey') : ''}`;
+  const brand = `${c('MEMORO·CLI', 'bold')}${version ? c(`  ${version}`, 'grey') : ''}`;
   // Counted on the plain text, and the narrowest terminal keeps the count it
   const parts = [
-    { text: `${data.queue.runnable} of ${data.queue.depth} queued`, styles: ['white'] },
+    { text: `${data.queue.runnable} of ${data.queue.depth} queued` },
     cost ? { text: `${cost} today`, styles: ['grey'] } : null,
   ].filter(Boolean);
   const plain = () => parts.map((part) => part.text).join('  ·  ');

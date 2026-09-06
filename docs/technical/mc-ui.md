@@ -282,58 +282,75 @@ through all three sections.
 | `blocked` | red |
 | `done` | grey |
 | `invalid` | red bold |
-| no plan on main | dim grey |
+| no plan on main | grey |
 
-Everything else is structure, and structure is quiet:
+Everything else is structure, and structure is quiet. **plain** in the table
+below means no escape at all — the terminal's own foreground, whatever the
+person set it to.
 
 | where | what | colour |
 |---|---|---|
-| header | `MEMORO·CLI` | bold white |
-| header | `N of M queued` | white |
+| header | `MEMORO·CLI` | bold |
+| header | `N of M queued` | plain |
 | header | version, rule, cost today | grey |
 | section titles | `RUNNER` `HELPER` `BRIEF` `QUEUE` `INTAKE` `PROGRAMMES` `WORK` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
-| RUNNER | the live step's `●`, its name | green, bold white |
-| RUNNER | elapsed: under ¾ of budget, from ¾, past it | white, yellow, bold red |
+| RUNNER | the live step's `●`, its name | green, bold |
+| RUNNER | elapsed: under ¾ of budget, from ¾, past it | plain, yellow, bold red |
 | RUNNER | `■ STOP requested` | bold red |
 | RUNNER | a stale runner file | red |
 | RUNNER | a quota answer under 6 h old, older | yellow, grey |
-| RUNNER | the production sha, the rest of that line | white, grey |
+| RUNNER | the production sha, the rest of that line | plain, grey |
 | RUNNER | `/api/version` naming another sha than the last deploy | bold yellow |
 | RUNNER | a deploy running now, one that has not come back in an hour | green, bold yellow |
 | RUNNER | a deploy that failed after the last good one | yellow |
 | RUNNER | between steps, no runner, the day's line, the tool and pid | grey |
 | HELPER, BRIEF | the `●` and the verb it is running | cyan |
-| HELPER, BRIEF | `·  not open` | dim grey |
-| WORK | a session's `●` and its area | cyan, bold white |
+| HELPER, BRIEF | `·  not open` | grey |
+| WORK | a session's `●` and its area | cyan, bold |
 | WORK | a tmux window's `◆` | yellow |
 | WORK | how long it has been open, under a day, from a day | grey, yellow |
-| QUEUE | the next name, the first of them | white, bold white |
+| QUEUE | the next name, the first of them | plain, bold |
 | QUEUE | the number, `… N more runnable` | grey |
-| QUEUE | why a project was skipped | dim grey |
+| QUEUE | why a project was skipped | grey |
 | QUEUE | `blocker finished N` and the steps under it | bold yellow, yellow |
 | INTAKE | the digest's date, under 24 h old, older | green, yellow |
 | INTAKE | new errors, when > 0 | red |
 | INTAKE | proposals, when > 0 | yellow |
-| INTAKE | a `!` line: its mark, its text | red, bold white |
+| INTAKE | a `!` line: its mark, its text | red, bold |
 | INTAKE | no digest yet, no new errors, no proposals | grey |
-| PROGRAMMES | a project the runner is stepping — `●`, its name | green, bold white |
-| PROGRAMMES | a quiet project's name and `next` | white, plain |
+| PROGRAMMES | a project the runner is stepping — `●`, its name | green, bold |
+| PROGRAMMES | a quiet project's name and `next` | plain, plain |
 | PROGRAMMES | the programme heading | bold cyan |
 | PROGRAMMES | a programme's open planning session | cyan |
-| PROGRAMMES | a programme with no planning session | dim grey |
-| PROGRAMMES | the repository a project lives in | dim grey |
+| PROGRAMMES | a programme with no planning session | grey |
+| PROGRAMMES | the repository a project lives in | grey |
 | PROGRAMMES | the open PR number | cyan |
 | PROGRAMMES | the number, the steps done, the last-run time, the no-workarea line | grey |
 | PROGRAMMES | a workarea row with no project on main | grey throughout |
 | footer | the cache line, the notes | grey |
 
-Four things hold that table up:
+Five things hold that table up:
 
 - **Plain 16-colour SGR, and only the `SGR` table in `status-render.js`** —
   `bold`, `dim`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,
-  `grey`. Nothing 256-colour, nothing new: `white` was already there, and
-  `bgred` turned out not to be needed.
+  `grey`. Nothing 256-colour, nothing new, and `bgred` turned out not to be
+  needed. The page draws from a subset of that table: `dim` and `white` are
+  still in `status-render.js` for whoever else wants them, and `page-render.js`
+  uses neither — see the bullet below.
+- **No `dim`, and primary text is the terminal's foreground** (2026-09-06).
+  `dim grey` was `ESC[2m` over `ESC[90m` — two steps down from the foreground —
+  and it drew the repository cell of all 41 project rows, `no plan session` on
+  every programme heading, `·  not open` on a desk, and the skip line under
+  QUEUE. On Martin's terminal that is at or below the background: a cell nobody
+  can read is not a quiet cell, it is a missing one. `white` was `ESC[37m`, one
+  fixed colour a theme never chose — the wrong end of the scale on a light
+  theme, dimmer than its neighbours on a dark one. Both are gone from the page.
+  What receded by being dim now recedes by position, by the `·` glyph, or by
+  plain `grey`, which is one step and not two; what was `white` is a part with
+  no styles, which `paint` and `painter` return untouched, and `bold` is what
+  marks the name a row is about. The plain page is unchanged — there was never
+  an escape in it — and `mc --json` never carried one either.
 - **`paint(c, parts, space)` is why no escape is ever cut.** `clip` counts
   columns but slices bytes, so a string that already carries escapes cannot be
   cut. `paint` measures the plain text of a run, paints it only when it fits,
@@ -353,7 +370,11 @@ Four things hold that table up:
 painted page (the colours in order, not the escape bytes), the two tables
 walked through every section that prints them, the clock at ¾ and past the
 budget, and — at six terminal widths — painted against plain, row for row,
-with every escape checked to be whole.
+with every escape checked to be whole. Two more assertions keep the paragraph
+above honest: no row of the page carries `dim` or `ESC[37m`, and no row of any
+table on this page names either. In the snapshot, primary text leaves no run at
+all — a cell that disappears from a signature is a cell that went back to being
+read rather than coloured.
 
 ## The menu
 
