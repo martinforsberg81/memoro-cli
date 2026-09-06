@@ -16,35 +16,36 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { planLaunch } from '../../src/mc/commands/plan.js';
 import {
   SHARED_ROLE_FILE, canonRolesDir, instructionsFor, readCanonRole,
 } from '../../src/mc/roles.js';
 
 /**
- * Every role that may put a question to Martin. `brief` answers them.
+ * Every role that writes a question down for Martin to find. `brief` answers
+ * them.
  *
- * `plan` is not one any more. Its overlay is gone — the role is frontmatter,
- * and what a planning session is told is its first prompt and nothing else
- * (Martin, 2026-08-31) — so there is no text there to hold to a shape. It is
- * also the one session Martin is sitting in front of: a question does not have
- * to become anything to reach him, it can be asked.
+ * `plan` is not one, and has a body of its own since #656. It is the session
+ * Martin is sitting in front of: a question does not have to become anything
+ * to reach him, it can be asked — so its overlay says read first and ask the
+ * one thing, rather than holding it to the shape a written proposal takes.
  */
 const AUTHORS = ['worker', 'step', 'repair'];
 
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
 
-/** What a session of this role actually receives, by the path that carries it. */
+/**
+ * What a session of this role actually receives.
+ *
+ * One path for all seven now. `plan` used to be the exception — frontmatter
+ * with no body, so nothing reached it but `planLaunch`'s prompt — and
+ * `tests/mc/roles.test.js` § *every canon role has a body* is what keeps that
+ * from coming back.
+ */
 const toldTo = (name) => {
   const role = readCanonRole(name);
-  assert.ok(role, `${name} is missing from canon/roles/`);
-  // `plan` is frontmatter only and stays that way (#580): a planning session's
-  // text is its first prompt, so `planLaunch` is where anything reaches it.
-  // Every other role inherits through its overlay.
-  return role.overlay
-    ? instructionsFor('claude-code', 'PROFILE', role.overlay)
-    : planLaunch({ programme: 'msr-core', repos: ['memoro-cli'], role }).prompt;
+  assert.ok(role?.overlay, `${name} is missing from canon/roles/, or has no body`);
+  return instructionsFor('claude-code', 'PROFILE', role.overlay);
 };
 
 /**
@@ -119,9 +120,8 @@ describe('the decision shape every role writes', () => {
  * found that nobody asked it about, and who settles the route to `main`.
  *
  * These are not one role's rules, so they are not in a role file. They are in
- * `canon/roles/_common.md`, and this asserts they arrive — through the
- * assembler for the six roles with a body, and through `planLaunch` for the
- * one without.
+ * `canon/roles/_common.md`, and this asserts they arrive at all seven through
+ * the assembler.
  */
 describe('the rules every session gets, whichever role it is', () => {
   const CANON_ROLES = ['brief', 'helper', 'intake', 'plan', 'repair', 'step', 'worker'];

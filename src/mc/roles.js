@@ -124,6 +124,41 @@ export function sharedRoleText() {
   return readFile(join(canonRolesDir(), SHARED_ROLE_FILE))?.trim() || null;
 }
 
+/**
+ * A passage two roles share, carried by reference rather than copied.
+ *
+ * `_common.md` is what *every* role session is told. The rules for writing a
+ * `PLAN.json` are not that: two roles write plans (the planning session, and
+ * the brief since 2026-09-06) and six do not, and telling a `step` session how
+ * to write a plan it may never write is worse than telling it nothing. So a
+ * shared passage is its own file under the same underscore convention —
+ * `listRoles` skips it, `parseRole` refuses it for want of frontmatter — and a
+ * role file names it on a line of its own:
+ *
+ *   @include _plan-writing.md
+ *
+ * The line is replaced with that file's text at assembly, in `instructionsFor`,
+ * which is the one door every launch path goes through. It is deliberately not
+ * expanded in `parseRole`: `run.js` and the role commands test `role.overlay`
+ * to decide whether a role file is installed at all, and that has to stay the
+ * role's *own* words (see `SHARED_ROLE_FILE`).
+ *
+ * Only an underscored name in `canon/roles/` can be included — a role cannot
+ * include a role, so there is no recursion to bound. A name that is not there
+ * is left standing in the text rather than silently dropped: a visible
+ * `@include` line in a session's instructions is a broken install somebody can
+ * see, and a rule that quietly vanished is not.
+ */
+const ROLE_INCLUDE = /^@include[ \t]+(_[A-Za-z0-9._-]+\.md)[ \t]*$/gmu;
+
+export function expandRoleIncludes(text) {
+  if (typeof text !== 'string' || !text.includes('@include')) return text;
+  return text.replace(ROLE_INCLUDE, (line, file) => {
+    const passage = readFile(join(canonRolesDir(), file))?.trim();
+    return passage || line;
+  });
+}
+
 export function readRole(name, env = process.env) {
   const path = join(rolesDir(env), `${name}.md`);
   const role = parseRole(readFile(path), name);
@@ -207,10 +242,15 @@ export function areaRole(areaPath, env = process.env) {
  * base instructions rather than replace them (see `portrait.js`). A tool mc
  * has no channel for gets an empty argument list there and is unaffected by
  * what is assembled here.
+ *
+ * A passage two roles share is pulled in here too, where the overlay is
+ * expanded — see `expandRoleIncludes`. It is the same door because a second
+ * one is how a kind of session quietly stops being told something.
  */
 export function instructionsFor(toolId, profile, overlay) {
   const shared = overlay ? sharedRoleText() : null;
-  const combined = [profile, shared, overlay].filter(Boolean).join('\n\n---\n\n');
+  const body = expandRoleIncludes(overlay);
+  const combined = [profile, shared, body].filter(Boolean).join('\n\n---\n\n');
   return combined || null;
 }
 

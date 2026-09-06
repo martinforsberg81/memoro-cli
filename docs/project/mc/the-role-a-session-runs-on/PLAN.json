@@ -22,12 +22,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`canon/roles/plan.md` has an overlay body, and no canon role can ship without one again.",
       "check": "`readCanonRole('plan').overlay` is a non-empty string, and a test walks `canonRolesDir()` asserting every `*.md` that is not `_common.md` parses to a role with a non-null `overlay`. The test fails on today's tree."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The rules two roles now share about writing a plan are written once, and neither role file carries a second copy of them.",
       "check": "The shared passage lives in exactly one file; a test asserts the sentences that define it appear in one canon file and not in `plan.md` and `brief.md` both."
     },
@@ -55,7 +55,7 @@
   "steps": [
     {
       "title": "`canon/roles/plan.md` gets a body, and the plan-writing rules are written once",
-      "status": "ready",
+      "status": "done",
       "done_when": "`canon/roles/plan.md` has an overlay that tells a planning session what it is for and how a plan is written; the rules it shares with `canon/roles/brief.md` exist in one file that both inherit; and a test asserts every canon role but `_common.md` has a non-null overlay.",
       "instruction": [
         "`canon/roles/plan.md` is six lines — `name`, `model`, `singleton`, `tools` — and no body at all. `readCanonRole('plan').overlay` is `null`, so an `mc plan <programme>` session is told `_common.md` and its profile and nothing about planning. Every other role has a body. #580 was called *\"Every role says a turn is the cost; the plan role gets a body\"* and delivered only the first half; ruling 6 in `docs/project/mc/rulings.md` records that the model on that file had never been placed deliberately either.",
@@ -64,8 +64,14 @@
         "The overlap with `brief.md` is now real: both write plans, both consume proposals, both land through a pull request. Write those sentences **once**. `_common.md` is the file every role inherits and it is not the right home — this is shared by two roles, not by all eight, and folding it there would tell a `step` session how to write a plan it may not write. So make it a passage of its own that both role files carry by reference, or split the shared half into a file the two of them include; whichever you choose, `instructionsFor` assembles profile, `_common.md` and the overlay in that order and the mechanism for a third piece has to go through that same door. Do not fold anything into `overlay` before `run.js`'s `role.overlay` check — `roles.js` § `SHARED_ROLE_FILE` says why, and that reason still holds.",
         "Then the guard that stops this happening again: a test over `canonRolesDir()` asserting every `*.md` that is not `_common.md` parses to a role whose `overlay` is a non-empty string. It fails on today's tree, which is the point of writing it first."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The shared passage is `canon/roles/_plan-writing.md` and the mechanism is an include marker: a line of exactly `@include _plan-writing.md` in a role's body, expanded by `expandRoleIncludes` **inside `instructionsFor`** and nowhere else. The step's instruction offered two shapes and this is the one that keeps the passage where each role wants it — mid-body in `brief.md`, last in `plan.md` — rather than always ahead of or behind the role's own words. Three properties are load-bearing for step 2: only an underscored name in `canonRolesDir()` resolves (so a role cannot include a role, and there is no recursion to bound), the marker must be a line of its own, and an unresolvable marker is left standing in the text rather than dropped. Expansion is deliberately *not* in `parseRole`, so `role.overlay` is still the role's own words — `run.js:1421`'s installed-or-not check and `mc roles show` both read it.",
+        "That has a consequence step 2 has to decide about: `mc roles show plan` now prints a raw `@include _plan-writing.md` line, because `commands/roles.js:33` writes `role.overlay`. Step 2's verb is the assembled form — exactly what `instructionsFor` returns — so the two halves of its comparison are the same object, and the digest it records must be taken from the assembled text, after expansion. A digest over `role.overlay` would not change when `_plan-writing.md` changes, which is precisely the drift the project exists to catch.",
+        "`planLaunch` no longer pastes `sharedRoleText()` into its prompt and its `shared` parameter is gone. With `plan.md` having no body, that paste was the only way a planning session could inherit `_common.md`; now the overlay carries it through the assembler and doing both would tell the session the same rules twice. `tests/mc/commands/plan.test.js` asserts the count is exactly one. `mc plan` also refuses a role with no overlay now, the way `mc brief` and `mc worker` do, and `run(argv, deps)` grew a `deps.role` seam so that refusal is testable without touching the shipped file.",
+        "Two technical documents said the opposite of the tree and were corrected rather than left: `docs/technical/mc-roles.md` § *The one session that cannot inherit it* (now § *A passage two roles share*) and `docs/technical/mc-plan.md` § *What the session is told*. `docs/project/README.md` needed nothing — § *Who writes what* already said what `plan.md` now says. The project log and `docs/project/mc/rulings.md` are untouched; ruling 13 already describes both steps and the close-out row belongs to whoever writes it after step 2.",
+        "Not done and not in this step's `done_when`: nothing verifies that a *user catalogue* role carrying an include marker resolves against canon rather than against the catalogue it came from. `expandRoleIncludes` resolves in `canonRolesDir()` unconditionally, which is right — shared passages ship with mc — but step 2 records which source a role's text came from beside the digest, and that reading should note an included passage always comes from canon even when the role does not."
+      ],
+      "pr": 659,
       "blocked_by": null
     },
     {

@@ -135,31 +135,57 @@ Four paths launch a session with instructions, and all four call it:
 
 Each of them used to write the join out by hand.
 
-## The one session that cannot inherit it
+## A passage two roles share
 
-`canon/roles/plan.md` is **frontmatter only** and stays that way (#580): what a
-planning session is told is its first prompt, composed by `planLaunch` in
-[`plan.js`](../../src/mc/commands/plan.js), so that function is the whole
-account of what that session hears
-([`mc-plan.md`](mc-plan.md#what-the-session-is-told)).
+`_common.md` is what *every* role session is told. Since 2026-09-06 there is a
+second kind of shared text, and it is not that: two roles write plans — the
+planning session, and the brief for a proposal Martin said GO to (ruling 11) —
+and six do not. Telling a `step` session how to write a `PLAN.json` it may
+never write is worse than telling it nothing, so the plan-writing rules are
+neither in `_common.md` nor copied into both role files. They are
+`canon/roles/_plan-writing.md`, and each of the two names it on a line of its
+own:
 
-Its overlay is therefore `null`, and the assembler correctly hands it nothing.
-So `planLaunch` reads `sharedRoleText()` itself and folds it into the prompt.
-The other shape — having the assembler supply the shared text when the overlay
-is null — would have cost the parallel-operation guarantee above: it would need
-a second flag saying "this null overlay is a role and that one is not", which
-is the drift this mechanism exists to stop. Reading the one file keeps the rule
-in a single home and keeps `planLaunch` the single account of its own prompt.
+```
+@include _plan-writing.md
+```
+
+`expandRoleIncludes` replaces that line with the file's text **in
+`instructionsFor`** — the same door, for the same reason a second one was never
+opened. It is deliberately not expanded in `parseRole`: `overlay` stays the
+role's own words, which is what `run.js`'s installed-or-not check and
+`mc roles show` read.
+
+Three properties are mechanical rather than tidy. Only an underscored name in
+`canon/roles/` can be included, so a role cannot include a role and there is no
+recursion to bound. The marker has to be a line of its own — a mention inside a
+sentence is left alone. And a name that resolves to nothing is left standing in
+the text rather than dropped: a visible `@include` line in a session's
+instructions is a broken install somebody can see, and a rule that quietly
+vanished is not.
+
+`canon/roles/plan.md` had no body at all until #656 — six lines, every one of
+them frontmatter — so an `mc plan <programme>` session was told its model,
+`_common.md` and its first prompt, and nothing about planning. #580 was called
+*"Every role says a turn is the cost; the plan role gets a body"* and landed
+only the first half. It has one now: the programme as the unit, `~/mc/plan/`
+and why it is not a workarea, the two kinds of work that are its own (thinking
+a programme through, and a `plan-review` park), the project the brief has
+already decided and it therefore does not take, and the shared passage above.
+`planLaunch` no longer folds `sharedRoleText()` into its prompt — with a role
+body, the shared text arrives through the assembler like every other session's,
+and pasting it in as well would say it twice.
 
 ## Where the code is
 
 | file | what |
 |---|---|
-| `src/mc/roles.js` | `parseRole`, the two catalogues, `sharedRoleText`, `instructionsFor`, the `.mc-role` mark, the reserved names |
+| `src/mc/roles.js` | `parseRole`, the two catalogues, `sharedRoleText`, `expandRoleIncludes`, `instructionsFor`, the `.mc-role` mark, the reserved names |
 | `src/mc/canon.js` | `canonRoot` — where the packaged `canon/` is, resolved from the module's own path |
 | `src/mc/portrait.js` | `profileArgs` — the per-tool launch argument the assembled text rides on |
 | `src/mc/commands/roles.js` | `mc roles list`, `mc roles show <role>` over the user's catalogue |
 | `canon/roles/_common.md` | the text every role session shares |
+| `canon/roles/_plan-writing.md` | the passage `plan` and `brief` share about writing a `PLAN.json` |
 | `canon/roles/<name>.md` | one role's frontmatter and its own words |
 
 ## How it is tested
@@ -173,12 +199,22 @@ is in exactly one file in `canon/roles/`, reaches every canon role that has a
 body, is **not** listed as a role with the file sitting in the catalogue
 directory under test, and is not in `step`'s own overlay.
 
+Two blocks below it. *A passage two roles share* asserts three sentences of
+`_plan-writing.md` are each in exactly one file in `canon/roles/`, that `plan`
+and `brief` both carry the marker and neither a copy, that the passage is not
+itself listed as a role, that `instructionsFor` expands the marker and leaves
+none behind — and that an unresolvable marker is left standing. *Every canon
+role has a body* walks `canonRolesDir()` and fails any `*.md` without a leading
+underscore that does not parse to a role with a non-empty `overlay`; it is the
+guard that would have caught `plan.md`, and it failed on the tree that shipped
+it.
+
 [`tests/mc/roles-decisions.test.js`](../../tests/mc/roles-decisions.test.js) —
 what each role is told, read through the path that actually delivers it: the
-assembler for the roles with a body, `planLaunch` for `plan`. It walks all
-seven canon roles for the loose-thread and route rules, asserts their text
-exists in exactly one file, and holds the decision shape `worker`, `step` and
-`repair` are held to.
+assembler for the roles with a body, `planLaunch` for a role without one. It
+walks all seven canon roles for the loose-thread and route rules, asserts their
+text exists in exactly one file, and holds the decision shape `worker`, `step`
+and `repair` are held to.
 
 The delivered text is asserted at each launch path too, against
 `sharedRoleText()` rather than a copy of it:

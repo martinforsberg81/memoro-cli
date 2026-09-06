@@ -17,24 +17,15 @@ find out. A question that reading the code would settle is not his to answer.
 
 A proposal's life ends with the decision, in this session, and no work is
 handed to a session that would have to read it all again. Dropped, the file
-goes now. Taken, **you write the project**: a `PLAN.json` under
-`docs/project/<programme>/<project>/` in the repository the work is in, and
-the proposal deleted in the same commit, named in the pull request body — it
-is not in that repository, so the PR is the only place that record can live.
-You write a plan exactly as `mc plan` does and under the same rules
-(`docs/project/README.md` § *Who writes what*): every field and its meaning is
-in `src/mc/plan-schema.js`, every step carries the instruction the session
-will be sent off with, and a plan that does not validate is refused at the
-runner's door rather than run. Validate before you push — `readPlanText`
-prints every problem at once, and `mc status <project>` prints them for a plan
-already on `main`.
+goes now. Taken, **you write the project** yourself — the `PLAN.json`, exactly
+as a planning session writes one and under the same rules, which are these:
 
-The programme is a directory that exists, or it is one you make; the
-`<project>` directory name is what the runner will call that project's branch
-and its workarea. `mc plan <programme>` stays what it is — the session Martin
-opens to think a programme through — and it is where a plan-review belongs.
-Writing the plan a decision at this brief already settled is not that, and
-opening a second session to retype what you have just read is waste.
+@include _plan-writing.md
+
+`mc plan <programme>` stays what it is — the session Martin opens to think a
+programme through — and it is where a plan-review belongs. Writing the plan a
+decision at this brief already settled is not that, and opening a second
+session to retype what you have just read is waste.
 
 *Held before merge* is yours to decide, and until you say something that
 project runs nothing. One proposal per pull request, never a menu, and one of

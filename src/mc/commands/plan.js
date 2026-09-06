@@ -39,7 +39,7 @@ import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea } from '../work-area.js';
 import { openInWorkArea } from '../work-open.js';
 import { PLAN_HOME, planHome } from '../paths.js';
-import { readCanonRole, reservedRoleHint, reservedRoleName, sharedRoleText } from '../roles.js';
+import { readCanonRole, reservedRoleHint, reservedRoleName } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
 import { scanArgs } from './flags.js';
 
@@ -91,12 +91,14 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
-  // The role is frontmatter — the model and the tools this session defaults to.
-  // It carries no overlay: what a planning session is told is the first prompt
-  // and nothing else (Martin, 2026-08-31).
-  const role = readCanonRole('plan');
-  if (!role) {
-    stderr.write('mc: the plan role is missing from this install — expected canon/roles/plan.md\n');
+  // The role is the model and the tools this session defaults to, and — since
+  // #656 — a body saying what a planning session is for and how a plan is
+  // written. A role file with no body is a session told nothing about
+  // planning, which is what that change ended; refused here rather than
+  // launched, the way every other role command refuses its own.
+  const role = (deps.role || (() => readCanonRole('plan')))();
+  if (!role?.overlay) {
+    stderr.write('mc: the plan role is missing from this install — expected canon/roles/plan.md with an overlay body\n');
     return 1;
   }
 
@@ -284,25 +286,24 @@ export function programmeLabel(row) {
  *
  * So the reading is named and nothing else is: `docs/project/README.md`, which
  * is where the convention and the `PLAN.json` schema actually live, and the
- * programme's own directory. There is no role overlay behind this — the role
- * file is frontmatter, the model and the tools, and no prose.
+ * programme's own directory. What a planning session *is* — the programme as
+ * the unit, the plan-review, the projects the brief has already decided and
+ * this session therefore does not take — is `canon/roles/plan.md` and reaches
+ * the session behind the profile, the way every other role's does.
  *
  * The one addition is not a deliverable either: a step parked on `plan-review`
  * is this session's by definition, and the brief hands it over by name. That is
  * a fact about work already on `main`, not a guess about what this session will
  * produce.
  *
- * The one thing that does come from outside is the text every role session
- * shares — `canon/roles/_common.md`, read here rather than restated. A rule
- * that holds for every session holds for this one, and a planning session is
- * the only one that cannot inherit it through its role: `instructionsFor`
- * hangs the shared text on the overlay, and this role has none. So it comes in
- * through the prompt, which is what a planning session is told (Martin,
- * 2026-08-31) — and it comes in by reading the one file, so the rule still has
- * a single home and this function is still the whole account of what this
- * session hears.
+ * This function used to read `canon/roles/_common.md` and paste it into the
+ * prompt, because a role with no overlay inherits nothing: `instructionsFor`
+ * hangs the shared text on the overlay, and this role had none. It has one now
+ * (#656), so the shared text arrives by the same door as every other session's
+ * and pasting it here as well would tell a planning session the same rules
+ * twice. The `shared` parameter is gone with it.
  */
-export function planLaunch({ programme, repos = [], role, shared = sharedRoleText() }) {
+export function planLaunch({ programme, repos = [], role }) {
   const beside = repos.map((repo) => `\`${repo}/\``).join(' and ') || 'no checkout';
   const lines = [
     `You are the planning session for the \`${programme}\` programme.`,
@@ -311,13 +312,11 @@ export function planLaunch({ programme, repos = [], role, shared = sharedRoleTex
     `worktree on branch \`plan/${programme}\`. This is not a workarea: nothing`,
     '`mc run` does can reach it.',
   ];
-  if (shared) lines.push('', shared);
   // The one thing a planning session is told about a plan it has not opened:
   // `plan-review` is its work. `canon/roles/brief.md` sends it here by name, and
   // a hand-off nobody at the receiving end has heard of is a hand-off that
-  // stops. It is a line of this prompt rather than prose in
-  // `canon/roles/plan.md` because that role is frontmatter and stays that way —
-  // asserted, with the reason, in `tests/mc/commands/plan.test.js`.
+  // stops. The role file says it too, in general; this says it about the
+  // programme now on the screen, which is the form the session can act on.
   lines.push(
     '',
     'Martin is at the terminal. Start by reading `docs/project/README.md` and what',
