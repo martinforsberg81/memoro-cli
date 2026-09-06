@@ -166,7 +166,9 @@ describe('RUNNER — production', () => {
     assert.match(strip(drawn), /production 1a2b3c4 .* · \/api\/version says b3e65b6 \(60 min old\)/u);
     // Yellow is the page's colour for what waits on a person, and nothing here
     // can tell which of the two shas is the one to believe.
-    assert.equal(signature(drawn), 'white grey yellow+bold');
+    // The sha itself carries no colour — it is the text of the line — so the
+    // only two runs on the row are the grey bookkeeping and the yellow.
+    assert.equal(signature(drawn), 'grey yellow+bold');
   });
 
   it('carries a deploy that is running now, and calls one that never came back late', () => {
@@ -984,9 +986,14 @@ const SGR = new RegExp(`${ESC}\\[([0-9;]*)m`, 'gu');
 const strip = (line) => line.replace(SGR, '');
 
 /**
- * A row's colours in order — `bold+white grey` for a painted name followed by
- * a painted count. The palette is a table, and this is how a test reads one
+ * A row's colours in order — `bold grey` for a painted name followed by a
+ * painted count. The palette is a table, and this is how a test reads one
  * row of it back without pinning the escape bytes themselves.
+ *
+ * Primary text carries no escape at all (it is the terminal's own foreground),
+ * so it leaves no run here: a row's signature is what the page painted *on
+ * top of* the text, and a cell that vanishes from a signature is a cell that
+ * went back to being read rather than coloured.
  */
 function signature(line) {
   const out = [];
@@ -1014,46 +1021,62 @@ describe('the palette', () => {
   // One line of the page per row, and the colours it carries. The text beside
   // each is what that row says at 120 columns; the plain page below is the
   // same page with the escapes taken out again.
+  //
+  // A name with no run against it is not an unpainted row: it is a name drawn
+  // in the terminal's own foreground, which is what primary text is here. Every
+  // `white` and every `dim+grey` that used to be in this list went one of those
+  // two ways — to nothing, or to plain `grey`.
   const SNAPSHOT = [
     '',
-    'bold+white grey grey white grey grey', //   MEMORO·CLI 0.7.11 ── 4 decisions · 2 of 3 queued · ≈$7.28 today
+    'bold grey grey grey grey', //               MEMORO·CLI 0.7.11 ── 2 of 3 queued · ≈$7.28 today
     '',
     'bold+cyan grey grey yellow+bold grey', //                     QUEUE  2 runnable of 3 · held before merge 1   mc status <name>
-    'grey bold+white green', //                                      1  mc-ui  step
-    'grey white green', //                                           2  docx-editor  step
-    'dim+grey', //                                                   skipped 1 (done 1)
+    'grey bold green', //                                            1  mc-ui  step
+    'grey green', //                                                 2  docx-editor  step
+    'grey', //                                                       skipped 1 (done 1)
     'yellow+bold yellow', //                                         · docx-editor  #10958  two tests the change reaches are red
     '',
     'bold+cyan grey grey yellow grey', //                          INTAKE  1 digest · 1 proposal
-    'bold+white grey green grey red', //                                   memoro · 2026-08-29 (60 min old) · 1 new error (1 loud)
-    'red bold+white', //                                           !  `abc` — 41x 500 — loud
+    'bold grey green grey red', //                                         memoro · 2026-08-29 (60 min old) · 1 new error (1 loud)
+    'red bold', //                                                 !  `abc` — 41x 500 — loud
     '',
     'bold+cyan grey green grey red grey grey grey', //          PROGRAMMES  3 programmes · 4 projects  ready 2 · done 1 · blocked 1
-    'bold+cyan dim+grey', //                                       assistant-avatar   ·  no plan session
-    'grey grey white dim+grey red grey grey blue', //             1 · avatar-self-serve  memoro  blocked  0/1  …  triage
-    'bold+cyan dim+grey', //                                       docx-editing-surface   ·  no plan session
-    'grey grey white dim+grey green grey grey green', //          2 · docx-editor  memoro  ready  0/1  …  step
-    'bold+cyan dim+grey', //                                       mc   ·  no plan session
-    'grey grey white dim+grey grey grey', //                      3 · mc-run  memoro-cli  done  1/1  nothing
-    'grey grey white dim+grey green grey cyan', //                4 · mc-ui  memoro-cli  ready  0/1  Step 1, …  #440
+    'bold+cyan grey', //                                           assistant-avatar   ·  no plan session
+    'grey grey grey red grey grey blue', //                      1 · avatar-self-serve  memoro  blocked  0/1  …  triage
+    'bold+cyan grey', //                                           docx-editing-surface   ·  no plan session
+    'grey grey grey green grey grey green', //                   2 · docx-editor  memoro  ready  0/1  …  step
+    'bold+cyan grey', //                                           mc   ·  no plan session
+    'grey grey grey grey grey', //                               3 · mc-run  memoro-cli  done  1/1  nothing
+    'grey grey grey green grey cyan', //                         4 · mc-ui  memoro-cli  ready  0/1  Step 1, …  #440
     'grey', //                                                       3 of them have no workarea yet
     '',
     'bold+cyan grey grey', //                                      WORK  1 session · 1 workarea with no project
-    'yellow bold+white cyan grey grey grey grey', //             ◆ docx-editor  tmux · open 60 min · mc-docx-editor
+    'yellow bold cyan grey grey grey grey', //                  ◆ docx-editor  tmux · open 60 min · mc-docx-editor
     '',
-    'grey grey grey dim+grey grey', //                               5 · ui-fixes  —  no project on main
+    'grey grey grey grey grey', //                                   5 · ui-fixes  —  no project on main
     '',
     'bold+cyan grey', //                                          RUNNER                                mc run
-    'green bold+white green grey grey grey white grey grey', //  ● mc-ui  step · claude opus · 20 min of 90 min · pid 4242
+    'green bold green grey grey grey grey grey', //             ● mc-ui  step · claude opus · 20 min of 90 min · pid 4242
     'red+bold grey', //                                          ■ STOP requested — the runner exits after the steps it is in
     'grey', //                                                     runner up 120 min · 3 steps in 24 h — …
     '',
     'bold+cyan cyan grey grey grey grey grey grey', //            HELPER  ● open 60 min · claude sonnet · pid 99   mc helper
-    'bold+cyan dim+grey grey', //                                 BRIEF  ·  not open                                mc brief
+    'bold+cyan grey grey', //                                     BRIEF  ·  not open                                mc brief
     '',
     'grey', //                                                     offline, PRs 2 h old — --fresh asks GitHub
     'grey', //                                                     note: no queue.md
   ];
+
+  it('paints nothing with the dim attribute, anywhere on the page', () => {
+    // The palette's own floor: `ESC[2m` sat at or below the background on
+    // Martin's terminal, so a row that carried it was a row nobody could read.
+    for (const [index, line] of paintedPage(DATA).entries()) {
+      assert.ok(!signature(line).split(' ').some((run) => run.split('+').includes('dim')),
+        `row ${index} is drawn dim: ${strip(line)}`);
+      assert.ok(!signature(line).split(' ').some((run) => run.split('+').includes('white')),
+        `row ${index} is drawn in ESC[37m rather than the terminal's foreground: ${strip(line)}`);
+    }
+  });
 
   it('paints every row of the page, and the same colour for the same meaning', () => {
     assert.deepEqual(paintedPage(DATA).map(signature), SNAPSHOT);
@@ -1139,13 +1162,15 @@ describe('the palette', () => {
       programmes: programmesSection({ plans, areas: plans.map((plan, n) => ({ name: plan.project, mtime_ms: 100 - n })).concat([{ name: 'e-none', mtime_ms: 0 }]) }),
     });
     const lines = paintedPage(data);
-    // Index 4: the number, the mark, the name, the repository, then the status.
+    // Index 3: the number, the mark, the repository, then the status. The name
+    // between the mark and the repository is the terminal's own foreground and
+    // paints no run of its own.
     for (const [name, tone] of [['a-ready', 'green'], ['b-blocked', 'red'], ['d-done', 'grey']]) {
-      assert.equal(signature(rowWith(lines, name)).split(' ')[4], tone, `${name} is ${tone}`);
+      assert.equal(signature(rowWith(lines, name)).split(' ')[3], tone, `${name} is ${tone}`);
     }
-    // A workarea no project explains is grey through and through, and the
-    // repository it holds is the dimmest thing on the page.
-    assert.deepEqual(signature(rowWith(lines, 'e-none')).split(' '), ['grey', 'grey', 'grey', 'dim+grey', 'grey']);
+    // A workarea no project explains is grey through and through — the number,
+    // the mark, the name, the repository and the middle, one grey each.
+    assert.deepEqual(signature(rowWith(lines, 'e-none')).split(' '), ['grey', 'grey', 'grey', 'grey', 'grey']);
   });
 
   it('turns the clock yellow near the budget and red past it', () => {
@@ -1160,11 +1185,16 @@ describe('the palette', () => {
         alive: live,
       }),
     });
-    const clock = (spent) => signature(rowWith(paintedPage(stepAt(spent)), '● thing')).split(' ')[6];
-    assert.equal(clock(600), 'white', 'ten minutes in, the clock is just a clock');
-    assert.equal(clock(0.74 * 5400), 'white');
-    assert.equal(clock(0.8 * 5400), 'yellow', 'past three quarters of the budget');
-    assert.equal(clock(5401), 'red+bold', 'over budget');
+    const clock = (spent) => signature(rowWith(paintedPage(stepAt(spent)), '● thing')).split(' ');
+    // Inside its budget the clock carries no colour of its own — it is text to
+    // read — so it leaves no run at all, and the row is the eight runs around
+    // it: the mark, the name, the kind, and the greys of the separators, the
+    // tool and the pid. Once it turns, it is a ninth run at index 6.
+    const QUIET = ['green', 'bold', 'green', 'grey', 'grey', 'grey', 'grey', 'grey'];
+    assert.deepEqual(clock(600), QUIET, 'ten minutes in, the clock is just a clock');
+    assert.deepEqual(clock(0.74 * 5400), QUIET);
+    assert.equal(clock(0.8 * 5400)[6], 'yellow', 'past three quarters of the budget');
+    assert.equal(clock(5401)[6], 'red+bold', 'over budget');
     assert.ok(strip(rowWith(paintedPage(stepAt(5401)), '● thing')).includes('over budget'));
   });
 
@@ -1188,7 +1218,7 @@ describe('the palette', () => {
         alive: live,
       }),
     });
-    assert.deepEqual(signature(rowWith(paintedPage(data), '● red')).split(' ').slice(0, 3), ['cyan', 'bold+white', 'cyan']);
+    assert.deepEqual(signature(rowWith(paintedPage(data), '● red')).split(' ').slice(0, 3), ['cyan', 'bold', 'cyan']);
   });
 
   // The two tables in `docs/technical/mc-ui.md` are the palette written down;
@@ -1211,14 +1241,20 @@ describe('the palette', () => {
     // The two fallbacks are rows of their own in the doc, and they are the
     // colours `kindTone` and `statusTone` reach for when the table has no key.
     assert.ok(/\| anything else \| grey \|/u.test(doc));
-    assert.ok(/\| no plan on main \| dim grey \|/u.test(doc));
+    assert.ok(/\| no plan on main \| grey \|/u.test(doc));
+    // And no row of any table in the document names a colour the page has
+    // stopped drawing. The prose above them may still explain what `dim grey`
+    // and `white` were; a table row saying so would be a table that lies.
+    for (const line of doc.split('\n').filter((l) => l.startsWith('|'))) {
+      assert.ok(!/\b(dim|white)\b/u.test(line), `a palette row still says dim or white: ${line}`);
+    }
     assert.deepEqual(signature(rowWith(paintedPage(pageData({
       programmes: programmesSection({
         plans: [],
         areas: [{ name: 'unplanned', mtime_ms: 1 }],
         rows: [{ ts: '2026-08-29T10:00:00Z', name: 'unplanned', kind: 'rebase', pr: '-', note: '' }],
       }),
-    })), 'unplanned')).split(' '), ['grey', 'grey', 'grey', 'dim+grey', 'grey'],
+    })), 'unplanned')).split(' '), ['grey', 'grey', 'grey', 'grey', 'grey'],
     'a folder no project explains is the page at its quietest');
   });
 

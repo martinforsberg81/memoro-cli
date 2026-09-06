@@ -28,7 +28,7 @@
       "check": "A test in `tests/mc/page-frame.test.js` or a new `page-live` test: a 97-line page at 45 rows × 120 columns, first print, one growth frame, then one changed row — asserting the absolute row in the emitted `CSI n;1H` is the row that line occupies. Fails today by one."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No row of the page is drawn with the `dim` attribute, and primary text is the terminal's own foreground rather than `ESC[37m`.",
       "check": "`grep -n \"'dim'\" src/mc/page-render.js` returns nothing, and the per-row signature snapshot in `tests/mc/page.test.js` is updated to match — the snapshot is the assertion that the palette is a table and not a habit."
     },
@@ -84,7 +84,7 @@
     },
     {
       "title": "The palette loses `dim`, and primary text becomes the terminal's foreground",
-      "status": "ready",
+      "status": "done",
       "done_when": "No row of the page carries the `dim` attribute, primary text is the terminal's own foreground, `docs/technical/mc-ui.md` § *The palette* says so, and `tests/mc/page.test.js`'s signature snapshot is updated to match.",
       "instruction": [
         "`dim grey` is `ESC[2m` on top of `ESC[90m` — the dim attribute over bright black — and on Martin's terminal it is at or below the background. It draws the repository column of every one of the 41 project rows (`projectLine`), `no plan session` on eleven programme headings (`programmeLine`), `· not open` on the HELPER row (`deskLine`), why a project was skipped (`queueLines`), and the orphan rows in WORK. Those are the most-repeated cells on the page.",
@@ -93,8 +93,12 @@
         "The palette is a table on purpose. Update the two tables in `docs/technical/mc-ui.md` § *The palette* in the same commit — every row of them that says `dim grey` or `white` — so the document and the code do not drift. `tests/mc/page.test.js` holds a per-row signature snapshot of the painted page (the colours in order, not the escape bytes); regenerate it and read the diff rather than accepting it, because that diff is the whole review of this step.",
         "Keep the discipline that makes the snapshot possible: every escape goes on after `clip` and `pad` have decided the width, through `paint`, so a coloured row is exactly as wide as its plain twin."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "`white` is gone as well as `dim`, everywhere in `page-render.js` — the instruction said to decide what primary text is, and the decision is *nothing*: a part with no styles, which `paint` returns untouched and `painter` would only wrap in a bare reset. The practical consequence for the steps after this one is that **primary text leaves no run in a signature**, so the per-row snapshot got shorter on eleven rows and every positional index into a signature moved. Two tests asserted a colour by index and had to be rewritten rather than renumbered: the plan-status walk now reads index 3 (number, mark, repository, status) instead of 4, and the budget clock can no longer be read by index at all — inside its budget it paints nothing, so the test asserts the whole eight-run row and only indexes when the clock has turned yellow or red. Write new colour assertions against the whole signature, not a position in it.",
+        "Where a run of parts is built, an unpainted part is `{ text }` with no `styles` key; where a string is built by hand with `c(...)`, the `c()` call has to go rather than be called with no styles, because `painter` emits `ESC[0m` for an empty style list. That is why `projectLine` and `queueLines` now compute a padded `name` first and paint it only in the branch that is bold. The width discipline is untouched — `clip` and `pad` still run before any escape — and the plain page is byte-identical at all six widths, which is what the painted-against-plain test proves.",
+        "`grep -n \"'dim'\" src/mc/page-render.js` returns nothing and exits 1; `grep -n \"'white'\"` likewise. `dim` and `white` stay in the `SGR` table in `src/mc/status-render.js` as the contract requires — no other module used either — so the page draws from a subset of the table, and the doc says that in § *The palette*. Two assertions now hold the code and the document together: no row of the painted page carries `dim` or `ESC[37m`, and no table row anywhere in `docs/technical/mc-ui.md` names either word, which is why that document explains the old colours in prose rather than in a cell."
+      ],
+      "pr": 660,
       "blocked_by": null
     },
     {
