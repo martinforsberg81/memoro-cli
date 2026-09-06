@@ -768,8 +768,8 @@ measurements and neither is read.
 
 Each is absent on its own terms and the file may hold either alone. An absent
 `per_repo` is 1, an absent `total` is no cap, and a machine with neither set —
-which is what `~/.memoro/mc/lanes.json` holds today — runs one lane per
-repository, two sessions, exactly what it ran before the total existed. Set,
+which is what `~/.memoro/mc/lanes.json` held until 2026-09-05 — runs one lane
+per repository, two sessions, exactly what it ran before the total existed. Set,
 both bind and the smaller wins: `per_repo`
 structurally, because there are that many lane loops per repository, and
 `total` as an in-process claim each lane takes at the last moment before it
@@ -796,6 +796,24 @@ with 46 memoro step runs against memoro-cli's 10 since 2026-09-02 is most of
 the time. `per_repo 2, total 3` guarantees each of them one, with no ordering
 rule and no scheduler. A `total` at or below `per_repo` is the first thing to
 look at when one side is being starved.
+
+**This machine runs `per_repo 2, total 3`**, set 2026-09-05 as
+[ruling 14](../project/mc/rulings.md) — the pair that lifts the interim
+`per_repo 1` and still leaves memoro-cli a slot memoro cannot take. Measured
+from `runner.log`'s own start lines over the first 12½ hours under it
+(2026-09-06T02:28Z on): 40 step sessions, **never more than three at once**,
+three of them at once six times and 4 % of the window; the same reading of
+2026-09-04, before the total existed, has six at once. No lane has yet had to
+wait for a slot — there is not one `steps in flight on this machine` line in
+the log — so the ceiling is measured and the waiting is still only tested.
+
+What the total does not bound is worth knowing before it is trusted as a load
+guard. It counts **steps**, taken by a lane: the chores beside the lanes — the
+helper turn, the intake drain — spend sessions of their own and take no slot,
+and neither do `mc test`, `mc merge` or anything a person starts. And the
+counter is one runner process's own, so a second `mc run` on this machine has a
+second counter and the two do not see each other. One unattended runner is the
+case this is built for; `mc run --once` beside it is not capped against it.
 
 `mc run lanes` with no argument prints both numbers and how many steps are in
 flight while it is read — `3 per repository, 3 in total — 2 in flight`, or
