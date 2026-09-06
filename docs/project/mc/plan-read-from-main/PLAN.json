@@ -97,7 +97,7 @@
         "A consequence worth having before step 3 builds the guard: with this fix, `abandonMerge` on a *non-plan* conflict is now only reachable through the refusals that come after `chooseKind` — role missing, tool missing, STOP, quota — because every plan-shaped refusal is now taken by `planRefusal` before the merge is attempted. The workarea that cannot take main therefore leaves runner.log's `still conflicting in:` line in fewer cases than before, which strengthens rather than weakens step 3's argument that a log line is the wrong audience.",
         "Verified: `node --test tests/mc/run.test.js` — 130 pass, 0 fail, including the new `a conflict outside the plan hands out the step main says, not the one HEAD says`. That test was run against the old predicate too (reverted by hand, run, restored) and fails there on `main's plan has a ready step, so the project gets its session`, so it covers the defect rather than the fix. Full `npm test`: 1853 tests, 1844 pass, 0 fail, 9 skipped. Criteria 2 and 4 are step 3's — nothing here was measured against a real conflicted workarea or a live runner.log."
       ],
-      "pr": null,
+      "pr": 668,
       "blocked_by": null
     },
     {
