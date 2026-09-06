@@ -127,7 +127,7 @@
         "It takes no slot and it is not counted by `total`, so the machine's ceiling with a merge lane in it is `total + 1` — the sentence step 4 owes `mc-run.md` § *Lanes*. Two refusals were added that the instruction did not name and the contract does: STOP and a pending UPDATE stop a repair *starting* (the landing it follows has already finished by then), the same rule `waitForSlot` makes for a step, because a 90-minute session started under a drain stretches the drain into two.",
         "Not measured against a live runner, and the third criterion is left `met: false` because of it: its check wants a real queued pull request, the page's *held before merge* row and an hour of later rounds, and the runner on this machine is still on main's code, which has no merge lane. What was measured is in the pull request — the whole suite green, and one real runner process with a real git repository, a real `git worktree add` from the branch and the real `canon/roles/repair.md`, with only the model session and `mc merge`'s round faked at the deps edge. Step 4 is where the live measurement belongs."
       ],
-      "pr": null,
+      "pr": 679,
       "blocked_by": null
     },
     {
