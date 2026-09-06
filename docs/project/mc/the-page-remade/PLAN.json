@@ -1,0 +1,146 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`mc` tells the truth about what is running, what is next and what is stopped, and every row of it is legible. The page a person leaves open stays true where it stands: the rows that move sit below the rows that do not, and the live loop rewrites the row it means to rewrite even when the page is taller than the screen.",
+    "Today it does none of that. Measured 2026-09-06: one growth frame on a 97-line page makes every in-place write land one row too high, so `CSI 2K` clears the neighbour and the row that changed keeps its old text — Martin saw eleven `sql-readiness` projects reduced to four on his screen. QUEUE reads only `~/mc/queue.md`, so with that file empty the section says *\"empty — mc brief queues the next thing\"* and the brand row says *\"0 of 0 queued\"* while the runner walks 41 projects and runs one. `dim grey` (`ESC[2m ESC[90m`) draws the repository column of every project row and `no plan session` on eleven programme headings, at or below the terminal's background. Thirty-two projects are `blocked` and the page never says that `plan-review` holds twelve of them and `home-on-msr` seven, though every step carries `blocked_by: { kind, name }`."
+  ],
+  "contract": [
+    "**No new colour space.** Plain 16-colour SGR and the `SGR` table in `src/mc/status-render.js` stay (`docs/technical/mc-ui.md` § *The palette*). Legibility comes from removing `dim` and from using the terminal's own foreground, never from adding colours a theme has not been asked about.",
+    "**The page stays offline and instant.** No git, no `gh`, no model, no process per row. Every number this project adds is already in `~/mc/runner/plans.json`, `runs.tsv`, `held.json` or the foreground register.",
+    "**`mc --json` and the renderer take the same object.** `--json` carries everything the page draws, so the two surfaces cannot say different things — that is why `--json` exists.",
+    "**Every project keeps a number, and a number still opens that project** — including a project inside a collapsed row. The menu's grammar gains one key and nothing else.",
+    "**Every project stays listed.** `docs/technical/mc-ui.md` § *The five sections* decided the overview stays complete, and this project does not overturn it: the page gets shorter by collapsing what is not actionable, not by leaving work out. Whether the page should fit a terminal at all is Martin's question, not this project's.",
+    "**The runner is not touched.** The page reports; it decides nothing about what runs.",
+    "**The helper's digest keeps its own sha fix.** The same comparison fault exists in `src/mc/helper-collect.js` and belongs to the `deploy-mismatch-shows-identical-shas` proposal; only the page's copy is fixed here."
+  ],
+  "out_of_scope": [
+    "Making the page fit a terminal. 69 lines is what falls out of the collapsing this project does; it is not a target and no section is cut to reach a number.",
+    "`mc brief`, `mc helper` and `mc status <name>` — they render from their own modules and are not part of this page.",
+    "`~/mc/queue.md`'s own shape and who writes it. NEXT reads the order the runner assembles from it; the file stays Martin's strict list (`src/mc/run-plan.js` § `strictQueue`).",
+    "The blocked steps themselves. The page learns to say what holds them; unblocking any of them is the brief's work and a different pull request.",
+    "The helper's digest, its deploy section and its sha comparison."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "On a page taller than the screen, after any number of growth frames, an in-place write lands on the screen row that holds the line it is rewriting.",
+      "check": "A test in `tests/mc/page-frame.test.js` or a new `page-live` test: a 97-line page at 45 rows × 120 columns, first print, one growth frame, then one changed row — asserting the absolute row in the emitted `CSI n;1H` is the row that line occupies. Fails today by one."
+    },
+    {
+      "met": false,
+      "criterion": "No row of the page is drawn with the `dim` attribute, and primary text is the terminal's own foreground rather than `ESC[37m`.",
+      "check": "`grep -n \"'dim'\" src/mc/page-render.js` returns nothing, and the per-row signature snapshot in `tests/mc/page.test.js` is updated to match — the snapshot is the assertion that the palette is a table and not a habit."
+    },
+    {
+      "met": false,
+      "criterion": "With `~/mc/queue.md` empty and ready plans on `main`, the page names the projects the runner would step next rather than saying the queue is empty.",
+      "check": "A test feeds `queueSection` an empty queue file and a fixture of plans, and asserts NEXT's rows are `assembleQueue`'s order per lane with `step n/m` on each, and that the heading says the order is alphabetical. The brand row asserts in-flight, ready and blocked counts, never `0 of 0 queued`."
+    },
+    {
+      "met": false,
+      "criterion": "Every programme row carries its own `x ready · y blocked`, the blocked projects of a programme are one row naming their numbers and their blockers, and one line says how many projects wait on a decision, how many on a project, and which blockers hold the most.",
+      "check": "A test over a plans fixture asserts the programme row's counts, the collapsed row's number ranges, and the rollup line's figures; and that `a` at the menu draws every project uncollapsed with the same numbers."
+    },
+    {
+      "met": false,
+      "criterion": "RUNNER draws one row per lane whether or not that lane has a step, naming the repository rather than the runner's own pid; the production line says what a failed deploy stopped at; and two shas that are the same commit are not reported as a mismatch.",
+      "check": "Tests over `runnerSection`/`productionSection` fixtures: an idle lane produces a row, the step row carries `repo` and no `pid`, `productionSection({ deploy: { sha: <40 chars> }, live: { commit: <its first 7> } })` returns `differs: false`, and `failed.stopped_at` survives the width at 100 columns."
+    },
+    {
+      "met": false,
+      "criterion": "`mc --json` carries every field the redrawn page draws, and the page is rendered from it alone.",
+      "check": "The existing `--json`/render parity test in `tests/mc/page.test.js` passes with the new sections, and `mc --json | node -e '…renderPageLines…'` reproduces the page byte for byte."
+    }
+  ],
+  "documents": [
+    { "label": "mc — the page (how it looks, the palette, the live page)", "path": "docs/technical/mc-ui.md" },
+    { "label": "The round, the queue and the lanes", "path": "docs/technical/mc-run.md" }
+  ],
+  "runner": {
+    "tool": "claude",
+    "model": "opus",
+    "budget_minutes": 120
+  },
+  "steps": [
+    {
+      "title": "The frame tells the truth about where the page is",
+      "status": "ready",
+      "done_when": "After a growth reprint on a page taller than the screen, `frameWrites` addresses the screen row that actually holds each line, and a test at 45 rows × 120 columns with a 97-line page proves it.",
+      "instruction": [
+        "`page-live.js`'s `draw` computes `const above = current.length + tailRows` (around line 281) — the whole page assumed to be above the cursor. That is true for the first print and stops being true the first time the page grows: `reprint()` in `page-frame.js` (around line 127) drops `skip = Math.max(0, 1 - (anchor - above))` rows on a page taller than the screen and prints only `after.slice(skip)`, so the page then occupies `next.length - skip` screen rows. `draw` sets `current = [...next]` and the next frame derives `above` from the full length again, so every absolute target `anchor - above + index` (`page-frame.js`, around line 110) is one row too high — `CSI 2K` clears the neighbour, writes the new text there, and leaves the row that should have changed standing with its old text.",
+        "Measured 2026-09-06 by driving the real `frameWrites` and `screenRows` against the real 97-line page through a VT model at 45×120: one growth frame, then three `sql-readiness` rows changing status, and three projects were erased from the screen while two appeared twice. That is what Martin saw.",
+        "Fix it by keeping the rows the page actually occupies rather than re-deriving them from its length. Export the reprint's own arithmetic from `page-frame.js` so `reprint()` and the caller cannot disagree — one function that answers, for a given `above`, `rows` and `anchor`, how many rows a reprint would skip and how many it would print. Hold that as a `footprint` in `liveReader`, set it after every reprint and after `show()`, and derive `above` from `footprint + tailRows`. `current` keeps its job of saying what the rows contain and stops being asked where they are.",
+        "The test is the point of the step: a 97-line page, `stdout.rows = 45`, `columns = 120`, the first print, one growth frame, then one changed row — asserting the absolute row in the emitted `CSI n;1H` is the row that line occupies on the screen. Assert the non-anchor (drawn-by-count) path too; it has the same defect through `reach`.",
+        "This step goes first because every step after it is invisible on a page that redraws wrong."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The palette loses `dim`, and primary text becomes the terminal's foreground",
+      "status": "ready",
+      "done_when": "No row of the page carries the `dim` attribute, primary text is the terminal's own foreground, `docs/technical/mc-ui.md` § *The palette* says so, and `tests/mc/page.test.js`'s signature snapshot is updated to match.",
+      "instruction": [
+        "`dim grey` is `ESC[2m` on top of `ESC[90m` — the dim attribute over bright black — and on Martin's terminal it is at or below the background. It draws the repository column of every one of the 41 project rows (`projectLine`), `no plan session` on eleven programme headings (`programmeLine`), `· not open` on the HELPER row (`deskLine`), why a project was skipped (`queueLines`), and the orphan rows in WORK. Those are the most-repeated cells on the page.",
+        "`white` is `ESC[37m`, which is not the terminal's foreground either; on a light theme it is the wrong end of the scale, and on a dark one it is dimmer than the text around it.",
+        "Take `dim` out of `page-render.js` entirely. Where something must recede, let it recede by position and by glyph — the page already has `·` for quiet — or by plain `grey`, which is one step and not two. Then decide what primary text is: `painter` maps style names to SGR, and a part with no styles is already returned with the terminal's own colour. Use that for the text a person is reading, and keep `bold` for the name a row is about.",
+        "The palette is a table on purpose. Update the two tables in `docs/technical/mc-ui.md` § *The palette* in the same commit — every row of them that says `dim grey` or `white` — so the document and the code do not drift. `tests/mc/page.test.js` holds a per-row signature snapshot of the painted page (the colours in order, not the escape bytes); regenerate it and read the diff rather than accepting it, because that diff is the whole review of this step.",
+        "Keep the discipline that makes the snapshot possible: every escape goes on after `clip` and `pad` have decided the width, through `paint`, so a coloured row is exactly as wide as its plain twin."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "NEXT replaces QUEUE: the order the runner would actually take",
+      "status": "ready",
+      "done_when": "The section draws `assembleQueue`'s outcome — `queue.md` first, then the alphabetical ready plans — one block per lane, three deep, each row naming the project and `step n/m` with the step's title; the heading says how many came from `queue.md`; and the brand row counts in flight, ready and blocked.",
+      "instruction": [
+        "`collectPage` reads `~/mc/queue.md` through `queueNames` and passes that alone to `queueSection`, so an empty file makes the section say *\"empty — mc brief queues the next thing\"* and the brand row say *\"0 of 0 queued\"* — while the runner is walking 41 projects. The runner's own order is `assembleQueue` (`src/mc/run-plan.js`): the queue file's names that have a non-legacy plan on `main`, then every other such plan alphabetically, split one lane per repository by `splitLanes` (`src/mc/run.js`). It is a pure function of the plans the page already holds.",
+        "Build the section from that order. Keep `queueSection`'s existing machine reading — `machineState` is what tells a plan that says `ready` from a project this machine will not start — and keep `skipped`, `held` and `stale` exactly as they are; what changes is the list the section starts from. Say on the heading how many of the named ones came from `queue.md`, so an empty file reads as *the order is alphabetical* and never as *empty*.",
+        "Lanes run at the same time, one per repository, so the section is one block per lane and not one flat list: the head of each lane starts now. Three deep per lane is enough to see what is coming without the section becoming the listing again.",
+        "A row is the project and `step n/m` and the step's title. `planSummary` (`src/mc/plan-schema.js`) already computes the index — it builds the sentence `Step ${index + 1}, …` and throws the number away. Carry `step` and `steps` as numbers on the plan record so the page formats them itself instead of parsing a sentence.",
+        "The brand row counts what is true: how many steps are in flight, how many projects are ready, how many are blocked. Those three are on the page already; `N of M queued` is not one of them.",
+        "`mc --json` carries the whole section, as it does today: the parity test is what keeps the two surfaces from drifting."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "PROGRAMMES: counts on every heading, the blocked collapsed to one row",
+      "status": "ready",
+      "done_when": "Every programme row carries `x ready · y blocked` or `no project yet`; a programme's blocked projects are one row naming their numbers and their blockers; one line says how many wait on a decision, how many on a project, and which blockers hold the most; and `a` at the menu draws every project uncollapsed with the same numbers.",
+      "instruction": [
+        "The section draws 41 rows of which 32 say `blocked` and nothing says what would move them. Every blocked step carries `blocked_by: { kind, name }` and the page reads none of it. Counted 2026-09-06 off `~/mc/runner/plans.json`: 17 blocked on a decision, 15 on a project, `plan-review` holding 12 and `home-on-msr` 7 — two names for 19 of the 32.",
+        "Put the counts where the eye already is: on the programme heading, beside the planning session. A programme with no project says so rather than showing an empty count.",
+        "Under it, a project that is `ready` or that the runner is stepping keeps its full row. The blocked ones become one row for the programme: how many, the numbers they hold, and the blockers that hold them, biggest first. Numbering must not change — it runs through the projects in the order they are sorted and then through the drawn workareas, and a number opens that project whether or not its row is drawn, so the collapsed row lists its numbers.",
+        "Add `a` to the menu: draw the page again with nothing collapsed. `commands/home.js` § `menu` is where the letters are, and the key list under the page is what tells a person it exists. It is a redraw, not a new grammar — `reader.show` already exists for exactly this.",
+        "Then the one line that is worth more than all 32 red cells: how many projects wait on a decision, how many on a project, and the blockers holding the most. Draw it under NEXT, where a person is looking for what to do, not buried in PROGRAMMES.",
+        "`stale-blockers.js` already reads `blocked_by` for its own purpose and is the precedent for how to walk the plans; do not re-derive the blocker by parsing the `next` sentence."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The rest of the page: the lanes, production, WORK, INTAKE, and the order of the sections",
+      "status": "ready",
+      "done_when": "RUNNER draws one row per lane naming its repository and not the runner's pid; the production line leads with what is wrong and two shas that are the same commit do not read as a mismatch; WORK's orphan workareas are one line; INTAKE's `!` lines lead with the message; the sections that move sit below the sections that do not; and `page-collect.js`'s header no longer documents a section that does not exist.",
+      "instruction": [
+        "**The lanes.** `runnerLines` draws a row only for a step in flight, so an idle lane and a dead lane look identical. Draw one row per lane, always. The `pid` on a step row is the runner's own — `~/mc/runner/current-<repo>.json` writes `\"pid\": 11480` and `runner.json` says 11480 too, so with two lanes both rows carry the same number and it kills nothing useful. `repo` and `lane` are in that file and are not drawn; put the repository there instead.",
+        "**Production.** `productionSection` computes `differs` as `live.commit !== deploy.sha`, comparing a 7-character sha from `/api/version` with the 40-character sha in `deploys.tsv` — so the line has been bold-yellow *mismatch* with the same `919de24` printed on both sides. Compare on the shorter of the two, and say what the two values actually are when they really differ. The same fault is in the helper's digest and stays with its own proposal; fix only the page's copy here. Then give the line's width to what is wrong: a deploy that failed clips off its own `stopped_at` today (`Deploy source preflight`, 2026-09-06) because the holder's hostname is spent first. The holder is bookkeeping and belongs in `--json` and `mc status`.",
+        "**WORK.** The section draws twelve orphan workareas every time — twelve rows that never change, listed whole in `~/mc/runner/unplanned-workareas.md` and already raised at every brief. Collapse them to one line with the count and the file. The live sessions above them stay as they are: they are the part of WORK that moves.",
+        "**INTAKE.** A `!` line leads with the fingerprint, so the clip eats the message — which is the half that makes somebody look. Put the message first and the fingerprint and count after it.",
+        "**The order.** The page is a listing with a machine at the bottom, and that is deliberate: the live loop can only keep the rows still on the screen true. Make the whole page obey it — PROGRAMMES, INTAKE and WORK first, then NEXT, RUNNER and the two desks nearest the prompt. NEXT changes every round and belongs below, not above.",
+        "**The header.** `page-collect.js`'s module comment documents a `DECISIONS` section that `collectPage` does not return. Say what the file actually gathers.",
+        "Run the page at six widths against the fixtures, as `tests/mc/page.test.js` already does, and check the plain page against the painted one row for row."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}

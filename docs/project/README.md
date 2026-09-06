@@ -119,6 +119,13 @@ terminal. It opens on a **programme**, not on one project — how many projects
 come out of it, under what names, and by what route they reach `main` is worked
 out in the session, not decided by the command that opens it.
 
+**The brief writes plans too**, under exactly these rules, for the proposals
+Martin decides there (`canon/roles/brief.md`). A decision taken at the brief
+already carries the reading the plan needs, and opening a planning session to
+retype it is a second session's worth of cost for nothing. What stays the
+planning session's is thinking a programme through, and reading a plan a step
+has asked for a review of — `plan-review` is not the brief's.
+
 **A proposal that becomes a project is deleted when the project is created.**
 Most projects start as a file in `~/mc/proposals/` — the helper's reading of a
 digest, or a session's of the code — decided with Martin at the brief. The
