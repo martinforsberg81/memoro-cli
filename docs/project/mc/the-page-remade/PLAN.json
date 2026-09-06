@@ -163,7 +163,7 @@
         "WORK's twelve orphan rows became one line, and with them went the only reader of `readUnplanned` — two `git` calls per folder for `uncommitted` and `last_commit`, which nothing drew any more. The function is deleted rather than left unread, and `programmesSection` no longer takes `detail`. What did **not** change is the numbering: `unplanned.shown` is still the first `UNPLANNED_SHOWN` (12) orphans with a number each, still what `commands/home.js` § `menu` opens by number, and the line draws those numbers as a range beside the file. On this machine that is 42 folders, 12 of them numbered, and `~/mc/runner/unplanned-workareas.md` has all 42 with the one fact the page cannot have — whether the branch has landed.",
         "Left open and not mine to take: step 1's recommendation that `reprint()` end with a newline. After a growth frame the page still sits one row lower than a first print, `footprint` still carries `below` rather than `printed` to absorb it, the blank separator row between the page and the key lines is still missing, and `note()`/`hold()` still write onto the page's last row instead of that blank. Step 1's comments have the whole shape of it. It changes `frameWrites`' documented bytes and five asserted byte strings in `tests/mc/page-frame.test.js`, which is why it is a decision rather than a tidy-up — and nothing in this step's `done_when` touches it. Also left alone deliberately: the heading `docs/technical/mc-ui.md` § *The five sections* now covers seven, but the contract of this plan cites that heading by name, so renaming it belongs to whoever closes the project out."
       ],
-      "pr": null,
+      "pr": 665,
       "blocked_by": null
     }
   ]
