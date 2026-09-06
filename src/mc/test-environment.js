@@ -114,10 +114,45 @@ export function callerWorktree(cwd = process.cwd(), deps = {}) {
   return path ? resolve(path) : null;
 }
 
-/** A live server already serving this worktree, or null. */
-export function servingWorktree(worktree, { root } = {}) {
+/**
+ * A live server already serving this worktree, or null.
+ *
+ * Since the static tier, a worktree can have two: the Worker and the file
+ * server the harness suites measure against. They register through the same
+ * protocol and differ in `service`, so a caller that means one of them says
+ * which. A caller that says nothing gets whichever is live — the reading
+ * `mc test dev --stop` and the page had before, kept for them.
+ */
+export function servingWorktree(worktree, { root, service = null } = {}) {
   const { servers } = listServers(root ? { root } : {});
-  return servers.find((server) => server.live && resolve(server.worktree_path) === resolve(worktree)) || null;
+  return servers.find((server) => server.live
+    && resolve(server.worktree_path) === resolve(worktree)
+    && (!service || server.service === service)) || null;
+}
+
+/** Every live server for this worktree, whatever it serves. */
+export function serversFor(worktree, { root } = {}) {
+  const { servers } = listServers(root ? { root } : {});
+  return servers.filter((server) => server.live && resolve(server.worktree_path) === resolve(worktree));
+}
+
+/**
+ * Which tier a suite is measured against.
+ *
+ * `server: "static"` is the repository saying this suite never talks to the
+ * app — it stubs its own document and imports the module graph — and may be
+ * served files by something that is not the Worker. Anything else is the app.
+ * Read here and nowhere else, so that "what does static mean" has one answer.
+ */
+export function tierOf(suite) {
+  return suite?.server === 'static' ? 'static' : 'app';
+}
+
+/** The service the declaration names for a tier, or null when it names none. */
+export function serviceFor(declaration, tier) {
+  const dev = declaration?.environments?.dev || {};
+  if (tier === 'static') return dev.static_service || null;
+  return dev.service || null;
 }
 
 /**
@@ -128,7 +163,7 @@ export function servingWorktree(worktree, { root } = {}) {
  * declaration's, and `agent` in practice — the light one, without containers,
  * because this is a measurement and not the whole product.
  */
-export function startArgvFor(worktree, declaration) {
+export function startArgvFor(worktree, declaration, { service: wanted = null } = {}) {
   const path = join(worktree, DEV_DEFINITION_FILE);
   if (!existsSync(path)) return { ok: false, error: `${worktree} does not declare ${DEV_DEFINITION_FILE}` };
   let definition = null;
@@ -137,18 +172,29 @@ export function startArgvFor(worktree, declaration) {
   } catch (error) {
     return { ok: false, error: `${path}: ${error.message}` };
   }
-  const serviceName = declaration?.environments?.dev?.service || definition.default_service;
+  const serviceName = wanted || declaration?.environments?.dev?.service || definition.default_service;
   const service = definition.services?.[serviceName];
   if (!service) return { ok: false, error: `${path}: no service ${serviceName}` };
-  const profileName = declaration?.environments?.dev?.profile || service.default_profile;
+  // The declaration's profile is about the app service; another service —
+  // the static tier — runs its own default.
+  const declared = !wanted || wanted === declaration?.environments?.dev?.service;
+  const profileName = (declared && declaration?.environments?.dev?.profile) || service.default_profile;
   const profile = service.profiles?.[profileName];
   if (!profile) return { ok: false, error: `${path}: ${serviceName} has no profile ${profileName}` };
   const argv = profile.start?.argv;
   if (!Array.isArray(argv) || !argv.length || argv.some((part) => typeof part !== 'string')) {
     return { ok: false, error: `${path}: ${serviceName}/${profileName} has no start argv` };
   }
+  // The protocol has always let a profile say how long registering may take.
+  // The Worker never declared one and gets the long window below; the static
+  // tier says fifteen seconds, and fifteen seconds is what it gets.
+  const declaredMs = Number(profile.readiness?.timeout_ms);
   return {
-    ok: true, argv, service: serviceName, profile: profileName,
+    ok: true,
+    argv,
+    service: serviceName,
+    profile: profileName,
+    registerTimeoutMs: Number.isFinite(declaredMs) && declaredMs > 0 ? declaredMs : null,
   };
 }
 
@@ -171,15 +217,17 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   const now = deps.now || (() => Date.now());
   const sleep = deps.sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
   const fetchImpl = deps.fetch || fetch;
-  const registerMs = deps.registerTimeoutMs ?? REGISTER_TIMEOUT_MS;
   const readyMs = deps.readyTimeoutMs ?? READY_TIMEOUT_MS;
   const root = deps.root;
+  // Which of the worktree's services. Unnamed means the app, as it always did.
+  const service = deps.service || serviceFor(declaration, 'app');
 
-  const running = servingWorktree(worktree, { root });
+  const running = servingWorktree(worktree, { root, service });
   if (running) return { ok: true, server: running, started: false };
 
-  const start = startArgvFor(worktree, declaration);
+  const start = startArgvFor(worktree, declaration, { service });
   if (!start.ok) return start;
+  const registerMs = deps.registerTimeoutMs ?? start.registerTimeoutMs ?? REGISTER_TIMEOUT_MS;
 
   const [command, ...args] = start.argv;
   const child = (deps.spawn || spawn)(command, args, {
@@ -192,12 +240,12 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   let server = null;
   while (!server && now() < registerBy) {
     await sleep(1000);
-    server = servingWorktree(worktree, { root });
+    server = servingWorktree(worktree, { root, service });
   }
   if (!server) {
     return {
       ok: false,
-      error: `no dev server registered for ${worktree} within ${seconds(registerMs)}`
+      error: `no ${start.service} registered for ${worktree} within ${seconds(registerMs)}`
         + ' — its log is under .wrangler/dev-server/logs/',
     };
   }
@@ -215,11 +263,11 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     }
     // A wrapper that has died is not going to answer, and waiting ten minutes
     // to find that out is the wrong kind of patience.
-    const still = servingWorktree(worktree, { root });
+    const still = servingWorktree(worktree, { root, service });
     if (!still) {
       return {
         ok: false,
-        error: `${worktree}'s dev server (${server.instance_id}) stopped before it answered`
+        error: `${worktree}'s ${start.service} (${server.instance_id}) stopped before it answered`
           + ' — its log is under .wrangler/dev-server/logs/',
       };
     }
@@ -228,7 +276,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   }
   return {
     ok: false,
-    error: `${worktree}'s dev server registered as ${server.instance_id} but had not answered`
+    error: `${worktree}'s ${start.service} registered as ${server.instance_id} but had not answered`
       + ` ${server.health_url || server.url} after ${seconds(readyMs)}`,
   };
 }
@@ -344,14 +392,16 @@ export function accountAvailable(declaration, env = process.env) {
  * pass to find out is a second coffee. The exit code is the round's, not any
  * one suite's.
  *
- * The one thing that does stop it is the server leaving. `stillThere` is asked
- * before each suite and again after any suite that went red, and a round that
- * loses its server reports what it measured, which suite was unmeasured, and
- * which never ran — never six red suites, which is what the first full round
- * of this verb actually produced when memoro's worker exited under it.
+ * The one thing that does stop it is a server leaving. `stillThere(suite)` is
+ * asked before each suite and again after any suite that went red, and a tier
+ * that loses its server reports what it measured, which suite was unmeasured,
+ * and which never ran — never six red suites, which is what the first full
+ * round of this verb actually produced when memoro's worker exited under it.
+ * The other tier goes on: since 2026-09-06 the harness suites have a file
+ * server of their own, and the Worker leaving is not their news.
  */
 export async function runSuites({
-  declaration, worktree, baseUrl, only = null, env = process.env,
+  declaration, worktree, baseUrl, staticBaseUrl = null, only = null, env = process.env,
   stillThere = null, onStart = null, onEnd = null,
 }, deps = {}) {
   const runOne = deps.spawnSync || spawnSync;
@@ -360,12 +410,23 @@ export async function runSuites({
     ? declaration.suites.filter((suite) => suite.name === only)
     : declaration.suites;
   const results = [];
-  let gone = false;
+  // Two tiers, two servers, and a server that leaves takes only its own
+  // suites with it: the file server going has nothing to say about the app,
+  // and the Worker going — which is the one that does go — has nothing to say
+  // about six suites that never asked it for anything.
+  const gone = new Set();
+  const neverRan = [];
+  // A tier the declaration gives no server of its own runs against the app,
+  // which is where every suite ran before there were tiers.
+  const urlFor = (suite) => (tierOf(suite) === 'static' && staticBaseUrl ? staticBaseUrl : baseUrl);
+  const there = async (suite) => (stillThere ? stillThere(suite) : true);
 
   for (const suite of chosen) {
+    const tier = tierOf(suite);
+    if (gone.has(tier)) { neverRan.push(suite.name); continue; }
     // Before, so a round that cannot measure anything says that instead of
     // spending six minutes proving it one suite at a time.
-    if (stillThere && !await stillThere()) { gone = true; break; }
+    if (!await there(suite)) { gone.add(tier); neverRan.push(suite.name); continue; }
 
     onStart?.(suite);
     const startedAt = now();
@@ -373,7 +434,7 @@ export async function runSuites({
     const finished = runOne(command, args, {
       cwd: worktree,
       env: suiteEnv({
-        declaration, baseUrl, env, needsAccount: Boolean(suite.needs_account),
+        declaration, baseUrl: urlFor(suite), env, needsAccount: Boolean(suite.needs_account),
       }),
       encoding: 'utf8',
       shell: false,
@@ -387,9 +448,10 @@ export async function runSuites({
     // the one whose red is a lie. It is reported as unmeasured, not as a
     // failure of the thing it was pointed at. A suite that skipped itself is
     // not evidence about the server either way.
-    if (!ok && !skipped && stillThere && !await stillThere()) {
+    if (!ok && !skipped && !await there(suite)) {
       results.push({
         name: suite.name,
+        server: tier,
         ok: false,
         unmeasured: true,
         skipped: false,
@@ -398,12 +460,13 @@ export async function runSuites({
         tail: tailOf(finished),
       });
       onEnd?.(results.at(-1));
-      gone = true;
-      break;
+      gone.add(tier);
+      continue;
     }
 
     const result = {
       name: suite.name,
+      server: tier,
       ok,
       unmeasured: false,
       // Not red — the app did not fail — and not a pass either. The round
@@ -419,7 +482,7 @@ export async function runSuites({
     onEnd?.(result);
   }
 
-  return { results, gone, skipped: chosen.slice(results.length).map((suite) => suite.name) };
+  return { results, gone: [...gone], skipped: neverRan };
 }
 
 function tailOf(finished, lines = 12) {

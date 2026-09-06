@@ -138,7 +138,12 @@ IN FULL
                                     with ten wranglers is a machine nobody can
                                     work on; --here gives the calling worktree
                                     its own, for a change that is not on main
-                                    yet. --url prints the address and runs
+                                    yet. A suite the repository marks
+                                    server: "static" never talks to the app and
+                                    runs against the file server it names as
+                                    static_service instead — chosen alone, it
+                                    starts no Worker at all — and a server that
+                                    leaves takes only its own tier's suites. --url prints the address and runs
                                     nothing; --list says what is running
                                     anywhere on the machine, and --stop ends
                                     the one for this worktree by asking the

@@ -22,8 +22,8 @@ import { describe, it } from 'node:test';
 
 import { registerManifest } from '../../src/mc/dev-servers.js';
 import {
-  accountAvailable, answers, ensureDevServer, readDeclaration, runSuites, servingWorktree,
-  startArgvFor, stopServer, suiteEnv,
+  accountAvailable, answers, ensureDevServer, readDeclaration, runSuites, serversFor, servingWorktree,
+  startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
 
 const DEAD_PID = 2_147_483_646;
@@ -56,6 +56,36 @@ const DEV_DEFINITION = {
   },
 };
 
+/** The same repository once it has a static tier. */
+const TIERED_DECLARATION = {
+  ...DECLARATION,
+  environments: {
+    dev: { service: 'memoro-worker', profile: 'agent', static_service: 'memoro-static' },
+    prod: { base_url: 'https://meetmemoro.app' },
+  },
+  suites: [
+    { name: 'signs-in', argv: ['npm', 'run', 'test:signs-in'], server: 'app', needs_account: true },
+    { name: 'harness', argv: ['npm', 'run', 'test:harness'], server: 'static', needs_account: false },
+    { name: 'does-not', argv: ['npm', 'run', 'test:does-not'], server: 'app', needs_account: false },
+  ],
+};
+
+const TIERED_DEFINITION = {
+  ...DEV_DEFINITION,
+  services: {
+    ...DEV_DEFINITION.services,
+    'memoro-static': {
+      default_profile: 'static',
+      profiles: {
+        static: {
+          start: { argv: ['node', 'scripts/testing/static-server.mjs'] },
+          readiness: { kind: 'runtime-manifest', path: '.wrangler/dev-server/run/mc-static.json', timeout_ms: 15000 },
+        },
+      },
+    },
+  },
+};
+
 function worktreeWith({ declaration = DECLARATION, definition = DEV_DEFINITION } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-test-env-'));
   mkdirSync(join(root, '.mc'), { recursive: true });
@@ -64,14 +94,14 @@ function worktreeWith({ declaration = DECLARATION, definition = DEV_DEFINITION }
   return root;
 }
 
-function registerServer(root, worktree, { pid = process.pid, port = 8890 } = {}) {
+function registerServer(root, worktree, { pid = process.pid, port = 8890, service = 'memoro-worker' } = {}) {
   const dir = join(worktree, '.wrangler', 'dev-server', 'run');
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, 'mc-dev.json');
+  const path = join(dir, service === 'memoro-worker' ? 'mc-dev.json' : 'mc-static.json');
   writeFileSync(path, JSON.stringify({
     schema_version: 1,
-    instance_id: `dev-${port}`,
-    service: 'memoro-worker',
+    instance_id: `${service === 'memoro-worker' ? 'dev' : 'static'}-${port}`,
+    service,
     session_name: 'a-session',
     worktree_path: worktree,
     pid,
@@ -221,7 +251,7 @@ describe('the round', () => {
     assert.deepEqual(seen, ['test:signs-in', 'test:does-not'], 'the second suite ran after the first went red');
     assert.deepEqual(results.map((r) => [r.name, r.ok]), [['signs-in', false], ['does-not', true]]);
     assert.equal(results[0].tail, 'a line\nanother');
-    assert.equal(gone, false);
+    assert.deepEqual(gone, [], 'no tier lost its server');
     rmSync(worktree, { recursive: true, force: true });
   });
 
@@ -275,7 +305,7 @@ describe('a server that leaves in the middle', () => {
         spawnSync: () => { alive = false; return { status: 1, stdout: 'ERR_CONNECTION_REFUSED\n' }; },
       },
     );
-    assert.equal(gone, true);
+    assert.deepEqual(gone, ['app'], 'the app tier lost its server');
     assert.deepEqual(results.map((r) => [r.name, r.ok, r.unmeasured]), [['signs-in', false, true]]);
     assert.deepEqual(skipped, ['does-not'], 'the suite that never ran is named, not counted as green');
     rmSync(worktree, { recursive: true, force: true });
@@ -294,7 +324,7 @@ describe('a server that leaves in the middle', () => {
       { spawnSync: () => { ran += 1; return { status: 0 }; } },
     );
     assert.equal(ran, 0);
-    assert.equal(gone, true);
+    assert.deepEqual(gone, ['app'], 'the app tier lost its server');
     assert.deepEqual(results, []);
     assert.deepEqual(skipped, ['signs-in', 'does-not']);
     rmSync(worktree, { recursive: true, force: true });
@@ -312,7 +342,7 @@ describe('a server that leaves in the middle', () => {
       },
       { spawnSync: () => ({ status: 1, stdout: 'a real failure\n' }) },
     );
-    assert.equal(gone, false);
+    assert.deepEqual(gone, [], 'no tier lost its server');
     assert.deepEqual(results.map((r) => [r.ok, r.unmeasured, r.skipped]), [[false, false, false]]);
     rmSync(worktree, { recursive: true, force: true });
   });
@@ -390,7 +420,7 @@ describe('a suite that says it did not run', () => {
       },
       { spawnSync: () => ({ status: 78 }) },
     );
-    assert.equal(gone, false);
+    assert.deepEqual(gone, [], 'no tier lost its server');
     assert.equal(asked, 1, 'asked before the suite, and not again after a skip');
     assert.equal(results[0].skipped, true);
     rmSync(worktree, { recursive: true, force: true });
@@ -496,7 +526,7 @@ describe('bringing one up', () => {
     });
 
     assert.equal(ensured.ok, false);
-    assert.match(ensured.error, /no dev server registered/u);
+    assert.match(ensured.error, /no memoro-worker registered/u, 'the message names the service it waited for');
     assert.equal(asked, 0, 'nothing was asked for health — nothing had said where');
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
@@ -542,5 +572,108 @@ describe('bringing one up', () => {
     assert.equal(spawned, 0);
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+});
+
+describe('two tiers', () => {
+  it('a suite is static only when the repository says so', () => {
+    assert.equal(tierOf({ server: 'static' }), 'static');
+    assert.equal(tierOf({ server: 'app' }), 'app');
+    assert.equal(tierOf({}), 'app', 'an omission is the app, as every suite was before there were tiers');
+  });
+
+  it('a worktree can have a server per service, and a caller says which', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith({ declaration: TIERED_DECLARATION, definition: TIERED_DEFINITION });
+    registerServer(root, worktree, { port: 8900 });
+    registerServer(root, worktree, { port: 8910, service: 'memoro-static' });
+
+    assert.equal(servingWorktree(worktree, { root, service: 'memoro-worker' }).port ?? 8900, 8900);
+    assert.equal(servingWorktree(worktree, { root, service: 'memoro-static' }).instance_id, 'static-8910');
+    assert.equal(servingWorktree(worktree, { root, service: 'memoro-measure' }), null, 'a service nobody runs');
+    assert.equal(serversFor(worktree, { root }).length, 2, 'and both are the worktree\'s');
+
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('the static service starts with its own profile and its own registration window', () => {
+    const worktree = worktreeWith({ declaration: TIERED_DECLARATION, definition: TIERED_DEFINITION });
+    const app = startArgvFor(worktree, TIERED_DECLARATION);
+    assert.deepEqual([app.service, app.profile, app.registerTimeoutMs], ['memoro-worker', 'agent', null]);
+    const fileServer = startArgvFor(worktree, TIERED_DECLARATION, { service: 'memoro-static' });
+    assert.deepEqual(fileServer.argv, ['node', 'scripts/testing/static-server.mjs']);
+    assert.equal(fileServer.profile, 'static', 'the declaration\'s profile is the app\'s, not this service\'s');
+    assert.equal(fileServer.registerTimeoutMs, 15000, 'what .mc/dev.json says it needs, not the Worker\'s two minutes');
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('ensuring the static tier reuses a live Worker for nothing and starts the file server', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith({ declaration: TIERED_DECLARATION, definition: TIERED_DEFINITION });
+    registerServer(root, worktree, { port: 8900 });
+    const started = [];
+    const ensured = await ensureDevServer(worktree, TIERED_DECLARATION, {
+      root,
+      service: 'memoro-static',
+      sleep: async () => {},
+      now: (() => { let t = 0; return () => { t += 1000; return t; }; })(),
+      spawn: (command, args) => {
+        started.push([command, ...args]);
+        registerServer(root, worktree, { port: 8910, service: 'memoro-static' });
+        return { unref() {} };
+      },
+      fetch: async () => ({ ok: true }),
+    });
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.equal(ensured.started, true, 'the Worker being up is not the file server being up');
+    assert.deepEqual(started, [['node', 'scripts/testing/static-server.mjs']]);
+    assert.equal(ensured.server.service, 'memoro-static');
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a static suite is handed the static URL, and an app suite the app\'s', async () => {
+    const worktree = worktreeWith({ declaration: TIERED_DECLARATION, definition: TIERED_DEFINITION });
+    const handed = {};
+    const { results } = await runSuites(
+      {
+        declaration: TIERED_DECLARATION, worktree, baseUrl: 'http://127.0.0.1:8900', staticBaseUrl: 'http://127.0.0.1:8910',
+      },
+      { spawnSync: (command, args, options) => { handed[args.at(-1)] = options.env.MEMORO_BASE_URL; return { status: 0 }; } },
+    );
+    assert.deepEqual(handed, {
+      'test:signs-in': 'http://127.0.0.1:8900',
+      'test:harness': 'http://127.0.0.1:8910',
+      'test:does-not': 'http://127.0.0.1:8900',
+    });
+    assert.deepEqual(results.map((r) => r.server), ['app', 'static', 'app'], 'and each result says which');
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('without a static service, a static suite runs against the app like before', async () => {
+    const worktree = worktreeWith({ declaration: TIERED_DECLARATION, definition: DEV_DEFINITION });
+    const handed = {};
+    await runSuites(
+      { declaration: TIERED_DECLARATION, worktree, baseUrl: 'http://127.0.0.1:8900' },
+      { spawnSync: (command, args, options) => { handed[args.at(-1)] = options.env.MEMORO_BASE_URL; return { status: 0 }; } },
+    );
+    assert.equal(handed['test:harness'], 'http://127.0.0.1:8900');
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('the Worker leaving takes the app suites, and the static suite still runs', async () => {
+    const worktree = worktreeWith({ declaration: TIERED_DECLARATION, definition: TIERED_DEFINITION });
+    const ran = [];
+    const { results, gone, skipped } = await runSuites(
+      {
+        declaration: TIERED_DECLARATION, worktree, baseUrl: 'http://127.0.0.1:8900', staticBaseUrl: 'http://127.0.0.1:8910',
+        stillThere: async (suite) => tierOf(suite) === 'static',
+      },
+      { spawnSync: (command, args) => { ran.push(args.at(-1)); return { status: 0 }; } },
+    );
+    assert.deepEqual(ran, ['test:harness'], 'the file server was there; the Worker was not');
+    assert.deepEqual(gone, ['app']);
+    assert.deepEqual(skipped, ['signs-in', 'does-not'], 'the app suites never ran, and are named');
+    assert.deepEqual(results.map((r) => [r.name, r.ok]), [['harness', true]]);
+    rmSync(worktree, { recursive: true, force: true });
   });
 });
