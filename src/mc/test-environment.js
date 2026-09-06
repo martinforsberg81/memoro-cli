@@ -199,7 +199,33 @@ export function startArgvFor(worktree, declaration, { service: wanted = null } =
 }
 
 /**
+ * Has the worktree moved on from the tree a running service was built from?
+ *
+ * The measurement fixture serves a startup snapshot: workerd reads `public/`
+ * once, and a module that arrives on disk afterwards answers 404 until the
+ * fixture is started again. On 2026-09-06 a shared checkout was fast-forwarded
+ * under a fixture that had been up since 07:43; two modules landed with it,
+ * and `msr-core` reported the app's module graph as broken for an hour. A
+ * service that says what it was built from (`built_from.commit` in its
+ * manifest) is compared with the worktree's HEAD, and a mismatch is a reason
+ * to start over. A service that says nothing is trusted as before.
+ */
+export function builtFromMoved(server, worktree, deps = {}) {
+  const was = String(server?.built_from?.commit || '').trim();
+  if (!was) return null;
+  const git = deps.git || ((args) => spawnSync('git', args, { cwd: worktree, encoding: 'utf8' }));
+  const asked = git(['rev-parse', 'HEAD']);
+  if (asked.status !== 0) return null;
+  const now = String(asked.stdout || '').trim();
+  if (!now || now === was) return null;
+  return { was: was.slice(0, 10), now: now.slice(0, 10) };
+}
+
+/**
  * A dev server for this worktree — the one already there, or a new one.
+ *
+ * Or a new one in place of the one there, when the checkout has moved on from
+ * what that one was built from — see `builtFromMoved`.
  *
  * Reuse is decided by the inventory, not by a port answering: a URL that
  * responds says something is serving, never that it is serving *this*
@@ -223,7 +249,18 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   const service = deps.service || serviceFor(declaration, 'app');
 
   const running = servingWorktree(worktree, { root, service });
-  if (running) return { ok: true, server: running, started: false };
+  let restartedFrom = null;
+  if (running) {
+    const stale = builtFromMoved(running, worktree, deps);
+    if (!stale) return { ok: true, server: running, started: false };
+    // The server is alive and it is this worktree's, and it is serving a tree
+    // that is no longer here. Stopped through its own stop command, like
+    // `--stop` would, and started again below.
+    const stopped = (deps.stopServer || stopServer)(running);
+    if (!stopped.ok) return { ok: false, error: `${running.instance_id} serves ${stale.was}, the worktree is at ${stale.now}, and it could not be stopped: ${stopped.error}` };
+    restartedFrom = stale;
+    deps.onRestart?.(running, stale);
+  }
 
   const start = startArgvFor(worktree, declaration, { service });
   if (!start.ok) return start;
@@ -258,7 +295,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   while (now() < readyBy) {
     if (await answers(server, { fetch: fetchImpl, attempts: 1 })) {
       return {
-        ok: true, server, started: true, service: start.service, profile: start.profile,
+        ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom,
       };
     }
     // A wrapper that has died is not going to answer, and waiting ten minutes
