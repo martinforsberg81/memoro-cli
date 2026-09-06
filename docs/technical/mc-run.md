@@ -617,6 +617,57 @@ it is still `ready`, its next step follows at once rather than a whole round
 later, up to eight times. A six-step plan would otherwise have taken six
 rounds of twenty projects.
 
+**A hand `mc merge` that was refused becomes the runner's.** The verb runs the
+round it always ran and prints what it always printed; what changed on
+2026-09-06 is what becomes of a round that did not land. Six stops are ones the
+lane can do something about — `busy` and `lease` (this machine's one gate lock,
+or the repository, is somebody else's for the minute), `red`, `pr-tests`,
+`extra-gate` and `merge` — and each writes one entry to
+**`~/mc/runner/merges.json`**: repository and number together as the identity,
+the branch the gate read, the reason, the stop, a `since` a second queueing does
+not move, and who typed it. The rules are pure in
+[`src/mc/merge-queue.js`](../../src/mc/merge-queue.js), the shape `held.js` has
+and for the same reason. A stop at `pr` is not queued — GitHub could not be
+asked, or there is no such pull request, and nothing on this machine can land
+what it cannot name — and neither is a batch or a `--check`, which measured and
+was never asked to land. The caller gets one line, `queued — the runner's merge
+lane lands #N, or holds it after one repair`, and **exit 0**: the merge is now
+somebody's rather than nobody's. Measured 2026-09-06: `mc merge memoro-cli 671`
+was refused fourteen times in twenty minutes by the runner's own landings, and
+every one of those refusals was a person typing again.
+
+**Without a running runner nothing is queued**, and the terminal is what it was
+before this project plus one line on stderr saying no runner is there to take
+the refusal. *A runner is running* is `runner.json` with a live pid, read
+through the same `readRunner` the loop reads it with, so the verb and the runner
+cannot disagree about who is holding the machine.
+
+**The lane that lands them** is one loop for the whole process, beside the
+repository lanes and the chores (*Lanes*, below). It takes the oldest entry
+every 30 s and hands it to the same `landPr` a step's own pull request goes
+through, so it waits out a busy gate exactly as a step's landing does — up to 45
+minutes — and writes `held.json` when the gate goes red. The entry leaves the
+queue on whatever the answer was, dropped inside `landPr` *after* the hold is
+written, so a crash between the two leaves the pull request in a file rather
+than in neither; from then on a red one is `held.json`'s, with the one-repair
+rule every held pull request has. A step lane's own landing answers a queued
+pull request just as well, which is the ordinary case — a hand merge is usually
+refused *because* the project's lane was landing that same pull request — and a
+queued landing that changed mc's own code writes `UPDATE` exactly as a step's
+does, since the runner should not go on running old code because the change came
+in by hand. An entry whose pull request somebody merged or closed by hand leaves
+at `reconcileHold`, where a held entry leaves, with one guard of its own: the
+open list is `gh pr list`'s from earlier in the round, and `merges.json` is
+written by another process, so an entry younger than that reading is left alone
+rather than judged absent from a list taken before it existed.
+
+Measured live, 2026-09-06T23:46Z, with the repository's whole suite holding the
+gate: `mc merge memoro-cli 681` stopped at `busy`, printed the queued line and
+exited 0 in under a second; the lane read the entry four seconds later, waited
+40 s for the gate, and GitHub merged #681 into `main` at 23:47:22Z with nobody
+typing again. The round before it, against a free gate, landed in 4 s and wrote
+no queue file at all.
+
 ### Held before merge
 
 A landing that does not land leaves a pull request open, and an open pull
@@ -688,6 +739,31 @@ earlier. `repairBaseline` picks the baseline and `stepOfPr` the index — the
 step that names this pull request, or the deliverable one before that edit has
 landed. An ordinary repair is judged against the worktree's plan, so a repair
 that oversteps is held again like any step.
+
+**A held pull request with no project gets its one repair from the merge lane.**
+The repair above is found *per project*, inside a round, and runs in that
+project's workarea — so an entry whose branch is no project's is reached by no
+round at all, and stood at `repairs: 0` for ever with nobody told. That is the
+ordinary shape of a hand `mc merge`, which is a person typing about their own
+branch. So the merge lane does the reaching: where a landing it made held a pull
+request `projectForBranch` calls nobody's, the lane makes a workarea from the
+entry's branch (the call `mc work add` makes), counts the repair *before* the
+session as the rule above says, runs the same `repair` role on the same
+`repairPrompt`, and lands once more. After that the entry reads `repairs: 1` and
+it is the brief's, exactly as a project's own held pull request is. It re-reads
+`held.json` before it launches and refuses an entry that already carries a
+repair, which is what stops the one branch both readings could claim — a branch
+named after a plan that is on main with no workarea on this machine — from being
+given two. STOP or a pending UPDATE stops a repair *starting*, the same refusal
+`waitForSlot` makes for a step, because a ninety-minute session begun under a
+drain stretches the drain into two. The workarea is fresh from the branch, so
+the rule that a repair may not run in a worktree with a merge in progress is
+asserted rather than handled; and an entry that names no branch — a round
+refused before the gate ran has none to give — gets no repair here and says so.
+The session writes no `current-<repo>.json`, because it is not a step and the
+page's RUNNER block draws that file as one; what says the machine is busy is the
+lane's own `mergeBusy`, and what makes the hour visible afterwards is a runs.tsv
+row with `kind: repair` and the branch in the name column.
 
 **And then it stops.** `repairs >= 1` is a skip again, with the line `#N is
 held before merge after a repair — the brief's`. No loop: a pull request its
@@ -819,6 +895,22 @@ counter is one runner process's own, so a second `mc run` on this machine has a
 second counter and the two do not see each other. One unattended runner is the
 case this is built for; `mc run --once` beside it is not capped against it.
 
+**The merge lane is outside both numbers, and the ceiling is `total + 1`.** It
+is not one of the `per_repo` loops and it never takes a slot — `takeSlot` counts
+steps and this is not one: no session, no workarea, no plan. That is the
+requirement the queue exists for, since the refusals it answers are the ones a
+person was retrying by hand *while every lane was busy*, and a merge that waited
+for a step lane would answer them no faster. It lands one pull request at a time
+and runs at most one repair session, so a machine with a merge lane in it runs
+at most `total` steps and one more thing: **`total + 1`**. What it does share is
+what no landing can avoid sharing — this machine's one gate lock and the
+repository's lease, both of which `landPr` waits for rather than gives up on.
+STOP and UPDATE it reads where the step lanes read them, at a round boundary,
+which for this lane is between two queued pull requests and never inside a
+landing; and because it writes no `current-<repo>.json` for the drain to count,
+it answers the drain itself through `mergeBusy()`, so a handover cannot arrive
+in the middle of a squash.
+
 `mc run lanes` with no argument prints both numbers and how many steps are in
 flight while it is read — `3 per repository, 3 in total — 2 in flight`, or
 `1 per repository, no total cap (up to 2 across 2 repositories) — 0 in
@@ -885,6 +977,11 @@ Everything lives under `~/mc/runner/`.
 - **`held.json`** — every pull request a landing did not land, with the reason
   and how many repairs it has had. One file for the machine, written by
   whichever lane held or released something; see *Held before merge*.
+- **`merges.json`** — every pull request a refused `mc merge` handed the merge
+  lane, and only what the lane has not tried yet: repository, number, branch,
+  reason, stop, `since` and who typed it. Written by the verb, in whatever
+  terminal it was typed in, and emptied by the lane one entry at a time; see
+  *The merge*.
 - **`unmergeable.json`** — every workarea a round could not bring to
   `origin/main`, with the files the merge stopped on and a `since`. Written
   where the round aborts a merge nothing could be handed, dropped the round

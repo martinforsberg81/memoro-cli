@@ -21,7 +21,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "An `mc merge` refused while a runner is running returns within a minute saying the pull request is queued, and the pull request lands with nobody typing again.",
       "check": "Open a real pull request on memoro-cli while a step is landing, run `mc merge memoro-cli <pr>`, read the line and the exit, then read `runner.log` for the merge lane's landing and GitHub for the merge. Put all three in the PR."
     },
@@ -31,7 +31,7 @@
       "check": "With `total` steps in flight (`mc run lanes` says so and the RUNNER block shows them), a queued pull request lands before any of them finishes. `runner.log` names the lane's round between two `step starting` lines that are still running."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A queued pull request whose gate goes red gets exactly one repair, then is the brief's, through `held.json` like every other held pull request.",
       "check": "Queue a pull request with a deliberately red test: `held.json` gains the entry with `repairs: 0`, one repair session starts and is counted, and the entry then reads `repairs: 1` with the page's *held before merge* row naming it. No second repair over the next hour of rounds."
     },
@@ -132,14 +132,19 @@
     },
     {
       "title": "Close out",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/technical/mc-run.md` carries the merge lane, the queue, the repair of a project-less pull request and the `total + 1` sentence; `mc-ui.md` carries the page rows; every criterion's `met` is flipped from a measurement; `docs/project/project_log.md` has the row.",
       "instruction": [
         "Write it beside what it extends: § *The merge* gets the queue and where a refused hand merge goes; § *Held before merge* gets the project-less repair; § *Lanes* (or wherever `per_repo` and `total` are explained) gets the sentence that the merge lane is outside both and what the ceiling is. One paragraph each; the mechanism is in the code and the comments, the doc says the shape.",
         "Flip each criterion from a measurement made in this step or cited from an earlier step's PR by number, and say which.",
         "Add the row to `docs/project/project_log.md`."
       ],
-      "comments": [],
+      "comments": [
+        "Criteria 1 and 3 were measured live against the running runner (pid 74508, started 2026-09-06T23:41:26Z — the first process carrying step 3's lane), not cited. Criterion 1: with `mc test memoro-cli --full` holding this machine's one gate lock, `mc merge memoro-cli 681` stopped at `busy`, printed the queued line and exited 0 in under a second (23:46:40Z); the lane read the entry at 23:46:44Z, waited 40 s for the gate, and GitHub merged #681 into main at 23:47:22Z with nobody typing again. The attempt before it is worth as much: the gate round meant to hold the lock took 7 s, so `mc merge memoro-cli 680` was not refused at all and landed the ordinary way in 4 s with no queue file written — the contract's first line, measured rather than assumed. Criterion 3: #682 carried one deliberately red test, queued at `red`, was landed red by the lane, written to `held.json` with `repairs: 0` and both red tests by name, and got the lane's one repair — a workarea made from `merge-lane-red-check`, `repairs: 1` written before the session started (23:51:02Z), `repair starting (claude opus, 90 min)` at 23:51:04Z, a runs.tsv row `kind: repair` with the branch in the name column — after which the landing that followed held it again at `repairs: 1`. Two honest caveats: I ended that repair session after 53 s rather than let ninety minutes of Opus run on a throwaway branch, so what is measured is that exactly one repair *starts and is counted*, not what a repair session makes of a nonsense task; and the check's \"no second repair over the next hour of rounds\" was not waited out — the entry is off the queue and `laneRepair` refuses `repairs >= 1`, so nothing can reach it, but that is read from the code, not from an hour.",
+        "Criterion 2 is the one thing left unmet, and the estate is why. Its check wants `total` steps in flight — three on this machine — and there were two runnable projects all evening: `merge-queue` (this session) and memoro's `card-base-closure`, with the only other memoro candidate, `sql-w1-universe-closure`, refused as unmergeable every round. So a third step never started and no measurement could be made of a landing that overtakes a full machine. What *was* observed is the weaker half of the same fact: the lane landed #681 and ran three gate rounds for #682 between 23:46Z and 23:52Z while both step sessions started at 23:42Z were still running, and neither was touched. To finish it: with `mc run lanes` reading `3 in flight`, queue a pull request against a held gate and read `runner.log` for the lane's round between two `step starting` lines that outlive it. That the lane cannot be blocked by a full machine at all is proved in code and in step 2's tests (#677) rather than by this measurement.",
+        "One hole this step found and did not close, because closing it is a step nobody has written: a pull request queued at `busy` or `lease` carries `branch: null` — the gate had not run, so `report.gate?.pr?.head` is nothing — and `landPr` then holds it with the branch it was *handed* rather than with the branch of the round it has just run. A queued-at-busy pull request whose landing goes red is therefore held branchless, and `laneRepair` refuses it on its first line: it never gets the repair it is owed. #681 queued exactly that way and was green, so the hole did not open; #682 queued at `red` and carried its branch the whole way. The fix looks like one line in `landPr` (`report.gate?.pr?.head ?? branch`), and it is written up as `~/mc/proposals/2026-09-07-queued-busy-entries-carry-no-branch.md`.",
+        "What this step did to the estate, so the next reader is not puzzled by it. Three measurement pull requests were opened off project-less branches: #680 and #681 (docs only, `docs/project/mc/merge-queue/measurements.md`, which the archive removes with the rest of this directory) landed — one by hand against a free gate, one by the merge lane — and #682, the deliberately red one, was closed after the measurement with its branch deleted, so its held entry leaves at `reconcileHold` on a later round. Both scratch worktrees and all three local branches are gone (`git worktree list` is clean). One refusal on the way is worth knowing about because it is the lane behaving correctly: the first attempt at #682's repair could not make a workarea, because the scratch worktree that had opened the pull request still had the branch checked out — the lane said exactly that and left the entry to the brief, which is why the measurement had to queue #682 a second time."
+      ],
       "pr": null,
       "blocked_by": null
     }
