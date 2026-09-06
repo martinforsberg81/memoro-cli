@@ -478,6 +478,35 @@ day. This entry is that record, a day late.
 which now only has to watch a busy hour against the RUNNER block, flip
 criterion 1 from that measurement, and add the `project_log.md` row.
 
+## 15 · A refused merge is queued, and a merge lane lands it
+
+`ruling · 2026-09-06` · raised by Martin at the plan session, out of the day's merges
+
+Three pull requests merged by hand on 2026-09-06 — memoro-cli #667 and #671,
+memoro #11513 — needed six retry loops between two sessions. `mc merge` is
+refused the moment the gate or the lease is busy, and the runner's own
+landings kept both busy: `mc merge memoro-cli 671` was refused fourteen times
+in twenty minutes. The runner's own landing already waits for a busy gate and
+already gives a red pull request one repair; a hand merge gets neither, so
+every session builds its own watch.
+
+Martin asked for a merge agent — anybody runs `mc merge`, it is queued, a
+runner-like merger takes it, repairs if it must, and closes. The plan session
+proposed queueing always; he narrowed it:
+
+> **Beslut:** "mc merge ska naturligtvis först och främst köra samma process
+> som nu. Endast om den inte går igenom så köas den. Det måste finnas en
+> särskilt runner lane för merge issues så att det inte behöver vänta på att en
+> vanlig lane blir ledig." (Martin, 2026-09-06)
+
+So: the ordinary round first and unchanged; only a refusal queues; the runner
+is the merger, through a lane of its own that is not a step lane and is not
+counted by `per_repo` or `total`; `held.json` and its one-repair rule stay the
+record of what would not land. Explicitly out: `--wait`, a second process, the
+batch and `--docs` forms, and any change to what the gate measures.
+
+**Carried by [`merge-queue/PLAN.json`](merge-queue/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
