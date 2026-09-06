@@ -221,6 +221,10 @@ anything looks at. The filter is re-applied when a lane stays on a project
 after a merged step, not computed once for the round — a plan that came good
 in that window should not have to wait for the next one — and the same answer
 is what makes a lane let go of a project whose merged step left it stopped.
+A pending `UPDATE` makes it let go too: the drain is read between rounds by
+the lane loop, and inside a round at this one place, so a lane that has just
+merged does not chain further steps on its project while the other lanes wait
+for the quiet moment.
 
 One thing it deliberately does not answer: a **conflicted merge** left in a
 workarea lives where no plan on main can see it. It does not need to be
