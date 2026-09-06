@@ -176,9 +176,11 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       staticServer = ensured.server;
       staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');
       if (!opts.json) {
-        stdout.write(ensured.started
-          ? `mc: static tier — ${staticBaseUrl} (${staticServer.instance_id})\n`
-          : `mc: static tier — ${staticBaseUrl} was already up (${staticServer.instance_id})\n`);
+        stdout.write(ensured.restartedFrom
+          ? `mc: static tier — the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}), started a fresh one: ${staticBaseUrl} (${staticServer.instance_id})\n`
+          : ensured.started
+            ? `mc: static tier — ${staticBaseUrl} (${staticServer.instance_id})\n`
+            : `mc: static tier — ${staticBaseUrl} was already up (${staticServer.instance_id})\n`);
       }
     }
     if (wantsApp) {
@@ -199,9 +201,13 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       server = ensured.server;
       baseUrl = String(server.url).replace(/\/+$/u, '');
       if (!opts.json) {
-        stdout.write(ensured.started
-          ? `mc: started one — ${baseUrl} (${server.instance_id})\n`
-          : `mc: ${baseUrl} was already serving it (${server.instance_id})\n`);
+        if (ensured.restartedFrom) {
+          stdout.write(`mc: the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}) — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
+        } else {
+          stdout.write(ensured.started
+            ? `mc: started one — ${baseUrl} (${server.instance_id})\n`
+            : `mc: ${baseUrl} was already serving it (${server.instance_id})\n`);
+        }
       }
     }
   }

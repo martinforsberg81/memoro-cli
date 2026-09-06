@@ -22,8 +22,8 @@ import { describe, it } from 'node:test';
 
 import { registerManifest } from '../../src/mc/dev-servers.js';
 import {
-  accountAvailable, answers, ensureDevServer, isLoopback, readDeclaration, runSuites, serversFor, servingWorktree,
-  startArgvFor, stopServer, suiteEnv, tierOf,
+  accountAvailable, answers, builtFromMoved, ensureDevServer, isLoopback, readDeclaration, runSuites, serversFor,
+  servingWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
 
 const DEAD_PID = 2_147_483_646;
@@ -94,7 +94,9 @@ function worktreeWith({ declaration = DECLARATION, definition = DEV_DEFINITION }
   return root;
 }
 
-function registerServer(root, worktree, { pid = process.pid, port = 8890, service = 'memoro-worker' } = {}) {
+function registerServer(root, worktree, {
+  pid = process.pid, port = 8890, service = 'memoro-worker', extra = {},
+} = {}) {
   const dir = join(worktree, '.wrangler', 'dev-server', 'run');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, service === 'memoro-worker' ? 'mc-dev.json' : 'mc-static.json');
@@ -107,6 +109,7 @@ function registerServer(root, worktree, { pid = process.pid, port = 8890, servic
     pid,
     url: `http://127.0.0.1:${port}`,
     health_url: `http://127.0.0.1:${port}/api/version`,
+    ...extra,
   }));
   const done = registerManifest(path, { root });
   assert.equal(done.ok, true, done.error);
@@ -696,5 +699,59 @@ describe('two tiers', () => {
     assert.deepEqual(skipped, ['signs-in', 'does-not'], 'the app suites never ran, and are named');
     assert.deepEqual(results.map((r) => [r.name, r.ok]), [['harness', true]]);
     rmSync(worktree, { recursive: true, force: true });
+  });
+});
+
+describe('a service built from a tree that is gone', () => {
+  const git = (head) => () => ({ status: 0, stdout: `${head}\n` });
+
+  it('a manifest that says what it was built from is compared with HEAD', () => {
+    const server = { built_from: { commit: 'aaaaaaaaaa1111' } };
+    assert.equal(builtFromMoved(server, '/w', { git: git('aaaaaaaaaa1111') }), null, 'same tree, nothing to do');
+    assert.deepEqual(builtFromMoved(server, '/w', { git: git('bbbbbbbbbb2222') }), { was: 'aaaaaaaaaa', now: 'bbbbbbbbbb' });
+    assert.equal(builtFromMoved({}, '/w', { git: git('bbbbbbbbbb2222') }), null, 'a manifest that says nothing is trusted as before');
+    assert.equal(builtFromMoved(server, '/w', { git: () => ({ status: 128, stdout: '' }) }), null, 'no git, no opinion');
+  });
+
+  it('ensuring stops the stale one through its own stop command and starts again', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    registerServer(root, worktree, {
+      port: 8900,
+      extra: { built_from: { commit: 'aaaaaaaaaa1111' }, control: { stop: { argv: ['node', 'stop.mjs', '--stop'] } } },
+    });
+    const stopped = [];
+    const spawned = [];
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      git: git('bbbbbbbbbb2222'),
+      stopServer: (server) => { stopped.push(server.instance_id); return { ok: true, instance_id: server.instance_id }; },
+      sleep: async () => {},
+      now: (() => { let t = 0; return () => { t += 1000; return t; }; })(),
+      spawn: (command, args) => {
+        spawned.push([command, ...args]);
+        registerServer(root, worktree, { port: 8901, extra: { built_from: { commit: 'bbbbbbbbbb2222' } } });
+        return { unref() {} };
+      },
+      fetch: async () => ({ ok: true }),
+    });
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.deepEqual(stopped, ['dev-8900'], 'the stale one was asked to leave');
+    assert.equal(spawned.length, 1, 'and a fresh one was started');
+    assert.deepEqual(ensured.restartedFrom, { was: 'aaaaaaaaaa', now: 'bbbbbbbbbb' });
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a live server on the same tree is reused, whatever it says it was built from', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    registerServer(root, worktree, { port: 8900, extra: { built_from: { commit: 'aaaaaaaaaa1111' } } });
+    let spawned = 0;
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root, git: git('aaaaaaaaaa1111'), spawn: () => { spawned += 1; return { unref() {} }; },
+    });
+    assert.equal(ensured.started, false);
+    assert.equal(spawned, 0);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 });

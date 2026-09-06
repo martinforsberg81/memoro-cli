@@ -162,7 +162,20 @@ whose service is the one the tier needs, and nothing else counts. Since
 suites marked `server: "static"` are measured against. Both register through
 this protocol; a profile's `readiness.timeout_ms` is now the window mc gives
 that service to register (the app's never declared one and keeps the long
-default). The plan identity fields (`profile`, `definition_fingerprint`,
+default).
+
+A manifest may also say what tree the service was built from:
+
+```json
+"built_from": { "commit": "<git HEAD at start>" }
+```
+
+`mc test dev` compares it with the worktree's HEAD when it finds a live
+service to reuse. A mismatch means the service is serving a tree that is no
+longer there — the measurement fixture reads `public/` once at start, and a
+module that lands afterwards answers 404 until it starts again — so mc stops
+it through its own stop command and starts a fresh one, saying so. A manifest
+without the field is reused as before. The plan identity fields (`profile`, `definition_fingerprint`,
 `start_argv`, `resource_class`) and `coding_session_id` are optional and
 carried through as they come — the exact-match reuse they were added for went
 with `mc dev ensure`, and a manifest without them is a first-class citizen
