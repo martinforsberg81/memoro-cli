@@ -407,6 +407,43 @@ the helper's digest keeps its own sha fix with the
 
 **Carried by [`the-page-remade/PLAN.json`](the-page-remade/PLAN.json).**
 
+## 13 · The plan role gets a body, and what a session was told becomes checkable
+
+`ruling · 2026-09-06` · raised at the brief, out of rewriting `canon/roles/brief.md` for ruling 11
+
+Two holes found while writing ruling 11's change. `canon/roles/plan.md` is six
+lines and every one of them is frontmatter, so an `mc plan <programme>` session
+is told its model and nothing else beyond `_common.md` — while brief is 111
+lines, step 55, intake 42, repair 38. #580 was called *"Every role says a turn
+is the cost; the plan role gets a body"* and only the first half landed. It
+matters more after ruling 11, because two roles write plans now and only one of
+them is told how.
+
+And this brief's own running role text contains two sentences — *"A
+recommendation you cannot…"* and *"mc counts them and does…"* — that
+`canon/roles/brief.md` has not held since #614 landed on 2026-09-05T12:18+02:00,
+a day before the session started; `git log -S` finds both removed by that commit
+and by no other. `mc brief` reads `readCanonRole('brief')` and passes
+`role.overlay` through `instructionsFor` to `--append-system-prompt`, and
+nothing records what came out. So a session cannot answer *which revision of my
+role am I running*, and neither can anyone looking at it. The proposal this came
+from said something was rewriting the role text; that was a guess and it is
+wrong — the text is a real earlier revision of the file, and what the estate
+actually lacks is any record of which one a session was handed.
+
+> **Beslut:** "Gör det." (Martin, 2026-09-06)
+
+Two steps: `plan.md` gets a body written out of what is already settled, with
+the passage it now shares with `brief.md` written once and a test refusing any
+canon role that ships with no overlay; then every launched session records its
+role name and a digest of the instructions `instructionsFor` returned, and one
+verb prints what a launch would produce today and names any live session whose
+text is not that. Explicitly out: the other six role files, `_common.md` itself,
+and chasing the one stale launch — the launcher has exited and the answer is not
+recoverable, which is precisely why the record is the fix.
+
+**Carried by [`the-role-a-session-runs-on/PLAN.json`](the-role-a-session-runs-on/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
