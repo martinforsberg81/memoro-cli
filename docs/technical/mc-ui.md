@@ -126,6 +126,17 @@ the eye already is:
   a time. Yellow, like the line under it — nothing in the runner moves it on its own.
   The page draws the first six and counts the rest; `mc --json` carries every
   one whole, with `note`, `since` and `repairs`.
+  Beside it on the same line, and green rather than yellow: **queued for merge
+  N** — `~/mc/runner/merges.json`, every pull request a refused `mc merge`
+  handed the runner's merge lane, one row each under the held rows with the
+  repository, the number, the reason the round stopped and since when. The two
+  belong together because they are one story in order: what the lane has not
+  tried yet, and what it tried and could not land. The colour is the difference
+  a person acts on — a held pull request is somebody's to deal with, a queued
+  one is the runner's, and a row that will be gone in a minute should not read
+  as work. `mc --json` carries `next.queued` whole, and `mc status <name>` says
+  `#N is queued for merge (since …)` where the entry's branch is that project's
+  ([`mc-run.md`](mc-run.md) § *The merge*).
   Last under the section, and the one line worth more than every red cell in
   PROGRAMMES: **how many projects are blocked**, how many of them wait on a
   decision and how many on another project, and the blockers holding the most —
@@ -189,6 +200,7 @@ the helper and the sessions already write.
 | stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
 | a pull request left unlanded | `~/mc/runner/held.json` (project, repo, pr, branch, reason, note, since, repairs, and — when a gate held it — `red` and `gates` for the repair session to read) | `mc run`, whenever a landing does not land |
+| a pull request waiting for the merge lane | `~/mc/runner/merges.json` (repo, pr, branch, reason, stopped_at, since, holder) | `mc merge`, whenever its round is refused and a runner is running |
 | the head of the order | `~/mc/queue.md` — the rest of NEXT is the plans themselves | Martin, at the brief |
 | what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
 | what mc deployed | `~/mc/runner/log/deploys.tsv` (sha, build, holder, outcome, the live version verified) | `mc deploy`, before and after |
