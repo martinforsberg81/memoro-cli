@@ -1,0 +1,137 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`mc merge <repo> <pr>` is the last thing anybody has to type. It runs the round it runs today, and when that round is refused — the gate busy, the lease held, the suite red — the pull request is queued and a lane of the runner that exists for nothing else lands it, repairs it once if it must, or hands it to the brief. No session watches a merge.",
+    "Measured 2026-09-06: three pull requests merged by hand that day (#667, #671, memoro #11513) needed six retry loops between two sessions, two of the loops were killed for memory, `mc merge memoro-cli 671` was refused fourteen times in twenty minutes by the runner's own landings (#11541, #11542, #673 in turn) and once by a GitHub outage, and #11513 landed through a second `mc merge` somebody else had started in parallel with the first. The runner's own landing already waits for a busy gate (`landPr`, `run.js:618`: every 30 s, up to 45 min) and already gives a red pull request one repair (`heldRepair`, `run.js:1406`); a hand merge gets neither."
+  ],
+  "contract": [
+    "The ordinary process comes first and is unchanged: `mc merge` takes the lease, runs the gate, checks the base, squashes — `runMergeRound` (`repo-merge.js:66`) through `gate()` (`commands/repo.js:272`). Only a round that did not land queues. A round that landed prints what it prints today and touches no queue.",
+    "One gate round at a time on this machine and one holder per repository stay exactly as they are (`gate-lock.js`, `repo-lease.js`). The queue is what a refused caller does with the refusal, not a change to who is refused.",
+    "The merge lane is not a step lane. It is beside the repository lanes and the chore loop in `runLoop` (`run.js:2079`), it is not counted by `per_repo` or `total` (`takeSlot`, `run.js:1283`), and it never waits for a step lane to come free. It obeys STOP and UPDATE like every other lane.",
+    "`~/mc/runner/held.json` stays the one record of a pull request that would not land, with its one-repair rule (`held.js`, *Held before merge* in `mc-run.md`). A queued pull request that goes red joins it; the queue itself holds only what has not been tried by the lane yet.",
+    "Without a running runner `mc merge` behaves exactly as today, to the byte on the terminal, and says that nothing will pick the refusal up.",
+    "The runner merges only what it was asked to: its own steps' pull requests, and what `mc merge` queued. Nothing in this project makes it look at open pull requests it was not handed."
+  ],
+  "out_of_scope": [
+    "`mc merge --wait`, or any way of following a queued merge from the terminal beyond the page and `mc status`. Somebody who wants to watch can watch the page.",
+    "A second process. The runner is the merger because it already holds the vocabulary — lease, gate lock, `landPr`, `held.json`, the repair role — and a merger of its own would compete with it for the one gate.",
+    "The batch form `mc merge <repo> <pr> <pr>` and `--docs`. A batch that is refused falls back to one round per pull request already (`FALLBACK_STOPS`, `repo-merge.js:174`); queueing one entry per pull request out of a batch, and a docs-only landing that met the lease, are two more cases for a later step if they turn out to matter.",
+    "Changing what the gate measures, when it goes red, or what a repair may do. The repair role (`canon/roles/repair.md`) is read, not moved."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "An `mc merge` refused while a runner is running returns within a minute saying the pull request is queued, and the pull request lands with nobody typing again.",
+      "check": "Open a real pull request on memoro-cli while a step is landing, run `mc merge memoro-cli <pr>`, read the line and the exit, then read `runner.log` for the merge lane's landing and GitHub for the merge. Put all three in the PR."
+    },
+    {
+      "met": false,
+      "criterion": "The merge lane lands a queued pull request while every step lane is busy.",
+      "check": "With `total` steps in flight (`mc run lanes` says so and the RUNNER block shows them), a queued pull request lands before any of them finishes. `runner.log` names the lane's round between two `step starting` lines that are still running."
+    },
+    {
+      "met": false,
+      "criterion": "A queued pull request whose gate goes red gets exactly one repair, then is the brief's, through `held.json` like every other held pull request.",
+      "check": "Queue a pull request with a deliberately red test: `held.json` gains the entry with `repairs: 0`, one repair session starts and is counted, and the entry then reads `repairs: 1` with the page's *held before merge* row naming it. No second repair over the next hour of rounds."
+    },
+    {
+      "met": false,
+      "criterion": "Without a runner, `mc merge` is unchanged.",
+      "check": "`mc run stop`, then a refused `mc merge`: stderr is what it was before this project, plus at most one line saying no runner is there to take it. A test asserts the queue file is untouched."
+    },
+    {
+      "met": false,
+      "criterion": "The queue is visible where a person looks.",
+      "check": "With one entry queued, the page's NEXT block and `mc --json` carry it with repository, number, reason and since; `mc status <name>` says so for a pull request whose branch belongs to a project."
+    }
+  ],
+  "documents": [
+    {
+      "label": "The round a hand merge runs, and its outcomes",
+      "path": "../../../../src/mc/repo-merge.js"
+    },
+    {
+      "label": "The verb: where the refusal reaches the terminal",
+      "path": "../../../../src/mc/commands/repo.js"
+    },
+    {
+      "label": "landPr, the wait for a busy gate, the repair launch and the lanes",
+      "path": "../../../../src/mc/run.js"
+    },
+    {
+      "label": "The held file's pure rules — the shape the queue file copies",
+      "path": "../../../../src/mc/held.js"
+    },
+    {
+      "label": "What the runner is: lanes, the merge, held before merge",
+      "path": "../../../technical/mc-run.md"
+    },
+    {
+      "label": "The decision this plan carries",
+      "path": "../rulings.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "A refused `mc merge` queues the pull request",
+      "status": "ready",
+      "done_when": "`mc merge <repo> <pr>` whose round stopped anywhere short of merged writes one entry to `~/mc/runner/merges.json` when a runner is running, says so in one line, and is byte-for-byte today's command when none is; the page shows the queue.",
+      "instruction": [
+        "Read `held.js` first and copy its shape, not its file: a new `src/mc/merge-queue.js` with pure rules — `enqueue`, `dequeue`, `queuedFor(repo, pr)` — over `~/mc/runner/merges.json`, one entry per pull request `{ repo, pr, branch, reason, stopped_at, since, holder }`. `repo` is part of the identity for the reason `held.js` gives: memoro #9 and memoro-cli #9 are different work.",
+        "The write happens in `gate()` (`commands/repo.js:272`) after the round has printed what it prints today, and only when `report.ok` is false and the stop is one the lane can do something about: `busy`, `lease` (`BUSY_STOPS`, `run.js:133`), `red`, `pr-tests`, `extra-gate`, `merge` — the same set `FALLBACK_STOPS` names in `repo-merge.js:396`, plus the two busy ones. A stop at `pr` (GitHub unreachable, or no such pull request) is not queued: nothing on this machine can land what it cannot name. Say which stops queue in a comment beside the list, in one sentence each.",
+        "\"A runner is running\" is `runner.json` with a live pid — `readRunner({ alive })` as `runLoop` reads it at `run.js:1994`; use that function rather than a second reading. Without it the command prints today's lines and one more: `mc: no runner is running to take the refusal — start one, or run this again`, and the queue file is not touched.",
+        "The line on success is one: `mc: queued — the runner's merge lane lands #N, or holds it after one repair (mc shows the queue)`. Exit code 0 when queued: the caller asked for a merge and the merge is now somebody's. `--json` carries `queued: true` and the entry.",
+        "The page: `page-collect.js` reads the file beside `held.json` and `page-render.js` draws `queued for merge N` in the NEXT heading next to `held before merge N`, with one row per entry under the held rows — repository, number, reason, since. `mc --json` carries `next.queued` whole. `mc status <name>` says `#N is queued for merge (since …)` when the entry's branch is the project's.",
+        "Tests: the pure rules in `tests/mc/merge-queue.test.js` in the style of `held.test.js`; the command in a test that drives `gate()` with a fake `runMergeRound` — there is none today, so it is a new file beside `tests/mc/repo-merge.test.js` — refused with a runner writes the entry, refused without one does not and prints the extra line, landed writes nothing. `npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The merge lane lands what was queued",
+      "status": "ready",
+      "done_when": "A lane of the runner that takes no step drains `merges.json` through `landPr`, outside `per_repo` and `total`, lands what it can, holds what went red in `held.json` with `repairs: 0`, and obeys STOP and UPDATE.",
+      "instruction": [
+        "Add the lane in `runLoop` beside the repository lanes and `choreLoop` (`run.js:2079`–). It is one loop for the whole process, not one per repository: the gate is one at a time on the machine anyway, and two merge lanes would only refuse each other. It reads `merges.json` every `LAND_RETRY_MS`, takes the oldest entry, and hands it to `landPr(repo, name, pr, { branch })` (`run.js:595`), which already waits for a busy gate up to `LAND_WAIT_MS` and already writes `held.json` on red. `name` is the project whose workarea stands on the entry's branch when there is one — match it the way `heldRepair` (`run.js:1406`) matches a held entry to a project, and do not write a second matcher — and the branch itself when there is none — the log line has to name something a person can find.",
+        "The lane never calls `takeSlot`: it is not a step, and Martin's requirement is that a merge does not wait for a step lane. Say so in a comment at the lane, and say what it does share — the gate lock and the lease, both of which `landPr` already waits for.",
+        "`landPr` releases the queue entry on `merged` beside `release(repo, pr)` for the held file, and drops it on any other outcome too: a pull request that went red is now in `held.json`, and one entry per pull request in one file is the rule. An entry whose pull request is no longer open — merged or closed by hand — leaves the way held entries do, at `reconcileHold` (`run.js:1704`); extend that function rather than writing a second reconciliation.",
+        "STOP and UPDATE: the lane returns on either, like the repository lanes do, and it counts as \"in flight\" for the drain's `quiet()` (`run.js:2078`) while a round is running — a handover in the middle of a squash is the thing `landPr`'s lease exists to prevent.",
+        "`askForUpdate` (`run.js:674`) fires for a queued landing that changed mc's own code exactly as for a step's: the runner should not run old code because the change came in by hand — #671 today did exactly that.",
+        "Tests in `tests/mc/run.test.js` with the fixture the lanes already use: a queued entry lands while `total` steps are in flight; a red one goes to `held.json` with `repairs: 0` and leaves the queue; STOP ends the lane. Then the real thing: queue a pull request while the runner is busy, read `runner.log`, put the lines in the PR."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A held pull request with no project gets its one repair from the merge lane",
+      "status": "ready",
+      "done_when": "A pull request queued by hand whose branch belongs to no project is repaired once, in a workarea named after its branch, by the same repair role, and is then the brief's — with `held.json` showing `repairs: 1`.",
+      "instruction": [
+        "Today a repair is found per project inside the round (`heldRepair`, `run.js:1406`) and runs in that project's workarea on the entry's branch. A pull request with no project is never reached by a round, so its held entry sits at `repairs: 0` for ever. Check this against the code before building: it is what the code reads as on 2026-09-06 and it may have moved.",
+        "The merge lane does the reaching: after `landPr` held an entry with no project, it launches the repair itself — a workarea created from the entry's branch (the same call `mc work add` makes, keyed on the branch name), `repairPrompt` with the entry (`run.js:1511`), `countRepair` before the session as the rule says (`run.js:1516`), then `landPr` once more. After that the entry is `repairs: 1` and the brief's, and the lane does not look at it again.",
+        "Whether that repair session counts against `total` is a choice, and it is made here, not silently: it does **not** — the requirement is that a merge does not wait for a step lane, and a repair is the merge's own second try — and the lane runs at most one session at a time, so the machine's ceiling is `total + 1`. Write that sentence into `mc-run.md` § *Lanes* in step 4.",
+        "A repair may not run in a worktree with a merge in progress (`mc-run.md`, *Held before merge*); the workarea made from the branch is fresh, so this cannot happen on the first repair, and there is no second. Assert it rather than handle it.",
+        "Tests: a held entry with no project gets one repair from the lane and no second; the workarea is made from the branch; a project's own held entry is left to its round as today. Then a real one: queue a pull request with a deliberately red test and read `held.json` and the session's log. `npm test`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close out",
+      "status": "ready",
+      "done_when": "`docs/technical/mc-run.md` carries the merge lane, the queue, the repair of a project-less pull request and the `total + 1` sentence; `mc-ui.md` carries the page rows; every criterion's `met` is flipped from a measurement; `docs/project/project_log.md` has the row.",
+      "instruction": [
+        "Write it beside what it extends: § *The merge* gets the queue and where a refused hand merge goes; § *Held before merge* gets the project-less repair; § *Lanes* (or wherever `per_repo` and `total` are explained) gets the sentence that the merge lane is outside both and what the ceiling is. One paragraph each; the mechanism is in the code and the comments, the doc says the shape.",
+        "Flip each criterion from a measurement made in this step or cited from an earlier step's PR by number, and say which.",
+        "Add the row to `docs/project/project_log.md`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
