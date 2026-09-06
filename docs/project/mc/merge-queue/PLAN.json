@@ -107,7 +107,7 @@
         "One thing the instruction did not name and the code now does: `reconcileHold` judges a queue entry against `gh pr list` only when the entry was written *before* that list was read (`since` against the round's `askedAt`). `merges.json` is written by another process, so an entry that arrives between the fetch and the reconciliation is younger than the list, not absent from it — without the guard a `mc merge` refused in that window loses its entry silently, which is the exact failure the project exists to stop. Held entries need no such rule: only this process writes them.",
         "Not measured live, and it could not be: the runner running on this machine (pid 11175, started 2026-09-06T18:37Z) is on main's code, which has step 1's queueing verb and no merge lane at all, so there was nothing to queue *to*. The three criteria that need a live runner are step 4's to measure once this has landed. What was measured is in the pull request: the whole `runLoop` on the fixture, and one real process with real files in a temp work root."
       ],
-      "pr": null,
+      "pr": 677,
       "blocked_by": null
     },
     {
