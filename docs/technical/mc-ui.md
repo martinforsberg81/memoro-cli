@@ -87,15 +87,37 @@ listed — and what moves sits where the eye already is:
   a time. Yellow, like the line under it — nothing in the runner moves it on its own.
   The page draws the first six and counts the rest; `mc --json` carries every
   one whole, with `note`, `since` and `repairs`.
+  Last under the section, and the one line worth more than every red cell in
+  PROGRAMMES: **how many projects are blocked**, how many of them wait on a
+  decision and how many on another project, and the blockers holding the most —
+  `33 blocked · 18 on a decision, 15 on a project · held most by plan-review 12,
+  home-on-msr 7`. It is PROGRAMMES' own rollup, drawn here because it answers
+  *what should I do* and this is the section somebody asking that is reading.
+  It says `blocked`, the plan's word and the brand row's, rather than a third
+  word for the same projects. The names give way to the width before the fact
+  does: three of them, then two, then one, then none.
 - **INTAKE** — the newest `~/mc/intake/errors-<date>.md`, its age, what is
   new in it, and how many proposals nobody has queued or dropped.
-- **PROGRAMMES** — one heading per programme, with the room for its planning
-  session on the right of it, filled or empty; then one numbered row per
-  project under it: the repository it lives in, where the plan stands, how many
-  of its steps are done, `next`, the open PR. A project's `●` means the runner
-  has a step in flight on it, and nothing else. A programme is drawn whether or
-  not any of its projects have a plan the runner can read, and a programme that
-  exists only as an open planning session is drawn too.
+- **PROGRAMMES** — one heading per programme with its own `x ready · y blocked`
+  and the room for its planning session, filled or empty; then one numbered row
+  per project under it: the repository it lives in, where the plan stands, how
+  many of its steps are done, `next`, the open PR. A project's `●` means the
+  runner has a step in flight on it, and nothing else. A programme is drawn
+  whether or not any of its projects have a plan the runner can read; one that
+  exists only as an open planning session is drawn too, and says `no project
+  yet` where the counts would be.
+  **A programme's blocked projects are one row.** Thirty-three of forty-four
+  projects were `blocked` on 2026-09-06, and the page said so thirty-three
+  times without once saying what would move any of them. So a project that is
+  `ready`, `done` or in flight keeps its full row, and the stopped ones become
+  one row for the programme: how many, the numbers that still open them
+  (`1–3, 7`), and the blockers holding them, biggest first. Nothing leaves the
+  page — the numbering runs through every project of every programme whether or
+  not a row is drawn for it, a number opens a project either way, and `a` at
+  the menu draws them all again. The blocker is `blocked_by: { kind, name }` on
+  the step the status is about — the first that is not done, the only one the
+  runner considers — read off the plan and never parsed back out of the `next`
+  sentence.
 - **WORK** — everything running that the runner did not start, oldest first:
   `mc plan` on a programme is not here (it is on that programme's heading), so
   what is left is `mc work`, a session from before `mc plan` took a programme,
@@ -328,6 +350,7 @@ person set it to.
 | NEXT | `step n/m` on a row | the step kind's colour |
 | NEXT | how the order was arrived at, `… N more`, why a project was skipped | grey |
 | NEXT | `blocker finished N` and the steps under it | bold yellow, yellow |
+| NEXT | the rollup: `N blocked`, and the rest of that line | red, grey |
 | INTAKE | the digest's date, under 24 h old, older | green, yellow |
 | INTAKE | new errors, when > 0 | red |
 | INTAKE | proposals, when > 0 | yellow |
@@ -338,6 +361,9 @@ person set it to.
 | PROGRAMMES | the programme heading | bold cyan |
 | PROGRAMMES | a programme's open planning session | cyan |
 | PROGRAMMES | a programme with no planning session | grey |
+| PROGRAMMES | a programme's own count of ready, of blocked, of nothing | green, red, grey |
+| PROGRAMMES | a programme with no project yet | grey |
+| PROGRAMMES | a collapsed row: `N blocked`, its numbers and its blockers | red, grey |
 | PROGRAMMES | the repository a project lives in | grey |
 | PROGRAMMES | the open PR number | cyan |
 | PROGRAMMES | the number, the steps done, the last-run time, the no-workarea line | grey |
@@ -399,9 +425,10 @@ not changed:
 
 | | |
 |---|---|
-| a number | opens that project's workarea, making one if it has none — **PROGRAMMES’ number**, not a listing of its own |
+| a number | opens that project's workarea, making one if it has none — **PROGRAMMES’ number**, not a listing of its own, and it opens a project whose row is inside a collapsed one just the same |
 | a name | opens that workarea |
 | `n` | starts a new one |
+| `a` | draws the page again with nothing collapsed — every blocked project back as its own row, under the number it always had. `a` again puts them away |
 | `b` | `mc brief` |
 | `p <name>` | `mc plan <name>` |
 | `s <name>` | `mc status <name>` |

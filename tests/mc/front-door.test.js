@@ -317,15 +317,39 @@ describe('the menu under the page', () => {
     assert.deepEqual(bare.opened, ['mc-ui']);
   });
 
-  it('offers n, b, p and s beside the numbers, and no watch', async () => {
+  it('offers n, a, b, p and s beside the numbers, and no watch', async () => {
     const shown = drive(['q']);
     await shown.run();
     const keys = shown.written.join('');
     // `p` takes no name: `mc plan` asks which programme when it is not told,
     // and the page is where being shown the list beats remembering a name.
-    for (const key of ['n  start something new', 'b  brief', 'p  plan a programme', 's <name>', 'q  quit']) {
+    for (const key of ['n  start something new', 'a  every project', 'b  brief', 'p  plan a programme', 's <name>', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
     assert.ok(!keys.includes('watch'), 'the menu offers no watch');
+  });
+
+  /**
+   * `a` is a way of looking, not a verb: it turns the collapsing off, asks for
+   * the page again, and goes back to the prompt. The flag it sets belongs to
+   * the caller's closure, because the live loop refreshes through that same
+   * closure and a frame that did not know the mode would put the rows away
+   * again thirty seconds later (`commands/home.js`).
+   */
+  it('turns collapsing off and on again with a, and draws the page each time', async () => {
+    const modes = [];
+    const written = [];
+    const answers = ['a', 'a', 'q'];
+    const stdout = { columns: 100, write: (text) => written.push(text) };
+    const code = await menu(DATA, {
+      stdout,
+      stderr: { write: (text) => written.push(text) },
+      page: async () => ({ data: DATA, lines: ['  PROGRAMMES'] }),
+      reader: plainReader({ stdout, ask: () => answers.shift() ?? null }),
+      open: async () => 0,
+      expand: (on) => modes.push(on),
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(modes, [true, false], 'a shows them all, a again puts them back');
   });
 });

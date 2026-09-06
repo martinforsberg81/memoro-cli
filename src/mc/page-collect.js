@@ -43,6 +43,7 @@ import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-col
 import { readLiveVersion } from './live-version.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
+import { planState } from './plan-schema.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { assembleQueue, queueFileNames } from './run-plan.js';
@@ -481,6 +482,83 @@ export function intakeSection({ digests = [], proposals = [], now = new Date(), 
 export const UNPLANNED_SHOWN = 12;
 
 /**
+ * What holds a blocked project: the `blocked_by` of the step that stopped it.
+ *
+ * The step is the one `planState` picks — the first that is not done, which is
+ * the only step the runner considers and therefore the only one the row's
+ * `blocked` is about. A later step blocked on something else is not why this
+ * project is standing still.
+ *
+ * Read off the plan rather than out of the `next` sentence: `blocked_by` is a
+ * `{ kind, name }` every blocked step carries, and parsing the prose back apart
+ * would be a second answer to a question the plan already answers.
+ * `stale-blockers.js` walks the same field for its own purpose, and is the
+ * precedent for reading it here.
+ */
+function blockerOf(record) {
+  if (record.status !== 'blocked') return null;
+  const { step } = planState(record.plan);
+  if (step?.status !== 'blocked') return null;
+  const by = step.blocked_by;
+  return by?.name ? { kind: by.kind || null, name: by.name } : null;
+}
+
+/** How many of each plan status a set of projects holds. */
+function statusesOf(projects) {
+  const out = {};
+  for (const project of projects) {
+    const key = project.status || 'unknown';
+    out[key] = (out[key] || 0) + 1;
+  }
+  return out;
+}
+
+/**
+ * The blockers a set of projects waits on, biggest first — the shape both the
+ * programme's collapsed row and the page's one rollup line are drawn from.
+ *
+ * By name *and* kind, because the two namespaces are different: a `decision`
+ * called `plan-review` and a project called `plan-review` would be two
+ * different things waiting, and nothing here can merge them.
+ */
+function blockersOf(projects) {
+  const tally = new Map();
+  for (const project of projects) {
+    const blocker = project.blocked_by;
+    if (!blocker) continue;
+    const key = `${blocker.kind} ${blocker.name}`;
+    const held = tally.get(key) || { kind: blocker.kind, name: blocker.name, count: 0 };
+    held.count += 1;
+    tally.set(key, held);
+  }
+  return [...tally.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+/**
+ * What a programme's blocked projects collapse to: how many, the numbers that
+ * still open them, and what holds them.
+ *
+ * `names` is what the renderer leaves out; `numbers` is what it draws instead.
+ * Both, rather than one derived from the other, because the numbering runs
+ * through every project of every programme and a row that is not drawn is still
+ * openable by its number — that is the contract the collapsing is allowed under.
+ *
+ * A blocked project the runner has a step in flight on keeps its own row: the
+ * plan on `origin/main` says blocked, but something is happening to it right
+ * now, and that is the one thing a person watching this page wants to see.
+ */
+function collapsedOf(projects) {
+  const blocked = projects.filter((project) => project.status === 'blocked' && !project.running);
+  if (!blocked.length) return null;
+  return {
+    count: blocked.length,
+    numbers: blocked.map((project) => project.number),
+    names: blocked.map((project) => project.name),
+    blockers: blockersOf(blocked),
+  };
+}
+
+/**
  * One heading per **programme**, its projects under it, sorted programme then
  * project.
  *
@@ -516,6 +594,21 @@ export const UNPLANNED_SHOWN = 12;
  * Numbering runs through the projects and then the drawn folders, so every row
  * is openable by the number beside it. A project with no workarea is numbered
  * like any other: opening it is what creates the folder.
+ *
+ * **Every programme carries its own counts, and its blocked projects collapse.**
+ * Thirty-three of forty-four projects were `blocked` on 2026-09-06 and the page
+ * said so thirty-three times without once saying what would move any of them,
+ * though every blocked step carries `blocked_by: { kind, name }`. So a group
+ * carries `statuses` — its own `x ready · y blocked` — and `blocked`: how many,
+ * which numbers they are, and the blockers holding them, biggest first. The
+ * section carries the same rollup over every programme at once, which is the
+ * line worth more than all thirty-three red cells: `plan-review` holds twelve
+ * of them and `home-on-msr` seven.
+ *
+ * The rows themselves are all still here. Collapsing is the renderer's, and it
+ * is drawing rather than listing: `projects` is every project of the programme
+ * whether or not a row is drawn for it, which is what keeps `mc --json` whole
+ * and every number openable (`commands/home.js` § `menu`).
  */
 export function programmesSection({
   plans = [], areas = [], rows = [], openPrs = [], live = [], detail = () => ({}),
@@ -545,6 +638,9 @@ export function programmesSection({
       programme: plan.programme,
       status: plan.status || null,
       next: plan.next || null,
+      // What would move it, for a project that is stopped. Null for every other
+      // project, and for a blocked plan too old to carry the field.
+      blocked_by: blockerOf(plan),
       legacy: Boolean(plan.legacy),
       steps: steps.length ? { done: steps.filter((step) => step?.status === 'done').length, total: steps.length } : null,
       // The runner, and only the runner: a session somebody has open in the
@@ -610,19 +706,29 @@ export function programmesSection({
       projects: own,
       repos: [...new Set(own.map((project) => project.repo))].sort(),
       planning: planning[name] || null,
+      // The heading's own answer: how many of this programme's projects are
+      // ready and how many are stopped. An empty object is a programme with no
+      // project yet, which the heading says in words.
+      statuses: statusesOf(own),
+      blocked: collapsedOf(own),
     };
   });
 
-  const statuses = {};
-  for (const project of projects) {
-    const key = project.status || 'unknown';
-    statuses[key] = (statuses[key] || 0) + 1;
+  const stopped = projects.filter((project) => project.status === 'blocked');
+  const kinds = {};
+  for (const project of stopped) {
+    const kind = project.blocked_by?.kind;
+    if (kind) kinds[kind] = (kinds[kind] || 0) + 1;
   }
 
   return {
     count: projects.length,
     programmes: groups,
-    statuses,
+    statuses: statusesOf(projects),
+    // Every stopped project at once: how many wait on an answer from Martin,
+    // how many on another project, and which blockers hold the most. The page
+    // draws it under NEXT, where somebody is looking for what to do.
+    blocked: { count: stopped.length, kinds, blockers: blockersOf(stopped) },
     planning: groups.filter((group) => group.planning).length,
     running: projects.filter((project) => project.running).length,
     no_workarea: projects.filter((project) => !project.workarea).length,

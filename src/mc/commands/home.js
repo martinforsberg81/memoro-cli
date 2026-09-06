@@ -63,6 +63,12 @@ export async function run(argv, deps = {}) {
 
   const collect = deps.collect || collectPage;
   const version = await getPackageVersion().catch(() => '');
+  // Whether the page draws every project or collapses each programme's blocked
+  // ones. It lives here rather than in the menu because the live loop refreshes
+  // through this same closure (`page-live.js`): a frame that did not know the
+  // mode would collapse the rows again, thirty seconds after somebody asked to
+  // see them.
+  let expand = false;
   // One way to make a page, used by both surfaces: the width and the
   // colour are read per draw.
   const page = async () => {
@@ -73,6 +79,7 @@ export async function run(argv, deps = {}) {
         columns: columnsFor(stdout),
         colour: colourFor(stdout, env),
         version,
+        expand,
       }),
     };
   };
@@ -90,7 +97,7 @@ export async function run(argv, deps = {}) {
   if (!(deps.interactive || interactive)()) return 0;
   const reader = deps.reader || readerFor({ stdout, lines: first.lines, page });
   return menu(first.data, {
-    stdout, stderr, page, reader, open: deps.openArea,
+    stdout, stderr, page, reader, open: deps.openArea, expand: (on) => { expand = on; },
   });
 }
 
@@ -123,15 +130,17 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  open it   ·   n  start something new   ·   b  brief   ·   p  plan a programme',
-  '  s <name>  that project   ·   q  quit',
+  '  <n>  open it   ·   n  start something new   ·   a  every project   ·   b  brief',
+  '  p  plan a programme   ·   s <name>  that project   ·   q  quit',
 ].join('\n');
 
 /**
  * The way on from the page.
  *
  * The numbers are PROJECTS' numbers — the page above the prompt is the
- * listing, so the menu has none of its own. Everything a number cannot say is a letter,
+ * listing, so the menu has none of its own, and a number opens its project
+ * whether or not a row was drawn for it: a programme's blocked projects are one
+ * collapsed row, and `a` is what draws them all again. Everything a number cannot say is a letter,
  * and anything else is read as a `mc work` command, because a prompt invites
  * one and the verbs are the same verbs. `mc work discard x`, `discard x`,
  * `discard x --apply` — the leading `mc` and `work` are stripped and the rest
@@ -146,9 +155,13 @@ const KEYS = [
  * back — and the reader owns everything from the prompt onwards.
  */
 export async function menu(first, {
-  stdout, stderr, page, reader, open = openArea,
+  stdout, stderr, page, reader, open = openArea, expand = () => {},
 }) {
   let data = first;
+  // Off, and a redraw away from on. `a` is a way of looking rather than a verb:
+  // it changes what the next page draws and nothing else, which is why the flag
+  // is set on the caller's closure and the page is simply asked for again.
+  let all = false;
   for (;;) {
     // Everything PROGRAMMES numbered, in the order it numbered it: every
     // project of every programme, then the workareas no project explains,
@@ -164,6 +177,14 @@ export async function menu(first, {
     if (!answer || answer === 'q') return 0;
 
     if (answer === 'n' || answer === 'new') return startSomething({ stdout, stderr });
+    // The page again with nothing collapsed — every blocked project back as its
+    // own row, under the number it always had. `a` again puts them away.
+    if (answer === 'a' || answer === 'all') {
+      all = !all;
+      expand(all);
+      data = await redraw();
+      continue;
+    }
     if (answer === 'b' || answer === 'brief') {
       const brief = await import('./brief.js');
       return brief.run([], { stdout, stderr });
