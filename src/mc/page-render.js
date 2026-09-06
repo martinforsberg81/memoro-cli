@@ -7,6 +7,10 @@
  *   - **A number where a number is the answer**, a line only where the
  *     identity matters — and every count names the verb that expands it, on
  *     the right of its own heading.
+ *   - **What is not actionable is collapsed, never dropped.** A programme's
+ *     blocked projects are one row that keeps their numbers, so the page gets
+ *     shorter without any project leaving it, and `expand` — `a` at the menu —
+ *     draws every one of them again.
  *   - **Width-aware.** `stdout.columns` clamped to 60–160 through `width`,
  *     `pad` and `clip` from status-render.js, which are escape-aware. Nothing
  *     here is padded to a number somebody typed once.
@@ -122,6 +126,29 @@ function paint(c, parts, space = Infinity) {
   const plain = items.map((part) => part.text).join('');
   if (plain.length > space) return c(clip(plain, space), 'grey');
   return items.map((part) => (part.styles?.length ? c(part.text, ...part.styles) : part.text)).join('');
+}
+
+/**
+ * The parts that fit, dropping the tail rather than greying the whole run.
+ *
+ * `paint` clips and greys when a run is too long, which is right for a line
+ * whose whole text is one statement. It is wrong for a line built as *the
+ * answer, then what is behind it*: there the tail is droppable and the head is
+ * not, so a narrow terminal should lose the last part rather than the colour of
+ * the first. Each droppable part carries its own leading separator, so nothing
+ * is ever left dangling at the end of a line.
+ */
+function fitting(parts, space) {
+  const out = [];
+  let used = 0;
+  for (const part of parts) {
+    const text = String(part?.text ?? '');
+    if (!text) continue;
+    if (used + text.length > space) break;
+    out.push(part);
+    used += text.length;
+  }
+  return out;
 }
 
 /** The same parts with a separator of its own between them. */
@@ -645,17 +672,63 @@ function orphanLine(c, wide, area) {
 }
 
 /**
- * One programme heading, with the room for its planning session on the right
- * of it — filled or empty.
+ * The three columns of a programme heading. The name shortens on a narrow
+ * terminal and the counts do not: the counts are the answer, and a programme
+ * name is still recognisable at twenty-two columns.
+ */
+function programmeColumns(wide) {
+  return { name: wide >= 90 ? 31 : 22, counts: 22 };
+}
+
+/**
+ * How many of a programme's projects are ready and how many are stopped, or
+ * that it has no project yet.
+ *
+ * A zero keeps no colour. Green on `0 ready` would give a state's colour to the
+ * absence of it, and the page's rule is that colour carries state — so a count
+ * of nothing reads as the bookkeeping it is.
+ */
+function programmeCounts(c, group, columns) {
+  const statuses = group.statuses || {};
+  const total = Object.values(statuses).reduce((sum, n) => sum + n, 0);
+  if (!total) return pad(c(clip('no project yet', columns), 'grey'), columns);
+  const ready = statuses.ready || 0;
+  const blocked = statuses.blocked || 0;
+  return pad(paint(c, [
+    { text: `${ready} ready`, styles: ready ? statusTone('ready') : ['grey'] },
+    { text: ' · ', styles: ['grey'] },
+    { text: `${blocked} blocked`, styles: blocked ? statusTone('blocked') : ['grey'] },
+  ], columns), columns);
+}
+
+/**
+ * Three ways of saying that nobody is planning this programme, longest first.
+ *
+ * The counts took the room the sentence used to have, and a clipped `no plan
+ * sessio` says less than the glyph on its own does — so the widest one that
+ * fits is drawn rather than the only one there was.
+ */
+const NO_PLAN = [`${MARK.quiet}  no plan session`, `${MARK.quiet}  no plan`, MARK.quiet];
+
+/**
+ * One programme heading: its name, its own counts, and the room for its
+ * planning session — filled or empty.
  *
  * Empty is the point. `mc plan <programme>` is how new work enters, and a
  * programme with no session open is one nobody is thinking about right now,
  * which is a thing worth being able to see at a glance rather than to work out
  * from an absence (Martin, 2026-09-02).
+ *
+ * The counts sit between the two because that is where the eye already is: the
+ * page's own numbers were all on one heading forty rows above, so a programme's
+ * share of them had to be counted off its rows by hand.
  */
 function programmeLine(c, wide, group) {
+  const column = programmeColumns(wide);
   const session = group.planning;
-  const left = `  ${c(pad(clip(group.programme, 30), 31), 'bold', 'cyan')}`;
+  const left = `  ${c(pad(clip(group.programme, column.name - 1), column.name), 'bold', 'cyan')}`;
+  const counts = programmeCounts(c, group, column.counts);
+  const space = Math.max(0, wide - 4 - column.name - column.counts);
   const meta = session
     ? paint(c, [
       { text: `${MARK.running} `, styles: ['cyan'] },
@@ -664,12 +737,105 @@ function programmeLine(c, wide, group) {
         { text: [session.tool, session.model].filter(Boolean).join(' '), styles: ['grey'] },
         { text: session.pid ? `pid ${session.pid}` : '', styles: ['grey'] },
       ], ' · '),
-    ], wide - 34)
-    : c(`${MARK.quiet}  no plan session`, 'grey');
-  return `${left} ${meta}`;
+    ], space)
+    : c(NO_PLAN.find((text) => text.length <= space) ?? '', 'grey');
+  return `${left} ${counts} ${meta}`.replace(/[ ]+$/u, '');
 }
 
-function programmesLines(lines, c, wide, programmes) {
+/** How many blockers a collapsed row and the rollup line name before they stop. */
+export const BLOCKERS_DRAWN = 3;
+
+/** `1–3, 7` — a run of row numbers as the shortest thing that still opens them. */
+export function numberRanges(numbers) {
+  const sorted = [...numbers].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  const out = [];
+  let start = null;
+  let last = null;
+  const flush = () => { if (start !== null) out.push(start === last ? `${start}` : `${start}–${last}`); };
+  for (const n of sorted) {
+    if (start === null) { start = n; last = n; continue; }
+    if (n === last + 1) { last = n; continue; }
+    flush();
+    start = n;
+    last = n;
+  }
+  flush();
+  return out.join(', ');
+}
+
+/** `plan-review 12, home-on-msr 7` — the blockers, biggest first. */
+function blockerWords(blockers, drawn = BLOCKERS_DRAWN) {
+  const named = blockers.slice(0, drawn);
+  const rest = blockers.length - named.length;
+  return `${named.map((item) => `${item.name} ${item.count}`).join(', ')}${rest ? `, … ${rest} more` : ''}`;
+}
+
+/**
+ * As many blockers as the room holds, biggest first — the widest of `lead` plus
+ * three, two or one of them that fits, and nothing at all if even one does not.
+ *
+ * A blocker's name is a project's or a decision's, and those run long
+ * (`martin-iphone-cold-restore-confirmation`). Dropping the whole tail because
+ * the third name overran costs the row the one thing it is drawn for, so the
+ * count of names gives way before the fact does — and after it, the words
+ * around the names, which is what the second lead is for.
+ */
+function blockersFitting(blockers, leads, space) {
+  for (const lead of [].concat(leads)) {
+    for (let drawn = Math.min(BLOCKERS_DRAWN, blockers.length); drawn > 0; drawn -= 1) {
+      const text = `${lead}${blockerWords(blockers, drawn)}`;
+      if (text.length <= space) return text;
+    }
+  }
+  return '';
+}
+
+/**
+ * A programme's blocked projects as one row: how many, the numbers that still
+ * open them, and what holds them.
+ *
+ * Twelve rows saying `blocked` with twelve different names is twelve rows of
+ * the same fact; the fact worth the room is which blocker holds them. The
+ * numbers stay because they are what a person types — a collapsed project is
+ * still openable, and this row is where its number went.
+ */
+function collapsedLine(c, wide, blocked) {
+  const room = wide - 8;
+  const head = [
+    { text: `${blocked.count} blocked`, styles: statusTone('blocked') },
+    { text: `  ·  ${numberRanges(blocked.numbers)}`, styles: ['grey'] },
+  ];
+  const holders = blockersFitting(blocked.blockers, '  ·  ', room - head.reduce((n, part) => n + part.text.length, 0));
+  return `        ${paint(c, fitting([...head, { text: holders, styles: ['grey'] }], room), room)}`;
+}
+
+/**
+ * The one line worth more than every red cell under it: how many projects are
+ * stopped, how many of them wait on an answer and how many on another project,
+ * and the blockers holding the most.
+ *
+ * Drawn under NEXT and not in PROGRAMMES, because it answers *what should I
+ * do* and NEXT is where somebody asking that is already looking. It says
+ * `blocked` — the plan's own word, and the word the brand row and the skip line
+ * use — rather than inventing a third for the same thirty-three projects.
+ */
+function blockedLines(lines, c, wide, blocked) {
+  if (!blocked?.count) return;
+  const kinds = blocked.kinds || {};
+  const waits = [
+    kinds.decision ? `${kinds.decision} on a decision` : '',
+    kinds.project ? `${kinds.project} on a project` : '',
+  ].filter(Boolean).join(', ');
+  const room = wide - 7;
+  const head = [
+    { text: `${blocked.count} blocked`, styles: statusTone('blocked') },
+    { text: waits ? ` · ${waits}` : '', styles: ['grey'] },
+  ];
+  const holders = blockersFitting(blocked.blockers, [' · held most by ', ' · '], room - head.reduce((n, part) => n + part.text.length, 0));
+  lines.push(`       ${paint(c, fitting([...head, { text: holders, styles: ['grey'] }], room), room)}`);
+}
+
+function programmesLines(lines, c, wide, programmes, expand) {
   const statuses = Object.entries(programmes.statuses || {})
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([status, n]) => ({ text: `${status} ${n}`, styles: statusTone(status) }));
@@ -681,7 +847,15 @@ function programmesLines(lines, c, wide, programmes) {
 
   for (const group of groups) {
     lines.push(programmeLine(c, wide, group));
-    for (const project of group.projects) lines.push(projectLine(c, wide, project));
+    // What is actionable keeps its row; what is stopped becomes one row for the
+    // programme. `a` at the menu draws the page again with nothing collapsed —
+    // the same rows, the same numbers, all of them.
+    const collapsed = expand ? null : group.blocked;
+    const held = new Set(collapsed ? collapsed.names : []);
+    for (const project of group.projects) {
+      if (!held.has(project.name)) lines.push(projectLine(c, wide, project));
+    }
+    if (collapsed) lines.push(collapsedLine(c, wide, collapsed));
   }
   if (programmes.no_workarea) {
     say(lines, c, wide, 7, `${programmes.no_workarea} of them ${programmes.no_workarea === 1 ? 'has' : 'have'} no workarea yet — opening by number makes one`);
@@ -696,7 +870,7 @@ function programmesLines(lines, c, wide, programmes) {
  * per section, so the two can never say different things.
  */
 export function renderPageLines(data, {
-  columns = 100, colour = false, version = '', now = new Date(),
+  columns = 100, colour = false, version = '', now = new Date(), expand = false,
 } = {}) {
   const c = painter(colour);
   const wide = Math.max(60, Math.min(columns, 160));
@@ -728,10 +902,14 @@ export function renderPageLines(data, {
 
   const sessions = data.sessions || { desks: {}, others: [] };
   nextLines(lines, c, wide, data.next);
+  // PROGRAMMES' rollup, under NEXT: the section below counts the stopped
+  // projects and this is the line that says what would move them, drawn where
+  // somebody asking what to do next is already looking.
+  blockedLines(lines, c, wide, data.programmes?.blocked);
   lines.push('');
   intakeLines(lines, c, wide, data.intake);
   lines.push('');
-  programmesLines(lines, c, wide, data.programmes);
+  programmesLines(lines, c, wide, data.programmes, expand);
   lines.push('');
   workLines(lines, c, wide, sessions, data.programmes?.unplanned);
   lines.push('');

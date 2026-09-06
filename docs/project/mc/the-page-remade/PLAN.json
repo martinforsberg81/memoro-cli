@@ -38,7 +38,7 @@
       "check": "A test feeds `queueSection` an empty queue file and a fixture of plans, and asserts NEXT's rows are `assembleQueue`'s order per lane with `step n/m` on each, and that the heading says the order is alphabetical. The brand row asserts in-flight, ready and blocked counts, never `0 of 0 queued`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Every programme row carries its own `x ready · y blocked`, the blocked projects of a programme are one row naming their numbers and their blockers, and one line says how many projects wait on a decision, how many on a project, and which blockers hold the most.",
       "check": "A test over a plans fixture asserts the programme row's counts, the collapsed row's number ranges, and the rollup line's figures; and that `a` at the menu draws every project uncollapsed with the same numbers."
     },
@@ -124,7 +124,7 @@
     },
     {
       "title": "PROGRAMMES: counts on every heading, the blocked collapsed to one row",
-      "status": "ready",
+      "status": "done",
       "done_when": "Every programme row carries `x ready · y blocked` or `no project yet`; a programme's blocked projects are one row naming their numbers and their blockers; one line says how many wait on a decision, how many on a project, and which blockers hold the most; and `a` at the menu draws every project uncollapsed with the same numbers.",
       "instruction": [
         "The section draws 41 rows of which 32 say `blocked` and nothing says what would move them. Every blocked step carries `blocked_by: { kind, name }` and the page reads none of it. Counted 2026-09-06 off `~/mc/runner/plans.json`: 17 blocked on a decision, 15 on a project, `plan-review` holding 12 and `home-on-msr` 7 — two names for 19 of the 32.",
@@ -134,8 +134,13 @@
         "Then the one line that is worth more than all 32 red cells: how many projects wait on a decision, how many on a project, and the blockers holding the most. Draw it under NEXT, where a person is looking for what to do, not buried in PROGRAMMES.",
         "`stale-blockers.js` already reads `blocked_by` for its own purpose and is the precedent for how to walk the plans; do not re-derive the blocker by parsing the `next` sentence."
       ],
-      "comments": [],
-      "pr": null,
+      "comments": [
+        "The blocker is read off **one** step, not every blocked step in the file — `planState`'s, the first that is not done, which is the only one the runner considers and therefore the only one the row's `blocked` is about. `stale-blockers.js` walks them all because it is looking for a fault anywhere in a plan; this is looking for why a project is standing still, and a later step blocked on something else is not it. The figures come out as the instruction measured them: 33 blocked today, 18 on a decision, 15 on a project, `plan-review` holding 12 and `home-on-msr` 7 (one decision blocker newer than 2026-09-06).",
+        "**No `PLANS_SHAPE` bump was owed, and step 5 should check the same way.** Step 3's comment asks for one whenever a plan *record* gains a field; `blocked_by` here is derived inside `programmesSection` from `plan.steps`, which the cached record already carries whole, so nothing about `plans.json` changed. The rule is about `listPlans`' output, not about what the page computes from it.",
+        "What `mc --json` gained, for whoever reads it: `programmes.programmes[].statuses` (that programme's own status counts, `{}` for a programme with no project) and `.blocked` (`count`, `numbers`, `names`, `blockers`), `programmes.blocked` (the same rollup over every programme, with `kinds`), and `blocked_by` on each project. Nothing was renamed. The section carries **every** project whether or not a row is drawn for it — the collapsing is entirely `page-render.js`'s, which is what keeps the numbering and the menu untouched.",
+        "Two things for step 5, which owns the section order and the rest of the page. The page is **87 rows at 120 columns where it was 110**, and expanded (`a`) it is 110 again — so the collapsing, not a cut, is what shortened it. And `programmeLine` is three columns now (name, counts, session): the name shortens to 22 below 90 columns and the counts do not, because the counts are the answer; the `no plan session` text picks the widest of three phrasings that fits, and `blockersFitting` drops blockers one at a time and then the words around them rather than letting `paint` grey the whole run. If step 5 changes what sits on that row, that arithmetic is where it lives."
+      ],
+      "pr": 664,
       "blocked_by": null
     },
     {

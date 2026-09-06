@@ -31,7 +31,7 @@ const NOW = new Date('2026-08-29T12:00:00Z');
  * `step n/m` on a NEXT row is only worth drawing when a plan can be part-way
  * through: `2/3` has to come from somewhere real.
  */
-function planRecord({ repo, programme, project, status, title, done = 0 }) {
+function planRecord({ repo, programme, project, status, title, done = 0, blockedBy = null }) {
   const stopped = status === 'blocked' || status === 'blocked';
   const before = Array.from({ length: done }, (_, n) => ({
     title: `Step ${n + 1}`, status: 'done', done_when: 'it was done', instruction: [], pr: null, blocked_by: null,
@@ -44,7 +44,7 @@ function planRecord({ repo, programme, project, status, title, done = 0 }) {
       done_when: 'the step is finished',
       instruction: ['Do it.'],
       pr: null,
-      blocked_by: stopped ? { kind: 'decision', name: `${programme}-1` } : null,
+      blocked_by: stopped ? (blockedBy || { kind: 'decision', name: `${programme}-1` }) : null,
     }];
   const plan = {
     schema: 'mc-plan',
@@ -76,6 +76,33 @@ const PLANS = [
   planRecord({ repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', title: 'Measure paste and IME', done: 1 }),
   planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', title: 'The page' }),
   planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-run', status: 'done', title: 'nothing' }),
+];
+/**
+ * Five plans that are mostly stopped, and stopped by different things.
+ *
+ * Thirty-three of forty-four projects said `blocked` on 2026-09-06 and the page
+ * said it thirty-three times without once saying what would move any of them,
+ * though `plan-review` held twelve and `home-on-msr` seven. This is that shape,
+ * small enough to assert: two programmes, two blockers, two kinds.
+ */
+const STOPPED = [
+  planRecord({
+    repo: 'memoro', programme: 'msr-core', project: 'a-one', status: 'blocked', title: 'one',
+    blockedBy: { kind: 'decision', name: 'plan-review' },
+  }),
+  planRecord({
+    repo: 'memoro', programme: 'msr-core', project: 'b-two', status: 'blocked', title: 'two',
+    blockedBy: { kind: 'decision', name: 'plan-review' },
+  }),
+  planRecord({
+    repo: 'memoro', programme: 'msr-core', project: 'c-three', status: 'blocked', title: 'three',
+    blockedBy: { kind: 'project', name: 'home-on-msr' },
+  }),
+  planRecord({ repo: 'memoro', programme: 'msr-core', project: 'd-four', status: 'ready', title: 'four' }),
+  planRecord({
+    repo: 'memoro-cli', programme: 'mc', project: 'e-five', status: 'blocked', title: 'five',
+    blockedBy: { kind: 'project', name: 'home-on-msr' },
+  }),
 ];
 const TSV = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
@@ -758,6 +785,70 @@ describe('PROJECTS', () => {
     assert.equal(projects.unplanned.shown[0].repo, 'memoro');
   });
 
+  it('counts every programme’s own projects on its own heading', () => {
+    const projects = programmesSection({ plans: STOPPED, areas: [], programmes: ['empty-one'] });
+    const byName = Object.fromEntries(projects.programmes.map((g) => [g.programme, g]));
+    assert.deepEqual(byName.mc.statuses, { blocked: 1 });
+    assert.deepEqual(byName['msr-core'].statuses, { blocked: 3, ready: 1 });
+    // A programme with no project at all counts nothing, and the heading says
+    // that in words rather than as `0 ready · 0 blocked`.
+    assert.deepEqual(byName['empty-one'].statuses, {});
+  });
+
+  it('collapses a programme’s blocked projects to their numbers and their blockers', () => {
+    const projects = programmesSection({ plans: STOPPED, areas: [] });
+    const byName = Object.fromEntries(projects.programmes.map((g) => [g.programme, g]));
+    // Numbered `mc` first, then `msr-core`: a-one is 2, b-two 3, c-three 4.
+    assert.deepEqual(byName['msr-core'].blocked.numbers, [2, 3, 4]);
+    assert.deepEqual(byName['msr-core'].blocked.names, ['a-one', 'b-two', 'c-three']);
+    assert.equal(byName['msr-core'].blocked.count, 3);
+    assert.deepEqual(byName['msr-core'].blocked.blockers, [
+      { kind: 'decision', name: 'plan-review', count: 2 },
+      { kind: 'project', name: 'home-on-msr', count: 1 },
+    ]);
+    // Every project is still on the group, drawn or not: the row is what
+    // collapses, and the number still opens the project.
+    assert.deepEqual(byName['msr-core'].projects.map((p) => p.name), ['a-one', 'b-two', 'c-three', 'd-four']);
+    assert.equal(byName['msr-core'].projects.find((p) => p.name === 'd-four').blocked_by, null);
+  });
+
+  // The plan on main says blocked and something is happening to it right now,
+  // which is the one row a person watching this page wants to see.
+  it('keeps the row of a blocked project the runner has a step in flight on', () => {
+    const projects = programmesSection({ plans: STOPPED, areas: [], running: ['a-one'] });
+    const group = projects.programmes.find((g) => g.programme === 'msr-core');
+    assert.deepEqual(group.blocked.names, ['b-two', 'c-three']);
+    // The programme's own count is the plan's, not the drawing's: it is still
+    // three projects that are stopped.
+    assert.equal(group.statuses.blocked, 3);
+  });
+
+  it('says how many wait on a decision, how many on a project, and what holds the most', () => {
+    const projects = programmesSection({ plans: STOPPED, areas: [] });
+    assert.equal(projects.blocked.count, 4);
+    assert.deepEqual(projects.blocked.kinds, { decision: 2, project: 2 });
+    assert.deepEqual(projects.blocked.blockers, [
+      { kind: 'project', name: 'home-on-msr', count: 2 },
+      { kind: 'decision', name: 'plan-review', count: 2 },
+    ]);
+  });
+
+  // Read off `blocked_by` on the step that stopped the project — the first that
+  // is not done, which is the only one the runner considers — and never parsed
+  // back out of the `next` sentence.
+  it('takes the blocker from the step the status is about, and from no other', () => {
+    const record = planRecord({ repo: 'memoro', programme: 'mc', project: 'later', status: 'ready', title: 'go' });
+    record.plan.steps.push({
+      title: 'A later one', status: 'blocked', done_when: 'x', instruction: [], pr: null,
+      blocked_by: { kind: 'decision', name: 'something-else' },
+    });
+    const projects = programmesSection({ plans: [{ ...record, ...planSummary(record.plan) }], areas: [] });
+    const [project] = projects.programmes[0].projects;
+    assert.equal(project.status, 'ready');
+    assert.equal(project.blocked_by, null, 'a later blocked step is not why this project stands still');
+    assert.equal(projects.blocked.count, 0);
+  });
+
   it('says a plan still on the old markdown file is one, rather than a fraction of nothing', () => {
     const projects = programmesSection({
       plans: [{ repo: 'memoro', programme: 'mc', project: 'old', legacy: true, plan: null, status: 'ready', next: 'x' }],
@@ -867,7 +958,14 @@ describe('the page', () => {
     assert.match(text, /INTAKE {2}1 digest · 1 proposal\s+mc helper --intake/u);
     assert.match(text, /^ +memoro · 2026-08-29 \(60 min old\) · 1 new error \(1 loud\)$/mu);
     assert.match(text, /PROGRAMMES {2}3 programmes · 4 projects {2}ready 2 · blocked 1 · done 1\s+p {2}plan a programme/u);
-    assert.match(text, /^ {2}docx-editing-surface\s+·\s{2}no plan session$/mu, 'the programme is a heading of its own');
+    assert.match(text, /^ {2}docx-editing-surface\s+1 ready · 0 blocked\s+·\s{2}no plan session$/mu,
+      'the programme is a heading of its own, and it counts its own projects');
+    // The blocked project is one row for its programme — the number that still
+    // opens it, and what holds it — and the line that adds them all up is under
+    // NEXT, where somebody is looking for what to do.
+    assert.match(text, /^ {8}1 blocked {2}· {2}1 {2}· {2}assistant-avatar-1 1$/mu);
+    assert.doesNotMatch(text, /avatar-self-serve/u, 'a blocked project is collapsed, not listed');
+    assert.match(text, /^ {7}1 blocked · 1 on a decision · held most by assistant-avatar-1 1$/mu);
     assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
     assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+Step 1, The page — done when the step[^|]*#440/u);
     assert.match(text, /3 of them have no workarea yet/u);
@@ -876,6 +974,66 @@ describe('the page', () => {
     assert.match(text, /offline, PRs 2 h old — --fresh asks GitHub/u);
     assert.match(text, /note: no queue\.md/u);
     assert.ok(!/note: PRs from cache/u.test(text), 'the cache line already says it');
+  });
+
+  /**
+   * The whole point of collapsing: the page gets shorter without a project
+   * leaving it. Every number is still a row somewhere, and `expand` is what
+   * puts the rows back.
+   */
+  it('draws every project uncollapsed on expand, with the same numbers', () => {
+    const numbers = (lines) => lines.flatMap((line) => (/^ {2}( *\d+) [·●]/u.exec(line) || []).slice(1).map(Number));
+    const collapsed = renderPageLines(DATA, { columns: 120, now: NOW });
+    const all = renderPageLines(DATA, { columns: 120, now: NOW, expand: true });
+    assert.deepEqual(numbers(all), [1, 2, 3, 4, 5]);
+    assert.deepEqual(numbers(collapsed), [2, 3, 4, 5], 'the collapsed row is where 1 went');
+    assert.match(all.join('\n'), /^ {4}1 · avatar-self-serve\s+memoro\s+blocked/mu);
+    assert.ok(!all.some((line) => / {8}1 blocked {2}· {2}1/u.test(line)), 'nothing left to collapse');
+    // The rollup is not a drawing choice: it counts the plans, and it says the
+    // same thing whichever way the rows below it are drawn.
+    for (const lines of [collapsed, all]) {
+      assert.ok(lines.some((line) => /1 blocked · 1 on a decision · held most by assistant-avatar-1 1/u.test(line)));
+    }
+
+    // Four blocked projects in two programmes: three rows go, two collapsed
+    // rows come, and the page is a row shorter for it. That is the whole trade
+    // — shorter by collapsing what is not actionable, never by leaving work out.
+    const many = pageData({ programmes: programmesSection({ plans: STOPPED, areas: [] }) });
+    const short = renderPageLines(many, { columns: 120, now: NOW });
+    const long = renderPageLines(many, { columns: 120, now: NOW, expand: true });
+    assert.equal(long.length - short.length, 2);
+    assert.deepEqual(numbers(long), [1, 2, 3, 4, 5]);
+    assert.deepEqual(numbers(short), [5], 'only d-four, the one that is ready');
+    assert.match(short.join('\n'), /^ {8}3 blocked {2}· {2}2–4 {2}· {2}plan-review 2, home-on-msr 1$/mu);
+    assert.match(short.join('\n'), /^ {8}1 blocked {2}· {2}1 {2}· {2}home-on-msr 1$/mu);
+    assert.match(short.join('\n'), /^ {7}4 blocked · 2 on a decision, 2 on a project · held most by home-on-msr 2, plan-review 2$/mu);
+  });
+
+  /**
+   * `a` at the menu, driven through `run` — the closure that renders is the one
+   * the live loop refreshes through, so the mode has to survive the redraw
+   * rather than live inside one call.
+   */
+  it('draws the page again with nothing collapsed when a is typed at the menu', async () => {
+    const shown = [];
+    const asked = ['a', 'q'];
+    const reader = {
+      ask: async () => asked.shift() ?? null,
+      show: (lines) => shown.push(lines.join('\n')),
+    };
+    const code = await page([], {
+      collect: async () => DATA,
+      stdout: { columns: 120, write: () => {} },
+      stderr: { write: () => {} },
+      env: {},
+      interactive: () => true,
+      reader,
+      checkAndPrintFreshInstall: async () => {},
+    });
+    assert.equal(code, 0);
+    assert.equal(shown.length, 1, 'one redraw, for the one a');
+    assert.match(shown[0], /^ {4}1 · avatar-self-serve/mu);
+    assert.doesNotMatch(shown[0], / {8}1 blocked {2}· {2}1 {2}·/u);
   });
 
   it('fits the terminal it is printed in, from 60 columns to 160', () => {
@@ -1114,6 +1272,11 @@ describe('the palette', () => {
   // in the terminal's own foreground, which is what primary text is here. Every
   // `white` and every `dim+grey` that used to be in this list went one of those
   // two ways — to nothing, or to plain `grey`.
+  //
+  // `avatar-self-serve` has no row of its own here and that is not an omission:
+  // it is blocked, so its programme draws it as part of one collapsed row, and
+  // its number is on that row. `expand` draws it again — the page is rendered
+  // both ways in *the page* above.
   const SNAPSHOT = [
     '',
     'bold grey grey grey grey', //               MEMORO·CLI 0.7.11 ── 2 of 3 queued · ≈$7.28 today
@@ -1125,17 +1288,18 @@ describe('the palette', () => {
     'bold green', //                                                   docx-editor  step 2/2  Measure paste and IME
     'grey', //                                                       skipped 2 (done 1, blocked 1)
     'yellow+bold yellow', //                                         · docx-editor  #10958  two tests the change reaches are red
+    'red grey grey', //                                              1 blocked · 1 on a decision · held most by assistant-avatar-1 1
     '',
     'bold+cyan grey grey yellow grey', //                          INTAKE  1 digest · 1 proposal
     'bold grey green grey red', //                                         memoro · 2026-08-29 (60 min old) · 1 new error (1 loud)
     'red bold', //                                                 !  `abc` — 41x 500 — loud
     '',
     'bold+cyan grey green grey red grey grey grey', //          PROGRAMMES  3 programmes · 4 projects  ready 2 · done 1 · blocked 1
-    'bold+cyan grey', //                                           assistant-avatar   ·  no plan session
-    'grey grey grey red grey grey blue', //                      1 · avatar-self-serve  memoro  blocked  0/1  …  triage
-    'bold+cyan grey', //                                           docx-editing-surface   ·  no plan session
+    'bold+cyan grey grey red grey', //                             assistant-avatar  0 ready · 1 blocked   ·  no plan session
+    'red grey grey', //                                              1 blocked  ·  1  ·  assistant-avatar-1 1
+    'bold+cyan green grey grey grey', //                           docx-editing-surface  1 ready · 0 blocked   ·  no plan session
     'grey grey grey green grey grey green', //                   2 · docx-editor  memoro  ready  0/1  …  step
-    'bold+cyan grey', //                                           mc   ·  no plan session
+    'bold+cyan green grey grey grey', //                           mc  1 ready · 0 blocked   ·  no plan session
     'grey grey grey grey grey', //                               3 · mc-run  memoro-cli  done  1/1  nothing
     'grey grey grey green grey cyan', //                         4 · mc-ui  memoro-cli  ready  0/1  Step 1, …  #440
     'grey', //                                                       3 of them have no workarea yet
@@ -1257,7 +1421,10 @@ describe('the palette', () => {
     const data = pageData({
       programmes: programmesSection({ plans, areas: plans.map((plan, n) => ({ name: plan.project, mtime_ms: 100 - n })).concat([{ name: 'e-none', mtime_ms: 0 }]) }),
     });
-    const lines = paintedPage(data);
+    // Uncollapsed, because a blocked project's own row is one of the three this
+    // walks — collapsed it is a count in a row of its own, which is the next
+    // assertion down and a different question.
+    const lines = paintedPage(data, { expand: true });
     // Index 3: the number, the mark, the repository, then the status. The name
     // between the mark and the repository is the terminal's own foreground and
     // paints no run of its own.
@@ -1267,6 +1434,17 @@ describe('the palette', () => {
     // A workarea no project explains is grey through and through — the number,
     // the mark, the name, the repository and the middle, one grey each.
     assert.deepEqual(signature(rowWith(lines, 'e-none')).split(' '), ['grey', 'grey', 'grey', 'grey', 'grey']);
+    // Collapsed, the count that stands in for those rows is the status's own
+    // red, and everything behind it — the numbers, the blockers — is grey. So
+    // is the rollup line under NEXT, which is the same word about the same
+    // projects and had better not be a second colour for them.
+    const collapsed = paintedPage(pageData({ programmes: programmesSection({ plans: STOPPED, areas: [] }) }));
+    assert.deepEqual(signature(rowWith(collapsed, '2–4')).split(' '), ['red', 'grey', 'grey']);
+    assert.deepEqual(signature(rowWith(collapsed, 'held most by')).split(' '), ['red', 'grey', 'grey']);
+    // And a programme's counts: green while something is ready, red while
+    // something is stopped, grey for a count of nothing.
+    assert.deepEqual(signature(rowWith(collapsed, '1 ready · 3 blocked')).split(' '), ['bold+cyan', 'green', 'grey', 'red', 'grey']);
+    assert.deepEqual(signature(rowWith(collapsed, '0 ready · 1 blocked')).split(' '), ['bold+cyan', 'grey', 'grey', 'red', 'grey']);
   });
 
   it('turns the clock yellow near the budget and red past it', () => {
