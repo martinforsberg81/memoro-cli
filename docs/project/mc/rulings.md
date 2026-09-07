@@ -507,6 +507,35 @@ batch and `--docs` forms, and any change to what the gate measures.
 
 **Carried by [`merge-queue/PLAN.json`](merge-queue/PLAN.json).**
 
+## 16 · `mc deploy` runs from `main`, wherever `main` is — and keeps a `main` of its own
+
+`ruling · 2026-09-06` · raised by Martin at the plan session, from a failed deploy that evening
+
+At 20:04Z `mc deploy` failed at *Deploy source preflight*: "Production deploys
+must run from main; current branch is language-content-open-decisions". The
+verb had read `origin/main`'s sha, printed it, asked, and then spawned
+`npm run deploy` in `~/memoro` — whatever branch that checkout was on. `main`
+was checked out in `~/mc/plan/msr-core/memoro`. The script's own preflight
+stopped it and production was untouched; the 09:18Z row that morning ("Working
+tree is dirty before deploy") was the same cause.
+
+> "Det är en brist; det ska vara inbyggt i mc deploy att alltid köra från main,
+> oavsett var main är utcheckad." … "Ja, den måste köra från main, ff om det
+> behövs, den ska bygga om css OM det behövs, allt smart och smidigt." … "Jag
+> checkar ut main enbart för att göra deploys." (Martin, 2026-09-06)
+
+So: the script runs in a worktree that is `main` — the one where `main` is
+checked out when there is one, otherwise a worktree mc makes and keeps under
+`~/.memoro/mc/deploy/memoro`, so that nobody checks `main` out by hand to
+deploy again. It is fast-forwarded to `origin/main` under the lease before the
+script runs; a dirty or diverged `main` is a refused row. `deploy.mjs` is not
+touched — it already builds the CSS bundle on every run, from the tree it runs
+in, which is what running it in `main` makes right. Explicitly out: any
+argument to the verb, any change to `defaultRepos` or the lease key, and a
+worktree under `~/mc/`, which would be a workarea to the runner.
+
+**Carried by [`deploy-from-main/PLAN.json`](deploy-from-main/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
