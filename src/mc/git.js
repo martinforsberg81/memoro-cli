@@ -73,6 +73,33 @@ export function primaryWorktree(cwd) {
 }
 
 /**
+ * The path of the worktree that has `branch` checked out, from the text of
+ * `git worktree list --porcelain`, or null when no worktree has it.
+ *
+ * Pure on purpose: the caller shells out through its own seam and this only
+ * reads the answer. Porcelain is stanzas separated by a blank line, each
+ * `worktree <path>` then `HEAD <sha>` then one of `branch refs/heads/<name>`,
+ * `detached` or `bare` — the last two are stanzas with no branch line and are
+ * simply not matched. There is at most one hit: git refuses a second checkout
+ * of the same branch, which is the property the deploy worktree rests on.
+ */
+export function worktreeOnBranch(porcelain, branch) {
+  const want = `refs/heads/${branch}`;
+  for (const stanza of String(porcelain || '').split(/\n\s*\n/u)) {
+    const stanzaLines = stanza.split('\n');
+    const path = stanzaLines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length);
+    const ref = stanzaLines.find((line) => line.startsWith('branch '))?.slice('branch '.length).trim();
+    if (path && ref === want) return path.replace(/\r$/u, '');
+  }
+  return null;
+}
+
+/** Where `main` is checked out, if anywhere. `mc deploy`'s one question. */
+export function mainWorktree(porcelain) {
+  return worktreeOnBranch(porcelain, 'main');
+}
+
+/**
  * True if the branch exists locally.
  */
 export function branchExists(cwd, branch) {

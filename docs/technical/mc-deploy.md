@@ -10,8 +10,10 @@ not edit it.
 What the verb adds is everything around the script:
 
 - **the reading**, so the person deciding sees what would ship before they say
-  yes: the sha, what is live now, the gap between them, and whether the nightly
-  ever measured that tree whole;
+  yes: the sha, what is live now, the gap between them, whether the nightly
+  ever measured that tree whole, and which worktree it would run in;
+- **a `main` to run it in**, found where `main` is already checked out or made
+  and kept by mc, so nobody checks `main` out by hand to deploy;
 - **one question**, always, with no flag that skips it;
 - **the lease**, so a gate round or a landing cannot move `main` under the build;
 - **the record**, written before the deploy starts and completed after it ends,
@@ -34,37 +36,98 @@ deployed. `REPO` is `memoro` in
 path through `defaultRepos(env)`, the same reading `mc brief` uses.
 
 1. **Fetch and read.** `git fetch origin main` in `~/memoro`, then
-   `rev-parse origin/main` — the sha that would ship — and its subject.
-2. **What is live.** The last `deployed` row of `~/mc/runner/log/deploys.tsv`
+   `rev-parse origin/main` — the sha that would ship — and its subject. Refs
+   are shared by every worktree of a repository, so these reads stay here
+   whatever branch this checkout is on, and so does the lease in step 7.
+2. **Where the script will run.** `git worktree list --porcelain` in `~/memoro`,
+   and the worktree whose branch is `refs/heads/main` is the one — git allows at
+   most one, so there is nothing to choose between. When no worktree has `main`
+   out, mc makes its own at **`~/.memoro/mc/deploy/memoro`**
+   (`git worktree add`, from `main` or from `origin/main` when the branch is not
+   local) and says so in one line. Then, in that worktree: `status --porcelain`,
+   `rev-list --count origin/main..HEAD` and `rev-list --count HEAD..origin/main`
+   — dirty and diverged are refusals (below), behind is fast-forwarded in step 8.
+   `--dry-run` makes nothing: it names the worktree it *would* make.
+3. **What is live.** The last `deployed` row of `~/mc/runner/log/deploys.tsv`
    when there is one; otherwise `GET https://meetmemoro.app/api/version`, which
    is public, tiny (`{ commit, build, build_time }`) and asked with `no-store`.
    The row is preferred because it is mc's own record of what mc shipped.
-3. **The gap.** `git rev-list --count <live>..<sha>`. A sha the checkout does not
+4. **The gap.** `git rev-list --count <live>..<sha>`. A sha the checkout does not
    have is *"the gap is unknown"*, never a number.
-4. **The nightly.** `readNightlyHistory`
+5. **The nightly.** `readNightlyHistory`
    ([`src/mc/nightly-history.js`](../../src/mc/nightly-history.js)) has the last
    full-suite measurement per repository with the commit it measured. When that
    commit is not the one about to ship, the line says so plainly and the verb
    still asks — it is a reading a person weighs, not a gate.
-5. **The question**, at a terminal: `deploy <short sha> to production? [y/N]`.
+6. **The question**, at a terminal: `deploy <short sha> to production? [y/N]`.
    Anything but `y`/`yes` ends it.
-6. **The lease.** `claimLease({ repoPath, errand: 'deploy <sha>', … })`
-   ([`src/mc/repo-lease.js`](../../src/mc/repo-lease.js)), held for the whole
-   deploy and released in a `finally` however it ends.
-7. **The script.** `npm run deploy` in `~/memoro`, the process's environment
+7. **The lease.** `claimLease({ repoPath, errand: 'deploy <sha>', … })`
+   ([`src/mc/repo-lease.js`](../../src/mc/repo-lease.js)), keyed on `~/memoro`
+   because that is the path the runner's merge rounds claim against, held for
+   the whole deploy and released in a `finally` however it ends.
+8. **The fast-forward**, when the worktree is behind: `git merge --ff-only
+   origin/main` in it, under the lease, after the yes. It is the one movement of
+   somebody else's checkout this verb makes, and it moves it to exactly the sha
+   the person just said yes to, on a tree already proved clean and not ahead.
+9. **The script.** `npm run deploy` in that worktree, the process's environment
    passed through untouched, its output echoed as it happens.
-8. **The row completed** — outcome, build, the live version the script verified,
-   and the step it stopped at when it failed.
+10. **The row completed** — outcome, build, the live version the script verified,
+    and the step it stopped at when it failed.
 
-A real reading, run in this worktree on 2026-09-04:
+A real reading, run in this workarea on 2026-09-07 — `~/memoro` is where `main`
+happened to be that day, and the line says so whichever worktree it is:
 
 ```
-mc: would deploy memoro e30fd83298dfe857ee7319c9ed66026c9416b723 — The whole-suite round is green in mc's own path, twice (#11349)
-mc: live now b3e65b6 (build 23533) — api/version, 2026-09-04 10:03
-mc: 21 commits would ship
-mc: the nightly measured fc19465, 79 commits ago; this tree was not measured whole
+mc: would deploy memoro 2742862a328e13ac9585e082f9758330ced3835d — Plan: msr-core — Martin's 2026-09-07 phone pass and four rulings (#11575)
+mc: from /Users/martinforsberg/memoro — main, 1 behind origin/main, fast-forwarded before the script runs
+mc: live now 08d5b46 (build 23779) — deploys.tsv, 2026-09-07 05:45
+mc: 1 commit would ship
+mc: the nightly measured eb592c4, 131 commits ago; this tree was not measured whole
 mc: --dry-run — nothing was deployed
 ```
+
+The same reading with the repository checkout on a feature branch and `main`
+elsewhere (`MC_REPOS_HOME=~/mc/msr-core`, whose `memoro` stands on
+`programme-map-surface-persistence`) names the same worktree, and `--json`
+carries it as `worktree` beside `behind`, `ahead` and `dirty`:
+
+```
+mc: would deploy memoro 2742862a328e13ac9585e082f9758330ced3835d — Plan: msr-core — Martin's 2026-09-07 phone pass and four rulings (#11575)
+mc: from /Users/martinforsberg/memoro — main, 1 behind origin/main, fast-forwarded before the script runs
+…
+  "path": "/Users/martinforsberg/mc/msr-core/memoro",
+  "worktree": "/Users/martinforsberg/memoro",
+  "behind": 1,
+```
+
+## mc's own `main`, and why it is kept
+
+When no worktree has `main` checked out, mc adds one at
+`~/.memoro/mc/deploy/memoro` and **never removes it**. Two consequences, both
+deliberate:
+
+- Every later deploy finds it in step 2 and runs there, so the two cases
+  converge on one deploy checkout.
+- While it stands, `git checkout main` anywhere else is refused by git — one
+  branch, one worktree. That is the point rather than a side effect (Martin,
+  2026-09-06: *"Jag checkar ut main enbart för att göra deploys"*). To take
+  `main` back by hand, `git worktree remove ~/.memoro/mc/deploy/memoro`.
+
+It lives under `mcHome()` and never under `~/mc/`: a checkout there is a
+workarea to `listWorkAreas` and to the runner's `closeWorkareas`, and a deploy
+checkout is neither a project nor something the board should draw.
+
+`deploy.mjs` needs nothing from outside the tree it runs in — it resolves its
+own `ROOT` from its file, and `npm run deps:ensure`
+(`scripts/ensure-worktree-deps.mjs`) installs a fresh worktree's dependencies
+itself, so mc runs no `npm ci`. One thing is worth knowing: the container
+deploy-state cache is read through `git rev-parse --git-path
+memoro-deploy-state.json`, which in a linked worktree resolves to that
+worktree's *private* git directory (`.git/worktrees/<name>/…`), not the shared
+one. A first deploy from a worktree that has not made one before therefore
+plans a full container rollout — *"no local record of a successful full
+container deploy"* (`determineContainerPlan`, `deploy.mjs:719`) — which is
+slower, never less than the deploy asked for.
 
 ## What it refuses, and with what code
 
@@ -78,14 +141,23 @@ rather than assumes wherever there is nobody to ask.
 | `--dry-run` | 0 | the reading, and it stops there — no lease, no row, no spawn |
 | no checkout of `memoro` on this machine | 1 | says so; this verb deploys that repository and no other |
 | the checkout has no `origin/main` | 1 | says so |
+| **`main` is dirty** where it is checked out | 1 | names the path and the first five files; refused row *"main is dirty in `<path>` — `<n>` file(s)"*. Nothing is stashed, reset or discarded — that tree may be somebody's |
+| **`main` has commits `origin/main` does not** | 1 | refused row *"main in `<path>` has `<n>` commit(s) not on origin/main"*: what would ship is not that tree |
+| `git worktree add` for mc's own `main` failed | 1 | says so; refused row. There is no checkout of `main` to run the script in |
+| the fast-forward failed | 1 | refused row, lease released, nothing spawned |
 | **no TTY** | 2 | *"mc deploy asks before it deploys, and there is no terminal here to ask"* |
 | the question answered `no` | 1 | *"nothing was deployed"* |
 | the repository lease is held | 1 | names the holder and the errand, as `mc merge` does |
 | the script ran | its own | whatever `npm run deploy` exited with |
 
-The three of those that are decisions — `no`, no terminal, a held lease — are
-each written to the record as `outcome: refused` with the reason. They are
-deploys somebody meant to make, and the brief can only see them if they exist.
+`main` checked out **nowhere** is not on this list and is not a refusal: mc makes
+its own worktree and deploys from that. A `main` merely *behind* `origin/main` is
+not one either — it is fast-forwarded in step 8.
+
+The decisions among them — `no`, no terminal, a held lease, and the three
+worktree refusals — are each written to the record as `outcome: refused` with
+the reason. They are deploys somebody meant to make, and the brief can only see
+them if they exist.
 
 A deliberate `no` is exit **1** rather than 0 on purpose, so `mc deploy && …`
 does not carry on as though it had shipped.
@@ -219,11 +291,17 @@ The boundary is a rule, not a judgement call:
   no flag is invented for it, and it is not edited from this repository. If a
   preflight mc wants is missing there, that is a memoro pull request made on its
   own terms.
-- **mc does not move memoro's checkout.** `deploy.mjs` refuses a dirty tree, a
-  branch that is not `main`, and a `main` that is not `origin/main`, and the
-  runbook (`docs/runbooks/deploy.md` § *What `npm run deploy` does*, step 2) says
-  the script fast-forwards a clean `main` itself. `~/memoro` is Martin's
-  checkout; what the verb adds before the question is only the reading.
+- **mc chooses where the script runs, and moves that checkout in one way only.**
+  `deploy.mjs` keeps its own preflight — it refuses a dirty tree, a branch that
+  is not `main`, and a `main` that is not `origin/main` (`REQUIRED_PROD_BRANCH`,
+  `ensureCleanWorktree`, `ensureUpToDateWithOrigin`) — and mc reimplements none
+  of it. What mc adds is a `cwd` that is always a `main`, and one
+  `git merge --ff-only origin/main` after the yes, under the lease, on a tree it
+  has just read as clean and not ahead. Anything else in that worktree is
+  refused with the path in the row; nothing is ever stashed, reset or discarded.
+  Before ruling 16 (2026-09-06) the spawn's `cwd` was `~/memoro` whatever branch
+  it stood on, and two deploys died at *Deploy source preflight* for exactly
+  that.
 - **mc knows nothing about containers, Docker or Wrangler auth.**
   `MEMORO_DEPLOY_CONTAINERS`, the OrbStack preflight and every credential the
   deploy needs are the environment's, passed through untouched.
@@ -249,9 +327,23 @@ and asserts both the echo and the capture.
 and the two writes; the page, brief and helper readings are covered in their own
 suites from fixtures.
 
+Where `main` is has a test per case — in another worktree, behind, dirty, ahead,
+checked out nowhere with mc's worktree absent, and mc's worktree present — and
+each asserts the spawn's `cwd` where there is a spawn and the refused row where
+there is not. The fake `git` answers `worktree list --porcelain` with a stanza
+set the test chooses and `status` / `rev-list --count` per worktree path, so a
+whole machine's shape is one object. `worktreeOnBranch` (and `mainWorktree` over
+it) in [`src/mc/git.js`](../../src/mc/git.js) is a pure function over the
+porcelain text with its own tests, including `detached`, `bare`, a path with a
+space and a branch merely *starting* with `main`.
+
 **The reading half has been run for real**; the deploying half has not.
-`mc deploy --dry-run` was run against `~/memoro` on 2026-09-04 (the output above,
-and an earlier one at `c061d74`). Everything from the question onwards — the
-lease, the spawn, the completed row — has only ever run against a faked script.
+`mc deploy --dry-run` was run on 2026-09-07 (both outputs above: once with the
+repository checkout on `main` and once with it on a feature branch), and on
+2026-09-04 (at `c061d74` and `e30fd83`). Everything from the question onwards —
+the fast-forward, the lease, the spawn, the completed row — has only ever run
+against a faked script; mc's own worktree at `~/.memoro/mc/deploy/memoro` has
+therefore never been made on this machine, because `main` has always been
+checked out somewhere.
 The one real deploy is Martin's to type, watched, and this note should say what
 it did when it has happened.
