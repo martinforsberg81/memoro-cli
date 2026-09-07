@@ -16,8 +16,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  deployPlan, parseDeployArgs, planLines, readScriptOutput, run, spawnDeployDefault,
+  deployPlan, deploySource, deployWorktreePath, parseDeployArgs, planLines, readScriptOutput, run,
+  spawnDeployDefault, worktreeState,
 } from '../../../src/mc/commands/deploy.js';
+import { mainWorktree } from '../../../src/mc/git.js';
 import { lastAttempt, lastDeploy, readDeploys } from '../../../src/mc/deploys.js';
 import { claimLease, readLease, releaseLease } from '../../../src/mc/repo-lease.js';
 
@@ -56,16 +58,41 @@ function io() {
   return { out, stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } } };
 }
 
-/** git as the verb uses it: fetch, rev-parse, log, rev-list. */
-function fakeGit({ sha = SHA, counts = {}, subject = 'the change that would ship', fetch = true } = {}) {
+/** Where `main` is checked out on the machine the test is describing. */
+const MAIN_WT = '/tmp/does-not-exist/mc/plan/msr-core/memoro';
+const porcelain = (stanzas) => stanzas.map((lines) => lines.join('\n')).join('\n\n');
+const worktreeList = (mainAt = MAIN_WT) => porcelain([
+  [`worktree ${PATH}`, 'HEAD 0000000000000000000000000000000000000000', 'branch refs/heads/language-content-open-decisions'],
+  ...(mainAt ? [[`worktree ${mainAt}`, `HEAD ${SHA}`, 'branch refs/heads/main']] : []),
+  ['worktree /tmp/does-not-exist/scratch', 'HEAD 1111111111111111111111111111111111111111', 'detached'],
+]);
+
+/**
+ * git as the verb uses it: fetch, rev-parse, log, rev-list, plus the three
+ * readings of the worktree it will run in. `state` answers `status --porcelain`
+ * and the two `rev-list --count` ranges per worktree path, so a test says where
+ * `main` is *and* what state it is in without a repository anywhere.
+ */
+function fakeGit({
+  sha = SHA, counts = {}, subject = 'the change that would ship', fetch = true,
+  worktrees = worktreeList(), state = {}, localMain = true, add = '', ff = '',
+} = {}) {
   const calls = [];
+  const at = (cwd) => state[cwd] || { dirty: [], ahead: 0, behind: 0 };
   const git = (cwd, args) => {
     calls.push({ cwd, args });
     if (args[0] === 'fetch') return fetch ? '' : null;
     if (args[0] === 'rev-parse') return sha;
     if (args[0] === 'log') return subject;
+    if (args[0] === 'worktree' && args[1] === 'list') return worktrees;
+    if (args[0] === 'worktree' && args[1] === 'add') return add;
+    if (args[0] === 'show-ref') return localMain ? '' : null;
+    if (args[0] === 'status') return at(cwd).dirty.join('\n');
+    if (args[0] === 'merge') return ff;
     if (args[0] === 'rev-list') {
       const range = args.at(-1);
+      if (range === 'origin/main..HEAD') return String(at(cwd).ahead);
+      if (range === 'HEAD..origin/main') return String(at(cwd).behind);
       return Object.hasOwn(counts, range) ? String(counts[range]) : null;
     }
     return null;
@@ -200,6 +227,210 @@ describe('mc deploy — what it says before it asks', () => {
   });
 });
 
+describe('where main is — the lookup over git worktree list --porcelain', () => {
+  it('finds the stanza whose branch is refs/heads/main', () => {
+    assert.equal(mainWorktree(worktreeList()), MAIN_WT);
+  });
+
+  it('is null when no worktree has main out', () => {
+    assert.equal(mainWorktree(worktreeList(null)), null);
+  });
+
+  it('skips detached and bare stanzas, and keeps a path with a space', () => {
+    const text = porcelain([
+      ['worktree /tmp/repo.git', 'bare'],
+      ['worktree /tmp/some other/place', `HEAD ${SHA}`, 'branch refs/heads/main'],
+      ['worktree /tmp/detached', `HEAD ${SHA}`, 'detached'],
+    ]);
+    assert.equal(mainWorktree(text), '/tmp/some other/place');
+  });
+
+  it('is not fooled by a branch whose name merely starts with main', () => {
+    const text = porcelain([['worktree /tmp/a', `HEAD ${SHA}`, 'branch refs/heads/main-red-fix']]);
+    assert.equal(mainWorktree(text), null);
+  });
+
+  it('is null on nothing at all, rather than a crash', () => {
+    assert.equal(mainWorktree(''), null);
+    assert.equal(mainWorktree(null), null);
+  });
+});
+
+describe('mc deploy — the worktree the script runs in', () => {
+  const MINE = deployWorktreePath(process.env);
+
+  it('uses the worktree that has main, wherever that is', () => {
+    const git = fakeGit();
+    assert.deepEqual(deploySource({ path: PATH, git, env: process.env, create: true }), {
+      worktree: MAIN_WT, created: false, absent: false, failed: false,
+    });
+    assert.equal(git.calls.some((call) => call.args[1] === 'add'), false, 'nothing is made when main is already out');
+  });
+
+  it('makes mc\'s own worktree under MC_HOME when main is checked out nowhere', () => {
+    const git = fakeGit({ worktrees: worktreeList(null) });
+    const source = deploySource({ path: PATH, git, env: process.env, create: true });
+    assert.deepEqual(source, { worktree: MINE, created: true, absent: false, failed: false });
+    assert.match(MINE, /\/deploy\/memoro$/u);
+    assert.equal(MINE.startsWith(process.env.MC_HOME), true, 'under mc home, never under ~/mc');
+    const add = git.calls.find((call) => call.args[1] === 'add');
+    assert.equal(add.cwd, PATH, 'the checkout that owns the worktrees makes it');
+    assert.deepEqual(add.args, ['worktree', 'add', MINE, 'main']);
+  });
+
+  it('makes the branch from origin/main when main does not exist locally', () => {
+    const git = fakeGit({ worktrees: worktreeList(null), localMain: false });
+    deploySource({ path: PATH, git, env: process.env, create: true });
+    const add = git.calls.find((call) => call.args[1] === 'add');
+    assert.deepEqual(add.args, ['worktree', 'add', '-b', 'main', MINE, 'origin/main']);
+  });
+
+  it('makes nothing without create — that is what --dry-run reports', () => {
+    const git = fakeGit({ worktrees: worktreeList(null) });
+    assert.deepEqual(deploySource({ path: PATH, git, env: process.env }), {
+      worktree: MINE, created: false, absent: true, failed: false,
+    });
+    assert.equal(git.calls.some((call) => call.args[1] === 'add'), false);
+  });
+
+  it('says so rather than throwing when git worktree add fails', () => {
+    const git = fakeGit({ worktrees: worktreeList(null), add: null });
+    assert.deepEqual(deploySource({ path: PATH, git, env: process.env, create: true }), {
+      worktree: MINE, created: false, absent: true, failed: true,
+    });
+  });
+
+  it('reads dirty, ahead and behind in the worktree itself', () => {
+    const git = fakeGit({ state: { [MAIN_WT]: { dirty: [' M src/a.js', '?? b.txt'], ahead: 2, behind: 7 } } });
+    assert.deepEqual(worktreeState({ worktree: MAIN_WT, git }), {
+      dirty: [' M src/a.js', '?? b.txt'], ahead: 2, behind: 7,
+    });
+    assert.equal(git.calls.every((call) => call.cwd === MAIN_WT), true);
+  });
+});
+
+describe('mc deploy — every case of where main is', () => {
+  const MINE = deployWorktreePath(process.env);
+
+  const ranIn = async (extra, argv = []) => {
+    const seen = [];
+    const { out, stdout, stderr } = io();
+    const code = await run(argv, {
+      ...deps({ ...extra, spawnDeploy: async (options) => { seen.push(options); return { code: 0 }; } }),
+      stdout,
+      stderr,
+    });
+    return { code, seen, out };
+  };
+
+  it('main in another worktree: the reading names it and the script runs there', async () => {
+    const { code, seen, out } = await ranIn({});
+    assert.equal(code, 0);
+    assert.equal(seen[0].cwd, MAIN_WT);
+    assert.match(out.stdout, new RegExp(`mc: from ${MAIN_WT} — main at origin/main`, 'u'));
+  });
+
+  it('main behind origin/main: fast-forwarded under the lease, then the script runs there', async () => {
+    const git = fakeGit({
+      counts: { [`${LIVE}..${SHA}`]: 6 },
+      state: { [MAIN_WT]: { dirty: [], ahead: 0, behind: 3 } },
+    });
+    const { code, seen, out } = await ranIn({ git });
+    assert.equal(code, 0);
+    assert.equal(seen[0].cwd, MAIN_WT);
+    assert.match(out.stdout, /main, 3 behind origin\/main, fast-forwarded before the script runs/u);
+    const ff = git.calls.find((call) => call.args[0] === 'merge');
+    assert.deepEqual(ff, { cwd: MAIN_WT, args: ['merge', '--ff-only', 'origin/main'] });
+    assert.match(out.stdout, /fast-forwarded main in .* to 1a2b3c4/u);
+  });
+
+  it('main dirty: a refused row naming the path and the files, and nothing runs', async () => {
+    const git = fakeGit({
+      counts: { [`${LIVE}..${SHA}`]: 6 },
+      state: { [MAIN_WT]: { dirty: [' M src/app.js', '?? scratch.txt'], ahead: 0, behind: 0 } },
+    });
+    const { code, seen, out } = await ranIn({ git });
+    assert.equal(code, 1);
+    assert.equal(seen.length, 0, 'nothing is deployed out of a dirty tree');
+    assert.equal(git.calls.some((call) => call.args[0] === 'merge'), false, 'and nobody\'s work is moved');
+    const row = lastAttempt({ MC_WORK_ROOT: work });
+    assert.equal(row.outcome, 'refused');
+    assert.equal(row.note, `main is dirty in ${MAIN_WT} — 2 file(s)`);
+    assert.match(out.stderr, /M src\/app\.js/u);
+  });
+
+  it('main with commits not on origin/main: a refused row, and nothing runs', async () => {
+    const git = fakeGit({
+      counts: { [`${LIVE}..${SHA}`]: 6 },
+      state: { [MAIN_WT]: { dirty: [], ahead: 2, behind: 0 } },
+    });
+    const { code, seen, out } = await ranIn({ git });
+    assert.equal(code, 1);
+    assert.equal(seen.length, 0);
+    const row = lastAttempt({ MC_WORK_ROOT: work });
+    assert.equal(row.outcome, 'refused');
+    assert.equal(row.note, `main in ${MAIN_WT} has 2 commit(s) not on origin/main`);
+    assert.match(out.stderr, /which is not that tree/u);
+  });
+
+  it('main checked out nowhere: mc makes its own worktree, says so, and runs there', async () => {
+    const git = fakeGit({ worktrees: worktreeList(null), counts: { [`${LIVE}..${SHA}`]: 6 } });
+    const { code, seen, out } = await ranIn({ git });
+    assert.equal(code, 0);
+    assert.equal(seen[0].cwd, MINE);
+    assert.deepEqual(git.calls.find((call) => call.args[1] === 'add'), {
+      cwd: PATH, args: ['worktree', 'add', MINE, 'main'],
+    });
+    assert.match(out.stdout, /made mc's own main worktree at .*\/deploy\/memoro/u);
+  });
+
+  it('mc\'s worktree already there: found like any other, and made a second time by nobody', async () => {
+    const git = fakeGit({ worktrees: worktreeList(MINE), counts: { [`${LIVE}..${SHA}`]: 6 } });
+    const { code, seen } = await ranIn({ git });
+    assert.equal(code, 0);
+    assert.equal(seen[0].cwd, MINE);
+    assert.equal(git.calls.some((call) => call.args[1] === 'add'), false);
+  });
+
+  it('--dry-run names the worktree, makes nothing and moves nothing', async () => {
+    const git = fakeGit({
+      counts: { [`${LIVE}..${SHA}`]: 6 },
+      state: { [MAIN_WT]: { dirty: [], ahead: 0, behind: 4 } },
+    });
+    const { out } = await ranIn({ git }, ['--dry-run']);
+    assert.match(out.stdout, new RegExp(`mc: from ${MAIN_WT} — main, 4 behind`, 'u'));
+    assert.equal(git.calls.some((call) => call.args[0] === 'merge'), false);
+    assert.equal(git.calls.some((call) => call.args[1] === 'add'), false);
+  });
+
+  it('--dry-run with main nowhere reports the worktree it would make, and makes none', async () => {
+    const git = fakeGit({ worktrees: worktreeList(null), counts: { [`${LIVE}..${SHA}`]: 6 } });
+    const { out } = await ranIn({ git }, ['--dry-run']);
+    assert.match(out.stdout, /mc's own main worktree, made before the script runs/u);
+    assert.equal(git.calls.some((call) => call.args[1] === 'add'), false);
+  });
+
+  it('--json carries the worktree and how far behind it is', async () => {
+    const git = fakeGit({
+      counts: { [`${LIVE}..${SHA}`]: 6 },
+      state: { [MAIN_WT]: { dirty: [], ahead: 0, behind: 4 } },
+    });
+    const { out } = await ranIn({ git }, ['--dry-run', '--json']);
+    const json = JSON.parse(out.stdout);
+    assert.equal(json.worktree, MAIN_WT);
+    assert.equal(json.behind, 4);
+    assert.equal(json.path, PATH, 'the reads and the lease are still ~/memoro');
+  });
+
+  it('git worktree add that fails is a refused row, not a deploy from the wrong tree', async () => {
+    const git = fakeGit({ worktrees: worktreeList(null), add: null, counts: { [`${LIVE}..${SHA}`]: 6 } });
+    const { code, seen } = await ranIn({ git });
+    assert.equal(code, 1);
+    assert.equal(seen.length, 0);
+    assert.match(lastAttempt({ MC_WORK_ROOT: work }).note, /could not make mc's own main worktree/u);
+  });
+});
+
 describe('mc deploy — the question', () => {
   it('asks once, naming the sha, and a no runs nothing', async () => {
     const { out, stdout, stderr } = io();
@@ -250,7 +481,7 @@ describe('mc deploy — the question', () => {
 });
 
 describe('mc deploy — the script under the lease', () => {
-  it('runs npm run deploy in memoro with the environment and the terminal, lease held, then released', async () => {
+  it('runs npm run deploy in the worktree that is main, with the environment, lease held on ~/memoro, then released', async () => {
     const { stdout, stderr } = io();
     const seen = [];
     const env = { ...process.env, MC_WORK_ROOT: work, MEMORO_DEPLOY_CONTAINERS: 'always' };
@@ -265,7 +496,7 @@ describe('mc deploy — the script under the lease', () => {
     });
     assert.equal(code, 0);
     assert.equal(seen.length, 1);
-    assert.equal(seen[0].cwd, PATH);
+    assert.equal(seen[0].cwd, MAIN_WT, 'the spawn runs where main is, not where the reads and the lease are');
     assert.equal(seen[0].env.MEMORO_DEPLOY_CONTAINERS, 'always');
     assert.equal(seen[0].lease.held, true);
     assert.equal(seen[0].lease.errand, `deploy ${SHA}`);

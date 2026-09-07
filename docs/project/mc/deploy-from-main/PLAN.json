@@ -20,17 +20,17 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc deploy --dry-run` on this machine, with `~/memoro` on a feature branch and `main` checked out in another worktree, names that worktree in its reading and would spawn the script there.",
       "check": "Run `mc deploy --dry-run` and `mc deploy --dry-run --json` from the workarea after `npm link` or through `node src/mc-cli.js deploy --dry-run`; the reading's new line names the path `git -C ~/memoro worktree list --porcelain` shows for `refs/heads/main`, and the JSON carries the same path in `worktree`. Paste both outputs in the PR."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Every case of where `main` is has a unit test, and the spawn's `cwd` is asserted in each one that spawns: `main` in another worktree; `main` behind `origin/main` (allowed, fast-forwarded); `main` dirty (refused, row); `main` with commits not on `origin/main` (refused, row); `main` checked out nowhere and mc's worktree absent (created, then spawned there); mc's worktree present (used).",
       "check": "`node --test tests/mc/commands/deploy.test.js` green, and the test names read as that list. The worktree lookup is a pure function over `git worktree list --porcelain` text with its own tests."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`docs/technical/mc-deploy.md` says where the script runs, in the sequence and in the refusal table, and `~/memoro` no longer appears as the place `npm run deploy` runs.",
       "check": "Read the doc's § *The sequence* items 1 and 7 and § *What it refuses*: the worktree rule is there, the three new refusals have rows, and `grep -n '~/memoro' docs/technical/mc-deploy.md` shows only the reads that still happen there."
     }
@@ -47,7 +47,7 @@
   "steps": [
     {
       "title": "The script runs in `main`, wherever `main` is — and mc keeps a `main` of its own",
-      "status": "ready",
+      "status": "done",
       "done_when": "`mc deploy` spawns `npm run deploy` in a worktree on branch `main` at `origin/main`, found or made by mc; a dirty or diverged `main` is a refused row; the reading names the worktree; the doc and the tests say all of it.",
       "instruction": [
         "Read `run()` in `commands/deploy.js` end to end first. `path` there is `~/memoro` from `defaultRepos`, and it is used for three things that must be told apart: the git reads (`fetch`, `rev-parse origin/main`, `rev-list`) — refs are shared by every worktree of the repository, so these stay on `path`; the lease (`claimLease({ repoPath: path })`) — stays on `path`, see the contract; and the spawn's `cwd` — this is the one that changes.",
@@ -59,9 +59,15 @@
         "Tests, in `tests/mc/commands/deploy.test.js`: extend the fake `git` so `worktree list --porcelain` returns a stanza set the test chooses, and `status --porcelain` / `rev-list --count` answer per worktree path, then one test per case in success criterion 2 — the spawn's `cwd` asserted where there is a spawn (the existing test at `seen[0].cwd` is the pattern), the refusal's exit and its `deploys.tsv` row asserted where there is not, and for the nowhere case the `worktree add` call asserted by `cwd` and `args`. `mainWorktree` gets its own tests on porcelain text, including `detached` and `bare` stanzas and a path with a space.",
         "`docs/technical/mc-deploy.md`: § *The sequence* item 1 keeps the reads in `~/memoro`; a new item after it says where the script will run and how that is decided, in the order above; item 7 says `npm run deploy` in that worktree; § *What it refuses* gains three rows (dirty `main`, `main` ahead or diverged, and — no row — that a `main` checked out nowhere is not a refusal any more but mc's own worktree). Say plainly, once, that mc's worktree under `~/.memoro/mc/deploy/` is kept for good and that git will refuse `checkout main` elsewhere while it stands, with `git worktree remove` as the way to take it back. Then record the step in the plan the way a step session does: `status`, `pr`, the criteria met, and what the code taught you in `comments` — in particular anything `deploy.mjs` reads from outside the tree."
       ],
-      "pr": null,
+      "pr": 685,
       "blocked_by": null,
-      "comments": []
+      "comments": [
+        "What `deploy.mjs` reads from outside the tree it runs in, read rather than assumed (`~/memoro/scripts/deploy.mjs`, 2026-09-07): nothing a fresh worktree would lack. It resolves `ROOT` from its own file (line 49); `npm run deps:ensure` is `scripts/ensure-worktree-deps.mjs`, which installs a worktree's dependencies itself through a shared cache, so mc runs no `npm ci`; wrangler auth and every `MEMORO_DEPLOY_*` come from the environment mc passes through untouched; the OrbStack preflight looks in `/Applications` and `~/Applications`. There is no `.env` or `.dev.vars` read at all.",
+        "The one exception is worth knowing, and is now a paragraph in the doc: the container deploy-state cache is read through `git rev-parse --git-path memoro-deploy-state.json`, which in a *linked* worktree resolves to that worktree's private git directory rather than the shared one (measured 2026-09-07: `~/memoro` gives `.git/memoro-deploy-state.json`, `~/mc/msr-core/memoro` gives `~/memoro/.git/worktrees/memoro11/memoro-deploy-state.json`). `determineContainerPlan` (`deploy.mjs:707`) therefore finds no state the first time a deploy runs from a worktree that has never made one, and plans a full container rollout — its reason string is \"no local record of a successful full container deploy\". Slower, never less than the deploy asked for, and it self-corrects after one deploy from that worktree.",
+        "Success criterion 1 was checked live, but not in the machine state the plan predicted: on 2026-09-07 `~/memoro` is itself on `main` (it was `language-content-open-decisions` when the ruling was written). Moving Martin's checkout to a feature branch to reproduce the plan's wording is not this step's to do, so the feature-branch half was run with `MC_REPOS_HOME=/Users/martinforsberg/mc/msr-core`, whose `memoro` stands on `programme-map-surface-persistence`: the reading named `/Users/martinforsberg/memoro` — exactly what `worktree list --porcelain` shows for `refs/heads/main` — and `--json` carried `\"worktree\": \"/Users/martinforsberg/memoro\"` beside `\"path\": \"/Users/martinforsberg/mc/msr-core/memoro\"`. Both outputs are in the pull request and in the doc.",
+        "So mc's own worktree at `~/.memoro/mc/deploy/memoro` has never been made on this machine: `main` has always been checked out somewhere, and `--dry-run` deliberately makes nothing. That path is covered by unit tests (the `worktree add` call asserted by `cwd` and `args`) and not by a live run. The first real `mc deploy` is still Martin's to type, and it is the first time the fast-forward, the spawn's new cwd and the three new refusals will meet a real script.",
+        "Shape, for whoever touches this next: `worktreeOnBranch(porcelain, branch)` and `mainWorktree(porcelain)` are pure functions in `src/mc/git.js` beside `primaryWorktree`; `deployWorktreePath(env)`, `deploySource({ path, git, env, create })` and `worktreeState({ worktree, git })` are in `commands/deploy.js`, all on the `deps.git` seam. `run()` keeps `path` for the fetch, the rev-parse, the gap rev-list and the lease, and uses `source.worktree` for the status/rev-list readings, the `--ff-only` merge and the spawn's cwd. The reading object gained `worktree`, `behind`, `ahead`, `dirty`, `worktree_created`, `worktree_absent` and `worktree_failed`; `--json` carries all of them."
+      ]
     }
   ]
 }
