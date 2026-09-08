@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   MC_OWN_TREES, assembleQueue, chooseKind, collectNote, headlessArgs, heldRepair, helperDue,
-  inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, queueFileNames,
+  inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaSeen,
   readSessionOutput, repairPrompt, sessionSettings, stackOrder, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow,
@@ -55,6 +55,83 @@ test('queueFileText: one name per line, and an empty file when every name has ru
   assert.equal(queueFileText(['a', 'b']), 'a\nb\n');
   assert.equal(queueFileText([]), '');
   assert.deepEqual(queueFileNames('a\n# no\n\nb\n'), ['a', 'b']);
+});
+
+/* --------------------------------------------------------------- the pick */
+
+/**
+ * `nextFor` is what replaced the round on 2026-09-08: a lane takes the first
+ * name its repository's order offers that nothing is holding, and picks again
+ * when that step is over. What these assert is every way a name is passed
+ * over, and that the answer is a *name and a kind* rather than a list.
+ */
+const READY = (steps = [{ title: 'One', status: 'ready', done_when: 'x', instruction: ['do'], pr: null, blocked_by: null }]) => ({
+  schema: 'mc-plan',
+  version: 1,
+  goal: ['One thing.'],
+  contract: ['Not without Martin.'],
+  out_of_scope: ['The rest.'],
+  success_criteria: [{ met: false, criterion: 'It is done.', check: 'The row.' }],
+  documents: [],
+  steps,
+});
+const planRow = (project, { repo = 'memoro', plan = READY(), status = 'ready' } = {}) => ({
+  repo, programme: 'prog', project, path: `docs/project/prog/${project}/PLAN.json`, legacy: false, plan, problems: [], status,
+});
+const world = (plans, { queueText = '', prs = [] } = {}) => ({ names: assembleQueue(queueText, plans), plans, prs });
+
+test('nextFor: queue.md order first, then alphabetical, one repository at a time', () => {
+  const plans = [planRow('alpha'), planRow('gamma'), planRow('mc-run', { repo: 'memoro-cli' })];
+  const seen = world(plans, { queueText: 'gamma\n' });
+  assert.deepEqual(nextFor({ repo: 'memoro', world: seen }), { name: 'gamma', kind: 'step', repo: 'memoro' });
+  assert.deepEqual(nextFor({ repo: 'memoro-cli', world: seen }), { name: 'mc-run', kind: 'step', repo: 'memoro-cli' });
+  // With no repository named — `mc run --once` — the whole order is one lane's.
+  assert.equal(nextFor({ world: seen }).name, 'gamma');
+});
+
+test('nextFor: a name another lane is holding is passed over, and so is one this pass refused', () => {
+  const seen = world([planRow('alpha'), planRow('beta')]);
+  assert.equal(nextFor({ repo: 'memoro', world: seen, claimed: new Set(['alpha']) }).name, 'beta');
+  assert.equal(nextFor({ repo: 'memoro', world: seen, passed: new Set(['alpha']) }).name, 'beta');
+  assert.equal(nextFor({ repo: 'memoro', world: seen, claimed: new Set(['alpha', 'beta']) }), null);
+});
+
+test('nextFor: a blocked plan, a done plan and one that does not parse are not picked', () => {
+  const blocked = READY([{ title: 'One', status: 'blocked', done_when: 'x', instruction: ['do'], pr: null, blocked_by: { kind: 'decision', name: 'prog-1' } }]);
+  const done = READY([{ title: 'One', status: 'done', done_when: 'x', instruction: [], pr: 7, blocked_by: null }]);
+  const plans = [
+    planRow('a-blocked', { plan: blocked, status: 'blocked' }),
+    planRow('b-done', { plan: done, status: 'done' }),
+    { ...planRow('c-broken'), plan: null, problems: ['goal: at least one paragraph'], status: 'invalid' },
+    planRow('d-ready'),
+  ];
+  assert.equal(nextFor({ repo: 'memoro', world: world(plans) }).name, 'd-ready');
+});
+
+/**
+ * An open pull request is work in flight and takes its project out of the
+ * pick; a held one whose repair is spent is waiting on a person and does the
+ * same. A hold still owed its repair is neither — the runner starts it, and
+ * what it starts is a repair.
+ */
+test('nextFor: in flight, held after its repair, and the repair the runner still owes', () => {
+  const plans = [planRow('alpha'), planRow('beta')];
+  const open = [{ repo: 'memoro', number: 9, headRefName: 'alpha-2', baseRefName: 'main', isDraft: false, title: 'Step' }];
+  assert.equal(nextFor({ repo: 'memoro', world: world(plans, { prs: open }) }).name, 'beta', 'alpha is in flight');
+
+  const held = [{ project: 'alpha', repo: 'memoro', pr: 9, branch: 'alpha-2', reason: 'two tests red', repairs: 1 }];
+  assert.equal(nextFor({ repo: 'memoro', world: world(plans, { prs: open }), held }).name, 'beta', 'and its one repair is spent');
+
+  const owed = [{ ...held[0], repairs: 0 }];
+  assert.deepEqual(nextFor({ repo: 'memoro', world: world(plans, { prs: open }), held: owed }),
+    { name: 'alpha', kind: 'repair', repo: 'memoro' }, 'a repair is a thing the runner starts');
+});
+
+/** The page passes its own reading, which has seen a worktree this cannot. */
+test('nextFor: a caller\'s own reading decides, and the order is still the runner\'s', () => {
+  const plans = [planRow('alpha'), planRow('beta')];
+  const state = (name) => ({ runnable: name !== 'alpha', kind: 'step' });
+  assert.equal(nextFor({ repo: 'memoro', world: world(plans), state }).name, 'beta');
 });
 
 /**
@@ -329,12 +406,26 @@ test('parseRunArgs: defaults, flags, errors', () => {
   // `awake` defaults to true: a runner waits ten minutes between rounds and
   // this laptop sleeps after one of them on battery, so the default that keeps
   // an unattended run alive is the one nobody has to remember (stay-awake.js).
-  assert.deepEqual(parseRunArgs([]), { rounds: 0, once: false, merge: true, idleSleep: 600, awake: true, verb: 'run' });
-  assert.deepEqual(parseRunArgs(['--rounds', '1', '--once', '--no-merge', '--idle-sleep', '5']), { rounds: 1, once: true, merge: false, idleSleep: 5, awake: true, verb: 'run' });
+  assert.deepEqual(parseRunArgs([]), { once: false, merge: true, idleSleep: 600, awake: true, verb: 'run' });
+  assert.deepEqual(parseRunArgs(['--once', '--no-merge', '--idle-sleep', '5']), { once: true, merge: false, idleSleep: 5, awake: true, verb: 'run' });
   assert.equal(parseRunArgs(['--no-caffeinate']).awake, false);
-  assert.match(parseRunArgs(['--rounds', 'x']).error, /whole number/u);
-  assert.match(parseRunArgs(['--rounds']).error, /needs a value/u);
+  assert.match(parseRunArgs(['--idle-sleep', 'x']).error, /whole number of seconds/u);
+  assert.match(parseRunArgs(['--idle-sleep']).error, /needs a value/u);
   assert.match(parseRunArgs(['extra']).error, /unexpected argument/u);
+});
+
+/**
+ * `--rounds N` went with the round on 2026-09-08: a lane takes the next step
+ * and picks again, so there is no pass over the queue to count. It is answered
+ * by name — the form `mc-cut` gave a retired verb — rather than as an
+ * unexpected argument, because the flag was in somebody's muscle memory and in
+ * every `mc run start` line ever written down.
+ */
+test('parseRunArgs: --rounds is retired, and says what to type instead', () => {
+  for (const argv of [['--rounds', '3'], ['--rounds=3'], ['--rounds'], ['start', '--rounds', '3']]) {
+    assert.match(parseRunArgs(argv).error, /a round no longer exists/u, argv.join(' '));
+    assert.match(parseRunArgs(argv).error, /`mc run --once` takes one/u, argv.join(' '));
+  }
 });
 
 test('parseRunArgs: the three orders, and the flags start carries through', () => {
@@ -345,16 +436,16 @@ test('parseRunArgs: the three orders, and the flags start carries through', () =
   // `start` is the run, in the background: its flags are parsed here so a typo
   // is answered at the terminal rather than in a log nobody is watching, and
   // passed on untouched because the background runner is the same runner.
-  const start = parseRunArgs(['start', '--no-merge', '--rounds', '3']);
+  const start = parseRunArgs(['start', '--no-merge', '--idle-sleep', '30']);
   assert.equal(start.verb, 'start');
   assert.equal(start.merge, false);
-  assert.equal(start.rounds, 3);
-  assert.deepEqual(start.pass, ['--no-merge', '--rounds', '3']);
-  assert.match(parseRunArgs(['start', '--rounds', 'x']).error, /whole number/u);
+  assert.equal(start.idleSleep, 30);
+  assert.deepEqual(start.pass, ['--no-merge', '--idle-sleep', '30']);
+  assert.match(parseRunArgs(['start', '--idle-sleep', 'x']).error, /whole number of seconds/u);
 
   // An order to a runner that is already up takes nothing else: every flag it
   // could take is a property that runner already has.
-  assert.match(parseRunArgs(['--update', '--rounds', '2']).error, /one order on its own/u);
+  assert.match(parseRunArgs(['--update', '--idle-sleep', '2']).error, /one order on its own/u);
   assert.match(parseRunArgs(['stop', 'now']).error, /unexpected argument/u);
 });
 

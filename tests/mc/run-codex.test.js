@@ -128,7 +128,7 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   t.after(() => { process.env.PATH = realPath; });
 
   const deps = { ...realDeps(env), profile: async () => 'PROFILE', log: () => {} };
-  const code = await runLoop({ rounds: 1, once: true, merge: false, deps });
+  const code = await runLoop({ once: true, merge: false, deps });
   assert.equal(code, 0);
 
   // The row: a codex step, exit 0, the usage the event stream carried.

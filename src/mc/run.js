@@ -1,28 +1,31 @@
 /**
  * `mc run` — the runner, inside mc.
  *
- * One round is one pass over the queue; one step is one fresh headless
+ * The runner takes the next step: a lane picks the first project its
+ * repository's order says is ready and nothing is holding (`nextFor`,
+ * run-plan.js), runs it, and picks again. One step is one fresh headless
  * session in one workarea, then the merge of the PR it opened. The runner
  * decides nothing with a model: it reads files, runs git and gh, starts the
  * session through the launch adapter and waits for it. No inbox, no knock,
  * no watcher — it is the parent of the process it starts.
  *
- * Each repository is a lane, and each lane runs its own rounds on its own
- * clock: memoro's steps and memoro-cli's never touch (different main
- * branches, different worktrees), so neither waits for the other's round to
- * end. Nothing new to type or start — the lanes are inside the one `mc run`
- * process, and one repository with ready plans is one lane. `--rounds N` and
- * `--once` still drive one shared round at a time, for a person watching.
+ * There is no round. Until 2026-09-08 a lane walked its whole slice of the
+ * queue and then began again, which meant a project nothing could start was
+ * tried and skipped every ten minutes for days and a `skipped 15 (blocked
+ * 15)` line was written for every one of those passes. Each repository is a
+ * lane loop on its own clock — memoro's steps and memoro-cli's never touch
+ * (different main branches, different worktrees) — and `mc run lanes <n>`
+ * puts n loops on each. `--once` is one step, for a person watching.
  *
- * A round begins by taking away what is finished: every plan on main that
+ * The chores take away what is finished: every plan on main that
  * says `status: done` is archived — its `docs/project/<programme>/<project>/`
  * removed and a `project_log.md` row left behind it — in one PR per
  * repository that the runner merges like any other. `done` is the whole
  * trigger; there is nothing to type. The rules are in archive-plan.js.
  *
- * A round ends by taking away the folder that plan explains: a workarea whose
- * project is finished — its plan left main this round, or `project_log.md`
- * says an earlier round archived it — and whose worktree is clean and whose
+ * The chore loop also takes away the folder that plan explains: a workarea
+ * whose project is finished — its plan has left main, or `project_log.md`
+ * says it was archived — and whose worktree is clean and whose
  * last row in runs.tsv ends `merged` is removed: worktree handed back, local
  * branch deleted, everything it kept beside its checkout moved to
  * `runner/log/closed/<name>/`. A workarea no project explains at all is never
@@ -32,11 +35,11 @@
  * The same holds for a plan on origin/main that does not parse: the runner can
  * hand out no step from it and must not guess at what its author meant, so it
  * goes to `~/mc/runner/unreadable-plans.md` (plan-intake.js) rather than to a
- * `runner.log` line nobody reads. `new-user` had that line every round for a
+ * `runner.log` line nobody reads. `new-user` had that line every pass for a
  * day, and the fault was five paragraphs of prose in a validated field.
  *
- * A round asks GitHub what is open before it acts. An open pull request on a
- * project ends that project's round with a line naming it — the plan on
+ * A lane asks GitHub what is open before it acts. An open pull request on a
+ * project takes it out of the pick with a line naming it — the plan on
  * origin/main and the plan in the worktree both say `ready` while the step's
  * work sits in an open pull request, and the runner used to believe them and
  * start the step again. A workarea whose branch has already landed is moved to
@@ -53,28 +56,30 @@
  * are held.js.
  *
  * `~/mc/queue.md` is Martin's "these first" and nothing else: names of
- * projects that still have a step to run, one per line. The round rewrites it
- * to that shape and a name leaves it the moment its step has run, so a queue
- * everything ran from is an empty file.
+ * projects that still have a step to run, one per line. The chores rewrite it
+ * to that shape, and a name leaves it when its plan is done or off main —
+ * never merely because one step of it has run (2026-09-08), because with the
+ * pick as the only order there is, that would drop a prioritised project to
+ * alphabetical after its first step.
  *
  * Two things that are not steps ride along, and neither opens a worktree or
- * touches a branch. `runHelperDay` is the collect: once per calendar day at the
- * top of the first round after 05:00Z, one digest per repository into
- * `~/mc/intake/`, no model. `runIntakeDrain` is the inbox: every round, the
+ * touches a branch. `runHelperDay` is the collect: once per calendar day, in
+ * the first chore loop after 05:00Z, one digest per repository into
+ * `~/mc/intake/`, no model. `runIntakeDrain` is the inbox: every chore loop, the
  * oldest files in `~/mc/intake/` up to `INTAKE_PER_ROUND`, one headless turn
  * each, each file archived under `~/mc/runner/log/intake/<date>/` the moment its
  * turn ends. They used to be one gate and one row, which meant one file could be
  * read a day and only if the collect had also run.
  *
  * The runner is worked from another terminal by three files under
- * `~/mc/runner/`, all read at a round boundary and never mid-session: `STOP`
+ * `~/mc/runner/`, all read between two picks and never mid-session: `STOP`
  * ends it, `UPDATE` makes it fast-forward mc's own checkout and hand over to a
  * fresh process on the new code. `mc run start|stop|--update` write them; the
  * rules and the handover are in run-control.js. `UPDATE` has one writer that
  * is not a person — a landing that changed `src/mc/` or `canon/`, which is
  * the runner having merged the code it is running (`askForUpdate`).
  *
- * Every process boundary is a dependency on `deps`, so the round can be
+ * Every process boundary is a dependency on `deps`, so a lane's pass can be
  * driven in a test with a fake git, gh, tmux and session and no network.
  * The rules themselves live in run-plan.js.
  */
@@ -107,7 +112,7 @@ import {
 import { runDocsMerge } from './docs-merge.js';
 import { clearUnmergeable, markUnmergeable, parseUnmergeable, unmergeablePath } from './unmergeable.js';
 import { runMergeRound } from './repo-merge.js';
-import { kindFor, pidAlive } from './status-collect.js';
+import { pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { dequeue, mergesPath, parseQueue, queueOrder } from './merge-queue.js';
 import { loadProfile, profileArgs } from './portrait.js';
@@ -118,7 +123,7 @@ import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, REFUSAL, TIMEOUT_EXIT,
   assembleQueue, chooseKind, collectNote, headlessArgs,
-  heldRepair, helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, queueFileNames,
+  heldRepair, helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, nextFor,
   queueFileText, readSessionOutput, repairPrompt, sessionSettings, stackOrder,
   stepOfPr, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from './run-plan.js';
@@ -132,6 +137,16 @@ export const REPO_NAMES = ['memoro', 'memoro-cli'];
  * rather than leaving the pull request open — see `landPr`.
  */
 export const BUSY_STOPS = ['busy', 'lease'];
+
+/**
+ * The refusals a lane waits out rather than moves past: they are facts about
+ * this moment, not about the project. GitHub not answering `gh pr list` and a
+ * fetch that failed are the network; the bare `skipped` is this process's own
+ * (an UPDATE while waiting for a slot, or a project another lane took between
+ * the pick and the run). Every other refusal is the project's, and the lane
+ * takes the next name instead — see `pass`.
+ */
+export const WAIT_REFUSALS = new Set(['skipped', 'skipped:prs-unknown', 'skipped:sync']);
 export const LAND_WAIT_MS = 45 * 60 * 1000;
 export const LAND_RETRY_MS = 30 * 1000;
 /** How often an idle lane looks again while an UPDATE waits for the quiet moment. */
@@ -1362,15 +1377,6 @@ export function createRunner({
     return rows.length;
   }
 
-  /** A name leaves the queue the moment its step has run. */
-  function dropFromQueue(name) {
-    const text = deps.read(paths.queue);
-    if (text == null) return;
-    const names = queueFileNames(text).filter((line) => line !== name);
-    const next = queueFileText(names);
-    if (next !== text) deps.write(paths.queue, next);
-  }
-
   /**
    * The day's collect, run at the top of a round. Returns 'ran', 'failed' or
    * null when it was not due.
@@ -1566,17 +1572,21 @@ export function createRunner({
    * step in it.
    */
   /**
-   * One project is in flight in one lane at a time, whatever the lanes'
-   * slices say. The slices split a repository's names by index, but a lane
-   * that merged a step stays on its project for the next one (`runLane`),
-   * and another lane's round can read that project as ready — the pull
-   * request that would stop it is not open yet, and the worktree is clean
-   * for the first minute. Two sessions in one worktree is the failure this
-   * refuses; the claim lives in this process, where the lanes are.
+   * One project is in flight in one lane at a time, whatever the lanes' count
+   * says. Two lanes on one repository read the world separately — two `gh pr
+   * list` calls, up to ten minutes apart — and the first lane's pull request
+   * is not open yet while its session runs, so nothing on GitHub or on disk
+   * says the project is taken. Two sessions in one worktree is the failure
+   * this refuses; the claim lives in this process, where the lanes are.
+   *
+   * `claimed` is the lane saying it already holds the name: the pick takes the
+   * claim in the same tick it chooses (`pass`), so that a second lane picking
+   * a moment later cannot choose the same name, and this is the same claim
+   * arriving here rather than a second one.
    */
   const claims = new Set();
-  async function runStep(name, world = {}, { lane = 0 } = {}) {
-    if (claims.has(name)) { say(`${name}: in flight in another lane, skip`); return 'skipped'; }
+  async function runStep(name, world = {}, { lane = 0, claimed = false } = {}) {
+    if (!claimed && claims.has(name)) { say(`${name}: in flight in another lane, skip`); return 'skipped'; }
     claims.add(name);
     try {
       return await runStepClaimed(name, world, { lane });
@@ -1690,7 +1700,8 @@ export function createRunner({
       // Since ruling 10 there is one way to arrive here: the `PLAN.json` is
       // itself among the conflicts, so the plan was read from HEAD — every
       // other conflict leaves main's plan on disk, and a project main's plan
-      // refuses is stopped by `planRefusal` before a worktree is touched.
+      // refuses is never picked at all (`nextFor`, run-plan.js), so no
+      // worktree of its is touched.
       //
       // What is said is *not* `choice.skip`. That sentence is the branch's own
       // stale plan talking, and reporting it is the defect ruling 10 answered
@@ -1704,7 +1715,7 @@ export function createRunner({
         markStuck({ project: name, repo: repo.name, worktree, files: conflicts, why: 'the PLAN.json is one of the conflicts and nothing could be handed the merge' });
         return refuse(REFUSAL.unmergeable);
       }
-      // The other way here is a round driven by hand past `planRefusal` — the
+      // The other way here is `runStep` driven by hand past the picker — the
       // plan on disk is main's and it refuses the project itself. That is the
       // plan's word, not the merge's, and nothing is recorded: `machineState`
       // reads the same plan on main and answers it before it asks anything of
@@ -1881,13 +1892,12 @@ export function createRunner({
     logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
     if (read.quota) await quotaPause();
-    // The queue is Martin's "these first", and it empties itself: this
-    // project has had its step, so its name leaves the file now.
-    dropFromQueue(name);
-    // A merged step leaves the project ready for its next step now; 'merged'
-    // is the round's cue to stay on it. There is no second way to earn it:
-    // the only other session that used to — one that finished a merge and
-    // stopped — is gone, and its work is the first thing a step session does.
+    // `merged` and `ran` are both *a step ran*, and the lane picks again on
+    // either. They are still told apart because the row and the log line are
+    // read by a person, and because a merged step is the one that leaves the
+    // project ready for its next one — which the order now takes care of:
+    // the project is still at the head of it (2026-09-08, replacing the
+    // eight-step stay a lane used to make after a merge).
     return note === 'success,merged' ? 'merged' : 'ran';
   }
 
@@ -1937,215 +1947,84 @@ export function createRunner({
   }
 
   /**
-   * The queue split into lanes: one lane per repository, Martin's order kept
-   * within each. A name whose repository cannot be told (no workarea and no
-   * plan on main) rides in a lane of its own, where `runStep` says so and
-   * skips it.
+   * What this lane takes next: the first name in the queue's order, in this
+   * repository, that the plan on `origin/main` says is ready and that nothing
+   * else — an open pull request, a spent repair, another lane's claim — is
+   * holding. The rule is `nextFor` (run-plan.js), which is the same function
+   * the page draws NEXT from; what this adds is the two things only the
+   * running process knows: what the lanes are holding, and what this pass has
+   * already been refused on.
    */
-  function splitLanes(names, plans) {
-    const lanes = new Map();
-    for (const name of names) {
-      const repo = repoOf(name, plans)?.name || null;
-      if (!lanes.has(repo)) lanes.set(repo, []);
-      lanes.get(repo).push(name);
-    }
-    return [...lanes].map(([repo, laneNames]) => ({ repo, names: laneNames }));
+  function nextStep({ repo = null, world = {}, passed = new Set() } = {}) {
+    return nextFor({ repo, world, claimed: claims, passed, held: heldNow() });
   }
 
   /**
-   * What the plan on `origin/main` already says about a name, asked before
-   * anything is touched. `{ name, reason }` means the lane does not go there
-   * this pass, and the reason is the word the round counts in `refusedLine`;
-   * null means it does.
+   * One pass of one lane: the world for its repository read once, then the
+   * first name nothing stops, run — and the answer, so the lane knows whether
+   * to pick again at once or to wait.
    *
-   * `kindFor` is the page's reading — `chooseKind` over the plan text
-   * `queue()` has already fetched — and it answers `skip:<reason>` for a plan
-   * that is blocked, done, unparseable or unmigrated without a worktree, a
-   * `git status`, a fetch or a merge. `runStep` used to be where that answer
-   * arrived, five pieces of git work later: 2026-09-02 a round spent 51
-   * seconds walking 38 projects to start one, and 21 of those refusals were
-   * on the page before the round began.
+   * Returns `{ ran, stop, waited, name, step }`. `ran` is 0 or 1: a pass ends
+   * when a step has run, because the world it was picked from is now a world
+   * in which a pull request exists and a plan has moved on, and the next pick
+   * must be made against the new one. `waited` is the refusal that was about
+   * this moment rather than about the project (`WAIT_REFUSALS`) — the lane
+   * sleeps and asks the same question again. Anything else is this project's
+   * own refusal: it is passed over for the rest of this pass and the lane
+   * moves to the next name, which is what stops one stuck project from
+   * standing in front of a queue (2026-09-08: `sql-w3-email-closure` was
+   * merged, refused and aborted every ten minutes for two days, and
+   * `sql-w1-universe-closure` was dirty every round, while 15 memoro projects
+   * behind them ran nothing).
    *
-   * It does not replace `runStep`'s own reading, which stays exactly where it
-   * was. The plan in the worktree after `syncMain` is the one that must be
-   * obeyed — it is the one a step session will edit, and it can be one merge
-   * ahead of this one. This only stops the walk from arriving at a project
-   * whose plan on main already refuses it.
-   *
-   * Two things it deliberately does not answer:
-   *
-   * - **A name with no plan on main at all.** `assembleQueue` drops those, so
-   *   it can only happen when a plan leaves main mid-round; `runStep` has the
-   *   line for it, and this leaves it there.
-   * - **A conflicted merge left in a workarea.** It lives in a worktree no
-   *   plan on main can see, and it is the step session's to resolve — so a
-   *   project whose plan on main is stopped never reaches the merge at all,
-   *   which is the round it would have been able to use it in anyway.
+   * `last` is the `{ name, step }` this lane ran a moment ago, and the one
+   * thing the picker itself cannot know: whether anything moved. A project
+   * whose step landed is picked again at once and gets its *next* step, which
+   * is what the eight-step stay after a merge was for — but a step that ended
+   * with the plan on main saying exactly what it said before is one this lane
+   * would otherwise start again the second it finished, for ever. So that one
+   * name waits for the next pass.
    */
-  function planRefusal(name, plans = []) {
-    const plan = plans.find((p) => p.project === name) || null;
-    if (!plan) return null;
-    const kind = kindFor(name, { plans });
-    if (!kind.startsWith('skip:')) return null;
-    return { name, reason: kind.slice('skip:'.length) };
-  }
-
-  /**
-   * The one line a round leaves about what its plans refused, or null when
-   * they refused nothing.
-   *
-   * A plan-shaped refusal is already on the page — `mc status`'s QUEUE draws
-   * it from the same `kindFor` — so the twenty-first `blocked on decision
-   * plan-review` in runner.log tells a reader nothing the first one did not.
-   * What it costs is the lines that are *not* on the page: a dirty worktree,
-   * a pull request in flight, a merge that conflicted. Those are facts about
-   * this machine at this moment, they keep their own named line in `runStep`,
-   * and they are what this line exists to leave room for.
-   *
-   * The shape is the page's: `skipped 28 (blocked 21, unparseable 5, done
-   * 1)`, reasons in the order the queue met them. One reason is named rather
-   * than only counted — a plan that does not parse is a thing somebody must
-   * go and fix, and a count of five does not say which five.
-   */
-  function refusedLine(refusals = []) {
-    if (!refusals.length) return null;
-    const counts = new Map();
-    for (const { reason } of refusals) counts.set(reason, (counts.get(reason) || 0) + 1);
-    const by = [...counts].map(([reason, n]) => `${reason} ${n}`).join(', ');
-    const unparseable = refusals.filter((r) => r.reason === 'unparseable').map((r) => r.name);
-    const named = unparseable.length ? ` — the plans that do not parse: ${unparseable.join(', ')}` : '';
-    return `skipped ${refusals.length} (${by})${named}`;
-  }
-
-  /**
-   * One lane: its names in order, one step at a time. A project whose step
-   * merged keeps the lane — its next step follows at once (plans re-read, so
-   * the merged status is what decides) instead of waiting a whole round
-   * behind every other project — 2026-08-29 a six-step plan would have taken
-   * six rounds of twenty projects. STOP is honoured between those steps too.
-   *
-   * The names it does not stop at are `planRefusal`: a project whose plan on
-   * origin/main already says the runner would do nothing is passed over here,
-   * before `runStep` opens a worktree to find out the same thing. It says
-   * nothing about them one at a time — they are collected and returned as
-   * `refused`, and the round leaves the one line (`refusedLine`).
-   */
-  async function runLane({ repo = null, names = [], lane = 0 }, world, { once = false } = {}) {
-    let known = Array.isArray(world) ? { plans: world } : world;
-    let ran = 0;
-    const refused = [];
-    for (const name of names) {
-      // The plan first, git second: a project its own plan on main refuses is
-      // never reached, and no worktree, status or fetch is spent on it. Asked
-      // per name against `known`, which a merged step re-reads — a plan that
-      // came good in that window does not wait for the next round.
-      const no = planRefusal(name, known.plans);
-      if (no) { refused.push(no); continue; }
-      let r = await runStep(name, known, { lane });
-      for (let stayed = 0; ; stayed += 1) {
-        if (r === 'stop') return { ran, stop: true, refused };
-        if (r === 'ran' || r === 'merged') {
-          ran += 1;
-          if (once) return { ran, stop: false, once: true, refused };
-          await deps.sleep(60_000);
-        }
-        if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true, refused }; }
-        if (r !== 'merged' || stayed >= 8) break;
-        // An UPDATE drains the runner from the moment it is read, and the
-        // lane loop reads it between rounds — but this loop is inside one.
-        // A lane that stays on its project after a merge would start up to
-        // eight more steps here while the other lanes sit idle waiting for
-        // it. Seen 2026-09-06: #668 wrote UPDATE at 14:11Z; by 14:38Z both
-        // idle lanes had said so, while the two busy lanes each merged and
-        // started a further 90-minute step on the project they were on.
-        // Letting go here is what makes the handover one step long.
-        if (updateRequested()) { say(`${name}: UPDATE is pending — the lane lets go of ${name}`); break; }
-        // Re-read: the plan the merge advanced, and what GitHub has open now
-        // — the step that just landed may have left a second pull request.
-        known = queue({ only: repo });
-        // The plan the merge advanced says stop: the lane lets go, and the
-        // count is the round's, same as any other refusal on the plan.
-        const stopped = planRefusal(name, known.plans);
-        if (stopped) { refused.push(stopped); break; }
-        const status = known.plans.find((p) => p.project === name)?.status;
-        if (!status || status === 'done') break;
-        say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
-        r = await runStep(name, known, { lane });
+  async function pass({
+    repo = null, lane = 0, tag = null, world = null, last = null, passed: already = [],
+  } = {}) {
+    const label = tag || repo || 'run';
+    const known = world || queue({ only: repo });
+    // Cleared with the world, and only with it: the names in here were refused
+    // by a reading of this world, and a fresh reading is what could change the
+    // answer. A caller may seed it with names it already has an answer for —
+    // which is how a test drives a lane over a whole queue without a clock.
+    const passed = new Set(already);
+    const stepOf = (name) => known.plans.find((item) => item.project === name)?.step ?? null;
+    for (;;) {
+      if (stopRequested()) return { ran: 0, stop: true };
+      const pick = nextStep({ repo, world: known, passed });
+      if (!pick) return { ran: 0 };
+      if (last && pick.name === last.name && stepOf(pick.name) === last.step) {
+        say(`${label}: ${pick.name} is on the same step its last session ended on — leaving it for the next pass`);
+        passed.add(pick.name);
+        continue;
       }
+      const plan = known.plans.find((item) => item.project === pick.name) || null;
+      const at = plan?.step && plan?.steps ? ` (step ${plan.step}/${plan.steps})` : '';
+      say(`${label}: next — ${pick.name}${at}`);
+      // The claim, taken in the tick the name was picked: `nextStep` has just
+      // read this set, and a second lane picking a moment from now must see
+      // the name taken before this one's session has opened anything.
+      claims.add(pick.name);
+      const outcome = await runStep(pick.name, known, { lane, claimed: true });
+      if (outcome === 'stop') return { ran: 0, stop: true };
+      if (outcome === 'ran' || outcome === 'merged') {
+        const ran = { ran: 1, name: pick.name, step: stepOf(pick.name) };
+        if (stopRequested()) {
+          say(`runner exit on STOP after ${pick.name} (remove ${paths.stop} before the next start)`);
+          return { ...ran, stop: true };
+        }
+        return ran;
+      }
+      if (WAIT_REFUSALS.has(outcome)) return { ran: 0, waited: outcome };
+      passed.add(pick.name);
     }
-    return { ran, stop: false, refused };
-  }
-
-  /**
-   * One pass: the day's helper if it is due, then every queued project —
-   * memoro's lane and memoro-cli's at the same time, in the one process.
-   * Returns { ran, stop } — the helper is not counted, it is not a step.
-   *
-   * The lanes never touch: different main branches, different worktrees,
-   * different PRs. What they do share is the Claude quota (`quotaPause`) and
-   * the STOP file, which ends both lanes after the step each is in. With
-   * only one repository holding ready plans there is one lane, and a round
-   * is exactly what it was before.
-   */
-  async function round({ once = false, only = null, lane = 0, count = 1 } = {}) {
-    // `only` is one lane's round — the unattended loop's shape since
-    // 2026-09-03, when Martin saw that a round ended only when *both* lanes
-    // had: memoro-cli's lane sat idle for hours while memoro's walked thirty
-    // names, and a memoro-cli step that became ready in that time waited for
-    // a round boundary nobody needed. A lane's round reads the queue for its
-    // repository alone and does none of the chores, because the chores read
-    // the whole queue: `tidyQueue` over one repository's plans would drop the
-    // other's names from queue.md, and `closeWorkareas` would file the
-    // other's workareas as unplanned. `chores()` runs them beside the lanes.
-    const chores = only == null;
-    // The day's collect first, then the inbox it just added to, and only in a
-    // round that is a round: `--once` exists to watch a single step, and a
-    // model turn over production is not what somebody typing it asked for.
-    if (chores && !once && !stopRequested()) {
-      await runHelperDay();
-      await runIntakeDrain();
-    }
-    const world = queue({ only });
-    const { names, plans } = world;
-    if (chores && !once) tidyQueue(plans);
-    if (chores) writeUnreadable(plans);
-    // A plan that says `done` is archived in the round the runner reads it,
-    // before any step of that round runs — one PR per repository, and the
-    // two repositories never touch. Not under `--once`, for the reason the
-    // helper is not: that is one step to watch, not a round.
-    const archives = chores && !once ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
-    const archived = archives.flatMap((a) => a.archived);
-    const landed = archives.flatMap((a) => a.landed);
-    const left = names.filter((name) => !archived.includes(name));
-    // `--once` is one step, so it is one lane over the whole queue in
-    // Martin's order — there is nothing for a second lane to do.
-    // With `lanes` above one for a repository, this round is one of that
-    // many running side by side, and takes every `lanes`th name from the
-    // repository's list starting at its own index — so two rounds in one
-    // repository never hold the same project, and each still walks its
-    // names in the queue's order. A project that is in flight in the other
-    // lane is also refused by `inFlight`'s open pull request, once it has one.
-    const lanes = (once ? [{ repo: null, names: left }] : splitLanes(left, plans))
-      .filter((item) => only == null || item.repo === only)
-      .map((item) => ({ ...item, lane, names: item.names.filter((_, index) => index % count === lane) }));
-    if (lanes.length > 1) say(`lanes: ${lanes.map((lane) => `${lane.repo || 'unplaced'} (${lane.names.length})`).join(', ')}`);
-    const results = await Promise.all(lanes.map((lane) => runLane(lane, world, { once })));
-    const out = {
-      ran: results.reduce((sum, r) => sum + r.ran, 0),
-      stop: results.some((r) => r.stop),
-    };
-    // What the plans refused, in one line for the whole round rather than one
-    // line per project: both lanes' refusals counted together, because a
-    // reader of runner.log is reading a round, not a lane.
-    const line = refusedLine(results.flatMap((r) => r.refused || []));
-    if (line) say(only ? `${only}: ${line}` : line);
-    // Last of all, and only in a whole round that was not cut short: the
-    // workareas whose plan left main this round are taken down, and the ones
-    // with no plan at all are written where Martin looks. `--once` changes
-    // nothing but the one step it exists to watch.
-    if (chores && !once && !out.stop) closeWorkareas(plans, landed, archivedProjects());
-    if (results.some((r) => r.once)) out.once = true;
-    return out;
   }
 
   /**
@@ -2182,7 +2061,7 @@ export function createRunner({
   };
 
   return {
-    paths, repos, say, round, chores, runStep, runLane, splitLanes, runHelperDay, runIntakeDrain, archiveDone, queue, stopRequested,
+    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, archiveDone, queue, stopRequested,
     held: heldNow,
     queued: queuedNow, mergeQueued, mergeBusy,
     writeUnreadable,
@@ -2192,11 +2071,12 @@ export function createRunner({
 }
 
 /**
- * The loop: rounds until `rounds` is reached (0 = forever), a STOP file
- * appears, or `--once` has run its one step.
+ * The loop: one lane loop per repository per `per_repo`, each taking the next
+ * step of the next project until a STOP file appears or an UPDATE hands over —
+ * or, under `--once`, one step and out.
  */
 export async function runLoop({
-  rounds = 0, once = false, merge = true, idleSleepMs = 600_000,
+  once = false, merge = true, idleSleepMs = 600_000,
   // The machine's sleep, held for the length of the run. On by default,
   // because a runner that stops because the laptop dozed is the failure this
   // exists for and nobody would think to ask for the flag beforehand.
@@ -2238,7 +2118,7 @@ export async function runLoop({
     runner.clearRunner();
     runner.say(`cleared runner.json — the pid it named (${held.pid}) is gone`);
   }
-  runner.say(`runner start (mc run, merge=${merge ? 1 : 0} rounds=${rounds} once=${once ? 1 : 0})`);
+  runner.say(`runner start (mc run, merge=${merge ? 1 : 0} once=${once ? 1 : 0})`);
   // Before the first round, so a run that is going to be unattended is already
   // holding the assertion by the time anybody walks away from it. `--once` is
   // a person watching one step and does not need it.
@@ -2270,19 +2150,18 @@ export async function runLoop({
     return false;
   };
   try {
-    if (rounds === 0 && !once) {
-      // The unattended run: one loop per repository, each on its own clock.
-      // A lane's round ends when its own names are walked and its next one
-      // starts then — not when the other lane's does. Until 2026-09-03 the
-      // two lanes shared a round, and memoro-cli's sat idle for hours while
-      // memoro's walked thirty names. The chores a shared round did around
-      // its lanes run in their own loop beside them. STOP and UPDATE are
-      // read where they always were, at a round boundary — now each lane's
-      // own — and the handover waits for every lane to reach one.
+    if (!once) {
+      // The unattended run: one loop per repository, each on its own clock,
+      // each taking the next step of the next project (`pass`). The chores a
+      // round used to do around its lanes run in their own loop beside them.
+      // STOP and UPDATE are read between picks, and the handover waits for
+      // every lane to reach one.
       //
-      // `mc run lanes <n>` puts n of these loops on each repository. Each
-      // takes every nth name of the repository's queue (round.js: `lane`,
-      // `count`), so two never hold one project; what they share is the
+      // `mc run lanes <n>` puts n of these loops on each repository. They take
+      // from one ordered list and claim what they pick (`claims`), so two
+      // never hold one project — until 2026-09-08 they took every nth name of
+      // the repository's list instead, which meant lane 2 took the second name
+      // whether or not lane 1 could run the first. What they share is the
       // repository's main, and a landing that meets the other's at the gate
       // waits for it (`landPr`).
       //
@@ -2315,7 +2194,15 @@ export async function runLoop({
       const lane = async (repo, index) => {
         const tag = count > 1 ? `${repo.name}#${index + 1}` : repo.name;
         let draining = false;
-        for (let n = 1; ; n += 1) {
+        // The last line this lane said about having taken nothing. An idle
+        // lane looks every ten minutes and would otherwise write the same
+        // sentence 144 times a day; it says it once and then goes quiet until
+        // something changes.
+        let quietLine = null;
+        // What this lane ran a moment ago, so a step that left the plan where
+        // it found it is not started again the second it ends (`pass`).
+        let last = null;
+        for (;;) {
           if (runner.updateRequested()) {
             if (!draining) { draining = true; runner.say(`${tag}: UPDATE — taking no new step; handing over when every lane is done`); }
             if (quiet()) return { update: true };
@@ -2323,11 +2210,21 @@ export async function runLoop({
             if (runner.stopRequested()) return { stop: true };
             continue;
           }
-          const r = await runner.round({ only: repo.name, lane: index, count });
+          const r = await runner.pass({ repo: repo.name, lane: index, tag, last });
           if (r.stop) return { stop: true };
-          runner.say(`${tag}: round ${n} done (${r.ran} ran)`);
+          // A step ran: the world it was picked from is stale now, so the next
+          // pick is made at once against a fresh reading rather than after a
+          // sleep nobody is waiting for.
+          if (r.ran) { quietLine = null; last = { name: r.name, step: r.step }; continue; }
+          // Nothing ran, and the sleep below is ten minutes: what the last step
+          // left is worth looking at again on the other side of it.
+          last = null;
+          const line = r.waited
+            ? `${tag}: waiting — ${r.waited === 'skipped' ? 'nothing could be started this pass' : r.waited.slice('skipped:'.length)}`
+            : `${tag}: nothing to run — sleeping`;
+          if (line !== quietLine) { runner.say(line); quietLine = line; }
           if (runner.updateRequested()) continue;
-          if (r.ran === 0) await deps.sleep(idleSleepMs);
+          await deps.sleep(idleSleepMs);
           if (runner.stopRequested()) return { stop: true };
         }
       };
@@ -2371,17 +2268,13 @@ export async function runLoop({
       runner.say('runner exit — the update did not hand over');
       return 0;
     }
-    let n = 0;
-    while (once ? n < 1 : n < rounds) {
-      n += 1;
-      const r = await runner.round({ once });
-      if (r.stop) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
-      if (r.once) { runner.say('once: exiting'); return 0; }
-      runner.say(`round ${n} done (${r.ran} ran)`);
-      if (runner.updateRequested() && await update()) return 0;
-      if (r.ran === 0 && n < rounds) await deps.sleep(idleSleepMs);
-    }
-    runner.say(`runner exit after ${rounds} round(s)`);
+    // `--once`: one pick over the whole queue, in Martin's order, and out.
+    // One lane, both repositories, no chores — a person watching one step,
+    // which is what the flag is for. A project the machine refuses is passed
+    // over and the next name tried, exactly as a lane does.
+    const r = await runner.pass({ tag: 'once' });
+    if (r.stop) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
+    runner.say(r.ran ? 'once: exiting' : 'once: nothing to run');
     return 0;
   } finally {
     if (!handedOver) runner.clearRunner();

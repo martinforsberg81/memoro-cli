@@ -30,7 +30,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { openPrsFor } from './project-prs.js';
-import { REFUSAL, chooseKind, heldRepair, inFlight } from './run-plan.js';
+import { REFUSAL, chooseKind, heldRepair, inFlight, kindFor } from './run-plan.js';
 import { describeUnmergeable, unmergeableFor } from './unmergeable.js';
 
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
@@ -44,26 +44,18 @@ export const REPO_NAMES = Object.freeze(['memoro', 'memoro-cli']);
 /**
  * What the runner would do with a queued name — asked of the runner itself.
  *
- * The rule lives in one place, `chooseKind` in run-plan.js, and run.js calls
- * the same function before it starts a step; this only flattens the answer
- * to one string. A merge left in progress inside a workarea does not change
- * it either way — the plan decides what a project gets, and the conflict is
- * something the step session is told about rather than a kind of its own.
+ * The rule lives in one place, `kindFor` in run-plan.js, beside the picker
+ * (`nextFor`) that the runner takes its next step with; it is re-exported here
+ * because this is where every reader of the page has always imported it from.
+ * A merge left in progress inside a workarea does not change it either way —
+ * the plan decides what a project gets, and the conflict is something the step
+ * session is told about rather than a kind of its own.
  *
  * Decisions are not a parameter any more. The runner runs `ready` plans and
  * nothing else — a project waiting on a decision is simply not ready, and no
  * `**Beslut:**` line anywhere starts it (Martin, 2026-08-29).
  */
-export function kindFor(name, { plans }) {
-  const plan = plans.find((p) => p.project === name) || null;
-  const choice = chooseKind({ plan });
-  if (choice.kind) return choice.kind;
-  if (!plan) return 'skip:no-plan';
-  // The reason is a word the page can count. The sentence beside it is for a
-  // person; grouping on it produced rows like "n does not parse: ..." when the
-  // sentence changed shape.
-  return `skip:${choice.reason || 'no-status'}`;
-}
+export { kindFor };
 
 /* ----------------------------------------------------------- machine state */
 
@@ -86,9 +78,9 @@ export function kindFor(name, { plans }) {
  * shared with the round so the two cannot drift.
  *
  * The plan is asked first and its answer returned before any git at all. That
- * is `planRefusal`'s economy (run.js): a project whose plan on main already
- * refuses it must cost no `git status` — a round spent 51 seconds walking 38
- * projects to start one before it was asked in that order.
+ * is the picker's economy (`nextFor`, run-plan.js): a project whose plan on
+ * main already refuses it must cost no `git status` — a round spent 51 seconds
+ * walking 38 projects to start one before it was asked in that order.
  *
  * Nothing here starts, writes or fetches, which is the rule this module opens
  * with: `git` is only ever asked read-only questions of a worktree, and a

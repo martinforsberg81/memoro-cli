@@ -2,15 +2,16 @@
  * `mc run` — take the next step of the next project, all day, and the switch
  * that works it from another terminal.
  *
- * `mc run [--rounds N] [--once] [--no-merge] [--idle-sleep S] [--no-caffeinate]`;
- * rounds 0 (the default) is forever. `--once` runs one step for the first
- * runnable project and exits — the way to watch one step.
+ * `mc run [--once] [--no-merge] [--idle-sleep S] [--no-caffeinate]`; with no
+ * flags it takes the next step of the next project until STOP. `--once` runs
+ * one step for the first runnable project and exits — the way to watch one
+ * step. `--rounds N` is retired: there is no round to count (2026-09-08).
  *
  *   mc run start [flags]   the same runner, in the background, logging to
  *                          `~/mc/runner/log/runner.log`
- *   mc run stop            it finishes the round it is in, then exits
+ *   mc run stop            it finishes the step it is in, then exits
  *   mc run stop --force    it ends now, and the session it is holding with it
- *   mc run --update        it finishes the round, fast-forwards mc's own
+ *   mc run --update        it finishes the step, fast-forwards mc's own
  *                          checkout, and restarts itself on the new code
  *   mc run lanes [<n>] [--total <n>|none]
  *                          how many steps may be in flight — the positional
@@ -19,7 +20,7 @@
  *                          Read at start, so a running runner takes new
  *                          counts on `--update`
  *
- * The three orders are files under `~/mc/runner/` read at a round boundary,
+ * The three orders are files under `~/mc/runner/` read between two picks,
  * not signals: a runner ninety minutes into a headless session is given the
  * order without that session being interrupted. The rules are in
  * run-control.js.
@@ -27,7 +28,7 @@
  * A run that is not `--once` holds the machine awake for its whole length
  * (stay-awake.js). That is the default rather than a flag to remember: this
  * laptop sleeps after one minute of idle on battery, and a runner waiting ten
- * minutes between rounds is doing exactly what that setting kills.
+ * minutes between picks is doing exactly what that setting kills.
  * `--no-caffeinate` is the way out for somebody who wants the machine to be
  * allowed to sleep.
  */
@@ -39,10 +40,10 @@ import { pidAlive, readCurrents } from '../status-collect.js';
 import { scanArgs } from './flags.js';
 
 const USAGE = [
-  'usage — mc run [--rounds <n>] [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]',
+  'usage — mc run [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]',
   '        mc run start [same flags]   the runner, in the background',
-  '        mc run stop [--force]       after the round it is in, or now',
-  '        mc run --update             after the round: new code, new process',
+  '        mc run stop [--force]       after the step it is in, or now',
+  '        mc run --update             after the step: new code, new process',
   `        mc run lanes [<n>] [--total <n>|none]`,
   `                                    steps in flight: <n> per repository, --total across every`,
   `                                    repository at once, both 1–${LANES_MAX}; no argument prints both`,
@@ -66,7 +67,7 @@ export async function run(argv, deps = {}) {
   }
 
   return (deps.loop || runLoop)({
-    rounds: opts.rounds, once: opts.once, merge: opts.merge, idleSleepMs: opts.idleSleep * 1000, awake: opts.awake,
+    once: opts.once, merge: opts.merge, idleSleepMs: opts.idleSleep * 1000, awake: opts.awake,
   });
 }
 
@@ -118,7 +119,7 @@ function lanes(opts, deps) {
     lines: [
       `lanes ${phrase(pair, repos)} from the next start`,
       ...neverBinds(pair, repos),
-      'a running runner keeps the counts it started with: mc run --update takes the new ones after the round it is in',
+      'a running runner keeps the counts it started with: mc run --update takes the new ones after the step it is in',
     ],
   };
 }
@@ -221,11 +222,20 @@ export function parseRunArgs(argv) {
   return opts.error ? opts : { ...opts, verb: 'run' };
 }
 
+/**
+ * `--rounds N`, retired 2026-09-08 with the round itself: a lane takes the
+ * next step and picks again, so there is no pass over the queue to count. The
+ * form is `mc-cut`'s for a verb that has gone — the flag is answered by name,
+ * with what to type instead, rather than by `unexpected argument 3`.
+ */
+const RETIRED_ROUNDS = 'a round no longer exists; `mc run` takes the next step until STOP, `mc run --once` takes one';
+
 /** The loop's own flags — for `mc run`, and for the `mc run start` behind it. */
 function parseLoopArgs(argv) {
+  if (argv.some((arg) => arg === '--rounds' || String(arg).startsWith('--rounds='))) return { error: RETIRED_ROUNDS };
   const scanned = scanArgs(argv, {
     booleans: ['--once', '--no-merge', '--no-caffeinate'],
-    strictValues: ['--rounds', '--idle-sleep'],
+    strictValues: ['--idle-sleep'],
   });
   if (scanned.error) return { error: scanned.error };
   if (scanned.positional.length) return { error: `unexpected argument ${scanned.positional[0]}` };
@@ -234,12 +244,9 @@ function parseLoopArgs(argv) {
     const n = Number(value);
     return Number.isInteger(n) && n >= 0 ? n : NaN;
   };
-  const rounds = num(scanned.flags.rounds, 0);
   const idleSleep = num(scanned.flags.idleSleep ?? scanned.flags['idle-sleep'], 600);
-  if (Number.isNaN(rounds)) return { error: '--rounds needs a whole number (0 = forever)' };
   if (Number.isNaN(idleSleep)) return { error: '--idle-sleep needs a whole number of seconds' };
   return {
-    rounds,
     once: scanned.flags.once,
     merge: !scanned.flags.noMerge && !scanned.flags['no-merge'],
     idleSleep,

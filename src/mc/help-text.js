@@ -279,10 +279,10 @@ IN FULL
                                     PLAN.md on origin/main. Touch
                                     ~/mc/runner/STOP to exit after the step.
                                     Runs mc helper --intake once a day too,
-                                    in the first round after 05:00Z
+                                    in the first chore loop after 05:00Z
   mc run --once                    One step for the first runnable project,
                                     and no helper
-  mc run --rounds <n> [--no-merge] [--idle-sleep <s>]
+  mc run [--no-merge] [--idle-sleep <s>]
   mc worker <name> [task]          A project folder that carries the worker
                                     role, read from the roles mc ships: every
                                     conversation started in it gets the
