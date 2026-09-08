@@ -20,14 +20,19 @@ process is [`src/mc/run.js`](../../src/mc/run.js), where every boundary is a
 key on `deps` so a whole round can be driven in a test with no network.
 
 ```
-mc run [--rounds <n>] [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]
+mc run [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]
 ```
 
-`--rounds 0` (the default) is forever. `--once` runs one step for the first
-runnable project and exits — the way to watch a single step. `--no-merge`
-leaves the pull requests open; it is a default-on boolean written mc's way,
-not `--merge 0|1`. `--idle-sleep` is how long a round that ran nothing waits
-before the next one, 600 s by default.
+With no flags it takes the next step of the next project until STOP. `--once`
+runs one step for the first runnable project and exits — the way to watch a
+single step. `--no-merge` leaves the pull requests open; it is a default-on
+boolean written mc's way, not `--merge 0|1`. `--idle-sleep` is how long a lane
+that could start nothing waits before it looks again, 600 s by default.
+`--rounds <n>` was retired with the round on 2026-09-08 and is answered by
+name, with exit 2.
+
+> The rest of this document still describes the round this project replaced;
+> it is rewritten in step 4 of `runner-next-step`.
 
 ## The switch
 

@@ -397,6 +397,50 @@ const stepRole = {
 };
 const okSession = (json = {}) => () => ({ status: 0, stdout: JSON.stringify({ subtype: 'success', num_turns: 4, session_id: 'sid', usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, ...json }), stderr: '', timedOut: false });
 
+/**
+ * One lane, driven to a standstill: `pass` takes one step and returns, because
+ * the world it picked from is stale the moment a step has run, so a lane loop
+ * calls it again. This is that loop without the sleeping — every step that
+ * lane would take before it had to wait for something.
+ */
+async function lane(runner, repo = null) {
+  let ran = 0;
+  // What this lane already has an answer for. A live lane carries `last`
+  // instead and re-reads the world every ten minutes; here there is no clock,
+  // so a name that has had its step is not asked for a second one — which is
+  // what a round did, once per name.
+  const taken = new Set();
+  for (;;) {
+    const r = await runner.pass({ repo, passed: taken });
+    ran += r.ran || 0;
+    if (r.stop || !r.ran) return { ran, stop: Boolean(r.stop) };
+    taken.add(r.name);
+  }
+}
+
+/**
+ * An unattended run that ends: the first session writes STOP, so the loop
+ * takes one step and leaves. There is no `--rounds 1` to bound a run with any
+ * more (2026-09-08), and `--once` is a different thing — it holds no
+ * caffeinate and runs no chores.
+ */
+function stopAfterAStep(f) {
+  const inner = f.deps.session;
+  f.deps.session = (call) => { f.files['/w/runner/STOP'] = ''; return inner(call); };
+}
+
+/**
+ * What a round was, driven by hand: the chores, then every step both lanes
+ * would take. The runner has no round any more (2026-09-08) — the loop is
+ * `chores()` on its own clock beside one lane loop per repository — and the
+ * tests that used to drive one drive this.
+ */
+async function round(runner, { chores = true } = {}) {
+  if (chores) await runner.chores();
+  const results = await Promise.all(runner.repos.map((repo) => lane(runner, repo.name)));
+  return { ran: results.reduce((n, r) => n + r.ran, 0), stop: results.some((r) => r.stop) };
+}
+
 test('queue: queue.md first, then plans on origin/main of both repositories', () => {
   const f = fixture({ queue: 'b\n# c\n', plans: { memoro: { a: ready, b: ready }, 'memoro-cli': { 'mc-run': ready } } });
   const runner = createRunner({ deps: f.deps });
@@ -406,7 +450,7 @@ test('queue: queue.md first, then plans on origin/main of both repositories', ()
 test('one step: worktree made from origin/main, session through the adapter, PR merged, row logged', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 77, title: 'Alpha step' } } });
   const runner = createRunner({ deps: f.deps });
-  const r = await runner.round({ once: true });
+  const r = await runner.pass();
   assert.equal(r.ran, 1);
   assert.deepEqual(f.calls.added, ['alpha']);
   const [call] = f.calls.sessions;
@@ -439,13 +483,12 @@ test('skips: dirty worktree, a blocked step', async () => {
     dirty: ['dirty'], session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  const r = await runner.round();
+  const r = await round(runner);
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /dirty: dirty worktree \(.+\) — skipped every round until it is committed or stashed in \/w\/dirty\/memoro/u, 'the machine gets its own line, with the files and the way out');
-  assert.match(log, /skipped 1 \(blocked 1\)/u, 'the plan gets a count');
-  assert.doesNotMatch(log, /wait: /u, 'and no line of its own — the page already draws it');
+  assert.doesNotMatch(log, /wait: /u, 'a blocked plan is never picked, and the page is where it shows');
 });
 
 /**
@@ -464,7 +507,7 @@ test('a live tmux session in the workarea does not stop the step', async () => {
     live: ['live'], session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  const r = await runner.round();
+  const r = await round(runner);
   assert.equal(r.ran, 1);
   assert.equal(f.calls.sessions.length, 1);
   const log = f.files['/w/runner/log/runner.log'];
@@ -479,18 +522,25 @@ test('a live tmux session in the workarea does not stop the step', async () => {
  * request — on 2026-09-02T04:33 that started a 120-minute Opus session to
  * rebuild `action-window` step 4 while step 4's work was open as #11241.
  */
-test('an open pull request on a `<name>-<n>` branch ends that project\'s round, with a line naming it', async () => {
+test('an open pull request on a `<name>-<n>` branch takes that project out of the pick', async () => {
   const f = fixture({
     plans: { memoro: { alpha: ready } },
     openPrs: { memoro: [{ number: 11246, headRefName: 'alpha-4', baseRefName: 'main', isDraft: false, title: 'Step 4' }] },
     session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  const r = await runner.round({ once: true });
+  const world = runner.queue();
+  const r = await runner.pass({ world });
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0, 'no session is spent on work that is already open');
-  assert.match(f.files['/w/runner/log/runner.log'], /alpha: #11246 is open \(Step 4\) — not starting a step/u);
   assert.doesNotMatch(f.files['/w/runner/log/runs.tsv'] || '', /\talpha\t/u, 'a skip is not a run');
+  // The pick passes it over in silence: a line every ten minutes about a
+  // project whose pull request is open is what runner.log was full of, and the
+  // page draws it from the same rule. The last guard — which a lane no longer
+  // reaches — still answers in the word `mc status` uses.
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /next — alpha/u);
+  assert.equal(await runner.runStep('alpha', world), 'skipped:in-flight');
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: #11246 is open \(Step 4\) — not starting a step/u);
 });
 
 test('a pull request on another project\'s branch is not this project\'s', async () => {
@@ -502,11 +552,11 @@ test('a pull request on another project\'s branch is not this project\'s', async
     gh: { mc: { number: 60, title: 'Mc' } },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.deepEqual(f.calls.sessions.map((c) => c.cwd), ['/w/mc/memoro'], 'mc-cut stops; mc runs');
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /mc-cut: #51 is open \(Cut\) — not starting a step/u);
-  assert.doesNotMatch(log, /^.*\bmc: #51\b/mu);
+  assert.doesNotMatch(log, /next — mc-cut/u, 'mc-cut has work in flight, so it is not picked');
+  assert.match(log, /run: next — mc \(step 1\/1\)/u, '#51 is mc-cut\'s, not mc\'s');
 });
 
 /**
@@ -522,7 +572,7 @@ test('a workarea whose branch has already landed is moved to `<name>-<n>` before
     session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.deepEqual(f.calls.checkouts, [['/w/beta/memoro', 'beta-3']], 'beta and beta-2 are taken');
   assert.equal(f.calls.sessions.length, 1, 'the session runs, from a branch it can push');
   const order = f.calls.git.filter((c) => c[0] === '/w/beta/memoro').findIndex((c) => c.includes('checkout'));
@@ -538,14 +588,16 @@ test('a workarea whose branch carries work is left exactly where it is', async (
     landed: [], session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.deepEqual(f.calls.checkouts, []);
   assert.equal(f.calls.sessions.length, 1);
 });
 
 /**
- * Not knowing what is open is what bought the 04:33 session. An idle round
- * costs ten minutes of sleep, so the round that cannot ask starts nothing.
+ * Not knowing what is open is what bought the 04:33 session. An idle lane
+ * costs ten minutes of sleep, so a repository the runner cannot ask about
+ * starts nothing — and the one line that says so is the repository's, written
+ * where the question was asked.
  */
 test('a repository GitHub could not be asked starts nothing, and says so', async () => {
   const f = fixture({
@@ -553,11 +605,14 @@ test('a repository GitHub could not be asked starts nothing, and says so', async
     prsFail: ['memoro'], session: okSession(), gh: { 'mc-run': { number: 5, title: 'Run' } },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  const world = runner.queue();
+  await runner.pass({ world });
   assert.deepEqual(f.calls.sessions.map((c) => c.cwd), ['/w/mc-run/memoro-cli'], 'the other repository is unaffected');
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /memoro: GitHub could not be asked what is open \(gh: not logged in\)/u);
-  assert.match(log, /alpha: what is open on GitHub is unknown this round, skip/u);
+  assert.doesNotMatch(log, /next — alpha/u, 'nothing of memoro\'s is picked at all');
+  // And the last guard still answers in the word the reading answers in.
+  assert.equal(await runner.runStep('alpha', world), 'skipped:prs-unknown');
 });
 
 test('the round asks GitHub once per repository, beside the fetch it already pays for', async () => {
@@ -608,7 +663,7 @@ test('a PLAN.json whose two sides changed different steps is merged by the runne
     session: okSession(), gh: { c: { number: 90, title: 'Step two' } },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
 
   const merged = JSON.parse(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json']);
   assert.deepEqual(merged.steps.map((s) => [s.status, s.pr]), [['done', 601], ['ready', null]], "main's step 1 survived");
@@ -637,7 +692,7 @@ test('a PLAN.json whose two sides changed the same step is left in progress, wit
     session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
 
   assert.equal(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json'], three.branch, 'the file is untouched — a refusal writes nothing');
   assert.ok(!f.calls.git.some((c) => c[1] === 'add' && c.at(-1) === PLAN_AT), 'and stages nothing');
@@ -664,7 +719,7 @@ test('a conflicting merge of origin/main goes to the step session, with the file
     session: okSession(), gh: { c: { number: 93, title: 'The one step' } },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.equal(f.calls.sessions.length, 1, 'one session, not one for the merge and one for the step');
   const call = f.calls.sessions[0];
   assert.match(call.args[1], /^A `git merge origin\/main` is in progress in this worktree and stopped on\nconflicts in: docs\/project\/project_log\.md src\/a\.js/u);
@@ -714,7 +769,7 @@ test('a step session resolves the plan conflict it was handed and its work is ju
     session: (call) => { f.files[`/w/c/memoro/${PLAN_AT}`] = text(resolved); return okSession()(call); },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
 
   const [call] = f.calls.sessions;
   assert.match(call.args[1], /conflicts in: docs\/project\/prog\/c\/PLAN\.json/u);
@@ -755,7 +810,7 @@ test('a conflict outside the plan hands out the step main says, not the one HEAD
     session: okSession(), gh: { c: { number: 95, title: 'Step two' } },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
 
   assert.equal(f.calls.sessions.length, 1, "main's plan has a ready step, so the project gets its session");
   const [call] = f.calls.sessions;
@@ -784,7 +839,7 @@ test('a conflict with no step to hand it to is aborted, and the files are named'
     session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.equal(f.calls.sessions.length, 0, 'no session is launched on a half-merged tree');
   assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
   const log = f.files['/w/runner/log/runner.log'];
@@ -819,7 +874,7 @@ test('a workarea that could not take main is recorded, with the files, and dropp
     session: okSession(),
   };
   const f = fixture(stuck);
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   const [entry] = JSON.parse(f.files['/w/runner/unmergeable.json']);
   assert.deepEqual(
     [entry.project, entry.repo, entry.worktree, entry.files, entry.since],
@@ -847,7 +902,7 @@ test('a workarea that could not take main is recorded, with the files, and dropp
   // eight rounds of one condition is one thing standing still, not eight.
   const again = fixture({ ...stuck, now: '2026-08-29T12:00:00Z' });
   again.files['/w/runner/unmergeable.json'] = f.files['/w/runner/unmergeable.json'];
-  await createRunner({ deps: again.deps }).round({ once: true });
+  await createRunner({ deps: again.deps }).pass();
   assert.equal(JSON.parse(again.files['/w/runner/unmergeable.json'])[0].since, '2026-08-29T10:00:00Z');
 
   // And the round the workarea takes main, the entry goes — nobody has to
@@ -855,7 +910,7 @@ test('a workarea that could not take main is recorded, with the files, and dropp
   // waiting on hands that nothing is waiting for.
   const fixed = fixture({ ...stuck, conflicts: {}, areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } }, gh: { c: { number: 96 } } });
   fixed.files['/w/runner/unmergeable.json'] = f.files['/w/runner/unmergeable.json'];
-  await createRunner({ deps: fixed.deps }).round({ once: true });
+  await createRunner({ deps: fixed.deps }).pass();
   assert.deepEqual(JSON.parse(fixed.files['/w/runner/unmergeable.json']), []);
   assert.equal(fixed.calls.sessions.length, 1, 'and the project gets its step');
 });
@@ -873,7 +928,7 @@ test('a step session that leaves MERGE_HEAD behind has the merge aborted under i
     session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.equal(f.calls.sessions.length, 1);
   assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
   assert.match(f.files['/w/runner/log/runner.log'], /c: the session left the merge of origin\/main unfinished — merge aborted/u);
@@ -889,7 +944,7 @@ test('a workarea with no plan is not in the queue, and gets no step and no skip 
   const f = fixture({ areas: { fresh: { repo: 'memoro' } }, queue: 'fresh\n', session: okSession() });
   const runner = createRunner({ deps: f.deps });
   assert.deepEqual(runner.queue().names, [], 'queue.md named it; it has no plan, so it is not queued');
-  await runner.round();
+  await round(runner);
   assert.equal(f.calls.sessions.length, 0);
   assert.deepEqual(runRows(f.files).filter((r) => r.kind !== 'helper'), []);
   const log = f.files['/w/runner/log/runner.log'] || '';
@@ -906,7 +961,7 @@ test('a quota answer is logged as quota, not merged, and the runner sleeps 30 mi
   const f = fixture({ plans: { memoro: { q: ready } }, gh: { q: { number: 5 } }, session: () => ({ status: 1, stdout: JSON.stringify({ subtype: 'success', num_turns: 1, result: "You've hit your weekly limit" }), stderr: '', timedOut: false }) });
   f.deps.sleep = async (ms) => { slept.push(ms); };
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\n/u);
   assert.equal(f.calls.rounds.length, 0);
   assert.ok(slept.includes(30 * 60 * 1000));
@@ -915,7 +970,7 @@ test('a quota answer is logged as quota, not merged, and the runner sleeps 30 mi
 test('a timed-out session is logged as timeout with exit 142', async () => {
   const f = fixture({ plans: { memoro: { t: ready } }, session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true }) });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\ttimeout\t-\n/u);
 });
 
@@ -934,7 +989,7 @@ test('a red gate leaves the pull request open and says so in the row', async () 
     rounds: { 9: { ok: false, merged: false, merged_into: null, stopped_at: 'red', reason: 'two tests the change reaches are red' } },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.equal(f.calls.rounds.length, 1);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,gate-red\t\d+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /m: #9 left open — two tests the change reaches are red/u);
@@ -959,7 +1014,7 @@ test('a pull request the gate would not land is written to held.json with its re
     plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
     rounds: { 9: { ok: false, merged: false, merged_into: null, stopped_at: 'red', reason: 'two tests the change reaches are red' } },
   });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.deepEqual(heldFile(f.files), [{
     project: 'm', repo: 'memoro', pr: 9, branch: 'm',
     reason: 'two tests the change reaches are red', note: 'open,gate-red',
@@ -1016,7 +1071,7 @@ test('a session that changed more of the plan than its step is held, with the pr
       return okSession()(call);
     },
   });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.equal(f.calls.rounds.length, 0, 'a trespassing session lands nothing');
   assert.deepEqual(heldFile(f.files).map((entry) => [entry.project, entry.pr, entry.note, entry.reason]), [[
     'm', 9, 'plan-trespass',
@@ -1029,7 +1084,7 @@ test('a session that timed out with its pull request open is held too', async ()
     plans: { memoro: { t: ready } }, gh: { t: { number: 5 } },
     session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true }),
   });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.note, entry.reason]),
     [[5, 'timeout', 'the session timed out with the pull request open']]);
 });
@@ -1066,7 +1121,7 @@ test('a held pull request runs a repair session, told the pull request, the bran
     red: ['tests/a.test.js > one', 'tests/b.test.js > two'],
     gates: [{ name: 'sql:pr-ci', output: 'admission missing for 0042_x.sql' }],
   })]);
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
 
   assert.equal(f.calls.sessions.length, 1, 'the open pull request is a repair, not a skip');
   const [call] = f.calls.sessions;
@@ -1107,7 +1162,7 @@ test('a pull request held because it conflicts with main gets its repair, told t
     [heldEntry({ reason: '#9 conflicts with origin/main — CONFLICT (content): Merge conflict in canon/roles/step.md' })],
     { conflicts: { m: ['canon/roles/reconcile.md', 'canon/roles/step.md'] } },
   );
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
 
   assert.equal(f.calls.sessions.length, 1, 'a conflicted sync no longer refuses the repair it is owed');
   const [call] = f.calls.sessions;
@@ -1126,11 +1181,17 @@ test('a pull request held because it conflicts with main gets its repair, told t
 
 test('a pull request still held after its repair waits for the brief — no second repair', async () => {
   const f = heldRound([heldEntry({ repairs: 1 })]);
-  await createRunner({ deps: f.deps }).round({ once: true });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  await runner.pass({ world });
   assert.equal(f.calls.sessions.length, 0, 'one repair per pull request, and no loop');
   assert.equal(f.calls.rounds.length, 0);
-  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 is held before merge after a repair — the brief's/u);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /next — m /u, 'it is waiting on a person, so it is not picked');
   assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.repairs]), [[9, 1]]);
+  // Driven straight at the machine — where `mc status` and the brief read the
+  // same fact — the word and the sentence are still there.
+  assert.equal(await runner.runStep('m', world), 'skipped:held-after-repair');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 is held before merge after a repair — the brief's/u);
 });
 
 /**
@@ -1142,7 +1203,7 @@ test('a pull request still held after its repair waits for the brief — no seco
  */
 test('a kind whose role file is missing is still skipped, not launched on the shared text alone', async () => {
   const f = heldRound([heldEntry()], { roles: false });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.equal(f.calls.sessions.length, 0, 'no role file, no session');
   assert.match(f.files['/w/runner/log/runner.log'], /m: canon\/roles\/repair\.md is missing — skip/u);
 });
@@ -1151,7 +1212,7 @@ test('a repair that stays red is held again, with the gate\'s new reason and its
   const f = heldRound([heldEntry()], {
     rounds: { 9: { ok: false, merged: false, merged_into: null, stopped_at: 'red', reason: 'one test is still red' } },
   });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.equal(f.calls.sessions.length, 1);
   assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.reason, entry.repairs, entry.since]),
     [[9, 'one test is still red', 1, '2026-09-03T10:00:00Z']], 'held again keeps how long it has stood still, and that it had its repair');
@@ -1169,7 +1230,7 @@ test('a repair of a plan trespass is judged against origin/main, so a trespass i
   const f = heldRound([heldEntry({ note: 'plan-trespass', reason: 'the session changed more of the plan than its step: goal: a step session does not change it' })], {
     areas: { m: { repo: 'memoro', programme: 'prog', plan: JSON.stringify(trespassed, null, 2) } },
   });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.match(f.calls.sessions[0].args[1], /The problems above are the plan boundary/u);
   assert.equal(f.calls.rounds.length, 0, 'a trespass the repair left in place lands nothing');
   assert.equal(runRows(f.files)[0].note, 'plan-trespass');
@@ -1188,7 +1249,7 @@ test('a repair that undoes the trespass lands', async () => {
     f.files[path] = ready;
     return okSession()(call);
   };
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.equal(runRows(f.files)[0].note, 'success,merged');
   assert.deepEqual(heldFile(f.files), []);
 });
@@ -1199,7 +1260,7 @@ test('a merge that landed somewhere other than main is not recorded as merged', 
     rounds: { 11250: { ok: true, merged: true, merged_into: 'msr-track-3-capture-command', off_default: true } },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,off-main\t\d+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /#11250 was merged into msr-track-3-capture-command, NOT main/u);
 });
@@ -1209,7 +1270,7 @@ test('a pull request aimed at a branch that is nobody head lands nothing', async
     plans: { memoro: { m: ready } }, gh: { m: { number: 11250, base: 'msr-track-3-capture-command' } }, session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.equal(f.calls.rounds.length, 0, 'nothing is handed to the merge round');
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,not-a-stack\t\d+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /#11250 is aimed at msr-track-3-capture-command — none of them is aimed at main — landing none of them/u);
@@ -1225,7 +1286,7 @@ test('a stack is landed bottom first, each one above it retargeted and replayed'
     session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.deepEqual(f.calls.rounds.map((c) => c.pr), [1, 2, 3], 'bottom first, whatever order GitHub listed them in');
   assert.deepEqual(f.calls.rounds.map((c) => c.repoPath), ['/home/memoro', '/home/memoro', '/home/memoro']);
   assert.deepEqual(f.calls.git.filter((c) => c[1] === 'rebase').map((c) => c.slice(1)), [
@@ -1243,7 +1304,7 @@ test('a stacked branch that conflicts after the one below lands is aborted, not 
     session: okSession(), rebaseFails: ['m-2'], conflicts: { m: ['a.js'] },
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.deepEqual(f.calls.rounds.map((c) => c.pr), [1], 'the one above it is not handed to the gate');
   assert.ok(f.calls.git.some((c) => c[1] === 'rebase' && c[2] === '--abort'));
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,stack-stopped\t\d+\n/u);
@@ -1257,7 +1318,7 @@ test('two pull requests aimed at main are not a stack and nothing lands', async 
     session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.equal(f.calls.rounds.length, 0);
   assert.match(f.files['/w/runner/log/runner.log'], /#1 and #2 are both aimed at main — two stacks, not one/u);
 });
@@ -1271,7 +1332,7 @@ test('tool and model come from the project frontmatter', async () => {
   const codexPlan = plan({ runner: { tool: 'codex', model: 'o3', budget_minutes: 20 } });
   const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => ({ status: 0, stdout: '', stderr: '', timedOut: false }) });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   const [call] = f.calls.sessions;
   assert.equal(call.bin, '/bin/codex');
   assert.equal(call.cwd, '/w/cx/memoro-cli');
@@ -1283,7 +1344,7 @@ test('a codex plan that names no model gets none, and the log says so', async ()
   const codexPlan = plan({ runner: { tool: 'codex' } });
   const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => ({ status: 0, stdout: '', stderr: '', timedOut: false }) });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   const [call] = f.calls.sessions;
   // `opus` is claude's alias; codex would die on it before reading the plan.
   assert.equal(call.args.includes('--model'), false);
@@ -1295,10 +1356,10 @@ test('STOP file: the loop exits after the step it is in, and refuses to start wh
   const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
   const inner = f.deps.session;
   f.deps.session = (call) => { f.files['/w/runner/STOP'] = ''; return inner(call); };
-  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(await runLoop({ deps: f.deps }), 0);
   assert.equal(f.calls.sessions.length, 1);
   assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP after a/u);
-  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 2);
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 2);
 });
 
 /**
@@ -1311,7 +1372,7 @@ test('STOP file: the loop exits after the step it is in, and refuses to start wh
 test('runLoop: a second runner refuses to start while the first is alive, and names the pid', async () => {
   const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [7777] });
   f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777, started: '2026-08-29T06:33:25Z' }, null, 2)}\n`;
-  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 2);
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 2);
   assert.equal(f.calls.sessions.length, 0, 'a refused runner started a step anyway');
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /a runner is already running — pid 7777, started 2026-08-29T06:33:25Z/u);
@@ -1334,7 +1395,7 @@ test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', 
   const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
   f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777, started: '2026-08-29T06:33:25Z' }, null, 2)}\n`;
   f.files['/w/runner/current-memoro.json'] = '{}';
-  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
   assert.equal(f.calls.sessions.length, 1, "a killed runner's leftovers stopped the next one from running");
   assert.match(f.files['/w/runner/log/runner.log'], /cleared runner\.json — the pid it named \(7777\) is gone/u);
   assert.equal('/w/runner/current-memoro.json' in f.files, false, 'the killed runner\'s in-flight file outlived it');
@@ -1342,9 +1403,9 @@ test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', 
 
 /**
  * `mc run --update` from the runner's side: the file is read where STOP is
- * read — between rounds — and the round in flight is never cut short for it.
+ * read — between two picks — and the step in flight is never cut short for it.
  */
-test('UPDATE file: the loop finishes its round, then hands over to a new process', async () => {
+test('UPDATE file: the loop finishes the step it is in, then hands over to a new process', async () => {
   const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
   const inner = f.deps.session;
   f.deps.session = (call) => { f.files['/w/runner/UPDATE'] = ''; return inner(call); };
@@ -1354,11 +1415,11 @@ test('UPDATE file: the loop finishes its round, then hands over to a new process
     say('update: handed over to pid 9001 — this runner is done');
     return { ok: true, pid: 9001 };
   };
-  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
-  // One step ran, the round finished, and only then was the handover made.
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  // One step ran, it finished, and only then was the handover made.
   assert.equal(f.calls.sessions.length, 1);
   assert.deepEqual(handovers, ['/w/runner/UPDATE']);
-  assert.match(f.files['/w/runner/log/runner.log'], /memoro: round 1 done \(1 ran\)\n[\s\S]*handed over to pid 9001/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /a: step done[\s\S]*handed over to pid 9001/u);
   // The runner it handed to has written its own runner.json by now: this one
   // must not remove it on the way out.
   assert.equal('/w/runner/runner.json' in f.files, false);
@@ -1384,22 +1445,22 @@ test('UPDATE file: the successor starts with no refusal — runner.json is clear
     successor = runLoop({ once: true, deps: { ...f.deps, pid: 9001, session: inner } });
     return 9001;
   };
-  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(await runLoop({ deps: f.deps }), 0);
   assert.equal(holderAtRespawn, null, 'the successor was started while runner.json still named the runner handing over');
   assert.equal(await successor, 0, 'the successor refused to start');
   const log = f.files['/w/runner/log/runner.log'];
   assert.equal(/a runner is already running/u.test(log), false, 'the handover tripped the holder refusal');
   // `respawn` starts the successor before `handOver` gets to say it handed
   // over, so the successor's own start line is the earlier of the two.
-  assert.match(log, /runner start \(mc run, merge=1 rounds=0 once=1\)[\s\S]*handed over to pid 9001/u);
+  assert.match(log, /runner start \(mc run, merge=1 once=1\)[\s\S]*handed over to pid 9001/u);
 });
 
 test('UPDATE file: a handover that does not start keeps this runner going', async () => {
   const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), runs: null });
   f.files['/w/runner/UPDATE'] = '';
   f.deps.handOver = async ({ say }) => { say('update: the new runner did not start'); return { ok: false }; };
-  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
-  assert.match(f.files['/w/runner/log/runner.log'], /runner exit after 1 round/u);
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /runner exit — the update did not hand over/u);
 });
 
 /**
@@ -1416,7 +1477,7 @@ test('a landing that changed src/mc/ writes UPDATE itself', async () => {
     plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
     prFiles: { 9: ['src/mc/plan-schema.js', 'tests/mc/plan-schema.test.js'] },
   });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\n/u, 'it landed as usual');
   assert.ok('/w/runner/UPDATE' in f.files, 'the runner merged its own code and asked for nothing');
   assert.match(f.files['/w/runner/log/runner.log'], /m: #9 changed mc's own code \(src\/mc\/plan-schema\.js\) — UPDATE written/u);
@@ -1433,7 +1494,7 @@ test('a landing that changed canon/ writes UPDATE too — the roles are quoted i
     plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
     prFiles: { 9: ['canon/roles/step.md'] },
   });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.ok('/w/runner/UPDATE' in f.files);
 });
 
@@ -1445,7 +1506,7 @@ test('a landing that touched neither src/mc/ nor canon/ writes nothing', async (
     // process, and most memoro-cli landings are these.
     prFiles: { 9: ['docs/technical/mc-run.md', 'src/mcp/server.js', 'canonical.md', 'tests/mc/run.test.js'] },
   });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\n/u);
   assert.equal('/w/runner/UPDATE' in f.files, false, 'a handover was asked for that nothing needed');
   assert.equal(/UPDATE written/u.test(f.files['/w/runner/log/runner.log']), false);
@@ -1457,7 +1518,7 @@ test('a landing whose files GitHub will not name asks for no update, and says wh
   f.deps.gh = (cwd, args) => (args[1] === 'view' && args.includes('files')
     ? { ok: false, stdout: '', stderr: 'gh: not logged in' }
     : inner(cwd, args));
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.equal('/w/runner/UPDATE' in f.files, false);
   assert.match(f.files['/w/runner/log/runner.log'], /could not be asked which files #9 changed \(gh: not logged in\) — no update requested/u);
 });
@@ -1469,12 +1530,12 @@ test('STOP already written: the code lands, and the next runner reads it because
   });
   const inner = f.deps.session;
   f.deps.session = (call) => { f.files['/w/runner/STOP'] = ''; return inner(call); };
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.equal('/w/runner/UPDATE' in f.files, false, 'an UPDATE left for whoever starts the next runner by hand');
   assert.match(f.files['/w/runner/log/runner.log'], /STOP is written — the next runner starts on it anyway/u);
 });
 
-test('the loop hands over after a round that landed mc own code, with nobody typing --update', async () => {
+test('the loop hands over after a step that landed mc own code, with nobody typing --update', async () => {
   const f = fixture({
     plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
     prFiles: { 9: ['src/mc/run.js'] },
@@ -1485,25 +1546,33 @@ test('the loop hands over after a round that landed mc own code, with nobody typ
     say('update: handed over to pid 9001 — this runner is done');
     return { ok: true, pid: 9001 };
   };
-  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
-  assert.deepEqual(handovers, ['/w/runner/UPDATE'], 'the round boundary reader never saw the flag');
-  // The round finished first: the flag is written while the landing happens
-  // and read between rounds, never mid-session.
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.deepEqual(handovers, ['/w/runner/UPDATE'], 'the reader between two picks never saw the flag');
+  // The step finished first: the flag is written while the landing happens and
+  // read between two picks, never mid-session.
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /UPDATE written[\s\S]*round 1 done \([0-9]+ ran\)\n.*handed over to pid 9001/u);
+  assert.match(log, /UPDATE written[\s\S]*m: step done[\s\S]*handed over to pid 9001/u);
   // Once, however many times the lane came back to the same project: the
   // flag is a file, and a second write would be a second line saying so.
   assert.equal(log.match(/UPDATE written/gu).length, 1);
 });
 
-test('runLoop: --rounds 1 does one pass and exits; --once exits after the first step', async () => {
-  const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
-  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
-  assert.equal(f.calls.sessions.length, 2);
-  assert.match(f.files['/w/runner/log/runner.log'], /round 1 done \(2 ran\)\n.*runner exit after 1 round/u);
+/**
+ * `--once` is one step: one lane over the whole queue, in Martin's order, and
+ * out. `--rounds N` is gone with the round (2026-09-08) — the flag is answered
+ * by name in `parseRunArgs`, and this is what is left of the pair.
+ */
+test('runLoop: --once takes the first runnable project and exits', async () => {
   const g = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
   assert.equal(await runLoop({ once: true, deps: g.deps }), 0);
-  assert.equal(g.calls.sessions.length, 1);
+  assert.deepEqual(g.calls.sessions.map((call) => call.cwd), ['/w/a/memoro']);
+  assert.match(g.files['/w/runner/log/runner.log'], /once: next — a \(step 1\/1\)\n[\s\S]*once: exiting/u);
+
+  // Nothing to run is not a failure and not a silence: the one line says so.
+  const empty = fixture({ plans: { memoro: {} }, session: okSession() });
+  assert.equal(await runLoop({ once: true, deps: empty.deps }), 0);
+  assert.equal(empty.calls.sessions.length, 0);
+  assert.match(empty.files['/w/runner/log/runner.log'], /once: nothing to run/u);
 });
 
 test('current-<repo>.json exists only while the step is in flight, and runner.json only while the loop runs', async () => {
@@ -1526,7 +1595,7 @@ test('the current file carries the project frontmatter, and is removed even when
   const codexPlan = plan({ runner: { tool: 'codex', model: 'o3', budget_minutes: 20 } });
   const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => { throw new Error('boom'); } });
   const runner = createRunner({ deps: f.deps });
-  await assert.rejects(runner.round({ once: true }), /boom/u);
+  await assert.rejects(runner.pass(), /boom/u);
   assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current-memoro-cli.json']), {
     name: 'cx', kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', budget_minutes: 20,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
@@ -1562,7 +1631,7 @@ test('two lanes: a memoro step and a memoro-cli step are in flight at the same t
     },
   });
   const guard = setTimeout(release, 5000);
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   clearTimeout(guard);
 
   assert.deepEqual(seen.at(-1), ['/w/alpha/memoro', '/w/beta/memoro-cli'], 'both sessions were running at once');
@@ -1570,28 +1639,34 @@ test('two lanes: a memoro step and a memoro-cli step are in flight at the same t
   const during = f.duringSession.at(-1);
   assert.equal(JSON.parse(during['/w/runner/current-memoro.json']).name, 'alpha');
   assert.equal(JSON.parse(during['/w/runner/current-memoro-cli.json']).name, 'beta');
-  assert.match(f.files['/w/runner/log/runner.log'], /lanes: memoro \(1\), memoro-cli \(1\)/u);
+  // Each lane says what it took, and the two lines are the two lanes.
+  assert.match(f.files['/w/runner/log/runner.log'], /memoro: next — alpha[\s\S]*memoro-cli: next — beta/u);
 });
 
-test('the queue is split by repository, and Martin\'s order holds within a lane', () => {
+/**
+ * Each lane picks from its own repository, in the one order there is: Martin's
+ * names first, then alphabetical. The queue used to be *split* into lanes by
+ * repository and then sliced between them by index (`splitLanes`, and
+ * `index % count === lane`); both are gone — a lane asks for the next name it
+ * can run, and the claim is what keeps two lanes off one project.
+ */
+test('each lane picks from its own repository, and Martin\'s order holds within it', () => {
   const f = fixture({
     queue: 'mc-run\nalpha\n',
     plans: { memoro: { alpha: ready, gamma: ready }, 'memoro-cli': { 'mc-run': ready } },
   });
   const runner = createRunner({ deps: f.deps });
-  const { names, plans } = runner.queue();
-  assert.deepEqual(names, ['mc-run', 'alpha', 'gamma']);
-  assert.deepEqual(runner.splitLanes(names, plans), [
-    { repo: 'memoro-cli', names: ['mc-run'] },
-    { repo: 'memoro', names: ['alpha', 'gamma'] },
-  ]);
+  const world = runner.queue();
+  assert.deepEqual(world.names, ['mc-run', 'alpha', 'gamma']);
+  assert.equal(runner.nextStep({ repo: 'memoro', world }).name, 'alpha');
+  assert.equal(runner.nextStep({ repo: 'memoro', world, passed: new Set(['alpha']) }).name, 'gamma');
+  assert.equal(runner.nextStep({ repo: 'memoro-cli', world }).name, 'mc-run');
 });
 
-test('one repository with ready plans is one lane, and a round is what it was', async () => {
+test('one repository with ready plans is one lane, and its steps run in order', async () => {
   const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/a/memoro', '/w/b/memoro']);
-  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /lanes:/u, 'nothing to say about lanes when there is one');
 });
 
 /**
@@ -1607,7 +1682,7 @@ test('the plan is asked before git: only the ready project\'s workarea is touche
   const plans = { memoro: { zeta: ready } };
   for (const name of names) plans.memoro[name] = stopped;
   const f = fixture({ plans, session: okSession() });
-  const r = await createRunner({ deps: f.deps }).round();
+  const r = await round(createRunner({ deps: f.deps }));
 
   assert.equal(r.ran, 1);
   assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/zeta/memoro']);
@@ -1615,79 +1690,73 @@ test('the plan is asked before git: only the ready project\'s workarea is touche
   const touched = [...new Set(f.calls.git.map((call) => call[0]).filter((cwd) => cwd.startsWith('/w/')))];
   assert.deepEqual(touched, ['/w/zeta/memoro'], `git was asked about ${touched.join(', ')}`);
   assert.deepEqual(f.calls.added, ['zeta'], 'no workarea is made for a project the plan already refuses');
-  // And the twenty are one line, not twenty.
+  // And the twenty are no lines at all — not the twenty they were before
+  // 2026-09-02, and not the `skipped 20 (blocked 20)` line that replaced them
+  // and was written again every ten minutes for as long as they stayed blocked.
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /skipped 20 \(blocked 20\)/u);
+  assert.doesNotMatch(log, /skipped \d+ \(/u);
   for (const name of names) assert.doesNotMatch(log, new RegExp(`${name}: `, 'u'));
 });
 
 /**
- * The filter is re-applied, not computed once: `runLane` re-reads the plans
- * after a step merges, and the plan that merge advanced is the one that
- * decides whether the lane stays.
+ * The world is re-read between picks, so the plan a step advanced is the one
+ * the next pick obeys. A lane used to *stay* on a project it had merged, for
+ * up to eight steps, and re-read the plans to decide whether to keep staying;
+ * the order does that now — a project whose next step is ready is still at the
+ * head of it — and a plan the step stopped is simply not picked again.
  */
-test('a plan that stopped while the lane stayed on it is not stepped again', async () => {
-  const plans = { memoro: { go: ready } };
+test('a plan the step stopped is not picked again', async () => {
+  const plans = { memoro: { go: ready, other: plan({ status: 'blocked' }) } };
   const f = fixture({
     plans,
     gh: { go: { number: 7 } },
     // What the step did: the plan it edited says `blocked` from now on.
     session: (call) => { plans.memoro.go = plan({ status: 'blocked' }); return okSession()(call); },
   });
-  const r = await createRunner({ deps: f.deps }).round();
+  const r = await round(createRunner({ deps: f.deps }));
 
   assert.equal(r.ran, 1);
-  assert.equal(f.calls.sessions.length, 1, 'the lane stayed on a project whose plan had stopped');
+  assert.equal(f.calls.sessions.length, 1, 'a stopped plan bought a second session');
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /skipped 1 \(blocked 1\)/u, 'the lane let go, counted like any other refusal on the plan');
+  assert.equal((log.match(/next — go /gu) || []).length, 1, 'picked once, and not again');
   assert.doesNotMatch(log, /staying on go/u);
 });
 
 /**
- * The drain reaches inside a round: a lane that just merged a step lets go of
- * its project when an UPDATE is pending, instead of chaining up to eight more
- * steps on it while every other lane waits for the quiet moment.
+ * What a lane *says* when it can start nothing. A plan-shaped refusal is
+ * already drawn by `mc status`'s NEXT, from the same `kindFor` — so the
+ * twenty-first `blocked on decision plan-review` in runner.log is a line
+ * nobody reads, and it buries the ones somebody must (Martin, 2026-09-02).
+ * The `skipped 20 (blocked 20)` line that replaced those twenty was the same
+ * fault at one line a round: memoro's two lanes each wrote one every ten
+ * minutes for two days in September and neither ever said anything new.
  */
-test('a lane does not stay on its project after a merge once an UPDATE is pending', async () => {
-  const plans = { memoro: { go: ready } };
-  const f = fixture({ plans, gh: { go: { number: 7 } }, session: okSession() });
-  // The step's own landing is what writes UPDATE in the real case; here the
-  // flag appears while the step runs, as it would from `mc run --update`.
-  const inner = f.deps.session;
-  f.deps.session = (call) => { f.files['/w/runner/UPDATE'] = ''; return inner(call); };
-  const r = await createRunner({ deps: f.deps }).round();
-
-  assert.equal(r.ran, 1);
-  assert.equal(f.calls.sessions.length, 1, 'the lane stayed on go with an UPDATE pending');
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /go: UPDATE is pending — the lane lets go of go/u);
-  assert.doesNotMatch(log, /staying on go/u);
-});
-
-/**
- * What a round *says*. A plan-shaped refusal is already drawn by `mc status`'s
- * QUEUE, from the same `kindFor` — so the twenty-first `blocked on decision
- * plan-review` in runner.log is a line nobody reads, and it buries the ones
- * somebody must (Martin, 2026-09-02).
- */
-test('a round that can start nothing says so in one line, not one line per project', async () => {
+test('a lane that can start nothing says so once, and names nobody', async () => {
   const stopped = plan({ status: 'blocked' });
   const names = Array.from({ length: 20 }, (unused, i) => `stopped-${String(i + 1).padStart(2, '0')}`);
   const plans = { memoro: {} };
   for (const name of names) plans.memoro[name] = stopped;
   const f = fixture({ plans, session: okSession() });
-  const r = await createRunner({ deps: f.deps }).round();
+  const runner = createRunner({ deps: f.deps });
+  const r = await round(runner);
 
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   const lines = (f.files['/w/runner/log/runner.log'] || '').trim().split('\n');
-  const summary = lines.filter((line) => /skipped \d/u.test(line));
-  assert.equal(summary.length, 1, `one line, not ${summary.length}`);
-  assert.match(summary[0], /skipped 20 \(blocked 20\)$/u);
-  for (const name of names) assert.doesNotMatch(lines.join('\n'), new RegExp(`${name}: `, 'u'));
+  assert.deepEqual(lines.filter((line) => /skipped \d/u.test(line)), [], 'no round summary is left to write');
+  for (const name of names) assert.doesNotMatch(lines.join('\n'), new RegExp(`${name}`, 'u'));
+
+  // And what the lane loop itself would say, once, before it slept — the whole
+  // of a runner.log line for an idle repository.
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
 });
 
-test('the reasons are counted in the shape the page uses, and a plan that does not parse is named', async () => {
+/**
+ * A plan on origin/main that does not parse is not counted in a log line
+ * either: it goes to `~/mc/runner/unreadable-plans.md`, where somebody looks,
+ * and the pick simply never reaches it.
+ */
+test('a plan that does not parse is filed, not counted in a line', async () => {
   const f = fixture({
     plans: {
       memoro: {
@@ -1698,12 +1767,14 @@ test('the reasons are counted in the shape the page uses, and a plan that does n
     },
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  const r = await round(createRunner({ deps: f.deps }));
 
-  // Reasons in the order the queue met them; `done` is not among them because
-  // a plan that says done is archived before the lane starts.
+  assert.equal(r.ran, 0);
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /skipped 3 \(unparseable 2, blocked 1\) — the plans that do not parse: alsobroken, broken$/mu);
+  assert.doesNotMatch(log, /skipped \d/u);
+  const table = f.files['/w/runner/unreadable-plans.md'];
+  assert.match(table, /\| alsobroken \| memoro \|/u);
+  assert.match(table, /\| broken \| memoro \|/u);
 });
 
 /**
@@ -1731,16 +1802,20 @@ test('a skip that is about the machine keeps its own line: dirty, in flight, unp
     ? { ok: false, stdout: '', stderr: 'no' }
     : git(cwd, args));
 
-  const r = await createRunner({ deps: f.deps }).round();
+  const r = await round(createRunner({ deps: f.deps }));
 
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /dirt: dirty worktree \(.+\) — skipped every round/u);
-  assert.match(log, /flight: #11246 is open \(Step 2\) — not starting a step/u);
   assert.match(log, /stuck: stuck has landed and stuck-2 could not be made, skip/u);
-  // And the one refusal that is on the plan is the only one counted.
-  assert.match(log, /skipped 1 \(blocked 1\)$/mu);
+  // The two that are about this machine are met by `runStep`, one line each,
+  // and the lane moves past them to the next name rather than stopping there.
+  assert.deepEqual((log.match(/next — (\w+)/gu) || []), ['next — dirt', 'next — stuck']);
+  // Work in flight and a blocked plan are neither: `flight` has an open pull
+  // request and `wait` is stopped in its own plan, so the pick never reaches
+  // either and the page is where both show.
+  assert.doesNotMatch(log, /flight:|wait:/u);
 });
 
 /**
@@ -1771,7 +1846,7 @@ test('a quota answer in one lane pauses the other, and there is one sleep, not t
     await new Promise((resolve) => { setTimeout(resolve, 5); });
     events.push('woke');
   };
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
 
   assert.equal(events.filter((event) => event === 'sleep').length, 1, 'one sleep for both lanes');
   assert.ok(events.indexOf('start b') > events.indexOf('woke'),
@@ -1786,7 +1861,7 @@ test('STOP ends both lanes after the step each is in', async () => {
   });
   const inner = f.deps.session;
   f.deps.session = async (call) => { f.files['/w/runner/STOP'] = ''; return inner(call); };
-  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(await runLoop({ deps: f.deps }), 0);
   assert.equal(f.calls.sessions.length, 2, 'one step in each lane, and no more');
   assert.deepEqual(f.calls.sessions.map((call) => call.cwd).sort(), ['/w/a/memoro', '/w/b/memoro-cli']);
   assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP after a\b/u);
@@ -1804,7 +1879,7 @@ test('STOP ends both lanes after the step each is in', async () => {
 test('the collect runs once per calendar day, logged as kind helper with helper in the name', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
   const runner = createRunner({ deps: f.deps });
-  await runner.round();
+  await round(runner);
   const first = runRows(f.files).filter((r) => r.kind === 'helper');
   // One row per repository: memoro's production is the deployed service,
   // memoro-cli's is this machine, and a single row could not say which of
@@ -1823,7 +1898,7 @@ test('the collect runs once per calendar day, logged as kind helper with helper 
   assert.equal(first[0].turns, '-', 'no model runs in the collect half');
   assert.deepEqual(f.calls.collects.map((c) => c.repo), ['memoro', 'memoro-cli']);
 
-  await runner.round();
+  await round(runner);
   assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 2, 'a second round the same day does not run it again');
   assert.equal(f.calls.collects.length, 2);
   assert.ok(f.log.some((line) => /already ran today/u.test(line)) === false, 'the gate is silent — nobody reads a skip line');
@@ -1831,12 +1906,12 @@ test('the collect runs once per calendar day, logged as kind helper with helper 
 
 test('the helper waits for 05:00Z, and runs in the first round after it', async () => {
   const early = fixture({ now: '2026-08-29T04:59:00Z' });
-  await createRunner({ deps: early.deps }).round();
+  await round(createRunner({ deps: early.deps }));
   assert.equal(early.calls.collects.length, 0);
   assert.equal(runRows(early.files).length, 0);
 
   const late = fixture({ now: '2026-08-29T05:00:00Z' });
-  await createRunner({ deps: late.deps }).round();
+  await round(createRunner({ deps: late.deps }));
   assert.equal(late.calls.collects.length, 2, 'both repositories, once the day has started');
 });
 
@@ -1844,7 +1919,7 @@ test('yesterday\'s helper row does not count as today\'s', async () => {
   const yesterday = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n'
     + '2026-08-28T06:00:00Z\thelper\thelper\t0\t120\t-\t3\t-\t-\t-\t-\t-\tsuccess,0-proposals\n';
   const f = fixture({ runs: yesterday });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.equal(f.calls.collects.length, 2);
   assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 3, 'yesterday\'s one row plus today\'s two');
 });
@@ -1856,13 +1931,13 @@ test('yesterday\'s helper row does not count as today\'s', async () => {
 test('a failed collect is logged and never retried within the day', async () => {
   const f = fixture({ collect: async () => { throw new Error('wrangler is not logged in'); } });
   const runner = createRunner({ deps: f.deps });
-  await runner.round();
+  await round(runner);
   const rows = runRows(f.files).filter((r) => r.kind === 'helper');
   assert.deepEqual(rows.map((r) => r.note), ['collect-failed,memoro', 'collect-failed,memoro-cli']);
   assert.deepEqual(rows.map((r) => r.exit), ['1', '1']);
   assert.ok(f.log.some((line) => /memoro: the collect step failed — wrangler is not logged in/u.test(line)));
 
-  await runner.round();
+  await round(runner);
   assert.equal(f.calls.collects.length, 2, 'both were tried once; neither is retried today');
 });
 
@@ -1879,7 +1954,7 @@ test('a repository whose collect throws does not cost the other its digest', asy
       return { path: '/w/intake/errors-memoro-cli-2026-08-29.md', text: '# mc itself', repo: 'memoro-cli', data: { delta: { first: true, fingerprints: [], failing: [] }, errors: { rows: [] }, notes: [] } };
     },
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   const rows = runRows(f.files).filter((r) => r.kind === 'helper');
   assert.deepEqual(rows.map((r) => r.note), ['collect-failed,memoro', 'success,memoro-cli,first-digest']);
   assert.ok(f.log.some((line) => /memoro: the collect step failed/u.test(line)));
@@ -1887,7 +1962,7 @@ test('a repository whose collect throws does not cost the other its digest', asy
 
 test('--once is one step, no collect and no drain', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } }, inbox: ['errors-memoro-2026-08-28.md'] });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.equal(f.calls.collects.length, 0, '--once exists to watch one step, not to call production');
   assert.equal(f.calls.turns.length, 0);
   assert.equal(runRows(f.files).filter((r) => r.kind !== 'step').length, 0);
@@ -1896,7 +1971,7 @@ test('--once is one step, no collect and no drain', async () => {
 test('a STOP file stops the collect and the drain as well as the steps', async () => {
   const f = fixture({ inbox: ['errors-memoro-2026-08-28.md'] });
   f.files['/w/runner/STOP'] = '';
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.equal(f.calls.collects.length, 0);
   assert.equal(f.calls.turns.length, 0);
 });
@@ -1996,17 +2071,17 @@ test('the drain runs every round until the inbox is empty, however the collect w
   });
   const runner = createRunner({ deps: f.deps });
 
-  await runner.round();
+  await round(runner);
   assert.equal(f.calls.collects.length, 0, 'today\'s collect has already run');
   assert.equal(f.calls.turns.length, 3, 'three a round, so a round stays bounded');
   assert.deepEqual(inboxLeft(f.files), ['d-2026-08-23.md']);
   assert.ok(f.log.some((line) => /intake: 1 file\(s\) still waiting/u.test(line)));
 
-  await runner.round();
+  await round(runner);
   assert.equal(f.calls.turns.length, 4);
   assert.deepEqual(inboxLeft(f.files), [], 'and it keeps going across rounds until nothing is left');
 
-  await runner.round();
+  await round(runner);
   assert.equal(f.calls.turns.length, 4, 'an empty inbox costs a listing and no turn');
   assert.equal(runRows(f.files).filter((r) => r.kind === 'intake').length, 4);
 });
@@ -2036,7 +2111,7 @@ test('a done plan is archived in the round it is read: directory removed, row wr
     projectLog: { memoro: LOG_HEAD },
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
 
   const wt = '/w/runner/archive/memoro';
   assert.deepEqual(f.calls.rm, ['docs/project/prog/over'], 'the project directory, and nothing else');
@@ -2063,7 +2138,7 @@ test('a row its close-out already wrote is kept: only the directory goes, and th
     projectLog: { 'memoro-cli': already },
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   const text = f.files['/w/runner/archive/memoro-cli/docs/project/project_log.md'];
   assert.equal(text, already, 'the row is preferred, never rewritten');
   assert.equal(text.split('\n').filter((line) => line.includes('| mc-ui |')).length, 1);
@@ -2077,7 +2152,7 @@ test('a programme left empty by its last project goes with it; the log and the p
     projectLog: { memoro: LOG_HEAD },
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   const wt = '/w/runner/archive/memoro';
   assert.deepEqual(f.calls.rm.sort(), ['docs/project/prog/one', 'docs/project/prog/two']);
   assert.deepEqual(Object.keys(f.files).filter((p) => p.startsWith(`${wt}/docs/project/prog/`)), [],
@@ -2093,7 +2168,7 @@ test('a project with no docs/technical note is recorded in intake, and archived 
     projectLog: { memoro: LOG_HEAD },
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rm, ['docs/project/prog/thin'], 'a thin note never stops an archive');
   const intake = f.files['/w/runner/undocumented-closures.md'];
   assert.match(intake, /# Projects archived with no docs\/technical\/ note/u);
@@ -2107,7 +2182,7 @@ test('an archive PR still open from an earlier round holds the next one off', as
     archive: { memoro: { openFromEarlierRound: 812 } },
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rm, [], 'nothing is removed twice');
   assert.ok(!f.calls.git.some((c) => c[1] === 'worktree' && c[2] === 'add'));
   assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro #812 is still open from an earlier round — not opening another/u);
@@ -2120,7 +2195,7 @@ test('both repositories archive in the same round, one PR each', async () => {
     archive: { memoro: { number: 901 }, 'memoro-cli': { number: 902 } },
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   const created = f.calls.gh.filter((c) => c[2] === 'create').map((c) => c[0]);
   assert.deepEqual(created.sort(), ['/w/runner/archive/memoro', '/w/runner/archive/memoro-cli']);
   assert.equal(f.calls.sessions.length, 0, 'nothing was ready, so nothing else happened');
@@ -2128,7 +2203,7 @@ test('both repositories archive in the same round, one PR each', async () => {
 
 test('--once is one step and no archiving', async () => {
   const f = fixture({ plans: { memoro: { over: done(), alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.deepEqual(f.calls.rm, [], '--once exists to watch one step, not to change main');
   assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/alpha/memoro']);
 });
@@ -2155,7 +2230,7 @@ test('a workarea whose plan left main this round is closed: worktree handed back
     runs: RUNS_HEAD + ranRow('over'),
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
 
   assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'worktree' && c[2] === 'remove' && c[3] === '/w/over/memoro'));
   assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'branch' && c[2] === '-D' && c[3] === 'over'));
@@ -2176,7 +2251,7 @@ test('a done workarea with an uncommitted change is kept, and says why', async (
     dirty: ['over'],
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
   assert.equal('/w/over/memoro/.git' in f.files, true, 'the checkout is untouched');
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — an uncommitted change/u);
@@ -2195,7 +2270,7 @@ test('a done workarea whose last step is still open is kept', async () => {
     runs: RUNS_HEAD + ranRow('over', 'success,open'),
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — the last run says success,open/u);
 });
@@ -2217,7 +2292,7 @@ test('a workarea whose plan an earlier round archived is closed on the strength 
     runs: RUNS_HEAD + ranRow('gone'),
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, ['/w/gone']);
   assert.match(f.files['/w/runner/log/runner.log'], /close: gone removed — worktree, branch gone/u);
   // ...and it is not also filed as a folder nobody can explain.
@@ -2238,7 +2313,7 @@ test('a folder sharing an archived name, with no runner step, is kept and filed 
     runs: RUNS_HEAD,
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
   assert.match(f.files['/w/runner/log/runner.log'], /close: gone kept — no runner step to point at/u);
 });
@@ -2252,7 +2327,7 @@ test('an archive PR that did not merge keeps the workarea: the plan is still on 
     runs: RUNS_HEAD + ranRow('over'),
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — its plan is still on main/u);
 });
@@ -2267,7 +2342,7 @@ test('a workarea no project explains is never removed, and is written to intake 
     landed: ['mc-repo'],
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, [], 'only Martin can say whether an unplanned workarea is finished');
   const intake = f.files['/w/runner/unplanned-workareas.md'];
   assert.match(intake, /# Workareas with no project on main/u);
@@ -2287,7 +2362,7 @@ test('the branch is asked of the worktree, not guessed from the folder name', as
     landed: ['msr-track1-skin'],
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.match(f.files['/w/runner/unplanned-workareas.md'], /\| msr-track-1 \| memoro \| 0 \| abc1234 \| landed \|/u);
 });
 
@@ -2300,7 +2375,7 @@ test('a live workarea is never closed, however done its plan is', async () => {
     live: ['over'],
     session: okSession(),
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — a live tmux session/u);
 });
@@ -2318,7 +2393,7 @@ test('a plan that does not parse gets a row in ~/mc/runner/, not a line nobody r
     session: okSession(),
     gh: { alpha: { number: 7 } },
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   const intake = f.files['/w/runner/unreadable-plans.md'];
   assert.match(intake, /\| new-user \| memoro \| goal: at least one paragraph/u);
   assert.doesNotMatch(intake, /\| alpha \|/u, 'a plan that parses is not in the table');
@@ -2329,7 +2404,7 @@ test('a plan that does not parse gets a row in ~/mc/runner/, not a line nobody r
 test('the unreadable table is rewritten whole each round', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
   f.files['/w/runner/unreadable-plans.md'] = 'stale\n';
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   assert.doesNotMatch(f.files['/w/runner/unreadable-plans.md'], /stale/u);
 });
 
@@ -2341,7 +2416,7 @@ test('--once closes nothing', async () => {
     session: okSession(),
     gh: { alpha: { number: 7 } },
   });
-  await createRunner({ deps: f.deps }).round({ once: true });
+  await createRunner({ deps: f.deps }).pass();
   assert.deepEqual(f.calls.rmdirs, []);
   assert.equal('/w/runner/unplanned-workareas.md' in f.files, false);
 });
@@ -2354,7 +2429,7 @@ test('--once closes nothing', async () => {
  * 2026-08-29 file had seven comment lines and twenty names that were already
  * done or had no plan on main.
  */
-test('queue.md is rewritten to names only, and a name leaves it the moment its step has run', async () => {
+test('queue.md is rewritten to names only, and a name leaves it when its plan is done', async () => {
   const f = fixture({
     queue: '# the queue\n\n## Martin\nalpha\nover\nghost\nbeta\n',
     plans: { memoro: { alpha: ready, beta: ready, over: done() } },
@@ -2364,24 +2439,28 @@ test('queue.md is rewritten to names only, and a name leaves it the moment its s
     session: okSession(),
     gh: { alpha: { number: 7 }, beta: { number: 8 } },
   });
-  await createRunner({ deps: f.deps }).round();
+  await round(createRunner({ deps: f.deps }));
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /queue: dropped "# the queue" — not a project name/u);
   assert.match(log, /queue: dropped "## Martin" — not a project name/u);
   assert.match(log, /queue: dropped "over" — the plan is done/u);
   assert.match(log, /queue: dropped "ghost" — no plan on main/u);
-  assert.equal(f.files['/w/queue.md'], '', 'every name that was left had its step, so the file is empty');
+  // Both had a step this pass, and both keep their place: the file is Martin's
+  // *these first*, and with the pick as the only order there is, a five-step
+  // project that dropped to alphabetical after its first step would be the old
+  // round again in another shape (2026-09-08).
+  assert.equal(f.files['/w/queue.md'], 'alpha\nbeta\n', 'a name leaves when its plan is done or off main, not when a step has run');
 });
 
-test('a name whose project was skipped stays in the queue', async () => {
+test('a name keeps its place until its plan is done or off main', async () => {
   const f = fixture({
     queue: 'alpha\nwait\n',
     plans: { memoro: { alpha: ready, wait: plan({ status: 'blocked' }) } },
     session: okSession(),
     gh: { alpha: { number: 7 } },
   });
-  await createRunner({ deps: f.deps }).round();
-  assert.equal(f.files['/w/queue.md'], 'wait\n', 'it has not had its step, so it keeps its place');
+  await round(createRunner({ deps: f.deps }));
+  assert.equal(f.files['/w/queue.md'], 'alpha\nwait\n', 'one had its step and one is blocked; neither plan is finished');
 });
 
 /**
@@ -2396,15 +2475,16 @@ test('runLoop: an unattended run holds the machine awake; --once does not', asyn
   const held = [];
   const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
   f.deps.keepAwake = (options) => {
-    held.push({ ...options, roundsSoFar: f.calls.sessions.length });
+    held.push({ ...options, stepsSoFar: f.calls.sessions.length });
     return { ok: true, pid: 9, flags: ['-i', '-m', '-s'], note: 'held' };
   };
   f.deps.onACPower = () => true;
-  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
-  assert.equal(held.length, 1, 'asked once, not once per round');
+  stopAfterAStep(f);
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.equal(held.length, 1, 'asked once, not once per step');
   assert.equal(held[0].pid, process.pid);
   assert.equal(held[0].onAC, true);
-  assert.equal(held[0].roundsSoFar, 0, 'held before the first step, not after it');
+  assert.equal(held[0].stepsSoFar, 0, 'held before the first step, not after it');
   assert.match(f.files['/w/runner/log/runner.log'], /staying awake \(caffeinate -i -m -s pid 9\)/u);
 
   const g = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
@@ -2418,7 +2498,8 @@ test('runLoop: a machine that will not stay awake still runs, and says so', asyn
   const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
   f.deps.keepAwake = () => ({ ok: false, reason: 'caffeinate-missing', flags: [], note: 'caffeinate could not be run' });
   f.deps.onACPower = () => null;
-  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0, 'the run is not blocked by it');
+  stopAfterAStep(f);
+  assert.equal(await runLoop({ deps: f.deps }), 0, 'the run is not blocked by it');
   assert.equal(f.calls.sessions.length, 1);
   assert.match(f.files['/w/runner/log/runner.log'], /NOT staying awake \(caffeinate-missing\)/u);
 });
@@ -2427,7 +2508,8 @@ test('runLoop: --no-caffeinate is obeyed', async () => {
   const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
   const asked = [];
   f.deps.keepAwake = (options) => { asked.push(options); return { ok: true, pid: 1, flags: [], note: '' }; };
-  assert.equal(await runLoop({ rounds: 1, awake: false, deps: f.deps }), 0);
+  stopAfterAStep(f);
+  assert.equal(await runLoop({ awake: false, deps: f.deps }), 0);
   assert.deepEqual(asked, []);
 });
 
@@ -2460,7 +2542,7 @@ test('runLoop: lanes run their own rounds — memoro-cli does not wait for memor
     events.push(`${name}: end`);
     return inner(call);
   };
-  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(await runLoop({ deps: f.deps }), 0);
   const started = events.filter((e) => e.endsWith(': start')).map((e) => e.split(':')[0]);
   assert.deepEqual(started.sort(), ['a', 'x', 'y'], `every step started: ${events.join(', ')}`);
   assert.ok(events.indexOf('y: start') < events.indexOf('a: end'), `memoro-cli's second step waited for memoro's first: ${events.join(', ')}`);
@@ -2487,7 +2569,7 @@ test('a pull request from the branch the worktree stands on is the project\'s, w
     session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.equal(f.calls.sessions.length, 1, 'the PR was not named after the project, so nothing stopped the step');
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /alpha: #77 is on test-arch, not a branch named after the project — landing it anyway/u);
@@ -2511,7 +2593,7 @@ test('a landing that meets another round waits for it, and lands', async () => {
   let slept = 0;
   f.deps.sleep = async () => { slept += 1; };
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.equal(asked, 3, 'the round was asked again after each refusal');
   assert.ok(slept >= 2, 'it waited between the asks');
   const log = f.files['/w/runner/log/runner.log'];
@@ -2524,37 +2606,63 @@ test('a landing that meets another round waits for it, and lands', async () => {
 test('a landing refused for any other reason is left open, as before', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 70, title: 'Step' } }, session: okSession(), rounds: { 70: { ok: false, merged: false, stopped_at: 'red', reason: '2 tests red' } } });
   const runner = createRunner({ deps: f.deps });
-  await runner.round({ once: true });
+  await runner.pass();
   assert.equal(f.calls.rounds.length, 1, 'a red round is not asked again');
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: #70 left open — 2 tests red/u);
 });
 
 /**
- * `mc run lanes 2`: two loops on one repository, each taking every second
- * name, each with a current file of its own. Neither waits for the other.
+ * `mc run lanes 2`: two loops on one repository, taking from one ordered list.
+ * The second lane takes the second name it can *run*, which is the whole of
+ * what changed on 2026-09-08 — it used to take every second name by index
+ * (`splitLanes`, `index % count === lane`), so with the second name blocked it
+ * took nothing at all while the third waited behind the first lane. Neither
+ * lane waits for the other, and the claim is what keeps them off one project.
  */
-test('runLoop: lanes above one split a repository\'s names, and never hold the same project', async () => {
-  const f = fixture({ plans: { memoro: { a: ready, b: ready, c: ready } }, session: okSession() });
+test('runLoop: two lanes on one repository take the next two runnable names, never the same one', async () => {
+  const f = fixture({
+    plans: { memoro: { a: ready, b: plan({ status: 'blocked' }), c: ready, d: ready } },
+    session: okSession(),
+  });
   const inner = f.deps.session;
-  const seen = [];
-  let started = 0;
+  const starts = [];
+  const live = new Set();
+  let peak = [];
+  let currents = [];
+  let release = null;
+  const held = new Promise((resolve) => { release = resolve; });
   f.deps.session = async (call) => {
-    started += 1;
-    seen.push({ name: call.cwd.split('/')[2], currents: Object.keys(f.files).filter((k) => /\/runner\/current-/u.test(k)).sort() });
-    if (started === 3) f.files['/w/runner/STOP'] = '';
+    const name = call.cwd.split('/')[2];
+    starts.push(name);
+    live.add(name);
+    if (live.size > peak.length) {
+      peak = [...live].sort();
+      currents = Object.keys(f.files).filter((key) => /\/runner\/current-/u.test(key)).sort();
+    }
+    await held;
+    live.delete(name);
     return inner(call);
   };
+  // A sleep that yields a macrotask: the chore loop and the merge lane poll on
+  // it, and a resolved promise would starve the sessions of the event loop.
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
   f.deps.laneCount = () => ({ per_repo: 2, total: null });
-  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
-  const names = seen.map((s) => s.name).sort();
-  assert.deepEqual(names, ['a', 'b', 'c'], `every project ran once: ${JSON.stringify(seen)}`);
-  const both = seen.find((s) => s.currents.length === 2);
-  assert.ok(both, `two steps were in flight at once: ${JSON.stringify(seen)}`);
-  assert.deepEqual(both.currents, ['/w/runner/current-memoro-1.json', '/w/runner/current-memoro.json']);
+  const run = runLoop({ deps: f.deps });
+  for (let i = 0; i < 40; i += 1) await new Promise((resolve) => { setImmediate(resolve); });
+
+  assert.deepEqual(peak, ['a', 'c'], `the two lanes held the first two runnable names: ${starts.join(', ')}`);
+  assert.deepEqual(currents, ['/w/runner/current-memoro-1.json', '/w/runner/current-memoro.json'],
+    'and each lane wrote its own current file');
+  f.files['/w/runner/STOP'] = '';
+  release();
+  assert.equal(await run, 0);
+  assert.deepEqual(starts, [...new Set(starts)], `no project was started twice: ${starts.join(', ')}`);
+
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /lanes: 2 per repository/u);
-  assert.match(log, /memoro#2: round 1 done \(1 ran\)/u, 'the second lane closed a round of its own');
-  assert.match(log, /runner exit on STOP after c/u, 'the first lane walked a then c and left on STOP');
+  assert.match(log, /memoro#1: next — a /u);
+  assert.match(log, /memoro#2: next — c /u, 'the second runnable name, not the second name');
+  assert.doesNotMatch(log, /next — b /u, 'b is blocked in its own plan and is never picked');
 });
 
 /* ------------------------------------------------------ the total lane cap */
@@ -2601,7 +2709,7 @@ function laneRace({ total, openPrs = {} }) {
  */
 test('runLoop: no total set — every lane starts, exactly as before', async () => {
   const r = laneRace({ total: null });
-  const run = runLoop({ rounds: 0, deps: r.f.deps });
+  const run = runLoop({ deps: r.f.deps });
   await turns();
   assert.equal(r.state.peak, 4, `four steps in flight at once: ${r.state.starts.join(', ')}`);
   r.stop();
@@ -2620,7 +2728,7 @@ test('runLoop: no total set — every lane starts, exactly as before', async () 
  */
 test('runLoop: a total of 2 — four lanes, a blocking step, and two sessions', async () => {
   const r = laneRace({ total: 2 });
-  const run = runLoop({ rounds: 0, deps: r.f.deps });
+  const run = runLoop({ deps: r.f.deps });
   await turns();
   assert.equal(r.state.peak, 2, `only the total ever ran at once: ${r.state.starts.join(', ')}`);
   assert.equal(r.state.starts.length, 2, `and only the total ever began: ${r.state.starts.join(', ')}`);
@@ -2721,7 +2829,7 @@ test('runLoop: an UPDATE drains — no lane starts a step, the ones in flight fi
   f.deps.sleep = () => new Promise((resolve) => { setImmediate(() => { ticks += 1; resolve(); }); });
   const handovers = [];
   f.deps.handOver = async ({ say }) => { handovers.push(events.slice()); say('update: handed over to pid 9001 — this runner is done'); return { ok: true, pid: 9001 }; };
-  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(await runLoop({ deps: f.deps }), 0);
   assert.equal(events.indexOf('x: start'), -1, `a lane started a step under a pending UPDATE: ${events.join(', ')}`);
   assert.equal(handovers.length, 1, 'the update handed over');
   assert.deepEqual(handovers[0], ['a: start', 'a: end'], 'the handover came after the step in flight had ended');
@@ -2776,7 +2884,7 @@ const queueOf = (f) => JSON.parse(f.files['/w/runner/merges.json'] || '[]');
 test('the merge lane lands a queued pull request while every step lane is busy', async () => {
   const r = laneRace({ total: 2, openPrs: { 'memoro-cli': [{ number: 671, headRefName: 'merge-queue', baseRefName: 'main' }] } });
   r.f.files['/w/runner/merges.json'] = queueFile([{ pr: 671, branch: 'merge-queue' }]);
-  const run = runLoop({ rounds: 0, deps: r.f.deps });
+  const run = runLoop({ deps: r.f.deps });
   await turns();
   assert.equal(r.state.peak, 2, `the total was still the ceiling on steps: ${r.state.starts.join(', ')}`);
   assert.deepEqual(
@@ -2859,7 +2967,7 @@ test('runLoop: the merge lane ends the run on STOP', async () => {
   const inner = f.deps.mergeRound;
   f.deps.mergeRound = async (options) => { f.files['/w/runner/STOP'] = ''; return inner(options); };
   f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
-  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(await runLoop({ deps: f.deps }), 0);
   assert.deepEqual(queueOf(f), [], 'the round it was in finished, and the entry left');
   assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP/u);
 });
@@ -2876,7 +2984,7 @@ test('runLoop: an UPDATE leaves the queue alone and hands over', async () => {
   f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
   const handovers = [];
   f.deps.handOver = async () => { handovers.push(true); return { ok: true, pid: 9001 }; };
-  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(await runLoop({ deps: f.deps }), 0);
   assert.equal(handovers.length, 1, 'the update handed over');
   assert.deepEqual(f.calls.rounds, [], 'the lane started no round under a pending UPDATE');
   assert.deepEqual(queueOf(f).map((item) => item.pr), [671], 'the entry is the next runner\'s');

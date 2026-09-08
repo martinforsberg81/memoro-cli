@@ -471,6 +471,27 @@ describe('NEXT', () => {
     assert.ok(named.some((line) => /NEXT {2}2 runnable of 4 · 2 from queue\.md, then alphabetical/u.test(line)), named.join('\n'));
   });
 
+  /**
+   * The heads are the lanes: `mc run lanes 2` puts two loops on a repository,
+   * and both of their next projects start now. With one lane there is one
+   * head, which is what the block has always drawn.
+   */
+  it('says how many of a repository\'s rows start now — one per lane loop', () => {
+    const many = ['a', 'b', 'c'].map((name) => planRecord({
+      repo: 'memoro', programme: 'p', project: name, status: 'ready', title: `Do ${name}`,
+    }));
+    const one = nextSection({ queueText: '', plans: many });
+    assert.deepEqual(one.lanes.map((item) => [item.repo, item.heads]), [['memoro', 1]]);
+
+    const two = nextSection({ queueText: '', plans: many, lanes: 2 });
+    assert.deepEqual(two.lanes.map((item) => [item.repo, item.heads, item.items.map((row) => row.name)]),
+      [['memoro', 2, ['a', 'b', 'c']]], 'two lanes, so a and b are both starting now');
+
+    // A lane count above what is runnable is not a head that does not exist.
+    const short = nextSection({ queueText: '', plans: [many[0]], lanes: 3 });
+    assert.deepEqual(short.lanes.map((item) => item.heads), [1]);
+  });
+
   it('draws three deep per lane and counts the rest of that lane', () => {
     const many = ['a', 'b', 'c', 'd'].map((name) => planRecord({
       repo: 'memoro', programme: 'p', project: name, status: 'ready', title: `Do ${name}`,
