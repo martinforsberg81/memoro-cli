@@ -110,7 +110,6 @@ import {
   UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerTablePath, workRoot,
 } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
-import { clearUnmergeable, markUnmergeable, parseUnmergeable, unmergeablePath } from './unmergeable.js';
 import { runMergeRound } from './repo-merge.js';
 import { pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
@@ -324,11 +323,6 @@ export function createRunner({
     // merge lane. The same kind of state again, and the one file the lane
     // reads to know it has work — see merge-queue.js.
     merges: mergesPath(root),
-    // Every workarea a round could not bring to origin/main. The same kind of
-    // state as `held.json` and for the same reason: an aborted merge leaves
-    // the worktree clean, so without this nothing outside runner.log says the
-    // project is standing still — see unmergeable.js.
-    unmergeable: unmergeablePath(root),
     // With more than one lane per repository (`mc lanes`), the first keeps
     // the file's old name and the rest number themselves, so the page —
     // which reads `current-*.json` by name — needs no new rule.
@@ -378,33 +372,32 @@ export function createRunner({
   const quotaHold = async () => { if (quotaSleep) await quotaSleep; };
 
   /**
-   * The plan the workarea carries. `fromHead` reads the branch's own last
-   * committed copy (`git show HEAD:<path>`) instead of the file on disk.
+   * The plan the workarea carries, read off disk and nowhere else.
    *
-   * It is for one case and only one: a `PLAN.json` the plan's own rule refused,
-   * two sides editing the same step, whose copy on disk therefore carries
-   * conflict markers and parses as nothing. HEAD is then the last copy of that
-   * file which is a plan at all, and it is what the session is handed along
-   * with the merge it has to finish.
+   * There is one copy of a plan the runner obeys — the one on `main`
+   * (`docs/project/README.md`, § Who writes what) — and after `syncMain` the
+   * file on disk is that copy: git merges the files it can, so a merge that
+   * stopped on `src/a.js` has already written main's plan into the worktree,
+   * and a `PLAN.json` that conflicted is resolved by the plan's own rule or,
+   * where the rule refuses, by taking main's side outright
+   * (`resolvePlanConflict`). Neither leaves conflict markers behind.
    *
-   * What it is *not* for is any other conflicting file. A merge that stopped on
-   * `src/a.js` has already written main's plan into the worktree — git merges
-   * the files it can — so the file on disk is main's copy, which is the one the
-   * contract says the round and the planning session share (`docs/project/
-   * README.md`, § Who writes what). Reading HEAD there hands out a step main
-   * has replaced: measured over `runner.log` to 2026-09-05, 180 of 207
-   * conflicting rounds had no plan among their conflicts, and `docx-editor`
-   * reported a blocker from a step main had re-planned for 13 rounds running.
-   * Ruling 10 in `docs/project/mc/rulings.md`.
+   * It used to take a `fromHead` option that read the branch's own last commit
+   * (`git show HEAD:<path>`) for exactly the case that is now resolved: a plan
+   * the rule refused, whose copy on disk carried markers and parsed as nothing.
+   * HEAD is stale there by construction — it is the side that has *not* taken
+   * main — and reading it is what reported `docx-editor` as blocked on a
+   * decision main had re-planned the evening before, for 13 rounds (measured
+   * over `runner.log` to 2026-09-05). The option went with the case,
+   * 2026-09-08.
    */
-  function planOf(worktree, name, { fromHead = false } = {}) {
+  function planOf(worktree, name) {
     const base = join(worktree, 'docs', 'project');
     for (const programme of deps.list(base)) {
       const dir = join(base, programme, name);
       const path = join(dir, 'PLAN.json');
       if (deps.exists(path)) {
-        const at = ['docs', 'project', programme, name, 'PLAN.json'].join('/');
-        const text = (fromHead ? gitOut(worktree, ['show', `HEAD:${at}`]) : deps.read(path)) || '';
+        const text = deps.read(path) || '';
         const { plan, problems } = readPlanText(text);
         return { path, programme, text, plan, problems, legacy: false };
       }
@@ -434,9 +427,22 @@ export function createRunner({
    * project's branch — and `:3:` theirs, origin/main. Resolved means written
    * and staged; the commit is `syncMain`'s, once every conflict is gone.
    *
-   * Returns true when the file is resolved. Every other answer is a line in
-   * runner.log saying which side of the rule it fell off, because the next
-   * reader of that file is deciding whether the refusal was right.
+   * Where the rule refuses — both sides edited one step, or the step counts
+   * differ — main's copy is taken. It is the copy the runner obeys everywhere
+   * else (`docs/project/README.md`, § Who writes what), and by the time this
+   * runs there is nothing of the branch's left to lose: an open pull request of
+   * this project's has already ended the pick (`inFlight`), and a branch whose
+   * content is in origin/main has already been moved (`freshBranch`). What is
+   * left on the branch and not on main is either work that landed in another
+   * shape or work no pull request carries.
+   *
+   * The rule is still tried first, and its refusal is still a line in
+   * runner.log: the next reader of that file is deciding whether what the
+   * branch had was worth anything. What the line is not any more is the end of
+   * the project — `sql-w3-email-closure` merged, refused and aborted every ten
+   * minutes from 2026-09-06T18:34Z to 2026-09-08 on this one predicate.
+   *
+   * Returns true when the file is resolved, either way.
    */
   function resolvePlanConflict(worktree, name, path) {
     const stage = (n) => {
@@ -445,8 +451,13 @@ export function createRunner({
     };
     const merged = mergePlanText({ base: stage(1), branch: stage(2), main: stage(3) });
     if (!merged.ok) {
-      say(`${name}: ${path} is not resolvable by the plan's rule — ${merged.why}`);
-      return false;
+      if (!deps.git(worktree, ['checkout', '--theirs', '--', path]).ok
+        || !deps.git(worktree, ['add', '--', path]).ok) {
+        say(`${name}: ${path} — the plan's rule refused (${merged.why}) and main's copy could not be taken either`);
+        return false;
+      }
+      say(`${name}: ${path} — the plan's rule refused (${merged.why}); main's copy taken`);
+      return true;
     }
     deps.write(join(worktree, path), merged.text);
     if (!deps.git(worktree, ['add', '--', path]).ok) {
@@ -610,32 +621,6 @@ export function createRunner({
     if (!dropped.length) return;
     for (const entry of dropped) say(`merge lane: ${entry.repo} #${entry.pr} is no longer open — no longer queued for merge`);
     writeJson(paths.merges, queued.filter((entry) => !dropped.some((gone) => samePr(gone, entry))));
-  }
-
-  /* ------------------------------------------- workareas that cannot merge */
-
-  /**
-   * `~/mc/runner/unmergeable.json`, read-modify-written through these two and
-   * nowhere else — the same one-turn discipline `held.json` has, because any
-   * lane may write it.
-   *
-   * `markStuck` is called where the round aborts a merge nothing could be
-   * handed, `clearStuck` where the workarea took main. The clear writes only
-   * when it changes something: it runs on every project of every round, and a
-   * file rewritten ten times a minute for nothing is a file whose mtime says
-   * nothing either.
-   */
-  const unmergeableNow = () => parseUnmergeable(deps.read(paths.unmergeable));
-
-  function markStuck(entry) {
-    writeJson(paths.unmergeable, markUnmergeable(unmergeableNow(), { ...entry, since: stamp() }));
-  }
-
-  function clearStuck(project, repo) {
-    const entries = unmergeableNow();
-    if (!entries.length) return;
-    const kept = clearUnmergeable(entries, { project, repo });
-    if (kept.length !== entries.length) writeJson(paths.unmergeable, kept);
   }
 
   /* --------------------------------------------------------------- landing */
@@ -1617,6 +1602,23 @@ export function createRunner({
       const added = deps.addWorktree({ name, repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
       if (!added.ok) return refuse(REFUSAL.worktree, `worktree add failed (${added.reason}), skip`);
     }
+    // A merge of origin/main a killed session left behind. The runner aborts
+    // its own after the session (below), but a runner killed mid-session — rc
+    // 143, `mc run stop --force` — never reaches that line, and what it leaves
+    // is unmerged paths: a dirty worktree, which parks the project for every
+    // pick from then on. `sql-w1-universe-closure` was
+    // `dirty worktree (.gitattributes, .github/workflows/deploy.yml,
+    // .gitignore +1039)` every round of 2026-09-08 on exactly this.
+    //
+    // The abort returns the tree to the branch's own last commit; nothing a
+    // session committed is touched, and what it had not committed went with the
+    // session. `REBASE_HEAD` and `CHERRY_PICK_HEAD` are deliberately not
+    // aborted — the runner starts neither, so one of those is a person's work
+    // and the dirty check below reports it as it always has.
+    if (deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
+      deps.git(worktree, ['merge', '--abort']);
+      say(`${name}: a merge of origin/main was left in progress — aborted`);
+    }
     // A dirty worktree parks the project for every round until a person acts,
     // so the line names the files: `email-window-layout` stood third in
     // queue.md and was skipped 134 rounds on three modified files before
@@ -1668,15 +1670,11 @@ export function createRunner({
     // the project unreadable to the runner: the conflict goes to the step
     // session as something to do first.
     const conflicts = sync.conflicts;
-    // The workarea took main, so whatever an earlier round recorded about it
-    // is over. Only here: a conflict that goes to a session is not resolved
-    // yet, and `markStuck` below keeps the first round's `since` — how long
-    // this has been standing still is the fact the record is kept for.
-    if (!conflicts.length) clearStuck(name, repo.name);
-    // And the plan is read from HEAD only when the plan itself is one of them
-    // — see `planOf`. Every other conflict leaves main's plan on disk already
-    // merged, and that is the copy the round hands out.
-    const plan = planOf(worktree, name, { fromHead: conflicts.some(isPlanPath) });
+    // Off disk, always: a conflicting `PLAN.json` has been resolved by the
+    // plan's rule or by taking main's copy before this line (`syncMain`), and
+    // every other conflict left main's plan on disk already merged. That is the
+    // copy the runner hands out.
+    const plan = planOf(worktree, name);
     // A merge nobody is handed is a merge nobody finishes, and an unmerged
     // path is a dirty worktree — which skips the project every round until a
     // person acts. So every way out of this round that is not the step
@@ -1697,29 +1695,12 @@ export function createRunner({
     // is the repair; `repairPrompt` is handed the files.
     const choice = repair ? { kind: 'repair' } : chooseKind({ plan });
     if (conflicts.length && choice.kind !== 'step' && choice.kind !== 'repair') {
-      // Since ruling 10 there is one way to arrive here: the `PLAN.json` is
-      // itself among the conflicts, so the plan was read from HEAD — every
-      // other conflict leaves main's plan on disk, and a project main's plan
-      // refuses is never picked at all (`nextFor`, run-plan.js), so no
-      // worktree of its is touched.
-      //
-      // What is said is *not* `choice.skip`. That sentence is the branch's own
-      // stale plan talking, and reporting it is the defect ruling 10 answered
-      // in another shape: `docx-editor` had `step 17 is blocked on decision
-      // docx-ime-input-source` in runner.log for 13 rounds about a step main
-      // had replaced the evening before. What is true is that this workarea
-      // cannot take main and nothing can be handed the merge — which is a
-      // person's, so it is written down where a person looks and not only here.
-      if (conflicts.some(isPlanPath)) {
-        abandonMerge('its PLAN.json is one of the conflicts and the copy on this branch has no step to hand out');
-        markStuck({ project: name, repo: repo.name, worktree, files: conflicts, why: 'the PLAN.json is one of the conflicts and nothing could be handed the merge' });
-        return refuse(REFUSAL.unmergeable);
-      }
-      // The other way here is `runStep` driven by hand past the picker — the
-      // plan on disk is main's and it refuses the project itself. That is the
-      // plan's word, not the merge's, and nothing is recorded: `machineState`
-      // reads the same plan on main and answers it before it asks anything of
-      // this machine.
+      // The way here is `runStep` driven by hand past the picker — the plan on
+      // disk is main's and it refuses the project itself. A project main's plan
+      // refuses is never picked at all (`nextFor`, run-plan.js), so no worktree
+      // of its is touched by a lane. That is the plan's word, not the merge's,
+      // and nothing is recorded: `machineState` reads the same plan on main and
+      // answers it before it asks anything of this machine.
       abandonMerge(choice.skip || 'no session to hand it to');
       return refuse(choice.reason || 'no-plan');
     }

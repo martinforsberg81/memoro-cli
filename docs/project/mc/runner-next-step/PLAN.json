@@ -41,7 +41,7 @@
       "check": "Unit tests for each blocking reason in the contract assert the docs PR's content (the plan diff is exactly `status`, `blocked_by` and one appended comment on the first not-done step) and that a second pick over the same world returns the *next* name. Live: `sql-w1-universe-closure` and `sql-w3-email-closure` — stuck on 2026-09-08 — each either start a session or are `blocked` on `origin/main` within one pick of the restarted runner; `git -C ~/memoro show origin/main:docs/project/sql-readiness/sql-w1-universe-closure/PLAN.json | jq '.steps[] | select(.status==\"blocked\") | .blocked_by'` and the matching `runner.log` lines, pasted in the PR."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A `PLAN.json` the plan's rule cannot merge no longer stops a project: `main`'s copy is taken, the merge commits, and the session starts. `~/mc/runner/unmergeable.json` is no longer written or read by anything.",
       "check": "`tests/mc/run.test.js`: a workarea whose branch edited the same step `main` re-planned starts a step with `main`'s plan text in the prompt. `grep -rn unmergeable src/ tests/` finds only `repo-merge.js`'s and `repo-freshen.js`'s use of the ordinary English word. `ls ~/mc/runner/unmergeable.json` is gone after step 3 has run on this machine, or the file is stale and named in the step's comments."
     },
@@ -102,7 +102,7 @@
     },
     {
       "title": "A `PLAN.json` conflict takes `main`'s copy, and a merge a killed session left is aborted",
-      "status": "ready",
+      "status": "done",
       "done_when": "In `syncMain`, a conflicted `PLAN.json` the plan's rule refuses is resolved by taking `origin/main`'s copy and the merge commits; a worktree with `MERGE_HEAD` present and no session on it has its merge aborted before the dirty check; `fromHead` in `planOf` and everything that existed for it — `markStuck`, `clearStuck`, `unmergeable.js`, its reader in `machineState` and the brief, and the `unmergeable` word in `RUN_REFUSALS` — is removed; the suite is green.",
       "instruction": [
         "Read `syncMain`, `resolvePlanConflict` and `planOf` in `src/mc/run.js` (about lines 385–475), the `conflicts.some(isPlanPath)` branch in `runStepClaimed` (about lines 1655–1710) and `src/mc/plan-merge.js`. Today a `PLAN.json` conflict is tried by the plan's rule (`mergePlanText`: base, ours, theirs from the index); when the rule refuses — both sides edited one step, or the step count differs — the merge is left in progress, the plan is read from the branch's `HEAD`, that copy has no step to hand out, the merge is aborted, and the workarea is written to `~/mc/runner/unmergeable.json`. Every ten minutes, for days (`sql-w3-email-closure` since 2026-09-06T18:34Z).",
@@ -113,7 +113,15 @@
       ],
       "pr": null,
       "blocked_by": null,
-      "comments": []
+      "comments": [
+        "`planOf`'s `fromHead` had exactly one caller-condition left (`conflicts.some(isPlanPath)`) and nothing else in the tree read `HEAD:` for a plan, so removing the option removed the last reader of a workarea's branch copy: the runner now reads a plan off disk and off `origin/main` and from nowhere else. The fixture's `git show HEAD:<path>` fake in `tests/mc/run.test.js` is kept on purpose — one test asserts HEAD is *not* read for a conflict outside the plan, and that assertion needs something to have been readable.",
+        "The predicate ruling 10 ruled on is therefore gone from the code entirely, not narrowed further: there is no `fromHead` to scope. Step 4 removes ruling 10 with ruling 17, as this step's instruction says.",
+        "One reader the instruction did not name: `status-project.js` read `unmergeable.json` too (`readUnmergeable`), because `mc status <name>` assembles `machineState`'s inputs itself rather than going through the brief. The `RUN_REFUSALS` agreement test would not have caught it — that test drives `machineState` directly — so a `grep -rn unmergeable src/` is what found it. `page-collect.js` and `page-cache.js` never read the file.",
+        "The MERGE_HEAD abort is unconditional and sits at the top of `runStepClaimed`, after the worktree exists and before `git status --porcelain`, so a lane that would have refused `dirty` on a killed session's leftovers now starts the step instead. The post-session abort is untouched, and `REBASE_HEAD`/`CHERRY_PICK_HEAD` are deliberately not aborted — the runner starts neither, so one of those is a person's work and the dirty check reports it as before.",
+        "One path can still stop a project on a plan conflict, and it has a test: git could not give `main`'s copy either — the three sides are not in the index, or `checkout --theirs`/`add` failed. Then the line says so (`the plan's rule refused (<why>) and main's copy could not be taken either`), the conflict is left, and the merge is aborted rather than left half-done. That was the *ordinary* case until now; it should be rare enough that step 3 can treat it as any other `sync` refusal.",
+        "`~/mc/runner/unmergeable.json` was deleted on this machine at the end of this step. Its two entries are worth keeping for step 3's live check: `mail-window-round-5` (memoro) stuck since 2026-09-07T05:53:17Z on its `PLAN.json` and `public/js/msr/renderers/web/card-block-renderer.js`, and `items-sweep` (memoro) since 2026-09-08T05:48:44Z on its `PLAN.json` alone. Both are exactly the case this step resolves, so both should start a session on the first pick of a runner on this code. The runner still running on the old code can write the file again before it restarts; nothing on this code reads or writes it.",
+        "`docs/technical/mc-brief.md` had a one-line list of what `machineState` reads, and it named `unmergeable.json`; that line is corrected here rather than left false for a step. The rest of the doc sweep, `mc-run.md` included, is step 4's."
+      ]
     },
     {
       "title": "A step the runner cannot start is `blocked` on `main`, and the runner never retries it",
