@@ -536,6 +536,44 @@ worktree under `~/mc/`, which would be a workarea to the runner.
 
 **Carried by [`deploy-from-main/PLAN.json`](deploy-from-main/PLAN.json).**
 
+## 17 · The runner takes the next step, and a step it cannot start is `blocked` on `main`
+
+`ruling · 2026-09-08` · raised by Martin at the plan session, from the runner's log
+
+Every ten minutes on 2026-09-08 the memoro lanes ended a round with `skipped
+15 (blocked 15)` and `0 ran`. `sql-w3-email-closure` was merged, refused by the
+plan's rule and aborted each time since 2026-09-06; `sql-w1-universe-closure`
+sat behind a `git merge origin/main` a killed session had left in progress and
+was `dirty worktree (… +1039)` every round. Nothing on `main` said either was
+stuck. The plan session proposed a contract that handled the workarea faults
+in the runner and wrote `blocked` on `main`, with the runner re-checking every
+round whether the fault had cleared. Martin took the first half and threw out
+the round with the second:
+
+> "Hela upplägget med 'runda' är fel. Allt ska inte provas. Runner ska ta next
+> step. Punkt." … "Dessutom så är kodningen med jämna och ojämna rader för
+> vilket projekt som tas ur bota dumt skapat så det får vi fixa till. Varje
+> lane tar nästa step under NEXT, men inte samma projekt för två olika lanes."
+> … "Vägen tillbaka är via brief eller en plan-session. Om det var något som
+> en LLM skulle kunna ta beslut som så skulle det ha gjorts vid första
+> Runner-försöket. Då är det det som är fel. Rätt svar är inte en Runner-runda
+> till." (Martin, 2026-09-08)
+
+So: no round. Each lane takes the first project under NEXT — `queue.md`'s
+order, then alphabetical, in its repository — whose plan on `main` says
+`ready` and which no other lane holds, and runs it or blocks it. The
+`index % count` split between lanes goes; a claim in the process is the rule.
+A step the runner cannot start is `blocked` on `main` with `blocked_by.kind:
+workarea`, through a docs-only pull request the runner lands itself, and the
+runner never retries it: `mc brief` or a planning session sets it `ready`
+again. What the runner can settle by itself it settles at the first attempt —
+`main`'s copy of a `PLAN.json` the rule cannot merge, the abort of a merge a
+killed session left. A name stays in `queue.md` until its plan is done or
+off `main`, no longer only until one step has run. Explicitly out: the gate,
+the merge lane, any rebase (there is none), and any new verb for the way back.
+
+**Carried by [`runner-next-step/PLAN.json`](runner-next-step/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
