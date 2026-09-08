@@ -148,12 +148,13 @@ export const RUN_REFUSALS = Object.freeze([
   { reason: 'in-flight', read: true },
   { reason: 'branch', read: true },
   { reason: 'sync', read: false, why: 'the fetch and the merge of origin/main are the round\'s own writes, and their failure is what they returned' },
-  // The one word here the reading answers from a file rather than from the
-  // machine as it stands: a merge that stopped and was aborted leaves the
-  // worktree clean, so nothing but the round's own record says it happened.
-  // `unmergeable.json` is that record, written where the round aborts and
-  // dropped the next time that project gets past the merge.
-  { reason: 'unmergeable', read: true },
+  // There was a tenth word here until 2026-09-08, and it was the only one the
+  // reading answered out of a file the runner had written rather than out of
+  // the machine as it stands: a merge that stopped on a `PLAN.json` the plan's
+  // own rule refused was aborted, and an aborted merge leaves the worktree
+  // clean. The word and its file are both gone, because the case is — such a
+  // conflict now takes main's copy and the merge commits
+  // (`resolvePlanConflict`, run.js), so no state is left for a reading to miss.
   { reason: 'role-missing', read: false, why: 'the kind is only known after the merge, and the role file is read out of the worktree the round has just synced' },
   { reason: 'tool-missing', read: false, why: 'whether the tool is on this machine is asked of the launch adapter, which spawns it' },
 ].map((item) => Object.freeze(item)));

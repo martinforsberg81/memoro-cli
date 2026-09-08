@@ -5,7 +5,6 @@ import { join } from 'node:path';
 
 import { createRunner, runLoop } from '../../src/mc/run.js';
 import { parseHeld } from '../../src/mc/held.js';
-import { parseUnmergeable } from '../../src/mc/unmergeable.js';
 import { RUN_REFUSALS } from '../../src/mc/run-plan.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { machineState } from '../../src/mc/status-collect.js';
@@ -165,13 +164,24 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
         const held = (stages[cwd.split('/')[2]] || {})[path];
         return held ? { ok: true, stdout: held[Number(stage)] ?? '' } : { ok: false, stdout: '' };
       }
-      // The branch's own last committed copy of a file, which is how the plan
-      // is read while a merge is in progress: `headFiles` per workarea and
-      // path, and by default whatever the workarea has on disk.
+      // The branch's own last committed copy of a file. Nothing in the runner
+      // reads this any more (`planOf` lost `fromHead` on 2026-09-08); it is
+      // kept so a test can assert that HEAD is not read at all.
       if (args[0] === 'show' && String(args[1]).startsWith('HEAD:')) {
         const at = args[1].slice('HEAD:'.length);
         const held = (headFiles[cwd.split('/')[2]] || {})[at];
         return { ok: true, stdout: held ?? files[`${cwd}/${at}`] ?? '' };
+      }
+      // `git checkout --theirs -- <path>`: origin/main's side of a conflicted
+      // file written over the copy on disk, which is stage `:3:` of it. The
+      // `--` form is the plan's, and the only one that writes here — the
+      // `.gitignore` resolution above it takes the plain default.
+      if (args[0] === 'checkout' && args[1] === '--theirs' && args[2] === '--') {
+        const path = args.at(-1);
+        const held = (stages[cwd.split('/')[2]] || {})[path];
+        if (!held) return { ok: false, stdout: '', stderr: `error: path '${path}' does not have their version` };
+        files[`${cwd}/${path}`] = held[3] ?? '';
+        return { ok: true, stdout: '' };
       }
       if (args[0] === 'ls-tree' && repoName) {
         return { ok: true, stdout: Object.keys(plans[repoName] || {}).map((n) => `docs/project/prog/${n}/PLAN.json`).join('\n') };
@@ -682,23 +692,43 @@ test('a PLAN.json whose two sides changed different steps is merged by the runne
   assert.doesNotMatch(log, /c: merge conflict in:/u);
 });
 
-test('a PLAN.json whose two sides changed the same step is left in progress, with the reason', async () => {
+/**
+ * And where the rule refuses, main's copy is taken and the merge commits.
+ *
+ * This is the case that stopped a project dead. The merge was left in
+ * progress, the plan was read from the branch's `HEAD`, that copy had no step
+ * to hand out, the merge was aborted and the workarea was recorded — and the
+ * next lane, ten minutes on, did the same thing: `sql-w3-email-closure` from
+ * 2026-09-06T18:34Z to 2026-09-08, on one predicate. Main's copy is the one
+ * the runner obeys everywhere else, so it is what the workarea takes.
+ */
+test("a PLAN.json whose two sides changed the same step takes main's copy, and the project gets its step", async () => {
   const three = planStages({ bothOnStepOne: true });
   const f = fixture({
     areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
     plans: { memoro: { c: three.main } },
     conflicts: { c: [PLAN_AT] },
     stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch, 3: three.main } } },
-    session: okSession(),
+    session: okSession(), gh: { c: { number: 91, title: 'Step two' } },
   });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
 
-  assert.equal(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json'], three.branch, 'the file is untouched — a refusal writes nothing');
-  assert.ok(!f.calls.git.some((c) => c[1] === 'add' && c.at(-1) === PLAN_AT), 'and stages nothing');
+  assert.equal(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json'], three.main, "main's copy, whole");
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'checkout' && c[2] === '--theirs' && c.at(-1) === PLAN_AT));
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'add' && c.at(-1) === PLAN_AT), 'the resolution is staged');
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'commit'), 'and the merge is committed');
+  assert.ok(!f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'), 'nothing is aborted');
+
+  assert.equal(f.calls.sessions.length, 1, 'and the project gets its step');
+  const [call] = f.calls.sessions;
+  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u, "main's step 1 is done, so the step is 2");
+  assert.match(call.args[1], /Step one landed\./u, "and the plan in the prompt is main's text");
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json is not resolvable by the plan's rule — steps\[0\]: changed on this branch and on main both/u);
-  assert.match(log, /c: merge conflict in: docs\/project\/prog\/c\/PLAN\.json/u);
+  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json — the plan's rule refused \(steps\[0\]: changed on this branch and on main both\); main's copy taken/u);
+  assert.doesNotMatch(log, /c: merge conflict in:/u);
+  assert.deepEqual(Object.keys(f.files).filter((p) => /^\/w\/runner\/[^/]+\.json$/u.test(p)), [],
+    'and no record of a workarea that could not merge — there is nothing left to record');
 });
 
 /**
@@ -730,18 +760,20 @@ test('a conflicting merge of origin/main goes to the step session, with the file
 });
 
 /**
- * The plan the rule refused is the plan the session is handed — read from
- * `HEAD`, because the copy on disk is the one with the markers in it. This is
- * the one case `fromHead` survives ruling 10 for, and the test above is the
- * other side of that line.
+ * The other side of taking main's copy: what the session is then judged
+ * against.
  *
- * And it is judged against the plan on origin/main afterwards: the merge that
- * stopped *is* main's edits to that file, so judging the session's resolution
- * against the HEAD it was handed would read every one of them as a step it had
- * no business touching. Here main added a comment to step 1, which the session
- * keeps; against HEAD that is `steps[0]: changed by the session that ran step 2`.
+ * The plan the rule refused used to be read from `HEAD` and handed to the
+ * session with the merge to finish, and its work was judged against
+ * origin/main afterwards — because the merge that stopped *is* main's edits to
+ * that file, so judging against the HEAD it was handed would read every one of
+ * them as a step it had no business touching. The runner takes main's copy
+ * itself now, so the session is handed main's plan in the first place; the
+ * judgement is the same one, over the same file, and this is what holds it.
+ * Here main added a comment to step 1, which the session keeps; against the
+ * branch's copy that is `steps[0]: changed by the session that ran step 2`.
  */
-test('a step session resolves the plan conflict it was handed and its work is judged against main', async () => {
+test("a step session handed main's plan has its work judged against main", async () => {
   const twoSteps = [
     { title: 'One', status: 'done', done_when: 'x', instruction: ['Do x.'], comments: [], pr: 601, blocked_by: null },
     { title: 'Two', status: 'ready', done_when: 'y', instruction: ['Do y.'], comments: [], pr: null, blocked_by: null },
@@ -758,10 +790,9 @@ test('a step session resolves the plan conflict it was handed and its work is ju
   const text = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
   const f = fixture({
-    // On disk: the merge stopped, so the file carries markers. It is HEAD
-    // that has a plan, and HEAD is what the round reads.
-    areas: { c: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
-    headFiles: { c: { [PLAN_AT]: text(branch) } },
+    // On the branch: this branch's own comment on step two, which is what the
+    // rule refuses on and what taking main's copy drops.
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: text(branch) } },
     plans: { memoro: { c: text(main) } },
     conflicts: { c: [PLAN_AT] },
     stages: { c: { [PLAN_AT]: { 1: text(base), 2: text(branch), 3: text(main) } } },
@@ -772,9 +803,9 @@ test('a step session resolves the plan conflict it was handed and its work is ju
   await runner.pass();
 
   const [call] = f.calls.sessions;
-  assert.match(call.args[1], /conflicts in: docs\/project\/prog\/c\/PLAN\.json/u);
-  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u, "HEAD's plan, not the file with the markers");
-  assert.match(call.args[1], /This branch touched step two\./u);
+  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u);
+  assert.match(call.args[1], /Main touched step two\./u, "main's copy, not the branch's");
+  assert.doesNotMatch(call.args[1], /This branch touched step two\./u);
   const [row] = runRows(f.files).filter((r) => r.name === 'c');
   assert.equal(row.note, 'success,merged', 'main\'s own edits to the plan are not a trespass');
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /left open — the session changed more of the plan/u);
@@ -821,19 +852,19 @@ test('a conflict outside the plan hands out the step main says, not the one HEAD
 });
 
 /**
- * The other half of the same rule: a merge nobody is handed is a merge nobody
- * finishes, and an unmerged path is a dirty worktree — which skips the project
- * every round until a person acts. Here the plan the branch is on is blocked,
- * so there is no step to give the conflict to.
+ * The one way a plan conflict still stops a project: git could not give main's
+ * copy either. The three sides are not in the index here — `stages` names
+ * none — so the rule cannot read them and `checkout --theirs` has nothing to
+ * take, and what is left is a half-merged tree with a plan on disk that parses
+ * as nothing.
  *
- * The conflict is the plan itself, and since ruling 10 that is the only way
- * this arises: main's copy is what the round reads otherwise, and a project
- * main's plan refuses is stopped by `planRefusal` before a worktree is touched.
+ * A merge nobody is handed is a merge nobody finishes, and an unmerged path is
+ * a dirty worktree, so the merge is aborted rather than left. This is the last
+ * of that path: it was the *ordinary* case until 2026-09-08.
  */
-test('a conflict with no step to hand it to is aborted, and the files are named', async () => {
+test('a plan conflict main\'s copy could not be taken for is aborted, and the files are named', async () => {
   const f = fixture({
     areas: { c: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
-    headFiles: { c: { [PLAN_AT]: plan({ status: 'blocked' }) } },
     plans: { memoro: { c: ready } },
     conflicts: { c: [PLAN_AT, 'src/a.js'] },
     session: okSession(),
@@ -843,76 +874,9 @@ test('a conflict with no step to hand it to is aborted, and the files are named'
   assert.equal(f.calls.sessions.length, 0, 'no session is launched on a half-merged tree');
   assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(
-    log,
-    /c: its PLAN\.json is one of the conflicts and the copy on this branch has no step to hand out — the merge of origin\/main is aborted, still conflicting in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u,
-  );
-  // And not the branch's stale plan talking. `docx-editor` reported `step 17 is
-  // blocked on decision docx-ime-input-source` for 13 rounds on 2026-09-05
-  // about a step main had replaced the evening before; the copy HEAD carries is
-  // the one that could not be merged, not the one that says what is true.
-  assert.doesNotMatch(log, /blocked on decision prog-1/u);
-});
-
-/**
- * The half of that abort nobody could see. `git merge --abort` leaves the
- * worktree *clean*, so the next round finds a ready plan on main, a clean
- * checkout and nothing open — and every surface calls the project ready while
- * it merges, conflicts and aborts again, ten minutes later, for ever.
- *
- * So the round writes what it found, in the shape `held.json` has: one entry
- * per workarea, with the files and a `since`, dropped the round the workarea
- * takes main. `machineState` reads it, which is what puts the project in
- * `mc status` and in the brief's *Ready, and the runner cannot start it*.
- */
-test('a workarea that could not take main is recorded, with the files, and dropped when it can', async () => {
-  const stuck = {
-    areas: { c: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
-    headFiles: { c: { [PLAN_AT]: plan({ status: 'blocked' }) } },
-    plans: { memoro: { c: ready } },
-    conflicts: { c: [PLAN_AT, 'src/a.js'] },
-    session: okSession(),
-  };
-  const f = fixture(stuck);
-  await createRunner({ deps: f.deps }).pass();
-  const [entry] = JSON.parse(f.files['/w/runner/unmergeable.json']);
-  assert.deepEqual(
-    [entry.project, entry.repo, entry.worktree, entry.files, entry.since],
-    ['c', 'memoro', '/w/c/memoro', [PLAN_AT, 'src/a.js'], '2026-08-29T10:00:00Z'],
-  );
-
-  // What a person is told, through the same reading `mc status` and the brief
-  // draw: the project is not runnable, the word is the merge and the sentence
-  // names the workarea and the files.
-  const world = createRunner({ deps: f.deps }).queue();
-  const reading = machineState('c', {
-    plans: world.plans,
-    prs: world.prs,
-    unmergeable: parseUnmergeable(f.files['/w/runner/unmergeable.json']),
-    root: '/w',
-    exists: f.deps.exists,
-    git: f.deps.git,
-  });
-  assert.equal(reading.runnable, false);
-  assert.equal(reading.reason, 'unmergeable');
-  assert.equal(reading.since, '2026-08-29T10:00:00Z');
-  assert.match(reading.detail, /origin\/main could not be merged into \/w\/c\/memoro: docs\/project\/prog\/c\/PLAN\.json, src\/a\.js/u);
-
-  // A second round that still cannot merge keeps the first round's `since`:
-  // eight rounds of one condition is one thing standing still, not eight.
-  const again = fixture({ ...stuck, now: '2026-08-29T12:00:00Z' });
-  again.files['/w/runner/unmergeable.json'] = f.files['/w/runner/unmergeable.json'];
-  await createRunner({ deps: again.deps }).pass();
-  assert.equal(JSON.parse(again.files['/w/runner/unmergeable.json'])[0].since, '2026-08-29T10:00:00Z');
-
-  // And the round the workarea takes main, the entry goes — nobody has to
-  // remember to clear it, and a stale row would be a project reported as
-  // waiting on hands that nothing is waiting for.
-  const fixed = fixture({ ...stuck, conflicts: {}, areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } }, gh: { c: { number: 96 } } });
-  fixed.files['/w/runner/unmergeable.json'] = f.files['/w/runner/unmergeable.json'];
-  await createRunner({ deps: fixed.deps }).pass();
-  assert.deepEqual(JSON.parse(fixed.files['/w/runner/unmergeable.json']), []);
-  assert.equal(fixed.calls.sessions.length, 1, 'and the project gets its step');
+  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json — the plan's rule refused \(the merge base could not be read out of the index\) and main's copy could not be taken either/u);
+  assert.match(log, /c: merge conflict in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u);
+  assert.match(log, /the merge of origin\/main is aborted, still conflicting in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u);
 });
 
 /**
@@ -932,6 +896,51 @@ test('a step session that leaves MERGE_HEAD behind has the merge aborted under i
   assert.equal(f.calls.sessions.length, 1);
   assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
   assert.match(f.files['/w/runner/log/runner.log'], /c: the session left the merge of origin\/main unfinished — merge aborted/u);
+});
+
+/**
+ * And the merge no session is standing over any more. The abort above only
+ * runs in the pass that started the session; a runner killed mid-session — rc
+ * 143, `mc run stop --force` — never reaches it, and what it leaves behind is
+ * unmerged paths in the workarea. That is a dirty worktree, so every pick from
+ * then on refuses the project and a person has to go and do it by hand:
+ * `sql-w1-universe-closure` was `dirty worktree (.gitattributes,
+ * .github/workflows/deploy.yml, .gitignore +1039)` every round of 2026-09-08
+ * on exactly this.
+ *
+ * So it is aborted before the dirty check, and the tree goes back to the
+ * branch's own last commit — which is what the post-session abort already does
+ * with the same merge.
+ */
+test('a merge a killed session left in the workarea is aborted before the dirty check', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    mergeLeft: ['c'],
+    session: okSession(), gh: { c: { number: 97, title: 'The one step' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  const aborts = f.calls.git.filter((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort');
+  assert.ok(aborts.length >= 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /c: a merge of origin\/main was left in progress — aborted/u);
+  assert.equal(f.calls.sessions.length, 1, 'and the step runs, in the same pass');
+});
+
+/** What the abort cannot fix is still a dirty worktree, and still says so. */
+test('a workarea still dirty after that abort is refused, with the files', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    mergeLeft: ['c'], dirty: ['c'],
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('c', runner.queue()), 'skipped:dirty');
+  assert.equal(f.calls.sessions.length, 0);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /c: a merge of origin\/main was left in progress — aborted/u);
+  assert.match(log, /c: dirty worktree \(x\)/u);
 });
 
 /**
@@ -3200,9 +3209,6 @@ const readingOf = (f, name, world) => machineState(name, {
   prs: world.prs,
   prsFailed: world.prsFailed,
   held: parseHeld(f.files['/w/runner/held.json'] ?? null),
-  // The one input here that is a round's own record rather than a fact about
-  // the machine now: an aborted merge leaves nothing on disk to read.
-  unmergeable: parseUnmergeable(f.files['/w/runner/unmergeable.json'] ?? null),
   stop: '/w/runner/STOP' in f.files,
   root: '/w',
   exists: f.deps.exists,
@@ -3284,33 +3290,12 @@ const CASES = [
     what: 'origin could not be fetched',
     make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), fetchFails: ['m'], session: okSession() }),
   },
-  // The one case whose reading comes out of a file the round wrote rather than
-  // out of the machine as it stands, and it has to: `git merge --abort` leaves
-  // the worktree clean, and `mc status` may not merge to find out. So the
-  // fixture carries the record of the round before this one — which is exactly
-  // the state the surfaces read on the second round and every round after.
-  {
-    reason: 'unmergeable',
-    what: 'a workarea that cannot be brought to origin/main',
-    make: () => {
-      const f = fixture({
-        areas: { m: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
-        headFiles: { m: { 'docs/project/prog/m/PLAN.json': plan({ status: 'blocked' }) } },
-        plans: { memoro: { m: ready } },
-        conflicts: { m: ['docs/project/prog/m/PLAN.json'] },
-        session: okSession(),
-      });
-      f.files['/w/runner/unmergeable.json'] = JSON.stringify([{
-        project: 'm', repo: 'memoro', worktree: '/w/m/memoro',
-        files: ['docs/project/prog/m/PLAN.json'],
-        why: 'the PLAN.json is one of the conflicts and nothing could be handed the merge',
-        since: '2026-08-29T08:00:00Z',
-      }]);
-      return f;
-    },
-    detail: /origin\/main could not be merged into \/w\/m\/memoro: docs\/project\/prog\/m\/PLAN\.json/u,
-    since: '2026-08-29T08:00:00Z',
-  },
+  // There was one more case here until 2026-09-08, and it was the only one
+  // whose reading came out of a file the runner had written rather than out of
+  // the machine as it stands: a workarea whose `PLAN.json` conflict the plan's
+  // rule refused, whose merge was therefore aborted — leaving the worktree
+  // clean, so nothing else said it had happened. Such a conflict takes main's
+  // copy now and the merge commits, so there is no refusal and no record.
   {
     reason: 'role-missing',
     what: 'the role file is not installed',
