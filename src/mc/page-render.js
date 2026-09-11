@@ -916,6 +916,11 @@ function blockedLines(lines, c, wide, blocked) {
   const waits = [
     kinds.decision ? `${kinds.decision} on a decision` : '',
     kinds.project ? `${kinds.project} on a project` : '',
+    // The runner's own: a step it could not start, waiting on a workarea
+    // somebody has to open (`blockStep`, run.js). Drawn beside the other two
+    // because the count above already holds it, and a blocked project whose
+    // reason is missing from this line reads as one of the other kinds.
+    kinds.workarea ? `${kinds.workarea} on a workarea` : '',
   ].filter(Boolean).join(', ');
   const room = wide - 7;
   const head = [

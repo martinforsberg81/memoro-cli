@@ -81,6 +81,14 @@ export { kindFor };
  * main already refuses it must cost no `git status` — a round spent 51 seconds
  * walking 38 projects to start one before it was asked in that order.
  *
+ * That order is also how the runner's own block is read (2026-09-08): a step it
+ * could not start is `blocked` on `main` with `blocked_by: { kind: 'workarea' }`
+ * (`blockStep`, run.js), so `kindFor` answers `skip:blocked` here and the dirty
+ * check and the hold below are never reached for it — the plan says what is
+ * wrong and the step's last comment says which workarea. Between the pick and
+ * the landed block they *are* reached, and that is the point: a workarea whose
+ * block has not landed yet must not read as runnable.
+ *
  * Nothing here starts, writes or fetches, which is the rule this module opens
  * with: `git` is only ever asked read-only questions of a worktree, and a
  * caller that gives no `git` reads a worktree as clean — exactly as the round

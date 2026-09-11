@@ -26,8 +26,18 @@ export const PLAN_VERSION = 1;
 // step that cannot go on is `blocked` and says why in `blocked_by` — which is
 // all `waiting-decision` ever meant to the runner, since the runner hands out
 // `ready` steps and reads no decision file.
+//
+// `blocked_by.kind` is what a reader has to *do*: `decision` is an answer from
+// Martin, `project` is another project landing first, and `workarea`
+// (2026-09-08) is a fact about this machine — a dirty worktree, a branch that
+// could not be moved, a tool that is not installed. The third is the runner's
+// own word: it is the one thing `mc run` writes into a plan, so that a step it
+// could not start is written down once instead of refused every ten minutes
+// for days. Its `name` is one of `WORKAREA_BLOCKS` (run-plan.js) and the step's
+// last comment says which workarea and what was in it. The way back is the same
+// for all three: `mc brief` or a planning session sets the step `ready` again.
 export const STEP_STATUSES = Object.freeze(['ready', 'done', 'blocked']);
-export const BLOCKER_KINDS = Object.freeze(['decision', 'project']);
+export const BLOCKER_KINDS = Object.freeze(['decision', 'project', 'workarea']);
 
 const STATUSES = new Set(STEP_STATUSES);
 const KINDS = new Set(BLOCKER_KINDS);
@@ -154,7 +164,7 @@ function validateBlocker(step, at, problems) {
     }
     for (const key of unknownKeys(blocker, BLOCKER_KEYS)) problems.push(`${at}.blocked_by.${key}: unknown key`);
     if (!KINDS.has(blocker.kind)) problems.push(`${at}.blocked_by.kind: one of ${BLOCKER_KINDS.join(', ')}`);
-    if (!text(blocker.name)) problems.push(`${at}.blocked_by.name: the decision or the project it waits for`);
+    if (!text(blocker.name)) problems.push(`${at}.blocked_by.name: the decision, the project or the workarea fault it waits for`);
     // A name, and the same shape as a project directory — because that is what
     // it is matched against. Three plans wrote a whole sentence here instead:
     // a project name, an em dash, and a paragraph saying which *step* of it

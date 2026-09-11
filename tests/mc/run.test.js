@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import { createRunner, runLoop } from '../../src/mc/run.js';
 import { parseHeld } from '../../src/mc/held.js';
-import { RUN_REFUSALS } from '../../src/mc/run-plan.js';
+import { RUN_REFUSALS, WORKAREA_BLOCKS } from '../../src/mc/run-plan.js';
+import { unauthorisedChanges } from '../../src/mc/plan-schema.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { machineState } from '../../src/mc/status-collect.js';
 
@@ -15,7 +16,7 @@ import { machineState } from '../../src/mc/status-collect.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [] } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -54,6 +55,8 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], checkouts: [], rounds: [], docsRounds: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
+  /** `/w/runner/block/<repo>` — and the one it writes a blocked step in. */
+  const blockRoot = `${root}/runner/block`;
   // A snapshot of the work root taken inside every session call — the only
   // way to see the files that exist only while a step is in flight.
   const duringSession = [];
@@ -141,7 +144,11 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     },
     docsMerge: async (options) => {
       calls.docsRounds.push(options);
-      const a = archive[Object.keys(archive).find((r) => options.repoPath.endsWith(`/${r}`)) || ''] || {};
+      // Two docs pull requests go through this door — the archive's and the
+      // blocked step's — and they are told apart by the worktree they were
+      // opened in, so a test can refuse one without refusing the other.
+      const table = options.repoPath.startsWith(`${blockRoot}/`) ? block : archive;
+      const a = table[Object.keys(table).find((r) => options.repoPath.endsWith(`/${r}`)) || ''] || {};
       return a.mergeFails
         ? { ok: false, merged: false, stopped_at: 'merge', reason: 'nope', pr: { number: options.pr } }
         : { ok: true, merged: true, merged_into: 'main', pr: { number: options.pr } };
@@ -278,6 +285,13 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
         heads[area] = args[2];
         return { ok: true, stdout: '' };
       }
+      // A commit this workarea will not make — the merge of origin/main
+      // resolved and refused, which is a fact about the workarea and blocks the
+      // step. Named per workarea, so the block's own commit is never the one
+      // that fails.
+      if (args[0] === 'commit' && commitFails.includes(cwd.split('/')[2])) {
+        return { ok: false, stdout: '', stderr: 'error: could not commit' };
+      }
       // `git branch --show-current`: the branch the workarea stands on, which
       // is the folder's name unless `heads` says otherwise.
       if (args[0] === 'branch') return { ok: true, stdout: heads[cwd.split('/')[2]] || cwd.split('/')[2] };
@@ -304,9 +318,11 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
         const stale = archive[repoName]?.openFromEarlierRound;
         return { ok: true, stdout: stale ? String(stale) : '' };
       }
-      if (cwd.startsWith(`${archiveRoot}/`)) {
-        const a = archive[cwd.slice(archiveRoot.length + 1)] || {};
-        const number = a.number ?? 900;
+      if (cwd.startsWith(`${archiveRoot}/`) || cwd.startsWith(`${blockRoot}/`)) {
+        const inBlock = cwd.startsWith(`${blockRoot}/`);
+        const table = inBlock ? block : archive;
+        const a = table[cwd.slice((inBlock ? blockRoot : archiveRoot).length + 1)] || {};
+        const number = a.number ?? (inBlock ? 950 : 900);
         if (args[1] === 'create') return a.createFails ? { ok: false, stdout: '', stderr: 'no' } : { ok: true, stdout: `https://github.com/o/r/pull/${number}\n` };
         if (args[1] === 'list') return { ok: true, stdout: String(number) };
         if (args[1] === 'view' && args.includes('mergeable')) return { ok: true, stdout: 'MERGEABLE' };
@@ -497,7 +513,8 @@ test('skips: dirty worktree, a blocked step', async () => {
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /dirty: dirty worktree \(.+\) — skipped every round until it is committed or stashed in \/w\/dirty\/memoro/u, 'the machine gets its own line, with the files and the way out');
+  assert.match(log, /dirty: uncommitted changes that are not a merge in progress \(x\) — \/w\/dirty\/memoro/u, 'the machine gets its own line, with the files and the workarea');
+  assert.match(log, /dirty: step 1 blocked on workarea dirty-worktree — #950/u, 'and it is written down on main, once, rather than met again in ten minutes');
   assert.doesNotMatch(log, /wait: /u, 'a blocked plan is never picked, and the page is where it shows');
 });
 
@@ -940,7 +957,7 @@ test('a workarea still dirty after that abort is refused, with the files', async
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /c: a merge of origin\/main was left in progress — aborted/u);
-  assert.match(log, /c: dirty worktree \(x\)/u);
+  assert.match(log, /c: uncommitted changes that are not a merge in progress \(x\)/u);
 });
 
 /**
@@ -1214,7 +1231,7 @@ test('a kind whose role file is missing is still skipped, not launched on the sh
   const f = heldRound([heldEntry()], { roles: false });
   await createRunner({ deps: f.deps }).pass();
   assert.equal(f.calls.sessions.length, 0, 'no role file, no session');
-  assert.match(f.files['/w/runner/log/runner.log'], /m: canon\/roles\/repair\.md is missing — skip/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: canon\/roles\/repair\.md is missing on this machine/u);
 });
 
 test('a repair that stays red is held again, with the gate\'s new reason and its repair still counted', async () => {
@@ -1816,8 +1833,12 @@ test('a skip that is about the machine keeps its own line: dirty, in flight, unp
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /dirt: dirty worktree \(.+\) — skipped every round/u);
-  assert.match(log, /stuck: stuck has landed and stuck-2 could not be made, skip/u);
+  assert.match(log, /dirt: uncommitted changes that are not a merge in progress \(x\)/u);
+  assert.match(log, /stuck: stuck has landed and stuck-2 could not be made/u);
+  // Each of them ends where a refusal a person has to act on now ends: written
+  // into the plan on main, so the lane meets it once and not every ten minutes.
+  assert.match(log, /dirt: step 1 blocked on workarea dirty-worktree/u);
+  assert.match(log, /stuck: step 1 blocked on workarea branch-unmovable/u);
   // The two that are about this machine are met by `runStep`, one line each,
   // and the lane moves past them to the next name rather than stopping there.
   assert.deepEqual((log.match(/next — (\w+)/gu) || []), ['next — dirt', 'next — stuck']);
@@ -3177,6 +3198,238 @@ test('the merge lane starts no repair under STOP or a pending UPDATE', async () 
     assert.equal(parseHeld(f.files['/w/runner/held.json'])[0].repairs, 0, `${file}: the repair is the next runner's`);
     assert.ok(f.files['/w/runner/log/runner.log'].includes(`gets no repair here — ${why}`));
   }
+});
+
+/* ----------------------------------------- a step the runner cannot start */
+
+/**
+ * The one thing the runner writes into a plan (2026-09-08, ruling 17).
+ *
+ * A refusal that is a fact about the workarea or this machine does not go away
+ * by itself, and the runner used to meet every one of them again ten minutes
+ * later — `sql-w1-universe-closure` was `dirty worktree (.gitattributes, … +1039)`
+ * every round of 2026-09-08 while its plan on main said `ready`. So the first
+ * not-done step goes `blocked` on `origin/main` through a docs-only pull request
+ * the runner lands itself, and nothing picks the project again until somebody
+ * sets the step `ready`.
+ *
+ * One case per name in `WORKAREA_BLOCKS`, driven the way a lane drives it, and
+ * the last test below asserts every name has one.
+ */
+const BLOCK_PLAN = (name = 'm') => `/w/runner/block/memoro/docs/project/prog/${name}/PLAN.json`;
+
+const BLOCKS = [
+  {
+    block: 'dirty-worktree',
+    reason: 'dirty',
+    what: 'a workarea with uncommitted work in it',
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], session: okSession() }),
+    detail: /uncommitted changes that are not a merge in progress \(x\)/u,
+  },
+  {
+    block: 'worktree-missing',
+    reason: 'worktree',
+    what: 'a worktree that could not be made',
+    make: () => {
+      const f = fixture({ plans: { memoro: { m: ready } }, session: okSession() });
+      f.deps.addWorktree = () => ({ ok: false, reason: 'no space left on device' });
+      return f;
+    },
+    detail: /git worktree add failed \(no space left on device\)/u,
+  },
+  {
+    block: 'branch-unmovable',
+    reason: 'branch',
+    what: 'a landed branch the workarea could not move off',
+    make: () => {
+      const f = fixture({
+        plans: { memoro: { m: ready } }, areas: area(), landed: ['m'], refs: { m: ['m'] }, session: okSession(),
+      });
+      const git = f.deps.git;
+      f.deps.git = (cwd, args) => (args[0] === 'checkout' && args.includes('-b') && cwd === '/w/m/memoro'
+        ? { ok: false, stdout: '', stderr: 'no' }
+        : git(cwd, args));
+      return f;
+    },
+    detail: /m has landed and m-2 could not be made/u,
+  },
+  {
+    block: 'merge-uncommittable',
+    reason: 'sync',
+    name: 'c',
+    what: 'a merge of origin/main that resolved and would not commit',
+    make: () => {
+      const three = planStages();
+      return fixture({
+        areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
+        plans: { memoro: { c: three.main } },
+        conflicts: { c: [PLAN_AT] },
+        stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch, 3: three.main } } },
+        commitFails: ['c'], session: okSession(),
+      });
+    },
+    detail: /origin\/main was merged in and the commit was refused/u,
+  },
+  {
+    block: 'role-missing',
+    reason: 'role-missing',
+    what: 'a role file that is not on this machine',
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), roles: false, session: okSession() }),
+    detail: /canon\/roles\/step\.md is missing on this machine/u,
+  },
+  {
+    block: 'tool-missing',
+    reason: 'tool-missing',
+    what: 'a tool the launch adapter cannot find',
+    make: () => {
+      const f = fixture({ plans: { memoro: { m: ready } }, areas: area(), session: okSession() });
+      f.deps.launch = () => ({ ok: false, reason: 'not installed' });
+      return f;
+    },
+    detail: /claude is not available on this machine \(not installed\)/u,
+  },
+  {
+    block: 'held-after-repair',
+    reason: 'held-after-repair',
+    what: 'a pull request still held after its one repair',
+    make: () => heldOn(
+      fixture({ plans: { memoro: { m: ready } }, areas: area(), openPrs: prOn('m'), session: okSession() }),
+      [heldEntry({ repairs: 1 })],
+    ),
+    detail: /#9 is held before merge after a repair/u,
+  },
+];
+
+for (const kase of BLOCKS) {
+  test(`blocked: ${kase.what} — the step is \`${kase.block}\` on main, in a docs PR the runner lands`, async () => {
+    const f = kase.make();
+    const name = kase.name || 'm';
+    const runner = createRunner({ deps: f.deps });
+    const outcome = await runner.runStep(name, runner.queue());
+
+    assert.equal(outcome, `skipped:${kase.reason}`, 'the lane still hears the word it always heard');
+    assert.equal(f.calls.sessions.length, 0, 'a blocked project spends no session');
+    const log = f.files['/w/runner/log/runner.log'];
+    assert.match(log, kase.detail, 'the reason is said in the log, with the workarea');
+    assert.match(log, new RegExp(`${name}: step \\d+ blocked on workarea ${kase.block} — #950`, 'u'));
+
+    // The pull request: docs-only by construction, from a branch named after
+    // the project so `projectForBranch` reads it as the project's own.
+    const created = f.calls.gh.find((c) => c[0] === '/w/runner/block/memoro' && c[2] === 'create');
+    assert.ok(created, 'a pull request was opened');
+    assert.match(created[created.indexOf('--title') + 1], new RegExp(`^Block ${name} step \\d+: ${kase.block}$`, 'u'));
+    assert.match(created[created.indexOf('--head') + 1], new RegExp(`^${name}-blocked-\\d{8}T\\d{6}Z$`, 'u'));
+    assert.match(created[created.indexOf('--body') + 1], /mc brief. or a planning session setting the step/u);
+    assert.deepEqual(f.calls.docsRounds.map((c) => c.repoPath), ['/w/runner/block/memoro'], 'landed through mc merge --docs');
+    assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'worktree' && c[2] === 'remove'), 'the block worktree is taken down again');
+  });
+}
+
+test('every workarea block has a case above', () => {
+  const covered = new Set(BLOCKS.map((kase) => kase.block));
+  assert.deepEqual(Object.values(WORKAREA_BLOCKS).filter((block) => !covered.has(block)), [],
+    'a name the runner can write into a plan with no case here is one nobody has read');
+  assert.deepEqual(BLOCKS.map((kase) => WORKAREA_BLOCKS[kase.reason]), BLOCKS.map((kase) => kase.block),
+    'and every case blocks under the name its refusal word maps to');
+});
+
+/**
+ * What the plan edit is allowed to be: `unauthorisedChanges`'s own shape, which
+ * is the rule a step session's edit is judged by — the runner holds itself to
+ * it. The status, the blocker and one appended comment on the first not-done
+ * step, and nothing else in the file.
+ */
+test('the block writes exactly the status, the blocker and one comment on the first not-done step', async () => {
+  const two = [
+    { title: 'One', status: 'done', done_when: 'x', instruction: [], comments: ['Landed.'], pr: 7, blocked_by: null },
+    { title: 'Two', status: 'ready', done_when: 'y', instruction: ['Do y.'], comments: [], pr: null, blocked_by: null },
+  ];
+  const f = fixture({
+    plans: { memoro: { m: plan({ steps: two }) } },
+    areas: { m: { repo: 'memoro', programme: 'prog', plan: plan({ steps: two }) } },
+    dirty: ['m'], session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.runStep('m', runner.queue());
+
+  const before = JSON.parse(plan({ steps: two }));
+  const after = JSON.parse(f.files[BLOCK_PLAN()]);
+  assert.deepEqual(unauthorisedChanges(before, after, 1), { ok: true, problems: [] });
+  assert.deepEqual(after.steps[0], before.steps[0], 'the step that is done is untouched');
+  assert.equal(after.steps[1].status, 'blocked');
+  assert.deepEqual(after.steps[1].blocked_by, { kind: 'workarea', name: 'dirty-worktree' });
+  assert.deepEqual(after.success_criteria, before.success_criteria);
+  assert.equal(after.steps[1].comments.length, 1, 'one paragraph, appended');
+  assert.equal(after.steps[1].comments[0],
+    'Blocked by mc run on 2026-08-29T10:00:00Z: uncommitted changes that are not a merge in progress (x). '
+    + 'The workarea is /w/m/memoro. mc brief or a planning session sets this step ready again once the '
+    + 'workarea is fixed; the runner does not retry.');
+  // The rest of the plan, byte for byte what it was: the runner rewrites the
+  // file, so everything it did not mean to change has to come back identical.
+  assert.deepEqual({ ...after, steps: null }, { ...before, steps: null });
+  assert.equal(after.steps[1].title, 'Two');
+  // And it is the file the pull request carries.
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/runner/block/memoro' && c[1] === 'add' && c.at(-1) === 'docs/project/prog/m/PLAN.json'));
+});
+
+/**
+ * The whole point, in the picker's own words: the block lands on `main`, the
+ * plan there says `blocked`, and the next pick is the *next* name rather than
+ * the same one ten minutes later.
+ */
+test('once the block is on main the project is never picked again, and the lane takes the next name', async () => {
+  const plans = { memoro: { m: ready, n: ready } };
+  const f = fixture({ plans, areas: area(), dirty: ['m'], session: okSession() });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(runner.nextStep({ repo: 'memoro', world: runner.queue() })?.name, 'm', 'm is first while its plan says ready');
+
+  await runner.runStep('m', runner.queue());
+  // The landing, in the fixture: what the block PR wrote is what origin/main
+  // now carries.
+  plans.memoro.m = f.files[BLOCK_PLAN()];
+  const world = runner.queue();
+  assert.equal(runner.nextStep({ repo: 'memoro', world })?.name, 'n', 'the picker moves on, and never comes back to m');
+  // Driven past the picker by hand, the machine still meets the dirty worktree
+  // — it is asked before the plan is read — but the block is written once: the
+  // step on main already says so, and a second comment is the same fact twice.
+  assert.equal(await runner.runStep('m', world), 'skipped:dirty');
+  assert.equal(f.calls.docsRounds.length, 1, 'one block pull request, not one per pick');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 is already blocked on workarea dirty-worktree — not written again/u);
+  // `mc status` reads the same block, off the plan, before it asks this
+  // machine anything at all.
+  const reading = readingOf(f, 'm', world);
+  assert.equal(reading.runnable, false);
+  assert.equal(reading.reason, 'blocked');
+  assert.match(reading.detail, /step 1 is blocked on workarea dirty-worktree/u);
+});
+
+/** A world one lane read a minute ago is not a reason to say the same thing twice. */
+test('a step another pick has already blocked is not written again', async () => {
+  const f = fixture({
+    plans: { memoro: { m: plan({ status: 'blocked' }) } },
+    areas: area(), dirty: ['m'], session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  // Driven past the picker, which would never have offered a blocked plan.
+  await runner.blockStep({ repo: runner.repos[0], name: 'm', reason: 'dirty-worktree', detail: 'x' });
+  assert.deepEqual(f.calls.docsRounds, [], 'nothing is landed');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 is already blocked on decision prog-1 — not written again/u);
+});
+
+/**
+ * The block is a pull request like any other, and a landing that is refused
+ * leaves it open. That is not a loss: `inFlight` covers the project from there,
+ * so nothing picks it again either way, and the brief reads open pull requests.
+ */
+test('a block whose landing is refused is left open, and the project still starts nothing', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], session: okSession(),
+    block: { memoro: { mergeFails: true } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('m', runner.queue()), 'skipped:dirty');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /m: #950 carries the block and is still open — the project starts nothing until it lands/u);
 });
 
 /* ------------------------------------------- the round and the reading agree */

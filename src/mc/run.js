@@ -17,6 +17,18 @@
  * (different main branches, different worktrees) — and `mc run lanes <n>`
  * puts n loops on each. `--once` is one step, for a person watching.
  *
+ * A step the runner cannot start is written down instead of met again. A
+ * refusal that is a fact about the workarea or this machine — a dirty worktree,
+ * a branch that could not be moved, a merge that would not commit, a role or a
+ * tool that is missing, a pull request held after its one repair — sets that
+ * step `blocked` on `main` with `blocked_by: { kind: "workarea", name }` and one
+ * comment naming the path, through a docs-only pull request the runner lands
+ * itself (`blockStep`). Then nothing picks the project until `mc brief` or a
+ * planning session sets the step `ready` again: the runner never writes `ready`
+ * and never retries. What it does **not** block on is transient and not the
+ * project's fault — STOP, the quota, GitHub not answering, a failed fetch — and
+ * there the lane waits and asks the same question again (ruling 17).
+ *
  * The chores take away what is finished: every plan on main that
  * says `status: done` is archived — its `docs/project/<programme>/<project>/`
  * removed and a `project_log.md` row left behind it — in one PR per
@@ -99,7 +111,7 @@ import {
   reconcileHeld, releasePr, samePr,
 } from './held.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
-import { readPlanText, unauthorisedChanges } from './plan-schema.js';
+import { readPlanText, unauthorisedChanges, validatePlan } from './plan-schema.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
@@ -121,7 +133,7 @@ import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, REFUSAL, TIMEOUT_EXIT,
-  assembleQueue, chooseKind, collectNote, headlessArgs,
+  WORKAREA_BLOCKS, assembleQueue, chooseKind, collectNote, headlessArgs,
   heldRepair, helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, nextFor,
   queueFileText, readSessionOutput, repairPrompt, sessionSettings, stackOrder,
   stepOfPr, stepPrompt, strictQueue, tsvHeader, tsvRow,
@@ -474,9 +486,14 @@ export function createRunner({
    * resolved here without a session: an identical .gitignore hunk, and a
    * PLAN.json whose two sides wrote to different steps. Anything else — and
    * any plan the rule refuses — is left in progress for the step session.
+   *
+   * `why` tells the two failures apart for the caller, because their answers
+   * are opposite: `fetch` is the network and the lane waits it out, `commit` is
+   * this workarea and blocks the step (`merge-uncommittable`, `WORKAREA_BLOCKS`).
+   * Both used to be `{ ok: false, conflicts: [] }` and nothing could ask.
    */
   function syncMain(worktree, name) {
-    if (!deps.git(worktree, ['fetch', '-q', 'origin']).ok) return { ok: false, conflicts: [] };
+    if (!deps.git(worktree, ['fetch', '-q', 'origin']).ok) return { ok: false, conflicts: [], why: 'fetch' };
     if (deps.git(worktree, ['merge', '-q', '--no-edit', 'origin/main']).ok) return { ok: true, conflicts: [] };
     const conflicts = (gitOut(worktree, ['diff', '--name-only', '--diff-filter=U']) || '').split('\n').filter(Boolean);
     if (conflicts.length === 1 && conflicts[0] === '.gitignore') {
@@ -486,10 +503,11 @@ export function createRunner({
     if (!left.length) {
       if (deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
       // Resolved, staged, and the commit refused: not a conflict any more and
-      // not a merge either. The round skips the project rather than start a
-      // session in a worktree mid-merge.
+      // not a merge either. No session is started in a worktree mid-merge, and
+      // nothing the runner does next changes the answer — so the step is
+      // blocked on `main` rather than skipped (`merge-uncommittable`).
       say(`${name}: ${conflicts.join(' ')} resolved, but the merge would not commit`);
-      return { ok: false, conflicts: [] };
+      return { ok: false, conflicts: [], why: 'commit' };
     }
     say(`${name}: merge conflict in: ${left.join(' ')}`);
     return { ok: false, conflicts: left };
@@ -1175,6 +1193,122 @@ export function createRunner({
     return { archived, landed };
   }
 
+  /* ------------------------------------------------------------- blocking */
+
+  /**
+   * The one thing the runner writes into a plan: a step it could not start.
+   *
+   * A refusal that is a fact about the workarea or this machine (`WORKAREA_BLOCKS`,
+   * run-plan.js) does not go away by itself, and until 2026-09-08 the runner met
+   * every one of them again ten minutes later — for days, with nothing on `main`
+   * saying the project was stuck and the plan reading `ready` in every surface.
+   * Martin, 2026-09-08: "Om det var något som en LLM skulle kunna ta beslut som
+   * så skulle det ha gjorts vid första Runner-försöket. Då är det det som är
+   * fel. Rätt svar är inte en Runner-runda till." (Ruling 17.)
+   *
+   * So it is written down once, where the runner already obeys: the first
+   * not-done step of the plan on `origin/main` goes `blocked` with
+   * `blocked_by: { kind: 'workarea', name: <reason> }` and one appended comment
+   * naming the workarea and what was in it. `kindFor` then reads `skip:blocked`
+   * and the picker never reaches the project again (`nextFor`). The way back is
+   * `mc brief` or a planning session setting the step `ready`; the runner never
+   * writes `ready` and never retries on its own.
+   *
+   * It lands the way an archive lands — a worktree of its own from origin/main,
+   * a docs-only pull request through `landDocsPr`, which is the door a plan edit
+   * has (`docs-merge.js` refuses anything outside `docs/`). The branch carries
+   * the project's name as its prefix on purpose: `projectForBranch`
+   * (project-prs.js) then reads a block pull request that did *not* land as this
+   * project's own open one, so `inFlight` keeps it out of every pick until it
+   * does. Nothing else has to know the branch exists.
+   *
+   * Returns true when the block is recorded on a branch — landed or left open —
+   * and false when nothing was written, which the line above it says.
+   */
+  async function blockStep({ repo, name, reason, detail }) {
+    const branch = `${name}-blocked-${stamp().replace(/[-:]/gu, '')}`;
+    const worktree = join(root, 'runner', 'block', repo.name);
+    if (deps.exists(worktree)) deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
+    if (!deps.git(repo.path, ['worktree', 'add', '-b', branch, worktree, 'origin/main']).ok) {
+      say(`${name}: the worktree to write the block in could not be made — the step is not blocked, only skipped`);
+      return false;
+    }
+    try {
+      return await blockIn({ repo, worktree, branch, name, reason, detail });
+    } finally {
+      deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
+      deps.git(repo.path, ['branch', '-D', branch]);
+    }
+  }
+
+  /** The plan edit itself, inside the worktree that was made for it. */
+  async function blockIn({ repo, worktree, branch, name, reason, detail }) {
+    const found = planOf(worktree, name);
+    const plan = found?.plan || null;
+    if (!plan) {
+      say(`${name}: the plan on origin/main ${found ? 'does not parse' : 'is gone'} — nothing to block`);
+      return false;
+    }
+    const index = plan.steps.findIndex((step) => step?.status !== 'done');
+    if (index < 0) { say(`${name}: every step of the plan on origin/main is done — nothing to block`); return false; }
+    const step = plan.steps[index];
+    // Already blocked: the world this lane read is stale — another lane, or an
+    // earlier pick, has written it. Say so and leave the plan alone; a second
+    // comment on the same step is the same fact twice.
+    if (step.status === 'blocked') {
+      say(`${name}: step ${index + 1} is already blocked on ${step.blocked_by?.kind || 'something'} ${step.blocked_by?.name || '(unnamed)'} — not written again`);
+      return false;
+    }
+    const area = join(root, name, repo.name);
+    step.status = 'blocked';
+    step.blocked_by = { kind: 'workarea', name: reason };
+    step.comments = [...(step.comments || []),
+      `Blocked by mc run on ${stamp()}: ${detail}. The workarea is ${area}. `
+      + 'mc brief or a planning session sets this step ready again once the workarea is fixed; the runner does not retry.'];
+    // A plan the runner made unreadable is the failure `plan-intake.js` exists
+    // for, and it must not be this runner's: nothing is committed unless the
+    // file it wrote still parses as a plan.
+    const check = validatePlan(plan);
+    if (!check.ok) {
+      say(`${name}: the block would leave the plan unreadable (${check.problems[0]}) — nothing written`);
+      return false;
+    }
+    const relative = found.path.slice(`${worktree}/`.length);
+    deps.write(found.path, `${JSON.stringify(plan, null, 2)}\n`);
+    const title = `Block ${name} step ${index + 1}: ${reason}`;
+    const body = [
+      detail,
+      '',
+      `The workarea is \`${area}\`.`,
+      '',
+      'This is the one thing `mc run` writes into a plan: a step it could not',
+      'start. The way back is `mc brief` or a planning session setting the step',
+      '`ready` again once the workarea is fixed — the runner never writes `ready`',
+      'and never retries this on its own.',
+    ].join('\n');
+    deps.git(worktree, ['add', '--', relative]);
+    if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok
+      || !deps.git(worktree, ['push', '-q', '-u', 'origin', 'HEAD']).ok) {
+      say(`${name}: the block could not be committed or pushed — the step is not blocked, only skipped`);
+      return false;
+    }
+    const created = deps.gh(worktree, ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body]);
+    const listed = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number']);
+    const pr = (/(\d+)\s*$/u.exec(created.stdout.trim())?.[1]) || (listed.ok && listed.stdout.trim()) || null;
+    if (!pr) {
+      say(`${name}: the block PR could not be opened (${lastLine(created)}) — the step is not blocked, only skipped`);
+      return false;
+    }
+    say(`${name}: step ${index + 1} blocked on workarea ${reason} — #${pr}`);
+    // A landing that is refused leaves the pull request open, and that is not a
+    // loss: `inFlight` covers the project from here, so nothing picks it again
+    // either way, and the brief reads open pull requests.
+    if (merge && !await landDocsPr(worktree, name, pr)) {
+      say(`${name}: #${pr} carries the block and is still open — the project starts nothing until it lands`);
+    }
+    return true;
+  }
+
   /* -------------------------------------------------------------- closing */
 
   /** The repositories this workarea has a checkout of. Empty means it is not one. */
@@ -1596,11 +1730,20 @@ export function createRunner({
     // the same fact `kindFor` answers with, met one question later.
     if (!repo) return refuse('no-plan', 'no workarea and no plan on main, skip');
     const worktree = join(root, name, repo.name);
+    // The other way out, for the refusals a person has to act on: the same word
+    // back to the lane, and the step written `blocked` on `main` so that this
+    // project is never picked again until somebody sets it `ready`
+    // (`blockStep`, and `WORKAREA_BLOCKS` for which refusals are these).
+    const block = async (reason, detail) => {
+      say(`${name}: ${detail} — ${worktree}`);
+      await blockStep({ repo, name, reason: WORKAREA_BLOCKS[reason], detail });
+      return `skipped:${reason}`;
+    };
     if (!deps.exists(worktree)) {
       say(`${name}: no workarea — creating ${repo.name} worktree from origin/main`);
       deps.git(repo.path, ['fetch', '-q', 'origin']);
       const added = deps.addWorktree({ name, repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
-      if (!added.ok) return refuse(REFUSAL.worktree, `worktree add failed (${added.reason}), skip`);
+      if (!added.ok) return block(REFUSAL.worktree, `git worktree add failed (${added.reason})`);
     }
     // A merge of origin/main a killed session left behind. The runner aborts
     // its own after the session (below), but a runner killed mid-session — rc
@@ -1619,18 +1762,18 @@ export function createRunner({
       deps.git(worktree, ['merge', '--abort']);
       say(`${name}: a merge of origin/main was left in progress — aborted`);
     }
-    // A dirty worktree parks the project for every round until a person acts,
-    // so the line names the files: `email-window-layout` stood third in
-    // queue.md and was skipped 134 rounds on three modified files before
-    // anyone read the reason.
+    // A dirty worktree is nobody's but a person's — the runner never commits,
+    // stashes or restores one — so the step is blocked and the files are named:
+    // `email-window-layout` stood third in queue.md and was skipped 134 rounds
+    // on three modified files before anyone read the reason.
     const dirty = (gitOut(worktree, ['status', '--porcelain']) || '').trim();
     if (dirty) {
       // `XY path` per porcelain line; the whole is trimmed above, which takes
       // the first line's leading status space with it — hence a pattern, not
       // `slice(3)`, which printed `ublic/css/…` on 2026-09-04.
       const files = dirty.split('\n').map((line) => line.replace(/^[ MADRCU?!]{1,2}\s+/u, '').trim() || line.trim());
-      const shown = files.slice(0, 3).join(', ') + (files.length > 3 ? ` +${files.length - 3}` : '');
-      return refuse(REFUSAL.dirty, `dirty worktree (${shown}) — skipped every round until it is committed or stashed in ${worktree}`);
+      const shown = files.slice(0, 5).join(', ') + (files.length > 5 ? ` +${files.length - 5}` : '');
+      return block(REFUSAL.dirty, `uncommitted changes that are not a merge in progress (${shown})`);
     }
     if (prsFailed.includes(repo.name)) return refuse(REFUSAL['prs-unknown'], 'what is open on GitHub is unknown this round, skip');
 
@@ -1644,7 +1787,11 @@ export function createRunner({
     // is one repair session rather than the same skip for ever. `heldRepair`
     // holds the whole rule, including the second round, which is the brief's.
     const repair = heldRepair({ entries: heldNow(), openPrs, project: name, repo: repo.name });
-    if (repair?.skip) return refuse(repair.reason, repair.skip);
+    // Its one repair is spent and the pull request is still held: nothing the
+    // runner does next moves it, so the step says so on `main` too. The picker
+    // passes such a project over before it ever gets here (`nextFor`); this is
+    // the hold that arrived between the pick and the run.
+    if (repair?.skip) return block(repair.reason, repair.skip);
     if (!repair) {
       const flight = inFlight(openPrs);
       if (flight) return refuse(flight.reason, flight.skip);
@@ -1657,15 +1804,20 @@ export function createRunner({
       const on = gitOut(worktree, ['branch', '--show-current']);
       if (repair.entry.branch && on !== repair.entry.branch
         && !deps.git(worktree, ['checkout', '-q', repair.entry.branch]).ok) {
-        return refuse(REFUSAL.branch, `#${repair.entry.pr} is on ${repair.entry.branch}, which this workarea could not check out, skip`);
+        return block(REFUSAL.branch, `#${repair.entry.pr} is on ${repair.entry.branch}, which this workarea could not check out`);
       }
     } else {
       const moved = freshBranch(worktree, name);
-      if (!moved.ok) return refuse(REFUSAL.branch, `${moved.why}, skip`);
+      if (!moved.ok) return block(REFUSAL.branch, moved.why);
     }
 
     const sync = syncMain(worktree, name);
-    if (!sync.ok && !sync.conflicts.length) return refuse(REFUSAL.sync, 'fetch/merge failed, skip');
+    // A fetch that failed is the network and this lane waits it out; a merge
+    // that resolved and would not commit is this workarea, and a person's.
+    if (!sync.ok && !sync.conflicts.length) {
+      if (sync.why === 'commit') return block(REFUSAL.sync, 'origin/main was merged in and the commit was refused');
+      return refuse(REFUSAL.sync, 'fetch/merge failed, skip');
+    }
     // What git and the plan's own rule could not resolve. It no longer makes
     // the project unreadable to the runner: the conflict goes to the step
     // session as something to do first.
@@ -1708,11 +1860,21 @@ export function createRunner({
     if (!choice.kind) return refuse(choice.reason || 'no-plan', choice.skip ? `${choice.skip}, skip` : null);
     const { kind } = choice;
 
+    // The two that are about this machine rather than this workarea, and blocked
+    // for the same reason: nothing the runner does next installs a role file or
+    // a tool. The merge is abandoned first, so the block is written over a
+    // workarea that is not left mid-merge.
     const role = deps.role(kind);
-    if (!role?.overlay) { abandonMerge(`canon/roles/${kind}.md is missing`); return refuse(REFUSAL['role-missing'], `canon/roles/${kind}.md is missing — skip`); }
+    if (!role?.overlay) {
+      abandonMerge(`canon/roles/${kind}.md is missing`);
+      return block(REFUSAL['role-missing'], `canon/roles/${kind}.md is missing on this machine`);
+    }
     const settings = sessionSettings(plan?.plan?.runner || {});
     const launch = deps.launch(settings.tool);
-    if (!launch?.ok) { abandonMerge(`${settings.tool} is not available`); return refuse(REFUSAL['tool-missing'], `${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); }
+    if (!launch?.ok) {
+      abandonMerge(`${settings.tool} is not available`);
+      return block(REFUSAL['tool-missing'], `${settings.tool} is not available on this machine (${launch?.hint || launch?.reason})`);
+    }
     // The machine's cap, claimed here — everything from this line to the
     // session is the launch itself, and nothing below returns without
     // spending it. Given up on the way `claims` refuses a project already in
@@ -2046,6 +2208,7 @@ export function createRunner({
     held: heldNow,
     queued: queuedNow, mergeQueued, mergeBusy,
     writeUnreadable,
+    blockStep,
     updateRequested, syncMain, freshBranch, landProject, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
   };

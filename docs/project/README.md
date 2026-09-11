@@ -52,7 +52,12 @@ carries:
   because the under-specified step is the expensive one. Paragraphs rather than
   one string so a diff stays line-oriented for whoever reads the PR.
 - `status` — `ready`, `done`, `blocked` — with `pr` and `blocked_by`
-  (`{ kind: "decision" | "project", name }`, required when stopped).
+  (`{ kind: "decision" | "project" | "workarea", name }`, required when
+  stopped). `workarea` is the runner's own: a step `mc run` could not start
+  because of a fault in the workarea or on this machine, with the name from its
+  fixed list (`dirty-worktree`, `worktree-missing`, `branch-unmovable`,
+  `merge-uncommittable`, `role-missing`, `tool-missing`, `held-after-repair`)
+  and the workarea named in the step's last comment.
 - `comments` — an array of paragraphs, possibly empty: whatever that step's
   session needs the next reader to know that the code in front of them does not
   show. This is where a session writes, and it is on the step rather than at the
