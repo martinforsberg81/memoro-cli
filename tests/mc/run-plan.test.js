@@ -2,12 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  MC_OWN_TREES, assembleQueue, chooseKind, collectNote, headlessArgs, heldRepair, helperDue,
+  MC_OWN_TREES, RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
+  assembleQueue, chooseKind, collectNote, headlessArgs, heldRepair, helperDue,
   inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaSeen,
   readSessionOutput, repairPrompt, sessionSettings, stackOrder, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
+import { NAME_RE } from '../../src/mc/plan-schema.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
 
@@ -700,6 +702,33 @@ test('mcOwnFiles: the two trees a running runner is already holding, and nothing
   assert.deepEqual(mcOwnFiles([{ path: 'src/mc/run.js' }, { path: 'README.md' }]), ['src/mc/run.js']);
   assert.deepEqual(mcOwnFiles(null), [], 'no answer is not a reason to hand over');
   assert.deepEqual(mcOwnFiles([undefined, '']), []);
+});
+
+/**
+ * Which refusals block a step on `main` and which the lane waits out — the
+ * distinction ruling 17 turns on, held as a list rather than as a habit.
+ *
+ * The blocking ones are facts a person has to act on: nothing the runner does
+ * next changes them, so meeting one again in ten minutes is the failure this
+ * project exists to end. The rest are about this moment — the network, the
+ * quota, a pull request somebody is still working on — and there the lane
+ * waits and asks the same question again.
+ */
+test('WORKAREA_BLOCKS: the persistent refusals, under names a plan can carry', () => {
+  assert.deepEqual(Object.keys(WORKAREA_BLOCKS).sort(),
+    ['branch', 'dirty', 'held-after-repair', 'role-missing', 'sync', 'tool-missing', 'worktree']);
+  // Every key is a word the runner already refuses in, so the two lists cannot
+  // drift into naming different things.
+  const refusals = RUN_REFUSALS.map((item) => item.reason);
+  for (const reason of Object.keys(WORKAREA_BLOCKS)) assert.ok(refusals.includes(reason), `${reason} is a refusal`);
+  // And every name is a name by the schema's own rule — a blocker name that is
+  // not one is a plan nothing can look up (plan-schema.js).
+  for (const name of WORKAREA_BLOCK_NAMES) assert.match(name, NAME_RE);
+  // The transient ones, named here so that adding one to the map is a test
+  // failure rather than a project parked on a bad network.
+  for (const reason of ['stop', 'prs-unknown', 'in-flight']) {
+    assert.equal(WORKAREA_BLOCKS[reason], undefined, `${reason} is about this moment, not about the project`);
+  }
 });
 
 // `lanes` and its `--total` form are parsed and printed in

@@ -162,6 +162,43 @@ export const RUN_REFUSALS = Object.freeze([
 /** The same words, by name, so a call site cannot invent one with a typo. */
 export const REFUSAL = Object.freeze(Object.fromEntries(RUN_REFUSALS.map((item) => [item.reason, item.reason])));
 
+/**
+ * The refusals above that are facts about the workarea or this machine, and the
+ * name each one is written into a plan under (`blocked_by: { kind: 'workarea',
+ * name }`, `blockStep` in run.js). Keyed by the refusal word, so the two lists
+ * are one list.
+ *
+ * A refusal in here is **persistent**: nothing the runner does next changes it,
+ * and a person has to act. That is the whole test. Until 2026-09-08 they were
+ * skips like any other, which meant the runner met the same dirty worktree
+ * every ten minutes for days and nothing on `main` said the project was stuck —
+ * `sql-w1-universe-closure` was `dirty worktree (.gitattributes, … +1039)`
+ * every round of 2026-09-08, and the plan said `ready` throughout.
+ *
+ * What is **not** here is transient and not the project's fault, and the lane
+ * waits on it instead: `stop`, `prs-unknown`, `sync` when the *fetch* failed
+ * (the same word, told apart at the call site by what `syncMain` returned),
+ * the quota pause, and `in-flight` — an open pull request is work, not a fault.
+ * A hold at `repairs: 0` is not here either: that is one repair session owed,
+ * which is a thing the runner starts.
+ *
+ * The names are a fixed list because a person reads them in a plan and the page
+ * spells them: they say what to fix, not what the code was doing when it found
+ * out. Every one matches `NAME_RE` (plan-schema.js).
+ */
+export const WORKAREA_BLOCKS = Object.freeze({
+  dirty: 'dirty-worktree',
+  worktree: 'worktree-missing',
+  branch: 'branch-unmovable',
+  sync: 'merge-uncommittable',
+  'role-missing': 'role-missing',
+  'tool-missing': 'tool-missing',
+  'held-after-repair': 'held-after-repair',
+});
+
+/** The names alone, for a reader that spells them rather than maps to them. */
+export const WORKAREA_BLOCK_NAMES = Object.freeze([...new Set(Object.values(WORKAREA_BLOCKS))]);
+
 /* ------------------------------------------------------------------- kind */
 
 /**

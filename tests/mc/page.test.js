@@ -1004,6 +1004,24 @@ describe('PROJECTS', () => {
     ]);
   });
 
+  /**
+   * The third kind, and the runner's own: a step it could not start, blocked on
+   * a workarea somebody has to open (`blockStep`, run.js). It is counted with
+   * the rest and drawn where a blocker is drawn — a stopped project whose
+   * reason is missing from that line reads as one of the other two.
+   */
+  it('counts and draws a step the runner blocked on a workarea', () => {
+    const plans = [...STOPPED, planRecord({
+      repo: 'memoro', programme: 'mc', project: 'f-six', status: 'blocked', title: 'six',
+      blockedBy: { kind: 'workarea', name: 'dirty-worktree' },
+    })];
+    const projects = programmesSection({ plans, areas: [] });
+    assert.deepEqual(projects.blocked.kinds, { decision: 2, project: 2, workarea: 1 });
+    assert.ok(projects.blocked.blockers.some((b) => b.kind === 'workarea' && b.name === 'dirty-worktree'));
+    const lines = renderPageLines(pageData({ programmes: projects }), { columns: 120, now: NOW });
+    assert.match(lines.join('\n'), /5 blocked · 2 on a decision, 2 on a project, 1 on a workarea/u);
+  });
+
   // Read off `blocked_by` on the step that stopped the project — the first that
   // is not done, which is the only one the runner considers — and never parsed
   // back out of the `next` sentence.

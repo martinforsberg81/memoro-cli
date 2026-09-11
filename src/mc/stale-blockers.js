@@ -24,6 +24,11 @@
  * park #11152 put on every converted plan. They are not stale; they are the
  * queue of plans Martin has not read yet.
  *
+ * A `workarea` blocker is not read here either, and never will be: it names a
+ * fault in a directory on this machine (`blockStep`, run.js), and no reading of
+ * `origin/main` can say whether somebody has fixed it. What says so is the
+ * person who fixes it, by setting the step `ready`.
+ *
  * **What counts as finished, and why the wording is careful.** A project
  * blocker is stale when the named project's plan on the same ref is `done`,
  * or when there is no plan by that name at all — `mc run` archives a plan the

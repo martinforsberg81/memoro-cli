@@ -42,14 +42,27 @@ left and what you would do with it: commit the branch it is on, or `git
 restore`. Both are Martin's hands, and a workarea nobody has looked at for six
 days is the one to put first.
 
-*Blocked* is the third and largest of that family, and it is three lists with
-three different answers.
+*Blocked* is the third and largest of that family, and it is four lists with
+four different answers.
 
 A **project blocker** is sequencing: the named project lands first, and that
 order is the blocking project's design, never yours to move. Say nothing about
 one unless the section reports that the project it names has left
 `origin/main` — then somebody has to say whether it was delivered or abandoned,
 and that is a proposal, not a fix you make.
+
+A **workarea blocker** is the runner's own writing, and it is not a decision:
+`mc run` could not start the step — uncommitted work in the workarea, a branch
+it could not move, a merge that would not commit, a role file or a tool that is
+not on this machine, a pull request held after its one repair — so it set the
+step `blocked` and said in that step's last `comments` paragraph which workarea
+and what was in it. Nothing is being judged here and there is nothing to
+decide. Open the workarea named there and say what the last session left: work
+that is finished is committed on the branch it is on, work that is abandoned is
+Martin's `git restore`, and neither is yours or any machine's to do. That is
+one proposal per workarea. When it is put right the step goes back to `ready` —
+your edit or a planning session's, with the reason in its `comments` — because
+the runner never retries one of these on its own.
 
 **`plan-review`** is not a question for Martin and never was: the step is
 waiting for its programme's planning session to read the plan it belongs to.

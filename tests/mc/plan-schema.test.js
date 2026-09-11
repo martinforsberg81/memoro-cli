@@ -19,7 +19,9 @@ import {
   validatePlan,
   PLAN_SCHEMA,
   PLAN_VERSION,
+  BLOCKER_KINDS,
 } from '../../src/mc/plan-schema.js';
+import { WORKAREA_BLOCK_NAMES } from '../../src/mc/run-plan.js';
 
 function plan(overrides = {}) {
   return {
@@ -118,7 +120,30 @@ describe('the plan schema', () => {
     // Still refused for being empty, and the message still says what it wants.
     assert.match(
       validatePlan(plan({ steps: [done, { ...stopped, blocked_by: { kind: 'project', name: '  ' } }] })).problems.join('\n'),
-      /blocked_by\.name: the decision or the project it waits for/u,
+      /blocked_by\.name: the decision, the project or the workarea fault it waits for/u,
+    );
+  });
+
+  /**
+   * The third kind, and the runner's own (2026-09-08): a step `mc run` could
+   * not start, blocked on a fault in the workarea rather than on anybody's
+   * judgement. The name is one of `WORKAREA_BLOCKS` and every one of them is a
+   * name by `NAME_RE`, which is what the schema checks here.
+   */
+  it('takes `workarea` as a blocker kind, with a name from the runner\'s fixed list', () => {
+    const [done, ready] = plan().steps;
+    const stopped = { ...ready, status: 'blocked' };
+    for (const name of WORKAREA_BLOCK_NAMES) {
+      assert.equal(
+        validatePlan(plan({ steps: [done, { ...stopped, blocked_by: { kind: 'workarea', name } }] })).ok,
+        true,
+        `${name} is a name a plan can carry`,
+      );
+    }
+    assert.ok(BLOCKER_KINDS.includes('workarea'));
+    assert.match(
+      validatePlan(plan({ steps: [done, { ...stopped, blocked_by: { kind: 'worktree', name: 'dirty-worktree' } }] })).problems.join('\n'),
+      /blocked_by\.kind: one of decision, project, workarea/u,
     );
   });
 
