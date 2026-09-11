@@ -140,13 +140,13 @@ terminal row.
 
 **The machine half is asked of the plan on `origin/main`**, not of the workarea
 copy the rows above it are read from, because `origin/main` is the copy the
-round reads. Where the two differ the plan row already says
+runner picks from. Where the two differ the plan row already says
 `differs from origin/main`, and a plan that is `ready` in the workarea while
 main's is `blocked` now says so on the status row as well.
 
 **`--offline` changes this row, and that is the honest answer rather than a
 promise.** With no `gh` call the repository lands in `prsFailed`, which is the
-round's own refusal for it, so every project reads
+runner's own refusal for it, so every project reads
 `ready · GitHub could not be asked what this repository has open` — measured on
 2026-09-05, `mc status total-lane-cap --offline` against `~/mc`. A project with
 something nearer in the way still reads that: the dirty worktree is asked first,

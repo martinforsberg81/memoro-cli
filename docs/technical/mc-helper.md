@@ -30,12 +30,12 @@ having decided anything.
 `~/mc/intake/` is an inbox. Anyone may drop a file in it — an error log, a
 screenshot, a note — and the collect step adds one digest a day per repository.
 Nothing stays in it: **one file, one turn, one outcome**, and the file is
-archived under `~/mc/runner/log/intake/<date>/` the moment its turn ends. A new
-round takes the next files, until the directory holds nothing.
+archived under `~/mc/runner/log/intake/<date>/` the moment its turn ends. The
+next chore pass takes the next files, until the directory holds nothing.
 
 The archive is unconditional, and that is what makes this an inbox rather than
 a pile. A turn that failed, timed out, hit the quota or threw has still had its
-turn; a file put back for the next round is a file every round after this one
+turn; a file put back for the next pass is a file every pass after this one
 takes again. An inbox that keeps what it could not judge never drains.
 
 **The turn opens the file itself.** It is named in the prompt, never inlined in
@@ -53,7 +53,7 @@ less than it had.
 
 ### What left it, and why it was never an inbox item
 
-`mc run` writes three tables about its own rounds — `undocumented-closures.md`,
+`mc run` writes three tables about its own work — `undocumented-closures.md`,
 `unplanned-workareas.md` and `unreadable-plans.md`. They sat in `~/mc/intake/`
 until 2026-09-05 and now live in `~/mc/runner/`, beside `held.json`,
 `runner.json` and `log/`. `RUNNER_HOME` and the three filenames are in
@@ -61,13 +61,13 @@ until 2026-09-05 and now live in `~/mc/runner/`, beside `held.json`,
 `runnerTableLabel` for the brief that names them to a person, so the writer and
 the label cannot drift.
 
-Two of them are rewritten **whole every round**, which is the property that made
-the old room wrong the moment the inbox was asked to drain: a turn that read one
-and filed it away would find it back next round, and the round after, forever.
-They are the runner's own output about its own rounds, read by exactly one
+Two of them are rewritten **whole every chore pass**, which is the property that
+made the old room wrong the moment the inbox was asked to drain: a turn that read
+one and filed it away would find it back next pass, and the pass after, forever.
+They are the runner's own output about its own work, read by exactly one
 reader — `mc brief --collect`, which renders a section for each — and they
 belong beside the rest of the runner's state. The three files were moved by
-hand: a migration for three files that are rewritten every round is more code
+hand: a migration for three files that are rewritten every pass is more code
 than it saves.
 
 `~/mc/intake/decisions-archive/` is skipped rather than drained. It is a
@@ -337,11 +337,13 @@ credential, a PR, a session, and a question — there is nobody to answer one.
 ## When the two halves run
 
 Two gates, because they answer two different questions. `mc run` runs both at
-the top of a round, before any step, and calls `collectHelper` and `drainIntake`
-directly rather than the verb. Neither is a step: no worktree, no branch, no PR.
+the top of every chore pass — its loop beside the lanes that take steps, one
+pass every `--idle-sleep` ([`mc-run.md`](mc-run.md) § *The pick, in order*) —
+and calls `collectHelper` and `drainIntake` directly rather than the verb.
+Neither is a step: no worktree, no branch, no PR.
 
 **The collect is a day.** It runs once per calendar day, at the top of
-the first round after 05:00Z, and writes one digest per repository. `helperDue`
+the first chore pass after 05:00Z, and writes one digest per repository. `helperDue`
 (`run-plan.js`) reads `~/mc/runner/log/runs.tsv` and nothing else — there is no
 stamp file beside it to fall out of step with — and looks for a row
 whose `kind` is `helper` and whose date is today. The row goes in whether the
@@ -351,22 +353,24 @@ successful one does.
 There is no model in this half — it writes two files and two rows.
 
 **The drain is a question about a directory.** `runIntakeDrain` asks only *is
-there a file in the inbox?*, so a round can drain without collecting, and
-collect and drain in the same round. It takes the oldest `INTAKE_PER_ROUND` = 3
+there a file in the inbox?*, so a pass can drain without collecting, and
+collect and drain in the same pass. It takes the oldest `INTAKE_PER_ROUND` = 3
 files — oldest by the date **in the name** (`intakeQueue`), not by the name
 itself, because `errors-memoro-2026-09-04.md` sorts before
 `errors-memoro-cli-2026-08-31.md` as a string, and a name with no date in it
 sorts last, which is arrival order too.
 
-Three is what a round can afford: a turn is capped at ten minutes and measured
-at 39–193 s on files Martin dropped in and 115–691 s on a digest, so a round's
+Three is what a pass can afford: a turn is capped at ten minutes and measured
+at 39–193 s on files Martin dropped in and 115–691 s on a digest, so a pass's
 drain is bounded at half an hour and usually far under it, beside a lane's
-ninety-minute step. One a round would take thirteen rounds to clear a backlog of
-thirteen; the whole inbox in one round has no bound at all and would stop the
-runner for a morning after Martin drops forty screenshots in.
+ninety-minute step. One a pass would take thirteen passes to clear a backlog of
+thirteen; the whole inbox in one pass has no bound at all and would stop the
+chores for a morning after Martin drops forty screenshots in. The constant is
+still called `INTAKE_PER_ROUND`, from when the chores ran inside the runner's
+round.
 
-Sharing one gate is what filled the directory in the first place: a round could
-read one file a day, and only if it had also collected.
+Sharing one gate is what filled the directory in the first place: the runner
+could read one file a day, and only if it had also collected.
 
 **The rows.** The collect writes one row per repository, carrying
 `helper` in both the name and the kind column, with the note
@@ -389,7 +393,7 @@ helper day as a failed run since the row existed.
 The turn's tokens go in the same `input`/`output`/`cache_read`/`cache_write`
 columns a step uses, so the page can price the day honestly. `run.js`'s header
 used to say the runner never calls a model; it does now, up to three times a
-round.
+chore pass.
 
 **`mc run --once` runs neither.** That flag exists to watch one step, and
 production reads plus model turns are not what somebody typing it asked for. The
@@ -451,7 +455,7 @@ Nobody automatic. That is the point.
 | `src/mc/helper-turn.js` | the prompt over one named file, `repoOfFile`, the ground read from `origin/main`, the headless session, the measured `wrote` — and `drainIntake`, the loop that archives every file the moment its turn ends |
 | `canon/roles/intake.md` | what the turn is, what it may write, how it judges |
 | `src/mc/run-plan.js` | `helperDue` and `collectNote` for the day; `intakeQueue`, `intakeNote`, `INTAKE_KIND` and `INTAKE_PER_ROUND` for the drain |
-| `src/mc/run.js` | `runHelperDay` — the daily collect — and `runIntakeDrain`, the inbox every round |
+| `src/mc/run.js` | `runHelperDay` — the daily collect — and `runIntakeDrain`, the inbox every chore pass |
 | `src/mc/paths.js` | `RUNNER_HOME` and the three tables that left the inbox: `runnerTablePath` for the writer, `runnerTableLabel` for the brief |
 | `src/mc/brief-collect.js` | `listProposals` — the names, and nothing about what is in them — and the three sections read from `~/mc/runner/` |
 | `src/mc/page-collect.js`, `page-render.js` | `newErrorLines`, `intakeSection`, the INTAKE block |
@@ -494,7 +498,7 @@ Measured 2026-09-05 against the real function: with yesterday's digest in the
 inbox the baseline is `errors-memoro-2026-09-04.md`; with it moved to
 `~/mc/runner/log/intake/<date>/` the baseline is `null`, which renders as *first
 digest — no baseline* and an empty *New since the last digest*. Today's backlog
-of fourteen files hides it — the drain takes three a round, oldest first, so the
+of fourteen files hides it — the drain takes three a pass, oldest first, so the
 newest digest is not archived on the day it is written — but once the inbox is
 empty every day's digest will be a first digest, and *the delta is the agenda*
 is the rule the whole turn judges by. The fix is a baseline that looks in the

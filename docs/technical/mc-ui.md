@@ -40,10 +40,10 @@ still accepted on the page and does nothing: offline is what the page does.
 
 ## The five sections
 
-In this order — **what does not move above what does**. NEXT changes every
-round, RUNNER every frame, and HELPER and BRIEF while somebody is sitting at
-them; PROGRAMMES, INTAKE and WORK change when a round lands and not between two
-frames. The live loop rewrites only rows still on the screen (`page-frame.js`),
+In this order — **what does not move above what does**. NEXT changes with
+every pick, RUNNER every frame, and HELPER and BRIEF while somebody is sitting
+at them; PROGRAMMES, INTAKE and WORK change when a landing lands and not between
+two frames. The live loop rewrites only rows still on the screen (`page-frame.js`),
 so at the top, under a hundred rows of projects, RUNNER had scrolled into
 history before the prompt was printed and never moved again (2026-09-03). The
 overview stays complete — every project is listed — and what moves sits where
@@ -95,10 +95,15 @@ the eye already is:
   the runner is doing — and never as an empty queue. It said *"empty — mc brief
   queues the next thing"* until 2026-09-06, with the brand row on `0 of 0
   queued`, while the runner walked 41 projects and ran one; `queue.md` is
-  Martin's *these first*, it empties itself, and it was never the queue.
-  Under the heading, **one block per lane**: `mc run` drives one lane per
-  repository at the same time (`splitLanes`), so the head of *each* lane starts
-  now and a flat list would say one of them is second. Three deep per lane, the
+  Martin's *these first* — a name stays in it until its plan is `done` or off
+  `main` — and it was never the queue.
+  Under the heading, **one block per repository**: `mc run` drives that
+  repository's lane loops at the same time, each taking the next runnable name
+  that no other lane has claimed, so the head of *each* lane starts now and a
+  flat list would say one of them is second. The block is drawn by the runner's
+  own picker — `nextFor` (`run-plan.js`) asked repeatedly with each pick claimed,
+  which is what the lanes do ([`mc-run.md`](mc-run.md) § *The pick, in order*)
+  — and as many of its rows as the repository has lanes are the heads. Three deep per lane, the
   rest of that lane a count on its own row, and every row is the project,
   `step n/m` in the kind's own colour, and that step's title. The skips are
   counted by reason underneath, and the reasons are both of the runner's
