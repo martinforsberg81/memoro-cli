@@ -67,10 +67,14 @@
   "steps": [
     {
       "title": "The step prompt carries its own step, and the session's context has a ceiling",
-      "status": "ready",
-      "pr": null,
+      "status": "done",
+      "pr": 693,
       "blocked_by": null,
-      "comments": [],
+      "comments": [
+        "`stepPrompt` takes the parsed `plan` and no longer `planText` — the parameter is dropped and the one caller (`run.js`, `plan: plan.plan`) fixed. The own step is rendered key by key from `Object.entries`, so the `runner` key step 2 adds to a step reaches the session with no change to the rendering. `headlessArgs` takes `autocompact` (default `AUTOCOMPACT_TOKENS`); `helper-turn.js` passes `autocompact: null`, because the contract leaves helper and intake sessions as they were. The repair session gets the window like a step.",
+        "Criterion 0 is left `met: false` on purpose. Measured 2026-09-11 against memoro's origin/main with the new `stepPrompt`: `sql-w1-universe-closure` has grown to 133 771 characters (the plan says 115k); the prompt for each of its 26 ready steps is 21.2k–23.8k characters, but its blocked `steps[7]` renders at 31.8k because that step's own `comments` are 10k, and the done steps 3 and 6 at 30.4k for the same reason. `msr-core/items-sweep` (133 965 characters) renders its ready `steps[7]` at 36.0k — 20k of that is the step's own comments. The floor of about 21k is the frozen fields and criteria (about 6.7k) plus 34 one-line steps (their `done_when` alone is 8.7k). Nothing more can be cut without dropping the own step's comments, which the instruction keeps in full. Whether that meets \"under 30k\" is the planning session's call.",
+        "Baseline for context per turn, the row `scripts/measure-steps.py` now prints, over `--since 2026-09-05 --until 2026-09-12 --min-turns 10` (159 sessions): median 108.7k tokens, p75 163.4k, p90 218.7k, max 297.3k."
+      ],
       "done_when": "`stepPrompt` in `src/mc/run-plan.js` renders the plan's `goal`, `contract`, `out_of_scope`, `success_criteria`, `documents` and `runner`, the session's own step in full, and every other step as one line (`steps[i] · status · title · done_when`), and no longer the whole file; `headlessArgs` passes `--autocompact` with the window named by one exported constant; `docs/technical/mc-run.md` describes both; `scripts/measure-steps.py` prints context per turn; the suite is green.",
       "instruction": [
         "Read `stepPrompt` (`src/mc/run-plan.js`, about line 563) and the two tests that cover it (`tests/mc/run-plan.test.js` lines 205 and 242) before touching anything. Today the prompt ends with `----- PLAN.json -----` followed by `planText`, the entire file as read from `origin/main` (`run.js` about line 1740: `planText: plan.text`). The session has that same file on disk in its worktree and edits it there; the copy in the prompt is only for reading, and it is read on every turn because it is in the prompt. The largest plans on main are in memoro: `docs/project/sql-readiness/sql-w1-universe-closure/PLAN.json` is 115 328 bytes, `sql-w3-email-closure` 102 508, `msr-core/items-sweep` 89 513 (measured 2026-09-11 with `wc -c`).",
