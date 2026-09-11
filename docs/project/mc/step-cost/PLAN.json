@@ -115,7 +115,7 @@
     {
       "title": "A check-in message replaces the budget kill, and only a stalled session is killed",
       "status": "blocked",
-      "pr": null,
+      "pr": 696,
       "blocked_by": { "kind": "decision", "name": "step-cost-memoro-budget" },
       "comments": [
         "Blocked before any code, by the instruction's own gate: memoro's `origin/main` (8af3901) carries `runner.budget_minutes` in 14 plans, and in every one of them it is the whole `runner` object. `docs/project/language-voice/language-voice-do-alarms/PLAN.json` (150), `docs/project/msr-core/items-sweep/PLAN.json` (180), `docs/project/voice-chat/voice-audio-path/PLAN.json` (150), `docs/project/voice-chat/voice-session-report/PLAN.json` (150), and under `docs/project/sql-readiness/`: `sql-goal1-certification` (150), `sql-w1-universe-closure` (150), `sql-w2-search-closure` (120), `sql-w3-email-closure` (150), `sql-w4-automation-closure` (150), `sql-w5-relationship-closure` (150), `sql-w6-background-closure` (150), `sql-w7-operations-closure` (150), `sql-w9-account-closure` (150), `sql-w10-product-domains-closure` (150). Memoro's `docs/project/README.md:77` lists `budget_minutes` among the runner keys too. No memoro code reads the key; the grep outside the plans hits only that README line. Several of these plans have `ready` steps, so a schema that refuses the key stops them the round this step lands.",
