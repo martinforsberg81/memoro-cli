@@ -131,6 +131,37 @@ def quantiles(label, xs, unit=1.0, fmt='{:6.1f}'):
             + ' p75=' + fmt.format(q(.75)) + ' p90=' + fmt.format(q(.9)) + ' max=' + fmt.format(xs[-1] / unit))
 
 
+def main_model(result):
+    """The model that did the session's work: the modelUsage key with the most output.
+
+    A session's json lists every model it touched — claude's own haiku calls, an
+    advisor — so the main one is the one that wrote the most, not the first.
+    """
+    usage = result.get('modelUsage') or {}
+    if not usage:
+        return 'unknown'
+    return max(usage.items(), key=lambda kv: (kv[1] or {}).get('outputTokens', 0))[0]
+
+
+def summary(found, indent=''):
+    """Wall, API time, turns, cost and context per turn for a set of sessions."""
+    walls = [r['duration_ms'] / 1000 for _, r, _ in found if r.get('duration_ms') is not None]
+    apis = [r['duration_api_ms'] / 1000 for _, r, _ in found if r.get('duration_api_ms') is not None]
+    turns = [r['num_turns'] for _, r, _ in found]
+    costs = [r['total_cost_usd'] for _, r, _ in found if r.get('total_cost_usd')]
+    # What every turn re-read: the session's whole input (cache hits and the rest)
+    # over its turns — the same usage fields readSessionOutput puts in runs.tsv.
+    # The number step-cost's step 1 (the plan excerpt, --autocompact) is measured on.
+    contexts = [((r.get('usage') or {}).get('cache_read_input_tokens', 0) + (r.get('usage') or {}).get('input_tokens', 0))
+                / r['num_turns'] for _, r, _ in found if r.get('num_turns')]
+    for line in (quantiles('session wall (min)', walls, 60),
+                 quantiles('session API time (min)', apis, 60),
+                 quantiles('turns', turns, 1, '{:6.0f}'),
+                 quantiles('cost (USD)', costs, 1),
+                 quantiles('context per turn (k tokens)', contexts, 1000)):
+        print(indent + line)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--since', required=True, help='first day or instant, inclusive (YYYY-MM-DD or YYYY-MM-DDTHH:MM)')
@@ -142,20 +173,17 @@ def main():
     print(f'{len(found)} step sessions {args.since}..{args.until} with ≥{args.min_turns} turns; '
           f'{sum(1 for _, _, t in found if t)} with a transcript\n')
 
-    walls = [r['duration_ms'] / 1000 for _, r, _ in found]
-    apis = [r['duration_api_ms'] / 1000 for _, r, _ in found]
-    turns = [r['num_turns'] for _, r, _ in found]
-    costs = [r['total_cost_usd'] for _, r, _ in found if r.get('total_cost_usd')]
-    # What every turn re-read: the session's whole input (cache hits and the rest)
-    # over its turns — the same usage fields readSessionOutput puts in runs.tsv.
-    # The number step-cost's step 1 (the plan excerpt, --autocompact) is measured on.
-    contexts = [((r.get('usage') or {}).get('cache_read_input_tokens', 0) + (r.get('usage') or {}).get('input_tokens', 0))
-                / r['num_turns'] for _, r, _ in found if r.get('num_turns')]
-    print(quantiles('session wall (min)', walls, 60))
-    print(quantiles('session API time (min)', apis, 60))
-    print(quantiles('turns', turns, 1, '{:6.0f}'))
-    print(quantiles('cost (USD)', costs, 1))
-    print(quantiles('context per turn (k tokens)', contexts, 1000))
+    summary(found)
+    # The same rows once per main model — the comparison step-cost (ruling 18)
+    # is measured on: opus at high effort before, sonnet at medium with an opus
+    # advisor after.
+    by_model = collections.defaultdict(list)
+    for item in found:
+        by_model[main_model(item[1])].append(item)
+    for model, items in sorted(by_model.items(), key=lambda kv: -len(kv[1])):
+        print(f'\nmain model {model}: {len(items)} sessions')
+        summary(items, '  ')
+    print()
     errors = collections.Counter(str(r.get('result'))[:40] for _, r, _ in found if r.get('is_error'))
     print(f'ended in an API error: {sum(errors.values())} {dict(errors)}\n')
 

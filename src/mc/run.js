@@ -135,7 +135,7 @@ import {
   HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, REFUSAL, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, chooseKind, collectNote, headlessArgs,
   heldRepair, helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, nextFor,
-  queueFileText, readSessionOutput, repairPrompt, sessionSettings, stackOrder,
+  queueFileText, readSessionOutput, repairPrompt, sessionSettings, describeSettings, stackOrder,
   stepOfPr, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from './run-plan.js';
 
@@ -1014,9 +1014,9 @@ export function createRunner({
     const role = deps.role('repair');
     if (!role?.overlay) return done('canon/roles/repair.md is missing');
     // No plan to read the session's settings off — a pull request with no
-    // project has none — so it is the defaults, which is what every plan that
-    // says nothing gets.
-    const settings = sessionSettings({});
+    // project has none — so it is a repair's defaults, which is what every
+    // plan that says nothing gets.
+    const settings = sessionSettings({}, null, { kind: 'repair' });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) return done(`${settings.tool} is not available (${launch?.hint || launch?.reason})`);
     await quotaHold();
@@ -1026,10 +1026,10 @@ export function createRunner({
     countRepair(repo.name, pr);
     say(`${branch}: #${pr} is held before merge and belongs to no project — the merge lane's one repair session: ${held.reason}`);
     const instructions = instructionsFor(launch.id, await deps.profile(), role.overlay);
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, instructions, prompt, profileArgs });
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
     const ts = stamp().replace(/[-:]/gu, '');
     const out = join(paths.log, `${branch}-${ts}.json`);
-    say(`${branch}: repair starting (${launch.shortName} ${settings.model || 'own default model'}, ${settings.budgetMinutes} min)`);
+    say(`${branch}: repair starting (${describeSettings(launch.shortName, settings)}, ${settings.budgetMinutes} min)`);
     const t0 = deps.now().getTime();
     // No `current-<repo>.json`: this is not a step, and the page's RUNNER block
     // draws that file as one. What says the lane is busy is `mergeBusy`, and it
@@ -1043,7 +1043,7 @@ export function createRunner({
     logRun({
       ts: stamp(), name: branch, kind: 'repair', exit: result.status, seconds, pr: String(pr),
       turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite,
-      session: read.session, note: read.note,
+      session: read.session, note: read.note, model: settings.model,
     });
     say(`${branch}: repair done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${read.note}`);
     if (read.quota) await quotaPause();
@@ -1904,7 +1904,9 @@ export function createRunner({
       abandonMerge(`canon/roles/${kind}.md is missing`);
       return block(REFUSAL['role-missing'], `canon/roles/${kind}.md is missing on this machine`);
     }
-    const settings = sessionSettings(plan?.plan?.runner || {});
+    // Step over plan over the kind's defaults (ruling 18). A repair is not a
+    // step, so a step's own `runner` is not what it runs on; the plan's is.
+    const settings = sessionSettings(plan?.plan?.runner, kind === 'step' ? choice.step?.runner : null, { kind });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) {
       abandonMerge(`${settings.tool} is not available`);
@@ -1935,13 +1937,13 @@ export function createRunner({
       say(`${name}: #${repair.entry.pr} is held before merge — one repair session: ${repair.entry.reason}`);
     }
     const instructions = instructionsFor(launch.id, await deps.profile(), role.overlay);
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, instructions, prompt, profileArgs });
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
 
     const ts = stamp().replace(/[-:]/gu, '');
     const out = join(paths.log, `${name}-${ts}.json`);
     // A plan that names no model on a tool that is not claude gets none, and
     // the line says so rather than printing `null`: the tool picks.
-    say(`${name}: ${kind} starting (${launch.shortName} ${settings.model || 'own default model'}, ${settings.budgetMinutes} min)`);
+    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${settings.budgetMinutes} min)`);
     const t0 = deps.now().getTime();
     // The lane's current file exists exactly as long as the session does —
     // written before the call that blocks, removed however that call
@@ -1951,7 +1953,7 @@ export function createRunner({
     const currentPath = paths.currentFor(repo.name, lane);
     writeJson(currentPath, {
       name, kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
-      budget_minutes: settings.budgetMinutes, started: stamp(), pid, worktree,
+      effort: settings.effort, advisor: settings.advisor, budget_minutes: settings.budgetMinutes, started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
       // names the role, but a name is not a revision: `mc roles check step`
       // compares this digest with what `canon/roles/step.md` assembles to now,
@@ -2067,7 +2069,7 @@ export function createRunner({
       landSeconds = landed.seconds;
     }
 
-    logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds });
+    logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
     if (read.quota) await quotaPause();
     // `merged` and `ran` are both *a step ran*, and the lane picks again on

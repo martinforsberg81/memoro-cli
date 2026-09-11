@@ -540,18 +540,48 @@ wherever it is met:
 
 ### The session
 
-Fresh, headless, and assembled from the plan's own frontmatter
-(`sessionSettings`):
+Fresh, headless, and assembled from the plan's `runner`, the step's own
+`runner`, and the defaults for the session's kind (`sessionSettings`). `model`,
+`effort` and `advisor` resolve **step over plan over default**, one key at a
+time — a step that names only its effort keeps the plan's model. `tool` and
+`budget_minutes` are the plan's alone. A repair reads the plan's `runner` but
+never a step's: it is a session on a pull request, not the step that opened it.
+
+| kind | `model` | `effort` | `advisor` |
+|---|---|---|---|
+| step | `sonnet` | `medium` | `opus` |
+| repair | `opus` | none | none |
+
+That is [ruling 18](../project/mc/rulings.md) (2026-09-11). Opus at high
+effort on every turn was the cost — 155 step sessions over 2026-09-05..12, all
+on `claude-opus-5` at this machine's `effortLevel: high` — and the advisor is
+the strong model at the decision points rather than throughout. The defaults
+are `SESSION_DEFAULTS` in `run-plan.js`.
 
 - **`tool:`** — `claude` by default, resolved through `resolveLaunch`. A tool
   that is not installed is a block with the adapter's own hint.
-- **`model:`** — `opus` by default, and that default belongs to claude alone.
-  `opus` is a claude alias; handed to `codex -m` it names a model that tool
-  does not have and the step dies on its argument list before reading a word
-  of the plan. A plan on another tool that names no model gets none, and the
-  tool picks its own.
+- **`model:`** — `sonnet` by default for a step, `opus` for a repair, and
+  those defaults belong to claude alone. They are claude aliases; handed to
+  `codex -m` one names a model that tool does not have and the step dies on
+  its argument list before reading a word of the plan. A plan on another tool
+  that names no model gets none, and the tool picks its own.
+- **`effort:`** — `low`, `medium`, `high`, `xhigh` or `max`, passed as
+  `--effort`. Without it claude falls back to the machine's own
+  `effortLevel`, which is why the step default names one. Anything else is
+  refused by the schema.
+- **`advisor:`** — a model name passed as `--advisor`, or `off` for none. The
+  flag is not in `claude --help`; it is documented at
+  code.claude.com/docs/en/advisor.md and was accepted by claude 2.1.268 on
+  2026-09-11.
 - **`budget_minutes:`** — the wall-clock cap, ninety minutes, by default.
   The child is killed at the cap and the row says `timeout`.
+
+Effort and advisor are claude's flags (`effortArgs` and `advisorArgs` in the
+claude adapter), so a codex session gets neither, named or not. A step's
+`runner` is its author's, like its `instruction`: `unauthorisedChanges`
+compares every key of the session's own step except `status`, `pr`,
+`comments` and `blocked_by`, so a session that changed the model it runs on
+is a `plan-trespass`.
 
 The prompt is `stepPrompt`: you are in this workarea, your plan is on disk at
 this path, do `steps[i]`, its `done_when` is your success criterion, say in the
@@ -590,8 +620,8 @@ them. How that is found and joined, for every session and not only this one, is
 The two argument lists are the only place the tools differ:
 
 ```
-claude  -p <prompt> [--model …] --permission-mode acceptEdits \
-        --autocompact 150000 \
+claude  -p <prompt> [--model …] [--effort …] [--advisor …] \
+        --permission-mode acceptEdits --autocompact 150000 \
         --append-system-prompt <instructions> --output-format json
 codex   exec --json --sandbox danger-full-access [-m …] \
         -c instructions=<instructions> <prompt>
@@ -1006,11 +1036,19 @@ thing it writes into a repository: a blocked step (below).
   file, and the
   history keeps the kinds the runner no longer produces:
   `ts name kind exit seconds pr turns input output cache_read cache_write
-  session note land_seconds`. `seconds` is the session; `land_seconds` is the
+  session note land_seconds model`. `seconds` is the session; `land_seconds` is the
   gate round that followed it, `-` when there was none. It is appended rather
   than placed beside `seconds` because the header is written once, when the
   file is created, and a column inserted would shift `note` one to the left for
-  every reader of the old header. The usage columns come from claude's `--output-format json`
+  every reader of the old header. `model` is the model the runner asked for —
+  the resolved `sessionSettings` model, `-` for the helper and intake turns and
+  for a tool left to pick its own — appended last for the same reason, so a
+  row can be read against the effort and advisor its session ran with (step-cost,
+  ruling 18). The file on this machine still has the thirteen-column header it
+  was created with, so a reader that keys cells by the header sees neither of
+  the last two; `archive-plan.js` reads by position and stops at `note`. What
+  the session actually ran on is in its own json's `modelUsage`, which is what
+  `scripts/measure-steps.py` groups by. The usage columns come from claude's `--output-format json`
   and from codex's `exec --json` event stream; a field the tool does not give
   is `-`, never a guess. `exit` and `note` are independent and are allowed to
   disagree — a process can fail after a session that reported success, and
@@ -1026,6 +1064,10 @@ thing it writes into a repository: a blocked step (below).
 - **`log/runner.log`** — the line-by-line narration, also on stdout. What a
   lane picked (`memoro#2: next — <name> (step i/n)`), what it could not start
   and why, and — once, not every ten minutes — that it has nothing to run.
+  The `starting` line says what the session runs on, leaving out what was not
+  passed: `<name>: step starting (claude sonnet · effort medium · advisor opus,
+  90 min)`, `(claude opus, 90 min)` for a repair, `(codex own default model,
+  90 min)` for a codex plan that names none (`describeSettings`).
 - **`log/<name>-<ts>.json`** and `.json.err` — what the session actually
   printed, kept whole.
 - **`runner.json`** stays one per machine: a runner is here, and this is the
@@ -1033,7 +1075,8 @@ thing it writes into a repository: a blocked step (below).
   checked rather than one that is only made.
 - **`current-<repo>.json`** — one file per lane, existing exactly as long as
   that lane's session does. It carries the project name, kind, repo, tool,
-  model, budget, start time, the runner's pid and the worktree, and it is
+  model, effort, advisor (`null` where none was passed), budget, start time,
+  the runner's pid and the worktree, and it is
   written immediately before the session starts and removed in a `finally`
   however that session returns, so a step that throws still clears it.
   Readers — the page's RUNNER block, `mc status <name>` — glob
@@ -1282,7 +1325,7 @@ the last such line is 2026-09-08T06:42:08Z, and every lane line since is
 
 ## What the era measured
 
-`scripts/measure-steps.py --since <day or instant> --until <day>` is the instrument: per step session, wall-clock against model time, turns, cost, test commands, the tool-time classes, Bash against native calls, and — since 2026-09-04 — the turns that carried more than one tool call, which is the number that says whether a session batches. The baseline it produced on 2026-09-03 is in `project_log.md` (step-parallelism) and that plan's history.
+`scripts/measure-steps.py --since <day or instant> --until <day>` is the instrument: per step session, wall-clock against model time, turns, cost, test commands, the tool-time classes, Bash against native calls, and — since 2026-09-04 — the turns that carried more than one tool call, which is the number that says whether a session batches. Since step-cost (ruling 18) it prints the wall, API time, turns, cost and context-per-turn rows once more per **main model** — the `modelUsage` key in the session's json with the most output, so an advisor or claude's own small calls do not count as what the session ran on — which is the before-and-after that ruling is measured on. The baseline it produced on 2026-09-03 is in `project_log.md` (step-parallelism) and that plan's history.
 
 `mc run` has been the runner since 2026-08-28T23:28Z. Through 2026-08-30 that
 is 115 rows in runs.tsv — 92 `step`, 20 merge-only sessions of a kind this

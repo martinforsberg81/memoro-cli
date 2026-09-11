@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   MC_OWN_TREES, RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
-  AUTOCOMPACT_TOKENS, assembleQueue, chooseKind, collectNote, headlessArgs, heldRepair, helperDue,
+  AUTOCOMPACT_TOKENS, SESSION_DEFAULTS, assembleQueue, chooseKind, collectNote, describeSettings, headlessArgs, heldRepair, helperDue,
   inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaSeen,
   readSessionOutput, repairPrompt, sessionSettings, stackOrder, stepOfPr, stepPrompt, strictQueue,
@@ -405,6 +405,24 @@ test('headlessArgs: claude is -p with json output; codex is exec --json', () => 
   assert.deepEqual(bare, ['exec', '--json', '--sandbox', 'danger-full-access', 'do it']);
 });
 
+/**
+ * Ruling 18: a step runs on sonnet at medium effort with an opus advisor. The
+ * flags are the adapter's, so this goes through the real claude adapter — a
+ * fixture that spelled them would pass with a flag claude does not take.
+ */
+test('headlessArgs: claude gets --model, --effort and --advisor, and none when unset', async () => {
+  const adapter = await import('../../src/adapters/claude-code.js');
+  const args = headlessArgs({ toolId: 'claude-code', adapter, model: 'sonnet', effort: 'medium', advisor: 'opus', instructions: null, prompt: 'do it', profileArgs });
+  assert.deepEqual(args.slice(0, 8), ['-p', 'do it', '--model', 'sonnet', '--effort', 'medium', '--advisor', 'opus']);
+  assert.equal(args[8], '--permission-mode');
+  const repair = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', effort: null, advisor: null, instructions: null, prompt: 'do it', profileArgs });
+  assert.deepEqual(repair.slice(0, 5), ['-p', 'do it', '--model', 'opus', '--permission-mode']);
+  assert.deepEqual(adapter.advisorArgs('off'), [], '`off` is no advisor, not an advisor called off');
+  // Codex takes neither, whatever it is handed.
+  const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m], effortArgs: () => ['--effort', 'x'], advisorArgs: () => ['--advisor', 'y'] }, model: 'o3', effort: 'high', advisor: 'opus', instructions: null, prompt: 'do it', profileArgs });
+  assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', 'do it']);
+});
+
 test('readSessionOutput: claude json usage fields, dashes when absent', () => {
   const out = JSON.stringify({ subtype: 'success', num_turns: 7, session_id: 's1', usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30 } });
   const r = readSessionOutput({ toolId: 'claude-code', stdout: out, exitCode: 0 });
@@ -445,22 +463,57 @@ test('readSessionOutput: codex events give what they give', () => {
  * and not inserted beside `seconds`, because the header is written once, when
  * the file is created, and the one on this machine still carries thirteen.
  */
-test('tsvRow has the shell runner\'s thirteen columns in order, then the landing\'s own time', () => {
-  assert.equal(tsvHeader(), 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\tland_seconds');
-  const row = tsvRow({ ts: 'T', name: 'n', kind: 'step', exit: 0, seconds: 9, pr: '12', turns: '3', input: '1', output: '2', cacheRead: '3', cacheWrite: '4', session: 's', note: 'success,merged', landSeconds: 1830 });
-  assert.equal(row.split('\t').length, 14);
-  assert.equal(row, 'T\tn\tstep\t0\t9\t12\t3\t1\t2\t3\t4\ts\tsuccess,merged\t1830');
-  assert.equal(tsvRow({ ts: 'T', note: 'a\tb' }).split('\t').length, 14);
-  assert.match(tsvRow({ ts: 'T', note: 'timeout' }), /\ttimeout\t-$/u, 'a step that never reached a landing says so');
+test('tsvRow has the shell runner\'s thirteen columns in order, then the landing\'s own time, then the model', () => {
+  assert.equal(tsvHeader(), 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\tland_seconds\tmodel');
+  const row = tsvRow({ ts: 'T', name: 'n', kind: 'step', exit: 0, seconds: 9, pr: '12', turns: '3', input: '1', output: '2', cacheRead: '3', cacheWrite: '4', session: 's', note: 'success,merged', landSeconds: 1830, model: 'sonnet' });
+  assert.equal(row.split('\t').length, 15);
+  assert.equal(row, 'T\tn\tstep\t0\t9\t12\t3\t1\t2\t3\t4\ts\tsuccess,merged\t1830\tsonnet');
+  assert.equal(tsvRow({ ts: 'T', note: 'a\tb' }).split('\t').length, 15);
+  assert.match(tsvRow({ ts: 'T', note: 'timeout' }), /\ttimeout\t-\t-$/u, 'a step that never reached a landing says so, and a row with no model a dash');
 });
 
-test('sessionSettings: frontmatter tool/model/budget_minutes with the runner defaults', () => {
-  assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'opus', budgetMinutes: 90 });
-  assert.deepEqual(sessionSettings({ tool: 'codex', model: 'o3', budget_minutes: '30' }), { tool: 'codex', model: 'o3', budgetMinutes: 30 });
+test('sessionSettings: tool and budget_minutes from the plan, with the runner defaults', () => {
+  assert.equal(sessionSettings({}).tool, 'claude');
+  assert.equal(sessionSettings({}).budgetMinutes, 90);
+  assert.deepEqual(sessionSettings({ tool: 'codex', model: 'o3', budget_minutes: '30' }), { tool: 'codex', model: 'o3', effort: null, advisor: null, budgetMinutes: 30 });
   assert.equal(sessionSettings({ budget_minutes: 'lots' }).budgetMinutes, 90);
-  // `opus` is claude's alias and nobody else's: a plan on another tool that
-  // names no model gets none, and the tool picks its own.
-  assert.deepEqual(sessionSettings({ tool: 'codex' }), { tool: 'codex', model: null, budgetMinutes: 90 });
+});
+
+/**
+ * Ruling 18 (2026-09-11): opus at high effort on every turn was what a step
+ * cost, so a step is sonnet at medium with opus as its advisor. A repair keeps
+ * opus with neither flag. Each key resolves step over plan over default on its
+ * own, so a step naming only its effort keeps the plan's model.
+ */
+test('sessionSettings: step and repair defaults, plan and step overrides, advisor off, codex getting none', () => {
+  assert.deepEqual(SESSION_DEFAULTS.step, { model: 'sonnet', effort: 'medium', advisor: 'opus' });
+  assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings(undefined, null, { kind: 'repair' }), { tool: 'claude', model: 'opus', effort: null, advisor: null, budgetMinutes: 90 });
+
+  // The plan overrides the default key by key.
+  assert.deepEqual(sessionSettings({ model: 'opus' }), { tool: 'claude', model: 'opus', effort: 'medium', advisor: 'opus', budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings({ effort: 'high', advisor: 'sonnet' }, null, { kind: 'repair' }), { tool: 'claude', model: 'opus', effort: 'high', advisor: 'sonnet', budgetMinutes: 90 });
+
+  // The step overrides the plan, again key by key.
+  const plan = { model: 'opus', effort: 'low', advisor: 'opus' };
+  assert.deepEqual(sessionSettings(plan, { effort: 'xhigh' }), { tool: 'claude', model: 'opus', effort: 'xhigh', advisor: 'opus', budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings(plan, { model: 'haiku', effort: null }), { tool: 'claude', model: 'haiku', effort: 'low', advisor: 'opus', budgetMinutes: 90 });
+
+  // `off` at any level is no advisor, and a step can turn off the plan's.
+  assert.equal(sessionSettings({ advisor: 'off' }).advisor, null);
+  assert.equal(sessionSettings({}, { advisor: 'off' }).advisor, null);
+  assert.equal(sessionSettings({ advisor: 'off' }, { advisor: 'opus' }).advisor, 'opus');
+
+  // `sonnet`, `medium` and `opus` are claude's: codex gets no model it did not
+  // name, and no effort or advisor even when one is named.
+  assert.deepEqual(sessionSettings({ tool: 'codex' }), { tool: 'codex', model: null, effort: null, advisor: null, budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings({ tool: 'codex', effort: 'high', advisor: 'opus' }, { model: 'o3' }), { tool: 'codex', model: 'o3', effort: null, advisor: null, budgetMinutes: 90 });
+});
+
+test('describeSettings: what the starting line says a session runs on', () => {
+  assert.equal(describeSettings('claude', sessionSettings({})), 'claude sonnet · effort medium · advisor opus');
+  assert.equal(describeSettings('claude', sessionSettings({}, null, { kind: 'repair' })), 'claude opus');
+  assert.equal(describeSettings('codex', sessionSettings({ tool: 'codex' })), 'codex own default model');
 });
 
 test('parseRunArgs: defaults, flags, errors', () => {

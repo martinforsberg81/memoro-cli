@@ -193,6 +193,34 @@ describe('the plan schema', () => {
     const { problems } = validatePlan({ ...plan(), needs: ['home-on-msr'] });
     assert.match(problems.join('\n'), /needs: unknown key/u);
   });
+
+  /**
+   * Ruling 18: what a session runs on is the plan's `runner`, and a step's
+   * own `runner` for the three keys a step may differ on. `tool` and
+   * `budget_minutes` stay the plan's — one lane, one tool, one wall clock.
+   */
+  it('takes effort and advisor in the plan\'s runner, and refuses what is not one', () => {
+    const runner = { tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', budget_minutes: 90 };
+    assert.deepEqual(validatePlan(plan({ runner })), { ok: true, problems: [] });
+    assert.equal(validatePlan(plan({ runner: { advisor: 'off' } })).ok, true);
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) assert.equal(validatePlan(plan({ runner: { effort } })).ok, true, effort);
+    assert.match(validatePlan(plan({ runner: { effort: 'extreme' } })).problems.join('\n'), /runner\.effort: one of low, medium, high, xhigh, max/u);
+    assert.match(validatePlan(plan({ runner: { advisor: 'Opus 5' } })).problems.join('\n'), /runner\.advisor: a model name, or off/u);
+  });
+
+  it('takes a runner with model, effort and advisor on a step, and nothing else there', () => {
+    const [done, ready] = plan().steps;
+    const onStep = (runner) => validatePlan(plan({ steps: [done, { ...ready, runner }] }));
+    assert.deepEqual(onStep({ model: 'opus', effort: 'high', advisor: 'off' }), { ok: true, problems: [] });
+    assert.equal(onStep({ effort: 'low' }).ok, true);
+    assert.match(onStep({ effort: 'lots' }).problems.join('\n'), /steps\[1\]\.runner\.effort: one of/u);
+    assert.match(onStep({ advisor: 'x y' }).problems.join('\n'), /steps\[1\]\.runner\.advisor: a model name, or off/u);
+    assert.match(onStep({ model: 'Sonnet 5' }).problems.join('\n'), /steps\[1\]\.runner\.model: must be a model name/u);
+    assert.match(onStep({ tool: 'codex' }).problems.join('\n'), /steps\[1\]\.runner\.tool: a plan-level key/u);
+    assert.match(onStep({ budget_minutes: 30 }).problems.join('\n'), /steps\[1\]\.runner\.budget_minutes: a plan-level key/u);
+    assert.match(onStep({ temperature: 1 }).problems.join('\n'), /steps\[1\]\.runner\.temperature: unknown key/u);
+    assert.match(onStep('opus').problems.join('\n'), /steps\[1\]\.runner: must be an object/u);
+  });
 });
 
 describe('the plan has no status of its own', () => {
@@ -245,6 +273,32 @@ describe('what a step session may have changed', () => {
     const widened = structuredClone(before);
     widened.out_of_scope = [];
     assert.match(unauthorisedChanges(before, widened, 1).problems.join('\n'), /out_of_scope/u);
+  });
+
+  /**
+   * A step's `runner` is its author's, like its instruction: a session that
+   * could pick its own model would pick the one it was not asked to run on.
+   * Its own step is no exception for anything but status, pr, comments and
+   * blocked_by.
+   */
+  it('catches a changed runner and a changed instruction on its own step', () => {
+    const runner = structuredClone(before);
+    runner.steps[1].runner = { model: 'opus' };
+    assert.match(unauthorisedChanges(before, runner, 1).problems.join('\n'), /steps\[1\]\.runner: a step session does not change it/u);
+
+    const instruction = structuredClone(before);
+    instruction.steps[1].instruction = ['Something easier.'];
+    assert.match(unauthorisedChanges(before, instruction, 1).problems.join('\n'), /steps\[1\]\.instruction: a step session does not change it/u);
+
+    const doneWhen = structuredClone(before);
+    doneWhen.steps[1].done_when = 'It builds.';
+    assert.match(unauthorisedChanges(before, doneWhen, 1).problems.join('\n'), /steps\[1\]\.done_when: a step session does not change it/u);
+
+    // Blocking itself is still its own to do.
+    const blocked = structuredClone(before);
+    blocked.steps[1].status = 'blocked';
+    blocked.steps[1].blocked_by = { kind: 'decision', name: 'step-cost-2' };
+    assert.deepEqual(unauthorisedChanges(before, blocked, 1), { ok: true, problems: [] });
   });
 
   it('lets a criterion be ticked but not rewritten', () => {
