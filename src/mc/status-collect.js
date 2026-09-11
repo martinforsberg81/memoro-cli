@@ -270,9 +270,10 @@ function readJson(path) {
  * NOW — what is happening this second, from the files `mc run` keeps and the
  * STOP file anyone can touch.
  *
- * There is one `current-<repo>.json` per lane and one runner.json for the
- * process that drives them all, so `steps` is a list: `mc run` runs one lane
- * per repository at the same time, and NOW names every one of them.
+ * There is one `current-<repo>[-<lane>].json` per lane and one runner.json for
+ * the process that drives them all, so `steps` is a list: `mc run` runs
+ * `per_repo` lanes on every repository at the same time (`mc run lanes`), and
+ * NOW names every one of them.
  *
  * A file whose pid is dead is a crashed runner, not a running one: it is
  * reported as stale and counts as nothing running. `runs.tsv` cannot answer
@@ -289,7 +290,12 @@ export function nowBlock({ runner = null, currents = [], stop = false, rows = []
   };
   const steps = [];
   for (const current of currents.filter(Boolean)) {
-    const file = current.repo ? `current-${current.repo}.json` : 'current.json';
+    // The lane's index within its repository: `current-memoro.json` is lane 0
+    // and `current-memoro-1.json` lane 1 (`paths.currentFor`, run.js), so a
+    // second lane on the same repository is a second step and not a second
+    // reading of the first.
+    const lane = Number.isInteger(current.lane) && current.lane > 0 ? current.lane : 0;
+    const file = current.repo ? `current-${current.repo}${lane ? `-${lane}` : ''}.json` : 'current.json';
     if (!alive(current.pid)) { stale.push(`${file} (pid ${current.pid} is gone)`); continue; }
     const budget = Number(current.budget_minutes);
     const budgetSeconds = Number.isFinite(budget) && budget > 0 ? budget * 60 : null;
@@ -298,8 +304,11 @@ export function nowBlock({ runner = null, currents = [], stop = false, rows = []
       name: current.name || null,
       kind: current.kind || null,
       repo: current.repo || null,
+      lane,
       tool: current.tool || null,
       model: current.model || null,
+      effort: current.effort || null,
+      advisor: current.advisor || null,
       worktree: current.worktree || null,
       pid: current.pid ?? null,
       started: current.started || null,

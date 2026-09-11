@@ -210,18 +210,45 @@ function row(c, wide, left, middle, right, tone = null) {
  * for different reasons; together they meant a `mc plan` left open since
  * Sunday sat in the same column as a step four minutes into its budget. The
  * sessions have a section of their own now.
+ *
+ * The heading carries the section's answer — how many steps are in flight,
+ * what `mc run lanes` allows, how long the process has been up — so the rows
+ * under it are only the lanes and what each one holds. One row per lane,
+ * step or no step: `mc run` drives `per_repo` lanes on every repository at
+ * the same time, and a lane is a lane between steps as much as during one.
+ * With a row only where there was a step, a lane waiting for its next project
+ * and a lane whose process had died looked exactly alike, which is nothing at
+ * all; and with one row per *repository* (until 2026-09-11) the second lane
+ * `mc run lanes 2` put on memoro was never drawn. A runner that is not
+ * running has no lanes, and says so in one line.
  */
 function runnerLines(lines, c, wide, runner) {
   const now = runner;
-  heading(lines, c, wide, 'RUNNER', null, 'mc run');
-  // One row per lane, step or no step. `mc run` drives one lane per repository
-  // at the same time, and a lane is a lane between steps as much as during one:
-  // with a row only where there was a step, a lane waiting for its next project
-  // and a lane whose process had died looked exactly alike, which is nothing at
-  // all. A runner that is not running has no lanes, and says so in one line.
   const lanes = now.lanes || [];
-  if (lanes.length && (now.process?.alive || lanes.some((lane) => lane.step))) {
-    for (const lane of lanes) lines.push(laneLine(c, wide, lane));
+  const alive = Boolean(now.process?.alive);
+  const flight = (now.steps || []).length;
+  const setting = now.setting || { per_repo: 1, total: null };
+  // The answer first and in the state's colour: green while something runs,
+  // grey when the runner is idle, yellow when it is not there at all — that is
+  // the one of the three a person has to do something about.
+  const counts = [
+    alive || flight
+      ? { text: `${flight} in flight`, styles: flight ? ['green', 'bold'] : ['grey'] }
+      : { text: 'not running', styles: ['yellow', 'bold'] },
+  ];
+  if (setting.per_repo > 1 || setting.total != null) {
+    counts.push({
+      text: `lanes ${setting.per_repo} per repository${setting.total != null ? `, ${setting.total} in total` : ''}`,
+      styles: ['grey'],
+    });
+  }
+  if (alive) counts.push({ text: `up ${duration(now.process.up_seconds)}`, styles: ['grey'] });
+  heading(lines, c, wide, 'RUNNER', between(counts, ' · '), 'mc run');
+  if (lanes.length && (alive || flight)) {
+    // Numbered only when there is something to number: `memoro #1` beside
+    // `memoro #2` tells two lanes apart, and `memoro #1` on its own is noise.
+    const numbered = lanes.some((lane) => (lane.lane ?? 0) > 0);
+    for (const lane of lanes) lines.push(laneLine(c, wide, lane, numbered));
   } else {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c('the runner is not running — mc run starts it', 'grey')}`);
   }
@@ -232,12 +259,7 @@ function runnerLines(lines, c, wide, runner) {
     ], wide - 2)}`);
   }
   for (const line of now.stale) say(lines, c, wide, 2, `${MARK.quiet} stale: ${line}`, 'red');
-  const day = now.day;
-  const up = now.process?.alive ? `runner up ${duration(now.process.up_seconds)} · ` : '';
-  const cost = money(day.cost);
-  say(lines, c, wide, 2, `${up}${day.steps} steps in 24 h — merged ${day.merged}, open ${day.open}, `
-    + `failed ${day.failed}, timed out ${day.timeout}`
-    + `${cost ? ` · ${cost} list (${day.model}, ${day.prices_dated})` : ''}`);
+  dayLine(lines, c, wide, now.day);
   productionLine(lines, c, wide, now.production);
   if (now.quota.count) {
     // Yellow while a refusal is recent enough to still be the reason the
@@ -249,35 +271,69 @@ function runnerLines(lines, c, wide, runner) {
   }
 }
 
-/** The two columns of a lane: the repository it is, and the project it has. */
+/**
+ * The day behind the lanes, one line: how many steps, and how they ended.
+ *
+ * Grey is the bookkeeping and the colour is the outcome that needs a look:
+ * a failed step is red and a timed-out one yellow, each only while its count
+ * is not zero — a `failed 0` is the quietest thing on the row, and painting
+ * it red would make the row cry wolf every day.
+ */
+function dayLine(lines, c, wide, day) {
+  const cost = money(day.cost);
+  const count = (label, n, styles) => ({ text: `${label} ${n}`, styles: n ? styles : ['grey'] });
+  lines.push(`  ${paint(c, between([
+    { text: `${day.steps} steps in 24 h`, styles: ['grey'] },
+    count('merged', day.merged, ['green']),
+    count('open', day.open, ['grey']),
+    count('failed', day.failed, ['red']),
+    count('timed out', day.timeout, ['yellow']),
+    cost ? { text: `${cost} list (${day.model}, ${day.prices_dated})`, styles: ['grey'] } : null,
+  ], ' · '), wide - 2)}`);
+}
+
+/** The two columns of a lane: the lane it is, and the project it has. */
 const LANE_REPO = 11;
-const LANE_NAME = 22;
+const LANE_REPO_NUMBERED = 14;
+const LANE_NAME = 26;
 
 /**
- * One lane: the repository, then the project the runner has in flight there.
+ * One lane: which lane it is, then the project the runner has in flight there.
  *
- * The repository leads because it is what the lane *is* — there is one per
- * repository and no other way to tell two of them apart. The pid used to sit at
- * the end of the row and was the runner's own: `current-memoro.json` and
- * `current-memoro-cli.json` both carry `"pid": 11480` because both lanes are
- * that one process, so the same number was drawn on every row and killed
- * nothing. It stays in `mc --json` and in `mc status`, where a number is a
- * thing to use rather than a thing to read.
+ * The lane leads because it is what the row *is* — `memoro #2` is the second
+ * loop on memoro, and there is no other way to tell it from the first. The
+ * pid used to sit at the end of the row and was the runner's own:
+ * `current-memoro.json` and `current-memoro-cli.json` both carry `"pid": 11480`
+ * because both lanes are that one process, so the same number was drawn on
+ * every row and killed nothing. It stays in `mc --json` and in `mc status`,
+ * where a number is a thing to use rather than a thing to read.
+ *
+ * After the name, what a person reads a lane row for, in that order: what
+ * kind of session it is, how far into its budget it is — the clock is bold,
+ * because it is the number on the row that changes — and what is running it:
+ * tool and model, and the advisor model when the step has one.
  */
-function laneLine(c, wide, lane) {
-  const repo = c(pad(clip(lane.repo || 'unplaced', LANE_REPO - 1), LANE_REPO), 'grey');
+function laneLine(c, wide, lane, numbered = false) {
+  const width = numbered ? LANE_REPO_NUMBERED : LANE_REPO;
+  const label = `${lane.repo || 'unplaced'}${numbered && lane.lane != null ? ` #${lane.lane + 1}` : ''}`;
+  const where = c(pad(clip(label, width - 1), width), 'grey');
   const s = lane.step;
-  if (!s) return `  ${c(MARK.quiet, 'grey')} ${repo} ${c('nothing in flight', 'grey')}`;
-  const budget = s.budget_seconds == null ? '' : ` of ${duration(s.budget_seconds)}`;
-  const meta = paint(c, between([
+  if (!s) return `  ${c(MARK.quiet, 'grey')} ${where} ${c('idle', 'grey')}`;
+  const over = s.over_budget ? ' — over budget' : '';
+  const sep = { text: ' · ', styles: ['grey'] };
+  const meta = paint(c, [
     { text: s.kind, styles: kindTone(s.kind) },
+    sep,
+    // The clock and its budget are two parts on purpose: the elapsed is the
+    // thing to read and carries its own colour, the budget is the bookkeeping
+    // beside it. `elapsedTone` says when the clock has turned.
+    { text: `${duration(s.elapsed_seconds)}${over}`, styles: elapsedTone(s) },
+    s.budget_seconds == null ? null : { text: ` of ${duration(s.budget_seconds)}`, styles: ['grey'] },
+    sep,
     { text: [s.tool, s.model].filter(Boolean).join(' '), styles: ['grey'] },
-    {
-      text: `${duration(s.elapsed_seconds)}${budget}${s.over_budget ? ' — over budget' : ''}`,
-      styles: elapsedTone(s),
-    },
-  ], ' · '), wide - 6 - LANE_REPO - LANE_NAME);
-  return `  ${c(MARK.running, 'green')} ${repo} ${c(pad(clip(s.name, LANE_NAME - 1), LANE_NAME), 'bold')} ${meta}`
+    ...(s.advisor ? [sep, { text: `${s.advisor} advisor`, styles: ['grey'] }] : []),
+  ], wide - 6 - width - LANE_NAME);
+  return `  ${c(MARK.running, 'green')} ${where} ${c(pad(clip(s.name, LANE_NAME - 1), LANE_NAME), 'bold')} ${meta}`
     .replace(/[ ]+$/u, '');
 }
 
@@ -439,10 +495,11 @@ function workLines(lines, c, wide, sessions, unplanned) {
 function elapsedTone(step) {
   if (step.over_budget) return ['red', 'bold'];
   const spent = step.elapsed_seconds;
-  if (step.budget_seconds && spent != null && spent >= step.budget_seconds * 0.75) return ['yellow'];
+  if (step.budget_seconds && spent != null && spent >= step.budget_seconds * 0.75) return ['yellow', 'bold'];
   // Not white: a clock inside its budget is text to read, and reads in the
-  // colour the rest of the row does.
-  return [];
+  // colour the rest of the row does — bold, because it is the one number on
+  // the row that is moving.
+  return ['bold'];
 }
 
 /** The widths of a NEXT row: the project, then what the runner would start. */
