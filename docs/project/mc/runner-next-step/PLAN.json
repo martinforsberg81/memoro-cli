@@ -57,66 +57,22 @@
     }
   ],
   "documents": [
-    {
-      "label": "The runner — `round()`, `runLane`, `splitLanes`, `runStepClaimed`, `claims`, `freshBranch`, `syncMain`, `resolvePlanConflict`, `planOf`, `abandonMerge`, `archiveDone`/`archiveIn`, `landDocsPr`, `tidyQueue`, `dropFromQueue`, `runLoop`",
-      "path": "../../../../src/mc/run.js"
-    },
-    {
-      "label": "The pure rules — `RUN_REFUSALS`, `assembleQueue`, `strictQueue`, `inFlight`, `heldRepair`, `chooseKind`, `nextBranch`, `stepPrompt`",
-      "path": "../../../../src/mc/run-plan.js"
-    },
-    {
-      "label": "The plan schema — `STEP_STATUSES`, `BLOCKER_KINDS`, `NAME_RE`, `validateBlocker`, `unauthorisedChanges`",
-      "path": "../../../../src/mc/plan-schema.js"
-    },
-    {
-      "label": "The plan's own merge rule, tried before `main`'s copy is taken",
-      "path": "../../../../src/mc/plan-merge.js"
-    },
-    {
-      "label": "`machineState` and `kindFor` — the page's reading of what the runner would start",
-      "path": "../../../../src/mc/status-collect.js"
-    },
-    {
-      "label": "`nextSection` and `lanesOf` — NEXT on the page",
-      "path": "../../../../src/mc/page-collect.js"
-    },
-    {
-      "label": "The record this project removes",
-      "path": "../../../../src/mc/unmergeable.js"
-    },
-    {
-      "label": "The docs-only merge the runner lands a plan edit through",
-      "path": "../../../../src/mc/docs-merge.js"
-    },
-    {
-      "label": "`projectForBranch` — why a `<name>-<suffix>` branch is the project's",
-      "path": "../../../../src/mc/project-prs.js"
-    },
-    {
-      "label": "`mc run`'s flags",
-      "path": "../../../../src/mc/commands/run.js"
-    },
-    {
-      "label": "The runner's tests, with the `RUN_REFUSALS` agreement test at the end",
-      "path": "../../../../tests/mc/run.test.js"
-    },
-    {
-      "label": "The doc this project rewrites",
-      "path": "../../../technical/mc-run.md"
-    },
-    {
-      "label": "Who writes what in a plan",
-      "path": "../../README.md"
-    },
-    {
-      "label": "The decision this plan carries — ruling 17",
-      "path": "../rulings.md"
-    }
+    { "label": "The runner — `round()`, `runLane`, `splitLanes`, `runStepClaimed`, `claims`, `freshBranch`, `syncMain`, `resolvePlanConflict`, `planOf`, `abandonMerge`, `archiveDone`/`archiveIn`, `landDocsPr`, `tidyQueue`, `dropFromQueue`, `runLoop`", "path": "../../../../src/mc/run.js" },
+    { "label": "The pure rules — `RUN_REFUSALS`, `assembleQueue`, `strictQueue`, `inFlight`, `heldRepair`, `chooseKind`, `nextBranch`, `stepPrompt`", "path": "../../../../src/mc/run-plan.js" },
+    { "label": "The plan schema — `STEP_STATUSES`, `BLOCKER_KINDS`, `NAME_RE`, `validateBlocker`, `unauthorisedChanges`", "path": "../../../../src/mc/plan-schema.js" },
+    { "label": "The plan's own merge rule, tried before `main`'s copy is taken", "path": "../../../../src/mc/plan-merge.js" },
+    { "label": "`machineState` and `kindFor` — the page's reading of what the runner would start", "path": "../../../../src/mc/status-collect.js" },
+    { "label": "`nextSection` and `lanesOf` — NEXT on the page", "path": "../../../../src/mc/page-collect.js" },
+    { "label": "The record this project removes", "path": "../../../../src/mc/unmergeable.js" },
+    { "label": "The docs-only merge the runner lands a plan edit through", "path": "../../../../src/mc/docs-merge.js" },
+    { "label": "`projectForBranch` — why a `<name>-<suffix>` branch is the project's", "path": "../../../../src/mc/project-prs.js" },
+    { "label": "`mc run`'s flags", "path": "../../../../src/mc/commands/run.js" },
+    { "label": "The runner's tests, with the `RUN_REFUSALS` agreement test at the end", "path": "../../../../tests/mc/run.test.js" },
+    { "label": "The doc this project rewrites", "path": "../../../technical/mc-run.md" },
+    { "label": "Who writes what in a plan", "path": "../../README.md" },
+    { "label": "The decision this plan carries — ruling 17", "path": "../rulings.md" }
   ],
-  "runner": {
-    "budget_minutes": 120
-  },
+  "runner": { "budget_minutes": 120 },
   "steps": [
     {
       "title": "Each lane takes the next step under NEXT, and the index split is gone",
@@ -186,7 +142,8 @@
         "Two block paths beyond the instruction's list, both under `merge-uncommittable`: a merge git refused with no conflict at all (unrelated histories, a stale `index.lock` — `syncMain` now returns `detail` with git's last line), and the one plan conflict step 2 left — `resolvePlanConflict` could take neither the rule's result nor main's copy. Both abort the merge before the block is written, so the workarea a person opens is the branch's own last commit. Each has a case in the `BLOCKS` table in `tests/mc/run.test.js`.",
         "`machineState` (status-collect.js) needed no code: `kindFor` answers `skip:blocked` from the plan before the dirty check and the hold are reached, which the test *once the block is on main the project is never picked again* asserts through `readProject`. The brief's *Ready, and the runner cannot start it* section still has its sources (dirty worktrees not yet picked, `prs-unknown`) and is left; a `workarea` blocker is a fourth group in `blockedSteps` with its own table and prose in `blockedLines`, and `canon/roles/brief.md` says what a brief does with one. `stale-blockers.js` reads `kind: project` only, as before.",
         "Live, from `~/mc/runner/log/runner.log` on 2026-09-11: `sql-w1-universe-closure` started a session at 2026-09-08T06:57:52Z and merged #11604; `sql-w3-email-closure` started at 08:27:05Z and merged #11606 — both on the first pick after step 2, so criterion 3's live half was met by step 2 and needed no block. Criterion 1: `grep -c 'skipped [0-9]* ('` is 930 and the last such line is 2026-09-08T06:42:08Z; every lane line since is `next —` or `nothing to run — sleeping`. Criterion 2: `awk '/step starting/'` after the switch shows no name started twice within a session's length, and only one `current-memoro*.json` at a time carried a name. Criterion 3's *never picked again* on a real block, and criterion 6, are read after the runner is restarted on this code (`mc run --update` after #690 lands); the planning session does that restart and step 4 flips what it can read then.",
-        "Seen while reading the log, not fixed here: `sql-w5-relationship-closure` was started every thirty minutes on 2026-09-08 and died after 3 s each time with `note=quota` — the quota pause does not hold a lane back between picks. Written as a proposal in `~/mc/proposals/`."
+        "Seen while reading the log, not fixed here: `sql-w5-relationship-closure` was started every thirty minutes on 2026-09-08 and died after 3 s each time with `note=quota` — the quota pause does not hold a lane back between picks. Written as a proposal in `~/mc/proposals/`.",
+        "Repair, 2026-09-11T16:37Z: #690 was held as `no-json` because the step session Martin stopped at 16:32Z ended rc=143 with the pull request open. The work itself was finished — the planning session's commit 5aff0a5 (the `persistent` set, `syncMain`'s `detail`, the plan-conflict block, this step's record) sat in the workarea unpushed, and #690 was still a draft with a placeholder body, which `gh pr merge` refuses. The repair pushed it, restored `main`'s formatting of `documents` and `runner` in this plan (5aff0a5 had re-indented them; no value changed), rewrote the body with the live check, and marked the pull request ready. `npm test`: 1932 tests, 1923 pass, 0 fail, 9 skipped. No code was changed by the repair."
       ]
     },
     {
