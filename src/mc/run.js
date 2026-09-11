@@ -491,23 +491,31 @@ export function createRunner({
    * are opposite: `fetch` is the network and the lane waits it out, `commit` is
    * this workarea and blocks the step (`merge-uncommittable`, `WORKAREA_BLOCKS`).
    * Both used to be `{ ok: false, conflicts: [] }` and nothing could ask.
+   * `detail` is what git said, for the block's comment — the one thing a person
+   * opening the workarea has to go on.
    */
   function syncMain(worktree, name) {
     if (!deps.git(worktree, ['fetch', '-q', 'origin']).ok) return { ok: false, conflicts: [], why: 'fetch' };
-    if (deps.git(worktree, ['merge', '-q', '--no-edit', 'origin/main']).ok) return { ok: true, conflicts: [] };
+    const merge = deps.git(worktree, ['merge', '-q', '--no-edit', 'origin/main']);
+    if (merge.ok) return { ok: true, conflicts: [] };
     const conflicts = (gitOut(worktree, ['diff', '--name-only', '--diff-filter=U']) || '').split('\n').filter(Boolean);
     if (conflicts.length === 1 && conflicts[0] === '.gitignore') {
       if (deps.git(worktree, ['checkout', '--theirs', '.gitignore']).ok && deps.git(worktree, ['add', '.gitignore']).ok && deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
     }
     const left = conflicts.filter((path) => !(isPlanPath(path) && resolvePlanConflict(worktree, name, path)));
     if (!left.length) {
-      if (deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
+      const commit = deps.git(worktree, ['commit', '-q', '--no-edit']);
+      if (commit.ok) return { ok: true, conflicts: [] };
       // Resolved, staged, and the commit refused: not a conflict any more and
       // not a merge either. No session is started in a worktree mid-merge, and
       // nothing the runner does next changes the answer — so the step is
-      // blocked on `main` rather than skipped (`merge-uncommittable`).
-      say(`${name}: ${conflicts.join(' ')} resolved, but the merge would not commit`);
-      return { ok: false, conflicts: [], why: 'commit' };
+      // blocked on `main` rather than skipped (`merge-uncommittable`). With no
+      // conflict at all, git refused the merge before it began — unrelated
+      // histories, a stale `index.lock` — which is the same answer.
+      const detail = conflicts.length
+        ? `origin/main was merged in, ${conflicts.join(' ')} resolved, and the commit was refused (${lastLine(commit)})`
+        : `origin/main could not be merged in, with no conflict to resolve (${lastLine(merge)})`;
+      return { ok: false, conflicts: [], why: 'commit', detail };
     }
     say(`${name}: merge conflict in: ${left.join(' ')}`);
     return { ok: false, conflicts: left };
@@ -1704,9 +1712,18 @@ export function createRunner({
    * arriving here rather than a second one.
    */
   const claims = new Set();
+  /**
+   * The names whose last refusal was one a person has to act on (`block` in
+   * `runStepClaimed`). `sync` is both a wait and a block — a fetch that failed
+   * and a merge that would not commit answer in the same word — and the lane
+   * must tell them apart: it waits out the first and moves to the next name
+   * past the second. Read and cleared by `pass`.
+   */
+  const persistent = new Set();
   async function runStep(name, world = {}, { lane = 0, claimed = false } = {}) {
     if (!claimed && claims.has(name)) { say(`${name}: in flight in another lane, skip`); return 'skipped'; }
     claims.add(name);
+    persistent.delete(name);
     try {
       return await runStepClaimed(name, world, { lane });
     } finally {
@@ -1736,6 +1753,7 @@ export function createRunner({
     // (`blockStep`, and `WORKAREA_BLOCKS` for which refusals are these).
     const block = async (reason, detail) => {
       say(`${name}: ${detail} — ${worktree}`);
+      persistent.add(name);
       await blockStep({ repo, name, reason: WORKAREA_BLOCKS[reason], detail });
       return `skipped:${reason}`;
     };
@@ -1814,8 +1832,14 @@ export function createRunner({
     const sync = syncMain(worktree, name);
     // A fetch that failed is the network and this lane waits it out; a merge
     // that resolved and would not commit is this workarea, and a person's.
+    // The merge git would not commit is aborted before the block is written,
+    // so the workarea a person opens is the branch's own last commit and not a
+    // tree with everything staged.
     if (!sync.ok && !sync.conflicts.length) {
-      if (sync.why === 'commit') return block(REFUSAL.sync, 'origin/main was merged in and the commit was refused');
+      if (sync.why === 'commit') {
+        if (deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) deps.git(worktree, ['merge', '--abort']);
+        return block(REFUSAL.sync, sync.detail);
+      }
       return refuse(REFUSAL.sync, 'fetch/merge failed, skip');
     }
     // What git and the plan's own rule could not resolve. It no longer makes
@@ -1845,6 +1869,17 @@ export function createRunner({
     // Measured 2026-09-05: #612 and #614 both sat at `repairs: 0` with the
     // gate's reason reading `conflicts with origin/main`. Resolving the merge
     // is the repair; `repairPrompt` is handed the files.
+    // The one plan conflict that still stops a step: git could give neither the
+    // plan's rule its three sides nor main's copy (`resolvePlanConflict`), so
+    // the plan on disk is a half-merged file no session can be handed a step
+    // from. Nothing the runner does next changes that, so it is blocked like
+    // any merge that would not commit. A repair is the exception, as it is for
+    // every conflict: resolving the merge is what the repair is for.
+    const planAt = plan?.path?.startsWith(`${worktree}/`) ? plan.path.slice(worktree.length + 1) : null;
+    if (!repair && planAt && conflicts.includes(planAt)) {
+      abandonMerge(`${planAt} could not be resolved`);
+      return block(REFUSAL.sync, `origin/main was merged in and ${planAt} could be resolved neither by the plan's rule nor by taking main's copy`);
+    }
     const choice = repair ? { kind: 'repair' } : chooseKind({ plan });
     if (conflicts.length && choice.kind !== 'step' && choice.kind !== 'repair') {
       // The way here is `runStep` driven by hand past the picker — the plan on
@@ -2165,7 +2200,9 @@ export function createRunner({
         }
         return ran;
       }
-      if (WAIT_REFUSALS.has(outcome)) return { ran: 0, waited: outcome };
+      // A refusal that blocked the step is never a wait, whatever its word: the
+      // plan on main is being told, and the next name is the lane's business.
+      if (!persistent.delete(pick.name) && WAIT_REFUSALS.has(outcome)) return { ran: 0, waited: outcome };
       passed.add(pick.name);
     }
   }

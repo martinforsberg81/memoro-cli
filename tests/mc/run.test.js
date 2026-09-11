@@ -3268,7 +3268,31 @@ const BLOCKS = [
         commitFails: ['c'], session: okSession(),
       });
     },
-    detail: /origin\/main was merged in and the commit was refused/u,
+    detail: /origin\/main was merged in, docs\/project\/prog\/c\/PLAN\.json resolved, and the commit was refused \(error: could not commit\)/u,
+  },
+  {
+    block: 'merge-uncommittable',
+    reason: 'sync',
+    name: 'c',
+    what: 'a PLAN.json conflict neither the plan\'s rule nor main\'s copy could settle',
+    make: () => {
+      const three = planStages();
+      const f = fixture({
+        areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
+        plans: { memoro: { c: three.main } },
+        conflicts: { c: [PLAN_AT] },
+        // Stage 3 unreadable: the rule refuses, and `checkout --theirs` is
+        // refused below, so main's copy cannot be taken either.
+        stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch } } },
+        session: okSession(),
+      });
+      const git = f.deps.git;
+      f.deps.git = (cwd, args) => (args[0] === 'checkout' && args[1] === '--theirs' && cwd === '/w/c/memoro'
+        ? { ok: false, stdout: '', stderr: 'error: path not in index' }
+        : git(cwd, args));
+      return f;
+    },
+    detail: /could be resolved neither by the plan's rule nor by taking main's copy/u,
   },
   {
     block: 'role-missing',
