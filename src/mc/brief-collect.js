@@ -37,7 +37,6 @@ import { PR_FIELDS } from './project-prs.js';
 import { RUN_REFUSALS } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
 import { machineDetail, machineState, pidAlive, readCurrents } from './status-collect.js';
-import { parseUnmergeable, unmergeablePath } from './unmergeable.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -458,9 +457,14 @@ export const PLAN_REVIEW = 'plan-review';
  * Every `blocked` step on `origin/main`, told apart by what a reader would do
  * with it — which is not the same question as what `blocked_by.kind` says.
  *
- * Three groups. A **project** blocker is sequencing: the named project has to
+ * Four groups. A **project** blocker is sequencing: the named project has to
  * land first, and that order is the blocking project's design, so the whole
- * list is worth a count and no more. **`plan-review`** is a `decision` blocker
+ * list is worth a count and no more. A **workarea** blocker is the runner's own
+ * (`blockStep`, run.js): the step is not waiting on anybody's judgement, it is
+ * waiting for a directory on this machine to be put right, and the step's last
+ * comment says which and what was in it — so it carries that comment and is
+ * kept out of the decisions, which is the list a session reads as *decide this*.
+ * **`plan-review`** is a `decision` blocker
  * by kind and a hand-off by meaning — the programme's planning session has not
  * read the plan yet — so it is separated from the decisions that are decisions.
  * What is left is the **named decisions**, and that short list is the one a
@@ -497,7 +501,13 @@ export function blockedSteps(plans = []) {
         title: step.title || '',
         kind: blocker.kind || null,
         blocker: name || null,
-        group: blocker.kind === 'project' ? 'project' : (name === PLAN_REVIEW ? 'plan-review' : 'decision'),
+        // What the runner wrote when it blocked the step: the workarea and what
+        // was in it. Last, because that is where an appended comment goes, and
+        // only carried for the group that is read from it.
+        comment: blocker.kind === 'workarea' ? (step.comments || []).at(-1) || null : null,
+        group: blocker.kind === 'project' ? 'project'
+          : (blocker.kind === 'workarea' ? 'workarea'
+            : (name === PLAN_REVIEW ? 'plan-review' : 'decision')),
         stale: stale.get(`${record.repo}/${record.project}/${index + 1}`) || null,
         unnamed: Boolean(name) && !NAME_RE.test(name),
       });
@@ -756,6 +766,7 @@ function blockedLines(out, blocked) {
   const named = blocked.filter((b) => b.group === 'decision');
   const review = blocked.filter((b) => b.group === 'plan-review');
   const project = blocked.filter((b) => b.group === 'project');
+  const workarea = blocked.filter((b) => b.group === 'workarea');
   const stale = blocked.filter((b) => b.stale);
   const unnamed = blocked.filter((b) => b.unnamed);
   const where = (b) => `${b.repo} · ${b.programme} / ${b.project} step ${b.step}`;
@@ -764,7 +775,29 @@ function blockedLines(out, blocked) {
     + `${blocked.length === 1 ? 'is' : 'are'} \`blocked\`: `
     + `**${named.length} named decision${named.length === 1 ? '' : 's'}** to work, `
     + `${review.length} waiting on a programme's planning session, `
-    + `${project.length} sequencing.`, '');
+    + `${project.length} sequencing, `
+    + `${workarea.length} on a workarea.`, '');
+
+  out.push(`### Waiting on a workarea — ${workarea.length}`, '');
+  if (!workarea.length) out.push('_none — the runner has started every step its plan said it could_');
+  else {
+    out.push('| repo | programme / project | step | what stopped it | the workarea |', '|---|---|---|---|---|');
+    for (const b of workarea) {
+      // The path out of the comment the runner wrote — it is the one thing a
+      // reader has to go to, and the rest of the sentence is the blocker name.
+      const path = /The workarea is (\S+?)\.?(?:\s|$)/u.exec(b.comment || '')?.[1] || '—';
+      out.push(`| ${b.repo} | ${b.programme} / ${b.project} | ${b.step} | ${b.blocker} | ${path} |`);
+    }
+    out.push('', 'These are not decisions and none of them is yours to take. `mc run` could not start '
+      + 'the step — a workarea with uncommitted work in it, a branch it could not move, a merge that '
+      + 'would not commit, a tool that is not installed — and wrote that down rather than meeting it '
+      + 'again every ten minutes. The step\'s last `comments` paragraph says what it found. Open the '
+      + 'workarea and put it right: uncommitted work is finished (commit it on the branch it is on) or '
+      + 'abandoned (Martin\'s `git restore`), and no machine touches either. Then the step goes back to '
+      + '`ready` — by your hand or a planning session\'s — because the runner never retries one of these '
+      + 'on its own. One proposal per workarea, naming what the last run left.');
+  }
+  out.push('');
 
   out.push(`### Named decisions — ${named.length}`, '');
   if (!named.length) out.push('_none — every decision blocker on main is a `plan-review` park_');
@@ -1062,8 +1095,6 @@ export async function collectBrief({
   let heldText = '';
   try { heldText = read(heldPath(root)); } catch { heldText = ''; }
   const held = heldForBrief(heldText);
-  let unmergeableNow = [];
-  try { unmergeableNow = parseUnmergeable(read(unmergeablePath(root))); } catch { unmergeableNow = []; }
 
   // Every `ready` plan the runner would pass over now. The whole file is read
   // here rather than `heldForBrief`'s filtered half: an entry still at
@@ -1084,11 +1115,6 @@ export async function collectBrief({
       prs: opened,
       prsFailed,
       held: parseHeld(heldText),
-      // The workareas the last round could not bring to origin/main. Read the
-      // same way and for the same reason as `held.json`: an aborted merge
-      // leaves nothing on disk to see, so the round's own record is the only
-      // thing that says the project is standing still.
-      unmergeable: unmergeableNow,
       stop,
       root,
       // `git` answers with a string or null here; the reading wants ok and text.

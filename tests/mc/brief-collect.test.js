@@ -335,9 +335,20 @@ describe('blocked steps', () => {
     record('sql-w3-email-closure', { status: 'ready', steps: [{ title: 'Close it', status: 'ready', done_when: 'closed', instruction: ['Do it.'], pr: null, blocked_by: null }] }),
     record('avatar-image-animation', { programme: 'assistant-avatar', steps: [step('Publish a release', 'plan-review')] }),
     record('lanes', { programme: 'mc', repo: 'memoro-cli', steps: [step('Pair the lanes', 'lanes-pair')] }),
+    // The runner's own, and the one blocker that is not a judgement: `mc run`
+    // could not start the step and wrote down which workarea and what was in
+    // it (`blockStep`, run.js).
+    record('home-on-msr', {
+      steps: [{
+        ...step('Draw the card', 'dirty-worktree', 'workarea'),
+        comments: ['Blocked by mc run on 2026-09-08T10:00:00Z: uncommitted changes that are not a merge in '
+          + 'progress (public/js/a.js). The workarea is /Users/m/mc/home-on-msr/memoro. mc brief or a planning '
+          + 'session sets this step ready again once the workarea is fixed; the runner does not retry.'],
+      }],
+    }),
   ];
 
-  it('tells the three kinds apart, and marks the two cases nothing else sees', () => {
+  it('tells the four kinds apart, and marks the two cases nothing else sees', () => {
     const rows = blockedSteps(PLANS);
     assert.deepEqual(rows.map((b) => [b.project, b.step, b.group]), [
       ['sql-goal1-certification', 2, 'project'],
@@ -345,7 +356,13 @@ describe('blocked steps', () => {
       ['sql-goal1-certification', 4, 'decision'],
       ['avatar-image-animation', 1, 'plan-review'],
       ['lanes', 1, 'decision'],
+      ['home-on-msr', 1, 'workarea'],
     ]);
+    // A workarea blocker carries the comment the runner wrote, because that is
+    // where the path is and the path is the whole act. No other group does:
+    // a decision's comment is the plan's own prose and belongs where the plan is.
+    assert.match(rows.at(-1).comment, /The workarea is \/Users\/m\/mc\/home-on-msr\/memoro\./u);
+    assert.deepEqual(rows.filter((b) => b.comment).length, 1);
     // `plan-review` is a `decision` by kind and a hand-off by meaning, so the
     // group is not the kind: it is what the reader does with it.
     assert.equal(rows[3].kind, 'decision');
@@ -366,7 +383,12 @@ describe('blocked steps', () => {
       blocked: blockedSteps(PLANS),
     });
     const section = text.split('## Blocked')[1].split('## Queue')[0];
-    assert.match(section, /5 steps on `origin\/main` are `blocked`: \*\*2 named decisions\*\* to work, 1 waiting on a programme's planning session, 2 sequencing\./u);
+    assert.match(section, /6 steps on `origin\/main` are `blocked`: \*\*2 named decisions\*\* to work, 1 waiting on a programme's planning session, 2 sequencing, 1 on a workarea\./u);
+    // The runner's own list, with the workarea out of the comment: the act is
+    // to open that directory, and it is not a decision anybody takes.
+    assert.match(section, /### Waiting on a workarea — 1/u);
+    assert.ok(section.includes('| memoro | sql / home-on-msr | 1 | dirty-worktree | /Users/m/mc/home-on-msr/memoro |'));
+    assert.match(section, /These are not decisions and none of them is yours to take\./u);
     assert.match(section, /### Named decisions — 2/u);
     // The whole name, uncut: it is what a session looks the answer up by, and
     // the one that does not fit a cell is the one worth seeing whole.

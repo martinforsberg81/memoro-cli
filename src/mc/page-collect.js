@@ -48,6 +48,7 @@ import {
 } from './brief-collect.js';
 import { lastAttempt, lastDeploy } from './deploys.js';
 import { heldEntries, heldPath } from './held.js';
+import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
 import { readLiveVersion } from './live-version.js';
@@ -56,7 +57,7 @@ import { PLAN_HOME, workRoot } from './paths.js';
 import { planState } from './plan-schema.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
-import { assembleQueue, queueFileNames } from './run-plan.js';
+import { assembleQueue, nextFor, queueFileNames } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
 import {
   REPO_NAMES, RUNNER_MODEL, areasWithCheckout, kindFor, machineState, nowBlock, pidAlive,
@@ -211,7 +212,8 @@ export function runnerSection({
  * The lanes, one per repository, whether or not that lane has a step.
  *
  * A lane is what `mc run` drives — one per repository, at the same time
- * (`splitLanes`, run.js) — and it exists between steps as much as during one.
+ * (one lane loop per repository, run.js) — and it exists between steps as much
+ * as during one.
  * The section drew a row only where there was a step, so a lane between steps
  * and a lane that had died looked exactly alike: nothing.
  *
@@ -335,11 +337,19 @@ export function sessionsSection({
  * its rule, so the page and the round cannot come to disagree about what is
  * next.
  *
- * Lanes are why it is blocks rather than a list: `mc run` drives one lane per
- * repository at the same time (`splitLanes`, run.js), so the head of *each*
- * lane starts now and a flat list would say one of them is second. Three deep
- * per lane is what is coming; past that it is a count, and the whole order is
+ * Lanes are why it is blocks rather than a list: `mc run` drives one lane loop
+ * per repository at the same time — `lanes` of them, as `mc run lanes` says —
+ * so the head of *each* starts now and a flat list would say one of them is
+ * second. `heads` on a block is how many of its rows start now. Three deep per
+ * repository is what is coming; past that it is a count, and the whole order is
  * in `items` for `mc --json`.
+ *
+ * The order is the runner's own picker: `nextFor` (run-plan.js), asked
+ * repeatedly with each pick added to `claimed`, which is exactly what a lane
+ * does. It is given this section's own reading per name — the plan, and then
+ * `machineState` — because the page can see a dirty worktree that the runner's
+ * pure reading cannot, and a lane that would refuse on it must not be drawn as
+ * starting it.
  *
  * A live area used to be a skip with a reason of its own, because the runner
  * would not start a step where somebody had a session open. It no longer
@@ -367,6 +377,7 @@ export function sessionsSection({
  */
 export function nextSection({
   queueText = '', plans = [], held = [], queued: forMerge = [], deep = LANE_DEEP, staleNamed = STALE_NAMED,
+  lanes: perRepo = 1,
   machine = () => null,
 } = {}) {
   const order = assembleQueue(queueText, plans);
@@ -409,7 +420,7 @@ export function nextSection({
     const reason = item.kind.slice('skip:'.length);
     reasons[reason] = (reasons[reason] || 0) + 1;
   }
-  const lanes = lanesOf(runnable, deep);
+  const lanes = lanesOf({ order, plans, items, deep, perRepo });
   return {
     // How far the runner's order reaches: every non-legacy plan on `main`,
     // `queue.md`'s names first. Not a depth anybody types — a depth it walks.
@@ -427,25 +438,49 @@ export function nextSection({
 }
 
 /**
- * The runnable names split one lane per repository, each lane in the order the
- * runner would take it and `deep` of them named — `splitLanes`' rule (run.js)
- * over the same list, with the lanes in the order their first name appears.
+ * One block per repository, in the order its first runnable name appears, each
+ * holding what that repository's lanes would take next: `deep` of them named
+ * and the rest counted, and `heads` — how many of those rows start *now*,
+ * which is how many lane loops the repository has (`mc run lanes`).
+ *
+ * The picks are the runner's, name by name: `nextFor` over the same order,
+ * with each pick claimed before the next is asked for, which is what a lane
+ * does with `claims`. Until 2026-09-08 this grouped the runnable list by
+ * repository instead — the same answer at one lane per repository, and the
+ * wrong one as soon as the runner's rule changed, because there were two
+ * rules.
  */
-function lanesOf(runnable, deep) {
+function lanesOf({ order, plans, items, deep, perRepo }) {
+  const byName = new Map(items.map((item) => [item.name, item]));
+  const world = { names: order, plans };
+  // The section's own reading per name, which `nextFor` asks instead of the
+  // plan-and-PR one it uses in the runner: the machine's answer is already in
+  // `items`, and asking twice is how two answers on one page come to differ.
+  const state = (name) => {
+    const item = byName.get(name);
+    return { runnable: Boolean(item?.runnable), kind: item?.kind || null };
+  };
   const lanes = [];
   const byRepo = new Map();
-  for (const item of runnable) {
-    const repo = item.repo || null;
+  const claimed = new Set();
+  for (;;) {
+    const pick = nextFor({ world, claimed, state });
+    if (!pick) break;
+    claimed.add(pick.name);
+    const repo = pick.repo || null;
     if (!byRepo.has(repo)) {
-      const lane = { repo, count: 0, items: [], more: 0 };
+      const lane = { repo, count: 0, items: [], more: 0, heads: 0 };
       byRepo.set(repo, lane);
       lanes.push(lane);
     }
     const lane = byRepo.get(repo);
     lane.count += 1;
-    if (lane.items.length < deep) lane.items.push(item);
+    if (lane.items.length < deep) lane.items.push(byName.get(pick.name));
   }
-  for (const lane of lanes) lane.more = lane.count - lane.items.length;
+  for (const lane of lanes) {
+    lane.more = lane.count - lane.items.length;
+    lane.heads = Math.min(Math.max(1, perRepo), lane.items.length);
+  }
   return lanes;
 }
 
@@ -955,6 +990,7 @@ export async function collectPage({
   run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }),
   exec = execAsync,
   alive = pidAlive,
+  laneCount = readLaneCount,
   cache = { loadPlans, loadPrs, savePrs },
 } = {}) {
   const root = workRoot(env);
@@ -1042,6 +1078,9 @@ export async function collectPage({
       plans,
       held,
       queued: queuedForMerge,
+      // How many lane loops each repository has, so the block bolds as many
+      // heads as there are lanes to start them (`mc run lanes`).
+      lanes: laneCount().per_repo,
       machine: (name) => machineState(name, {
         plans,
         prs: prs.prs,

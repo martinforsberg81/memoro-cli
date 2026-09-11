@@ -30,8 +30,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { openPrsFor } from './project-prs.js';
-import { REFUSAL, chooseKind, heldRepair, inFlight } from './run-plan.js';
-import { describeUnmergeable, unmergeableFor } from './unmergeable.js';
+import { REFUSAL, chooseKind, heldRepair, inFlight, kindFor } from './run-plan.js';
 
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
 export const RUNNER_MODEL = 'opus';
@@ -44,26 +43,18 @@ export const REPO_NAMES = Object.freeze(['memoro', 'memoro-cli']);
 /**
  * What the runner would do with a queued name — asked of the runner itself.
  *
- * The rule lives in one place, `chooseKind` in run-plan.js, and run.js calls
- * the same function before it starts a step; this only flattens the answer
- * to one string. A merge left in progress inside a workarea does not change
- * it either way — the plan decides what a project gets, and the conflict is
- * something the step session is told about rather than a kind of its own.
+ * The rule lives in one place, `kindFor` in run-plan.js, beside the picker
+ * (`nextFor`) that the runner takes its next step with; it is re-exported here
+ * because this is where every reader of the page has always imported it from.
+ * A merge left in progress inside a workarea does not change it either way —
+ * the plan decides what a project gets, and the conflict is something the step
+ * session is told about rather than a kind of its own.
  *
  * Decisions are not a parameter any more. The runner runs `ready` plans and
  * nothing else — a project waiting on a decision is simply not ready, and no
  * `**Beslut:**` line anywhere starts it (Martin, 2026-08-29).
  */
-export function kindFor(name, { plans }) {
-  const plan = plans.find((p) => p.project === name) || null;
-  const choice = chooseKind({ plan });
-  if (choice.kind) return choice.kind;
-  if (!plan) return 'skip:no-plan';
-  // The reason is a word the page can count. The sentence beside it is for a
-  // person; grouping on it produced rows like "n does not parse: ..." when the
-  // sentence changed shape.
-  return `skip:${choice.reason || 'no-status'}`;
-}
+export { kindFor };
 
 /* ----------------------------------------------------------- machine state */
 
@@ -86,9 +77,17 @@ export function kindFor(name, { plans }) {
  * shared with the round so the two cannot drift.
  *
  * The plan is asked first and its answer returned before any git at all. That
- * is `planRefusal`'s economy (run.js): a project whose plan on main already
- * refuses it must cost no `git status` — a round spent 51 seconds walking 38
- * projects to start one before it was asked in that order.
+ * is the picker's economy (`nextFor`, run-plan.js): a project whose plan on
+ * main already refuses it must cost no `git status` — a round spent 51 seconds
+ * walking 38 projects to start one before it was asked in that order.
+ *
+ * That order is also how the runner's own block is read (2026-09-08): a step it
+ * could not start is `blocked` on `main` with `blocked_by: { kind: 'workarea' }`
+ * (`blockStep`, run.js), so `kindFor` answers `skip:blocked` here and the dirty
+ * check and the hold below are never reached for it — the plan says what is
+ * wrong and the step's last comment says which workarea. Between the pick and
+ * the landed block they *are* reached, and that is the point: a workarea whose
+ * block has not landed yet must not read as runnable.
  *
  * Nothing here starts, writes or fetches, which is the rule this module opens
  * with: `git` is only ever asked read-only questions of a worktree, and a
@@ -97,13 +96,12 @@ export function kindFor(name, { plans }) {
  *
  * Returns `{ runnable, reason, detail, since, kind }`: `reason` a word the
  * page can count, `detail` the sentence for a person, `since` when it started
- * being true (a hold's own `since`, the oldest dirty file's mtime, the round
- * that first could not merge origin/main into the workarea), and `kind`
+ * being true (a hold's own `since`, the oldest dirty file's mtime), and `kind`
  * what the runner would start — `step`, or `repair` for a held pull request
  * that is still owed its one repair session.
  */
 export function machineState(name, {
-  plans = [], prs = [], prsFailed = [], held = [], unmergeable = [], stop = false,
+  plans = [], prs = [], prsFailed = [], held = [], stop = false,
   root = null, repoNames = REPO_NAMES,
   exists = existsSync, git = () => ({ ok: false, stdout: '' }), mtime = fileMtime,
 } = {}) {
@@ -154,16 +152,13 @@ export function machineState(name, {
       return no(REFUSAL.branch, `#${repair.entry.pr} is on ${wanted}, which this workarea has no branch for`, repair.entry.since);
     }
   }
-  // Where the round's own merge of origin/main sits, which is the one thing
-  // here that is asked of the last round rather than of the machine as it
-  // stands. An aborted merge leaves the worktree clean, so `git status` above
-  // says nothing about it and no reading could work it out without merging —
-  // `mc status` may not. `unmergeable.json` is the round's record, dropped the
-  // next time that project gets past the merge, and it sits here because that
-  // is where the round meets it: after the branch, before the role and the
-  // tool (`runStepClaimed`).
-  const stuck = unmergeableFor(unmergeable, { project: name, repo });
-  if (stuck) return no(REFUSAL.unmergeable, describeUnmergeable(stuck), stuck.since);
+  // There was one more reading here until 2026-09-08, out of a file the runner
+  // wrote beside `held.json`: the workarea the last round could not bring to
+  // origin/main, which no reading could work out for itself because an aborted
+  // merge leaves the worktree clean. It went with the case — a `PLAN.json` the
+  // plan's own rule refuses now takes main's copy and the merge commits
+  // (`resolvePlanConflict`, run.js), so nothing is aborted and nothing is
+  // recorded.
   return {
     runnable: true,
     reason: null,

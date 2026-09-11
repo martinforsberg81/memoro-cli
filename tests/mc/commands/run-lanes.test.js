@@ -82,7 +82,7 @@ test('lanes: the positional sets per_repo and --total sets the total, neither to
   const per = await mc.lanes('4');
   assert.equal(per.code, 0);
   assert.equal(per.out[0], 'lanes 4 per repository, no total cap (up to 8 across 2 repositories) from the next start');
-  assert.match(per.out.at(-1), /mc run --update takes the new ones after the round it is in/u);
+  assert.match(per.out.at(-1), /mc run --update takes the new ones after the step it is in/u);
   assert.deepEqual(readLaneCount({ root: mc.root }), { per_repo: 4, total: null });
 
   const total = await mc.lanes('--total', '3');

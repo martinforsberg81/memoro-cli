@@ -498,12 +498,13 @@ function nextLines(lines, c, wide, next) {
       { text: lane.more ? `… ${lane.more} more` : '', styles: ['grey'] },
     ], ' · '), wide - 5)}`);
     for (const [index, item] of lane.items.entries()) {
-      // The head of the lane is bold — it is the one starting now; the rest are
-      // the terminal's own text, and painting them made the first harder to
-      // find. `step 2/5` is where in its plan the project is, which a name and
-      // a kind never said.
+      // The heads of the block are bold — they are the ones starting now, one
+      // per lane loop the repository has (`lane.heads`); the rest are the
+      // terminal's own text, and painting them made the first harder to find.
+      // `step 2/5` is where in its plan the project is, which a name and a
+      // kind never said.
       const label = pad(clip(item.name, NEXT_NAME - 1), NEXT_NAME);
-      const name = index === 0 ? c(label, 'bold') : label;
+      const name = index < (lane.heads ?? 1) ? c(label, 'bold') : label;
       const at = item.step && item.steps ? ` ${item.step}/${item.steps}` : '';
       const kind = paint(c, [{ text: pad(`${item.kind}${at}`, NEXT_KIND), styles: kindTone(item.kind) }]);
       lines.push(row(c, wide, `       ${name}${kind}`, item.title || '', null));
@@ -915,6 +916,11 @@ function blockedLines(lines, c, wide, blocked) {
   const waits = [
     kinds.decision ? `${kinds.decision} on a decision` : '',
     kinds.project ? `${kinds.project} on a project` : '',
+    // The runner's own: a step it could not start, waiting on a workarea
+    // somebody has to open (`blockStep`, run.js). Drawn beside the other two
+    // because the count above already holds it, and a blocked project whose
+    // reason is missing from this line reads as one of the other kinds.
+    kinds.workarea ? `${kinds.workarea} on a workarea` : '',
   ].filter(Boolean).join(', ');
   const room = wide - 7;
   const head = [

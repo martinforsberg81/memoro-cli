@@ -110,11 +110,15 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
 
   it('states the flag defaults the command parses', () => {
     const defaults = parseRunArgs([]);
-    assert.equal(defaults.rounds, 0);
+    assert.equal(defaults.once, false);
     assert.equal(defaults.merge, true);
     assert.equal(defaults.idleSleep, 600);
-    assert.match(DOC, /`--rounds 0` \(the default\) is forever/u);
+    assert.match(DOC, /takes the next step of the next project until STOP/u);
     assert.match(DOC, /600 s by default/u);
     assert.match(DOC, /`--no-merge`\s+leaves the pull requests open/u);
+    // The flag is gone and the doc says so, in the same words the verb answers
+    // it with (`RETIRED_ROUNDS`, commands/run.js).
+    assert.match(DOC, /`--rounds <n>` was retired with the round/u);
+    assert.match(parseRunArgs(['--rounds', '2']).error, /a round no longer exists/u);
   });
 });

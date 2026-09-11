@@ -471,6 +471,27 @@ describe('NEXT', () => {
     assert.ok(named.some((line) => /NEXT {2}2 runnable of 4 · 2 from queue\.md, then alphabetical/u.test(line)), named.join('\n'));
   });
 
+  /**
+   * The heads are the lanes: `mc run lanes 2` puts two loops on a repository,
+   * and both of their next projects start now. With one lane there is one
+   * head, which is what the block has always drawn.
+   */
+  it('says how many of a repository\'s rows start now — one per lane loop', () => {
+    const many = ['a', 'b', 'c'].map((name) => planRecord({
+      repo: 'memoro', programme: 'p', project: name, status: 'ready', title: `Do ${name}`,
+    }));
+    const one = nextSection({ queueText: '', plans: many });
+    assert.deepEqual(one.lanes.map((item) => [item.repo, item.heads]), [['memoro', 1]]);
+
+    const two = nextSection({ queueText: '', plans: many, lanes: 2 });
+    assert.deepEqual(two.lanes.map((item) => [item.repo, item.heads, item.items.map((row) => row.name)]),
+      [['memoro', 2, ['a', 'b', 'c']]], 'two lanes, so a and b are both starting now');
+
+    // A lane count above what is runnable is not a head that does not exist.
+    const short = nextSection({ queueText: '', plans: [many[0]], lanes: 3 });
+    assert.deepEqual(short.lanes.map((item) => item.heads), [1]);
+  });
+
   it('draws three deep per lane and counts the rest of that lane', () => {
     const many = ['a', 'b', 'c', 'd'].map((name) => planRecord({
       repo: 'memoro', programme: 'p', project: name, status: 'ready', title: `Do ${name}`,
@@ -981,6 +1002,24 @@ describe('PROJECTS', () => {
       { kind: 'project', name: 'home-on-msr', count: 2 },
       { kind: 'decision', name: 'plan-review', count: 2 },
     ]);
+  });
+
+  /**
+   * The third kind, and the runner's own: a step it could not start, blocked on
+   * a workarea somebody has to open (`blockStep`, run.js). It is counted with
+   * the rest and drawn where a blocker is drawn — a stopped project whose
+   * reason is missing from that line reads as one of the other two.
+   */
+  it('counts and draws a step the runner blocked on a workarea', () => {
+    const plans = [...STOPPED, planRecord({
+      repo: 'memoro', programme: 'mc', project: 'f-six', status: 'blocked', title: 'six',
+      blockedBy: { kind: 'workarea', name: 'dirty-worktree' },
+    })];
+    const projects = programmesSection({ plans, areas: [] });
+    assert.deepEqual(projects.blocked.kinds, { decision: 2, project: 2, workarea: 1 });
+    assert.ok(projects.blocked.blockers.some((b) => b.kind === 'workarea' && b.name === 'dirty-worktree'));
+    const lines = renderPageLines(pageData({ programmes: projects }), { columns: 120, now: NOW });
+    assert.match(lines.join('\n'), /5 blocked · 2 on a decision, 2 on a project, 1 on a workarea/u);
   });
 
   // Read off `blocked_by` on the step that stopped the project — the first that

@@ -18,7 +18,7 @@
  */
 import { parseRuns } from './brief-collect.js';
 import { deliverableStep } from './plan-schema.js';
-import { describePr } from './project-prs.js';
+import { describePr, openPrsFor } from './project-prs.js';
 
 /**
  * The runs.tsv columns. `land_seconds` is last and not beside `seconds` on
@@ -76,11 +76,11 @@ export function queueFileNames(queueText) {
  * project name per line and nothing else: no comments, no headings, no
  * blank-line sections.
  *
- * The file is Martin's "these first", and it empties itself — a name leaves
- * it the moment its project's step has run, and a name that cannot have a
- * step (the plan is done, or there is no plan on main) leaves it now. What
- * is left is the order; the alphabetical list of ready plans on main is what
- * follows it, as before.
+ * A name leaves it when its plan is `done` or has left `main`, and not
+ * before (2026-09-08). It used to leave the moment one step had run, which
+ * made sense while a round walked every name once; with NEXT as the only
+ * order there is, a prioritised five-step project would drop to alphabetical
+ * after its first step and the file would stop meaning *these first*.
  *
  * Returns `{ names, dropped }` — `dropped` is `{ line, why }` per line that
  * goes, one runner.log line each. The 2026-08-29 file had seven comment
@@ -148,18 +148,56 @@ export const RUN_REFUSALS = Object.freeze([
   { reason: 'in-flight', read: true },
   { reason: 'branch', read: true },
   { reason: 'sync', read: false, why: 'the fetch and the merge of origin/main are the round\'s own writes, and their failure is what they returned' },
-  // The one word here the reading answers from a file rather than from the
-  // machine as it stands: a merge that stopped and was aborted leaves the
-  // worktree clean, so nothing but the round's own record says it happened.
-  // `unmergeable.json` is that record, written where the round aborts and
-  // dropped the next time that project gets past the merge.
-  { reason: 'unmergeable', read: true },
+  // There was a tenth word here until 2026-09-08, and it was the only one the
+  // reading answered out of a file the runner had written rather than out of
+  // the machine as it stands: a merge that stopped on a `PLAN.json` the plan's
+  // own rule refused was aborted, and an aborted merge leaves the worktree
+  // clean. The word and its file are both gone, because the case is — such a
+  // conflict now takes main's copy and the merge commits
+  // (`resolvePlanConflict`, run.js), so no state is left for a reading to miss.
   { reason: 'role-missing', read: false, why: 'the kind is only known after the merge, and the role file is read out of the worktree the round has just synced' },
   { reason: 'tool-missing', read: false, why: 'whether the tool is on this machine is asked of the launch adapter, which spawns it' },
 ].map((item) => Object.freeze(item)));
 
 /** The same words, by name, so a call site cannot invent one with a typo. */
 export const REFUSAL = Object.freeze(Object.fromEntries(RUN_REFUSALS.map((item) => [item.reason, item.reason])));
+
+/**
+ * The refusals above that are facts about the workarea or this machine, and the
+ * name each one is written into a plan under (`blocked_by: { kind: 'workarea',
+ * name }`, `blockStep` in run.js). Keyed by the refusal word, so the two lists
+ * are one list.
+ *
+ * A refusal in here is **persistent**: nothing the runner does next changes it,
+ * and a person has to act. That is the whole test. Until 2026-09-08 they were
+ * skips like any other, which meant the runner met the same dirty worktree
+ * every ten minutes for days and nothing on `main` said the project was stuck —
+ * `sql-w1-universe-closure` was `dirty worktree (.gitattributes, … +1039)`
+ * every round of 2026-09-08, and the plan said `ready` throughout.
+ *
+ * What is **not** here is transient and not the project's fault, and the lane
+ * waits on it instead: `stop`, `prs-unknown`, `sync` when the *fetch* failed
+ * (the same word, told apart at the call site by what `syncMain` returned),
+ * the quota pause, and `in-flight` — an open pull request is work, not a fault.
+ * A hold at `repairs: 0` is not here either: that is one repair session owed,
+ * which is a thing the runner starts.
+ *
+ * The names are a fixed list because a person reads them in a plan and the page
+ * spells them: they say what to fix, not what the code was doing when it found
+ * out. Every one matches `NAME_RE` (plan-schema.js).
+ */
+export const WORKAREA_BLOCKS = Object.freeze({
+  dirty: 'dirty-worktree',
+  worktree: 'worktree-missing',
+  branch: 'branch-unmovable',
+  sync: 'merge-uncommittable',
+  'role-missing': 'role-missing',
+  'tool-missing': 'tool-missing',
+  'held-after-repair': 'held-after-repair',
+});
+
+/** The names alone, for a reader that spells them rather than maps to them. */
+export const WORKAREA_BLOCK_NAMES = Object.freeze([...new Set(Object.values(WORKAREA_BLOCKS))]);
 
 /* ------------------------------------------------------------------- kind */
 
@@ -294,6 +332,93 @@ export function chooseKind({ plan, openPrs = [] }) {
   const { step, index, reason, why, problems } = deliverableStep(plan.plan);
   if (!step) return { kind: null, reason, skip: why, problems };
   return { kind: 'step', step, index };
+}
+
+/**
+ * What the runner would do with a name, from the plan on `origin/main` alone:
+ * `step`, or `skip:<reason>` — a word the page can count, not the sentence
+ * beside it.
+ *
+ * It lives here rather than in status-collect.js (where it was until
+ * 2026-09-08) because `nextFor` below is the runner's own picker and needs it;
+ * status-collect re-exports it, so both readings still come from one call.
+ */
+export function kindFor(name, { plans }) {
+  const plan = plans.find((p) => p.project === name) || null;
+  const choice = chooseKind({ plan });
+  if (choice.kind) return choice.kind;
+  if (!plan) return 'skip:no-plan';
+  return `skip:${choice.reason || 'no-status'}`;
+}
+
+/**
+ * The plan-and-GitHub half of *would the runner start this*: the plan on
+ * `origin/main`, then what that project has open. `{ runnable: true, kind }`,
+ * or `{ runnable: false, reason }` in the word both surfaces refuse in.
+ *
+ * It is the same order `runStepClaimed` asks in and the same order
+ * `machineState` asks in, minus everything that needs a worktree — this is
+ * read from what `queue()` already fetched, so a pick costs no git at all.
+ */
+function pickState(name, { plans = [], prs = [], prsFailed = [], held = [] } = {}) {
+  const kind = kindFor(name, { plans });
+  if (kind.startsWith('skip:')) return { runnable: false, reason: kind.slice('skip:'.length) };
+  const repo = plans.find((p) => p.project === name)?.repo || null;
+  // What is open decides whether a project may start anything at all, so a
+  // repository GitHub could not be asked about starts nothing — the lane says
+  // so once and sleeps, rather than picking a name it would refuse a fetch
+  // later. `queue()` has already written the line naming the repository.
+  if (prsFailed.includes(repo)) return { runnable: false, reason: 'prs-unknown' };
+  const openPrs = openPrsFor({ prs, name, names: plans.map((p) => p.project), repo });
+  // A hold at `repairs: 0` is not a refusal: it is one repair session owed,
+  // which is a thing the runner starts. Only a spent repair stops the project.
+  const repair = heldRepair({ entries: held, openPrs, project: name, repo });
+  if (repair?.skip) return { runnable: false, reason: repair.reason };
+  if (!repair) {
+    const flight = inFlight(openPrs);
+    if (flight) return { runnable: false, reason: flight.reason };
+  }
+  return { runnable: true, kind: repair ? 'repair' : kind };
+}
+
+/**
+ * The next step a lane takes: the first name in the queue's order, in this
+ * repository, that nothing stops. `{ name, kind, repo }`, or null when this
+ * repository has nothing to run.
+ *
+ * This is the whole of what replaced the round on 2026-09-08. A round built a
+ * repository's name list, split it by index between the lanes (`splitLanes`,
+ * `index % count === lane`) and walked every name of its slice — so lane 2 of
+ * 2 took the second name whether or not the first lane could run it, and a
+ * project nothing could start was tried again ten minutes later, for days.
+ * A lane now picks one name, runs it, and picks again.
+ *
+ * `claimed` is the runner's own set of projects a lane is holding this second
+ * (`claims`, run.js) and is read live — the lane adds its pick to it before
+ * the session is awaited, so two lanes reading the world ten minutes apart
+ * still cannot take one project. `passed` is this pass's own: a name the
+ * machine refused for a reason the plan does not know about, so the lane moves
+ * on rather than spinning on it until the world is read again.
+ *
+ * `state` is the per-name reading, and the page passes its own: `nextSection`
+ * has already asked `machineState` about a dirty worktree, which this cannot
+ * see. Given none, the reading is the plan and the open pull requests.
+ */
+export function nextFor({
+  repo = null, world = {}, claimed = new Set(), passed = new Set(), held = [], state = null,
+} = {}) {
+  const { names = [], plans = [], prs = [], prsFailed = [] } = world;
+  const byProject = new Map(plans.map((plan) => [plan.project, plan]));
+  const read = state || ((name) => pickState(name, { plans, prs, prsFailed, held }));
+  for (const name of names) {
+    const at = byProject.get(name)?.repo || null;
+    if (repo != null && at !== repo) continue;
+    if (claimed.has(name) || passed.has(name)) continue;
+    const answer = read(name);
+    if (!answer?.runnable) continue;
+    return { name, kind: answer.kind || null, repo: at };
+  }
+  return null;
 }
 
 /* --------------------------------------------------------------- landing */
