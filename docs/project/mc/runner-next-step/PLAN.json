@@ -46,12 +46,12 @@
       "check": "`tests/mc/run.test.js`: a workarea whose branch edited the same step `main` re-planned starts a step with `main`'s plan text in the prompt. `grep -rn unmergeable src/ tests/` finds only `repo-merge.js`'s and `repo-freshen.js`'s use of the ordinary English word. `ls ~/mc/runner/unmergeable.json` is gone after step 3 has run on this machine, or the file is stale and named in the step's comments."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`docs/technical/mc-run.md` describes the runner as it now is — a picker per lane, a blocked step on `main` as the one thing the runner writes into a plan, `queue.md`'s new rule — and `docs/project/README.md` § *Who writes what* names the runner's one write. `rulings.md` no longer carries ruling 17.",
       "check": "`grep -n 'round' docs/technical/mc-run.md` shows the word only where it names the merge lane's round (`landPr`, gate-lock) or the history section. `grep -n 'workarea' docs/project/README.md` hits the *Who writes what* paragraph. `grep -c '## 17' docs/project/mc/rulings.md` is 0 after the last step."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The suite is green on every step's pull request.",
       "check": "`node --test tests/` green in the PR's gate, and `node --test tests/mc/run.test.js tests/mc/run-plan.test.js tests/mc/status-collect.test.js tests/mc/page.test.js tests/mc/plan-schema.test.js` green locally, named in the PR."
     }
@@ -148,7 +148,7 @@
     },
     {
       "title": "The doc says what the runner now is, and the rulings this project built are removed",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/technical/mc-run.md` describes the picker, the claim, the block on `main` and `queue.md`'s rule, with the round in its history section only; `docs/project/README.md` § *Who writes what* names the runner's one write; rulings 10 and 17 are removed from `rulings.md` with a line in *What is still open* saying where they went; `project_log.md` has this project's row; every success criterion's `met` is true or the comment says which is not and why.",
       "instruction": [
         "`docs/technical/mc-run.md` (1 100 lines; read the headings first — § *The round, in order*, § *The queue*, § *One step*, § *Lanes*, § *What the runner writes*, § *What the era measured*). Rewrite § *The round, in order* as § *The pick, in order*: what a lane does — read its repository's world, pick with `nextFor`, claim, run or block, pick again — and where the chores went (their own loop, unchanged). § *The queue*: `queue.md`'s new rule. § *One step*: the two readings stay (the plan on `main` first, the machine second), but the machine's persistent answers now end in a block on `main` and the transient ones in a wait; list both sets by name. Add § *Blocked by the runner* under § *What the runner writes*: the branch name and why, the pull request, `landDocsPr`, the comment's text, and that the way back is `mc brief` or a planning session — quote ruling 17 there before it is deleted. § *Lanes*: the index split is gone, the claim is the rule, `per_repo`/`total` unchanged. Keep every measurement the doc already has; what changed is the shape, and the doc's history paragraphs are how a reader learns why the old shape was tried. Fix `mc-tidy.md` and any doc that says *round* about the runner (`grep -rln 'round' docs/technical/`), leaving the merge lane's round alone.",
@@ -157,7 +157,13 @@
       ],
       "pr": null,
       "blocked_by": null,
-      "comments": []
+      "comments": [
+        "Criterion 3 stays `false`, and it is the only one. Its unit half is met (the `BLOCKS` table and *once the block is on main the project is never picked again* in `tests/mc/run.test.js`, green here). Its live half is met only in letter: `sql-w1-universe-closure` and `sql-w3-email-closure` did start sessions, but at 2026-09-08T05:58:56Z and 06:27:29Z — before #688 landed at 06:38Z, on the round's code, after their workareas had been put right by hand between 05:48Z and 05:58Z — so neither proves the block or main's copy on a live runner. No live block had been written when this step ended: the runner on #690's code started at 2026-09-11T16:56:55Z and its three slots were taken by `avatar-image-animation`, `avatar-self-serve` and this session. The first real blocks are due on `home-on-msr` and `items-sweep`, both `ready` on memoro's `origin/main` with dirty workareas (`public/css/molecules/items-card.css …`, `config/testing-registry.mjs …`), the first time a memoro lane reaches them. Read `git -C ~/memoro show origin/main:docs/project/msr-core/items-sweep/PLAN.json | jq '.steps[] | select(.status==\"blocked\") | .blocked_by'` and the `blocked on workarea` lines in runner.log, and flip it then.",
+        "One thing the contract promised that the code does not do, found writing the doc and said in it (§ *What the worktree decides*, *One gap*): a pull request held after its one repair is passed over by the picker (`pickState` in run-plan.js answers `held-after-repair` before `runStep` is reached), so `held-after-repair` is only written onto a plan when the hold arrives between a pick and its run. The step-3 test for it drives `runStep` directly, past the picker. Nothing is lost — `held.json`, the page and the brief's *Held before merge* still carry it — but the plan on main keeps saying `ready`. Written as `~/mc/proposals/2026-09-11-held-after-repair-never-blocked.md` rather than fixed in a docs step.",
+        "Two smaller things, also proposals: `machineState` still reads a merge left in progress as `dirty` while the lane now aborts it and starts (`2026-09-11-reading-calls-a-killed-merge-dirty.md`), and memoro's own `docs/project/README.md` — which memoro-cli's says it mirrors — has neither the `workarea` kind nor the runner's one write (`2026-09-11-memoro-readme-lacks-the-runners-block.md`). `~/mc/runner/unmergeable.json` is back on this machine: one entry, `items-sweep`, since 2026-09-08T06:57:48Z, written by the runner still on the round's code after step 2 deleted it. Nothing on the current code reads or writes it; it is stale and left for a person rather than deleted by a session that did not create it.",
+        "The doc sweep reached further than `mc-run.md` and `mc-tidy.md`: `mc-helper.md`, `mc-brief.md`, `mc-ui.md`, `mc-plan.md` and `mc-status.md` said *round* about the runner and now say *chore pass*, *pick* or the runner; the gate's and the merge lane's rounds are left alone, as are `mc-merge.md`, `mc-log.md`, `mc-deploy.md` and `mc-dormant.md`, whose rounds are the gate's or the retired PM's. `tests/mc/helper-doc.test.js` pinned `first round after 05:00Z`; its pattern now reads `first chore pass after`. The constant `INTAKE_PER_ROUND` keeps its name, and the doc says so. The only lines in `mc-run.md` outside *History: the round* that carry the word are the merge round, the gate round and `gate-rounds.jsonl`.",
+        "Criteria 1, 2 and 6, read again here: `grep -c 'skipped [0-9]* ('` over runner.log is 930, the last at 2026-09-08T06:42:08Z, and no `round N done` line since; 24 step or repair sessions have started since the switch and no project had two open at once (paired `starting`/`done` lines per name); the gates of #688, #689 and #690 each ran their selection with 0 red (1013, 1008 and 1117 tests), and this pull request's gate runs after this session."
+      ]
     }
   ]
 }
