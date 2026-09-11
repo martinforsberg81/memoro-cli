@@ -53,11 +53,14 @@ carries:
   one string so a diff stays line-oriented for whoever reads the PR.
 - `status` — `ready`, `done`, `blocked` — with `pr` and `blocked_by`
   (`{ kind: "decision" | "project" | "workarea", name }`, required when
-  stopped). `workarea` is the runner's own: a step `mc run` could not start
-  because of a fault in the workarea or on this machine, with the name from its
-  fixed list (`dirty-worktree`, `worktree-missing`, `branch-unmovable`,
-  `merge-uncommittable`, `role-missing`, `tool-missing`, `held-after-repair`)
-  and the workarea named in the step's last comment.
+  stopped). `decision` waits on an answer, `project` on another project's plan.
+  `workarea` is the runner's own and the only kind it writes: a step `mc run`
+  could not start because of a fault in the workarea or on this machine that a
+  person has to fix, with the name from its fixed list (`dirty-worktree`,
+  `worktree-missing`, `branch-unmovable`, `merge-uncommittable`, `role-missing`,
+  `tool-missing`, `held-after-repair`) and the workarea named in the step's last
+  comment. It is answered by fixing the workarea and setting the step `ready`,
+  not by a decision.
 - `comments` — an array of paragraphs, possibly empty: whatever that step's
   session needs the next reader to know that the code in front of them does not
   show. This is where a session writes, and it is on the step rather than at the
@@ -158,6 +161,17 @@ the file before and after, and a session that touched anything else fails on the
 way back in. Everything a session may write is inside `steps[index]` and `met`,
 which is why that comparison is one skipped index and no shared field.
 
+**The runner writes one thing into a plan: a step it could not start.** When
+`mc run` meets a fault in the workarea or on this machine that a person has to
+fix — a dirty worktree, a branch it cannot move, a merge that will not commit, a
+missing role or tool, a pull request still held after its one repair — it sets
+the first step that is not done to `blocked` with `blocked_by: { kind:
+"workarea", name }` and appends one comment naming the workarea, through a
+docs-only pull request it lands itself. Nothing else in the plan is touched. It
+never writes `ready` and never retries: the brief or a planning session sets the
+step `ready` again once the workarea is fixed
+([`docs/technical/mc-run.md`](../technical/mc-run.md) § *Blocked by the runner*).
+
 When the code says a coming step is wrong, that is not a revision the step
 makes: the step goes `blocked` with `blocked_by` saying what the answer has to
 be about, the question goes in the pull request with one recommendation, and
@@ -189,11 +203,11 @@ This mirrors memoro's `docs/project/README.md` § *Citing a decision*.
 
 Close-out: add a row to `project_log.md` and update the technical
 documentation to describe what now exists. Removing the directory is not
-yours to do — a plan that says `status: done` is archived by `mc run` in the
-round it reads it: the directory goes, and the row is written for it if the
-close-out step did not write one (`src/mc/archive-plan.js`).
+yours to do — a plan that says `status: done` is archived by `mc run`'s chore
+loop the next time it reads it: the directory goes, and the row is written for
+it if the close-out step did not write one (`src/mc/archive-plan.js`).
 
-Nor is removing the workarea. At the end of the round that archived the
+Nor is removing the workarea. At the end of the chore pass that archived the
 plan, `mc run` closes every workarea whose plan said `done`, whose worktree
 has no uncommitted change and whose last row in `runs.tsv` ends `merged`:
 the worktree is handed back, the local branch deleted, and whatever the

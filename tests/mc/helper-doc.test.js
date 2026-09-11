@@ -54,7 +54,7 @@ describe('docs/technical/mc-helper.md says what the code does', () => {
   });
 
   it('states when the runner runs it, and under which name', () => {
-    const hour = number(/first round\s+after (\d+):00Z/u);
+    const hour = number(/first chore pass\s+after (\d+):00Z/u);
     assert.equal(hour, HELPER_HOUR_UTC);
     assert.match(DOC, new RegExp(`\`${HELPER_NAME}\` in both the name and the kind column`, 'u'));
     assert.match(DOC, new RegExp(`whose \`kind\` is \`${HELPER_KIND}\``, 'u'));
@@ -62,10 +62,10 @@ describe('docs/technical/mc-helper.md says what the code does', () => {
 
   /**
    * The drain is the half a reader is likeliest to get wrong from outside the
-   * code: how many files one round takes, and which row names each of them.
-   * Both are constants, so both are pinned like everything else here.
+   * code: how many files one chore pass takes, and which row names each of
+   * them. Both are constants, so both are pinned like everything else here.
    */
-  it('states how many files a round drains, and the row that names each one', () => {
+  it('states how many files a chore pass drains, and the row that names each one', () => {
     assert.equal(number(/`INTAKE_PER_ROUND` = (\d+)\s+files/u), INTAKE_PER_ROUND);
     assert.ok(DOC.includes(`\`kind: ${INTAKE_KIND}\``), `the doc does not name the drain's kind: ${INTAKE_KIND}`);
     assert.match(DOC, /the file in the name\s+column/u);

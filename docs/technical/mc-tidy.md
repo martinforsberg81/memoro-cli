@@ -21,31 +21,35 @@ and `tidyQueue` in [`src/mc/run.js`](../../src/mc/run.js).
 
 ## The order: the plan first, then the workarea
 
-A round reads every `PLAN.json` on both `origin/main`s, and then:
+None of this is a step. It is the runner's **chore loop**, which runs beside
+the lanes that take steps ([`mc-run.md`](mc-run.md) § *The pick, in order*)
+and sleeps `--idle-sleep` between two passes. One chore pass reads every
+`PLAN.json` on both `origin/main`s, and then:
 
 1. **tidies `queue.md`** against that reading,
 2. **archives** every plan that says `done`, one PR per repository, and
-   merges it like any other,
-3. runs its steps,
-4. **closes** the workareas whose archive PR merged in step 2.
+   merges it like any other — but only while no lane is in a session, because
+   the gate refuses a second landing rather than queueing it and a lane landing
+   its step at that moment would lose the landing,
+3. **closes** the workareas whose archive PR merged in step 2.
 
 The order is not cosmetic. A workarea is closed only after the plan that
 explains it is off main, so there is never a moment where a folder exists
 that nothing on main accounts for. It also means "its plan on main says
 `done`" can no longer be asked of main by the time the close runs — so the
-close is given the round's own reading, taken before the archive, and the
+close is given the pass's own reading, taken before the archive, and the
 list of projects whose archive PR actually merged. A done project whose
 archive PR failed to merge keeps its workarea, and runner.log says so.
 
-**But the two halves need not be the same round.** They had to be, once: the
-close tested `status: done`, so a plan an *earlier* round had already
+**But the two halves need not be the same pass.** They had to be, once: the
+close tested `status: done`, so a plan an *earlier* pass had already
 archived read as "no plan on main" and its folder joined the pile no machine
-will touch. Measured 2026-08-30, the close had never once run — the only round
+will touch. Measured 2026-08-30, the close had never once run — the only pass
 that reached the archive, taking three projects off main, was cut short by STOP
-before step 4 — and the next round found three folders it could no longer
+before the close — and the next one found three folders it could no longer
 explain. The close now asks the record the archive itself writes:
 `docs/project/project_log.md` names every project the runner has ever
-archived, so a round cut short is finished by the next one.
+archived, so a pass cut short is finished by the next one.
 
 ## What archiving does
 
@@ -70,13 +74,13 @@ one-line index into it, not a replacement for it.
 Two things about the mechanics are worth knowing:
 
 - **The archive gets a worktree of its own**, `~/mc/runner/archive/<repo>`,
-  made from origin/main and taken down however the round ends. Not the
+  made from origin/main and taken down however the pass ends. Not the
   project's own workarea: a done project need not have one, several projects
   are archived in the one PR, and the workarea is removed later in the same
-  round.
+  pass.
 - **One archive PR at a time per repository.** The branch is
-  `mc-archive-<stamp>`, unique per round, so an archive PR that never merged
-  would otherwise be joined by a second one next round removing the same
+  `mc-archive-<stamp>`, unique per pass, so an archive PR that never merged
+  would otherwise be joined by a second one next pass removing the same
   directories again. The runner looks for an open PR whose head starts with
   `mc-archive-` and holds off while one exists.
 
@@ -115,7 +119,7 @@ the seven closable workareas of 2026-08-29 that was `node_modules/`,
 `__pycache__/`, `.wrangler/`, `public/dist/` and one generated
 `scripts/dev/local-schema.sql` — build output a fresh checkout rebuilds, and
 no `.env` and no untracked note. A step that fails stops the rest of that
-folder's close and says so; the next round tries again.
+folder's close and says so; the next pass tries again.
 
 A folder is a workarea when it holds `memoro/` or `memoro-cli/`, and nothing
 else is. That rule is the same in the runner (`areaRepos`) and on the page
@@ -126,13 +130,21 @@ and out of reach of the close.
 ## The strict queue
 
 `~/mc/queue.md` is a list of project names and nothing else — no comments, no
-headings, no sections. A round rewrites it to that shape: a line that is not
-a project name is dropped, so is a name with no plan on main and a name whose
-plan is `done`, one runner.log line each. A name leaves the file the moment
-its step has *run*, so the file empties itself over a round.
+headings, no sections. Every chore pass rewrites it to that shape (`tidyQueue`,
+by `strictQueue`'s rule): a line that is not a project name is dropped, so is a
+name given twice, a name with no plan on main, a plan still written as
+`PLAN.md` and a name whose plan is `done`, one runner.log line each. **That is
+the whole rule: a name leaves when its plan is `done` or off `main`.**
 
-A `blocked` step keeps its place. It has a step ahead of it; a name leaves
-because it ran, never because it was skipped.
+Until 2026-09-08 a name also left the moment its step had *run*, and the file
+emptied itself over a pass through the queue. That made sense while the runner
+tried every name once per pass; with the order as the only thing a lane goes by
+([`mc-run.md`](mc-run.md) § *The queue*), a prioritised five-step project would
+have dropped to alphabetical after its first step and the file would have
+stopped meaning *these first*.
+
+A `blocked` step keeps its place too: the moment it is `ready` again, it is
+first again.
 
 ## What is handed to Martin instead
 
@@ -142,7 +154,7 @@ Two things a machine must not decide, so it writes them down and moves on:
   archived whose row says `doc: none`. A thin or missing `docs/technical/`
   note never stops an archive: keeping a project alive because its
   documentation is thin is how `docs/plans/` reached 656 files.
-- **`~/mc/runner/unplanned-workareas.md`** — rewritten every round with every
+- **`~/mc/runner/unplanned-workareas.md`** — rewritten every chore pass with every
   folder under `~/mc` that **no project** explains — no plan on main and no
   row in `project_log.md` (sixteen of them on 2026-08-29, from before the plan
   world; fifty-seven on 2026-08-30). Such a folder is work somebody started and
@@ -164,9 +176,9 @@ reported as absent rather than as "none" — the runner has not written one
 yet is a different answer from there is nothing to report.
 
 They sit in `~/mc/runner/`, with the rest of what the runner writes about its
-own rounds, and not in `~/mc/intake/` where they were until 2026-09-04: the
-inbox is drained one file per turn, and a table rewritten whole every round is
-back in it the next round however carefully it was read.
+own work, and not in `~/mc/intake/` where they were until 2026-09-04: the
+inbox is drained one file per turn, and a table rewritten whole every pass is
+back in it the next pass however carefully it was read.
 
 ## How it is tested
 
@@ -174,7 +186,7 @@ back in it the next round however carefully it was read.
 the rules on text: which row a project gets and where it is appended, and the
 squash-merge case (branch ahead, plan done, last run merged → closable), the
 dirty case, the missing-plan case and the live-session refusal.
-`tests/mc/run.test.js` drives whole rounds against fake git, gh and tmux —
+`tests/mc/run.test.js` drives the chore pass against fake git, gh and tmux —
 the archive PR, the hold-off while one is open, the intake files, the queue
 rewrite. `tests/mc/archive-live.test.js` and `tests/mc/close-live.test.js`
 run the same against real git repositories and a real work root, which is

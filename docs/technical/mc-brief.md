@@ -61,9 +61,9 @@ machine's day, not of the interval.
 reporting it. `mc run` writes `~/mc/runner/held.json` whenever a landing does
 not land, gives such a pull request exactly one repair session, and stops
 there; what the repair could not fix is a project standing still — its pull
-request is open, so the runner passes it every round — and this is where a
+request is open, so the runner's picker passes it over — and this is where a
 person is told. The brief takes the entries at `repairs >= 1` only: one still
-at zero is the runner's next round, and raising it would ask Martin to decide
+at zero is the runner's next pick, and raising it would ask Martin to decide
 something a session is about to try. When there is one at all the brief says so
 in its opening lines, not only in the section. The three answers the role
 allows are in [`canon/roles/brief.md`](../../canon/roles/brief.md): merge by
@@ -76,9 +76,13 @@ before it committed never got as far as one: `no-text-in-code` stood from
 `connections-section` from 2026-08-29T21:37Z on a session that exited 0 and
 opened no pull request. Neither was in `held.json`, neither was in *Workareas
 with no project on main* — both had a project on main, which is what made them
-a loss — and both were skipped every round with one `, skip` line in
-`runner.log`. The section asks `machineState` for the same answer the round
-refuses on and lists what it refuses: the project, what is in the way, since
+a loss — and both were skipped every ten minutes with one `, skip` line in
+`runner.log`. Since 2026-09-08 the runner writes such a step `blocked` on
+`main` the first time it meets it (*Waiting on a workarea*, under *Blocked*), so
+this section holds what the plan does not say yet: a workarea the runner has
+not picked since it went dirty, and a repository GitHub would not answer for.
+It asks `machineState` for the same answer the runner refuses on and lists
+what it refuses: the project, what is in the way, since
 when and how long, and the `runs.tsv` row that left it. It is a section of its
 own rather than rows in *Held before merge* because the act differs — a held
 pull request takes one of that section's three answers, and a workarea takes a
@@ -221,8 +225,8 @@ not written down will not be taken:
   under `docs/`, so the docs door lands it with no suite at all and refuses by
   GitHub's own file list if anything outside `docs/` crept in
   ([`mc-merge.md`](mc-merge.md)). Landed before the brief ends, and the
-  worktree removed after: an open pull request on a project's plan costs that
-  project a round.
+  worktree removed after: an open pull request on a project's plan keeps that
+  project out of the runner's picks until it lands.
 
 Both names are load-bearing and neither is decoration, and both were checked by
 running them rather than by reading (2026-09-05, against the real `~/mc` with
@@ -236,7 +240,10 @@ or `<project>-…`, which is the shape `projectForBranch`
 (`src/mc/project-prs.js`) claims for a project: against the 46 project names on
 main, `brief/unblock-2026-09-05` returned `null` where `brief-blocked-steps-4`
 returned `brief-blocked-steps`. A branch of the claimed shape would read as
-that project's own work in flight and end its round.
+that project's own work in flight and keep it out of every pick. (The runner's
+own block pull request uses exactly that on purpose — `<name>-blocked-<stamp>`
+— so a block that has not landed holds its project; see
+[`mc-run.md`](mc-run.md) § *Blocked by the runner*.)
 
 No verb was built for this. `mc unblock <repo> <project> <step>` was the
 alternative and was rejected: the route above needs no new code and no new

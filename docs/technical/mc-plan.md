@@ -27,20 +27,20 @@ lands it. All of that is gone.
 
 A programme is the initiative the work serves — `msr-core`, `sql-readiness`,
 `mc` — and it outlives every project under it. A project is what `mc run` runs:
-one `PLAN.json`, one branch, one workarea, archived off main the round its plan
-says done.
+one `PLAN.json`, one branch, one workarea, archived off main by the runner's
+next chore pass once its plan says done.
 
 `mc plan <name>` used to make `~/mc/<name>` on branch `<name>` — exactly the
 directory and the branch the runner gives the project of that name. One word
 was the session, the project and the workarea at once, so the planning session
 sat in the folder `mc run` would later merge into, close and hand back to git,
 and it read as an *unplanned workarea* to `mc status` and to the runner's own
-closing pass every round.
+closing pass every time it ran.
 
 A planning session and a project's workarea are not the same kind of thing. A
 planning session is Martin's, lasts as long as it takes, and holds both
 repositories because a programme may span them. A project's workarea is the
-runner's, holds one repository, and is removed the round its plan says done
+runner's, holds one repository, and is removed once its plan says done
 (Martin, 2026-08-31 — "en mc plan sessions workarea ska aldrig vara hopkopplad
 till något som körs av mc run").
 

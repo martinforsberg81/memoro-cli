@@ -285,58 +285,6 @@ verb runs and passed to nothing but the suite.
 scope this ruling widened from *decide whether `mc dev` exists* to the two
 verbs above.
 
-## 10 · A round reads the plan from `main` unless the plan itself is the conflict
-
-`ruling · 2026-09-05` · answers `plan-read-from-main-1`, raised by
-`plan-read-from-main` step 1 (#629)
-
-**Decided at the brief, not by Martin.** He asked for the open decisions to be
-taken one at a time and to be brought in where one carries weight; this one is a
-single predicate in the runner's read path, measured, reversible, and costs
-nothing outside mc's own scheduling. It is written here in his file because
-`rulings.md` is the only place a decision about this programme survives, and it
-is marked so nobody later reads it as his word.
-
-`run.js:1265` calls `planOf(worktree, name, { fromHead: conflicts.length > 0 })`.
-The docstring at `run.js:336` defends reading HEAD — *"HEAD is the branch's last
-good copy... Main's own edits to the plan are what the session is merging in"* —
-and it is right about exactly one case: a conflicted `PLAN.json`. The condition
-it is attached to fires on **any** conflicting file. That mismatch is the whole
-defect.
-
-The three options step 1 put: **1** — always read `origin/main`, never the
-worktree. **2** — refuse the step when the worktree could not be brought to base.
-**3** — scope `fromHead` to a conflicted plan, with 2 beside it as a guard.
-
-> **Beslut:** option 3. `conflicts.some(isPlanPath)` in place of
-> `conflicts.length > 0`, and the guard is built as its own step.
-
-The measurement decides it. Over the whole of `~/mc/runner/log/runner.log`
-(24 755 lines), 207 rounds reached a conflict: **27 with a `PLAN.json` among the
-conflicting files and 180 — 87% — with none.** Option 3 removes those 180 with
-one predicate and leaves untouched the case the docstring was written for.
-Option 1 would take that case too, and its cost is not theoretical: it drops the
-branch's own plan edits on the clean path, of which the one that matters is a
-step marked `done` with a `pr` that then did not land. Option 2 alone turns a
-silent wrong answer into a loud one without fixing the answer.
-
-Two findings from step 1 that make option 3 smaller than it looks. It needs no
-`git show origin/main:` read at all — during a merge stopped on some other file,
-git has **already** written main's plan into the worktree, demonstrated in a
-scratch repository rather than assumed. And `isPlanPath`
-(`src/mc/plan-merge.js:159`) is already imported into `run.js`.
-
-**What this does not fix, said out loud:** the 13 of those 27 rounds where
-`fromHead` fires legitimately and still gives a stale answer —
-`sdk-artifact-storage`, whose branch had landed and whose plan main then
-re-planned. That is a different mechanism (`branch-landed.js` answering
-`'unknown'` and `freshBranch` reading it as "not landed"), and it has its own
-proposal in `~/mc/proposals/2026-09-05-branch-landed-unknown-after-replan.md`.
-
-**Carried by [`plan-read-from-main/PLAN.json`](plan-read-from-main/PLAN.json)**
-step 2, whose instruction was already written assuming this answer, with step 3
-building option 2's guard.
-
 ## 11 · The brief writes the plans it decides, and there is no general rulings file
 
 `ruling · 2026-09-06` · raised at the brief, over the page remake below
@@ -536,44 +484,6 @@ worktree under `~/mc/`, which would be a workarea to the runner.
 
 **Carried by [`deploy-from-main/PLAN.json`](deploy-from-main/PLAN.json).**
 
-## 17 · The runner takes the next step, and a step it cannot start is `blocked` on `main`
-
-`ruling · 2026-09-08` · raised by Martin at the plan session, from the runner's log
-
-Every ten minutes on 2026-09-08 the memoro lanes ended a round with `skipped
-15 (blocked 15)` and `0 ran`. `sql-w3-email-closure` was merged, refused by the
-plan's rule and aborted each time since 2026-09-06; `sql-w1-universe-closure`
-sat behind a `git merge origin/main` a killed session had left in progress and
-was `dirty worktree (… +1039)` every round. Nothing on `main` said either was
-stuck. The plan session proposed a contract that handled the workarea faults
-in the runner and wrote `blocked` on `main`, with the runner re-checking every
-round whether the fault had cleared. Martin took the first half and threw out
-the round with the second:
-
-> "Hela upplägget med 'runda' är fel. Allt ska inte provas. Runner ska ta next
-> step. Punkt." … "Dessutom så är kodningen med jämna och ojämna rader för
-> vilket projekt som tas ur bota dumt skapat så det får vi fixa till. Varje
-> lane tar nästa step under NEXT, men inte samma projekt för två olika lanes."
-> … "Vägen tillbaka är via brief eller en plan-session. Om det var något som
-> en LLM skulle kunna ta beslut som så skulle det ha gjorts vid första
-> Runner-försöket. Då är det det som är fel. Rätt svar är inte en Runner-runda
-> till." (Martin, 2026-09-08)
-
-So: no round. Each lane takes the first project under NEXT — `queue.md`'s
-order, then alphabetical, in its repository — whose plan on `main` says
-`ready` and which no other lane holds, and runs it or blocks it. The
-`index % count` split between lanes goes; a claim in the process is the rule.
-A step the runner cannot start is `blocked` on `main` with `blocked_by.kind:
-workarea`, through a docs-only pull request the runner lands itself, and the
-runner never retries it: `mc brief` or a planning session sets it `ready`
-again. What the runner can settle by itself it settles at the first attempt —
-`main`'s copy of a `PLAN.json` the rule cannot merge, the abort of a merge a
-killed session left. A name stays in `queue.md` until its plan is done or
-off `main`, no longer only until one step has run. Explicitly out: the gate,
-the merge lane, any rebase (there is none), and any new verb for the way back.
-
-**Carried by [`runner-next-step/PLAN.json`](runner-next-step/PLAN.json).**
-
 ## 18 · A step runs on sonnet at medium effort with an opus advisor, and nothing is killed on elapsed time
 
 `ruling · 2026-09-11` · raised by Martin at the plan session, from the runner's cost
@@ -625,4 +535,12 @@ until the `runner-open-prs` project landed them. A ruling lives only until the
 code carries it: the first is `inFlight` and the gated round in
 `src/mc/run.js`, the second is `steps[i].comments` in `src/mc/plan-schema.js`,
 both are described in [`docs/technical/mc-run.md`](../../technical/mc-run.md),
-and the row is in [`project_log.md`](../project_log.md).
+and the row is in [`project_log.md`](../project_log.md). Rulings 10 (*a round
+reads the plan from `main` unless the plan itself is the conflict*) and 17 (*the
+runner takes the next step, and a step it cannot start is `blocked` on `main`*)
+went the same way with `runner-next-step`: the predicate ruling 10 scoped is
+gone — a conflicted `PLAN.json` now takes main's copy, so the runner reads no
+branch copy of a plan at all — and ruling 17 is the picker, the claim and
+`blockStep` in `src/mc/run.js`; `mc-run.md` carries both, with Martin's words
+for 17 quoted under *Blocked by the runner* and the measurements behind 10 in
+its history section, and the row is in `project_log.md`.
