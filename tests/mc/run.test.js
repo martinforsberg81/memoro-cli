@@ -483,8 +483,10 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.equal(call.bin, '/bin/claude');
   assert.equal(call.cwd, '/w/alpha/memoro');
   assert.equal(call.timeoutMs, 90 * 60_000);
-  assert.deepEqual(call.args.slice(2, 6), ['--model', 'opus', '--permission-mode', 'acceptEdits']);
-  assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- PLAN\.json -----\n\{/u);
+  assert.deepEqual(call.args.slice(2, 8), ['--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', '150000']);
+  // The parsed plan, not the file: the step in full under its own heading.
+  assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- Your step: steps\[0\] -----\ntitle: The one step/u);
+  assert.doesNotMatch(call.args[1], /"schema": ?"mc-plan"/u, 'the file itself is not in the prompt');
   assert.match(call.args[1], /Your step is `steps\[0\]` — 1, "The one step"/u);
   // Profile, then the text every role session shares, then this role's own
   // body — assembled by `instructionsFor`, the one door all four launch paths
@@ -740,7 +742,10 @@ test("a PLAN.json whose two sides changed the same step takes main's copy, and t
   assert.equal(f.calls.sessions.length, 1, 'and the project gets its step');
   const [call] = f.calls.sessions;
   assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u, "main's step 1 is done, so the step is 2");
-  assert.match(call.args[1], /Step one landed\./u, "and the plan in the prompt is main's text");
+  // The prompt quotes the other steps one line each, so main's step 1 is its
+  // status and PR there (its comments are in the file, not the prompt).
+  assert.match(call.args[1], /steps\[0\] · done · One · done when: x · PR #601/u, "and the plan in the prompt is main's");
+  assert.match(call.args[1], /success_criteria\[0\] · met: true/u);
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json — the plan's rule refused \(steps\[0\]: changed on this branch and on main both\); main's copy taken/u);
   assert.doesNotMatch(log, /c: merge conflict in:/u);

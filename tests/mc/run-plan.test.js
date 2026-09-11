@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   MC_OWN_TREES, RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
-  assembleQueue, chooseKind, collectNote, headlessArgs, heldRepair, helperDue,
+  AUTOCOMPACT_TOKENS, assembleQueue, chooseKind, collectNote, headlessArgs, heldRepair, helperDue,
   inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaSeen,
   readSessionOutput, repairPrompt, sessionSettings, stackOrder, stepOfPr, stepPrompt, strictQueue,
@@ -281,13 +281,41 @@ test('chooseKind: blocked is simply not ready', () => {
 });
 
 
+/** A three-step plan, the middle step the session's. */
+function threeSteps() {
+  const step = {
+    title: 'The hero object', status: 'ready', done_when: 'the object draws in both themes',
+    instruction: ['Draw the hero in the light theme.', 'Then the dark one, from the same tokens.'],
+    comments: ['The tokens moved in #12.'], pr: null, blocked_by: null,
+  };
+  const plan = {
+    schema: 'mc-plan',
+    version: 1,
+    goal: ['The front page has a hero.', 'It draws in both themes.'],
+    contract: ['Tokens only, no literal colours.'],
+    out_of_scope: ['The footer.'],
+    success_criteria: [
+      { met: true, criterion: 'The hero draws.', check: 'page.test.js renders it.' },
+      { met: false, criterion: 'Both themes.', check: 'A screenshot per theme.' },
+    ],
+    documents: [{ label: 'The design', path: '../design.md' }],
+    runner: { model: 'opus' },
+    steps: [
+      { title: 'The tokens', status: 'done', done_when: 'the tokens exist', instruction: ['Write the token file by hand.'], comments: [], pr: 12, blocked_by: null },
+      step,
+      { title: 'The footer link', status: 'ready', done_when: 'the hero links to the footer', instruction: ['Link the footer from the hero.'], comments: [], pr: null, blocked_by: null },
+    ],
+  };
+  return { plan, step };
+}
+
 test('stepPrompt names the step, its done_when, and what the session may edit', () => {
-  const step = { title: 'The hero object', status: 'ready', done_when: 'the object draws in both themes', instruction: ['Do it.'], pr: null, blocked_by: null };
+  const { plan, step } = threeSteps();
   const p = stepPrompt({
     name: 'x',
     repo: 'memoro',
     planPath: 'docs/project/p/x/PLAN.json',
-    planText: '{"schema":"mc-plan"}',
+    plan,
     step,
     index: 1,
     now: new Date('2026-08-29T00:00:00Z'),
@@ -307,10 +335,34 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
   assert.doesNotMatch(p, /merge origin\/main` is in progress/u, 'no conflict, no preamble');
   assert.match(p, /"kind": "decision" \| "project", "name"/u);
   assert.match(p, /only `met` is yours/u);
-  assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);
+  assert.match(p, /Your plan is on disk in this worktree at `docs\/project\/p\/x\/PLAN\.json`/u);
   // The runner only ever starts a plan whose first unfinished step is ready, so
   // a step is never handed an answered decision to apply (Martin, 2026-08-29).
   assert.doesNotMatch(p, /Decisions answered by Martin/u);
+});
+
+/**
+ * The part of the plan the step needs, and not the file: the frozen fields and
+ * the criteria in full, the session's own step in full, and every other step
+ * as one line. The other steps' instructions are what made the prompt 115k
+ * characters for memoro's largest plan (step-cost, step 1).
+ */
+test('stepPrompt carries its own step in full and every other step as one line', () => {
+  const { plan, step } = threeSteps();
+  const p = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan, step, index: 1 });
+  for (const text of [...plan.goal, ...plan.contract, ...plan.out_of_scope]) assert.ok(p.includes(text), text);
+  assert.match(p, /----- success_criteria -----\nsuccess_criteria\[0\] · met: true\ncriterion: The hero draws\.\ncheck: page\.test\.js renders it\./u);
+  assert.match(p, /success_criteria\[1\] · met: false\ncriterion: Both themes\.\ncheck: A screenshot per theme\./u);
+  assert.match(p, /----- documents -----\n- The design: \.\.\/design\.md/u);
+  assert.match(p, /----- runner -----\n\{"model":"opus"\}/u);
+  assert.match(p, /----- Your step: steps\[1\] -----\ntitle: The hero object\nstatus: ready\ndone_when: the object draws in both themes\ninstruction:\n\nDraw the hero in the light theme\.\n\nThen the dark one, from the same tokens\.\n\ncomments:\n\nThe tokens moved in #12\.\n\npr: null\nblocked_by: null/u);
+  assert.match(p, /----- The other steps -----\nsteps\[0\] · done · The tokens · done when: the tokens exist · PR #12\nsteps\[2\] · ready · The footer link · done when: the hero links to the footer$/u);
+  assert.doesNotMatch(p, /Write the token file by hand/u, "steps[0]'s instruction is not in the prompt");
+  assert.doesNotMatch(p, /Link the footer from the hero/u, "steps[2]'s instruction is not in the prompt");
+  assert.doesNotMatch(p, /"schema"/u, 'the file itself is not in the prompt');
+  // A plan without `runner` has no runner heading.
+  const bare = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan: { ...plan, runner: undefined }, step, index: 1 });
+  assert.doesNotMatch(bare, /----- runner -----/u);
 });
 
 /**
@@ -319,9 +371,11 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
  * `done_when` and the plan boundary are all still exactly true.
  */
 test('stepPrompt: a conflicted worktree is a preamble, and the step is still the job', () => {
-  const step = { title: 'The hero object', status: 'ready', done_when: 'it draws', instruction: ['Do it.'], pr: null, blocked_by: null };
+  const { plan } = threeSteps();
+  const step = { ...plan.steps[1], done_when: 'it draws' };
+  plan.steps[1] = step;
   const p = stepPrompt({
-    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', planText: '{"schema":"mc-plan"}',
+    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan,
     step, index: 1, conflicts: ['src/a.js', 'docs/project/p/x/PLAN.json'],
     now: new Date('2026-09-04T00:00:00Z'),
   });
@@ -329,14 +383,19 @@ test('stepPrompt: a conflicted worktree is a preamble, and the step is still the
   assert.match(p, /It is the first thing you\ndo and not the job/u);
   assert.match(p, /Your step is `steps\[1\]` — 2, "The hero object"/u, 'the body is the same body');
   assert.match(p, /Done when: it draws/u);
-  assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);
+  assert.match(p, /----- Your step: steps\[1\] -----\ntitle: The hero object/u);
 });
 
 test('headlessArgs: claude is -p with json output; codex is exec --json', () => {
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs });
-  assert.deepEqual(claude, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
+  assert.deepEqual(claude, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
+  assert.equal(AUTOCOMPACT_TOKENS, 150_000);
+  // The helper and intake turns opt out: step-cost's contract leaves them be.
+  const helper = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs, autocompact: null });
+  assert.equal(helper.includes('--autocompact'), false);
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'PROFILE', prompt: 'do it', profileArgs });
   assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="PROFILE"', 'do it']);
+  assert.equal(codex.includes('--autocompact'), false, 'codex has no such flag');
   // Never `--full-auto`: workspace-write has no network and no writes outside
   // the working directory, so the step could not push or open its PR — and a
   // workarea's `.git` lives outside it, so it could not even commit.

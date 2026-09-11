@@ -506,11 +506,33 @@ Fresh, headless, and assembled from the plan's own frontmatter
 - **`budget_minutes:`** — the wall-clock cap, ninety minutes, by default.
   The child is killed at the cap and the row says `timeout`.
 
-The prompt body is the PLAN.json itself, wrapped in `stepPrompt`: you are in
-this workarea, do the step named in `next:`, its "done when" is your success
-criterion, say in the PR body how you verified it, and — if the Contract must
-change — stop with the step `blocked` and say so in the PR. It ends "Do not merge.
-Do not ask questions. Stop when the PR exists."
+The prompt is `stepPrompt`: you are in this workarea, your plan is on disk at
+this path, do `steps[i]`, its `done_when` is your success criterion, say in the
+PR body how you verified it, what in the plan file you may edit, and — if the
+contract must change — stop with the step `blocked` and say so in the PR. "Do
+not merge. Do not ask questions. Stop when the PR exists." Below that comes
+**the part of the plan the step needs, not the file**: rendered from the parsed
+plan, each part under a `----- <heading> -----` line the session can search
+for — `goal`, `contract`, `out_of_scope`, `success_criteria` (index, `met`,
+criterion, check), `documents`, `runner` where the plan has one; then
+`Your step: steps[i]` with every field of the step, `instruction` and
+`comments` as paragraphs; then `The other steps`, one line each:
+`steps[i] · <status> · <title> · done when: <done_when>`, and `PR #n` where the
+step has one. Until step-cost (ruling 18) the prompt ended with the whole
+PLAN.json — up to 115k characters for memoro's `sql-w1-universe-closure` — and
+since the prompt is read on every turn, so was every other step's instructions.
+The session still has the whole file in its worktree and edits it there; one
+that needs another step's instructions reads it.
+
+The session's context has a ceiling too: claude gets `--autocompact` at
+`AUTOCOMPACT_TOKENS` (150 000), so it compacts at 150k tokens rather than near
+the model's own limit. Over 2026-09-05..12 the mean context per turn was 112k
+and 36 of 295 sessions averaged over 200k, and every turn pays for all of it.
+The window is a constant in `run-plan.js`, not a plan field — nothing has shown
+a plan needing another, and the measurement after twenty sessions
+(`scripts/measure-steps.py`'s *context per turn* row) is where that would show.
+A step and a repair get it; the helper and intake turns, which share
+`headlessArgs`, do not.
 
 Around that body go the Coding Profile, `canon/roles/_common.md` and
 `canon/roles/step.md` — assembled by `instructionsFor` and passed through the
@@ -521,7 +543,8 @@ them. How that is found and joined, for every session and not only this one, is
 The two argument lists are the only place the tools differ:
 
 ```
-claude  -p <prompt> [--model …] --permission-mode auto \
+claude  -p <prompt> [--model …] --permission-mode acceptEdits \
+        --autocompact 150000 \
         --append-system-prompt <instructions> --output-format json
 codex   exec --json --sandbox danger-full-access [-m …] \
         -c instructions=<instructions> <prompt>

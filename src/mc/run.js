@@ -1926,7 +1926,7 @@ export function createRunner({
     const now = deps.now();
     const prompt = kind === 'repair'
       ? repairPrompt({ name, repo: repo.name, ...repair.entry, conflicts })
-      : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, step: choice.step, index: choice.index, conflicts, now });
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, now });
     // Counted before the session runs, not after: a repair killed on its budget
     // still had its one turn, and a count written afterwards would give the next
     // round a second repair for the same pull request.
