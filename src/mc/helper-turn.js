@@ -257,7 +257,7 @@ export async function runHelperTurn({
   const profile = await (deps.profile || (() => loadProfile({ env })))();
   const instructions = instructionsFor(launch.id, profile, role.overlay);
   const args = headlessArgs({
-    toolId: launch.id, adapter: launch.adapter, model: model || role.model, instructions, prompt, profileArgs,
+    toolId: launch.id, adapter: launch.adapter, model: model || role.model, instructions, prompt, profileArgs, autocompact: null,
   });
 
   const result = await (deps.session || realSession)({

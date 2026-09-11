@@ -20,7 +20,7 @@ import { STEP_STATUSES } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
 import { REPO_NAMES, TOTAL_POLL_MS } from '../../src/mc/run.js';
 import {
-  DEFAULT_BUDGET_MINUTES, DEFAULT_MODEL, DEFAULT_TOOL, HELPER_HOUR_UTC, MC_OWN_TREES, QUOTA_SLEEP_MS,
+  AUTOCOMPACT_TOKENS, DEFAULT_BUDGET_MINUTES, DEFAULT_MODEL, DEFAULT_TOOL, HELPER_HOUR_UTC, MC_OWN_TREES, QUOTA_SLEEP_MS,
   RUNS_HEADER,
 } from '../../src/mc/run-plan.js';
 
@@ -54,6 +54,11 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(DOC, /`current-<repo>\.json`/u);
     assert.match(DOC, /`runner\.json`\*\* stays one/u);
     assert.match(DOC, /`~\/mc\/runner\/STOP`/u);
+  });
+
+  it('states the compaction window a claude session gets', () => {
+    assert.ok(DOC.includes(`--autocompact ${AUTOCOMPACT_TOKENS}`), 'the argument list in the doc no longer shows the window');
+    assert.ok(DOC.includes(`\`AUTOCOMPACT_TOKENS\` (${AUTOCOMPACT_TOKENS.toLocaleString('en-US').replace(/,/gu, ' ')})`));
   });
 
   it('states the tool and model a plan gets when its frontmatter names none', () => {

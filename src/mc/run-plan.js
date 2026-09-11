@@ -31,6 +31,13 @@ import { describePr, openPrsFor } from './project-prs.js';
 export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note', 'land_seconds'];
 
 export const DEFAULT_MODEL = 'opus'; // claude's alias, and only claude's — see `sessionSettings`
+// The context window at which a claude step or repair session compacts
+// (`--autocompact`, 100k–1M on claude 2.1.268). Over 2026-09-05..12 the mean
+// context per turn was 112k tokens, 36 of 295 sessions averaged over 200k and
+// one over 300k — every turn paid for all of it. At 150k claude compacts well
+// before the model's own limit. A constant and not a plan field: nothing has
+// shown a plan needing another; the measurement after twenty sessions would.
+export const AUTOCOMPACT_TOKENS = 150_000;
 export const DEFAULT_TOOL = 'claude';
 export const DEFAULT_BUDGET_MINUTES = 90;
 export const QUOTA_SLEEP_MS = 30 * 60 * 1000;
@@ -685,12 +692,68 @@ function conflictPreamble(conflicts, then = null) {
   ];
 }
 
-export function stepPrompt({ name, repo, planPath, planText, step, index, conflicts = [], now = new Date() }) {
+/** A field that is prose — one string, or an array of paragraph strings. */
+const paragraphs = (value) => (Array.isArray(value) ? value : (value == null ? [] : [value])).map(String);
+
+/** One field of the session's own step, as the prompt shows it. */
+function stepField(key, value) {
+  if (Array.isArray(value)) return [`${key}:`, '', ...paragraphs(value).flatMap((p) => [p, ''])];
+  if (value && typeof value === 'object') return [`${key}: ${JSON.stringify(value)}`];
+  return [`${key}: ${value ?? 'null'}`];
+}
+
+/**
+ * The part of the plan a step session needs, rendered from the parsed plan:
+ * the project's own terms in full, the session's step in full, and every
+ * other step as one line.
+ *
+ * It used to be the whole file. The session has that file in its worktree and
+ * edits it there, so the copy in the prompt was only ever for reading — and it
+ * was read on every turn, because it was in the prompt. The other steps'
+ * instructions are what made it large (memoro's `sql-w1-universe-closure` was
+ * 115k characters on 2026-09-11); a session that needs one reads the file.
+ *
+ * Every key of the session's own step is shown, not a known list, so a key the
+ * schema gains later reaches the session without a change here.
+ */
+function planExcerpt(plan, index, step) {
+  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+  const lines = [];
+  const section = (heading, body) => lines.push(`----- ${heading} -----`, ...body, '');
+  section('goal', paragraphs(plan?.goal).flatMap((p) => [p, '']));
+  section('contract', paragraphs(plan?.contract).flatMap((p) => [`- ${p}`, '']));
+  section('out_of_scope', paragraphs(plan?.out_of_scope).flatMap((p) => [`- ${p}`, '']));
+  section('success_criteria', (plan?.success_criteria || []).flatMap((c, i) => [
+    `success_criteria[${i}] · met: ${c?.met === true}`,
+    `criterion: ${c?.criterion ?? ''}`,
+    `check: ${c?.check ?? ''}`,
+    '',
+  ]));
+  section('documents', (plan?.documents || []).map((d) => `- ${d?.label ?? ''}: ${d?.path ?? ''}`));
+  if (plan?.runner) section('runner', [JSON.stringify(plan.runner)]);
+  const own = steps[index] || step || {};
+  section(`Your step: steps[${index}]`, Object.entries(own).flatMap(([key, value]) => stepField(key, value)));
+  const others = steps.flatMap((s, i) => (i === index ? [] : [
+    [`steps[${i}]`, s?.status, s?.title, `done when: ${s?.done_when ?? ''}`, ...(s?.pr ? [`PR #${s.pr}`] : [])].join(' · '),
+  ]));
+  section('The other steps', others.length ? others : ['(none)']);
+  return lines.join('\n').replace(/\n{3,}/gu, '\n\n').trimEnd();
+}
+
+/**
+ * What a step session is told. `plan` is the parsed plan (`readPlanText`'s
+ * `plan`); the prompt quotes the part of it this step needs and says where the
+ * whole file is, rather than carrying the file — see `planExcerpt`.
+ */
+export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], now = new Date() }) {
   const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
     ...conflictPreamble(conflicts),
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
-    `is merged in). Below is your plan, \`${planPath}\`.`,
+    `is merged in). Your plan is on disk in this worktree at \`${planPath}\`;`,
+    'what follows below is the part of it this step needs — the frozen fields,',
+    'your step in full, and every other step as one line. Read the file for',
+    'anything else.',
     '',
     `Your step is \`steps[${index}]\` — ${ordinal}, "${step?.title || ''}".`,
     `Done when: ${step?.done_when || ''}`,
@@ -715,8 +778,7 @@ export function stepPrompt({ name, repo, planPath, planText, step, index, confli
     '',
     'Do not merge. Do not ask questions. Stop when the PR exists.',
     '',
-    '----- PLAN.json -----',
-    planText,
+    planExcerpt(plan, index, step),
   ].join('\n');
 }
 
@@ -813,12 +875,18 @@ export function repairPrompt({ name, repo, pr, branch, reason, note = null, red 
  * `acceptEdits` runs the same session without the classifier and without
  * that instruction; `~/.claude/settings.json` allows Bash outright, so
  * nothing a step needs waits on a prompt nobody is there to answer.
+ *
+ * Claude also gets `--autocompact` at `AUTOCOMPACT_TOKENS`, so a session's
+ * context has a ceiling; codex has no such flag. The helper and intake turns
+ * pass `autocompact: null` — they are not this runner's step lane, and
+ * step-cost's contract leaves them as they were.
  */
-export function headlessArgs({ toolId, adapter, model, instructions, prompt, profileArgs }) {
+export function headlessArgs({ toolId, adapter, model, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const instr = profileArgs(toolId, instructions);
   if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...instr, prompt];
-  return ['-p', prompt, ...modelArgs, '--permission-mode', 'acceptEdits', ...instr, '--output-format', 'json'];
+  const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
+  return ['-p', prompt, ...modelArgs, '--permission-mode', 'acceptEdits', ...compact, ...instr, '--output-format', 'json'];
 }
 
 /**

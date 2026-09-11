@@ -146,10 +146,16 @@ def main():
     apis = [r['duration_api_ms'] / 1000 for _, r, _ in found]
     turns = [r['num_turns'] for _, r, _ in found]
     costs = [r['total_cost_usd'] for _, r, _ in found if r.get('total_cost_usd')]
+    # What every turn re-read: the session's whole input (cache hits and the rest)
+    # over its turns — the same usage fields readSessionOutput puts in runs.tsv.
+    # The number step-cost's step 1 (the plan excerpt, --autocompact) is measured on.
+    contexts = [((r.get('usage') or {}).get('cache_read_input_tokens', 0) + (r.get('usage') or {}).get('input_tokens', 0))
+                / r['num_turns'] for _, r, _ in found if r.get('num_turns')]
     print(quantiles('session wall (min)', walls, 60))
     print(quantiles('session API time (min)', apis, 60))
     print(quantiles('turns', turns, 1, '{:6.0f}'))
     print(quantiles('cost (USD)', costs, 1))
+    print(quantiles('context per turn (k tokens)', contexts, 1000))
     errors = collections.Counter(str(r.get('result'))[:40] for _, r, _ in found if r.get('is_error'))
     print(f'ended in an API error: {sum(errors.values())} {dict(errors)}\n')
 
