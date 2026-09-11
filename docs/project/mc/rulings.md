@@ -574,6 +574,40 @@ the merge lane, any rebase (there is none), and any new verb for the way back.
 
 **Carried by [`runner-next-step/PLAN.json`](runner-next-step/PLAN.json).**
 
+## 18 · A step runs on sonnet at medium effort with an opus advisor, and nothing is killed on elapsed time
+
+`ruling · 2026-09-11` · raised by Martin at the plan session, from the runner's cost
+
+Measured 2026-09-05..12 (`scripts/measure-steps.py`): 155 step sessions, all
+on `claude-opus-5` at the machine's `effortLevel: high`, median 93 turns and
+112k tokens of context per turn, median 7.7 USD at list price and p90 30.5;
+258 sessions since 2026-09-04 at about 2 500 USD list, and three sessions that
+week ended on the weekly limit. The plan session proposed three levers — the
+step prompt carrying its own step rather than the whole `PLAN.json` plus an
+auto-compact window, a model and effort per step in the plan, and replacing
+the wall-clock budget kill with a message asking the running session to judge
+whether it can finish. Martin corrected the cost premise and set the default:
+
+> "Alla modeller är inkluderade i Max 20x." … "Vi vill inte döda ett step som
+> faktiskt gör ett arbete bara för att datorn laggar, tester tar lång tid,
+> etc. Det enda som önskas är att en session avslutar sig själv om den kört
+> fast. Kanske med injektion av ett message efter x minuter, som berättar att
+> det tar tagit x min i tid och ber om en bedömning av om arbetet kommer kunna
+> avslutas eller inte, eller bör planeras om." … "Låt oss testa sonnet 5
+> medium som default med opus advisor." (Martin, 2026-09-11)
+
+So: the unit is quota, not dollars. A step session's default is `sonnet` at
+`medium` effort with `opus` as advisor; a plan may say otherwise in `runner`,
+and a step in its own `runner`; a repair stays on `opus`. `budget_minutes` is
+gone: every `check_in_minutes` the runner writes a check-in message into the
+running session's stdin, and only a session silent on stdout for
+`stall_minutes` is killed, logged `stalled`. The prompt carries the session's
+own step and the plan's frozen fields, and the session runs under an
+auto-compact window. Explicitly out: memoro's own `AGENTS.md` and suites, any
+new prompt rule about turns or test counts, and the plan-trespass rate.
+
+**Carried by [`step-cost/PLAN.json`](step-cost/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
