@@ -151,19 +151,28 @@ the eye already is:
   It says `blocked`, the plan's word and the brand row's, rather than a third
   word for the same projects. The names give way to the width before the fact
   does: three of them, then two, then one, then none.
-- **RUNNER** — **one row per lane**, whether or not that lane has a step: the
-  repository, then the project in flight there with its kind, tool, model and
-  elapsed against budget. `mc run` drives one lane per repository at the same
-  time, and a lane is a lane between steps as much as during one — with a row
-  only where there was a step, a lane waiting for its next project and a lane
-  whose process had died were the same absence. The repository is what tells two
-  rows apart; the pid that used to end the row was the runner's *own*
+- **RUNNER** — the heading carries the answer: how many steps are **in
+  flight** (bold green while it is not zero, `not running` in bold yellow when
+  there is no process), what `mc run lanes` allows when it is more than the
+  default, and how long the runner has been up. Under it **one row per lane**,
+  whether or not that lane has a step: the lane — `memoro #2` when a repository
+  has more than one, plain `memoro` when it has one — then the project in
+  flight there in bold, its kind, the clock against its budget (bold, because it
+  is the number on the row that moves), and what is running it: tool, model,
+  and the advisor model when the step has one. `mc run` drives `per_repo` lanes
+  on every repository at the same time (`mc run lanes`), and a lane is a lane
+  between steps as much as during one — with a row only where there was a
+  step, a lane waiting for its next project and a lane whose process had died
+  were the same absence; and with one row per *repository*, until 2026-09-11,
+  the second lane on memoro was never drawn at all. A lane between steps says
+  `idle`. The pid that used to end the row was the runner's *own*
   (`current-memoro.json` and `current-memoro-cli.json` both carry it, because
   both lanes are that one process), so it named neither lane and killed nothing.
   It is in `mc --json` and in `mc status`. A runner that is not running has no
   lanes and one line that says so. Then a pending `~/mc/runner/STOP`, the lane
   files whose process is gone, and one line of the day behind it: steps, merged,
-  open, failed, timed out, and an estimated **list-price** cost. The machine, and
+  open, failed, timed out, and an estimated **list-price** cost — `failed` red
+  and `timed out` yellow only while the count is not zero. The machine, and
   nothing else. Under the day, one line for **production**, and **what is wrong
   with it comes first**: a deploy that failed, with the step it stopped at, or
   one running now; then the sha from the last `deployed` row of
@@ -201,7 +210,7 @@ the helper and the sessions already write.
 | fact | file | written by |
 |---|---|---|
 | a runner is here | `~/mc/runner/runner.json` (pid, started) | `mc run`, at start |
-| a step is in flight | `~/mc/runner/current-<repo>.json`, one per lane (name, kind, repo, tool, model, budget, started, pid, worktree) | `mc run`, per step |
+| a step is in flight | `~/mc/runner/current-<repo>[-<lane>].json`, one per lane (name, kind, repo, lane, tool, model, effort, advisor, budget, started, pid, worktree) | `mc run`, per step |
 | stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
 | a pull request left unlanded | `~/mc/runner/held.json` (project, repo, pr, branch, reason, note, since, repairs, and — when a gate held it — `red` and `gates` for the repair session to read) | `mc run`, whenever a landing does not land |
@@ -220,13 +229,19 @@ a program could read. They are written through `atomic-write.js` and removed
 when their scope ends, the removal paired in a `finally` so a step that
 throws still clears the file.
 
-There is one current file **per lane**: `mc run` drives memoro's queue and
-memoro-cli's at the same time, so RUNNER is a list rather than a line, and the
-page reads `runner/current-*.json` by name instead of one fixed file. The lanes
-themselves are in [`docs/technical/mc-run.md`](mc-run.md). The *rows* are one
-per repository whether or not a current file exists for it — the repositories
-this machine has a checkout of, plus any a current file names that it does not —
-so a lane between steps has a row saying so rather than no row at all.
+There is one current file **per lane**: `mc run` drives `per_repo` lanes on
+memoro's queue and on memoro-cli's at the same time, so RUNNER is a list rather
+than a line, and the page reads `runner/current-*.json` by name instead of one
+fixed file — `current-memoro.json` for a repository's first lane,
+`current-memoro-1.json` for its second, and the file's own `lane` field is
+what puts a step on its row. The lanes themselves are in
+[`docs/technical/mc-run.md`](mc-run.md). The *rows* are `per_repo` per
+repository (`~/.memoro/mc/lanes.json`, read by `collectPage`) whether or not a
+current file exists for each — the repositories this machine has a checkout
+of, plus any a current file names that it does not — so a lane between steps
+has a row saying so rather than no row at all. A current file whose `lane` is
+past the setting still gets a row: the runner was started under a higher count
+than the file holds now, and the file is the fact.
 
 **Liveness is one test, `pidAlive`** — `kill(pid, 0)`, with `EPERM`
 counted as alive. Nothing asks tmux or pgrep. Both of those lied on
@@ -377,9 +392,13 @@ person set it to.
 | header | version, rule, cost today | grey |
 | section titles | `RUNNER` `HELPER` `BRIEF` `NEXT` `INTAKE` `PROGRAMMES` `WORK` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
+| RUNNER | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
+| RUNNER | the heading's lane setting and uptime | grey |
 | RUNNER | a lane with a step: its `●`, the project's name | green, bold |
-| RUNNER | a lane's repository | grey |
-| RUNNER | elapsed: under ¾ of budget, from ¾, past it | plain, yellow, bold red |
+| RUNNER | a lane's name (`memoro`, `memoro #2`) | grey |
+| RUNNER | elapsed: under ¾ of budget, from ¾, past it | bold, bold yellow, bold red |
+| RUNNER | the budget beside the clock, the tool, the advisor | grey |
+| RUNNER | the day's `failed`, `timed out` while not zero | red, yellow |
 | RUNNER | `■ STOP requested` | bold red |
 | RUNNER | a stale runner file | red |
 | RUNNER | a quota answer under 6 h old, older | yellow, grey |
@@ -387,7 +406,7 @@ person set it to.
 | RUNNER | `/api/version` naming another commit than the last deploy | bold yellow |
 | RUNNER | a deploy running now, one that has not come back in an hour | green, bold yellow |
 | RUNNER | a deploy that failed after the last good one | yellow |
-| RUNNER | a lane with nothing in flight, no runner, the day's line, the tool | grey |
+| RUNNER | an idle lane, no runner, the rest of the day's line | grey |
 | HELPER, BRIEF | the `●` and the verb it is running | cyan |
 | HELPER, BRIEF | `·  not open` | grey |
 | WORK | a session's `●` and its area | cyan, bold |

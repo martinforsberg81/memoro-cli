@@ -183,6 +183,9 @@ export function productionSection({ deploy = null, attempt = null, live = null, 
 export function runnerSection({
   runner = null, currents = [], stop = false, rows = [],
   deploy = null, attempt = null, live = null, repos = REPO_NAMES,
+  // What `mc run lanes` set: how many lane loops each repository has, and the
+  // cap across them. The rows are one per lane, so the page needs the number.
+  lanes: setting = { per_repo: 1, total: null },
   now = new Date(), alive = pidAlive,
 } = {}) {
   const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, now, alive });
@@ -194,7 +197,8 @@ export function runnerSection({
   }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   return {
     ...base,
-    lanes: lanesOfRunner(base.steps, repos),
+    lanes: lanesOfRunner(base.steps, repos, setting.per_repo),
+    setting: { per_repo: setting.per_repo ?? 1, total: setting.total ?? null },
     process,
     // What is in production, under the day it took to get there.
     production: productionSection({ deploy, attempt, live, now }),
@@ -209,13 +213,20 @@ export function runnerSection({
 }
 
 /**
- * The lanes, one per repository, whether or not that lane has a step.
+ * The lanes, `per_repo` per repository, whether or not each has a step.
  *
- * A lane is what `mc run` drives — one per repository, at the same time
- * (one lane loop per repository, run.js) — and it exists between steps as much
- * as during one.
- * The section drew a row only where there was a step, so a lane between steps
- * and a lane that had died looked exactly alike: nothing.
+ * A lane is what `mc run` drives — `per_repo` lane loops on every repository,
+ * at the same time (`runLoop`, run.js) — and it exists between steps as much
+ * as during one. The section drew one row per repository, and only where there
+ * was a step, so with `mc run lanes 2` the second lane's step was never drawn
+ * and a lane between steps and a lane that had died looked exactly alike:
+ * nothing.
+ *
+ * A step's lane is the index its current file carries (`lane` in
+ * `current-<repo>[-<lane>].json`), so two steps on one repository land on two
+ * rows. A step whose index is past the setting — a runner started under a
+ * higher count than the file holds now — still gets its row: the file is the
+ * runner saying it is there, and the page believes it over the setting.
  *
  * The repositories are the ones mc knows, plus any a lane file names that they
  * do not: a `current-<repo>.json` is the runner saying it is in that
@@ -225,13 +236,20 @@ export function runnerSection({
  * The step is the same object `steps` carries, not a copy — the two cannot
  * disagree about a lane, because there is one of it.
  */
-function lanesOfRunner(steps = [], repos = []) {
+function lanesOfRunner(steps = [], repos = [], perRepo = 1) {
+  const count = Number.isInteger(perRepo) && perRepo > 0 ? perRepo : 1;
   const names = [...new Set([...repos, ...steps.map((step) => step.repo)].filter(Boolean))].sort();
   return [
-    ...names.map((repo) => ({ repo, step: steps.find((step) => step.repo === repo) || null })),
+    ...names.flatMap((repo) => {
+      const own = steps.filter((step) => step.repo === repo);
+      const width = Math.max(count, ...own.map((step) => (step.lane ?? 0) + 1));
+      return Array.from({ length: width }, (_, lane) => ({
+        repo, lane, step: own.find((step) => (step.lane ?? 0) === lane) || null,
+      }));
+    }),
     // A `current.json` from before the lanes had repositories: it is a step in
     // flight and belongs on the page, in a lane with no name.
-    ...steps.filter((step) => !step.repo).map((step) => ({ repo: null, step })),
+    ...steps.filter((step) => !step.repo).map((step) => ({ repo: null, lane: null, step })),
   ];
 }
 
@@ -1046,15 +1064,19 @@ export async function collectPage({
   const held = heldEntries(readJson(heldPath(root)));
   const queuedForMerge = queueEntries(readJson(mergesPath(root)));
 
+  // Read once for both sections: RUNNER draws one row per lane, NEXT bolds
+  // one head per lane.
+  const laneSetting = laneCount();
   const runner = runnerSection({
     runner: readJson(join(root, 'runner', 'runner.json')),
     currents: readCurrents(join(root, 'runner')),
     stop,
     rows,
-    // One lane per repository this machine has a checkout of, drawn whether or
-    // not it has a step: a lane between steps and a lane that has died were the
-    // same absence until the row existed.
+    // `per_repo` lanes per repository this machine has a checkout of, drawn
+    // whether or not each has a step: a lane between steps and a lane that has
+    // died were the same absence until the row existed.
     repos: present.map((repo) => repo.name),
+    lanes: laneSetting,
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
     deploy: lastDeploy(env),
@@ -1080,7 +1102,7 @@ export async function collectPage({
       queued: queuedForMerge,
       // How many lane loops each repository has, so the block bolds as many
       // heads as there are lanes to start them (`mc run lanes`).
-      lanes: laneCount().per_repo,
+      lanes: laneSetting.per_repo,
       machine: (name) => machineState(name, {
         plans,
         prs: prs.prs,
