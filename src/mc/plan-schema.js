@@ -75,7 +75,15 @@ const STEP_KEYS = Object.freeze([
   'comments',
   'pr',
   'blocked_by',
+  'runner',
 ]);
+
+/**
+ * The fields of its own step a step session writes. Everything else on that
+ * step — `title`, `done_when`, `instruction`, `runner` — is the plan author's,
+ * and `unauthorisedChanges` compares it like any other step.
+ */
+const SESSION_STEP_FIELDS = Object.freeze(['status', 'pr', 'comments', 'blocked_by']);
 
 /**
  * The fields a step session never writes: the project's own terms, and what
@@ -87,7 +95,15 @@ export const PLAN_FROZEN_FIELDS = Object.freeze(['goal', 'contract', 'out_of_sco
 
 const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
 const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
-const RUNNER_KEYS = Object.freeze(['tool', 'model', 'budget_minutes']);
+const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'budget_minutes']);
+/**
+ * What a step may say for itself in its own `runner`: which model does the
+ * work, at what effort, advised by what. The tool and the interval stay the
+ * plan's — a step on another tool is not planned (step-cost, ruling 18).
+ */
+const STEP_RUNNER_KEYS = Object.freeze(['model', 'effort', 'advisor']);
+/** claude's `--effort` levels, as `claude --help` lists them (2.1.268). */
+export const EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const BLOCKER_KEYS = Object.freeze(['kind', 'name']);
 
 function plain(value) {
@@ -112,18 +128,31 @@ function positiveInteger(value) {
   return Number.isInteger(value) && value > 0;
 }
 
-function validateRunner(runner, problems) {
+// The plan's `runner` and a step's own, by one function: `at` is where the
+// problem text says it is, `keys` what that level may carry. A plan-level key
+// on a step is refused by name rather than as unknown, because the author who
+// wrote it meant something the step cannot say.
+function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS } = {}) {
   if (runner === null || runner === undefined) return;
-  if (!plain(runner)) { problems.push('runner: must be an object, or absent for the defaults'); return; }
-  for (const key of unknownKeys(runner, RUNNER_KEYS)) problems.push(`runner.${key}: unknown key`);
+  if (!plain(runner)) { problems.push(`${at}: must be an object, or absent for the defaults`); return; }
+  for (const key of unknownKeys(runner, keys)) {
+    problems.push(`${at}.${key}: ${RUNNER_KEYS.includes(key) ? 'a plan-level key' : 'unknown key'}`);
+  }
   if (runner.tool !== undefined && !TOOL_RE.test(String(runner.tool))) {
-    problems.push('runner.tool: must name a tool mc can launch');
+    problems.push(`${at}.tool: must name a tool mc can launch`);
   }
   if (runner.model !== undefined && runner.model !== null && !MODEL_RE.test(String(runner.model))) {
-    problems.push('runner.model: must be a model name');
+    problems.push(`${at}.model: must be a model name`);
+  }
+  if (runner.effort !== undefined && runner.effort !== null && !EFFORT_LEVELS.includes(runner.effort)) {
+    problems.push(`${at}.effort: one of ${EFFORT_LEVELS.join(', ')}`);
+  }
+  // `off` is a name by MODEL_RE too; it is spelled out so the message says it.
+  if (runner.advisor !== undefined && runner.advisor !== null && !MODEL_RE.test(String(runner.advisor))) {
+    problems.push(`${at}.advisor: a model name, or off`);
   }
   if (runner.budget_minutes !== undefined && !positiveInteger(runner.budget_minutes)) {
-    problems.push('runner.budget_minutes: must be a positive whole number of minutes');
+    problems.push(`${at}.budget_minutes: must be a positive whole number of minutes`);
   }
 }
 
@@ -227,6 +256,7 @@ function validateSteps(steps, problems) {
       problems.push(`${at}.pr: a pull request number, or null`);
     }
     validateBlocker(step, at, problems);
+    validateRunner(step.runner, problems, { at: `${at}.runner`, keys: STEP_RUNNER_KEYS });
   });
 }
 
@@ -355,9 +385,12 @@ export function deliverableStep(plan) {
  * run, and never the goal, the contract or the scope.
  *
  * Everything a session writes about its own work now sits inside
- * `steps[index]`, so one skipped index is the whole permission. It used to be
- * two rules: the step, and a shared `what_the_code_taught_us` at the top of
- * the plan that every session appended to.
+ * `steps[index]`. It used to be two rules: the step, and a shared
+ * `what_the_code_taught_us` at the top of the plan that every session appended
+ * to. And the session's own step used to be skipped whole, which left its
+ * `instruction` and `done_when` — and, since step-cost, its `runner`, the
+ * model it runs on — to the session's discretion. Only `SESSION_STEP_FIELDS`
+ * are its to write; the rest of its step is compared like any other.
  */
 export function unauthorisedChanges(before, after, index) {
   const problems = [];
@@ -374,7 +407,16 @@ export function unauthorisedChanges(before, after, index) {
   }
   const shared = Math.min(from.length, to.length);
   for (let i = 0; i < shared; i += 1) {
-    if (i === index) continue;
+    if (i === index) {
+      const keys = new Set([...Object.keys(from[i] || {}), ...Object.keys(to[i] || {})]);
+      for (const key of keys) {
+        if (SESSION_STEP_FIELDS.includes(key)) continue;
+        if (JSON.stringify(from[i]?.[key]) !== JSON.stringify(to[i]?.[key])) {
+          problems.push(`steps[${i}].${key}: a step session does not change it`);
+        }
+      }
+      continue;
+    }
     if (JSON.stringify(from[i]) !== JSON.stringify(to[i])) {
       problems.push(`steps[${i}]: changed by the session that ran step ${index + 1}`);
     }

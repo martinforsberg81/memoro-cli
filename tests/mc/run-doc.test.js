@@ -20,8 +20,8 @@ import { STEP_STATUSES } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
 import { REPO_NAMES, TOTAL_POLL_MS } from '../../src/mc/run.js';
 import {
-  AUTOCOMPACT_TOKENS, DEFAULT_BUDGET_MINUTES, DEFAULT_MODEL, DEFAULT_TOOL, HELPER_HOUR_UTC, MC_OWN_TREES, QUOTA_SLEEP_MS,
-  RUNS_HEADER,
+  AUTOCOMPACT_TOKENS, DEFAULT_BUDGET_MINUTES, DEFAULT_TOOL, HELPER_HOUR_UTC, MC_OWN_TREES, QUOTA_SLEEP_MS,
+  RUNS_HEADER, SESSION_DEFAULTS,
 } from '../../src/mc/run-plan.js';
 
 const DOC = readFileSync(fileURLToPath(new URL('../../docs/technical/mc-run.md', import.meta.url)), 'utf8');
@@ -61,9 +61,16 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.ok(DOC.includes(`\`AUTOCOMPACT_TOKENS\` (${AUTOCOMPACT_TOKENS.toLocaleString('en-US').replace(/,/gu, ' ')})`));
   });
 
-  it('states the tool and model a plan gets when its frontmatter names none', () => {
+  it('states the tool, model, effort and advisor a session gets when its plan names none', () => {
     assert.match(DOC, new RegExp(`\\*\\*\`tool:\`\\*\\* — \`${DEFAULT_TOOL}\` by default`, 'u'));
-    assert.match(DOC, new RegExp(`\\*\\*\`model:\`\\*\\* — \`${DEFAULT_MODEL}\` by default`, 'u'));
+    const { step, repair } = SESSION_DEFAULTS;
+    assert.match(DOC, new RegExp(`\\*\\*\`model:\`\\*\\* — \`${step.model}\` by default for a step, \`${repair.model}\` for a repair`, 'u'));
+    // The table under *The session*, one row per kind, as the code has them.
+    const cell = (value) => (value ? `\`${value}\`` : 'none');
+    for (const [kind, d] of Object.entries(SESSION_DEFAULTS)) {
+      assert.ok(DOC.includes(`| ${kind} | ${cell(d.model)} | ${cell(d.effort)} | ${cell(d.advisor)} |`), `the doc's table has no row for ${kind} as the code sets it`);
+    }
+    assert.ok(DOC.includes('[--effort …] [--advisor …]'), 'the argument list no longer shows the two flags');
   });
 
   it('lists the runs.tsv columns in the order the row is written', () => {

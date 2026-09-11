@@ -240,6 +240,27 @@ export function modelArgs(model) {
 }
 
 /**
+ * The effort to run at (`low` … `max`). Without it claude takes the machine's
+ * `effortLevel` from `~/.claude/settings.json` — `high` on this one, which is
+ * what every runner session ran at until step-cost (ruling 18).
+ */
+export function effortArgs(effort) {
+  if (!effort || typeof effort !== 'string') return [];
+  return ['--effort', effort];
+}
+
+/**
+ * The advisor: a second model the session consults at its decision points.
+ * `--help` does not list the flag; code.claude.com/docs/en/advisor.md names
+ * it, and claude 2.1.268 accepted it on 2026-09-11. Off unless asked for, so
+ * nothing — or `off` — is no flag.
+ */
+export function advisorArgs(advisor) {
+  if (!advisor || typeof advisor !== 'string' || advisor === 'off') return [];
+  return ['--advisor', advisor];
+}
+
+/**
  * mc mints the session id for a NEW session and hands it to Claude via
  * `--session-id`, so the registry owns the native id from launch instead
  * of rediscovering it from transcript files afterwards. Claude requires

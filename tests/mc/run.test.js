@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createRunner, runLoop } from '../../src/mc/run.js';
 import { parseHeld } from '../../src/mc/held.js';
 import { RUN_REFUSALS, WORKAREA_BLOCKS } from '../../src/mc/run-plan.js';
+import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { unauthorisedChanges } from '../../src/mc/plan-schema.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { machineState } from '../../src/mc/status-collect.js';
@@ -156,8 +157,16 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     profile: async () => 'PROFILE',
     role: (kind) => (roles ? { name: kind, overlay: `ROLE ${kind}` } : null),
     // `modelArgs` guards on a missing model exactly as both real adapters do:
-    // no model named means no flag, not `--model null`.
-    launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: { modelArgs: (m) => (m ? ['--model', m] : []) }, spec: { bin: `/bin/${tool}` } }),
+    // no model named means no flag, not `--model null`. Effort and advisor
+    // are the claude adapter's own, so a step's argument list here is the
+    // one claude gets.
+    launch: (tool) => ({
+      ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool,
+      adapter: tool === 'codex'
+        ? { modelArgs: (m) => (m ? ['--model', m] : []) }
+        : { modelArgs: (m) => (m ? ['--model', m] : []), effortArgs: claudeAdapter.effortArgs, advisorArgs: claudeAdapter.advisorArgs },
+      spec: { bin: `/bin/${tool}` },
+    }),
     session: (call) => { calls.sessions.push(call); duringSession.push(structuredClone(files)); return session(call); },
     log: (line) => log.push(line),
     git: (cwd, args) => {
@@ -483,7 +492,9 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.equal(call.bin, '/bin/claude');
   assert.equal(call.cwd, '/w/alpha/memoro');
   assert.equal(call.timeoutMs, 90 * 60_000);
-  assert.deepEqual(call.args.slice(2, 8), ['--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', '150000']);
+  // Ruling 18: a step is sonnet at medium effort with an opus advisor.
+  assert.deepEqual(call.args.slice(2, 12), ['--model', 'sonnet', '--effort', 'medium', '--advisor', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', '150000']);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: step starting \(claude sonnet · effort medium · advisor opus, 90 min\)/u);
   // The parsed plan, not the file: the step in full under its own heading.
   assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- Your step: steps\[0\] -----\ntitle: The one step/u);
   assert.doesNotMatch(call.args[1], /"schema": ?"mc-plan"/u, 'the file itself is not in the prompt');
@@ -497,8 +508,8 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   );
   assert.deepEqual(f.calls.rounds.map((c) => [c.repoPath, c.pr]), [['/home/memoro', 77]], 'landed through mc merge, not gh pr merge');
   const rows = f.files['/w/runner/log/runs.tsv'].trim().split('\n');
-  assert.equal(rows[0].split('\t').length, 14);
-  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t0');
+  assert.equal(rows[0].split('\t').length, 15);
+  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t0\tsonnet');
   assert.ok(f.files['/w/alpha-20260829T100000Z.json'] === undefined);
   assert.ok('/w/runner/log/alpha-20260829T100000Z.json' in f.files);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: merged #77 into main through the gate\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged land=0s/u);
@@ -993,7 +1004,7 @@ test('a quota answer is logged as quota, not merged, and the runner sleeps 30 mi
   f.deps.sleep = async (ms) => { slept.push(ms); };
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\tsonnet\n/u);
   assert.equal(f.calls.rounds.length, 0);
   assert.ok(slept.includes(30 * 60 * 1000));
 });
@@ -1002,7 +1013,7 @@ test('a timed-out session is logged as timeout with exit 142', async () => {
   const f = fixture({ plans: { memoro: { t: ready } }, session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true }) });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\ttimeout\t-\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\ttimeout\t-\tsonnet\n/u);
 });
 
 /**
@@ -1022,7 +1033,7 @@ test('a red gate leaves the pull request open and says so in the row', async () 
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
   assert.equal(f.calls.rounds.length, 1);
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,gate-red\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,gate-red\t\d+\t\w+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /m: #9 left open — two tests the change reaches are red/u);
 });
 
@@ -1292,7 +1303,7 @@ test('a merge that landed somewhere other than main is not recorded as merged', 
   });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,off-main\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,off-main\t\d+\t\w+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /#11250 was merged into msr-track-3-capture-command, NOT main/u);
 });
 
@@ -1303,7 +1314,7 @@ test('a pull request aimed at a branch that is nobody head lands nothing', async
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
   assert.equal(f.calls.rounds.length, 0, 'nothing is handed to the merge round');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,not-a-stack\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,not-a-stack\t\d+\t\w+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /#11250 is aimed at msr-track-3-capture-command — none of them is aimed at main — landing none of them/u);
   // Nothing else is going to land it either, so it is held with the reason
   // rather than left to a log line.
@@ -1325,7 +1336,7 @@ test('a stack is landed bottom first, each one above it retargeted and replayed'
     ['rebase', '--onto', 'origin/main', 'forked-origin/m-3', 'm-3'],
   ]);
   assert.ok(f.calls.gh.some((c) => c.includes('edit') && c.includes('2') && c.includes('--base') && c.includes('main')));
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\t\w+\n/u);
 });
 
 test('a stacked branch that conflicts after the one below lands is aborted, not resolved', async () => {
@@ -1338,7 +1349,7 @@ test('a stacked branch that conflicts after the one below lands is aborted, not 
   await runner.pass();
   assert.deepEqual(f.calls.rounds.map((c) => c.pr), [1], 'the one above it is not handed to the gate');
   assert.ok(f.calls.git.some((c) => c[1] === 'rebase' && c[2] === '--abort'));
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,stack-stopped\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,stack-stopped\t\d+\t\w+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /m-2 conflicts with what just landed in: a\.js/u);
 });
 
@@ -1369,6 +1380,22 @@ test('tool and model come from the project frontmatter', async () => {
   assert.equal(call.cwd, '/w/cx/memoro-cli');
   assert.equal(call.timeoutMs, 20 * 60_000);
   assert.deepEqual(call.args.slice(0, 6), ['exec', '--json', '--sandbox', 'danger-full-access', '--model', 'o3']);
+});
+
+test('a step\'s own runner overrides the plan\'s, key by key, and the row says what ran', async () => {
+  const stepped = plan({
+    runner: { model: 'opus', budget_minutes: 30 },
+    steps: [{ title: 'Own', status: 'ready', done_when: 'do x', instruction: ['Do it.'], pr: null, blocked_by: null, runner: { effort: 'high', advisor: 'off' } }],
+  });
+  const f = fixture({ plans: { 'memoro-cli': { own: stepped } }, session: okSession(), gh: { own: { number: 5 } } });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  const [call] = f.calls.sessions;
+  assert.equal(call.timeoutMs, 30 * 60_000);
+  assert.deepEqual(call.args.slice(2, 7), ['--model', 'opus', '--effort', 'high', '--permission-mode']);
+  assert.equal(call.args.includes('--advisor'), false, '`off` on the step turns the default advisor off');
+  assert.match(f.files['/w/runner/log/runner.log'], /own: step starting \(claude opus · effort high, 30 min\)/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\town\tstep\t.*\topus\n/u);
 });
 
 test('a codex plan that names no model gets none, and the log says so', async () => {
@@ -1509,7 +1536,7 @@ test('a landing that changed src/mc/ writes UPDATE itself', async () => {
     prFiles: { 9: ['src/mc/plan-schema.js', 'tests/mc/plan-schema.test.js'] },
   });
   await createRunner({ deps: f.deps }).pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\n/u, 'it landed as usual');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\t\w+\n/u, 'it landed as usual');
   assert.ok('/w/runner/UPDATE' in f.files, 'the runner merged its own code and asked for nothing');
   assert.match(f.files['/w/runner/log/runner.log'], /m: #9 changed mc's own code \(src\/mc\/plan-schema\.js\) — UPDATE written/u);
   // GitHub's own file list for the merged pull request, not the gate's report
@@ -1538,7 +1565,7 @@ test('a landing that touched neither src/mc/ nor canon/ writes nothing', async (
     prFiles: { 9: ['docs/technical/mc-run.md', 'src/mcp/server.js', 'canonical.md', 'tests/mc/run.test.js'] },
   });
   await createRunner({ deps: f.deps }).pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\t\w+\n/u);
   assert.equal('/w/runner/UPDATE' in f.files, false, 'a handover was asked for that nothing needed');
   assert.equal(/UPDATE written/u.test(f.files['/w/runner/log/runner.log']), false);
 });
@@ -1612,7 +1639,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
 
   const during = f.duringSession[0];
   assert.deepEqual(JSON.parse(during['/w/runner/current-memoro.json']), {
-    name: 'alpha', kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', budget_minutes: 90,
+    name: 'alpha', kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', budget_minutes: 90,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro', role: stepRole,
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z' });
@@ -1628,7 +1655,7 @@ test('the current file carries the project frontmatter, and is removed even when
   const runner = createRunner({ deps: f.deps });
   await assert.rejects(runner.pass(), /boom/u);
   assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current-memoro-cli.json']), {
-    name: 'cx', kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', budget_minutes: 20,
+    name: 'cx', kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', effort: null, advisor: null, budget_minutes: 20,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
     // The same text whichever tool it is handed to: `instructionsFor` assembles
     // one body and only the flag that carries it differs (portrait.js).

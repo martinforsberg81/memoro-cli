@@ -36,8 +36,13 @@ the door.
   for anything with a surface, the measurement *in the running app*. "Done" is
   never the session's judgement of its own work.
 - `documents` — `{ label, path }`.
-- `runner` — optional: `tool`, `model`, `budget_minutes`. Only what the runner
-  actually reads; there is no field here that nothing enforces.
+- `runner` — optional: `tool`, `model`, `effort`, `advisor`, `budget_minutes`.
+  Only what the runner actually reads; there is no field here that nothing
+  enforces. `effort` is one of `low`, `medium`, `high`, `xhigh`, `max`;
+  `advisor` is a model name, or `off` for none. What a key leaves unsaid is the
+  runner's default for the session's kind — a step runs on `sonnet` at `medium`
+  with `opus` as advisor, a repair on `opus` with neither (ruling 18,
+  [`docs/technical/mc-run.md`](../technical/mc-run.md) § *The session*).
 
 ### The steps
 
@@ -61,6 +66,12 @@ carries:
   `tool-missing`, `held-after-repair`) and the workarea named in the step's last
   comment. It is answered by fixing the workarea and setting the step `ready`,
   not by a decision.
+- `runner` — optional: `model`, `effort`, `advisor`, for a step that needs
+  something other than the plan's. Each key overrides the plan's `runner` on
+  its own, and a step that names only its effort keeps the plan's model.
+  `tool` and `budget_minutes` are the plan's alone and refused here by name.
+  It is the plan author's, like `instruction`: a step session that changes its
+  own step's `runner` fails on the way back in.
 - `comments` — an array of paragraphs, possibly empty: whatever that step's
   session needs the next reader to know that the code in front of them does not
   show. This is where a session writes, and it is on the step rather than at the
@@ -159,7 +170,9 @@ has not run, not a deletion — and never `goal`, `contract`, `out_of_scope`, or
 the criteria themselves. This is checked rather than asked: the runner compares
 the file before and after, and a session that touched anything else fails on the
 way back in. Everything a session may write is inside `steps[index]` and `met`,
-which is why that comparison is one skipped index and no shared field.
+and inside its own step only `status`, `pr`, `comments` and `blocked_by` — its
+`instruction`, `done_when` and `runner` are compared like every other step's,
+so a session cannot soften what it was asked to do or pick the model it runs on.
 
 **The runner writes one thing into a plan: a step it could not start.** When
 `mc run` meets a fault in the workarea or on this machine that a person has to

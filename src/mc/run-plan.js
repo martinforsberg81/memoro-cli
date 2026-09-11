@@ -17,7 +17,7 @@
  * started projects off answered decision files.
  */
 import { parseRuns } from './brief-collect.js';
-import { deliverableStep } from './plan-schema.js';
+import { deliverableStep, EFFORT_LEVELS } from './plan-schema.js';
 import { describePr, openPrsFor } from './project-prs.js';
 
 /**
@@ -27,10 +27,24 @@ import { describePr, openPrsFor } from './project-prs.js';
  * appended is a cell a header-keyed reader ignores; a column inserted would
  * shift `note` one to the left for every reader of the old header, and
  * `close-workarea.js` decides whether a workarea may go by reading it.
+ * `model` (step-cost, 2026-09-11) is appended after it for the same reason:
+ * the alias the session was launched on, `-` on every row that is not a
+ * session and on every row written before it.
  */
-export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note', 'land_seconds'];
+export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note', 'land_seconds', 'model'];
 
-export const DEFAULT_MODEL = 'opus'; // claude's alias, and only claude's — see `sessionSettings`
+/**
+ * What a session runs on when neither its step nor its plan says otherwise,
+ * per kind (ruling 18, 2026-09-11). A step is `sonnet` at `medium` effort
+ * with `opus` as its advisor — the strong model at the decision points rather
+ * than on every turn. A repair keeps `opus` with no effort flag and no
+ * advisor: it is one session on a pull request somebody else could not land.
+ * These are claude's aliases and nobody else's — see `sessionSettings`.
+ */
+export const SESSION_DEFAULTS = Object.freeze({
+  step: Object.freeze({ model: 'sonnet', effort: 'medium', advisor: 'opus' }),
+  repair: Object.freeze({ model: 'opus', effort: null, advisor: null }),
+});
 // The context window at which a claude step or repair session compacts
 // (`--autocompact`, 100k–1M on claude 2.1.268). Over 2026-09-05..12 the mean
 // context per turn was 112k tokens, 36 of 295 sessions averaged over 200k and
@@ -848,7 +862,9 @@ export function repairPrompt({ name, repo, pr, branch, reason, note = null, red 
 
 /**
  * The argument list for a session nobody sits in front of, per tool. The
- * model rides through the adapter's own `modelArgs`; the instructions
+ * model rides through the adapter's own `modelArgs`, and for claude the
+ * effort and the advisor through its `effortArgs` and `advisorArgs` — codex
+ * gets neither; the instructions
  * (Coding Profile + role overlay) through the same channel `mc work` uses;
  * the prompt is the last positional for both. Claude answers with one JSON
  * object; codex's `exec --json` streams events — parsed in
@@ -881,12 +897,13 @@ export function repairPrompt({ name, repo, pr, branch, reason, note = null, red 
  * pass `autocompact: null` — they are not this runner's step lane, and
  * step-cost's contract leaves them as they were.
  */
-export function headlessArgs({ toolId, adapter, model, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS }) {
+export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const instr = profileArgs(toolId, instructions);
   if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...instr, prompt];
+  const tuning = [...(adapter?.effortArgs?.(effort) ?? []), ...(adapter?.advisorArgs?.(advisor) ?? [])];
   const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
-  return ['-p', prompt, ...modelArgs, '--permission-mode', 'acceptEdits', ...compact, ...instr, '--output-format', 'json'];
+  return ['-p', prompt, ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...instr, '--output-format', 'json'];
 }
 
 /**
@@ -950,13 +967,13 @@ export function quotaSeen(text) {
 
 /* --------------------------------------------------------------------- log */
 
-export function tsvRow({ ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds }) {
+export function tsvRow({ ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model }) {
   const cell = (v) => String(v ?? '-').replace(/[\t\n]/gu, ' ');
   // `seconds` is the session; `land_seconds` is the gated round that followed
   // it. They are separate because the gate costs 20–35 minutes on memoro where
   // the old `gh pr merge` cost seconds, and a reader of runs.tsv asking where
   // a night went can only see that if the two are not added up here.
-  return [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds].map(cell).join('\t');
+  return [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model].map(cell).join('\t');
 }
 
 export function tsvHeader() {
@@ -966,22 +983,49 @@ export function tsvHeader() {
 /* -------------------------------------------------------------- frontmatter */
 
 /**
- * `tool`, `model`, `budget_minutes` from a PLAN.md frontmatter, with the
- * runner's defaults.
+ * What a session runs on: the plan's `runner`, a step's own `runner`, and the
+ * defaults for the session's kind (`SESSION_DEFAULTS`). `model`, `effort` and
+ * `advisor` resolve step over plan over default, one key at a time, so a step
+ * that names only its effort keeps the plan's model. `advisor: 'off'` at any
+ * level means no advisor. `tool` and `budget_minutes` are the plan's alone.
  *
- * The model default belongs to claude and to nothing else. `opus` is a claude
+ * The defaults belong to claude and to nothing else. `opus` is a claude
  * alias; handed to `codex -m` it names a model that tool does not have, and
  * the step dies on its own argument list before it has read a word of the
  * plan. A plan on another tool that names no model gets none — `modelArgs`
  * of nothing is `[]`, and the tool's own default is a better answer than
- * mc's guess at what that tool calls its best model.
+ * mc's guess at what that tool calls its best model. Effort and advisor are
+ * claude's flags, so another tool gets neither, named or not.
  */
-export function sessionSettings(fields = {}) {
-  const minutes = Number(fields.budget_minutes);
-  const tool = fields.tool || DEFAULT_TOOL;
+export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'step' } = {}) {
+  const plan = planRunner || {};
+  const step = stepRunner || {};
+  const minutes = Number(plan.budget_minutes);
+  const tool = plan.tool || DEFAULT_TOOL;
+  const claude = tool === DEFAULT_TOOL;
+  const defaults = claude ? (SESSION_DEFAULTS[kind] || SESSION_DEFAULTS.step) : {};
+  const named = (key) => [step[key], plan[key]].find((value) => value !== undefined && value !== null && value !== '');
+  const advisor = named('advisor') ?? defaults.advisor ?? null;
+  const effort = named('effort') ?? defaults.effort ?? null;
   return {
     tool,
-    model: fields.model || (tool === DEFAULT_TOOL ? DEFAULT_MODEL : null),
+    model: named('model') ?? defaults.model ?? null,
+    effort: claude && EFFORT_LEVELS.includes(effort) ? effort : null,
+    advisor: claude && advisor !== 'off' ? advisor : null,
     budgetMinutes: Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_BUDGET_MINUTES,
   };
+}
+
+/**
+ * The part of the `starting` line that says what the session runs on:
+ * `claude sonnet · effort medium · advisor opus`. What is not set is left
+ * out rather than printed as `null`, and a tool that picks its own model says
+ * so.
+ */
+export function describeSettings(shortName, settings) {
+  return [
+    `${shortName} ${settings.model || 'own default model'}`,
+    settings.effort ? `effort ${settings.effort}` : null,
+    settings.advisor ? `advisor ${settings.advisor}` : null,
+  ].filter(Boolean).join(' · ');
 }
