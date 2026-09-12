@@ -89,7 +89,7 @@
     {
       "title": "MERGES on the page — landing, queued, held",
       "status": "done",
-      "pr": null,
+      "pr": 706,
       "blocked_by": null,
       "comments": [
         "Grepped next.held/next.queued across src/ and tests/ before moving them: only src/mc/page-collect.js, src/mc/page-render.js, tests/mc/page.test.js, tests/mc/front-door.test.js and two doc mentions read either field. The brief (docs/technical/mc-run.md) reads held.json/merges.json directly, not next.held/next.queued, so nothing outside the page and its own tests needed touching.",
