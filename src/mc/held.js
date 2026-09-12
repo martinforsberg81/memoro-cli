@@ -129,7 +129,7 @@ export function holdPr(entries, entry) {
 
 /**
  * This pull request's repair counted, before the session that is about to try
- * it runs. Before rather than after: a repair session killed on its budget
+ * it runs. Before rather than after: a repair session killed as stalled
  * still had its one turn, and a count kept until the session came back would
  * hand the next round a second one for the same pull request.
  */
@@ -185,6 +185,7 @@ export function holdReason({ note, problems = [] } = {}) {
     return `the session changed more of the plan than its step${said ? `: ${said}` : ''}`;
   }
   if (note === 'timeout') return 'the session timed out with the pull request open';
+  if (note === 'stalled') return 'the session stalled — nothing on stdout for the stall interval — and was killed with the pull request open';
   if (note === 'no-json') return 'the session ended without a result with the pull request open';
   return `the session ended \`${note}\` with the pull request open`;
 }

@@ -343,7 +343,9 @@ export function summariseRuns(rows) {
     kinds[row.kind] = (kinds[row.kind] || 0) + 1;
     if (row.note.includes('merged')) merged += 1;
     else if (row.note.includes('open')) open += 1;
-    if (row.note.includes('timeout')) timeout += 1;
+    // A stall is the runner's only kill since ruling 18, and counts where the
+    // wall-clock timeout it replaced did.
+    if (row.note.includes('timeout') || row.note.startsWith('stalled')) timeout += 1;
     else if (row.exit !== '0' || !row.note.startsWith('success')) failed += 1;
     cacheRead += Number(row.cache_read) || 0;
     output += Number(row.output) || 0;

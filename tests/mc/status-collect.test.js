@@ -74,17 +74,17 @@ describe('NOW', () => {
   const NOW = new Date('2026-08-29T10:30:00Z');
   const RUNNER = { pid: 4242, started: '2026-08-29T08:30:00Z' };
   const CURRENT = {
-    name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
+    name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
   };
   const OTHER = {
-    name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus', budget_minutes: 90,
+    name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T10:20:00Z', pid: 4243, worktree: '/w/docx-editor/memoro',
   };
   const live = () => true;
   const dead = () => false;
 
-  it('names the step in flight with its elapsed time against its budget', () => {
+  it('names the step in flight with its elapsed time and its check-ins', () => {
     const block = nowBlock({ runner: RUNNER, currents: [CURRENT], rows: ROWS, now: NOW, alive: live });
     assert.deepEqual(block.runner, { pid: 4242, started: '2026-08-29T08:30:00Z', alive: true, up_seconds: 7200 });
     assert.equal(block.steps.length, 1);
@@ -93,8 +93,9 @@ describe('NOW', () => {
     assert.equal(block.steps[0].tool, 'claude');
     assert.equal(block.steps[0].repo, 'memoro-cli');
     assert.equal(block.steps[0].elapsed_seconds, 1800);
-    assert.equal(block.steps[0].budget_seconds, 5400);
-    assert.equal(block.steps[0].over_budget, false);
+    assert.equal(block.steps[0].check_in_seconds, 3600);
+    assert.equal(block.steps[0].check_ins, 0);
+    assert.equal('over_budget' in block.steps[0], false, 'nothing is over a budget that is gone (ruling 18)');
     assert.deepEqual(block.stale, []);
     assert.equal(block.stop, false);
   });
@@ -111,13 +112,18 @@ describe('NOW', () => {
     assert.deepEqual(block.stale, []);
   });
 
-  it('is empty when no runner has written a file, and says so when a step is over budget', () => {
+  it('is empty when no runner has written a file, and counts the check-ins a long step has had', () => {
     const empty = nowBlock({ now: NOW, alive: live });
     assert.equal(empty.runner, null);
     assert.deepEqual(empty.steps, []);
     assert.deepEqual(empty.quota, { count: 0, last: null });
-    const late = nowBlock({ currents: [{ ...CURRENT, started: '2026-08-29T08:00:00Z' }], now: NOW, alive: live });
-    assert.equal(late.steps[0].over_budget, true);
+    const late = nowBlock({ currents: [{ ...CURRENT, started: '2026-08-29T08:00:00Z', check_ins: 2 }], now: NOW, alive: live });
+    assert.deepEqual([late.steps[0].elapsed_seconds, late.steps[0].check_ins], [9000, 2]);
+    // codex has no check-in, and a file written before them has no count.
+    const codex = nowBlock({ currents: [{ ...CURRENT, tool: 'codex', check_in_minutes: null, check_ins: 0 }], now: NOW, alive: live });
+    assert.deepEqual([codex.steps[0].check_in_seconds, codex.steps[0].check_ins], [null, null]);
+    const older = nowBlock({ currents: [{ ...CURRENT, check_ins: undefined }], now: NOW, alive: live });
+    assert.equal(older.steps[0].check_ins, 0);
   });
 
   it('a file whose pid is gone is stale, not running — and it says which lane', () => {

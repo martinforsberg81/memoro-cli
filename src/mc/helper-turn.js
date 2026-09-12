@@ -257,7 +257,10 @@ export async function runHelperTurn({
   const profile = await (deps.profile || (() => loadProfile({ env })))();
   const instructions = instructionsFor(launch.id, profile, role.overlay);
   const args = headlessArgs({
-    toolId: launch.id, adapter: launch.adapter, model: model || role.model, instructions, prompt, profileArgs, autocompact: null,
+    // `stream: false`: a helper turn is one short answer on its own
+    // wall-clock cap, with no check-ins, so its prompt stays the positional
+    // and its output the one JSON object (step-cost step 3 left it so).
+    toolId: launch.id, adapter: launch.adapter, model: model || role.model, instructions, prompt, profileArgs, autocompact: null, stream: false,
   });
 
   const result = await (deps.session || realSession)({

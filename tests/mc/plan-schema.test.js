@@ -196,12 +196,20 @@ describe('the plan schema', () => {
 
   /**
    * Ruling 18: what a session runs on is the plan's `runner`, and a step's
-   * own `runner` for the three keys a step may differ on. `tool` and
-   * `budget_minutes` stay the plan's — one lane, one tool, one wall clock.
+   * own `runner` for the three keys a step may differ on. `tool`,
+   * `check_in_minutes` and `stall_minutes` stay the plan's — one lane, one
+   * tool, one watch on the session. `budget_minutes` is gone: nothing is
+   * killed for how long it ran.
    */
   it('takes effort and advisor in the plan\'s runner, and refuses what is not one', () => {
-    const runner = { tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', budget_minutes: 90 };
+    const runner = { tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', check_in_minutes: 60, stall_minutes: 20 };
     assert.deepEqual(validatePlan(plan({ runner })), { ok: true, problems: [] });
+    assert.match(validatePlan(plan({ runner: { budget_minutes: 90 } })).problems.join('\n'), /runner\.budget_minutes: unknown key/u);
+    for (const key of ['check_in_minutes', 'stall_minutes']) {
+      for (const bad of [0, -5, 1.5, '60']) {
+        assert.match(validatePlan(plan({ runner: { [key]: bad } })).problems.join('\n'), new RegExp(`runner\\.${key}: must be a positive whole number of minutes`, 'u'), `${key}: ${bad}`);
+      }
+    }
     assert.equal(validatePlan(plan({ runner: { advisor: 'off' } })).ok, true);
     for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) assert.equal(validatePlan(plan({ runner: { effort } })).ok, true, effort);
     assert.match(validatePlan(plan({ runner: { effort: 'extreme' } })).problems.join('\n'), /runner\.effort: one of low, medium, high, xhigh, max/u);
@@ -217,7 +225,8 @@ describe('the plan schema', () => {
     assert.match(onStep({ advisor: 'x y' }).problems.join('\n'), /steps\[1\]\.runner\.advisor: a model name, or off/u);
     assert.match(onStep({ model: 'Sonnet 5' }).problems.join('\n'), /steps\[1\]\.runner\.model: must be a model name/u);
     assert.match(onStep({ tool: 'codex' }).problems.join('\n'), /steps\[1\]\.runner\.tool: a plan-level key/u);
-    assert.match(onStep({ budget_minutes: 30 }).problems.join('\n'), /steps\[1\]\.runner\.budget_minutes: a plan-level key/u);
+    assert.match(onStep({ check_in_minutes: 30 }).problems.join('\n'), /steps\[1\]\.runner\.check_in_minutes: a plan-level key/u);
+    assert.match(onStep({ stall_minutes: 30 }).problems.join('\n'), /steps\[1\]\.runner\.stall_minutes: a plan-level key/u);
     assert.match(onStep({ temperature: 1 }).problems.join('\n'), /steps\[1\]\.runner\.temperature: unknown key/u);
     assert.match(onStep('opus').problems.join('\n'), /steps\[1\]\.runner: must be an object/u);
   });

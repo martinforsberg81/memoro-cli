@@ -543,8 +543,8 @@ wherever it is met:
 Fresh, headless, and assembled from the plan's `runner`, the step's own
 `runner`, and the defaults for the session's kind (`sessionSettings`). `model`,
 `effort` and `advisor` resolve **step over plan over default**, one key at a
-time — a step that names only its effort keeps the plan's model. `tool` and
-`budget_minutes` are the plan's alone. A repair reads the plan's `runner` but
+time — a step that names only its effort keeps the plan's model. `tool`,
+`check_in_minutes` and `stall_minutes` are the plan's alone. A repair reads the plan's `runner` but
 never a step's: it is a session on a pull request, not the step that opened it.
 
 | kind | `model` | `effort` | `advisor` |
@@ -573,8 +573,19 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
   flag is not in `claude --help`; it is documented at
   code.claude.com/docs/en/advisor.md and was accepted by claude 2.1.268 on
   2026-09-11.
-- **`budget_minutes:`** — the wall-clock cap, ninety minutes, by default.
-  The child is killed at the cap and the row says `timeout`.
+- **`check_in_minutes:`** — 60 minutes by default (`DEFAULT_CHECK_IN_MINUTES`):
+  how often the runner writes a check-in into the running session. The
+  check-in says how long the session has run and asks it to judge whether the
+  step can be finished here; one that cannot commits, sets its step `blocked`
+  on `<project>-check-in`, opens its pull request and stops. Sixty is above the
+  step median (17 minutes over 2026-09-05..12) and the p90 (47.6), so most
+  sessions never see one.
+- **`stall_minutes:`** — 20 minutes by default (`DEFAULT_STALL_MINUTES`): how
+  long a session may go without a byte on stdout before it is killed. The
+  row says `stalled`, and `stalled,open` when it had a pull request open, which
+  is then held. Twenty is twice the ten-minute ceiling a single Bash call has
+  in a runner session, so a long test run is not a stall. Nothing is killed
+  for how long it has run ([ruling 18](../project/mc/rulings.md)).
 
 Effort and advisor are claude's flags (`effortArgs` and `advisorArgs` in the
 claude adapter), so a codex session gets neither, named or not. A step's
@@ -609,7 +620,9 @@ The window is a constant in `run-plan.js`, not a plan field — nothing has show
 a plan needing another, and the measurement after twenty sessions
 (`scripts/measure-steps.py`'s *context per turn* row) is where that would show.
 A step and a repair get it; the helper and intake turns, which share
-`headlessArgs`, do not.
+`headlessArgs`, do not — and they keep the positional prompt, `--output-format
+json` and their own wall-clock timeout, because step-cost's contract leaves
+them be.
 
 Next to that body go the Coding Profile, `canon/roles/_common.md` and
 `canon/roles/step.md` — assembled by `instructionsFor` and passed through the
@@ -620,9 +633,10 @@ them. How that is found and joined, for every session and not only this one, is
 The two argument lists are the only place the tools differ:
 
 ```
-claude  -p <prompt> [--model …] [--effort …] [--advisor …] \
+claude  -p [--model …] [--effort …] [--advisor …] \
         --permission-mode acceptEdits --autocompact 150000 \
-        --append-system-prompt <instructions> --output-format json
+        --append-system-prompt <instructions> \
+        --input-format stream-json --output-format stream-json --verbose
 codex   exec --json --sandbox danger-full-access [-m …] \
         -c instructions=<instructions> <prompt>
 ```
@@ -804,7 +818,7 @@ forty and no output at all, and the report itself lives in memory for the
 length of that gate round, so it is read there or it is lost. The other is
 `runStep`, when a session ends with a pull request open and a note that is
 neither `success` nor `quota` (`holdsAfterSession`) — a `plan-trespass` with
-its problems named, a session that timed out with its work pushed, a tool that
+its problems named, a session killed as stalled with its work pushed, a tool that
 printed no result.
 
 **One death.** An entry leaves when its pull request is no longer open. `landPr`
@@ -828,7 +842,7 @@ never merges, never lowers a threshold, never deletes a test to pass: the gate
 decides and the repair obeys it.
 
 The repair is counted **before** the session starts, not after. A repair killed
-on its budget still had its turn, and a count written afterwards would hand the
+as stalled still had its turn, and a count written afterwards would hand the
 next pick a second one for the same pull request.
 
 A repair of a `plan-trespass` is judged against the plan on **origin/main**,
@@ -855,7 +869,7 @@ it is the brief's, exactly as a project's own held pull request is. It re-reads
 repair, which is what stops the one branch both readings could claim — a branch
 named after a plan that is on main with no workarea on this machine — from being
 given two. STOP or a pending UPDATE stops a repair *starting*, the same refusal
-`waitForSlot` makes for a step, because a ninety-minute session begun under a
+`waitForSlot` makes for a step, because an hour-long session begun under a
 drain stretches the drain into two. The workarea is fresh from the branch, so
 the rule that a repair may not run in a worktree with a merge in progress is
 asserted rather than handled; and an entry that names no branch — a merge round
@@ -1018,14 +1032,35 @@ rather than letting an operator believe they capped anything.
 
 `mc run` used to start the headless tool with `spawnSync` and block. Two lanes
 in one process cannot overlap behind a call that holds the event loop for the
-whole budget — ninety minutes, by default — so the second lane would never
-have started at all.
+whole session, so the second lane would never have started at all.
 
-`deps.session` returns a promise: `spawn` with stdin closed (`claude -p` reads
-a piped stdin and would eat it), a wall-clock `timeout` after which the child
-is killed and the step logged as a timeout, and stdout/stderr collected here
-rather than by `maxBuffer` — capped, because a session that floods stdout will
-not parse as JSON either way.
+`deps.session` is `streamSession` in `run.js`, and it returns a promise. For
+claude it spawns the session with a **stdin pipe**, on `--input-format
+stream-json --output-format stream-json --verbose`: the prompt is the first
+user message written to stdin, and every `check_in_minutes` the runner writes
+one more — the check-in (`checkInPrompt`), naming the minutes run and the
+count, with a line in `runner.log` (`<name>: check-in 1 at 60 min`) and the
+count in `current-<repo>.json`. stdout is scanned line by line; the `result`
+event is the end of the session, so stdin is closed on it and no check-in is
+written after one. That is how claude behaves, measured live 2026-09-11
+(step-cost step 3's comments): a message written mid-turn is folded into the
+running turn, a message written after a `result` starts a new turn with its
+own `result`, and the process exits when stdin closes. So two `result` lines
+are possible — a check-in that crossed the first — and `sessionResult` adds
+their turns, cost, durations and usage up rather than taking the last.
+
+The only kill is the **stall guard**: a timer re-armed on every byte of
+stdout, and the child `SIGTERM`ed when `stall_minutes` go by without one — the
+row says `stalled`, exit 142. It is armed at spawn and outlives the `result`,
+so a session that hangs after answering is still reaped. Nothing is killed for
+how long it has run ([ruling 18](../project/mc/rulings.md)); before step-cost
+a wall-clock budget killed a session that was working because the machine was
+slow or a suite was long. A codex session gets neither: its prompt is an
+argument, stdin is closed, and nothing watches it — `codex exec` reads no
+messages and has no stall guard written for it yet.
+
+stdout and stderr are collected here rather than by `maxBuffer` — capped at
+256 MiB, because a session that floods stdout will not parse either way.
 
 ## What the runner writes
 
@@ -1048,7 +1083,8 @@ thing it writes into a repository: a blocked step (below).
   was created with, so a reader that keys cells by the header sees neither of
   the last two; `archive-plan.js` reads by position and stops at `note`. What
   the session actually ran on is in its own json's `modelUsage`, which is what
-  `scripts/measure-steps.py` groups by. The usage columns come from claude's `--output-format json`
+  `scripts/measure-steps.py` groups by. The usage columns come from claude's
+  `result` event (summed when there were two, see *Why the session is spawned*)
   and from codex's `exec --json` event stream; a field the tool does not give
   is `-`, never a guess. `exit` and `note` are independent and are allowed to
   disagree — a process can fail after a session that reported success, and
@@ -1065,19 +1101,27 @@ thing it writes into a repository: a blocked step (below).
   lane picked (`memoro#2: next — <name> (step i/n)`), what it could not start
   and why, and — once, not every ten minutes — that it has nothing to run.
   The `starting` line says what the session runs on, leaving out what was not
-  passed: `<name>: step starting (claude sonnet · effort medium · advisor opus,
-  90 min)`, `(claude opus, 90 min)` for a repair, `(codex own default model,
-  90 min)` for a codex plan that names none (`describeSettings`).
-- **`log/<name>-<ts>.json`** and `.json.err` — what the session actually
-  printed, kept whole.
+  passed, and how it is watched: `<name>: step starting (claude sonnet · effort
+  medium · advisor opus, check-in every 60 min, killed after 20 min silent)`,
+  `(claude opus, check-in every 60 min, killed after 20 min silent)` for a
+  repair, `(codex own default model, no check-in, no stall guard)` for a codex
+  plan that names none (`describeSettings`, `describeWatch`). Each check-in is
+  a line too: `<name>: check-in 1 at 60 min`.
+- **`log/<name>-<ts>.jsonl`**, **`.json`** and **`.json.err`** — the stream
+  the session actually printed, kept whole; the one result object read out of
+  it (summed when there were two), which is the file
+  `scripts/measure-steps.py` reads; and stderr. A session that printed no
+  result has no `.json`.
 - **`runner.json`** stays one per machine: a runner is here, and this is the
   pid to test for life. Every start reads it first, so it is a claim that is
   checked rather than one that is only made.
 - **`current-<repo>.json`** — one file per lane, existing exactly as long as
   that lane's session does. It carries the project name, kind, repo, tool,
-  model, effort, advisor (`null` where none was passed), budget, start time,
-  the runner's pid and the worktree, and it is
-  written immediately before the session starts and removed in a `finally`
+  model, effort, advisor (`null` where none was passed), `check_in_minutes`
+  (`null` for codex) and `check_ins` so far, start time, the runner's pid and
+  the worktree, and it is
+  written immediately before the session starts, rewritten with the count at
+  each check-in, and removed in a `finally`
   however that session returns, so a step that throws still clears it.
   Readers — the page's RUNNER block, `mc status <name>` — glob
   `current-*.json` rather than opening one fixed path, which is why the block

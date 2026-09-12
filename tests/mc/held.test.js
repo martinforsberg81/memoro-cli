@@ -67,6 +67,9 @@ test('the reasons a session leaves behind are the words the repair session reads
   assert.equal(holdsAfterSession('quota'), false, 'a refused session opened nothing');
   assert.equal(holdsAfterSession('timeout'), true);
   assert.match(holdReason({ note: 'timeout' }), /timed out with the pull request open/u);
+  // Ruling 18: the runner kills a session only for going silent.
+  assert.equal(holdsAfterSession('stalled'), true);
+  assert.match(holdReason({ note: 'stalled' }), /stalled — nothing on stdout for the stall interval — and was killed with the pull request open/u);
   assert.equal(
     holdReason({ note: 'plan-trespass', problems: ['goal: a step session does not change it'] }),
     'the session changed more of the plan than its step: goal: a step session does not change it',

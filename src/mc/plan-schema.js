@@ -95,7 +95,7 @@ export const PLAN_FROZEN_FIELDS = Object.freeze(['goal', 'contract', 'out_of_sco
 
 const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
 const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
-const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'budget_minutes']);
+const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'check_in_minutes', 'stall_minutes']);
 /**
  * What a step may say for itself in its own `runner`: which model does the
  * work, at what effort, advised by what. The tool and the interval stay the
@@ -151,8 +151,12 @@ function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS } 
   if (runner.advisor !== undefined && runner.advisor !== null && !MODEL_RE.test(String(runner.advisor))) {
     problems.push(`${at}.advisor: a model name, or off`);
   }
-  if (runner.budget_minutes !== undefined && !positiveInteger(runner.budget_minutes)) {
-    problems.push(`${at}.budget_minutes: must be a positive whole number of minutes`);
+  // The two intervals a session is watched with (ruling 18): how often it is
+  // asked about its step, and how long it may say nothing before it is killed.
+  for (const key of ['check_in_minutes', 'stall_minutes']) {
+    if (runner[key] !== undefined && !positiveInteger(runner[key])) {
+      problems.push(`${at}.${key}: must be a positive whole number of minutes`);
+    }
   }
 }
 
