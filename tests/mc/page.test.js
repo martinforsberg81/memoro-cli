@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
-  collectPage, countNewErrors, intakeSection, newErrorLines, nextSection,
+  collectPage, countNewErrors, intakeSection, mergesSection, newErrorLines, nextSection,
   programmesSection, readDigests, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
@@ -558,30 +558,6 @@ describe('NEXT', () => {
   });
 
   /**
-   * A pull request the runner would not land keeps its project out of the
-   * queue entirely — `inFlight` refuses it every round — so it is in none of
-   * the counts above. `~/mc/runner/held.json` is where the runner writes why,
-   * and this is where a person reads it without opening runner.log.
-   */
-  it('carries every held pull request with its reason, oldest first', () => {
-    const queue = nextSection({
-      queueText: 'mc-ui\n',
-      plans: PLANS,
-      held: [
-        { project: 'mc-run', repo: 'memoro-cli', pr: 561, branch: 'mc-run-2', reason: 'the session changed more of the plan than its step', note: 'plan-trespass', since: '2026-08-29T11:00:00Z', repairs: 1 },
-        { project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor', reason: 'two tests the change reaches are red', note: 'open,gate-red', since: '2026-08-29T09:10:00Z', repairs: 0 },
-      ],
-    });
-    assert.equal(queue.held.count, 2);
-    assert.deepEqual(queue.held.items.map((item) => [item.project, item.pr, item.repairs]), [
-      ['docx-editor', 10958, 0], ['mc-run', 561, 1],
-    ]);
-    assert.deepEqual(Object.keys(queue.held.items[0]).sort(), [
-      'branch', 'note', 'pr', 'project', 'reason', 'repairs', 'repo', 'since',
-    ]);
-  });
-
-  /**
    * The plans said `ready` for both of memoro-cli's unfinished projects on
    * 2026-09-05 while `held.json` held both of their pull requests, and this
    * block reported two runnable. What the machine refuses is counted here
@@ -630,9 +606,45 @@ describe('NEXT', () => {
     assert.ok(lines.some((line) => /^ {7}mc-ui\s+repair 1\/1\s+The page$/u.test(line)), lines.join('\n'));
   });
 
+  // The whole section is empty only when there is nothing on main at all, and
+  // then it says that rather than blaming the queue file for it.
+  it('says so when there is no plan on main to run', () => {
+    const lines = renderPageLines(pageData({ next: nextSection({ plans: [] }) }), { columns: 120 });
+    assert.ok(lines.some((line) => /NEXT {2}nothing on main to run/u.test(line)), lines.join('\n'));
+  });
+});
+
+describe('MERGES', () => {
+  const LANDING = {
+    repo: 'memoro', pr: 11651, holder: 'sql-w5-relationship-closure', phase: 'running 17 test files',
+    mode: 'merge', since: '2026-08-29T11:56:00Z', age_seconds: 240,
+  };
+
+  /**
+   * A pull request the runner would not land keeps its project out of the
+   * queue entirely — `inFlight` refuses it every round — so it is in none of
+   * NEXT's counts. `~/mc/runner/held.json` is where the runner writes why,
+   * and this is where a person reads it without opening runner.log.
+   */
+  it('carries every held pull request with its reason, oldest first', () => {
+    const merges = mergesSection({
+      held: [
+        { project: 'mc-run', repo: 'memoro-cli', pr: 561, branch: 'mc-run-2', reason: 'the session changed more of the plan than its step', note: 'plan-trespass', since: '2026-08-29T11:00:00Z', repairs: 1 },
+        { project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor', reason: 'two tests the change reaches are red', note: 'open,gate-red', since: '2026-08-29T09:10:00Z', repairs: 0 },
+      ],
+    });
+    assert.equal(merges.held.count, 2);
+    assert.deepEqual(merges.held.items.map((item) => [item.project, item.pr, item.repairs]), [
+      ['docx-editor', 10958, 0], ['mc-run', 561, 1],
+    ]);
+    assert.deepEqual(Object.keys(merges.held.items[0]).sort(), [
+      'branch', 'note', 'pr', 'project', 'reason', 'repairs', 'repo', 'since',
+    ]);
+  });
+
   it('has nothing held when the file is missing or not a list', () => {
-    assert.deepEqual(nextSection({ plans: [] }).held, { count: 0, items: [] });
-    assert.equal(nextSection({ plans: [], held: null }).held.count, 0);
+    assert.deepEqual(mergesSection({}).held, { count: 0, items: [] });
+    assert.equal(mergesSection({ held: null }).held.count, 0);
   });
 
   /**
@@ -642,37 +654,54 @@ describe('NEXT', () => {
    * trace of a queued merge was a file nobody opens.
    */
   it('carries every queued pull request with its reason, oldest first', () => {
-    const queue = nextSection({
-      queueText: 'mc-ui\n',
-      plans: PLANS,
+    const merges = mergesSection({
       queued: [
         { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', reason: 'memoro-cli is held by mc-run', stopped_at: 'lease', since: '2026-08-29T11:00:00Z', holder: 'martin@laptop' },
         { repo: 'memoro', pr: 11541, branch: 'docx-editor', reason: 'another gate round is running', stopped_at: 'busy', since: '2026-08-29T09:30:00Z', holder: 'martin@laptop' },
       ],
     });
-    assert.equal(queue.queued.count, 2);
-    assert.deepEqual(queue.queued.items.map((item) => [item.repo, item.pr]), [['memoro', 11541], ['memoro-cli', 671]]);
+    assert.equal(merges.queued.count, 2);
+    assert.deepEqual(merges.queued.items.map((item) => [item.repo, item.pr]), [['memoro', 11541], ['memoro-cli', 671]]);
     // The rows say which repository, which number, why the round it was given
     // did not land, and how long it has been waiting.
-    const lines = renderPageLines(pageData({ next: queue }), { columns: 120 });
-    assert.ok(lines.some((line) => /NEXT.*queued for merge 2/u.test(line)), lines.join('\n'));
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /MERGES.*2 queued/u.test(line)), lines.join('\n'));
     assert.ok(lines.some((line) => /^ {7}· memoro {2}#11541 {2}another gate round is running {2}\(since 08-29 09:30Z\)$/u.test(line)),
       lines.join('\n'));
   });
 
   it('has nothing queued when the file is missing or not a list', () => {
-    assert.deepEqual(nextSection({ plans: [] }).queued, { count: 0, items: [] });
-    assert.equal(nextSection({ plans: [], queued: null }).queued.count, 0);
+    assert.deepEqual(mergesSection({}).queued, { count: 0, items: [] });
+    assert.equal(mergesSection({ queued: null }).queued.count, 0);
   });
 
-  // The whole section is empty only when there is nothing on main at all, and
-  // then it says that rather than blaming the queue file for it.
-  it('says so when there is no plan on main to run', () => {
-    const lines = renderPageLines(pageData({ next: nextSection({ plans: [] }) }), { columns: 120 });
-    assert.ok(lines.some((line) => /NEXT {2}nothing on main to run/u.test(line)), lines.join('\n'));
+  /**
+   * The round running right now — `runningMerge`'s own object, unread by this
+   * function — drawn ahead of the queue, in the green a running RUNNER step is
+   * drawn in: it is moving, not merely waiting to.
+   */
+  it('draws the round running now ahead of the queue', () => {
+    const merges = mergesSection({ landing: LANDING });
+    assert.equal(merges.landing, LANDING);
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /MERGES.*1 landing/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /● memoro #11651 {2}sql-w5-relationship-closure {2}running 17 test files · 4 min$/u.test(line)),
+      lines.join('\n'));
+  });
+
+  it('says measuring, not landing, for a check-mode round', () => {
+    const merges = mergesSection({ landing: { ...LANDING, mode: 'check', holder: 'martin@laptop' } });
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /● memoro #11651 {2}martin@laptop {2}measuring, not landing · running 17 test files · 4 min$/u.test(line)),
+      lines.join('\n'));
+  });
+
+  it('says nothing landing when no round is running', () => {
+    const lines = renderPageLines(pageData({ merges: mergesSection({}) }), { columns: 120 });
+    assert.ok(lines.some((line) => /· nothing landing$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /MERGES {2}nothing landing, nothing queued/u.test(line)), lines.join('\n'));
   });
 });
-
 
 describe('the stale-blocker line', () => {
   const PLAN = (project, steps) => ({ repo: 'memoro', programme: 'p', project, status: 'blocked', plan: { steps } });
@@ -1096,6 +1125,7 @@ function pageData(over = {}) {
     runner: runnerSection({ rows: [], now: NOW, alive: () => false }),
     sessions: sessionsSection({ now: NOW, alive: () => false }),
     next: nextSection({ plans: [] }),
+    merges: mergesSection({}),
     intake: intakeSection({ digests: [], proposals: [], now: NOW }),
     programmes: programmesSection({ areas: [], plans: [] }),
     caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },
@@ -1129,6 +1159,8 @@ const DATA = pageData({
   next: nextSection({
     queueText: 'mc-ui\ndocx-editor\nmc-run\n',
     plans: PLANS,
+  }),
+  merges: mergesSection({
     held: [{
       project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor',
       reason: 'two tests the change reaches are red', note: 'open,gate-red',
@@ -1165,7 +1197,7 @@ describe('the page', () => {
     // every frame, the desks while somebody is at them. The listing above them
     // changes when a round lands, not between two frames — at the top, RUNNER
     // scrolled off under the projects and never moved again (2026-09-03).
-    const at = ['PROGRAMMES', 'INTAKE', 'WORK', 'NEXT', 'RUNNER', 'HELPER', 'BRIEF'].map((head) => text.indexOf(`  ${head}`));
+    const at = ['PROGRAMMES', 'INTAKE', 'WORK', 'NEXT', 'MERGES', 'RUNNER', 'HELPER', 'BRIEF'].map((head) => text.indexOf(`  ${head}`));
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     // What is true of the work, and never `0 of 0 queued`: the step in flight,
@@ -1184,7 +1216,10 @@ describe('the page', () => {
     assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
     assert.match(text, /RUNNER {2}1 in flight · up 120 min\s+mc run/u);
     assert.match(text, /^ {2}3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)$/mu);
-    assert.match(text, /NEXT {2}2 runnable of 4 · 3 from queue\.md, then alphabetical · held before merge 1\s+mc status <name>/u);
+    assert.match(text, /NEXT {2}2 runnable of 4 · 3 from queue\.md, then alphabetical\s+mc status <name>/u);
+    assert.doesNotMatch(text, /NEXT[^\n]*held/u, 'held moved to MERGES');
+    assert.doesNotMatch(text, /NEXT[^\n]*queued/u, 'queued moved to MERGES');
+    assert.match(text, /MERGES {2}1 held\s+mc merge <repo> <pr>/u);
     // One block per lane, three deep, and the row says where in its plan the
     // project is. The lanes run at the same time: both heads start now.
     assert.match(text, /^ {5}memoro-cli · 1 runnable\n {7}mc-ui\s+step 1\/1\s+The page$/mu);
@@ -1309,7 +1344,7 @@ describe('the page', () => {
     const code = await page(['--json'], { collect: async () => DATA, stdout: { write: (s) => { out += s; } } });
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
-    assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'next', 'intake', 'programmes', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'caches', 'notes']);
     assert.equal(parsed.programmes.programmes[0].projects[0].name, 'avatar-self-serve');
     assert.equal(parsed.next.runnable, 2);
     // Every field the section draws is in the object, lanes and all: the page
@@ -1420,13 +1455,16 @@ describe('collectPage', () => {
     assert.deepEqual([...new Set(gitArgs)], ['status --porcelain'],
       'the reading asks the worktree one read-only question and nothing else');
     // The runner's own file, read where the runner writes it: nobody has to
-    // open runner.log to see which pull request is standing still.
-    assert.deepEqual(data.next.held.items.map((item) => [item.project, item.pr, item.reason]),
+    // open runner.log to see which pull request is standing still. It is under
+    // MERGES now, not NEXT — the same fact, a different heading.
+    assert.deepEqual(data.merges.held.items.map((item) => [item.project, item.pr, item.reason]),
       [['docx-editor', 10958, 'two tests the change reaches are red']]);
     // And beside it, `merges.json`: what a hand `mc merge` handed to the
     // runner's merge lane rather than to whoever typed it.
-    assert.deepEqual(data.next.queued.items.map((item) => [item.repo, item.pr, item.stopped_at]),
+    assert.deepEqual(data.merges.queued.items.map((item) => [item.repo, item.pr, item.stopped_at]),
       [['memoro-cli', 674, 'busy']]);
+    // No gate lock in the isolated test home, so nothing is landing.
+    assert.equal(data.merges.landing, null);
     assert.equal(data.intake.repos[0].new_errors, 1);
     assert.deepEqual(data.intake.repos[0].loud_lines, [{ message: 'loud', fingerprint: 'abc', count: '41x 500' }]);
     assert.equal(data.intake.proposals, 1);
@@ -1601,14 +1639,17 @@ describe('the palette', () => {
     'yellow bold cyan grey grey grey grey', //       ◆ docx-editor  tmux · open 60 min · mc-docx-editor
     'grey grey grey', //                                 5  ·  ~/mc/runner/unplanned-workareas.md  has them all
     '',
-    'bold+cyan grey grey grey grey yellow+bold grey', // NEXT  2 runnable of 4 · 3 from queue.md, then alphabetical · held before merge 1
+    'bold+cyan grey grey grey grey', //                NEXT  2 runnable of 4 · 3 from queue.md, then alphabetical
     'bold grey grey', //                                 memoro-cli · 1 runnable
     'bold green', //                                       mc-ui        step 1/1  The page
     'bold grey grey', //                                 memoro · 1 runnable
     'bold green', //                                       docx-editor  step 2/2  Measure paste and IME
     'grey', //                                           skipped 2 (done 1, blocked 1)
-    'yellow+bold yellow', //                             · docx-editor  #10958  two tests the change reaches are red
     'red grey grey', //                                  1 blocked · 1 on a decision · held most by assistant-avatar-1 1
+    '',
+    'bold+cyan grey grey', //                           MERGES  1 held           mc merge <repo> <pr>
+    'grey', //                                           · nothing landing
+    'yellow+bold yellow', //                             · docx-editor  #10958  two tests the change reaches are red
     '',
     'bold+cyan green+bold grey grey grey', //          RUNNER  1 in flight · up 120 min           mc run
     'grey grey grey', //                             · memoro      idle
@@ -1676,7 +1717,7 @@ describe('the palette', () => {
     });
     assert.equal(code, 0);
     assert.ok(!out.includes(ESC), '--json is bytes for a program, never for an eye');
-    assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'next', 'intake', 'programmes', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'caches', 'notes']);
   });
 
   it('gives a step kind one colour wherever a kind is printed', () => {

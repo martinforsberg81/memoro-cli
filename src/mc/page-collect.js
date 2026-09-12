@@ -14,6 +14,9 @@
  * next       — the order `mc run` would take (`assembleQueue`), one block per
  *              lane and three deep: what each lane starts now, how much of the
  *              walk is runnable, and what is skipped, counted by reason.
+ * merges     — the one gate round running now (`runningMerge`), and the two
+ *              queues behind it: what `mc merge` left for the runner's lane,
+ *              and what the runner refuses to land at all.
  * intake     — the helper's newest digest per repository, what is new in it,
  *              the `!` lines split into message, fingerprint and count, and
  *              how many proposals nobody has queued or dropped.
@@ -51,6 +54,7 @@ import { heldEntries, heldPath } from './held.js';
 import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
+import { runningMerge } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
@@ -394,7 +398,7 @@ export function sessionsSection({
  * reader gets the plan-shaped answer alone, exactly as before.
  */
 export function nextSection({
-  queueText = '', plans = [], held = [], queued: forMerge = [], deep = LANE_DEEP, staleNamed = STALE_NAMED,
+  queueText = '', plans = [], deep = LANE_DEEP, staleNamed = STALE_NAMED,
   lanes: perRepo = 1,
   machine = () => null,
 } = {}) {
@@ -449,8 +453,6 @@ export function nextSection({
     lanes,
     more: lanes.reduce((n, lane) => n + lane.more, 0),
     skipped: { count: skipped.length, reasons },
-    held: heldSection(held),
-    queued: queuedSection(forMerge),
     stale: staleSection(plans, staleNamed),
   };
 }
@@ -503,35 +505,26 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
 }
 
 /**
- * The pull requests the runner would not land (`~/mc/runner/held.json`),
- * oldest first — the one that has been standing still longest is the one to
- * read.
+ * MERGES — the one round running now, and the two queues behind it: what a
+ * hand `mc merge` left for the runner's lane, and what the runner refuses to
+ * land at all.
  *
- * Every entry is carried, not the first few: `mc --json` is read by programs
- * and by the brief, and a held pull request that fell off a display cap is a
- * project standing still that nothing was told about. The page draws what fits
- * and counts the rest (page-render.js), which is where a cap belongs.
+ * `landing` is `runningMerge`'s own object (merges-collect.js) or null — this
+ * function does not read the lock itself, so its tests never touch a real
+ * one. `queued` and `held` keep the sort orders they had under NEXT: the
+ * queue lane's own order (`queueOrder`) and held oldest-`since`-first, because
+ * moving them here changes where they are drawn, not what they mean.
  */
-function heldSection(held) {
-  const items = heldEntries(held)
+export function mergesSection({ landing = null, queued = [], held = [], now } = {}) {
+  const queuedItems = queueOrder(queueEntries(queued));
+  const heldItems = heldEntries(held)
     .sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
-  return { count: items.length, items };
-}
-
-/**
- * The pull requests a hand `mc merge` could not land and left for the runner's
- * merge lane (`~/mc/runner/merges.json`), oldest first — the order the lane
- * itself takes them in.
- *
- * Beside the held rows because they are the two halves of one answer: what
- * nothing will move until a person acts, and what the runner is going to land
- * without being asked again. Every entry is carried for the reason
- * `heldSection` carries every one of its own — `mc --json` is read by programs,
- * and the page is where a cap belongs.
- */
-function queuedSection(queued) {
-  const items = queueOrder(queueEntries(queued));
-  return { count: items.length, items };
+  return {
+    landing,
+    queued: { count: queuedItems.length, items: queuedItems },
+    held: { count: heldItems.length, items: heldItems },
+    count: (landing ? 1 : 0) + queuedItems.length + heldItems.length,
+  };
 }
 
 /** The stale blockers as the line draws them: how many, and the first few. */
@@ -1012,6 +1005,7 @@ export async function collectPage({
   alive = pidAlive,
   laneCount = readLaneCount,
   cache = { loadPlans, loadPrs, savePrs },
+  merges = runningMerge,
 } = {}) {
   const root = workRoot(env);
   const notes = [];
@@ -1102,8 +1096,6 @@ export async function collectPage({
     next: nextSection({
       queueText,
       plans,
-      held,
-      queued: queuedForMerge,
       // How many lane loops each repository has, so the block bolds as many
       // heads as there are lanes to start them (`mc run lanes`).
       lanes: laneSetting.per_repo,
@@ -1117,6 +1109,9 @@ export async function collectPage({
         // `git` answers with a string or null here; the reading wants ok and text.
         git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
       }),
+    }),
+    merges: mergesSection({
+      landing: merges({ repos: present, alive }), queued: queuedForMerge, held, now,
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({

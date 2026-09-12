@@ -273,6 +273,34 @@ describe('collectProject', () => {
   });
 
   /**
+   * The gate round itself, ahead of the queue: a pull request already landing
+   * is not merely going to move, it is moving right now, and a check-mode
+   * round is not landing anything at all.
+   */
+  it('says a pull request of this project is landing now, or only being measured', async () => {
+    const root = workRoot();
+    const exec = async (cmd) => (cmd === 'gh'
+      ? { ok: true, stdout: JSON.stringify([{ number: 427, title: 'mc status <name>', headRefName: 'mc-status' }]) }
+      : { ok: true, stdout: '' });
+    const opts = (mode) => ({
+      env: { MC_WORK_ROOT: root },
+      repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
+      git,
+      exec,
+      merges: () => ({
+        repo: 'memoro-cli', pr: 427, holder: 'martin@laptop', phase: 'running 17 test files',
+        mode, since: '2026-09-06T17:56:00Z', age_seconds: 240,
+      }),
+    });
+    const landing = await collectProject('mc-status', opts('merge'));
+    assert.equal(landing.landing.pr, 427);
+    assert.match(renderProject(landing), /#427 is landing now — running 17 test files \(4 min\)/u);
+
+    const checking = await collectProject('mc-status', opts('check'));
+    assert.match(renderProject(checking), /#427 is being measured \(mc test\), not landed/u);
+  });
+
+  /**
    * `--offline` did not ask GitHub, and what nobody asked is not the same as
    * nothing being open — the reading says so rather than promising a `ready`
    * it cannot stand behind. It is the round's own word for it.

@@ -738,7 +738,10 @@ was never asked to land. The caller gets one line, `queued — the runner's merg
 lane lands #N, or holds it after one repair`, and **exit 0**: the merge is now
 somebody's rather than nobody's. Measured 2026-09-06: `mc merge memoro-cli 671`
 was refused fourteen times in twenty minutes by the runner's own landings, and
-every one of those refusals was a person typing again.
+every one of those refusals was a person typing again. Every queued and every
+held entry, and the round the lane is landing right now, are on the page
+under **MERGES** rather than NEXT (ruling 20, 2026-09-12) — see
+[`mc-ui.md`](mc-ui.md).
 
 **Without a running runner nothing is queued**, and the terminal is what it was
 before this project plus one line on stderr saying no runner is there to take
@@ -875,9 +878,11 @@ held before merge after a repair — the brief's` as its detail. No loop: a pull
 request its one repair could not save is a person's decision, and it reaches
 Martin in `mc brief`'s *Held before merge* section — merge by hand, close, or
 block the step with a decision, one proposal each (see
-[`mc-brief.md`](mc-brief.md)). Between briefs it is on the page: NEXT draws
-`held before merge N` with project, pull request and reason under it, and
-`mc --json` carries `next.held` whole (see [`mc-ui.md`](mc-ui.md)).
+[`mc-brief.md`](mc-brief.md)). Between briefs it is on the page: **MERGES**
+draws `N held` on its own heading with project, pull request and reason under
+it, and `mc --json` carries `merges.held` whole (see [`mc-ui.md`](mc-ui.md)) —
+moved there from NEXT by ruling 20, because it answers MERGES' question rather
+than NEXT's.
 
 One gap worth knowing: the picker passes over a project whose plan on
 `origin/main` is blocked, done or unparseable before `runStep` is reached, so
