@@ -14,9 +14,9 @@ import { join } from 'node:path';
 import {
   installHooks,
   readInstalledHookVersion,
-  installUpdateCommand,
   uninstallHooks,
   uninstallCommands,
+  NATIVE_LAUNCH_HOOKS,
 } from '../../src/adapters/claude-code.js';
 import { getPackageVersion } from '../../src/lib/version.js';
 
@@ -127,54 +127,40 @@ describe('claude-code adapter — hook version stamp', () => {
   });
 });
 
-describe('claude-code adapter — /memoro-update slash command', () => {
-  test('installUpdateCommand writes the recipe file with the managed marker', async () => {
-    const file = await installUpdateCommand({ memoroCliBin: 'memoro-cli' });
-    assert.ok(file.endsWith('memoro-update.md'));
-    assert.ok(existsSync(file));
+describe('claude-code adapter — the slash commands earlier versions wrote', () => {
+  const MARKER = '<!-- memoro:managed:command -->';
+  const commands = () => join(sandbox, '.claude', 'commands');
+  const write = (name, body) => {
+    mkdirSync(commands(), { recursive: true });
+    writeFileSync(join(commands(), name), body);
+  };
 
-    const body = readFileSync(file, 'utf8');
-    assert.match(body, /memoro:managed:command/);
-    assert.match(body, /description:/);
-    // The recipe must surface the package update, but must not reinstall
-    // raw-tool hooks; Memoro-aware sessions go through mc.
-    assert.match(body, /npm install -g memoro-cli/);
-    assert.doesNotMatch(body, /hook install/);
-    // No leading `!` — the body is a prompt, not an auto-exec line.
-    assert.equal(body.includes('\n!'), false, 'update slash command must not auto-execute');
-    // The body must clearly tell the LLM not to run the recipe — `npm
-    // install -g` is sanctioned global persistence and auto-mode will
-    // (correctly) block it.
-    assert.match(body, /[Dd]isplay/);
-    assert.match(body, /do not (try to )?run/i);
-    // Two installation modes, detection first: a source-linked install
-    // (npm link) that runs `npm install -g` is silently replaced by a
-    // registry copy, so the recipe must detect before it prescribes.
-    assert.match(body, /npm ls -g memoro-cli/);
-    assert.match(body, /git pull/);
-    assert.match(body, /[Nn]ever run `npm install -g` in this mode/);
-  });
-
-  test('installUpdateCommand is idempotent (overwrites cleanly)', async () => {
-    const a = await installUpdateCommand({ memoroCliBin: 'memoro-cli' });
-    const b = await installUpdateCommand({ memoroCliBin: 'memoro-cli' });
-    assert.equal(a, b);
-    assert.ok(existsSync(a));
-  });
-
-  test('uninstallCommands sweeps memoro-update.md by managed marker', async () => {
-    await installUpdateCommand({ memoroCliBin: 'memoro-cli' });
+  test('uninstallCommands sweeps every managed file: update and the two coordinator commands', async () => {
+    for (const name of ['memoro-update.md', 'memoro-coordinator.md', 'memoro-coordinator-suggest.md']) {
+      write(name, `---\ndescription: old\n---\n\n${MARKER}\n\nbody\n`);
+    }
     const removed = await uninstallCommands();
-    assert.ok(removed.some(p => p.endsWith('memoro-update.md')));
-    assert.ok(!existsSync(join(sandbox, '.claude', 'commands', 'memoro-update.md')));
+    assert.equal(removed.length, 3);
+    for (const name of ['memoro-update.md', 'memoro-coordinator.md', 'memoro-coordinator-suggest.md']) {
+      assert.ok(!existsSync(join(commands(), name)), `${name} still there`);
+    }
   });
 
-  test('honours a custom memoroCliBin', async () => {
-    const file = await installUpdateCommand({ memoroCliBin: '/usr/local/bin/memoro-cli' });
-    const body = readFileSync(file, 'utf8');
-    // Alternate global package names/paths are still reflected in the
-    // install command, without adding raw-tool hook installation.
-    assert.match(body, /npm install -g \/usr\/local\/bin\/memoro-cli/);
-    assert.doesNotMatch(body, /hook install/);
+  test('uninstallCommands leaves a hand-written memoro-*.md without the marker', async () => {
+    write('memoro-notes.md', '---\ndescription: mine\n---\n\nnot managed\n');
+    const removed = await uninstallCommands();
+    assert.equal(removed.length, 0);
+    assert.ok(existsSync(join(commands(), 'memoro-notes.md')));
+  });
+
+  test('prepareEarly sweeps the managed commands before installing hooks', async () => {
+    write('memoro-update.md', `${MARKER}\n`);
+    const order = [];
+    await NATIVE_LAUNCH_HOOKS.prepareEarly({ deps: {
+      uninstallCommands: async () => { order.push('sweep'); return uninstallCommands(); },
+      installClaudeArtifactHooks: async () => { order.push('hooks'); },
+    } });
+    assert.deepEqual(order, ['sweep', 'hooks']);
+    assert.ok(!existsSync(join(commands(), 'memoro-update.md')));
   });
 });
