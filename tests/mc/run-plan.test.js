@@ -388,11 +388,14 @@ test('stepPrompt: a conflicted worktree is a preamble, and the step is still the
 
 test('headlessArgs: claude is -p with json output; codex is exec --json', () => {
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs });
-  assert.deepEqual(claude, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
+  assert.deepEqual(claude, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--disallowedTools', 'Agent', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
   assert.equal(AUTOCOMPACT_TOKENS, 150_000);
   // The helper and intake turns opt out: step-cost's contract leaves them be.
   const helper = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs, autocompact: null });
   assert.equal(helper.includes('--autocompact'), false);
+  // No launch of the runner's may spawn a subagent, whatever the repository's
+  // instruction files say — the helper included.
+  assert.deepEqual(helper.slice(helper.indexOf('--disallowedTools'), helper.indexOf('--disallowedTools') + 2), ['--disallowedTools', 'Agent']);
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'PROFILE', prompt: 'do it', profileArgs });
   assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="PROFILE"', 'do it']);
   assert.equal(codex.includes('--autocompact'), false, 'codex has no such flag');

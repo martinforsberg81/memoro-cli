@@ -896,6 +896,16 @@ export function repairPrompt({ name, repo, pr, branch, reason, note = null, red 
  * context has a ceiling; codex has no such flag. The helper and intake turns
  * pass `autocompact: null` — they are not this runner's step lane, and
  * step-cost's contract leaves them as they were.
+ *
+ * Every claude launch gets `--disallowedTools Agent`. A headless session
+ * has no use for a subagent: the step is bounded by its plan, the strong
+ * model is reached through `--advisor`, and a subagent runs on whatever
+ * model the repository's instruction files name, outside the plan's
+ * `runner` choice. Measured 2026-09-12 over the first 41 sonnet step
+ * sessions: 19 spawned opus subagents on memoro's `CLAUDE.md` instruction,
+ * 2 111 of the era's 6 556 model requests, about a quarter of its cost, and
+ * one 17-turn parent waited 41 minutes on a 319-turn child that runs.tsv
+ * never saw. The flag holds whatever any repository's files say.
  */
 export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
@@ -903,7 +913,7 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...instr, prompt];
   const tuning = [...(adapter?.effortArgs?.(effort) ?? []), ...(adapter?.advisorArgs?.(advisor) ?? [])];
   const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
-  return ['-p', prompt, ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...instr, '--output-format', 'json'];
+  return ['-p', prompt, ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, '--disallowedTools', 'Agent', ...instr, '--output-format', 'json'];
 }
 
 /**

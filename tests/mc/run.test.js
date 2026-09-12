@@ -493,7 +493,7 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.equal(call.cwd, '/w/alpha/memoro');
   assert.equal(call.timeoutMs, 90 * 60_000);
   // Ruling 18: a step is sonnet at medium effort with an opus advisor.
-  assert.deepEqual(call.args.slice(2, 12), ['--model', 'sonnet', '--effort', 'medium', '--advisor', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', '150000']);
+  assert.deepEqual(call.args.slice(2, 14), ['--model', 'sonnet', '--effort', 'medium', '--advisor', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--disallowedTools', 'Agent']);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: step starting \(claude sonnet · effort medium · advisor opus, 90 min\)/u);
   // The parsed plan, not the file: the step in full under its own heading.
   assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- Your step: steps\[0\] -----\ntitle: The one step/u);
