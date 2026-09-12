@@ -430,6 +430,16 @@ Both carry the holder's pid, so a round that was killed rather than finished
 is reaped by the next claim instead of blocking forever. Neither blocks git:
 they refuse `mc`, and nothing else.
 
+The gate lock also carries `mode` — `check`, `merge` or `full`, the same word
+the round log writes beside it — and `phase`/`phase_at`, rewritten each time
+the round's own narration says something new, but only by the pid the lock
+still names: a round whose lock was taken over while it was dying must never
+overwrite the round that took it. Ruling 20 (Martin, 2026-09-12) asked for a
+MERGES section on the page, current round plus queue; this is where the
+current round's name, mode and phase come from — `runningMerge` in
+`src/mc/merges-collect.js` joins the lock to the repository's name and its
+lease's holder, so the page reads a sentence rather than a slug and a pid.
+
 ## The full run nobody asks for
 
 `mc test nightly start` runs `mc test <repo> --full` for every repository mc

@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  describeRunning, gateLockPath, releaseGateLock, runningRound, takeGateLock,
+  describeRunning, gateLockPath, noteGatePhase, releaseGateLock, runningRound, takeGateLock,
 } from '../../src/mc/gate-lock.js';
 
 const home = () => mkdtempSync(join(tmpdir(), 'mc-gate-lock-'));
@@ -82,6 +82,15 @@ describe('taking it', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('records what kind of round it is', () => {
+    const root = home();
+    try {
+      const out = takeGateLock({ repo: 'memoro-cli', pr: 485, mode: 'check', root });
+      assert.equal(out.ok, true);
+      assert.equal(JSON.parse(readFileSync(gateLockPath(root), 'utf8')).mode, 'check');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('a lock it cannot write lets the round run anyway', () => {
     // The worst case is the contention it was avoiding. A guard that refuses
     // to measure anything because it could not write a file has made the
@@ -89,6 +98,40 @@ describe('taking it', () => {
     const out = takeGateLock({ repo: 'x', pr: 1, root: '/proc/definitely/not/writable' });
     assert.equal(out.ok, true);
     assert.equal(out.took, false);
+  });
+});
+
+describe('narrating what it is doing', () => {
+  it('rewrites phase and phase_at, and keeps the fields already there', () => {
+    const root = home();
+    try {
+      takeGateLock({ repo: 'memoro-cli', pr: 485, root });
+      const before = JSON.parse(readFileSync(gateLockPath(root), 'utf8'));
+      const later = new Date(Date.parse(before.since) + 5000);
+      const took = noteGatePhase({ root, message: 'running the suite', now: later });
+      assert.equal(took, true);
+      const after = JSON.parse(readFileSync(gateLockPath(root), 'utf8'));
+      assert.equal(after.phase, 'running the suite');
+      assert.equal(after.phase_at, later.toISOString());
+      assert.equal(after.pid, before.pid);
+      assert.equal(after.repo, before.repo);
+      assert.equal(after.pr, before.pr);
+      assert.equal(after.since, before.since);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('never writes into a lock another pid holds', () => {
+    const root = home();
+    try {
+      writeFileSync(gateLockPath(root), JSON.stringify({ pid: 4242, repo: 'memoro', pr: 1, since: '2026-09-12T09:00:00.000Z' }));
+      assert.equal(noteGatePhase({ root, message: 'running the suite' }), false);
+      assert.equal(JSON.parse(readFileSync(gateLockPath(root), 'utf8')).phase, undefined);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('with no lock at all, there is nothing to note', () => {
+    const root = home();
+    try { assert.equal(noteGatePhase({ root, message: 'running the suite' }), false); } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 
@@ -121,10 +164,10 @@ describe('giving it back', () => {
 });
 
 describe('what it does not do', () => {
-  it('has no force, no holder, no errand, no verbs — the whole surface is two functions', async () => {
+  it('has no force, no holder, no errand, no verbs — the whole surface is the round and its phase', async () => {
     const module = await import('../../src/mc/gate-lock.js');
     assert.deepEqual(Object.keys(module).sort(), [
-      'describeRunning', 'gateLockPath', 'releaseGateLock', 'runningRound', 'takeGateLock',
+      'describeRunning', 'gateLockPath', 'noteGatePhase', 'releaseGateLock', 'runningRound', 'takeGateLock',
     ]);
   });
 

@@ -50,7 +50,7 @@ import { basename, join } from 'node:path';
 import { claimLease, releaseLease } from './repo-lease.js';
 import { redNames, tapTotals } from './tap-red.js';
 import { currentHolder } from './work-identity.js';
-import { describeRunning, releaseGateLock, takeGateLock } from './gate-lock.js';
+import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { log } from './logger.js';
 import { mcHome, workGatePath } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
@@ -108,6 +108,13 @@ export async function runGate({
   // nightly`, which calls this function with this flag rather than copying
   // what it does.
   full = false,
+  // The round log's own word for what this round is (`check`, `merge`,
+  // `full`, `nightly`, …) — the same word `noteGatePhase` and `takeGateLock`
+  // write beside the pid, so a reader of the lock sees what a reader of the
+  // round log sees. Left null, it is guessed from `full` below, which is
+  // right for every caller that never named one (nightly's whole-suite
+  // round included) and wrong for none: an explicit `mode` always wins.
+  mode = null,
   tests = null,
   holder = currentHolder(),
   root = mcHome(),
@@ -133,6 +140,7 @@ export async function runGate({
   // cannot reach one and miss the other.
   const say = (message) => {
     log('gate.say', { text: message });
+    noteGatePhase({ root, message });
     try { onProgress(message); } catch { /* progress is a courtesy */ }
   };
 
@@ -153,6 +161,7 @@ export async function runGate({
   // `mc test <repo> --full` names no pull request: there is nothing to merge
   // in, and the one tree is the default branch as fetched.
   const wholeSuite = Boolean(full);
+  const gateMode = mode || (wholeSuite ? 'full' : 'merge');
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
 
   const report = {
@@ -249,7 +258,7 @@ export async function runGate({
   // message, a row on the page and four verbs of its own. Four hundred lines
   // of vocabulary for "one at a time", under a name nobody could say without
   // explaining it.
-  const held = takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0] ?? null, root });
+  const held = takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0] ?? null, mode: gateMode, root });
   if (!held.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
     return finish('busy', describeRunning(held.running));

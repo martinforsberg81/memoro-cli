@@ -26,7 +26,7 @@
       "check": "`tests/mc/status-project.test.js`: a work root whose workarea checkout holds a newer `PLAN.json` than the injected `origin/main` prints main's steps and a `plan` row ending `(origin/main)`. `tests/mc/page.test.js` `collectPage`: the injected `exec` receives one `git … fetch -q origin` per present repository with `fresh: false`, and none with `offline: true`. Live: with a workarea deliberately left on an old branch (`git -C ~/mc/<name>/<repo> checkout <old-branch>`), `mc status <name>` prints the same STEPS rows as `git -C ~/memoro-cli show origin/main:docs/project/<programme>/<name>/PLAN.json` would."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A running gate round writes its phase into `gate-running.json`, and only the process that holds the lock can.",
       "check": "`tests/mc/gate-lock.test.js`: `noteGatePhase` on a file whose pid is this process rewrites `phase` and `phase_at` and keeps `pid`, `repo`, `pr`, `since`; on a file naming another pid it writes nothing and returns false. Live: during `mc test memoro-cli <pr>` (a `check` round), `cat ~/.memoro/mc/gate-running.json` shows a `phase` that changes as the round's stderr narration changes, and `mode: \"check\"`."
     },
@@ -66,10 +66,16 @@
     },
     {
       "title": "The gate round writes its phase into the lock it holds",
-      "status": "ready",
-      "pr": null,
+      "status": "done",
+      "pr": 705,
       "blocked_by": null,
-      "comments": [],
+      "comments": [
+        "runningMerge lives in a new src/mc/merges-collect.js, not in gate-lock.js: gate-lock.js's own tests pin its export list as \"the whole surface is the round and its phase\", and runningMerge needs repo-lease.js (the holder) and a list of repositories (to turn the lock's slug into a name) — neither belongs on that file.",
+        "A round emits 48 say() calls between repo-gate.js (30) and repo-merge.js (18), so noteGatePhase throttles to one write per second by comparing phase_at, as the instruction allowed.",
+        "mode flows from commands/repo.js's existing check/merge word into both runGate and runMergeRound, and from there into takeGateLock. nightly-loop.js needed no change: it calls runGate with no mode and full: true, and runGate's own fallback (mode || (wholeSuite ? 'full' : 'merge')) already resolves that to 'full'.",
+        "Measured live (not through a real mc test/mc merge round, since the sandbox has no PR to run one against): took a lock, called noteGatePhase twice a second apart, and read gate-running.json back each time — mode, phase and phase_at land exactly as tests/mc/gate-lock.test.js and tests/mc/merges-collect.test.js check, and pid/repo/pr/since are untouched by the phase rewrite. The success criterion's own 'live' check (mc test against a real PR while watching the file change) was not run.",
+        "npm test: 1941 passed, 0 failed, 9 skipped (pre-existing legacy skips), run once in the foreground."
+      ],
       "done_when": "`noteGatePhase` in `src/mc/gate-lock.js` rewrites `gate-running.json` with `phase` and `phase_at` only when the file's pid is this process; `takeGateLock` writes `mode`; the round's `say` in `src/mc/repo-gate.js` calls it on every line; `runningMerge` returns the round with its repository name, holder, phase and age; `tests/mc/gate-lock.test.js` covers all of it; `docs/technical/mc-merge.md` says so; the suite is green.",
       "instruction": [
         "Read `src/mc/gate-lock.js` whole (110 lines: `gateLockPath`, `runningRound`, `takeGateLock`, `releaseGateLock`, `describeRunning`) and `tests/mc/gate-lock.test.js`. Read `say` in `src/mc/repo-gate.js` (lines 134–137: every narration line goes through `log('gate.say', …)` and `onProgress`), the lock being taken at line 252 (`takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0] ?? null, root })`), the lease at line 234, and the two releases at lines 273 and 288. Read `repoFileSlug` in `src/mc/repo-snapshot.js` line 55 (basename plus an 8-character sha1 of the path — the slug is not the repository's name) and `readLease` in `src/mc/repo-lease.js` line 54 (holder, errand, since, owner_pid). Find where the round log's `mode` (`merge`, `check`, `full`, `docs` — `src/mc/repo-round-log.js`) is decided for a gate round, so the lock can carry the same word: `mc test` is a `check` and lands nothing, and the section built in step 3 must be able to say so.",
