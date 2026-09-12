@@ -139,27 +139,22 @@ export async function uninstallHooks() {
 }
 
 /**
- * The seven slash-commands mc used to write here are gone.
+ * mc writes no slash commands into `~/.claude/commands/` any more.
  *
- * Each dropped a file into `~/.claude/commands/` that ran
- * `memoro-cli show <section>` to pull one slice of the portrait into a
- * session on demand. The server stopped serving that lens externally — all
- * seven answered `404` — and the need went with it: the Coding Profile now
- * reaches every new conversation at launch, which is what they were fetching
- * by hand.
+ * Seven of them ran `memoro-cli show <section>` to pull one slice of the
+ * portrait into a session; the server stopped serving that lens and the
+ * Coding Profile reaches every conversation at launch instead. Two more,
+ * `/memoro-coordinator` and `/memoro-coordinator-suggest`, opened a
+ * coordinator role that `mc` itself is now. The last, `/memoro-update`,
+ * displayed the recipe for updating memoro-cli, and was rewritten on every
+ * launch — so it came back however often it was deleted (Martin,
+ * 2026-09-12: "vi behöver rensa bort några gamla mc kommandon i claude som
+ * inte längre används").
  *
- * `uninstallCommands` below stays, so `memoro-cli hook uninstall` still
- * clears the ones already written.
+ * `uninstallCommands` stays, and runs at every launch and on
+ * `mc hook uninstall`, so a file any earlier version wrote is removed the
+ * next time mc starts. It deletes only files that carry `COMMAND_MARKER`.
  */
-
-export async function installUpdateCommand({ memoroCliBin = 'memoro-cli' } = {}) {
-  await ensureDir(commandsDir());
-  const file = join(commandsDir(), `${COMMAND_PREFIX}update.md`);
-  const body = renderUpdateCommandFile({ memoroCliBin });
-  await writeFile(file, body, { mode: 0o644 });
-  return file;
-}
-
 export async function uninstallCommands() {
   if (!existsSync(commandsDir())) return [];
   let entries;
@@ -460,80 +455,6 @@ const MEMORO_HOOK_ID = 'memoro-cli';
 const COMMAND_MARKER = '<!-- memoro:managed:command -->';
 const LEGACY_MEMORO_HOOK_RE = /\bmemoro-cli\b\s+(lens\s+pull|heartbeat-loop|heartbeat-stop|session\s+upload)\b/;
 
-const COMMAND_TITLES = {
-  'loose-ends': 'Show loose ends from recent coding sessions',
-  'decisions':  'Show recent decisions from coding sessions',
-  'rules':      'Show learned coding rules',
-  'stack':      'Show detected stack (languages, frameworks, preferences)',
-  'repos':      'Show recent repos worked on',
-  'practices':  'Show learned coding practices',
-  'tool-use':   'Show learned tool-use preferences',
-};
-
-function renderCommandFile({ section, memoroCliBin }) {
-  const title = COMMAND_TITLES[section] || `Show ${section}`;
-  return `---
-description: ${title}
----
-
-${COMMAND_MARKER}
-
-!${memoroCliBin} show ${section}
-`;
-}
-
-function renderUpdateCommandFile({ memoroCliBin }) {
-  // Body is rendered into the conversation as a user message. The LLM
-  // should DISPLAY this recipe to the user — not try to run it, since
-  // updating is the user's decision and (in registry mode) `npm install -g`
-  // is sanctioned global persistence that auto-mode correctly blocks.
-  //
-  // Two installation modes exist and the wrong recipe is destructive in one
-  // of them: a source-linked install (`npm link`) that runs `npm install -g`
-  // gets silently replaced by a registry copy and stops tracking the source.
-  // So the recipe leads with detection.
-  const pkg = memoroCliBin === 'memoro-cli' ? 'memoro-cli' : memoroCliBin;
-  return `---
-description: Show the recipe for updating memoro-cli
----
-
-${COMMAND_MARKER}
-
-The user invoked \`/memoro-update\`. **Display** the recipe below —
-do not try to run it yourself. Updating is the user's own decision, and
-in registry mode \`npm install -g\` is sanctioned global persistence
-that auto-mode will block anyway.
-
-memoro-cli is installed in one of two modes. Detect first:
-
-\`\`\`sh
-npm ls -g ${pkg}
-\`\`\`
-
-**Source-linked** — the output shows an arrow into a local directory
-(\`${pkg}@x.y.z -> …/memoro-cli\`, from \`npm link\`). Update by pulling
-the source the arrow points at:
-
-\`\`\`sh
-cd ~/memoro-cli && git pull
-\`\`\`
-
-Never run \`npm install -g\` in this mode: it silently replaces the link
-with a registry copy, and the installation stops tracking the source.
-
-**npm registry** — no arrow in the output. Update the package:
-
-\`\`\`sh
-npm install -g ${pkg}
-\`\`\`
-
-Either way, the next \`mc\` picks up the new version automatically.
-Reply with the detection step and the matching recipe block, plus a
-brief one-line confirmation — no further commentary, no offers to run
-anything.
-`;
-}
-
 async function readSettings() {
   if (!existsSync(settingsJson())) return {};
   try {
@@ -667,10 +588,11 @@ export const ARTIFACT_OWNERSHIP = Object.freeze({
 export const NATIVE_LAUNCH_HOOKS = Object.freeze({
   hookFailureReason: 'claude-provider-artifact-hook-unavailable',
   hookFailureLabel: 'Claude',
-  // Before identity/config resolution: coordinator surface + artifact
-  // hooks. A hook-install failure must refuse the launch.
+  // Before identity/config resolution: sweep the slash commands earlier
+  // versions wrote, then the artifact hooks. A hook-install failure must
+  // refuse the launch; a sweep failure must not.
   async prepareEarly({ deps = {} } = {}) {
-    await (deps.installUpdateCommand || installUpdateCommand)().catch(() => {});
+    await (deps.uninstallCommands || uninstallCommands)().catch(() => {});
     await (deps.installClaudeArtifactHooks || installHooks)();
   },
 });
