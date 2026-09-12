@@ -25,7 +25,6 @@ import { writeJsonAtomic } from '../atomic-write.js';
 import { describeRunning, runningRound } from '../gate-lock.js';
 import {
   MERGE_POLL_MS, MERGE_WAIT_MS, dequeue, dropDeadEntries, enqueue, mergesPath, nextWaiter, parseQueue, queueOrder,
-  queuedFor, queueable,
 } from '../merge-queue.js';
 import { planBoundary } from '../merge-boundary.js';
 import { landedPatch, redPatch, stepForMerge } from '../merge-step.js';

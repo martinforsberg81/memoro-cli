@@ -588,23 +588,6 @@ describe('NEXT', () => {
     assert.equal(queue.runnable, 1);
   });
 
-  /**
-   * A hold still owed its repair is not a skip — the runner would start it —
-   * and what it would start is a repair. The kind beside the name is what the
-   * runner would do, so the page does not say `step` where none is coming.
-   */
-  it('names the kind the runner would actually start', () => {
-    const queue = nextSection({
-      queueText: 'mc-ui\n',
-      plans: [PLANS[2]],
-      machine: () => ({ runnable: true, reason: null, detail: '#440 is held before merge — one repair session is owed', since: null, kind: 'repair' }),
-    });
-    assert.deepEqual(queue.lanes.flatMap((lane) => lane.items).map((item) => [item.name, item.kind]), [['mc-ui', 'repair']]);
-    assert.equal(queue.runnable, 1);
-    // And the row says it: `repair 1/1`, in the yellow a repair is drawn in.
-    const lines = renderPageLines(pageData({ next: queue }), { columns: 120 });
-    assert.ok(lines.some((line) => /^ {7}mc-ui\s+repair 1\/1\s+The page$/u.test(line)), lines.join('\n'));
-  });
 
   // The whole section is empty only when there is nothing on main at all, and
   // then it says that rather than blaming the queue file for it.
@@ -620,32 +603,7 @@ describe('MERGES', () => {
     mode: 'merge', since: '2026-08-29T11:56:00Z', age_seconds: 240,
   };
 
-  /**
-   * A pull request the runner would not land keeps its project out of the
-   * queue entirely — `inFlight` refuses it every round — so it is in none of
-   * NEXT's counts. `~/mc/runner/held.json` is where the runner writes why,
-   * and this is where a person reads it without opening runner.log.
-   */
-  it('carries every held pull request with its reason, oldest first', () => {
-    const merges = mergesSection({
-      held: [
-        { project: 'mc-run', repo: 'memoro-cli', pr: 561, branch: 'mc-run-2', reason: 'the session changed more of the plan than its step', note: 'plan-trespass', since: '2026-08-29T11:00:00Z', repairs: 1 },
-        { project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor', reason: 'two tests the change reaches are red', note: 'open,gate-red', since: '2026-08-29T09:10:00Z', repairs: 0 },
-      ],
-    });
-    assert.equal(merges.held.count, 2);
-    assert.deepEqual(merges.held.items.map((item) => [item.project, item.pr, item.repairs]), [
-      ['docx-editor', 10958, 0], ['mc-run', 561, 1],
-    ]);
-    assert.deepEqual(Object.keys(merges.held.items[0]).sort(), [
-      'branch', 'note', 'pr', 'project', 'reason', 'repairs', 'repo', 'since',
-    ]);
-  });
 
-  it('has nothing held when the file is missing or not a list', () => {
-    assert.deepEqual(mergesSection({}).held, { count: 0, items: [] });
-    assert.equal(mergesSection({ held: null }).held.count, 0);
-  });
 
   /**
    * The other half of the same answer: a pull request a hand `mc merge` could
@@ -1161,10 +1119,10 @@ const DATA = pageData({
     plans: PLANS,
   }),
   merges: mergesSection({
-    held: [{
-      project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor',
-      reason: 'two tests the change reaches are red', note: 'open,gate-red',
-      since: '2026-08-29T09:10:00Z', repairs: 0,
+    queued: [{
+      repo: 'memoro', pr: 10958, branch: 'docx-editor',
+      reason: 'another gate round is running', stopped_at: 'busy',
+      since: '2026-08-29T09:10:00Z', holder: 'martin@laptop', pid: 4242,
     }],
   }),
   intake: intakeSection({
@@ -1217,15 +1175,14 @@ describe('the page', () => {
     assert.match(text, /RUNNER {2}1 in flight · up 120 min\s+mc run/u);
     assert.match(text, /^ {2}3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)$/mu);
     assert.match(text, /NEXT {2}2 runnable of 4 · 3 from queue\.md, then alphabetical\s+mc status <name>/u);
-    assert.doesNotMatch(text, /NEXT[^\n]*held/u, 'held moved to MERGES');
     assert.doesNotMatch(text, /NEXT[^\n]*queued/u, 'queued moved to MERGES');
-    assert.match(text, /MERGES {2}1 held\s+mc merge <repo> <pr>/u);
+    assert.match(text, /MERGES {2}1 waiting\s+mc merge <repo> <pr>/u);
     // One block per lane, three deep, and the row says where in its plan the
     // project is. The lanes run at the same time: both heads start now.
     assert.match(text, /^ {5}memoro-cli · 1 runnable\n {7}mc-ui\s+step 1\/1\s+The page$/mu);
     assert.match(text, /^ {5}memoro · 1 runnable\n {7}docx-editor\s+step 2\/2\s+Measure paste and IME$/mu);
     assert.match(text, /skipped 2 \(done 1, blocked 1\)/u);
-    assert.match(text, /· docx-editor {2}#10958 {2}two tests the change reaches are red/u);
+    assert.match(text, /· memoro {2}#10958 {2}another gate round is running/u);
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /INTAKE {2}1 digest · 1 proposal\s+mc helper --intake/u);
     assert.match(text, /^ +memoro · 2026-08-29 \(60 min old\) · 1 new error \(1 loud\)$/mu);
@@ -1388,11 +1345,6 @@ describe('collectPage', () => {
       fetched: '2026-08-29T11:00:00Z',
       version: { commit: 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00', build: 23533, build_time: '2026-08-29T09:50:00Z' },
     }));
-    writeFileSync(join(root, 'runner', 'held.json'), JSON.stringify([{
-      project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor',
-      reason: 'two tests the change reaches are red', note: 'open,gate-red',
-      since: '2026-08-29T09:10:00Z', repairs: 0,
-    }]));
     writeFileSync(join(root, 'runner', 'merges.json'), JSON.stringify([{
       repo: 'memoro-cli', pr: 674, branch: 'mc-ui', reason: 'another gate round is running',
       stopped_at: 'busy', since: '2026-08-29T11:30:00Z', holder: 'martin@laptop',
@@ -1454,11 +1406,6 @@ describe('collectPage', () => {
       [['memoro', ['docx-editor']]]);
     assert.deepEqual([...new Set(gitArgs)], ['status --porcelain'],
       'the reading asks the worktree one read-only question and nothing else');
-    // The runner's own file, read where the runner writes it: nobody has to
-    // open runner.log to see which pull request is standing still. It is under
-    // MERGES now, not NEXT — the same fact, a different heading.
-    assert.deepEqual(data.merges.held.items.map((item) => [item.project, item.pr, item.reason]),
-      [['docx-editor', 10958, 'two tests the change reaches are red']]);
     // And beside it, `merges.json`: what a hand `mc merge` handed to the
     // runner's merge lane rather than to whoever typed it.
     assert.deepEqual(data.merges.queued.items.map((item) => [item.repo, item.pr, item.stopped_at]),
@@ -1647,9 +1594,9 @@ describe('the palette', () => {
     'grey', //                                           skipped 2 (done 1, blocked 1)
     'red grey grey', //                                  1 blocked · 1 on a decision · held most by assistant-avatar-1 1
     '',
-    'bold+cyan grey grey', //                           MERGES  1 held           mc merge <repo> <pr>
+    'bold+cyan grey grey', //                           MERGES  1 waiting        mc merge <repo> <pr>
     'grey', //                                           · nothing landing
-    'yellow+bold yellow', //                             · docx-editor  #10958  two tests the change reaches are red
+    'green+bold green grey', //                          · memoro  #10958  another gate round is running  (since …)
     '',
     'bold+cyan green+bold grey grey grey', //          RUNNER  1 in flight · up 120 min           mc run
     'grey grey grey', //                             · memoro      idle

@@ -30,7 +30,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { openPrsFor } from './project-prs.js';
-import { REFUSAL, chooseKind, heldRepair, inFlight, kindFor } from './run-plan.js';
+import { REFUSAL, chooseKind, inFlight, kindFor } from './run-plan.js';
 
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
 export const RUNNER_MODEL = 'opus';
@@ -96,12 +96,11 @@ export { kindFor };
  *
  * Returns `{ runnable, reason, detail, since, kind }`: `reason` a word the
  * page can count, `detail` the sentence for a person, `since` when it started
- * being true (a hold's own `since`, the oldest dirty file's mtime), and `kind`
- * what the runner would start — `step`, or `repair` for a held pull request
- * that is still owed its one repair session.
+ * being true (the oldest dirty file's mtime), and `kind` what the runner would
+ * start — `step`.
  */
 export function machineState(name, {
-  plans = [], prs = [], prsFailed = [], held = [], stop = false,
+  plans = [], prs = [], prsFailed = [], stop = false,
   root = null, repoNames = REPO_NAMES,
   exists = existsSync, git = () => ({ ok: false, stdout: '' }), mtime = fileMtime,
 } = {}) {
@@ -133,39 +132,18 @@ export function machineState(name, {
   if (prsFailed.includes(repo)) return no(REFUSAL['prs-unknown'], 'GitHub could not be asked what this repository has open');
 
   const openPrs = openPrsFor({ prs, name, names: plans.map((p) => p.project), repo });
-  // A hold at `repairs: 0` is not a refusal — it is one repair session owed,
-  // which is a thing the runner would start. Only a hold whose repair has been
-  // spent stops the project, and then it is waiting on a person.
-  const repair = heldRepair({ entries: held, openPrs, project: name, repo });
-  if (repair?.skip) return no(REFUSAL['held-after-repair'], repair.skip, repair.entry?.since);
-  if (!repair) {
-    const flight = inFlight(openPrs);
-    if (flight) return no(REFUSAL['in-flight'], flight.skip);
-  }
-  // A repair session has to stand on the branch its pull request is on. The
-  // round checks that out; this asks the readable half of the same question —
-  // whether the workarea has that branch at all.
-  if (repair && worktree && exists(worktree)) {
-    const wanted = repair.entry.branch;
-    const on = gitOut(['branch', '--show-current']);
-    if (wanted && on !== wanted && !gitOut(['rev-parse', '-q', '--verify', `refs/heads/${wanted}`])) {
-      return no(REFUSAL.branch, `#${repair.entry.pr} is on ${wanted}, which this workarea has no branch for`, repair.entry.since);
-    }
-  }
+  const flight = inFlight(openPrs);
+  if (flight) return no(REFUSAL['in-flight'], flight.skip);
   // There was one more reading here until 2026-09-08, out of a file the runner
   // wrote beside `held.json`: the workarea the last round could not bring to
   // origin/main, which no reading could work out for itself because an aborted
   // merge leaves the worktree clean. It went with the case — a `PLAN.json` the
   // plan's own rule refuses now takes main's copy and the merge commits
   // (`resolvePlanConflict`, run.js), so nothing is aborted and nothing is
-  // recorded.
-  return {
-    runnable: true,
-    reason: null,
-    detail: repair ? `#${repair.entry.pr} is held before merge — one repair session is owed` : null,
-    since: repair ? repair.entry.since || null : null,
-    kind: repair ? 'repair' : kind,
-  };
+  // recorded. And until 2026-09-12 a held pull request was read here too, with
+  // its one repair session; the register (ruling 21) is where a step that did
+  // not land stands now, and the plan's own word above already answers it.
+  return { runnable: true, reason: null, detail: null, since: null, kind };
 }
 
 /**

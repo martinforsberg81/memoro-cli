@@ -23,7 +23,6 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { defaultRepos, runsFor } from './brief-collect.js';
-import { heldPath, parseHeld } from './held.js';
 import { mergesPath, parseQueue } from './merge-queue.js';
 import { runningMerge } from './merges-collect.js';
 import { ageWords } from './page-cache.js';
@@ -67,11 +66,10 @@ export function fieldRows(plan, problems = [], machine = null, home = homedir())
 /**
  * What the machine adds to the plan's own word, or null when it adds nothing.
  *
- * Three cases and no others. A refusal the plan already says — `blocked`,
+ * Two cases and no others. A refusal the plan already says — `blocked`,
  * `done` — is dropped, because the row would then read `blocked · blocked`;
  * a refusal the plan does not say is the whole point and is spelled out. And
- * `runnable` is silent except for one repair owed, which is the runner's next
- * move here being a repair rather than the step the plan names.
+ * `runnable` is silent.
  *
  * The silent case is the one that must stay silent: most projects have nothing
  * in the way, and a row that grew a clause for every one of them would be
@@ -79,7 +77,7 @@ export function fieldRows(plan, problems = [], machine = null, home = homedir())
  */
 export function machineNote(machine, status, home = homedir()) {
   if (!machine) return null;
-  if (machine.runnable) return machine.kind === 'repair' ? sentence(machine, home) : null;
+  if (machine.runnable) return null;
   if (machine.reason === status) return null;
   return sentence(machine, home);
 }
@@ -174,7 +172,7 @@ export function renderProject({
   // request is not in the machine row above — nothing about this project is in
   // the way; the merge is simply somebody else's now.
   for (const entry of queued) {
-    out.push(`  #${entry.pr} is queued for merge${entry.since ? ` (since ${when(entry.since)})` : ''} — ${entry.reason}`);
+    out.push(`  #${entry.pr} is waiting for the gate${entry.since ? ` (since ${when(entry.since)})` : ''} — ${entry.reason}`);
   }
   for (const note of notes) out.push('', `note: ${note}`);
   return `${out.join('\n')}\n`;
@@ -292,12 +290,11 @@ export async function collectProject(name, {
 
   // The other half of the pair: would the runner start this now. Asked of the
   // plan on origin/main, because that is the copy the round reads, and of the
-  // files this machine keeps — held.json, the STOP file, the worktree.
+  // files this machine keeps — the STOP file, the worktree.
   const machine = machineState(name, {
     plans: mainPlansFor(name, main, mainPlan),
     prs: asked,
     prsFailed,
-    held: readHeld(root, read),
     stop: existsSync(join(root, 'runner', 'STOP')),
     root,
     // `git` here answers with a string or null; the reading wants ok and text.
@@ -365,11 +362,6 @@ function mainPlansFor(name, main, mainPlan) {
     },
     ...(main.names || []).filter((other) => other !== name).map((other) => ({ project: other, repo: main.repo })),
   ];
-}
-
-/** `~/mc/runner/held.json` as the runner reads it: unreadable means empty. */
-function readHeld(root, read) {
-  try { return parseHeld(read(heldPath(root))); } catch { return []; }
 }
 
 /** `~/mc/x` reads better than the absolute path on a page a person reads. */

@@ -14,7 +14,6 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import { REPAIRS_BEFORE_BRIEF } from '../../src/mc/brief-collect.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
 import { STEP_STATUSES } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
@@ -63,8 +62,8 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
 
   it('states the tool, model, effort and advisor a session gets when its plan names none', () => {
     assert.match(DOC, new RegExp(`\\*\\*\`tool:\`\\*\\* — \`${DEFAULT_TOOL}\` by default`, 'u'));
-    const { step, repair } = SESSION_DEFAULTS;
-    assert.match(DOC, new RegExp(`\\*\\*\`model:\`\\*\\* — \`${step.model}\` by default for a step, \`${repair.model}\` for a repair`, 'u'));
+    const { step } = SESSION_DEFAULTS;
+    assert.match(DOC, new RegExp(`\\*\\*\`model:\`\\*\\* — \`${step.model}\` by default for a step`, 'u'));
     // The table under *The session*, one row per kind, as the code has them.
     const cell = (value) => (value ? `\`${value}\`` : 'none');
     for (const [kind, d] of Object.entries(SESSION_DEFAULTS)) {
@@ -103,21 +102,15 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(DOC, /`plan-trespass` on a step that changed the runner's\n  own rules is worth checking before it is believed/u);
   });
 
-  it('says what a held pull request is, when its repair runs, and where it stops', () => {
-    const held = /### Held before merge\n([\s\S]*?)\n## /u.exec(DOC);
-    assert.ok(held, 'the section a reader looks in for a pull request the runner would not land is gone');
-    assert.match(held[1], /`~\/mc\/runner\/held\.json`/u, 'the section no longer names the file');
-    assert.match(held[1], /`repair` session/u, 'the section no longer names the kind a held pull request gets');
-    // The one-repair rule is the contract's, and the brief is what takes the
-    // second: a doc that says "one" while the code allows two is the drift
-    // this pins.
-    assert.equal(REPAIRS_BEFORE_BRIEF, 1, 'the doc says a held pull request gets one repair');
-    assert.match(held[1], /`repairs >= 1` is a skip again/u);
-    assert.match(held[1], /the brief's/u, 'the section no longer says where the repair stops');
-    // And that it is mc's own state: a fourth step status would make the
-    // paragraph that promises there is none wrong.
+  it('says where a step that did not land stands — the register, not a held file — and keeps the argument list current', () => {
+    const register = /### The register\n([\s\S]*?)\n## /u.exec(DOC);
+    assert.ok(register, 'the section a reader looks in for where state lives is gone');
+    assert.match(register[1], /`~\/mc\/runner\/projects\//u);
+    assert.match(register[1], /`failed`/u);
+    assert.match(register[1], /`mc step ready`/u);
     assert.deepEqual([...STEP_STATUSES], ['ready', 'running', 'done', 'failed', 'blocked']);
-    assert.match(held[1], /never a status in a `PLAN\.json`/u);
+    assert.ok(DOC.includes(`--autocompact ${AUTOCOMPACT_TOKENS}`), 'the argument list in the doc no longer shows the window');
+    assert.ok(DOC.includes(`\`AUTOCOMPACT_TOKENS\` (${AUTOCOMPACT_TOKENS.toLocaleString('en-US').replace(/,/gu, ' ')})`));
   });
 
   it('states the flag defaults the command parses', () => {

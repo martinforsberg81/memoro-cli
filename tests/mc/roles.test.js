@@ -203,7 +203,7 @@ describe('the text every role session shares', () => {
   });
 
   it('reaches every canon role that has a body of its own', () => {
-    for (const name of ['brief', 'helper', 'intake', 'repair', 'step', 'worker']) {
+    for (const name of ['brief', 'helper', 'intake', 'step', 'worker']) {
       const role = readCanonRole(name);
       assert.ok(role?.overlay, `${name} has no overlay`);
       assert.match(instructionsFor('claude-code', 'PROFILE', role.overlay), TURN_COST, name);
@@ -304,7 +304,7 @@ describe('every canon role has a body', () => {
     const shared = files.filter((file) => file.startsWith('_'));
     assert.ok(shared.includes(SHARED_ROLE_FILE), `${SHARED_ROLE_FILE} is missing from canon/roles/`);
     for (const file of shared) assert.equal(parseRole(readFileSync(join(canonRolesDir(), file), 'utf8')), null);
-    assert.ok(roleFiles.length >= 7, `only ${roleFiles.length} canon roles`);
+    assert.ok(roleFiles.length >= 6, `only ${roleFiles.length} canon roles`);
   });
 
   for (const file of roleFiles) {

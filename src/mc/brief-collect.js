@@ -6,7 +6,7 @@
  * Thirteen sections, in the order the plan fixes them: merged since the last
  * brief · opened, not merged · the helper's proposals · plan status ·
  * archived without a note · workareas with no plan · plans that do not parse ·
- * runner · production · held before merge · ready and not started · blocked ·
+ * runner · production · failed steps · ready and not started · blocked ·
  * queue. Every line comes from a file the runner
  * or a session already writes (`~/mc/runner/log/runs.tsv`,
  * `~/mc/runner/held.json`,
@@ -24,7 +24,6 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { lastAttempt, lastDeploy } from './deploys.js';
-import { heldPath, parseHeld } from './held.js';
 import { proposalsDir } from './helper-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { nightlyReading } from './nightly-history.js';
@@ -353,30 +352,40 @@ export function summariseRuns(rows) {
   return { steps: rows.length, kinds, merged, open, failed, timeout, cacheRead, output, seconds };
 }
 
-/* --------------------------------------------------- held before merge */
+/* ------------------------------------------------------------ failed steps */
 
 /**
- * How many repair sessions a held pull request gets before it is a person's.
- * One: the runner runs it, and what that session could not fix is not tried
- * again by another one exactly like it.
- */
-export const REPAIRS_BEFORE_BRIEF = 1;
-
-/**
- * `~/mc/runner/held.json`, filtered to what the brief is for: the pull
- * requests whose repair session has already run and left them held anyway.
- * An entry at `repairs: 0` is the runner's next round, not Martin's hour, and
- * raising it here would ask him to decide something a session is about to try.
+ * Every `failed` step on the plans as the register overlays them: a session
+ * ended without landing — the gate was red and the session could not make it
+ * green, or the session died — and the runner starts nothing on it again
+ * (ruling 21). Until 2026-09-12 this was `~/mc/runner/held.json`, filtered to
+ * the pull requests whose one repair session had run and failed; the repair
+ * session is gone, and the register's `failed` is the one word for a step
+ * that did not land.
  *
- * Oldest first, because the pull request that has stood still longest is the
- * one to open first. The file is read, never reconstructed: the runner writes
- * it (`held.js`) and the page draws the same entries, so a runs.tsv note
- * parsed back into a reason would be a second answer that can disagree.
+ * Plan order, which is `listPlans`'s: the same records the runner obeys.
  */
-export function heldForBrief(text) {
-  return parseHeld(text)
-    .filter((entry) => entry.repairs >= REPAIRS_BEFORE_BRIEF)
-    .sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
+export function failedSteps(plans = []) {
+  const rows = [];
+  for (const record of plans) {
+    const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
+    steps.forEach((step, index) => {
+      if (step?.status !== 'failed') return;
+      rows.push({
+        repo: record.repo,
+        programme: record.programme,
+        project: record.project,
+        step: index + 1,
+        title: step.title || '',
+        pr: step.pr ?? null,
+        // The register's reason travels on the step's last comment (`mc step
+        // failed` and the runner both append one); the reason field itself is
+        // the register's and not in the plan record.
+        comment: (step.comments || []).at(-1) || null,
+      });
+    });
+  }
+  return rows;
 }
 
 /* --------------------------------------------- ready, and still not started */
@@ -386,14 +395,14 @@ export function heldForBrief(text) {
  * would nevertheless pass over right now — the reason, since when, and the run
  * that left it that way.
  *
- * `held.json` only knows a pull request the gate refused, so *Held before
- * merge* above cannot see the larger case: a session killed before it committed
+ * A failed step is one whose session ended without landing (*Failed steps*
+ * above), and that cannot see the larger case: a session killed before it committed
  * never got as far as a pull request, and what it left is a dirty workarea the
  * round skips every ten minutes for as long as it stands there.
  * `no-text-in-code` sat from 2026-09-04T12:37Z on exit 143 with 35 files of
  * finished work uncommitted; `connections-section` sat from 2026-08-29T21:37Z
  * on a session that exited 0 and opened no pull request. Neither is in
- * `held.json`; neither is in *Workareas with no project on main*, because both
+ * the register; neither is in *Workareas with no project on main*, because both
  * have a project on main — which is exactly what makes them a loss; and the
  * only thing that said so was a `, skip` line in `runner.log`, of which there
  * were 9 827.
@@ -578,7 +587,6 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 const UNDOCUMENTED_FILE = runnerTableLabel(UNDOCUMENTED_CLOSURES);
 const UNPLANNED_FILE = runnerTableLabel(UNPLANNED_WORKAREAS);
 const UNREADABLE_FILE = runnerTableLabel(UNREADABLE_PLANS);
-const HELD_FILE = '`~/mc/runner/held.json`';
 /** The undocumented file is append-only; the brief shows the newest rows and counts the rest. */
 const INTAKE_CAP = 12;
 /**
@@ -735,15 +743,14 @@ function waitingLines(out, waiting, now) {
     + `${dirty ? `${dirty} of them ${dirty === 1 ? 'is' : 'are'} a workarea with uncommitted work in it: `
       + 'open it, and the work is either finished — commit it on the branch it is on — or abandoned, and then '
       + 'it is Martin\'s `git restore`. No machine removes one, and the runner does not commit it either. ' : ''}`
-    + `\`held-after-repair\` is *Held before merge* above, with what the gate saw and the three answers to it; `
-    + `\`in-flight\` is a pull request already open on the branch, to land or to close.`);
+    + '`in-flight` is a pull request already open on the branch, to land or to close.');
 }
 
 /**
  * *Blocked* — every step on `origin/main` that is stopped, grouped by what the
  * reader does with it.
  *
- * It sits beside *Held before merge* and *Ready, and the runner cannot start
+ * It sits beside *Failed steps* and *Ready, and the runner cannot start
  * it* because it is the third and largest member of that family: a project
  * standing still, and yours. Until now the only trace of one was inside *Plan
  * status*, where a plan gets one row and its blocker arrives clipped to 110
@@ -863,7 +870,7 @@ function blockedLines(out, blocked) {
 
 export function renderBrief({
   now, since, firstBrief, merged, opened, proposals = [], plans,
-  undocumented = null, unplanned = null, unreadable = null, runs, queue, held = [],
+  undocumented = null, unplanned = null, unreadable = null, runs, queue, failed = [],
   waiting = [], blocked = [], production = null, notes = [],
 }) {
   const out = [];
@@ -873,12 +880,11 @@ export function renderBrief({
     ? `First brief: the window is the last 24 h (since ${stamp(since)}).`
     : `Since last brief: ${stamp(since)}.`);
   for (const note of notes) out.push(`> ${note}`);
-  // A held pull request keeps its whole project out of the runner's round, so
+  // A failed step keeps its whole project out of the runner's round, so
   // it is not something to find in the ninth section of a long file.
-  if (held.length) {
-    out.push('', `**${held.length} pull request${held.length === 1 ? '' : 's'} held before merge** after `
-      + `${held.length === 1 ? 'its' : 'their'} repair — *Held before merge*, below. `
-      + `${held.length === 1 ? 'That project runs' : 'Those projects run'} nothing until you decide.`);
+  if (failed.length) {
+    out.push('', `**${failed.length} failed step${failed.length === 1 ? '' : 's'}** — *Failed steps*, below. `
+      + `${failed.length === 1 ? 'That project runs' : 'Those projects run'} nothing until you decide.`);
   }
   out.push('');
 
@@ -966,19 +972,18 @@ export function renderBrief({
   productionLines(out, production);
   out.push('');
 
-  out.push('## Held before merge', '');
-  if (!held.length) out.push('_none_');
+  out.push('## Failed steps', '');
+  if (!failed.length) out.push('_none_');
   else {
-    out.push('| project | repo | pr | branch | repairs | reason |', '|---|---|---|---|---|---|');
-    for (const h of held) {
-      out.push(`| ${h.project || '?'} | ${h.repo || '?'} | #${h.pr} | ${h.branch || '?'} | ${h.repairs} | ${clip(h.reason, 80)} |`);
+    out.push('| project | repo | step | pr | what the session left |', '|---|---|---|---|---|');
+    for (const f of failed) {
+      out.push(`| ${f.project} | ${f.repo || '?'} | ${f.step} · ${clip(f.title, 40)} | ${f.pr ? `#${f.pr}` : '—'} | ${clip(f.comment || '—', 90)} |`);
     }
-    out.push('', `${held.length} pull request${held.length === 1 ? '' : 's'} the runner would not land, `
-      + `${held.length === 1 ? 'its' : 'each with its'} one repair session already behind it. `
-      + `Each is a project standing still — the pull request is open, so the runner passes the project every round — and each is now yours: `
-      + `\`mc merge <repo> <pr>\` by hand when the red is not the change's, \`gh pr close\` when the work is wrong, `
-      + `or the step set \`blocked\` with a \`blocked_by\` decision. One proposal per pull request. `
-      + `${HELD_FILE} has the rest of what the gate saw.`);
+    out.push('', `${failed.length} step${failed.length === 1 ? '' : 's'} whose session ended without landing (ruling 21): `
+      + 'the gate was red and the session could not make it green, or the session died. Each is a project standing still — '
+      + 'the runner starts nothing on a failed step — and each is now yours, one proposal per step: '
+      + 'fix the branch and `mc merge <repo> <pr>` by hand, or `gh pr close` and `mc step ready <project> <n>` to start it again, '
+      + 'or replan. `mc step <project>` has the reason; the pull request\'s own comments have what the gate said.');
   }
   out.push('');
 
@@ -1093,17 +1098,10 @@ export async function collectBrief({
   let queue = [];
   try { queue = queueNames(read(join(root, 'queue.md'))); } catch { notes.push('no queue.md'); }
 
-  // No note when the file is not there: the runner writes `held.json` the
-  // first time it refuses to land something, and never having refused one is
-  // the good answer, not a missing file.
-  let heldText = '';
-  try { heldText = read(heldPath(root)); } catch { heldText = ''; }
-  const held = heldForBrief(heldText);
+  // Every `failed` step on the same plans: what the register says did not land.
+  const failed = failedSteps(plans);
 
-  // Every `ready` plan the runner would pass over now. The whole file is read
-  // here rather than `heldForBrief`'s filtered half: an entry still at
-  // `repairs: 0` is a repair the runner would start, which is the difference
-  // between a project that is waiting on hands and one that is not.
+  // Every `ready` plan the runner would pass over now.
   const stop = existsSync(join(root, 'runner', 'STOP'));
   const waiting = waitingOnHands({
     plans,
@@ -1118,7 +1116,6 @@ export async function collectBrief({
       plans,
       prs: opened,
       prsFailed,
-      held: parseHeld(heldText),
       stop,
       root,
       // `git` answers with a string or null here; the reading wants ok and text.
@@ -1150,7 +1147,7 @@ export async function collectBrief({
 
   const text = renderBrief({
     now, since, firstBrief: !last, merged, opened, proposals, plans,
-    undocumented, unplanned, unreadable, runs, queue, held, waiting, blocked, production, notes,
+    undocumented, unplanned, unreadable, runs, queue, failed, waiting, blocked, production, notes,
   });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
@@ -1160,7 +1157,7 @@ export async function collectBrief({
     text,
     data: {
       since, merged, opened, proposals, plans, undocumented, unplanned, unreadable,
-      runs, queue, held, waiting, blocked, production, notes,
+      runs, queue, failed, waiting, blocked, production, notes,
     },
   };
 }

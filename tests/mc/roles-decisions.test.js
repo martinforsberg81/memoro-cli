@@ -29,7 +29,7 @@ import {
  * to reach him, it can be asked — so its overlay says read first and ask the
  * one thing, rather than holding it to the shape a written proposal takes.
  */
-const AUTHORS = ['worker', 'step', 'repair'];
+const AUTHORS = ['worker', 'step'];
 
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
@@ -124,7 +124,7 @@ describe('the decision shape every role writes', () => {
  * the assembler.
  */
 describe('the rules every session gets, whichever role it is', () => {
-  const CANON_ROLES = ['brief', 'helper', 'intake', 'plan', 'repair', 'step', 'worker'];
+  const CANON_ROLES = ['brief', 'helper', 'intake', 'plan', 'step', 'worker'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
   const ROUTE = phrase('The practical route to `main` is yours to settle');
 

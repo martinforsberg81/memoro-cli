@@ -57,7 +57,6 @@ What canon holds today:
 | `helper` | sonnet | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | the inbox drain, one headless turn per file |
 | `plan` | fable | `mc plan <programme>`, a foreground session in `~/mc/plan/<programme>/` |
-| `repair` | opus | `mc run`, on a pull request whose landing failed |
 | `step` | opus | `mc run`, one step of a `PLAN.json` |
 | `worker` | opus | `mc worker`, and every conversation in that area after |
 
@@ -130,7 +129,7 @@ Four paths launch a session with instructions, and all four call it:
 |---|---|
 | `work-open.js:93` (`openInWorkArea`) | a foreground conversation in a work area — `mc work`, `mc brief`, `mc helper`, `mc plan` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
-| `run.js:1355` | a runner session: a step, or a repair |
+| `run.js` (`runStep`) | a runner session: a step |
 | `helper-turn.js:258` | the intake turn, one file, headless |
 
 Each of them used to write the join out by hand.
@@ -295,9 +294,9 @@ it.
 [`tests/mc/roles-decisions.test.js`](../../tests/mc/roles-decisions.test.js) —
 what each role is told, read through the path that actually delivers it: the
 assembler for the roles with a body, `planLaunch` for a role without one. It
-walks all seven canon roles for the loose-thread and route rules, asserts their
-text exists in exactly one file, and holds the decision shape `worker`, `step`
-and `repair` are held to.
+walks all six canon roles for the loose-thread and route rules, asserts their
+text exists in exactly one file, and holds the decision shape `worker` and
+`step` are held to.
 
 The delivered text is asserted at each launch path too, against
 `sharedRoleText()` rather than a copy of it:

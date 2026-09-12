@@ -77,25 +77,20 @@ the eye already is:
   ([**ruling 20**](#the-surfaces) put a round on the page; the section itself
   is `mergesSection`, `page-collect.js`, and `runningMerge`,
   `merges-collect.js`, joins the gate lock to a name). The heading's count is
-  `N landing · N queued · N held`, each part shown only when it is not zero,
-  and `nothing landing, nothing queued` — the literal phrase, not per missing
-  part — when all three are. Under it, in order: the round itself, green like
+  `N landing · N waiting`, each part shown only when it is not zero,
+  and `nothing landing, nothing waiting` — the literal phrase, not per missing
+  part — when both are. Under it, in order: the round itself, green like
   a running RUNNER lane because it is the same fact — `● memoro #11651
   sql-w5-relationship-closure  running 17 test files · 4 min`, or `· nothing
   landing` when the gate is idle. A `check`-mode round (`mc test`, not `mc
   merge`) says so rather than reading as a landing that is not one:
   *measuring, not landing*. Then, unchanged in everything but position:
-  **queued for merge** — `~/mc/runner/merges.json`, every pull request a
-  refused `mc merge` handed the runner's merge lane, green, the repository,
-  the number, the reason the round stopped, since when. Then **held before
-  merge** — `~/mc/runner/held.json`, every pull request `mc run` would not
-  land, yellow, project, pull request, reason. The two used to be under NEXT's
-  own heading and rows; they moved here because they answer this section's
-  question rather than NEXT's — what a pull request is doing once a step has
-  become a round — and NEXT's own skips still count a held project among its
-  reasons (`held-after-repair`), a different fact from these rows, which say
-  which pull request and why. `mc --json` carries `merges.queued` and
-  `merges.held` whole, and `mc status <name>` says `#N is landing now — <phase>
+  **waiting** — `~/mc/runner/merges.json`, every `mc merge` standing in line
+  for the gate with its pid, green, the repository, the number, what it is
+  behind, since when. The held rows that stood under it went with `held.json`
+  (ruling 21): a step that did not land is `failed` in the register and is
+  drawn where every other plan state is. `mc --json` carries `merges.queued`
+  whole, and `mc status <name>` says `#N is landing now — <phase>
   (<age>)` or `#N is being measured (mc test), not landed` when the round
   matches this project's own open pull request, and `#N is queued for merge
   (since …)` for a queued one ([`mc-run.md`](mc-run.md) § *The merge*).
@@ -138,7 +133,7 @@ the eye already is:
   `step n/m` in the kind's own colour, and that step's title. The skips are
   counted by reason underneath, and the reasons are both of the runner's
   own: what the plan on `origin/main` says (`blocked`, `done`, `unparseable`)
-  and what this machine says (`dirty`, `in-flight`, `held-after-repair`, …) —
+  and what this machine says (`dirty`, `in-flight`, …) —
   the two readings of [`mc-run.md`](mc-run.md) § *The two readings, and what
   each answers*, so a name counted runnable here is one the runner would
   actually start, and its kind is what it would start it as. A session somebody
@@ -149,11 +144,8 @@ the eye already is:
   nothing (`stale-blockers.js`). Only a `project` blocker; a `decision` waits
   on Martin and there is no artefact to read it against. It reports and
   nothing more — flipping the step back to `ready` is a plan edit somebody
-  makes. A held pull request still counts among the skip reasons above
-  (`held-after-repair`) — that is the skip nothing else counted, a project the
-  runner would not have started anyway — but its own row and the heading's
-  `held`/`queued` counts are gone from here; MERGES, right below this section,
-  is where the round and its two queues are now drawn.
+  makes. The heading's `held`/`queued` counts are gone from here; MERGES,
+  right below this section, is where the round and its waiters are drawn.
   Last under the section, and the one line worth more than every red cell in
   PROGRAMMES: **how many projects are blocked**, how many of them wait on a
   decision and how many on another project, and the blockers holding the most —
@@ -225,8 +217,8 @@ the helper and the sessions already write.
 | a step is in flight | `~/mc/runner/current-<repo>[-<lane>].json`, one per lane (name, kind, repo, lane, tool, model, effort, advisor, budget, started, pid, worktree) | `mc run`, per step |
 | stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
-| a pull request left unlanded | `~/mc/runner/held.json` (project, repo, pr, branch, reason, note, since, repairs, and — when a gate held it — `red` and `gates` for the repair session to read) | `mc run`, whenever a landing does not land |
-| a pull request waiting for the merge lane | `~/mc/runner/merges.json` (repo, pr, branch, reason, stopped_at, since, holder) | `mc merge`, whenever its round is refused and a runner is running |
+| where every step stands | `~/mc/runner/projects/<project>.json` (per step: status, pr, branch, blocked_by, reason, comments, session, attempts, landed) | `mc run`, `mc merge`, `mc step` |
+| a `mc merge` waiting for the gate | `~/mc/runner/merges.json` (repo, pr, branch, reason, stopped_at, since, holder, pid) | `mc merge`, while it waits its turn |
 | the round landing right now | `~/.memoro/mc/gate-running.json` (pid, repo slug, pr, mode, since, phase, phase_at), joined to a name through `repos` and to a holder through the repository's lease | `mc merge`/`mc test`, for the length of the round (`runningMerge`, `merges-collect.js`) |
 | the head of the order | `~/mc/queue.md` — the rest of NEXT is the plans themselves | Martin, at the brief |
 | what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
@@ -391,7 +383,6 @@ through all three sections.
 | step kind | colour |
 |---|---|
 | `step` | green |
-| `repair` | yellow |
 | `triage` | blue |
 | `brief` | cyan |
 | `plan` | cyan |
