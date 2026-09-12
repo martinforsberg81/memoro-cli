@@ -22,8 +22,9 @@ sessions or projects is a regression**, not a feature.
 | | what it does |
 |---|---|
 | `mc` | prints the page; at a terminal, then the menu, and the page refreshes in place under it every 30 s |
-| `mc --json [--fresh]` | the same object the renderer takes, one key per section, exit 0 |
+| `mc --json [--fresh\|--offline]` | the same object the renderer takes, one key per section, exit 0 |
 | `mc --fresh` | fetch and ask GitHub first, then print |
+| `mc --offline` | skip the fetch and read the plans as they were last fetched |
 | `mc status <name>` | one project — still its own verb |
 | `mc work <name> …` | the workarea verbs — still their own |
 
@@ -35,8 +36,11 @@ bytes, for `mc` and `mc --json` both, because a live surface leaking into a
 script is the one regression nobody would notice by looking.
 
 `mc list`, `mc sessions list`, bare `mc status` and `mc status
---sessions|--watch|--wait` exit 2 and say where they went. `--offline` is
-still accepted on the page and does nothing: offline is what the page does.
+--sessions|--watch|--wait` exit 2 and say where they went. **Ruling 20**
+(2026-09-12): a plan is read from `origin/main` and nowhere else, so every
+print of the page fetches `origin/main` for each repository first — the same
+fetch `mc status <name>` already took — and `--offline` is what skips it,
+reading the plans as they were last fetched rather than as they are now.
 
 ## The five sections
 
@@ -220,7 +224,7 @@ the helper and the sessions already write.
 | what mc deployed | `~/mc/runner/log/deploys.tsv` (sha, build, holder, outcome, the live version verified) | `mc deploy`, before and after |
 | what production answers it is | `~/mc/runner/version.json` (`GET /api/version`, with the moment it was asked) | `mc helper --collect` |
 | someone is sitting here | `tmux ls`, `~/mc/runner/foreground/<pid>.json` | tmux, `foreground.js` |
-| plans and open PRs | `~/mc/runner/plans.json`, `~/mc/runner/prs.json` | the page itself (below) |
+| plans and open PRs | `~/mc/runner/plans.json`, `~/mc/runner/prs.json` — plans read from `origin/main` after a `git fetch` (ruling 20), never the workarea | the page itself (below) |
 
 `runs.tsv` gets its row only *after* a step ends, which is why
 `runner.json` and the `current-<repo>.json` files exist at all: before them,
@@ -303,8 +307,10 @@ already reads, not state anything depends on. Delete both and the next
 
 The **cold** path is not instant: the first print after `origin/main` moves
 re-reads both repositories and costs 0.31 s quiet, 0.48 s under load. That
-happens once per merge. The runner could warm it in the round it already
-fetches in; it does not yet.
+used to happen once per merge; since ruling 20 it happens on every ordinary
+print, because the page now fetches before it reads — see *What a refresh
+costs* for the fetch's own price. The runner could warm the cache in the
+round it already fetches in; it does not yet.
 
 ### What a refresh costs
 
@@ -318,6 +324,8 @@ seconds, and the number to know is what that read actually takes now:
 | 2026-08-29 | 0.09–0.11 s | the caches hit, quiet |
 | 2026-09-02 | 2.4 s, 2.7 s, 4.8 s (and 3.9–6.6 s in a second set) | the runner landing pull requests, several sessions open |
 | 2026-09-03 | 1.83 s, 1.11 s, 1.09 s | the runner running, nothing merging |
+| 2026-09-12, `--offline` | 0.40 s, 0.39 s, 0.38 s | the same machine, three runs each, the fetch skipped |
+| 2026-09-12, fetching (ordinary, ruling 20) | 1.78 s, 1.38 s, 1.39 s | the same machine, three runs each |
 
 The spread is not noise and it is not the renderer: `plans.json` is keyed
 by the `origin/main` sha, so **every merge invalidates it**, and a machine
@@ -325,6 +333,13 @@ whose runner is landing pull requests is a machine where the page is cold
 most of the time — exactly when it is most worth watching. The 0.09 s in
 the section above is the hit; the seconds above are the miss, and the miss
 is the ordinary case under a runner.
+
+Since ruling 20, the miss is also the *only* case: an ordinary print fetches
+`origin/main` for every present repository before it reads a plan, so the
+2026-09-12 rows above are the honest floor, not a worst case. Against the
+2026-09-03 baseline of 1.1–1.8 s the added fetch costs roughly a second —
+`--offline` lands at 0.4 s, fetching at 1.4–1.8 s — which is the price of
+never showing a plan the workarea has already outrun.
 
 Making that read quick is a different problem and deliberately not this
 one. What the live page does about it is refuse to be blocked by it: the

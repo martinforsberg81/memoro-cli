@@ -1210,7 +1210,7 @@ describe('the page', () => {
     // open them, and the file that has them all.
     assert.match(text, /^ {7}5 {2}· {2}~\/mc\/runner\/unplanned-workareas\.md {2}has them all$/mu);
     assert.doesNotMatch(text, /ui-fixes/u, 'twelve rows that never change are a count and a file');
-    assert.match(text, /offline, PRs 2 h old — --fresh asks GitHub/u);
+    assert.match(text, /fetched origin, PRs 2 h old — --fresh asks GitHub/u);
     assert.match(text, /note: no queue\.md/u);
     assert.ok(!/note: PRs from cache/u.test(text), 'the cache line already says it');
   });
@@ -1469,6 +1469,59 @@ describe('collectPage', () => {
     assert.equal(data.caches.fresh, true);
     assert.equal(data.programmes.programmes.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
   });
+
+  /**
+   * Ruling 20: every ordinary page fetches `origin/main` before it reads a
+   * plan, so `plans.json`'s sha-keyed cache sees the round's real state
+   * rather than however stale the workarea happened to be left.
+   */
+  it('fetches origin for every present repository before loading plans, unless --fresh already did', async () => {
+    const root = workRootFixture();
+    const calls = [];
+    const repos = [
+      { name: 'memoro-cli', path: join(root, 'mc-ui', 'memoro-cli') },
+      { name: 'memoro', path: join(root, 'docx-editor', 'memoro-cli') },
+    ];
+    const data = await collectPage({
+      env: { MC_WORK_ROOT: root },
+      now: NOW,
+      repos,
+      exec: async (cmd, args) => { calls.push([cmd, ...args].join(' ')); return { ok: true, stdout: '' }; },
+      run: () => ({ status: 1, stdout: '' }),
+      git: () => null,
+      cache: {
+        loadPlans: () => ({ plans: PLANS, sources: [{ repo: 'memoro-cli', sha: 'aaa', cached: true }] }),
+        loadPrs: () => ({ prs: [], fetched: null, age_seconds: null }),
+      },
+    });
+    assert.deepEqual(calls.sort(), [
+      `git -C ${join(root, 'docx-editor', 'memoro-cli')} fetch -q origin`,
+      `git -C ${join(root, 'mc-ui', 'memoro-cli')} fetch -q origin`,
+    ]);
+    assert.equal(data.caches.fetched, true);
+  });
+
+  it('--offline skips the fetch entirely and reads the plans as last fetched', async () => {
+    const root = workRootFixture();
+    const calls = [];
+    const repos = [{ name: 'memoro-cli', path: join(root, 'mc-ui', 'memoro-cli') }];
+    const data = await collectPage({
+      env: { MC_WORK_ROOT: root },
+      now: NOW,
+      repos,
+      offline: true,
+      exec: async (cmd, args) => { calls.push([cmd, ...args].join(' ')); return { ok: true, stdout: '' }; },
+      run: () => ({ status: 1, stdout: '' }),
+      git: () => null,
+      cache: {
+        loadPlans: () => ({ plans: PLANS, sources: [{ repo: 'memoro-cli', sha: 'aaa', cached: true }] }),
+        loadPrs: () => ({ prs: [], fetched: null, age_seconds: null }),
+      },
+    });
+    assert.deepEqual(calls, [], 'offline asks git nothing');
+    assert.equal(data.caches.offline, true);
+    assert.equal(data.caches.fetched, false);
+  });
 });
 
 /* ------------------------------------------------------------- the palette */
@@ -1566,7 +1619,7 @@ describe('the palette', () => {
     'bold+cyan cyan grey grey grey grey grey grey', // HELPER  ● open 60 min · claude sonnet · pid 99   mc helper
     'bold+cyan grey grey', //                          BRIEF  ·  not open                                mc brief
     '',
-    'grey', //                                         offline, PRs 2 h old — --fresh asks GitHub
+    'grey', //                                         fetched origin, PRs 2 h old — --fresh asks GitHub
     'grey', //                                         note: no queue.md
   ];
 
