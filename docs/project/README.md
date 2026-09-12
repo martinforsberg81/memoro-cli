@@ -66,8 +66,18 @@ carries:
   person has to fix, with the name from its fixed list (`dirty-worktree`,
   `worktree-missing`, `branch-unmovable`, `merge-uncommittable`, `role-missing`,
   `tool-missing`, `held-after-repair`) and the workarea named in the step's last
-  comment. It is answered by fixing the workarea and setting the step `ready`,
-  not by a decision.
+  comment. It is answered by fixing the workarea and `mc step ready`, not by a
+  decision.
+
+  **Since 2026-09-12 these state fields are read from the file once and then
+  live in the register** (`~/mc/runner/projects/<project>.json`, `src/mc/register.js`
+  in memoro-cli — ruling 21): the plan on `main` says what a step *is*, the
+  register where it *stands*, and every reader lays the second over the first.
+  The register knows two states the file never carries: `running`, a session
+  is on the step, and `failed`, its session ended without landing and `reason`
+  says why. A transition is `mc step <status>`, never a pull request. The
+  fields stay in the file for now so a plan written today still reads; they go
+  from the schema when the last reader of them does.
 - `runner` — optional: `model`, `effort`, `advisor`, for a step that needs
   something other than the plan's. Each key overrides the plan's `runner` on
   its own, and a step that names only its effort keeps the plan's model.
@@ -190,15 +200,14 @@ and inside its own step only `status`, `pr`, `comments` and `blocked_by` — its
 `instruction`, `done_when` and `runner` are compared like every other step's,
 so a session cannot soften what it was asked to do or pick the model it runs on.
 
-**The runner writes one thing into a plan: a step it could not start.** When
-`mc run` meets a fault in the workarea or on this machine that a person has to
-fix — a dirty worktree, a branch it cannot move, a merge that will not commit, a
-missing role or tool, a pull request still held after its one repair — it sets
-the first step that is not done to `blocked` with `blocked_by: { kind:
-"workarea", name }` and appends one comment naming the workarea, through a
-docs-only pull request it lands itself. Nothing else in the plan is touched. It
-never writes `ready` and never retries: the brief or a planning session sets the
-step `ready` again once the workarea is fixed
+**The runner writes nothing into a plan.** When `mc run` meets a fault in the
+workarea or on this machine that a person has to fix — a dirty worktree, a
+branch it cannot move, a merge that will not commit, a missing role or tool —
+it sets the first step that is not done to `blocked` with `blocked_by: { kind:
+"workarea", name }` **in the register**, with one comment naming the workarea.
+Until 2026-09-12 that was a docs-only pull request the runner opened and landed
+itself, because the state lived in the plan on main. It never writes `ready`
+and never retries: `mc step ready <project> <n>` once the workarea is fixed
 ([`docs/technical/mc-run.md`](../technical/mc-run.md) § *Blocked by the runner*).
 
 When the code says a coming step is wrong, that is not a revision the step
