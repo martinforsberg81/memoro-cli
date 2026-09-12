@@ -138,7 +138,7 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   assert.match(ts, /^\d{4}-\d{2}-\d{2}T/u);
   assert.deepEqual(
     { name, kind, exit, pr, turns, input, output, cacheRead, cacheWrite, session, note },
-    { name: 'cx', kind: 'step', exit: '0', pr: '-', turns: '-', input: '1200', output: '340', cacheRead: '900', cacheWrite: '-', session: 'codex-thread-42', note: 'success' },
+    { name: 'cx', kind: 'step', exit: '0', pr: '-', turns: '-', input: '1200', output: '340', cacheRead: '900', cacheWrite: '-', session: 'codex-thread-42', note: 'success,failed' },
   );
   assert.match(seconds, /^\d+$/u);
 

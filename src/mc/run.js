@@ -2025,89 +2025,68 @@ export function createRunner({
     const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut });
     let { note } = read;
 
-    // The boundary, checked instead of asked for. A step session edits its own
-    // step, the criteria it met and what the code taught it; a session that
-    // rewrote a step it did not run, added one, or widened the scope leaves a
-    // PR the runner will not merge. Nothing is reverted here — the branch is
-    // the session's work and Martin reads the PR.
-    //
-    // A repair is checked the same way, and a repair of a `plan-trespass` is
-    // checked against the plan on **origin/main** rather than against the one
-    // it was handed: the worktree's plan already carries the trespass, so
-    // judging the repair by it would call the trespass repaired the moment
-    // nothing more was touched, and the runner would land what it refused to
-    // land an hour earlier.
-    //
-    // A step session whose conflict was in the plan itself is judged against
-    // the plan on origin/main for the same reason, the other way round: the
-    // copy it was handed is the branch's HEAD, and the merge that stopped is
-    // precisely main's edits to that file. Judging by HEAD would read every
-    // one of them — a step somebody else finished, a criterion somebody else
-    // met — as a step this session had no business touching.
+    // Where the step stands now is the register's word, not this process's
+    // (ruling 21). The session ran `mc merge` itself: green wrote `done` and
+    // ended the session, so the process under this lane came back with a
+    // signal and no JSON, and that is the ordinary end of a landed step. A
+    // session that gave up wrote `failed` with its reason. Anything still
+    // `running` when the process is gone is failed here: a pull request
+    // left open the session did not land, or no pull request at all. A
+    // quota answer is no session and the step goes back to `ready`. The
+    // runner lands nothing of a session's and never retries a failed step;
+    // `mc step ready` is the way back.
     let problems = [];
-    const onMain = plans.find((p) => p.project === name)?.plan || null;
-    const planConflicted = Boolean(plan?.path) && conflicts.some((path) => plan.path.endsWith(`/${path}`));
-    const judged = kind === 'repair'
-      ? repairBaseline(repair.entry, plan, onMain)
-      : (kind === 'step' ? { before: (planConflicted && onMain) || plan.plan, index: choice.index } : null);
-    if (judged && note === 'success') {
-      const after = readPlanText(deps.read(plan.path) || '');
-      const trespass = after.plan
-        ? unauthorisedChanges(judged.before, after.plan, judged.index)
-        : { ok: false, problems: [`the plan no longer parses: ${after.problems[0]}`] };
-      if (!trespass.ok) {
-        note = 'plan-trespass';
-        problems = trespass.problems;
-        for (const problem of trespass.problems) say(`${name}: ${problem}`);
-        say(`${name}: #${pr} left open — the session changed more of the plan than its step`);
-      }
-    }
-
-    // The second birthplace of a hold: a pull request this session left behind
-    // that nothing is going to land. A trespass, a session that timed out with
-    // its work pushed, a tool that printed no result — all of them leave a
-    // branch `inFlight` refuses the project on every later round, and until now
-    // the only trace was a runs.tsv note.
-    if (pr !== '-' && holdsAfterSession(note)) {
-      hold({ project: name, repo: repo.name, pr: Number(pr), branch, reason: holdReason({ note, problems }), note });
-    }
-
     let landSeconds = null;
-    if (merge && openNow.length && note === 'success') {
-      const landed = await landProject(worktree, repo, name, openNow);
-      note = `success,${landed.note}`;
-      landSeconds = landed.seconds;
-    }
-
-    // Where the step stands now, in the register (ruling 21). Landed: the
-    // step's own fields as the session left them in the plan it landed —
-    // `done` with its pull request, or `blocked` on a decision the session
-    // raised — plus the commit main now stands at. Anything else is `failed`
-    // with the reason: the gate's, when the landing held it; the session's
-    // exit, when it left no pull request at all. A quota answer is no session
-    // and the step goes back to `ready`. The runner never retries a failed
-    // step; `mc step ready` is the way back.
     if (kind === 'step') {
-      const landedPlan = note === 'success,merged' ? readPlanText(deps.read(plan.path) || '').plan : null;
-      const own = landedPlan?.steps?.[choice.index];
-      if (own) {
-        const status = own.status === 'blocked' ? 'blocked' : 'done';
-        recordStep(name, choice.index, {
-          status,
-          pr: Number(pr) || own.pr || null,
-          branch,
-          blocked_by: status === 'blocked' ? own.blocked_by : null,
-          comments: Array.isArray(own.comments) ? own.comments : [],
-          landed: { sha: gitOut(worktree, ['rev-parse', 'origin/main']) || null, at: stamp() },
-          reason: null,
-        });
+      const after = readEntry(root, name, { read: deps.read })?.steps?.[choice.index] || null;
+      // The row's note keeps the session's own exit word — `success`,
+      // `timeout`, `no-json`, `failed` — and says after it where the step
+      // stands: a step `mc merge` landed is `success,merged` however the
+      // process died, because the verb ends the session on purpose.
+      if (after?.status === 'done') {
+        note = 'success,merged';
+        say(`${name}: #${after.pr || pr} landed through mc merge from the session — step ${choice.index + 1} is done`);
+        if (after.pr) askForUpdate(repo, name, after.pr);
+      } else if (after?.status === 'failed') {
+        note = `${note},failed`;
+        say(`${name}: step ${choice.index + 1} failed by the session's own word — ${after.reason}`);
+      } else if (after?.status === 'blocked') {
+        note = `${note},blocked`;
+        say(`${name}: step ${choice.index + 1} is blocked by the session on ${after.blocked_by?.kind} ${after.blocked_by?.name}`);
       } else if (read.quota) {
         recordStep(name, choice.index, { status: 'ready', session: null });
       } else {
-        const held = pr !== '-' ? heldNow().find((entry) => samePr(entry, { repo: repo.name, pr: Number(pr) })) : null;
-        const reason = held?.reason
-          || (pr !== '-' ? `#${pr} is open and the runner did not land it (${note})` : `the session ended ${note} (rc ${result.status}) with no pull request`);
+        const reason = pr !== '-'
+          ? `#${pr} is open and the session ended ${note} (rc ${result.status}) without landing it`
+          : `the session ended ${note} (rc ${result.status}) with no pull request`;
         recordStep(name, choice.index, { status: 'failed', pr: Number(pr) || null, branch, reason });
+        say(`${name}: step ${choice.index + 1} failed — ${reason}`);
+        note = `${note},failed`;
+      }
+    } else {
+      // A repair is judged as it was, against the plan it was handed, and
+      // still landed by this lane — until the repair path goes (ruling 21).
+      const onMain = plans.find((p) => p.project === name)?.plan || null;
+      const judged = repairBaseline(repair.entry, plan, onMain);
+      if (judged && note === 'success') {
+        const after = readPlanText(deps.read(plan.path) || '');
+        const trespass = after.plan
+          ? unauthorisedChanges(judged.before, after.plan, judged.index)
+          : { ok: false, problems: [`the plan no longer parses: ${after.problems[0]}`] };
+        if (!trespass.ok) {
+          note = 'plan-trespass';
+          problems = trespass.problems;
+          for (const problem of trespass.problems) say(`${name}: ${problem}`);
+          say(`${name}: #${pr} left open — the session changed more of the plan than its step`);
+        }
+      }
+      if (pr !== '-' && holdsAfterSession(note)) {
+        hold({ project: name, repo: repo.name, pr: Number(pr), branch, reason: holdReason({ note, problems }), note });
+      }
+      if (merge && openNow.length && note === 'success') {
+        const landed = await landProject(worktree, repo, name, openNow);
+        note = `success,${landed.note}`;
+        landSeconds = landed.seconds;
       }
     }
 

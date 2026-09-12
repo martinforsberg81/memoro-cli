@@ -589,8 +589,11 @@ is a `plan-trespass`.
 The prompt is `stepPrompt`: you are in this workarea, your plan is on disk at
 this path, do `steps[i]`, its `done_when` is your success criterion, say in the
 PR body how you verified it, what in the plan file you may edit, and — if the
-contract must change — stop with the step `blocked` and say so in the PR. "Do
-not merge. Do not ask questions. Stop when the PR exists." Below that comes
+contract must change — stop with the step `blocked` and say so in the PR. Then
+the ending, since ruling 21: build it, set the step `done` with its `pr`, open
+the pull request, and run `mc merge <repo> <pr>` yourself until it says merged
+— a red comes back to the same session, which fixes it and runs it again;
+giving up is `mc step failed --reason "…"`. Below that comes
 **the part of the plan the step needs, not the file**: rendered from the parsed
 plan, each part under a `----- <heading> -----` line the session can search
 for — `goal`, `contract`, `out_of_scope`, `success_criteria` (index, `met`,
