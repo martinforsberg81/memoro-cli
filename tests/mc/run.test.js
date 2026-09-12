@@ -1075,7 +1075,7 @@ test('a step session that ended with its pull request open is failed with that r
   const step = registerOf(f, 't').steps[0];
   assert.equal(step.status, 'failed');
   assert.equal(step.reason, '#5 is open and the session ended stalled (rc 142) without landing it');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\ttimeout,failed\t/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tstalled,failed\t/u);
 });
 
 test('run.js has no gh pr merge left in it', () => {
