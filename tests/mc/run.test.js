@@ -922,7 +922,125 @@ test('a conflict outside the plan hands out the step main says, not the one HEAD
  */
 test('a plan conflict main\'s copy could not be taken for is aborted, and the files are named', async () => {
   const f = fixture({
-    areas: { c: { repo: 'memoro', programme: 'prog', plan: '  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\tstalled,failed\t-\tsonnet\n/u);
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
+    plans: { memoro: { c: ready } },
+    conflicts: { c: [PLAN_AT, 'src/a.js'] },
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.equal(f.calls.sessions.length, 0, 'no session is launched on a half-merged tree');
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json — the plan's rule refused \(the merge base could not be read out of the index\) and main's copy could not be taken either/u);
+  assert.match(log, /c: merge conflict in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u);
+  assert.match(log, /the merge of origin\/main is aborted, still conflicting in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u);
+});
+
+/**
+ * And a step session that did not finish the merge leaves the worktree as
+ * clean as the `reconcile` abort did — the same check, on the conflict rather
+ * than on a kind.
+ */
+test('a step session that leaves MERGE_HEAD behind has the merge aborted under it', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    conflicts: { c: ['src/a.js'] }, mergeLeft: ['c'],
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.equal(f.calls.sessions.length, 1);
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
+  assert.match(f.files['/w/runner/log/runner.log'], /c: the session left the merge of origin\/main unfinished — merge aborted/u);
+});
+
+/**
+ * And the merge no session is standing over any more. The abort above only
+ * runs in the pass that started the session; a runner killed mid-session — rc
+ * 143, `mc run stop --force` — never reaches it, and what it leaves behind is
+ * unmerged paths in the workarea. That is a dirty worktree, so every pick from
+ * then on refuses the project and a person has to go and do it by hand:
+ * `sql-w1-universe-closure` was `dirty worktree (.gitattributes,
+ * .github/workflows/deploy.yml, .gitignore +1039)` every round of 2026-09-08
+ * on exactly this.
+ *
+ * So it is aborted before the dirty check, and the tree goes back to the
+ * branch's own last commit — which is what the post-session abort already does
+ * with the same merge.
+ */
+test('a merge a killed session left in the workarea is aborted before the dirty check', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    mergeLeft: ['c'],
+    session: okSession(), gh: { c: { number: 97, title: 'The one step' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  const aborts = f.calls.git.filter((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort');
+  assert.ok(aborts.length >= 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /c: a merge of origin\/main was left in progress — aborted/u);
+  assert.equal(f.calls.sessions.length, 1, 'and the step runs, in the same pass');
+});
+
+/** What the abort cannot fix is still a dirty worktree, and still says so. */
+test('a workarea still dirty after that abort is refused, with the files', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    mergeLeft: ['c'], dirty: ['c'],
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('c', runner.queue()), 'skipped:dirty');
+  assert.equal(f.calls.sessions.length, 0);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /c: a merge of origin\/main was left in progress — aborted/u);
+  assert.match(log, /c: uncommitted changes that are not a merge in progress \(x\)/u);
+});
+
+/**
+ * The runner runs plans; it does not write them. There used to be a `triage`
+ * kind here that started a headless session, invented the PLAN.md and landed
+ * it on main by itself (Martin, 2026-08-29: "JAG TAR FRAM PLANER I EN mc plan
+ * SESSION").
+ */
+test('a workarea with no plan is not in the queue, and gets no step and no skip line', async () => {
+  const f = fixture({ areas: { fresh: { repo: 'memoro' } }, queue: 'fresh\n', session: okSession() });
+  const runner = createRunner({ deps: f.deps });
+  assert.deepEqual(runner.queue().names, [], 'queue.md named it; it has no plan, so it is not queued');
+  await round(runner);
+  assert.equal(f.calls.sessions.length, 0);
+  assert.deepEqual(runRows(f.files).filter((r) => r.kind !== 'helper'), []);
+  const log = f.files['/w/runner/log/runner.log'] || '';
+  assert.doesNotMatch(log, /fresh: /u, 'no skip line — nobody reads it');
+  // The two lines it does get are the two places somebody looks: the queue
+  // says why the name left it, and the workarea is written for `mc brief`.
+  assert.match(log, /queue: dropped "fresh" — no plan on main/u);
+  assert.equal(f.files['/w/queue.md'], '', 'the queue empties itself');
+  assert.match(f.files['/w/runner/unplanned-workareas.md'], /\| fresh \| memoro \|/u);
+});
+
+test('a quota answer is logged as quota, not merged, and the runner sleeps 30 minutes', async () => {
+  const slept = [];
+  const f = fixture({ plans: { memoro: { q: ready } }, gh: { q: { number: 5 } }, session: () => ({ status: 1, stdout: JSON.stringify({ subtype: 'success', num_turns: 1, result: "You've hit your weekly limit" }), stderr: '', timedOut: false }) });
+  f.deps.sleep = async (ms) => { slept.push(ms); };
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\tsonnet\n/u);
+  assert.equal(f.calls.rounds.length, 0);
+  assert.ok(slept.includes(30 * 60 * 1000));
+});
+
+const stalledSession = () => ({ status: 142, stdout: '', stderr: '', timedOut: true, stalled: true });
+
+test('a stalled session is logged as stalled with exit 142', async () => {
+  const f = fixture({ plans: { memoro: { t: ready } }, session: stalledSession });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\tstalled,failed\t-\tsonnet\n/u);
 });
 
 /**
@@ -956,7 +1074,7 @@ test('a step session that ended with its pull request open is failed with that r
   assert.equal('/w/runner/held.json' in f.files, false, 'there is no held file any more (ruling 21)');
   const step = registerOf(f, 't').steps[0];
   assert.equal(step.status, 'failed');
-  assert.equal(step.reason, '#5 is open and the session ended timeout (rc 142) without landing it');
+  assert.equal(step.reason, '#5 is open and the session ended stalled (rc 142) without landing it');
   assert.match(f.files['/w/runner/log/runs.tsv'], /\ttimeout,failed\t/u);
 });
 
@@ -2510,6 +2628,7 @@ test('a project already in flight in one lane is skipped by another', async () =
   const third = await runner.runStep('a', world, { lane: 1 });
   assert.notEqual(third, 'skipped', 'the claim is released when the step is over');
 });
+
 
 /* ----------------------------------------- a step the runner cannot start */
 
