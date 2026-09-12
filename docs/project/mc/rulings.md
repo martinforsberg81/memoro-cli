@@ -583,6 +583,39 @@ lane will take, and the held pull requests, which move there from NEXT.
 
 **Carried by [`main-and-merges/PLAN.json`](main-and-merges/PLAN.json).**
 
+## 21 · A step lands its own pull request, and there is no repair
+
+`ruling · 2026-09-12` · raised by Martin at the plan session, from the failure
+analysis of 2026-09-05..12
+
+The runner landed a step's pull request after the session had gone: the gate
+went red, `held.json` got an entry, and the next round started a fresh `repair`
+session on `opus` to read a branch it had never seen (22 repair rows, 156
+minutes, median 33 turns; 21 of 51 non-landed sessions were a gate stop). The
+step role said "Do not merge: the runner lands it after you." The planning
+session proposed keeping the mechanism and moving the fix session into the
+landing.
+
+> "Vi kan inte ha både en repair runda och en merge runda." … "Jag beskriver
+> samma beteende såsom det är tänkt I SAMMA SESSION. DET SKA INTE FINNAS
+> 'FIX'-SESSIONER. = DUBBEL KOSTNAD NÄR EN NY SESSION SKA LÄSA IN SIG PÅ ALLT
+> IGEN I GANSKA MÅNGA TURNS." … "Kanske vi ska göra så här istället runner step
+> kör direkt 'mc merge #'. Då körs direkt rätt tester. Om fel, fås svaret
+> tillbaka och kan fixas. Om grönt, så sker merge direkt och inga tester behöver
+> köras ytterligare en gång." … "Done ska naturligtvis vara en del av pr. Annars
+> måste ju en ny PR köras igen. Dubbel arbete. Om merge failar så sätts ändå inte
+> done i main." … "Ja, och med väntan i mc merge. Som tar nästa uppdrag så fort
+> det pågående är klart." (Martin, 2026-09-12)
+
+So: the step session sets `done` and `pr` in the plan, in the pull request with
+the code, and runs `mc merge <repo> <pr>` itself; a red comes back to the same
+session; green is the merge, measured once. `mc merge` waits for its turn in
+order of arrival and checks the plan boundary at the door. There is no repair
+session, no `held.json` and no merge lane: an open pull request a session could
+not land is a person's through the brief.
+
+**Carried by [`step-lands-itself/PLAN.json`](step-lands-itself/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
