@@ -25,6 +25,8 @@ import { join } from 'node:path';
 import { defaultRepos, runsFor } from './brief-collect.js';
 import { heldPath, parseHeld } from './held.js';
 import { mergesPath, parseQueue } from './merge-queue.js';
+import { runningMerge } from './merges-collect.js';
+import { ageWords } from './page-cache.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
@@ -122,7 +124,7 @@ export function wrap(text, width, pad) {
 
 export function renderProject({
   name, repo, programme, path, plan, problems = [], workarea, runs, prs, machine = null,
-  queued = [], notes = [],
+  queued = [], landing = null, notes = [],
 }) {
   const out = [];
   out.push(`${name} — ${[repo, programme].filter(Boolean).join(' · ') || 'no repository'}`);
@@ -160,6 +162,13 @@ export function renderProject({
   out.push('OPEN PR');
   if (!prs.length) out.push('  none for this project');
   for (const pr of prs) out.push(`  #${pr.number}  ${clip(pr.title, 70)}${pr.headRefName ? `  (${pr.headRefName})` : ''}`);
+  // The gate round itself, ahead of the queue: a pull request already landing
+  // is not merely going to move, it is moving right now.
+  if (landing) {
+    out.push(landing.mode === 'check'
+      ? `  #${landing.pr} is being measured (mc test), not landed`
+      : `  #${landing.pr} is landing now — ${landing.phase || 'running'} (${ageWords(landing.age_seconds)})`);
+  }
   // What is going to happen to it without anybody typing again. A queued pull
   // request is not in the machine row above — nothing about this project is in
   // the way; the merge is simply somebody else's now.
@@ -229,6 +238,7 @@ export async function collectProject(name, {
   git = runGit,
   exec = execAsync,
   read = (path) => readFileSync(path, 'utf8'),
+  merges = runningMerge,
 } = {}) {
   const root = workRoot(env);
   const notes = [];
@@ -288,6 +298,16 @@ export async function collectProject(name, {
     git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
   });
 
+  // The gate round, matched against this project's own fetched pull requests
+  // rather than a branch: `runningMerge`'s object carries no branch, only a
+  // repository and a pull request number. Matching through `prs` rather than
+  // asking again means `--offline` and a failed `gh` leave it silent, same as
+  // the pull requests themselves above.
+  const running = merges({ repos: present });
+  const landing = running && running.repo === repo && prs.some((pr) => pr.number === running.pr)
+    ? running
+    : null;
+
   return {
     name,
     repo,
@@ -299,6 +319,7 @@ export async function collectProject(name, {
     runs: runsFor(tsv, name, 3),
     prs,
     machine,
+    landing,
     // The entries waiting for the runner's merge lane whose branch is this
     // project's — the same longest-name rule the pull requests above are
     // matched by (project-prs.js), so it holds with GitHub unreachable too.

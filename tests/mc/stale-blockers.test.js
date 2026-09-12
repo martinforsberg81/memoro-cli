@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { nextSection, runnerSection, sessionsSection } from '../../src/mc/page-collect.js';
+import { mergesSection, nextSection, runnerSection, sessionsSection } from '../../src/mc/page-collect.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { describeStale, staleBlockers } from '../../src/mc/stale-blockers.js';
 
@@ -26,6 +26,7 @@ function pageText(next) {
     runner: runnerSection({ now: new Date('2026-09-03T12:00:00Z'), alive: () => false }),
     sessions: sessionsSection({ now: new Date('2026-09-03T12:00:00Z'), alive: () => false }),
     next,
+    merges: mergesSection({}),
     intake: { digest: null, proposals: 0, loud: [], fresh: 0 },
     programmes: { repos: [], unplanned: [] },
     caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },

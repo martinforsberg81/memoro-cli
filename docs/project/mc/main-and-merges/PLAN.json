@@ -31,7 +31,7 @@
       "check": "`tests/mc/gate-lock.test.js`: `noteGatePhase` on a file whose pid is this process rewrites `phase` and `phase_at` and keeps `pid`, `repo`, `pr`, `since`; on a file naming another pid it writes nothing and returns false. Live: during `mc test memoro-cli <pr>` (a `check` round), `cat ~/.memoro/mc/gate-running.json` shows a `phase` that changes as the round's stderr narration changes, and `mode: \"check\"`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc` draws MERGES between NEXT and RUNNER with the landing round, the queue and the held pull requests, and `mc --json` carries `merges`.",
       "check": "`tests/mc/page.test.js` `the page`: the heading order is PROGRAMMES, INTAKE, WORK, NEXT, MERGES, RUNNER, HELPER, BRIEF; a fixture with a live lock draws `● memoro #11651` with its holder and phase; with a dead pid it draws `· nothing landing`; the queued and held rows are under MERGES and no longer under NEXT; `tests/mc/front-door.test.js` lists MERGES among the headings that appear exactly once. Live: while the runner is landing a pull request, `mc` shows that pull request under MERGES with the same phase `runner.log`'s `merge #N — …` line last said."
     }
@@ -88,10 +88,18 @@
     },
     {
       "title": "MERGES on the page — landing, queued, held",
-      "status": "ready",
-      "pr": null,
+      "status": "done",
+      "pr": 706,
       "blocked_by": null,
-      "comments": [],
+      "comments": [
+        "Grepped next.held/next.queued across src/ and tests/ before moving them: only src/mc/page-collect.js, src/mc/page-render.js, tests/mc/page.test.js, tests/mc/front-door.test.js and two doc mentions read either field. The brief (docs/technical/mc-run.md) reads held.json/merges.json directly, not next.held/next.queued, so nothing outside the page and its own tests needed touching.",
+        "mergesSection({ landing, queued, held, now }) added to page-collect.js, taking over the held/queued logic nextSection used to own; collectPage now calls runningMerge once (DI param `merges`) and returns a `merges` key. nextSection keeps counting held-after-repair/in-flight among its skip reasons — a different fact from the rows that moved.",
+        "mergesLines drawn between blockedLines and runnerLines in page-render.js: heading MERGES, count `N landing · N queued · N held` (each part only when non-zero, literal `nothing landing, nothing queued` when all three are), verb hint `mc merge <repo> <pr>`; landing row bold green like a running RUNNER lane, check-mode rounds read `measuring, not landing`; queued and held rows unchanged from today's queuedLines/heldLines, just relocated. NEXT's heading and rows no longer carry held/queued.",
+        "mc status <name>: renderProject prints `#N is landing now — <phase> (<age>)` under OPEN PR when runningMerge's pr/repository match the project's own open pull request, and `#N is being measured (mc test), not landed` for a check-mode round; collectProject calls runningMerge once.",
+        "Tests: held/queued tests in page.test.js moved into a MERGES describe block against mergesSection; added a landing fixture and assertions for the row, check-mode wording, and `nothing landing`; the page order test now has MERGES between NEXT and RUNNER, the held-before-merge assertion moved off NEXT onto MERGES, and asserts NEXT's heading no longer says held/queued; the palette snapshot gained the section's rows. front-door.test.js has MERGES in both heading lists. status-project.test.js gained one test for the landing line (and the check-mode wording) using the same DI pattern already used for git/exec. Also fixed two stale hardcoded row-index/offset assertions in page-frame.test.js and one in stale-blockers.test.js that predated the 3-line growth MERGES adds to the empty-page fixture.",
+        "Docs: mc-ui.md's sections list is now eight and describes MERGES between NEXT and RUNNER, moving the held/queued paragraphs out of NEXT's bullet; the facts-come-from table, palette table and modules table all gained rows. mc-run.md's § The merge and § Held before merge each say once that held/queued now draw under MERGES, not NEXT. mc-status.md's OPEN PR example and facts-come-from table gained the landing line. Ruling 20 cited by name throughout.",
+        "npm test: 1954 tests, 1945 passed, 0 failed, 9 pre-existing skips, run once in the foreground."
+      ],
       "done_when": "`collectPage` returns `merges` with `landing`, `queued` and `held`; `renderPageLines` draws MERGES between NEXT and RUNNER with the landing row, the queued rows and the held rows; NEXT's heading no longer carries `held before merge` or `queued for merge` and its rows are gone from under NEXT; `mc status <name>` says when its pull request is landing now; `tests/mc/page.test.js` and `tests/mc/front-door.test.js` pin it; `docs/technical/mc-ui.md` and `mc-status.md` say so; the suite is green.",
       "instruction": [
         "Read `nextSection`, `heldSection` and `queuedSection` in `src/mc/page-collect.js` (lines 396–535) and `collectPage` (lines 1002–1127, where `held` and `queuedForMerge` are read once for NEXT); `nextLines`, `heldLines`, `queuedLines` in `src/mc/page-render.js` (lines 523–645) and `renderPageLines` (lines 1025–1092, the section order); the tests for NEXT's held and queued sections in `tests/mc/page.test.js` (lines 563–660), the page-order test at line 1160 and the heading lists in `tests/mc/front-door.test.js` lines 59 and 119. Read the palette tables in `docs/technical/mc-ui.md` § *The palette*, because every colour the section uses has to be one of them and `tests/mc/page.test.js` `the palette` walks the tables. Grep `next.held` and `next.queued` across `src/` and `tests/` before moving them: the brief reads `held.json` itself (`docs/technical/mc-run.md` § *Held before merge*), so the expected readers are the page and its tests only — say what you found in the PR.",

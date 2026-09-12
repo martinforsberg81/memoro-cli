@@ -54,6 +54,20 @@ OPEN PR
   none on this branch
 ```
 
+When this project's own open pull request is the one the gate lock names,
+the OPEN PR block says so instead of just naming the pull request:
+
+```
+OPEN PR
+  #427 mc status <name>
+  #427 is landing now — running 17 test files (4 min)
+```
+
+and a `check`-mode round (`mc test`, measuring rather than merging) reads
+`#427 is being measured (mc test), not landed` — the same
+`runningMerge` reading the page's own MERGES section draws
+([`mc-ui.md`](mc-ui.md)).
+
 `--json` prints the same object the renderer takes. `--offline` skips the
 fetch and the `gh` call; the one thing it changes besides the OPEN PR block is
 the status row, and it says so — see *The status row says the pair* below.
@@ -74,6 +88,7 @@ From the page's menu, `s <name>` runs this same verb and redraws
 | the workarea exists | `~/mc/<name>/` holding a checkout with a `.git` | `mc run`, `mc work` — never `mc plan`, whose session lives under `~/mc/plan/` and is not a workarea |
 | the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
+| whether that pull request is the round landing right now | `~/.memoro/mc/gate-running.json`, joined to a name and a holder (`runningMerge`, `merges-collect.js`) | `mc merge`/`mc test`, for the length of the round |
 | whether the runner could start it at all | the workarea's `git status --porcelain`, `~/mc/runner/held.json`, the same open pull requests, and whether `~/mc/runner/STOP` is there | `mc run`, and whoever left the workarea dirty |
 
 The readers are shared, not re-implemented: `planFields`, `scanDecisions`,

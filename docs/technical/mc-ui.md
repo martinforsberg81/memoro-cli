@@ -42,12 +42,12 @@ print of the page fetches `origin/main` for each repository first — the same
 fetch `mc status <name>` already took — and `--offline` is what skips it,
 reading the plans as they were last fetched rather than as they are now.
 
-## The five sections
+## The eight sections
 
 In this order — **what does not move above what does**. NEXT changes with
-every pick, RUNNER every frame, and HELPER and BRIEF while somebody is sitting
-at them; PROGRAMMES, INTAKE and WORK change when a landing lands and not between
-two frames. The live loop rewrites only rows still on the screen (`page-frame.js`),
+every pick, MERGES with every phase a gate round moves through, RUNNER every
+frame, and HELPER and BRIEF while somebody is sitting at them; PROGRAMMES,
+INTAKE and WORK change when a landing lands and not between two frames. The live loop rewrites only rows still on the screen (`page-frame.js`),
 so at the top, under a hundred rows of projects, RUNNER had scrolled into
 history before the prompt was printed and never moved again (2026-09-03). The
 overview stays complete — every project is listed — and what moves sits where
@@ -73,6 +73,32 @@ the eye already is:
   the step the status is about — the first that is not done, the only one the
   runner considers — read off the plan and never parsed back out of the `next`
   sentence.
+- **MERGES** — the gate round landing right now, and the two queues behind it
+  ([**ruling 20**](#the-surfaces) put a round on the page; the section itself
+  is `mergesSection`, `page-collect.js`, and `runningMerge`,
+  `merges-collect.js`, joins the gate lock to a name). The heading's count is
+  `N landing · N queued · N held`, each part shown only when it is not zero,
+  and `nothing landing, nothing queued` — the literal phrase, not per missing
+  part — when all three are. Under it, in order: the round itself, green like
+  a running RUNNER lane because it is the same fact — `● memoro #11651
+  sql-w5-relationship-closure  running 17 test files · 4 min`, or `· nothing
+  landing` when the gate is idle. A `check`-mode round (`mc test`, not `mc
+  merge`) says so rather than reading as a landing that is not one:
+  *measuring, not landing*. Then, unchanged in everything but position:
+  **queued for merge** — `~/mc/runner/merges.json`, every pull request a
+  refused `mc merge` handed the runner's merge lane, green, the repository,
+  the number, the reason the round stopped, since when. Then **held before
+  merge** — `~/mc/runner/held.json`, every pull request `mc run` would not
+  land, yellow, project, pull request, reason. The two used to be under NEXT's
+  own heading and rows; they moved here because they answer this section's
+  question rather than NEXT's — what a pull request is doing once a step has
+  become a round — and NEXT's own skips still count a held project among its
+  reasons (`held-after-repair`), a different fact from these rows, which say
+  which pull request and why. `mc --json` carries `merges.queued` and
+  `merges.held` whole, and `mc status <name>` says `#N is landing now — <phase>
+  (<age>)` or `#N is being measured (mc test), not landed` when the round
+  matches this project's own open pull request, and `#N is queued for merge
+  (since …)` for a queued one ([`mc-run.md`](mc-run.md) § *The merge*).
 - **INTAKE** — the newest `~/mc/intake/errors-<repo>-<date>.md` per repository,
   its age, what is new in it, and how many proposals nobody has queued or
   dropped. A `!` line — a fingerprint that has crossed the threshold, or a
@@ -123,29 +149,11 @@ the eye already is:
   nothing (`stale-blockers.js`). Only a `project` blocker; a `decision` waits
   on Martin and there is no artefact to read it against. It reports and
   nothing more — flipping the step back to `ready` is a plan edit somebody
-  makes. And, when there is one at all: **held before merge N** on the
-  heading's own count line, with a row under the skips for each — project,
-  pull request, reason. That is `~/mc/runner/held.json`, every pull request
-  `mc run` would not land (a red gate, a plan trespass, a session that timed
-  out with its work pushed). It belongs in NEXT because it *is* the skip
-  nothing counted: a held pull request keeps its project out of the queue
-  entirely (`inFlight`), and until the machine reading arrived the project was
-  in none of the numbers above it either. It is counted there now, under
-  `held-after-repair`; these rows are what a person acts on, one pull request at
-  a time. Yellow, like the line under it — nothing in the runner moves it on its own.
-  The page draws the first six and counts the rest; `mc --json` carries every
-  one whole, with `note`, `since` and `repairs`.
-  Beside it on the same line, and green rather than yellow: **queued for merge
-  N** — `~/mc/runner/merges.json`, every pull request a refused `mc merge`
-  handed the runner's merge lane, one row each under the held rows with the
-  repository, the number, the reason the round stopped and since when. The two
-  belong together because they are one story in order: what the lane has not
-  tried yet, and what it tried and could not land. The colour is the difference
-  a person acts on — a held pull request is somebody's to deal with, a queued
-  one is the runner's, and a row that will be gone in a minute should not read
-  as work. `mc --json` carries `next.queued` whole, and `mc status <name>` says
-  `#N is queued for merge (since …)` where the entry's branch is that project's
-  ([`mc-run.md`](mc-run.md) § *The merge*).
+  makes. A held pull request still counts among the skip reasons above
+  (`held-after-repair`) — that is the skip nothing else counted, a project the
+  runner would not have started anyway — but its own row and the heading's
+  `held`/`queued` counts are gone from here; MERGES, right below this section,
+  is where the round and its two queues are now drawn.
   Last under the section, and the one line worth more than every red cell in
   PROGRAMMES: **how many projects are blocked**, how many of them wait on a
   decision and how many on another project, and the blockers holding the most —
@@ -219,6 +227,7 @@ the helper and the sessions already write.
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
 | a pull request left unlanded | `~/mc/runner/held.json` (project, repo, pr, branch, reason, note, since, repairs, and — when a gate held it — `red` and `gates` for the repair session to read) | `mc run`, whenever a landing does not land |
 | a pull request waiting for the merge lane | `~/mc/runner/merges.json` (repo, pr, branch, reason, stopped_at, since, holder) | `mc merge`, whenever its round is refused and a runner is running |
+| the round landing right now | `~/.memoro/mc/gate-running.json` (pid, repo slug, pr, mode, since, phase, phase_at), joined to a name through `repos` and to a holder through the repository's lease | `mc merge`/`mc test`, for the length of the round (`runningMerge`, `merges-collect.js`) |
 | the head of the order | `~/mc/queue.md` — the rest of NEXT is the plans themselves | Martin, at the brief |
 | what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
 | what mc deployed | `~/mc/runner/log/deploys.tsv` (sha, build, holder, outcome, the live version verified) | `mc deploy`, before and after |
@@ -405,7 +414,7 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `RUNNER` `HELPER` `BRIEF` `NEXT` `INTAKE` `PROGRAMMES` `WORK` | bold cyan |
+| section titles | `RUNNER` `HELPER` `BRIEF` `NEXT` `MERGES` `INTAKE` `PROGRAMMES` `WORK` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | RUNNER | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
 | RUNNER | the heading's lane setting and uptime | grey |
@@ -434,6 +443,11 @@ person set it to.
 | NEXT | how the order was arrived at, `… N more`, why a project was skipped | grey |
 | NEXT | `blocker finished N` and the steps under it | bold yellow, yellow |
 | NEXT | the rollup: `N blocked`, and the rest of that line | red, grey |
+| MERGES | the round landing now: its `●`, `repo #pr` | green, bold |
+| MERGES | the round's holder, phase, age, `· nothing landing` | plain, plain, grey, grey |
+| MERGES | `measuring, not landing` on a check-mode round | plain |
+| MERGES | a queued row: `· repo  #pr`, the reason, the age | green bold, green, grey |
+| MERGES | a held row: `· project  #pr`, the reason | yellow bold, yellow |
 | INTAKE | the digest's date, under 24 h old, older | green, yellow |
 | INTAKE | new errors, when > 0 | red |
 | INTAKE | proposals, when > 0 | yellow |
@@ -734,6 +748,7 @@ part nobody has run.
 |---|---|
 | `src/mc/commands/home.js` | the two surfaces: the page and the menu |
 | `src/mc/page-collect.js` | the sections, built from read data — one key each, and its module comment names all of them |
+| `src/mc/merges-collect.js` | `runningMerge` — the gate lock joined to a name and a holder |
 | `src/mc/page-render.js` | how they look |
 | `src/mc/page-frame.js` | the difference between two frames, as bytes — pure, no terminal |
 | `src/mc/page-live.js` | the loop under the prompt: the 30 s interval, the raw-mode reader, the arithmetic |
@@ -741,7 +756,7 @@ part nobody has run.
 | `src/mc/status-collect.js` | the readers more than one caller needs — `nowBlock`, `kindFor`, `pidAlive`, `areasWithCheckout` |
 | `src/mc/status-render.js` | the drawing primitives — `painter`, `width`, `pad`, `clip`, `elapsed` |
 | `src/mc/foreground.js` | the foreground register |
-| `src/mc/status-project.js` | `mc status <name>`, unchanged by this |
+| `src/mc/status-project.js` | `mc status <name>` — also draws the landing line from `runningMerge` |
 
 The section builders are pure: each takes read data and returns its section,
 so `tests/mc/page.test.js` builds every one from fixtures and a temporary
