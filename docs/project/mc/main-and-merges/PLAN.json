@@ -21,7 +21,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc status <name>` reads the plan from `origin/main` after a fetch and never from a workarea, and the page fetches before every collect unless `--offline`.",
       "check": "`tests/mc/status-project.test.js`: a work root whose workarea checkout holds a newer `PLAN.json` than the injected `origin/main` prints main's steps and a `plan` row ending `(origin/main)`. `tests/mc/page.test.js` `collectPage`: the injected `exec` receives one `git … fetch -q origin` per present repository with `fresh: false`, and none with `offline: true`. Live: with a workarea deliberately left on an old branch (`git -C ~/mc/<name>/<repo> checkout <old-branch>`), `mc status <name>` prints the same STEPS rows as `git -C ~/memoro-cli show origin/main:docs/project/<programme>/<name>/PLAN.json` would."
     },
@@ -47,10 +47,12 @@
   "steps": [
     {
       "title": "Plans are read from origin/main after a fetch — on the page and in mc status",
-      "status": "ready",
-      "pr": null,
+      "status": "done",
+      "pr": 704,
       "blocked_by": null,
-      "comments": [],
+      "comments": [
+        "findWorkareaPlan removed from src/mc/status-project.js; the plan row always reads (origin/main). collectPage fetches every present repository before loadPlans unless offline; mc --offline wires it through the live loop too. Footer distinguishes fetched/fresh/offline. Measured cost: ordinary fetch ~1.4-1.8s vs --offline ~0.4s on mc --json (2026-09-12); mc status <name> unaffected since it already fetched (1.7-2.3s live, 0.13-0.17s --offline). docs/technical/mc-status.md and mc-ui.md rewritten citing ruling 20. npm test: 1932 passed, 0 failed, 9 pre-existing skips."
+      ],
       "done_when": "`collectProject` in `src/mc/status-project.js` no longer calls `findWorkareaPlan` and the function is gone; the `plan` row reads `(origin/main)`; `collectPage` in `src/mc/page-collect.js` fetches every present repository before `loadPlans` unless `offline`, and `mc --offline` sets it; the footer line says the page fetched; `docs/technical/mc-status.md` and `docs/technical/mc-ui.md` say so; the suite is green.",
       "instruction": [
         "Read `collectProject` and `findWorkareaPlan` in `src/mc/status-project.js` (lines 186–201 and 242–335) and the tests that pin them in `tests/mc/status-project.test.js` (`finds it in the workarea checkout, under whichever programme` at line 140, `prefers the workarea plan, says it differs from main, and keeps the last three runs` at line 172, `falls back to origin/main when no workarea holds the plan` at line 188, and the render fixture at lines 325–340 that asserts `(workarea memoro-cli, differs from origin/main)`). Read `collectPage` in `src/mc/page-collect.js` (lines 1002–1127), `loadPlans` in `src/mc/page-cache.js`, the `--offline`/`--fresh` parsing in `src/mc/commands/home.js` (lines 117–125; `--offline` is accepted and does nothing today) and the footer line in `renderPageLines` (`src/mc/page-render.js` lines 1082–1090).",
