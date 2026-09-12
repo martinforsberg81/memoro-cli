@@ -275,8 +275,12 @@ export function nowBlock({ runner = null, currents = [], stop = false, rows = []
     const lane = Number.isInteger(current.lane) && current.lane > 0 ? current.lane : 0;
     const file = current.repo ? `current-${current.repo}${lane ? `-${lane}` : ''}.json` : 'current.json';
     if (!alive(current.pid)) { stale.push(`${file} (pid ${current.pid} is gone)`); continue; }
-    const budget = Number(current.budget_minutes);
-    const budgetSeconds = Number.isFinite(budget) && budget > 0 ? budget * 60 : null;
+    // Nothing is killed on elapsed time (ruling 18), so the clock has no
+    // end to be over: it has the check-in interval and how many check-ins
+    // the session has had. A codex session has neither.
+    const interval = Number(current.check_in_minutes);
+    const checkInSeconds = Number.isFinite(interval) && interval > 0 ? interval * 60 : null;
+    const checkIns = Number(current.check_ins);
     const elapsed = since(current.started);
     steps.push({
       name: current.name || null,
@@ -291,8 +295,8 @@ export function nowBlock({ runner = null, currents = [], stop = false, rows = []
       pid: current.pid ?? null,
       started: current.started || null,
       elapsed_seconds: elapsed,
-      budget_seconds: budgetSeconds,
-      over_budget: elapsed != null && budgetSeconds != null && elapsed > budgetSeconds,
+      check_in_seconds: checkInSeconds,
+      check_ins: checkInSeconds == null ? null : (Number.isInteger(checkIns) && checkIns > 0 ? checkIns : 0),
     });
   }
   steps.sort((a, b) => String(a.name).localeCompare(String(b.name)));

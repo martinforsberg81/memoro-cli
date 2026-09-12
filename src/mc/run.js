@@ -94,6 +94,7 @@
  * The rules themselves live in run-plan.js.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -127,10 +128,10 @@ import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, REFUSAL, TIMEOUT_EXIT,
-  WORKAREA_BLOCKS, assembleQueue, chooseKind, collectNote, headlessArgs,
+  WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs,
   helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, nextFor,
-  queueFileText, readSessionOutput, sessionSettings, describeSettings,
-  stepPrompt, strictQueue, tsvHeader, tsvRow,
+  queueFileText, readSessionOutput, sessionResult, sessionSettings, describeSettings, describeWatch,
+  stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
@@ -154,6 +155,124 @@ export const TOTAL_POLL_MS = 15 * 1000;
 function sh(cmd, args, { cwd, timeout = 120_000 } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout, maxBuffer: 64 << 20 });
   return { ok: r.status === 0, status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/**
+ * One session: the adapter's binary with the headless argument list, and
+ * nothing killed on elapsed time (ruling 18).
+ *
+ * For claude (`prompt` given) stdin is a pipe. The prompt goes in as the
+ * first stream-json user message; every `checkInMs` while the session runs,
+ * `checkIn(elapsedMinutes, count)` is written as another, and the session
+ * judges its own step. A message written mid-turn is folded into that turn;
+ * one written after a `result` starts a new turn — so on the first `result`
+ * line stdin is ended, no check-in follows, and claude exits. The only kill
+ * is the stall guard: `stallMs` without a byte on stdout, armed at spawn and
+ * reset on every chunk, SIGTERMs the child and reports `stalled`. Stream-json
+ * prints an event per message, so a working session is never silent that
+ * long.
+ *
+ * Codex (no `prompt`) keeps its positional prompt with stdin closed, and gets
+ * neither a check-in nor a stall guard: nothing kills it.
+ *
+ * `spawn` and not `spawnSync`: two lanes run in this one process, and a
+ * synchronous wait would hold the event loop for the whole session — the
+ * second lane would never get to start. The output is collected here instead
+ * of by `maxBuffer`, and capped rather than allowed to eat the machine.
+ */
+export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, checkIn = null, onSpawn = null, spawn: spawnFn = spawn }) {
+  return new Promise((resolve) => {
+    const piped = prompt != null;
+    const child = spawnFn(bin, args, { cwd, stdio: [piped ? 'pipe' : 'ignore', 'pipe', 'pipe'], env });
+    // The register records the pid as the step's session (ruling 21); a
+    // record, not the session, so a throwing recorder must not end the run.
+    if (child.pid && onSpawn) { try { onSpawn(child.pid); } catch { /* recorded elsewhere */ } }
+    const cap = 256 << 20;
+    const collect = (stream, onChunk) => {
+      const chunks = [];
+      let size = 0;
+      stream.on('data', (chunk) => {
+        if (size < cap) { chunks.push(chunk); size += chunk.length; }
+        onChunk?.(chunk);
+      });
+      return () => Buffer.concat(chunks).toString('utf8');
+    };
+    const started = Date.now();
+    let settled = false;
+    let failure = null;
+    let stalled = false;
+    let resultSeen = false;
+    let stallTimer = null;
+    let checkInTimer = null;
+    let count = 0;
+    const stop = () => { clearTimeout(stallTimer); clearInterval(checkInTimer); };
+    const send = (text) => {
+      if (!piped || resultSeen || settled || !child.stdin?.writable) return;
+      child.stdin.write(userMessageLine(text));
+    };
+    const armStall = () => {
+      if (!stallMs || stalled || settled) return;
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        if (settled) return;
+        stalled = true;
+        stop();
+        child.kill('SIGTERM');
+      }, stallMs);
+    };
+    // Lines are scanned for a `result` only while stdin is still open; a
+    // partial line waits for the rest of it.
+    const decoder = new StringDecoder('utf8');
+    let partial = '';
+    const onResultLine = () => {
+      resultSeen = true;
+      clearInterval(checkInTimer);
+      try { child.stdin.end(); } catch { /* already closed */ }
+    };
+    const scan = (chunk) => {
+      armStall();
+      if (!piped || resultSeen) return;
+      const text = partial + decoder.write(chunk);
+      const lines = text.split('\n');
+      partial = lines.pop();
+      for (const line of lines) {
+        if (!line.slice(0, 200).includes('"type":"result"')) continue;
+        let event = null;
+        try { event = JSON.parse(line); } catch { continue; }
+        if (event?.type === 'result') { onResultLine(); return; }
+      }
+    };
+    const stdout = collect(child.stdout, scan);
+    const stderr = collect(child.stderr);
+    const done = (value) => { if (!settled) { settled = true; stop(); resolve(value); } };
+    if (piped) {
+      // A check-in written to a child that has just exited is an EPIPE on
+      // the stream, not a crash of the runner and both its lanes.
+      child.stdin.on('error', () => {});
+      send(prompt);
+      if (checkInMs && checkIn) {
+        checkInTimer = setInterval(() => {
+          if (settled || resultSeen) return;
+          count += 1;
+          send(checkIn(Math.round((Date.now() - started) / 60_000), count));
+        }, checkInMs);
+      }
+    }
+    armStall();
+    child.on('error', (error) => {
+      failure = error;
+      if (!child.pid) done({ status: 1, stdout: '', stderr: String(error.message), timedOut: false, stalled: false });
+    });
+    child.on('close', (status) => {
+      done({
+        status: stalled ? TIMEOUT_EXIT : (status ?? 1),
+        stdout: stdout(),
+        stderr: stderr() || (failure ? String(failure.message) : ''),
+        timedOut: stalled,
+        stalled,
+      });
+    });
+  });
 }
 
 export function realDeps(env = process.env) {
@@ -210,57 +329,22 @@ export function realDeps(env = process.env) {
     // real lease and a real remote behind it.
     mergeRound: (options) => runMergeRound({ env, ...options }),
     docsMerge: (options) => runDocsMerge(options),
-    // The session: the adapter's binary with the headless argument list,
-    // stdin closed (claude -p reads a piped stdin and would eat it), a
-    // wall-clock cap after which it is killed and logged as a timeout.
+    // The session — `streamSession` below. The session's Bash tool gets a
+    // ten-minute ceiling instead of claude's two-minute default. Measured
+    // 2026-09-01..03: with two minutes, a step ran `npm test` in the
+    // background and polled it in `sleep` loops of 120 s — 212 such calls,
+    // 1.9 h of 12.5 h tool time — and 17 calls were killed on the timeout
+    // itself. A suite run is one call now. The same ten minutes is why
+    // `DEFAULT_STALL_MINUTES` is twenty.
     //
-    // `spawn` and not `spawnSync`: two lanes run in this one process, and a
-    // synchronous wait would hold the event loop for the whole ninety
-    // minutes — the second lane would never get to start. The output is
-    // collected here instead of by `maxBuffer`, and capped rather than
-    // allowed to eat the machine: a session that floods stdout is not going
-    // to parse as JSON either way.
-    //
-    // The session's Bash tool gets a ten-minute ceiling instead of claude's
-    // two-minute default. Measured 2026-09-01..03: with two minutes, a step
-    // ran `npm test` in the background and polled it in `sleep` loops of
-    // 120 s — 212 such calls, 1.9 h of 12.5 h tool time — and 17 calls were
-    // killed on the timeout itself. A suite run is one call now.
-    //
-    // `env` is what the runner adds for this session — `MC_STEP=<project>:<index>`,
+    // `options.env` is what the runner adds for this session — `MC_STEP=<project>:<index>`,
     // so `mc step` and `mc merge` inside it know which step they are — and
     // `onSpawn` gets the child's pid the moment there is one: the register
     // records it as the step's session, which is how `mc merge` finds the
     // process to end when the step has landed (ruling 21).
-    session: ({ bin, args, cwd, timeoutMs, env: extra = {}, onSpawn = null }) => new Promise((resolve) => {
-      const sessionEnv = { ...env, BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000', ...extra };
-      const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGTERM', env: sessionEnv });
-      if (child.pid && onSpawn) { try { onSpawn(child.pid); } catch { /* a record, not the session */ } }
-      const cap = 256 << 20;
-      const collect = (stream) => {
-        const chunks = [];
-        let size = 0;
-        stream.on('data', (chunk) => { if (size < cap) { chunks.push(chunk); size += chunk.length; } });
-        return () => Buffer.concat(chunks).toString('utf8');
-      };
-      const stdout = collect(child.stdout);
-      const stderr = collect(child.stderr);
-      let settled = false;
-      let failure = null;
-      const done = (value) => { if (!settled) { settled = true; resolve(value); } };
-      child.on('error', (error) => {
-        failure = error;
-        if (!child.pid) done({ status: 1, stdout: '', stderr: String(error.message), timedOut: false });
-      });
-      child.on('close', (status, signal) => {
-        const timedOut = status == null && signal === 'SIGTERM';
-        done({
-          status: timedOut ? TIMEOUT_EXIT : (status ?? 1),
-          stdout: stdout(),
-          stderr: stderr() || (failure ? String(failure.message) : ''),
-          timedOut,
-        });
-      });
+    session: (options) => streamSession({
+      ...options,
+      env: { ...env, BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000', ...(options.env || {}) },
     }),
     // `mc run --update`: this runner's replacement, on the code that is on
     // disk now. Node read its whole module graph at process start, so the only
@@ -670,6 +754,39 @@ export function createRunner({
   }
 
   const dashes = { turns: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-', session: '-' };
+
+  /**
+   * What `deps.session` is handed besides the argument list: the prompt for
+   * stdin, the check-in interval with the text it writes, and the stall
+   * guard. A codex session gets none of it — its prompt is its last
+   * positional and nothing watches it — so its stdin stays closed.
+   */
+  function watchFor(launch, settings, { prompt, name, kind, onCheckIn = null }) {
+    if (launch.id === 'codex') return {};
+    return {
+      prompt,
+      checkInMs: settings.checkInMinutes * 60_000,
+      stallMs: settings.stallMinutes * 60_000,
+      checkIn: (minutes, count) => {
+        say(`${name}: check-in ${count} at ${minutes} min`);
+        onCheckIn?.(count, minutes);
+        return checkInPrompt({ project: name, minutes, count, kind });
+      },
+    };
+  }
+
+  /**
+   * A session's three log files under one stem: the stream as it came
+   * (`.jsonl`), the result read from it alone (`.json`, the summed object
+   * `scripts/measure-steps.py` reads — absent when there was none), and
+   * stderr (`.json.err`, where it always was).
+   */
+  function writeSessionLogs(stem, result) {
+    deps.write(`${stem}.jsonl`, result.stdout);
+    const summed = sessionResult(result.stdout);
+    if (summed) deps.write(`${stem}.json`, `${JSON.stringify(summed)}\n`);
+    deps.write(`${stem}.json.err`, result.stderr);
+  }
 
   /* ------------------------------------------------------------- archiving */
 
@@ -1427,20 +1544,25 @@ export function createRunner({
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
 
     const ts = stamp().replace(/[-:]/gu, '');
-    const out = join(paths.log, `${name}-${ts}.json`);
+    const out = join(paths.log, `${name}-${ts}`);
     // A plan that names no model on a tool that is not claude gets none, and
     // the line says so rather than printing `null`: the tool picks.
-    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${settings.budgetMinutes} min)`);
+    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})`);
     const t0 = deps.now().getTime();
     // The lane's current file exists exactly as long as the session does —
     // written before the call that blocks, removed however that call
     // returns. It carries its repo, which is also its lane's name. The
     // machine's slot is dropped in the same breath, so what the page shows
-    // and what the cap counts are the same fact and cannot drift.
+    // and what the cap counts are the same fact and cannot drift. The
+    // session's check-ins rewrite it with their count, which is what the
+    // page's clock reads (`check_ins`); the timers stop before the session's
+    // promise settles, so no check-in writes it after the `finally` below.
     const currentPath = paths.currentFor(repo.name, lane);
-    writeJson(currentPath, {
+    const current = {
       name, kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
-      effort: settings.effort, advisor: settings.advisor, budget_minutes: settings.budgetMinutes, started: stamp(), pid, worktree,
+      effort: settings.effort, advisor: settings.advisor,
+      check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
+      started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
       // names the role, but a name is not a revision: `mc roles check step`
       // compares this digest with what `canon/roles/step.md` assembles to now,
@@ -1452,7 +1574,8 @@ export function createRunner({
         overlay: role.overlay,
         instructions,
       }),
-    });
+    };
+    writeJson(currentPath, current);
     // The step is running, says the register — with the session's pid as
     // soon as there is one, which is what `mc merge` ends when the step
     // lands.
@@ -1467,10 +1590,11 @@ export function createRunner({
     let result;
     try {
       result = await deps.session({
-        bin: launch.spec.bin,
-        args,
-        cwd: worktree,
-        timeoutMs: settings.budgetMinutes * 60_000,
+        bin: launch.spec.bin, args, cwd: worktree,
+        ...watchFor(launch, settings, {
+          prompt, name, kind,
+          onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
+        }),
         env: stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree },
         onSpawn: (childPid) => {
           if (stepIndex == null) return;
@@ -1482,8 +1606,7 @@ export function createRunner({
       dropSlot();
     }
     const seconds = Math.round((deps.now().getTime() - t0) / 1000);
-    deps.write(out, result.stdout);
-    deps.write(`${out}.err`, result.stderr);
+    writeSessionLogs(out, result);
 
     // The abort survives the kind it was written for, and for the reason it
     // was written: a merge the session did not commit leaves unmerged paths,
@@ -1520,7 +1643,7 @@ export function createRunner({
       say(`${name}: GitHub could not be asked what this project has open (${error?.message || error}) — nothing is landed this round`);
     }
     const pr = String(openNow.find((item) => item.headRefName === branch)?.number ?? '-');
-    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut });
+    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled });
     let { note } = read;
 
     // Where the step stands now is the register's word, not this process's

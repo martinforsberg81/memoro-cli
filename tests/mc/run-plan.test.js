@@ -1,13 +1,14 @@
-import { test } from 'node:test';
+import { describe, it, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
   MC_OWN_TREES, RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
-  AUTOCOMPACT_TOKENS, SESSION_DEFAULTS, assembleQueue, chooseKind, collectNote, describeSettings, headlessArgs, helperDue,
+  AUTOCOMPACT_TOKENS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, chooseKind, collectNote,
+  describeSettings, describeWatch, headlessArgs, helperDue,
   inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaSeen,
-  readSessionOutput, sessionSettings, stepOfPr, stepPrompt, strictQueue,
-  tsvHeader, tsvRow,
+  readSessionOutput, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
+  tsvHeader, tsvRow, userMessageLine,
 } from '../../src/mc/run-plan.js';
 import { NAME_RE } from '../../src/mc/plan-schema.js';
 import { profileArgs } from '../../src/mc/portrait.js';
@@ -374,13 +375,16 @@ test('stepPrompt: a conflicted worktree is a preamble, and the step is still the
   assert.match(p, /----- Your step: steps\[1\] -----\ntitle: The hero object/u);
 });
 
-test('headlessArgs: claude is -p with json output; codex is exec --json', () => {
+test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex is exec --json', () => {
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs });
-  assert.deepEqual(claude, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--disallowedTools', 'Agent', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
+  assert.deepEqual(claude, ['-p', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--disallowedTools', 'Agent', '--append-system-prompt', 'PROFILE', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
+  assert.equal(claude.includes('do it'), false, 'the prompt is the first message on stdin, not an argument');
   assert.equal(AUTOCOMPACT_TOKENS, 150_000);
-  // The helper and intake turns opt out: step-cost's contract leaves them be.
-  const helper = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs, autocompact: null });
+  // The helper and intake turns opt out: step-cost's contract leaves them be —
+  // no compaction, and the positional prompt with one JSON object back.
+  const helper = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs, autocompact: null, stream: false });
   assert.equal(helper.includes('--autocompact'), false);
+  assert.deepEqual(helper, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--disallowedTools', 'Agent', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
   // No launch of the runner's may spawn a subagent, whatever the repository's
   // instruction files say — the helper included.
   assert.deepEqual(helper.slice(helper.indexOf('--disallowedTools'), helper.indexOf('--disallowedTools') + 2), ['--disallowedTools', 'Agent']);
@@ -404,10 +408,10 @@ test('headlessArgs: claude is -p with json output; codex is exec --json', () => 
 test('headlessArgs: claude gets --model, --effort and --advisor, and none when unset', async () => {
   const adapter = await import('../../src/adapters/claude-code.js');
   const args = headlessArgs({ toolId: 'claude-code', adapter, model: 'sonnet', effort: 'medium', advisor: 'opus', instructions: null, prompt: 'do it', profileArgs });
-  assert.deepEqual(args.slice(0, 8), ['-p', 'do it', '--model', 'sonnet', '--effort', 'medium', '--advisor', 'opus']);
-  assert.equal(args[8], '--permission-mode');
+  assert.deepEqual(args.slice(0, 7), ['-p', '--model', 'sonnet', '--effort', 'medium', '--advisor', 'opus']);
+  assert.equal(args[7], '--permission-mode');
   const repair = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', effort: null, advisor: null, instructions: null, prompt: 'do it', profileArgs });
-  assert.deepEqual(repair.slice(0, 5), ['-p', 'do it', '--model', 'opus', '--permission-mode']);
+  assert.deepEqual(repair.slice(0, 4), ['-p', '--model', 'opus', '--permission-mode']);
   assert.deepEqual(adapter.advisorArgs('off'), [], '`off` is no advisor, not an advisor called off');
   // Codex takes neither, whatever it is handed.
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m], effortArgs: () => ['--effort', 'x'], advisorArgs: () => ['--advisor', 'y'] }, model: 'o3', effort: 'high', advisor: 'opus', instructions: null, prompt: 'do it', profileArgs });
@@ -419,7 +423,86 @@ test('readSessionOutput: claude json usage fields, dashes when absent', () => {
   const r = readSessionOutput({ toolId: 'claude-code', stdout: out, exitCode: 0 });
   assert.deepEqual(r, { turns: '7', session: 's1', input: '10', output: '20', cacheRead: '30', cacheWrite: '-', note: 'success', quota: false });
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: 'garbage', exitCode: 1 }).note, 'no-json');
+  // The helper's own wall-clock cap is still a timeout; the runner's kill is a stall.
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: '', exitCode: 142, timedOut: true }).note, 'timeout');
+  assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: '', exitCode: 142, timedOut: true, stalled: true }).note, 'stalled');
+});
+
+/**
+ * Stream-json: one event per line, the `result` line the session's answer.
+ * Proven live 2026-09-11 (step-cost step 3's comments): a check-in written
+ * after a result starts a new turn with its own `result`, and each carries
+ * the numbers of its own turn group — so two are added up, not the last taken.
+ */
+describe('readSessionOutput on a stream-json run', () => {
+  const event = (value) => JSON.stringify(value);
+  const init = event({ type: 'system', subtype: 'init', session_id: 'sid' });
+  const assistant = event({ type: 'assistant', message: { content: [{ type: 'text', text: 'the result is in' }] } });
+  const result = (extra = {}) => event({
+    type: 'result', subtype: 'success', is_error: false, num_turns: 4, session_id: 'sid', result: 'done',
+    usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 40 },
+    ...extra,
+  });
+
+  it('reads the result line when it is the last one', () => {
+    const r = readSessionOutput({ toolId: 'claude-code', stdout: [init, assistant, result()].join('\n'), exitCode: 0 });
+    assert.deepEqual(r, { turns: '4', session: 'sid', input: '10', output: '20', cacheRead: '300', cacheWrite: '40', note: 'success', quota: false });
+  });
+
+  it('reads it with junk after it', () => {
+    const r = readSessionOutput({ toolId: 'claude-code', stdout: [init, result(), 'not json', '{"type":"resu'].join('\n'), exitCode: 0 });
+    assert.equal(r.note, 'success');
+    assert.equal(r.turns, '4');
+  });
+
+  it('is no-json with no result line at all', () => {
+    const r = readSessionOutput({ toolId: 'claude-code', stdout: [init, assistant].join('\n'), exitCode: 1 });
+    assert.equal(r.note, 'no-json');
+    assert.equal(sessionResult([init, assistant].join('\n')), null);
+  });
+
+  it('adds two results up, and takes the rest from the last', () => {
+    const first = result({
+      num_turns: 30, total_cost_usd: 1.5, duration_ms: 1000, duration_api_ms: 800, session_id: 'sid-1',
+      modelUsage: { sonnet: { inputTokens: 5, outputTokens: 7, contextWindow: 200000 } },
+    });
+    const second = result({
+      num_turns: 2, total_cost_usd: 0.25, duration_ms: 200, duration_api_ms: 100, session_id: 'sid-2', subtype: 'error_during_execution', is_error: true, result: 'blocked',
+      usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 },
+      modelUsage: { sonnet: { inputTokens: 1, outputTokens: 1, contextWindow: 200000 }, opus: { inputTokens: 9, outputTokens: 9 } },
+    });
+    const stdout = [init, first, assistant, second].join('\n');
+    const summed = sessionResult(stdout);
+    assert.equal(summed.num_turns, 32);
+    assert.equal(summed.total_cost_usd, 1.75);
+    assert.equal(summed.duration_ms, 1200);
+    assert.equal(summed.duration_api_ms, 900);
+    assert.deepEqual(summed.usage, { input_tokens: 11, output_tokens: 22, cache_read_input_tokens: 303, cache_creation_input_tokens: 44 });
+    assert.deepEqual(summed.modelUsage, { sonnet: { inputTokens: 6, outputTokens: 8, contextWindow: 200000 }, opus: { inputTokens: 9, outputTokens: 9 } });
+    assert.equal(summed.session_id, 'sid-2');
+    assert.equal(summed.subtype, 'error_during_execution');
+    assert.equal(summed.result, 'blocked');
+    const r = readSessionOutput({ toolId: 'claude-code', stdout, exitCode: 0 });
+    assert.deepEqual(r, { turns: '32', session: 'sid-2', input: '11', output: '22', cacheRead: '303', cacheWrite: '44', note: 'failed', quota: false });
+  });
+
+  it('keeps the quota rule: a short limit answer is quota', () => {
+    const limit = result({ num_turns: 1, result: "You've hit your weekly limit · resets Aug 28 at 3pm" });
+    assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: [init, limit].join('\n'), exitCode: 1 }).note, 'quota');
+  });
+});
+
+test('checkInPrompt: names the minutes, the count and a blocker the project can carry', () => {
+  const text = checkInPrompt({ project: 'step-cost', minutes: 60, count: 1 });
+  assert.match(text, /running for 60 minutes \(this is check-in number 1\)/u);
+  assert.match(text, /say so in one line and go on/u);
+  assert.match(text, /"kind": "decision", "name": "step-cost-check-in"/u);
+  assert.match(text, /Do not start anything new/u);
+  assert.match('step-cost-check-in', NAME_RE, 'the blocker name must pass the plan schema');
+  const repair = checkInPrompt({ project: 'mc-thing', minutes: 120, count: 2, kind: 'repair' });
+  assert.match(repair, /check-in number 2/u);
+  assert.doesNotMatch(repair, /blocked_by/u, 'a repair has no step of its own to block');
+  assert.equal(userMessageLine('hi'), '{"type":"user","message":{"role":"user","content":"hi"}}\n');
 });
 
 test('readSessionOutput: a quota answer is logged as quota, never success', () => {
@@ -463,11 +546,21 @@ test('tsvRow has the shell runner\'s thirteen columns in order, then the landing
   assert.match(tsvRow({ ts: 'T', note: 'timeout' }), /\ttimeout\t-\t-$/u, 'a step that never reached a landing says so, and a row with no model a dash');
 });
 
-test('sessionSettings: tool and budget_minutes from the plan, with the runner defaults', () => {
+const wait = (checkInMinutes = 60, stallMinutes = 20) => ({ checkInMinutes, stallMinutes });
+
+test('sessionSettings: tool, check_in_minutes and stall_minutes from the plan, with the runner defaults', () => {
   assert.equal(sessionSettings({}).tool, 'claude');
-  assert.equal(sessionSettings({}).budgetMinutes, 90);
-  assert.deepEqual(sessionSettings({ tool: 'codex', model: 'o3', budget_minutes: '30' }), { tool: 'codex', model: 'o3', effort: null, advisor: null, budgetMinutes: 30 });
-  assert.equal(sessionSettings({ budget_minutes: 'lots' }).budgetMinutes, 90);
+  assert.equal(DEFAULT_CHECK_IN_MINUTES, 60);
+  assert.equal(DEFAULT_STALL_MINUTES, 20);
+  assert.equal(sessionSettings({}).checkInMinutes, 60);
+  assert.equal(sessionSettings({}).stallMinutes, 20);
+  assert.deepEqual(sessionSettings({ tool: 'codex', model: 'o3', check_in_minutes: 30, stall_minutes: '15' }), { ...wait(30, 15), tool: 'codex', model: 'o3', effort: null, advisor: null });
+  assert.equal(sessionSettings({ check_in_minutes: 'lots' }).checkInMinutes, 60);
+  // A step cannot set them: they are the plan's, like the tool.
+  assert.equal(sessionSettings({}, { check_in_minutes: 5 }).checkInMinutes, 60);
+  assert.equal('budgetMinutes' in sessionSettings({ budget_minutes: 30 }), false, 'the budget is gone (ruling 18)');
+  assert.equal(describeWatch('claude-code', sessionSettings({})), 'check-in every 60 min, killed after 20 min silent');
+  assert.equal(describeWatch('codex', sessionSettings({ tool: 'codex' })), 'no check-in, no stall guard');
 });
 
 /**
@@ -478,19 +571,19 @@ test('sessionSettings: tool and budget_minutes from the plan, with the runner de
  */
 test('sessionSettings: the step defaults, plan and step overrides, advisor off, codex getting none', () => {
   assert.deepEqual(SESSION_DEFAULTS, { step: { model: 'sonnet', effort: 'medium', advisor: 'opus' } }, 'one kind: the repair is gone (ruling 21)');
-  assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', ...wait() });
 
   // The plan overrides the default key by key. A plan on opus keeps the
   // default advisor in name, but an advisor that is the model itself is no
   // advisor (Martin, 2026-09-12: "Om step har opus => advisor = null, inte
   // opus+opus.").
-  assert.deepEqual(sessionSettings({ model: 'opus' }), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings({ model: 'opus' }), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, ...wait() });
   assert.deepEqual(sessionSettings({ model: 'opus', advisor: 'sonnet' }).advisor, 'sonnet');
 
   // The step overrides the plan, again key by key.
   const plan = { model: 'opus', effort: 'low', advisor: 'opus' };
-  assert.deepEqual(sessionSettings(plan, { effort: 'xhigh' }), { tool: 'claude', model: 'opus', effort: 'xhigh', advisor: null, budgetMinutes: 90 });
-  assert.deepEqual(sessionSettings(plan, { model: 'haiku', effort: null }), { tool: 'claude', model: 'haiku', effort: 'low', advisor: 'opus', budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings(plan, { effort: 'xhigh' }), { tool: 'claude', model: 'opus', effort: 'xhigh', advisor: null, ...wait() });
+  assert.deepEqual(sessionSettings(plan, { model: 'haiku', effort: null }), { tool: 'claude', model: 'haiku', effort: 'low', advisor: 'opus', ...wait() });
   assert.deepEqual(sessionSettings({}, { model: 'opus' }).advisor, null, 'a step on opus gets no opus advisor');
 
   // `off` at any level is no advisor, and a step can turn off the plan's.
@@ -500,8 +593,8 @@ test('sessionSettings: the step defaults, plan and step overrides, advisor off, 
 
   // `sonnet`, `medium` and `opus` are claude's: codex gets no model it did not
   // name, and no effort or advisor even when one is named.
-  assert.deepEqual(sessionSettings({ tool: 'codex' }), { tool: 'codex', model: null, effort: null, advisor: null, budgetMinutes: 90 });
-  assert.deepEqual(sessionSettings({ tool: 'codex', effort: 'high', advisor: 'opus' }, { model: 'o3' }), { tool: 'codex', model: 'o3', effort: null, advisor: null, budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings({ tool: 'codex' }), { tool: 'codex', model: null, effort: null, advisor: null, ...wait() });
+  assert.deepEqual(sessionSettings({ tool: 'codex', effort: 'high', advisor: 'opus' }, { model: 'o3' }), { tool: 'codex', model: 'o3', effort: null, advisor: null, ...wait() });
 });
 
 test('describeSettings: what the starting line says a session runs on', () => {

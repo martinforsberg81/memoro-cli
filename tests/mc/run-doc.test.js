@@ -19,7 +19,7 @@ import { STEP_STATUSES } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
 import { REPO_NAMES, TOTAL_POLL_MS } from '../../src/mc/run.js';
 import {
-  AUTOCOMPACT_TOKENS, DEFAULT_BUDGET_MINUTES, DEFAULT_TOOL, HELPER_HOUR_UTC, MC_OWN_TREES, QUOTA_SLEEP_MS,
+  AUTOCOMPACT_TOKENS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, DEFAULT_TOOL, HELPER_HOUR_UTC, MC_OWN_TREES, QUOTA_SLEEP_MS,
   RUNS_HEADER, SESSION_DEFAULTS,
 } from '../../src/mc/run-plan.js';
 
@@ -39,9 +39,14 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(DOC, new RegExp(`${LANES_MIN} to ${LANES_MAX}`, 'u'), 'the doc no longer states the bounds on a lane count');
   });
 
-  it('states the default budget a lane would have blocked on', () => {
-    assert.equal(DEFAULT_BUDGET_MINUTES, 90, 'the doc says "ninety minutes, by default"');
-    assert.match(DOC, /ninety minutes, by default/u);
+  it('states the check-in and stall defaults, and no wall-clock budget', () => {
+    const checkIn = /`check_in_minutes:`\*\* — (\d+) minutes by default/u.exec(DOC);
+    const stall = /`stall_minutes:`\*\* — (\d+) minutes by default/u.exec(DOC);
+    assert.ok(checkIn, 'the doc no longer states the check-in default');
+    assert.ok(stall, 'the doc no longer states the stall default');
+    assert.equal(Number(checkIn[1]), DEFAULT_CHECK_IN_MINUTES);
+    assert.equal(Number(stall[1]), DEFAULT_STALL_MINUTES);
+    assert.doesNotMatch(DOC, /budget_minutes/u, 'the key is gone from the schema (ruling 18)');
   });
 
   it('names the two repositories that are the two lanes', () => {

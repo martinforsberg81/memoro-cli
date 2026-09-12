@@ -52,7 +52,16 @@ export const SESSION_DEFAULTS = Object.freeze({
 // shown a plan needing another; the measurement after twenty sessions would.
 export const AUTOCOMPACT_TOKENS = 150_000;
 export const DEFAULT_TOOL = 'claude';
-export const DEFAULT_BUDGET_MINUTES = 90;
+// How often a running claude session is asked whether its step can be
+// finished (ruling 18: no session is killed on elapsed time). Median session
+// wall was 17 minutes, p90 47.6, over 2026-09-05..12, so the first check-in
+// reaches the sessions that are already unusual.
+export const DEFAULT_CHECK_IN_MINUTES = 60;
+// How long a claude session may write nothing to stdout before it is killed
+// as stalled. The Bash ceiling a session's command gets is ten minutes
+// (`BASH_DEFAULT_TIMEOUT_MS` in run.js), so a session is never legitimately
+// silent for twenty.
+export const DEFAULT_STALL_MINUTES = 20;
 export const QUOTA_SLEEP_MS = 30 * 60 * 1000;
 export const TIMEOUT_EXIT = 142; // what the shell runner's `perl alarm` left in runs.tsv
 
@@ -479,7 +488,7 @@ export const INTAKE_KIND = 'intake';
  * How many files one round drains. Three, and the number is what a round costs:
  * a turn is capped at ten minutes (`DEFAULT_TURN_MINUTES`) and measured at two
  * to three, so a round's drain is bounded at half an hour and typically under
- * ten minutes — beside a lane's ninety-minute step, that is noise. One file a
+ * ten minutes — beside a lane's step, seventeen minutes at the median, that is noise. One file a
  * round would be smaller still and would take thirteen rounds to work through
  * the backlog that exists today; the whole inbox in one round is the version
  * with no bound at all, and an inbox Martin drops forty screenshots into would
@@ -691,9 +700,13 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
  * effort and the advisor through its `effortArgs` and `advisorArgs` — codex
  * gets neither; the instructions
  * (Coding Profile + role overlay) through the same channel `mc work` uses;
- * the prompt is the last positional for both. Claude answers with one JSON
- * object; codex's `exec --json` streams events — parsed in
- * `readSessionOutput`.
+ * the prompt is codex's last positional. Claude runs on stream-json both
+ * ways (`stream: true`, the step and repair lanes): the prompt is not an
+ * argument at all but the first user message `deps.session` writes on stdin,
+ * followed by the check-ins, and what comes back is one event per line ending
+ * in a `result` line. The helper and intake turns pass `stream: false` and
+ * keep the positional prompt and the one JSON object. Codex's `exec --json`
+ * streams its own events. Both are parsed in `readSessionOutput`.
  *
  * Codex gets `--sandbox danger-full-access`, and not the `--full-auto` this
  * started as. `--full-auto` is codex's workspace-write sandbox: no network,
@@ -732,34 +745,137 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
  * one 17-turn parent waited 41 minutes on a 319-turn child that runs.tsv
  * never saw. The flag holds whatever any repository's files say.
  */
-export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS }) {
+export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const instr = profileArgs(toolId, instructions);
   if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...instr, prompt];
   const tuning = [...(adapter?.effortArgs?.(effort) ?? []), ...(adapter?.advisorArgs?.(advisor) ?? [])];
   const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
-  return ['-p', prompt, ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, '--disallowedTools', 'Agent', ...instr, '--output-format', 'json'];
+  const io = stream
+    ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
+    : ['--output-format', 'json'];
+  return ['-p', ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, '--disallowedTools', 'Agent', ...instr, ...io];
+}
+
+/** One stream-json user message, as `deps.session` writes it on claude's stdin. */
+export function userMessageLine(text) {
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: String(text) } })}\n`;
+}
+
+/**
+ * What the runner writes to a running session every `check_in_minutes`
+ * (ruling 18). Nothing is killed on elapsed time; instead the session is
+ * asked to judge its own step and, if it cannot finish it, to leave it
+ * `blocked` on a decision named after the project — `NAME_RE` in
+ * plan-schema.js, so the blocker is a name somebody can answer. A repair has
+ * no step of its own to block, so it is asked to say so in the pull request.
+ */
+export function checkInPrompt({ project, minutes, count, kind = 'step' }) {
+  const lines = [
+    `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
+    'Judge whether this step can be finished in this session.',
+    '',
+    'If it can, say so in one line and go on — no other answer is needed.',
+    '',
+  ];
+  if (kind === 'repair') {
+    lines.push(
+      'If it cannot — you are going in circles, a test cannot be made green, the',
+      'code does not match what the pull request needs — commit and push what you',
+      'have, say in the pull request what you found and what a person should do',
+      'next, and stop.',
+    );
+  } else {
+    lines.push(
+      'If it cannot — you are going in circles, a test cannot be made green, the',
+      'plan does not match the code — commit what you have, set your step',
+      `\`blocked\` with \`blocked_by: { "kind": "decision", "name": "${project}-check-in" }\``,
+      "and in its `comments` what you found and what the next session should do",
+      'differently, open the pull request, and stop.',
+    );
+  }
+  lines.push('', 'Do not start anything new after a check-in that says it cannot be finished.');
+  return lines.join('\n');
+}
+
+const USAGE_SUMS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
+const RESULT_SUMS = ['num_turns', 'total_cost_usd', 'duration_ms', 'duration_api_ms'];
+// Limits, not amounts: the last result's value is the value.
+const MODEL_USAGE_KEPT = new Set(['contextWindow', 'maxOutputTokens']);
+
+const add = (a, b) => (typeof b === 'number' ? (typeof a === 'number' ? a + b : b) : a);
+
+/**
+ * The session's result, read from what claude printed: the last `result`
+ * line of a stream-json run, with the amounts of every result line added up.
+ *
+ * One process can print more than one (proven 2026-09-11, step-cost step 3):
+ * a check-in written just as the session finished starts a new turn with its
+ * own `result`, and each carries its own `num_turns`, `usage` and
+ * `total_cost_usd` for that turn group, not a running total. So turns, cost,
+ * durations, the four usage counts and `modelUsage` per model are summed;
+ * `subtype`, `is_error`, `result` and `session_id` are the last one's.
+ *
+ * Output that is one JSON object and no `result` line — `--output-format
+ * json`, which the helper still runs on — is read whole, as it always was.
+ * Null when there is neither.
+ */
+export function sessionResult(stdout) {
+  const results = [];
+  for (const line of String(stdout || '').split('\n')) {
+    if (!line.includes('"result"')) continue;
+    let event = null;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event && typeof event === 'object' && event.type === 'result') results.push(event);
+  }
+  if (!results.length) {
+    let json = null;
+    try { json = JSON.parse(stdout); } catch { json = null; }
+    return json && typeof json === 'object' && !Array.isArray(json) ? json : null;
+  }
+  const last = results.at(-1);
+  if (results.length === 1) return last;
+  const out = { ...last };
+  for (const key of RESULT_SUMS) out[key] = results.reduce((sum, r) => add(sum, r[key]), undefined);
+  const usage = { ...(last.usage || {}) };
+  for (const key of USAGE_SUMS) usage[key] = results.reduce((sum, r) => add(sum, r.usage?.[key]), undefined);
+  out.usage = usage;
+  const models = {};
+  for (const r of results) {
+    for (const [model, counts] of Object.entries(r.modelUsage || {})) {
+      const into = models[model] || (models[model] = {});
+      for (const [key, value] of Object.entries(counts || {})) {
+        into[key] = MODEL_USAGE_KEPT.has(key) ? value : add(into[key], value);
+      }
+    }
+  }
+  if (results.some((r) => r.modelUsage)) out.modelUsage = models;
+  return out;
 }
 
 /**
  * The usage fields runs.tsv carries, read from what the session printed.
  * Fields the tool does not give are `-`, never a guess. A quota or rate
  * limit answer is its own note: the session did not do the step.
+ *
+ * `stalled` is the runner's kill — a session silent for `stall_minutes` —
+ * and its note is `stalled`. `timedOut` alone is the helper turn's own
+ * wall-clock cap, which that lane keeps, and stays `timeout`.
  */
-export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timedOut = false }) {
+export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timedOut = false, stalled = false }) {
   const dash = { turns: '-', session: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-' };
   // A limit answer is what the tool says when it refuses: one or two turns
   // and the limit text as the whole result. Session prose that mentions a
   // quota (a PR body about quota rows, say) is not a limit — 2026-08-29 the
   // runner slept 30 min and left a finished PR unmerged on exactly that.
+  if (stalled) return { ...dash, note: 'stalled', quota: false };
   if (timedOut) return { ...dash, note: 'timeout', quota: false };
   if (toolId === 'codex') {
     const quota = exitCode !== 0 && quotaSeen(`${stdout}\n${stderr}`);
     return { ...dash, ...readCodexEvents(stdout), note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota };
   }
-  let json = null;
-  try { json = JSON.parse(stdout); } catch { json = null; }
-  if (!json || typeof json !== 'object') {
+  const json = sessionResult(stdout);
+  if (!json) {
     const quota = quotaSeen(`${stdout}\n${stderr}`);
     return { ...dash, note: quota ? 'quota' : 'no-json', quota };
   }
@@ -825,7 +941,8 @@ export function tsvHeader() {
  * level means no advisor, and so is an advisor that is the model itself: a
  * plan or step on `opus` gets no advisor unless it names a different one
  * (Martin, 2026-09-12: "Om step har opus => advisor = null, inte
- * opus+opus."). `tool` and `budget_minutes` are the plan's alone.
+ * opus+opus."). `tool`, `check_in_minutes` and `stall_minutes` are the plan's
+ * alone.
  *
  * The defaults belong to claude and to nothing else. `opus` is a claude
  * alias; handed to `codex -m` it names a model that tool does not have, and
@@ -838,7 +955,7 @@ export function tsvHeader() {
 export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'step' } = {}) {
   const plan = planRunner || {};
   const step = stepRunner || {};
-  const minutes = Number(plan.budget_minutes);
+  const minutes = (value, fallback) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback);
   const tool = plan.tool || DEFAULT_TOOL;
   const claude = tool === DEFAULT_TOOL;
   const defaults = claude ? (SESSION_DEFAULTS[kind] || SESSION_DEFAULTS.step) : {};
@@ -851,7 +968,8 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
     model,
     effort: claude && EFFORT_LEVELS.includes(effort) ? effort : null,
     advisor: claude && advisor !== 'off' && advisor !== model ? advisor : null,
-    budgetMinutes: Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_BUDGET_MINUTES,
+    checkInMinutes: minutes(plan.check_in_minutes, DEFAULT_CHECK_IN_MINUTES),
+    stallMinutes: minutes(plan.stall_minutes, DEFAULT_STALL_MINUTES),
   };
 }
 
@@ -867,4 +985,14 @@ export function describeSettings(shortName, settings) {
     settings.effort ? `effort ${settings.effort}` : null,
     settings.advisor ? `advisor ${settings.advisor}` : null,
   ].filter(Boolean).join(' · ');
+}
+
+/**
+ * The rest of the `starting` line: what the session is watched with. Codex
+ * gets neither a check-in nor a stall guard (its stdin is not a pipe), so it
+ * says so rather than printing numbers nothing acts on.
+ */
+export function describeWatch(toolId, settings) {
+  if (toolId === 'codex') return 'no check-in, no stall guard';
+  return `check-in every ${settings.checkInMinutes} min, killed after ${settings.stallMinutes} min silent`;
 }

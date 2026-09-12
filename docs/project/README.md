@@ -37,7 +37,8 @@ the door.
   for anything with a surface, the measurement *in the running app*. "Done" is
   never the session's judgement of its own work.
 - `documents` — `{ label, path }`.
-- `runner` — optional: `tool`, `model`, `effort`, `advisor`, `budget_minutes`.
+- `runner` — optional: `tool`, `model`, `effort`, `advisor`, `check_in_minutes`,
+  `stall_minutes`.
   Only what the runner actually reads; there is no field here that nothing
   enforces. `effort` is one of `low`, `medium`, `high`, `xhigh`, `max`;
   `advisor` is a model name, or `off` for none, and an advisor that is the
@@ -82,7 +83,8 @@ carries:
 - `runner` — optional: `model`, `effort`, `advisor`, for a step that needs
   something other than the plan's. Each key overrides the plan's `runner` on
   its own, and a step that names only its effort keeps the plan's model.
-  `tool` and `budget_minutes` are the plan's alone and refused here by name.
+  `tool`, `check_in_minutes` and `stall_minutes` are the plan's alone and
+  refused here by name.
   It is the plan author's, like `instruction`: a step session that changes its
   own step's `runner` fails on the way back in.
 - `comments` — an array of paragraphs, possibly empty: whatever that step's

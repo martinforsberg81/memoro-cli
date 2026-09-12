@@ -505,14 +505,20 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   const [call] = f.calls.sessions;
   assert.equal(call.bin, '/bin/claude');
   assert.equal(call.cwd, '/w/alpha/memoro');
-  assert.equal(call.timeoutMs, 90 * 60_000);
+  // Ruling 18: no wall-clock kill — a check-in every hour, a kill only on silence.
+  assert.equal(call.timeoutMs, undefined);
+  assert.equal(call.checkInMs, 60 * 60_000);
+  assert.equal(call.stallMs, 20 * 60_000);
+  assert.match(call.checkIn(60, 1), /running for 60 minutes \(this is check-in number 1\)[\s\S]*"name": "alpha-check-in"/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: check-in 1 at 60 min/u);
+  assert.deepEqual(call.args.slice(-5), ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
   // Ruling 18: a step is sonnet at medium effort with an opus advisor.
-  assert.deepEqual(call.args.slice(2, 14), ['--model', 'sonnet', '--effort', 'medium', '--advisor', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--disallowedTools', 'Agent']);
-  assert.match(f.files['/w/runner/log/runner.log'], /alpha: step starting \(claude sonnet · effort medium · advisor opus, 90 min\)/u);
+  assert.deepEqual(call.args.slice(1, 13), ['--model', 'sonnet', '--effort', 'medium', '--advisor', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--disallowedTools', 'Agent']);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: step starting \(claude sonnet · effort medium · advisor opus, check-in every 60 min, killed after 20 min silent\)/u);
   // The parsed plan, not the file: the step in full under its own heading.
-  assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- Your step: steps\[0\] -----\ntitle: The one step/u);
-  assert.doesNotMatch(call.args[1], /"schema": ?"mc-plan"/u, 'the file itself is not in the prompt');
-  assert.match(call.args[1], /Your step is `steps\[0\]` — 1, "The one step"/u);
+  assert.match(call.prompt, /`alpha` workarea of memoro[\s\S]*----- Your step: steps\[0\] -----\ntitle: The one step/u);
+  assert.doesNotMatch(call.prompt, /"schema": ?"mc-plan"/u, 'the file itself is not in the prompt');
+  assert.match(call.prompt, /Your step is `steps\[0\]` — 1, "The one step"/u);
   // Profile, then the text every role session shares, then this role's own
   // body — assembled by `instructionsFor`, the one door all four launch paths
   // take.
@@ -525,7 +531,9 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.equal(rows[0].split('\t').length, 15);
   assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t-\tsonnet');
   assert.ok(f.files['/w/alpha-20260829T100000Z.json'] === undefined);
-  assert.ok('/w/runner/log/alpha-20260829T100000Z.json' in f.files);
+  // The stream as it came, and the summed result beside it for measure-steps.py.
+  assert.ok('/w/runner/log/alpha-20260829T100000Z.jsonl' in f.files);
+  assert.equal(JSON.parse(f.files['/w/runner/log/alpha-20260829T100000Z.json']).num_turns, 4);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: #77 landed through mc merge from the session — step 1 is done\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged$/mu);
 });
 
@@ -730,7 +738,7 @@ test('a PLAN.json whose two sides changed different steps is merged by the runne
   assert.equal(f.calls.sessions.length, 1, 'one session, and it is the step');
   const [call] = f.calls.sessions;
   assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE step$/u);
-  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u);
+  assert.match(call.prompt, /Your step is `steps\[1\]` — 2, "Two"/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tc\tstep\t/u);
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json resolved by the plan's own rule — steps\[0\] from main, steps\[1\] from this branch/u);
@@ -767,11 +775,11 @@ test("a PLAN.json whose two sides changed the same step takes main's copy, and t
 
   assert.equal(f.calls.sessions.length, 1, 'and the project gets its step');
   const [call] = f.calls.sessions;
-  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u, "main's step 1 is done, so the step is 2");
+  assert.match(call.prompt, /Your step is `steps\[1\]` — 2, "Two"/u, "main's step 1 is done, so the step is 2");
   // The prompt quotes the other steps one line each, so main's step 1 is its
   // status and PR there (its comments are in the file, not the prompt).
-  assert.match(call.args[1], /steps\[0\] · done · One · done when: x · PR #601/u, "and the plan in the prompt is main's");
-  assert.match(call.args[1], /success_criteria\[0\] · met: true/u);
+  assert.match(call.prompt, /steps\[0\] · done · One · done when: x · PR #601/u, "and the plan in the prompt is main's");
+  assert.match(call.prompt, /success_criteria\[0\] · met: true/u);
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json — the plan's rule refused \(steps\[0\]: changed on this branch and on main both\); main's copy taken/u);
   assert.doesNotMatch(log, /c: merge conflict in:/u);
@@ -800,8 +808,8 @@ test('a conflicting merge of origin/main goes to the step session, with the file
   await runner.pass();
   assert.equal(f.calls.sessions.length, 1, 'one session, not one for the merge and one for the step');
   const call = f.calls.sessions[0];
-  assert.match(call.args[1], /^A `git merge origin\/main` is in progress in this worktree and stopped on\nconflicts in: docs\/project\/project_log\.md src\/a\.js/u);
-  assert.match(call.args[1], /Your step is `steps\[0\]` — 1, "The one step"/u, 'and the step is still the job');
+  assert.match(call.prompt, /^A `git merge origin\/main` is in progress in this worktree and stopped on\nconflicts in: docs\/project\/project_log\.md src\/a\.js/u);
+  assert.match(call.prompt, /Your step is `steps\[0\]` — 1, "The one step"/u, 'and the step is still the job');
   assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE step$/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tc\tstep\t/u);
   assert.ok(!f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'), 'the merge is the session\'s to finish, not aborted under it');
@@ -853,9 +861,9 @@ test("a step session handed main's plan has its work judged against main", async
   await runner.pass();
 
   const [call] = f.calls.sessions;
-  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u);
-  assert.match(call.args[1], /Main touched step two\./u, "main's copy, not the branch's");
-  assert.doesNotMatch(call.args[1], /This branch touched step two\./u);
+  assert.match(call.prompt, /Your step is `steps\[1\]` — 2, "Two"/u);
+  assert.match(call.prompt, /Main touched step two\./u, "main's copy, not the branch's");
+  assert.doesNotMatch(call.prompt, /This branch touched step two\./u);
   const [row] = runRows(f.files).filter((r) => r.name === 'c');
   assert.equal(row.note, 'success,merged');
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /left open — the session changed more of the plan/u);
@@ -895,8 +903,8 @@ test('a conflict outside the plan hands out the step main says, not the one HEAD
 
   assert.equal(f.calls.sessions.length, 1, "main's plan has a ready step, so the project gets its session");
   const [call] = f.calls.sessions;
-  assert.match(call.args[1], /Your step is `steps\[1\]` — 2, "Two"/u, "main's step, not the blocked one HEAD carries");
-  assert.match(call.args[1], /conflicts in: docs\/technical\/a\.md/u, 'and the merge is still the session\'s to finish');
+  assert.match(call.prompt, /Your step is `steps\[1\]` — 2, "Two"/u, "main's step, not the blocked one HEAD carries");
+  assert.match(call.prompt, /conflicts in: docs\/technical\/a\.md/u, 'and the merge is still the session\'s to finish');
   assert.ok(!f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'show' && String(c[2]).startsWith('HEAD:')), 'HEAD is not read at all here');
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /blocked on decision prog-1/u);
 });
@@ -1026,11 +1034,13 @@ test('a quota answer is logged as quota, not merged, and the runner sleeps 30 mi
   assert.ok(slept.includes(30 * 60 * 1000));
 });
 
-test('a timed-out session is logged as timeout with exit 142', async () => {
-  const f = fixture({ plans: { memoro: { t: ready } }, session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true }) });
+const stalledSession = () => ({ status: 142, stdout: '', stderr: '', timedOut: true, stalled: true });
+
+test('a stalled session is logged as stalled with exit 142', async () => {
+  const f = fixture({ plans: { memoro: { t: ready } }, session: stalledSession });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\ttimeout,failed\t-\tsonnet\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\tstalled,failed\t-\tsonnet\n/u);
 });
 
 /**
@@ -1058,14 +1068,14 @@ test('a step\'s pull request the session did not land is failed in the register,
 test('a step session that ended with its pull request open is failed with that reason — nothing is held', async () => {
   const f = fixture({
     plans: { memoro: { t: ready } }, gh: { t: { number: 5 } },
-    session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true }),
+    session: stalledSession,
   });
   await createRunner({ deps: f.deps }).pass();
   assert.equal('/w/runner/held.json' in f.files, false, 'there is no held file any more (ruling 21)');
   const step = registerOf(f, 't').steps[0];
   assert.equal(step.status, 'failed');
-  assert.equal(step.reason, '#5 is open and the session ended timeout (rc 142) without landing it');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\ttimeout,failed\t/u);
+  assert.equal(step.reason, '#5 is open and the session ended stalled (rc 142) without landing it');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tstalled,failed\t/u);
 });
 
 test('run.js has no gh pr merge left in it', () => {
@@ -1074,30 +1084,31 @@ test('run.js has no gh pr merge left in it', () => {
 });
 
 test('tool and model come from the project frontmatter', async () => {
-  const codexPlan = plan({ runner: { tool: 'codex', model: 'o3', budget_minutes: 20 } });
+  const codexPlan = plan({ runner: { tool: 'codex', model: 'o3', check_in_minutes: 20 } });
   const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => ({ status: 0, stdout: '', stderr: '', timedOut: false }) });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
   const [call] = f.calls.sessions;
   assert.equal(call.bin, '/bin/codex');
   assert.equal(call.cwd, '/w/cx/memoro-cli');
-  assert.equal(call.timeoutMs, 20 * 60_000);
+  // codex reads no stdin messages: its prompt is an argument, and nothing watches it.
+  assert.deepEqual([call.prompt, call.checkInMs, call.stallMs, call.timeoutMs], [undefined, undefined, undefined, undefined]);
   assert.deepEqual(call.args.slice(0, 6), ['exec', '--json', '--sandbox', 'danger-full-access', '--model', 'o3']);
 });
 
 test('a step\'s own runner overrides the plan\'s, key by key, and the row says what ran', async () => {
   const stepped = plan({
-    runner: { model: 'opus', budget_minutes: 30 },
+    runner: { model: 'opus', check_in_minutes: 30, stall_minutes: 15 },
     steps: [{ title: 'Own', status: 'ready', done_when: 'do x', instruction: ['Do it.'], pr: null, blocked_by: null, runner: { effort: 'high', advisor: 'off' } }],
   });
   const f = fixture({ plans: { 'memoro-cli': { own: stepped } }, session: okSession(), gh: { own: { number: 5 } } });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
   const [call] = f.calls.sessions;
-  assert.equal(call.timeoutMs, 30 * 60_000);
-  assert.deepEqual(call.args.slice(2, 7), ['--model', 'opus', '--effort', 'high', '--permission-mode']);
+  assert.deepEqual([call.checkInMs, call.stallMs], [30 * 60_000, 15 * 60_000]);
+  assert.deepEqual(call.args.slice(1, 6), ['--model', 'opus', '--effort', 'high', '--permission-mode']);
   assert.equal(call.args.includes('--advisor'), false, '`off` on the step turns the default advisor off');
-  assert.match(f.files['/w/runner/log/runner.log'], /own: step starting \(claude opus · effort high, 30 min\)/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /own: step starting \(claude opus · effort high, check-in every 30 min, killed after 15 min silent\)/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\town\tstep\t.*\topus\n/u);
 });
 
@@ -1110,7 +1121,7 @@ test('a codex plan that names no model gets none, and the log says so', async ()
   // `opus` is claude's alias; codex would die on it before reading the plan.
   assert.equal(call.args.includes('--model'), false);
   assert.equal(call.args.includes('opus'), false);
-  assert.match(f.files['/w/runner/log/runner.log'], /cx: step starting \(codex own default model, 90 min\)/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /cx: step starting \(codex own default model, no check-in, no stall guard\)/u);
 });
 
 test('STOP file: the loop exits after the step it is in, and refuses to start while it exists', async () => {
@@ -1350,7 +1361,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
 
   const during = f.duringSession[0];
   assert.deepEqual(JSON.parse(during['/w/runner/current-memoro.json']), {
-    name: 'alpha', kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', budget_minutes: 90,
+    name: 'alpha', kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro', role: stepRole,
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z' });
@@ -1360,13 +1371,29 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
   assert.equal('/w/runner/runner.json' in f.files, false);
 });
 
+test('a check-in is counted in the current file while the step runs', async () => {
+  let seen = null;
+  const f = fixture({
+    plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77 } },
+    session: (call) => {
+      call.checkIn(60, 1);
+      call.checkIn(120, 2);
+      seen = JSON.parse(f.files['/w/runner/current-memoro.json']);
+      return okSession()(call);
+    },
+  });
+  await createRunner({ deps: f.deps }).pass();
+  assert.deepEqual([seen.check_in_minutes, seen.check_ins], [60, 2]);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: check-in 1 at 60 min\n.*alpha: check-in 2 at 120 min/u);
+});
+
 test('the current file carries the project frontmatter, and is removed even when the session throws', async () => {
-  const codexPlan = plan({ runner: { tool: 'codex', model: 'o3', budget_minutes: 20 } });
+  const codexPlan = plan({ runner: { tool: 'codex', model: 'o3', check_in_minutes: 20 } });
   const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => { throw new Error('boom'); } });
   const runner = createRunner({ deps: f.deps });
   await assert.rejects(runner.pass(), /boom/u);
   assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current-memoro-cli.json']), {
-    name: 'cx', kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', effort: null, advisor: null, budget_minutes: 20,
+    name: 'cx', kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', effort: null, advisor: null, check_in_minutes: null, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
     // The same text whichever tool it is handed to: `instructionsFor` assembles
     // one body and only the flag that carries it differs (portrait.js).
@@ -2601,6 +2628,7 @@ test('a project already in flight in one lane is skipped by another', async () =
   const third = await runner.runStep('a', world, { lane: 1 });
   assert.notEqual(third, 'skipped', 'the claim is released when the step is over');
 });
+
 
 /* ----------------------------------------- a step the runner cannot start */
 

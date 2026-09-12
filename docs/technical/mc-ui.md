@@ -161,8 +161,9 @@ the eye already is:
   default, and how long the runner has been up. Under it **one row per lane**,
   whether or not that lane has a step: the lane — `memoro #2` when a repository
   has more than one, plain `memoro` when it has one — then the project in
-  flight there in bold, its kind, the clock against its budget (bold, because it
-  is the number on the row that moves), and what is running it: tool, model,
+  flight there in bold, its kind, the clock (bold, because it is the number on
+  the row that moves) and the check-ins the runner has written into the session
+  (`47 min · 0 check-ins`; none for codex, which gets none), and what is running it: tool, model,
   and the advisor model when the step has one. `mc run` drives `per_repo` lanes
   on every repository at the same time (`mc run lanes`), and a lane is a lane
   between steps as much as during one — with a row only where there was a
@@ -214,7 +215,7 @@ the helper and the sessions already write.
 | fact | file | written by |
 |---|---|---|
 | a runner is here | `~/mc/runner/runner.json` (pid, started) | `mc run`, at start |
-| a step is in flight | `~/mc/runner/current-<repo>[-<lane>].json`, one per lane (name, kind, repo, lane, tool, model, effort, advisor, budget, started, pid, worktree) | `mc run`, per step |
+| a step is in flight | `~/mc/runner/current-<repo>[-<lane>].json`, one per lane (name, kind, repo, lane, tool, model, effort, advisor, check_in_minutes, check_ins, started, pid, worktree) | `mc run`, per step |
 | stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
 | where every step stands | `~/mc/runner/projects/<project>.json` (per step: status, pr, branch, blocked_by, reason, comments, session, attempts, landed) | `mc run`, `mc merge`, `mc step` |
@@ -413,8 +414,8 @@ person set it to.
 | RUNNER | the heading's lane setting and uptime | grey |
 | RUNNER | a lane with a step: its `●`, the project's name | green, bold |
 | RUNNER | a lane's name (`memoro`, `memoro #2`) | grey |
-| RUNNER | elapsed: under ¾ of budget, from ¾, past it | bold, bold yellow, bold red |
-| RUNNER | the budget beside the clock, the tool, the advisor | grey |
+| RUNNER | elapsed: before the first check-in, from it — never red, nothing is killed for its length (ruling 18) | bold, bold yellow |
+| RUNNER | the check-ins beside the clock, the tool, the advisor | grey |
 | RUNNER | the day's `failed`, `timed out` while not zero | red, yellow |
 | RUNNER | `■ STOP requested` | bold red |
 | RUNNER | a stale runner file | red |
@@ -498,8 +499,8 @@ Five things hold that table up:
 
 `tests/mc/page.test.js` pins all of it: a per-row signature snapshot of the
 painted page (the colours in order, not the escape bytes), the two tables
-walked through every section that prints them, the clock at ¾ and past the
-budget, and — at six terminal widths — painted against plain, row for row,
+walked through every section that prints them, the clock before and past its
+first check-in and never red, and — at six terminal widths — painted against plain, row for row,
 with every escape checked to be whole. Two more assertions keep the paragraph
 above honest: no row of the page carries `dim` or `ESC[37m`, and no row of any
 table on this page names either. In the snapshot, primary text leaves no run at

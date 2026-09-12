@@ -144,7 +144,7 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
 
   // The launch, in runner.log where a night is read back from.
   const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
-  assert.match(log, /cx: step starting \(codex own default model, 90 min\)/u);
+  assert.match(log, /cx: step starting \(codex own default model, no check-in, no stall guard\)/u);
   assert.match(log, /cx: step done rc=0 \d+s pr=- turns=- note=success/u);
 
   // The argument list the process was actually started with.

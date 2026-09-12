@@ -207,7 +207,7 @@ function row(c, wide, left, middle, right, tone = null) {
  * It was NOW, and NOW drew the runner's steps and the sessions a person had
  * open as one list of dots. The two are stopped by different things and read
  * for different reasons; together they meant a `mc plan` left open since
- * Sunday sat in the same column as a step four minutes into its budget. The
+ * Sunday sat in the same column as a step four minutes old. The
  * sessions have a section of their own now.
  *
  * The heading carries the section's answer — how many steps are in flight,
@@ -308,9 +308,11 @@ const LANE_NAME = 26;
  * where a number is a thing to use rather than a thing to read.
  *
  * After the name, what a person reads a lane row for, in that order: what
- * kind of session it is, how far into its budget it is — the clock is bold,
- * because it is the number on the row that changes — and what is running it:
- * tool and model, and the advisor model when the step has one.
+ * kind of session it is, how long it has run and how many check-ins it has
+ * had — the clock is bold, because it is the number on the row that changes —
+ * and what is running it: tool and model, and the advisor model when the step
+ * has one. There is no end on the clock: nothing is killed on elapsed time
+ * (ruling 18).
  */
 function laneLine(c, wide, lane, numbered = false) {
   const width = numbered ? LANE_REPO_NUMBERED : LANE_REPO;
@@ -318,16 +320,16 @@ function laneLine(c, wide, lane, numbered = false) {
   const where = c(pad(clip(label, width - 1), width), 'grey');
   const s = lane.step;
   if (!s) return `  ${c(MARK.quiet, 'grey')} ${where} ${c('idle', 'grey')}`;
-  const over = s.over_budget ? ' — over budget' : '';
   const sep = { text: ' · ', styles: ['grey'] };
+  const checkIns = s.check_ins == null ? null : `${s.check_ins} check-in${s.check_ins === 1 ? '' : 's'}`;
   const meta = paint(c, [
     { text: s.kind, styles: kindTone(s.kind) },
     sep,
-    // The clock and its budget are two parts on purpose: the elapsed is the
-    // thing to read and carries its own colour, the budget is the bookkeeping
-    // beside it. `elapsedTone` says when the clock has turned.
-    { text: `${duration(s.elapsed_seconds)}${over}`, styles: elapsedTone(s) },
-    s.budget_seconds == null ? null : { text: ` of ${duration(s.budget_seconds)}`, styles: ['grey'] },
+    // The clock and its check-ins are two parts on purpose: the elapsed is
+    // the thing to read and carries its own colour, the count is the
+    // bookkeeping beside it. `elapsedTone` says when the clock has turned.
+    { text: duration(s.elapsed_seconds), styles: elapsedTone(s) },
+    ...(checkIns ? [sep, { text: checkIns, styles: ['grey'] }] : []),
     sep,
     { text: [s.tool, s.model].filter(Boolean).join(' '), styles: ['grey'] },
     ...(s.advisor ? [sep, { text: `${s.advisor} advisor`, styles: ['grey'] }] : []),
@@ -490,12 +492,15 @@ function workLines(lines, c, wide, sessions, unplanned) {
   ], room), room)}`);
 }
 
-/** How the clock reads: plain, then yellow near the budget, then red past it. */
+/**
+ * How the clock reads: plain, then yellow once the session is past its first
+ * check-in — the sessions that are already unusual. Never red: a long session
+ * is not a failed one, and nothing kills it on the clock (ruling 18).
+ */
 function elapsedTone(step) {
-  if (step.over_budget) return ['red', 'bold'];
   const spent = step.elapsed_seconds;
-  if (step.budget_seconds && spent != null && spent >= step.budget_seconds * 0.75) return ['yellow', 'bold'];
-  // Not white: a clock inside its budget is text to read, and reads in the
+  if (step.check_ins > 0 || (step.check_in_seconds && spent != null && spent >= step.check_in_seconds)) return ['yellow', 'bold'];
+  // Not white: a clock before its first check-in is text to read, and reads in the
   // colour the rest of the row does — bold, because it is the one number on
   // the row that is moving.
   return ['bold'];

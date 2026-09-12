@@ -116,7 +116,7 @@ const live = () => true;
 describe('RUNNER', () => {
   const RUNNER = { pid: 4242, started: '2026-08-29T10:00:00Z' };
   const CURRENT = {
-    name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
+    name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T11:40:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
   };
 
@@ -126,7 +126,7 @@ describe('RUNNER', () => {
     });
     assert.equal(runner.steps[0].name, 'mc-ui');
     assert.equal(runner.steps[0].elapsed_seconds, 1200);
-    assert.equal(runner.steps[0].budget_seconds, 5400);
+    assert.deepEqual([runner.steps[0].check_in_seconds, runner.steps[0].check_ins], [3600, 0]);
     assert.equal(runner.stop, true);
     assert.equal(runner.process.alive, true);
     assert.equal(runner.day.steps, 3);
@@ -149,7 +149,7 @@ describe('RUNNER', () => {
       runner: RUNNER,
       currents: [CURRENT, {
         name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus',
-        budget_minutes: 90, started: '2026-08-29T11:50:00Z', pid: 4243, worktree: '/w/docx-editor/memoro',
+        check_in_minutes: 60, check_ins: 0, started: '2026-08-29T11:50:00Z', pid: 4243, worktree: '/w/docx-editor/memoro',
       }],
       rows: ROWS,
       now: NOW,
@@ -192,7 +192,7 @@ describe('RUNNER', () => {
   it('carries per_repo lanes per repository, and a step on the lane its file names', () => {
     const second = {
       name: 'docx-editor', kind: 'step', repo: 'memoro-cli', lane: 1, tool: 'claude', model: 'sonnet', advisor: 'opus',
-      budget_minutes: 90, started: '2026-08-29T11:50:00Z', pid: 4242, worktree: '/w/docx-editor/memoro-cli',
+      check_in_minutes: 60, check_ins: 0, started: '2026-08-29T11:50:00Z', pid: 4242, worktree: '/w/docx-editor/memoro-cli',
     };
     const runner = runnerSection({
       runner: RUNNER, currents: [CURRENT, second], repos: ['memoro', 'memoro-cli'],
@@ -213,7 +213,7 @@ describe('RUNNER', () => {
 
     const lines = paintedPage(pageData({ runner }));
     assert.match(strip(rowWith(lines, 'docx-editor')),
-      /^ {2}● memoro-cli #2 {2}docx-editor {16}step · 10 min of 90 min · claude sonnet · opus advisor$/u);
+      /^ {2}● memoro-cli #2 {2}docx-editor {16}step · 10 min · 0 check-ins · claude sonnet · opus advisor$/u);
     assert.match(strip(rowWith(lines, 'mc-ui')), /^ {2}● memoro-cli #1 {2}mc-ui/u);
     assert.match(strip(rowWith(lines, 'memoro #2')), /^ {2}· memoro #2 {6}idle$/u);
     // The heading carries the setting, so a page reader knows what the rows add up to.
@@ -232,14 +232,14 @@ describe('RUNNER', () => {
         runner: RUNNER,
         currents: [CURRENT, {
           name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus',
-          budget_minutes: 90, started: '2026-08-29T11:50:00Z', pid: 4242, worktree: '/w/docx-editor/memoro',
+          check_in_minutes: 60, check_ins: 0, started: '2026-08-29T11:50:00Z', pid: 4242, worktree: '/w/docx-editor/memoro',
         }],
         rows: ROWS,
         now: NOW,
         alive: live,
       }),
     }));
-    assert.match(strip(rowWith(lines, 'docx-editor')), /^ {2}● memoro {6}docx-editor {16}step · 10 min of 90 min · claude opus$/u);
+    assert.match(strip(rowWith(lines, 'docx-editor')), /^ {2}● memoro {6}docx-editor {16}step · 10 min · 0 check-ins · claude opus$/u);
     assert.match(strip(rowWith(lines, 'mc-ui')), /^ {2}● memoro-cli {2}mc-ui/u);
     for (const line of lines) assert.doesNotMatch(strip(line), /pid 4242/u, 'the runner’s own pid says nothing about a lane');
 
@@ -1097,7 +1097,7 @@ const DATA = pageData({
   runner: runnerSection({
     runner: { pid: 4242, started: '2026-08-29T10:00:00Z' },
     currents: [{
-      name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
+      name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
       started: '2026-08-29T11:40:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
     }],
     stop: true,
@@ -1164,7 +1164,7 @@ describe('the page', () => {
     assert.doesNotMatch(text, /queued/u);
     // One row per lane, the repository first and the runner's own pid nowhere:
     // both lane files carry it, so it named neither of them.
-    assert.match(text, /^ {2}● memoro-cli {2}mc-ui\s+step · 20 min of 90 min · claude opus$/mu);
+    assert.match(text, /^ {2}● memoro-cli {2}mc-ui\s+step · 20 min · 0 check-ins · claude opus$/mu);
     assert.match(text, /^ {2}· memoro {6}idle$/mu);
     assert.doesNotMatch(text, /pid 4242/u);
     assert.match(text, /■ STOP requested — the runner exits after the steps it is in/u);
@@ -1322,11 +1322,11 @@ describe('collectPage', () => {
     mkdirSync(join(root, 'runner', 'log'), { recursive: true });
     writeFileSync(join(root, 'runner', 'runner.json'), JSON.stringify({ pid: process.pid, started: '2026-08-29T10:00:00Z' }));
     writeFileSync(join(root, 'runner', 'current-memoro-cli.json'), JSON.stringify({
-      name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
+      name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
       started: '2026-08-29T11:40:00Z', pid: process.pid, worktree: `${root}/mc-ui/memoro-cli`,
     }));
     writeFileSync(join(root, 'runner', 'current-memoro.json'), JSON.stringify({
-      name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus', budget_minutes: 90,
+      name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
       started: '2026-08-29T11:50:00Z', pid: process.pid, worktree: `${root}/docx-editor/memoro`,
     }));
     mkdirSync(join(root, 'runner', 'foreground'), { recursive: true });
@@ -1600,7 +1600,7 @@ describe('the palette', () => {
     '',
     'bold+cyan green+bold grey grey grey', //          RUNNER  1 in flight · up 120 min           mc run
     'grey grey grey', //                             · memoro      idle
-    'green grey bold green grey bold grey grey grey', // ● memoro-cli  mc-ui  step · 20 min of 90 min · claude opus
+    'green grey bold green grey bold grey grey grey grey', // ● memoro-cli  mc-ui  step · 20 min · 0 check-ins · claude opus
     'red+bold grey', //                              ■ STOP requested — the runner exits after the steps it is in
     'grey grey green grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
     '',
@@ -1673,7 +1673,7 @@ describe('the palette', () => {
         runner: runnerSection({
           runner: { pid: 4242, started: '2026-08-29T11:00:00Z' },
           currents: [{
-            name: 'thing', kind, repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
+            name: 'thing', kind, repo: 'memoro-cli', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
             started: '2026-08-29T11:40:00Z', pid: 4242,
           }],
           now: NOW,
@@ -1739,29 +1739,35 @@ describe('the palette', () => {
     assert.deepEqual(signature(rowWith(collapsed, '0 ready · 1 blocked')).split(' '), ['bold+cyan', 'grey', 'grey', 'red', 'grey']);
   });
 
-  it('turns the clock yellow near the budget and red past it', () => {
-    const stepAt = (spent) => pageData({
+  it('turns the clock yellow past its first check-in, and never red', () => {
+    const stepAt = (spent, checkIns = 0) => pageData({
       runner: runnerSection({
         runner: { pid: 4242, started: '2026-08-29T10:00:00Z' },
         currents: [{
-          name: 'thing', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
+          name: 'thing', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: checkIns,
           started: new Date(NOW.getTime() - spent * 1000).toISOString(), pid: 4242,
         }],
         now: NOW,
         alive: live,
       }),
     });
-    const clock = (spent) => signature(rowWith(paintedPage(stepAt(spent)), '● memoro-cli  thing')).split(' ');
-    // Inside its budget the clock carries no colour of its own — it is text to
-    // read, bold because it is the number on the row that moves — at index 5:
-    // the mark, the repository, the name, the kind, the separator, then the
-    // clock, the grey budget beside it, and the greys of the tool.
-    const QUIET = ['green', 'grey', 'bold', 'green', 'grey', 'bold', 'grey', 'grey', 'grey'];
-    assert.deepEqual(clock(600), QUIET, 'ten minutes in, the clock is just a clock');
-    assert.deepEqual(clock(0.74 * 5400), QUIET);
-    assert.equal(clock(0.8 * 5400)[5], 'yellow+bold', 'past three quarters of the budget');
-    assert.equal(clock(5401)[5], 'red+bold', 'over budget');
-    assert.ok(strip(rowWith(paintedPage(stepAt(5401)), '● memoro-cli  thing')).includes('over budget'));
+    const row = (spent, checkIns) => rowWith(paintedPage(stepAt(spent, checkIns)), '● memoro-cli  thing');
+    const clock = (spent, checkIns) => signature(row(spent, checkIns)).split(' ');
+    // Before its first check-in the clock carries no colour of its own — it
+    // is text to read, bold because it is the number on the row that moves —
+    // at index 5: the mark, the repository, the name, the kind, the
+    // separator, then the clock, and the greys of the count and the tool.
+    const QUIET = clock(600);
+    assert.equal(QUIET[5], 'bold', 'ten minutes in, the clock is just a clock');
+    assert.deepEqual(QUIET.slice(6).filter((style) => style !== 'grey'), [], 'the count and the tool are grey');
+    assert.deepEqual(clock(3599), QUIET);
+    assert.match(strip(row(47 * 60)), /47 min · 0 check-ins · claude opus/u);
+    assert.equal(clock(3600)[5], 'yellow+bold', 'past the first check-in');
+    assert.equal(clock(600, 1)[5], 'yellow+bold', 'a check-in the runner wrote turns it too');
+    assert.match(strip(row(3 * 3600 + 60, 3)), /3 check-ins/u);
+    // Ruling 18: nothing is killed for how long it ran, so nothing is over.
+    assert.equal(clock(10 * 3600, 10).includes('red+bold'), false);
+    assert.doesNotMatch(strip(row(10 * 3600, 10)), /over budget/u);
   });
 
   it('says a quota answer in yellow while it is recent, and in grey once it is history', () => {
