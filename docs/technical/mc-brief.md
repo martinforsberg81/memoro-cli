@@ -40,8 +40,8 @@ writes:
 | Plans that do not parse | `~/mc/runner/unreadable-plans.md` |
 | Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
 | Production | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, `git rev-list --count <it>..origin/main` in `~/memoro`, the nightly's last measurement, and the `/api/version` in `~/mc/runner/version.json` |
-| Held before merge | `~/mc/runner/held.json`, the entries at `repairs >= 1` |
-| Ready, and the runner cannot start it | `machineState` (`src/mc/status-collect.js`) over every non-legacy plan: the workarea's `git status --porcelain`, `held.json` whole, the open pull requests, the STOP file — less what `current-<repo>.json` says is running |
+| Failed steps | the `failed` steps of the same plans, as the register overlays them (`~/mc/runner/projects/<project>.json`) |
+| Ready, and the runner cannot start it | `machineState` (`src/mc/status-collect.js`) over every non-legacy plan: the workarea's `git status --porcelain`, the open pull requests, the STOP file — less what `current-<repo>.json` says is running |
 | Blocked | the `blocked` steps of the same plans *Plan status* already parsed, plus `staleBlockers` (`src/mc/stale-blockers.js`) |
 | Queue | `~/mc/queue.md` |
 
@@ -57,24 +57,24 @@ themselves are the record of when there was last a brief. The *Runner*
 section is the exception and always looks back 24 h — it is a picture of the
 machine's day, not of the interval.
 
-**Held before merge** is the one section that carries work rather than
-reporting it. `mc run` writes `~/mc/runner/held.json` whenever a landing does
-not land, gives such a pull request exactly one repair session, and stops
-there; what the repair could not fix is a project standing still — its pull
-request is open, so the runner's picker passes it over — and this is where a
-person is told. The brief takes the entries at `repairs >= 1` only: one still
-at zero is the runner's next pick, and raising it would ask Martin to decide
-something a session is about to try. When there is one at all the brief says so
-in its opening lines, not only in the section. The three answers the role
-allows are in [`canon/roles/brief.md`](../../canon/roles/brief.md): merge by
-hand, close, or block the step with a decision.
+**Failed steps** is the one section that carries work rather than reporting
+it. A step whose session ended without landing — the gate was red and the
+session could not make it green, or the session died — is `failed` in the
+register (ruling 21; `mc-run.md` § *The register*), and the runner starts
+nothing on it again. Each row is a project standing still, and each is a
+person's: fix the branch and `mc merge` by hand, close the pull request and
+`mc step ready`, or replan — one proposal per step, in
+[`canon/roles/brief.md`](../../canon/roles/brief.md). When there is one at
+all the brief says so in its opening lines, not only in the section. Until
+2026-09-12 this was *Held before merge*, over `~/mc/runner/held.json` and one
+repair session per pull request; both are gone.
 
 **Ready, and the runner cannot start it** is the rest of the same waiting.
-`held.json` only knows a pull request the gate refused, and a session killed
-before it committed never got as far as one: `no-text-in-code` stood from
+A failed step is one whose session got as far as ending; a session killed
+before it committed never got as far as a pull request: `no-text-in-code` stood from
 2026-09-04T12:37Z on exit 143 with 35 files of finished work uncommitted, and
 `connections-section` from 2026-08-29T21:37Z on a session that exited 0 and
-opened no pull request. Neither was in `held.json`, neither was in *Workareas
+opened no pull request. Neither was a failed step, neither was in *Workareas
 with no project on main* — both had a project on main, which is what made them
 a loss — and both were skipped every ten minutes with one `, skip` line in
 `runner.log`. Since 2026-09-08 the runner writes such a step `blocked` on
@@ -84,8 +84,8 @@ not picked since it went dirty, and a repository GitHub would not answer for.
 It asks `machineState` for the same answer the runner refuses on and lists
 what it refuses: the project, what is in the way, since
 when and how long, and the `runs.tsv` row that left it. It is a section of its
-own rather than rows in *Held before merge* because the act differs — a held
-pull request takes one of that section's three answers, and a workarea takes a
+own rather than rows in *Failed steps* because the act differs — a failed
+step takes one of that section's three answers, and a workarea takes a
 person opening it — and a row under prose that promises the wrong answer is a
 row somebody applies the wrong answer to. `prs-unknown` is a fact about a
 repository rather than a project, so it is one line per repository. A project

@@ -28,48 +28,27 @@
  */
 import { join } from 'node:path';
 
-import { samePr } from './held.js';
+
+/**
+ * One pull request, in one repository. Two repositories number their pull
+ * requests independently, so a number alone is not an identity — memoro's
+ * #500 and memoro-cli's are different work. (Was `held.js`'s until ruling 21
+ * took that file out.)
+ */
+export function samePr(a, b) {
+  return Number(a.pr) === Number(b.pr) && (a.repo ?? null) === (b.repo ?? null);
+}
 
 /** Where the file lives, spelled once for the verb, the runner and the page. */
 export function mergesPath(root) {
   return join(root, 'runner', 'merges.json');
 }
 
-/**
- * The stops a refused round queues on — the ones the merge lane can do
- * something about, and no others:
- *
- *  - `red` — the gate measured red, and a red pull request is what the
- *    repair session exists for.
- *  - `pr-tests` — the pull request's own tests failed, which is the same
- *    answer arrived at one phase earlier.
- *  - `extra-gate` — a declared command gate failed or could not run, and a
- *    gate that could not run is not an approval a second caller can give.
- *  - `merge` — the squash itself was refused (a conflict, a forge that said
- *    no), and the lane's round starts from a main that has moved since.
- *
- * `busy` and `lease` are not here any more. Both used to be the lane's to
- * retry, exactly like the four above; now the verb itself waits out a busy
- * gate lock and a held lease (see the module docstring), so a round can no
- * longer stop at either — `queueable('busy')` returning true would double a
- * process that is already its own waiter into a second entry.
- *
- * A stop at `pr` is not here: GitHub could not be asked, or there is no such
- * pull request, and nothing on this machine can land what it cannot name.
- * Every other stop (`drift`, `merge-unknown`, `batch`, `plan-trespass`) stays
- * exactly as it is today — the caller is told and nothing is queued.
- */
-export const QUEUEABLE_STOPS = Object.freeze(['red', 'pr-tests', 'extra-gate', 'merge']);
 
 /** Past this, a wait is not a wait any more — see the loop in `commands/repo.js`. */
 export const MERGE_WAIT_MS = 8 * 60 * 1000;
 /** How often a waiting `mc merge` looks again. */
 export const MERGE_POLL_MS = 15 * 1000;
-
-/** Would a round that stopped here be the lane's to try again? */
-export function queueable(stoppedAt) {
-  return QUEUEABLE_STOPS.includes(String(stoppedAt || ''));
-}
 
 /** One entry, whatever a hand-edited file or an older mc left behind. */
 function normalise(entry) {

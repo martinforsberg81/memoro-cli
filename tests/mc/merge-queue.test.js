@@ -11,8 +11,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  QUEUEABLE_STOPS, dequeue, dropDeadEntries, enqueue, mergesPath, nextWaiter, parseQueue, queueEntries, queueOrder,
-  queuedFor, queueable,
+  dequeue, dropDeadEntries, enqueue, mergesPath, nextWaiter, parseQueue, queueEntries, queueOrder,
+  queuedFor,
 } from '../../src/mc/merge-queue.js';
 
 const entry = (over = {}) => ({
@@ -67,19 +67,6 @@ test('the lane takes them oldest first', () => {
   assert.deepEqual(queueOrder(entries).map((item) => item.pr), [2, 3]);
 });
 
-test('only the stops the lane can do something about are queued', () => {
-  for (const stop of ['red', 'pr-tests', 'extra-gate', 'merge']) {
-    assert.equal(queueable(stop), true, `${stop} is one the lane can try again`);
-  }
-  // `busy` and `lease` are the verb's own wait now, not the lane's retry —
-  // see merge-queue.js's module docstring. A pull request nothing on this
-  // machine can name, and the stops that mean something else has to happen
-  // first, are never the lane's either.
-  for (const stop of ['busy', 'lease', 'pr', 'drift', 'merge-unknown', 'batch', 'plan-trespass', null, undefined]) {
-    assert.equal(queueable(stop), false, `${stop} is not the lane's`);
-  }
-  assert.equal(QUEUEABLE_STOPS.length, 4, 'a fifth stop needs a sentence beside the list');
-});
 
 test('a dead pid is litter, dropped by whoever polls next', () => {
   const entries = [entry({ pid: 111 }), entry({ pr: 9, pid: 222 }), entry({ pr: 5 })];

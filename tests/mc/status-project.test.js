@@ -105,15 +105,15 @@ describe('the plan fields', () => {
    */
   it('says the plan state and what this machine has to say about it, in one row', () => {
     const plan = JSON.parse(PLAN('ready', 'One project'));
-    const held = {
+    const flight = {
       runnable: false,
-      reason: 'held-after-repair',
-      detail: '#614 is held before merge after a repair — the brief\'s',
+      reason: 'in-flight',
+      detail: '#614 is open (Step) — not starting a step',
       since: '2026-09-03T10:00:00Z',
       kind: null,
     };
-    assert.deepEqual(fieldRows(plan, [], held), [
-      ['status', 'ready · #614 is held before merge after a repair — the brief\'s (since 09-03 10:00Z)'],
+    assert.deepEqual(fieldRows(plan, [], flight), [
+      ['status', 'ready · #614 is open (Step) — not starting a step (since 09-03 10:00Z)'],
     ]);
     // The home directory is folded: the row is read in a terminal, and the
     // absolute path of a workarea is most of its width.
@@ -143,18 +143,6 @@ describe('the plan fields', () => {
     }), [['status', 'blocked']]);
   });
 
-  /**
-   * A hold still owed its one repair session is not a refusal — the runner
-   * would start it — but what it would start is a repair, not the step the
-   * plan names, and that is worth a row saying so.
-   */
-  it('says a repair is what the runner would start, on a plan that reads ready', () => {
-    const plan = JSON.parse(PLAN('ready', 'One project'));
-    assert.deepEqual(fieldRows(plan, [], {
-      runnable: true, reason: null, kind: 'repair', since: '2026-09-03T10:00:00Z',
-      detail: '#614 is held before merge — one repair session is owed',
-    }), [['status', 'ready · #614 is held before merge — one repair session is owed (since 09-03 10:00Z)']]);
-  });
 
   it('folds a paragraph and indents its continuation', () => {
     assert.equal(wrap('one two three four', 9, 3), 'one two\n   three\n   four');
@@ -213,33 +201,6 @@ describe('collectProject', () => {
     assert.equal(await collectProject('never-existed', opts), null);
   });
 
-  /**
-   * The whole defect, end to end: on 2026-09-05 this printed `ready` for
-   * `role-instructions` while #614 was held with its one repair spent and the
-   * runner could not have started it. The plan is still `ready` — that is a
-   * fact about the file on main — and the row now says both.
-   */
-  it('names the held pull request beside the plan state', async () => {
-    const root = workRoot();
-    writeFileSync(join(root, 'runner', 'held.json'), JSON.stringify([{
-      project: 'mc-status', repo: 'memoro-cli', pr: 427, branch: 'mc-status',
-      reason: 'two tests the change reaches are red', note: 'open,gate-red',
-      since: '2026-09-03T10:00:00Z', repairs: 1,
-    }]));
-    const exec = async (cmd) => (cmd === 'gh'
-      ? { ok: true, stdout: JSON.stringify([{ number: 427, title: 'mc status <name>', headRefName: 'mc-status' }]) }
-      : { ok: true, stdout: '' });
-    const data = await collectProject('mc-status', {
-      env: { MC_WORK_ROOT: root },
-      repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
-      git,
-      exec,
-    });
-    assert.equal(data.machine.runnable, false);
-    assert.equal(data.machine.reason, 'held-after-repair');
-    assert.equal(data.machine.since, '2026-09-03T10:00:00Z');
-    assert.match(renderProject(data), /status +ready · #427 is held before merge after a repair/u);
-  });
 
   /**
    * A pull request a hand `mc merge` left for the runner's merge lane is not
@@ -269,7 +230,7 @@ describe('collectProject', () => {
       git,
     });
     assert.deepEqual(data.queued.map((entry) => entry.pr), [427], 'another project\'s branch is not this project\'s');
-    assert.match(renderProject(data), /#427 is queued for merge \(since 09-06 18:00Z\) — another gate round is running/u);
+    assert.match(renderProject(data), /#427 is waiting for the gate \(since 09-06 18:00Z\) — another gate round is running/u);
   });
 
   /**

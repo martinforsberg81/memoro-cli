@@ -54,7 +54,7 @@ and that is a proposal, not a fix you make.
 A **workarea blocker** is the runner's own writing, and it is not a decision:
 `mc run` could not start the step — uncommitted work in the workarea, a branch
 it could not move, a merge that would not commit, a role file or a tool that is
-not on this machine, a pull request held after its one repair — so it set the
+not on this machine — so it set the
 step `blocked` and said in that step's last `comments` paragraph which workarea
 and what was in it. Nothing is being judged here and there is nothing to
 decide. Open the workarea named there and say what the last session left: work

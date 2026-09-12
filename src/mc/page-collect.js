@@ -50,7 +50,6 @@ import {
   DAY_MS, defaultRepos, listProgrammes, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { lastAttempt, lastDeploy } from './deploys.js';
-import { heldEntries, heldPath } from './held.js';
 import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
@@ -432,8 +431,6 @@ export function nextSection({
     if (kind.startsWith('skip')) return { ...base, kind, runnable: false, machine: null };
     const state = machine(name) || null;
     if (state && !state.runnable) return { ...base, kind: `skip:${state.reason}`, runnable: false, machine: state };
-    // `repair` rather than `step` where a held pull request is owed one: the
-    // kind drawn beside the name is what the runner would actually start.
     return { ...base, kind: state?.kind || kind, runnable: true, machine: state };
   });
   const runnable = items.filter((item) => item.runnable);
@@ -506,25 +503,21 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
 }
 
 /**
- * MERGES — the one round running now, and the two queues behind it: what a
- * hand `mc merge` left for the runner's lane, and what the runner refuses to
- * land at all.
+ * MERGES — the one round running now, and the waiters behind it: every
+ * `mc merge` standing in line for the gate (`merges.json`, with its pid).
  *
  * `landing` is `runningMerge`'s own object (merges-collect.js) or null — this
  * function does not read the lock itself, so its tests never touch a real
- * one. `queued` and `held` keep the sort orders they had under NEXT: the
- * queue lane's own order (`queueOrder`) and held oldest-`since`-first, because
- * moving them here changes where they are drawn, not what they mean.
+ * one. The held rows went with `held.json` (ruling 21): a step that did not
+ * land is `failed` in the register and drawn where every other plan state is.
  */
-export function mergesSection({ landing = null, queued = [], held = [], now } = {}) {
+export function mergesSection({ landing = null, queued = [], now } = {}) {
   const queuedItems = queueOrder(queueEntries(queued));
-  const heldItems = heldEntries(held)
-    .sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
+  void now;
   return {
     landing,
     queued: { count: queuedItems.length, items: queuedItems },
-    held: { count: heldItems.length, items: heldItems },
-    count: (landing ? 1 : 0) + queuedItems.length + heldItems.length,
+    count: (landing ? 1 : 0) + queuedItems.length,
   };
 }
 
@@ -1063,7 +1056,6 @@ export async function collectPage({
   // Read once, for NOW and for the queue reading both: they are the same two
   // facts, and asking twice is how two answers on one page come to differ.
   const stop = existsSync(join(root, 'runner', 'STOP'));
-  const held = heldEntries(readJson(heldPath(root)));
   const queuedForMerge = queueEntries(readJson(mergesPath(root)));
 
   // Read once for both sections: RUNNER draws one row per lane, NEXT bolds
@@ -1107,7 +1099,6 @@ export async function collectPage({
         plans,
         prs: prs.prs,
         prsFailed,
-        held,
         stop,
         root,
         // `git` answers with a string or null here; the reading wants ok and text.
@@ -1115,7 +1106,7 @@ export async function collectPage({
       }),
     }),
     merges: mergesSection({
-      landing: merges({ repos: present, alive }), queued: queuedForMerge, held, now,
+      landing: merges({ repos: present, alive }), queued: queuedForMerge, now,
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({

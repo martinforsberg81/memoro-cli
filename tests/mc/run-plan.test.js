@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 
 import {
   MC_OWN_TREES, RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
-  AUTOCOMPACT_TOKENS, SESSION_DEFAULTS, assembleQueue, chooseKind, collectNote, describeSettings, headlessArgs, heldRepair, helperDue,
+  AUTOCOMPACT_TOKENS, SESSION_DEFAULTS, assembleQueue, chooseKind, collectNote, describeSettings, headlessArgs, helperDue,
   inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaSeen,
-  readSessionOutput, repairPrompt, sessionSettings, stackOrder, stepOfPr, stepPrompt, strictQueue,
+  readSessionOutput, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
 import { NAME_RE } from '../../src/mc/plan-schema.js';
@@ -110,23 +110,11 @@ test('nextFor: a blocked plan, a done plan and one that does not parse are not p
   assert.equal(nextFor({ repo: 'memoro', world: world(plans) }).name, 'd-ready');
 });
 
-/**
- * An open pull request is work in flight and takes its project out of the
- * pick; a held one whose repair is spent is waiting on a person and does the
- * same. A hold still owed its repair is neither — the runner starts it, and
- * what it starts is a repair.
- */
-test('nextFor: in flight, held after its repair, and the repair the runner still owes', () => {
+/** An open pull request is work in flight: the project is passed over, and the next name is taken. */
+test('nextFor: a project with a pull request open is not picked, and the next name is', () => {
   const plans = [planRow('alpha'), planRow('beta')];
   const open = [{ repo: 'memoro', number: 9, headRefName: 'alpha-2', baseRefName: 'main', isDraft: false, title: 'Step' }];
-  assert.equal(nextFor({ repo: 'memoro', world: world(plans, { prs: open }) }).name, 'beta', 'alpha is in flight');
-
-  const held = [{ project: 'alpha', repo: 'memoro', pr: 9, branch: 'alpha-2', reason: 'two tests red', repairs: 1 }];
-  assert.equal(nextFor({ repo: 'memoro', world: world(plans, { prs: open }), held }).name, 'beta', 'and its one repair is spent');
-
-  const owed = [{ ...held[0], repairs: 0 }];
-  assert.deepEqual(nextFor({ repo: 'memoro', world: world(plans, { prs: open }), held: owed }),
-    { name: 'alpha', kind: 'repair', repo: 'memoro' }, 'a repair is a thing the runner starts');
+  assert.equal(nextFor({ repo: 'memoro', world: world(plans, { prs: open }) }).name, 'beta');
 });
 
 /** The page passes its own reading, which has seen a worktree this cannot. */
@@ -488,10 +476,9 @@ test('sessionSettings: tool and budget_minutes from the plan, with the runner de
  * opus with neither flag. Each key resolves step over plan over default on its
  * own, so a step naming only its effort keeps the plan's model.
  */
-test('sessionSettings: step and repair defaults, plan and step overrides, advisor off, codex getting none', () => {
-  assert.deepEqual(SESSION_DEFAULTS.step, { model: 'sonnet', effort: 'medium', advisor: 'opus' });
+test('sessionSettings: the step defaults, plan and step overrides, advisor off, codex getting none', () => {
+  assert.deepEqual(SESSION_DEFAULTS, { step: { model: 'sonnet', effort: 'medium', advisor: 'opus' } }, 'one kind: the repair is gone (ruling 21)');
   assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', budgetMinutes: 90 });
-  assert.deepEqual(sessionSettings(undefined, null, { kind: 'repair' }), { tool: 'claude', model: 'opus', effort: null, advisor: null, budgetMinutes: 90 });
 
   // The plan overrides the default key by key. A plan on opus keeps the
   // default advisor in name, but an advisor that is the model itself is no
@@ -499,7 +486,6 @@ test('sessionSettings: step and repair defaults, plan and step overrides, adviso
   // opus+opus.").
   assert.deepEqual(sessionSettings({ model: 'opus' }), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, budgetMinutes: 90 });
   assert.deepEqual(sessionSettings({ model: 'opus', advisor: 'sonnet' }).advisor, 'sonnet');
-  assert.deepEqual(sessionSettings({ effort: 'high', advisor: 'sonnet' }, null, { kind: 'repair' }), { tool: 'claude', model: 'opus', effort: 'high', advisor: 'sonnet', budgetMinutes: 90 });
 
   // The step overrides the plan, again key by key.
   const plan = { model: 'opus', effort: 'low', advisor: 'opus' };
@@ -520,7 +506,7 @@ test('sessionSettings: step and repair defaults, plan and step overrides, adviso
 
 test('describeSettings: what the starting line says a session runs on', () => {
   assert.equal(describeSettings('claude', sessionSettings({})), 'claude sonnet · effort medium · advisor opus');
-  assert.equal(describeSettings('claude', sessionSettings({}, null, { kind: 'repair' })), 'claude opus');
+  assert.equal(describeSettings('claude', sessionSettings({ model: 'opus' })), 'claude opus · effort medium', 'an opus plan gets no opus advisor');
   assert.equal(describeSettings('codex', sessionSettings({ tool: 'codex' })), 'codex own default model');
 });
 
@@ -649,71 +635,11 @@ test('intakeQueue is oldest first by the date in the name, with dateless names l
 
 const pr = (number, headRefName, baseRefName = 'main') => ({ number, headRefName, baseRefName });
 
-test('stackOrder: one pull request aimed at main is the whole answer', () => {
-  assert.deepEqual(stackOrder([]), { ok: true, order: [] });
-  const one = pr(77, 'alpha');
-  assert.deepEqual(stackOrder([one]), { ok: true, order: [one] });
-});
 
-test('stackOrder: a stack is bottom first, whatever order GitHub listed it in', () => {
-  const bottom = pr(1, 'm');
-  const middle = pr(2, 'm-2', 'm');
-  const top = pr(3, 'm-3', 'm-2');
-  assert.deepEqual(stackOrder([top, bottom, middle]).order, [bottom, middle, top]);
-});
 
-/**
- * The four shapes that are not a stack, and #11250 is the first of them: a
- * pull request based on the branch of #11249, which the runner squash-merged
- * into that branch and logged `success,merged` while main received nothing.
- */
-test('stackOrder: what is not a stack lands nothing, and says which', () => {
-  const alone = stackOrder([pr(11250, 'msr-track-3-capture', 'msr-track-3-capture-command')]);
-  assert.equal(alone.ok, false);
-  assert.match(alone.reason, /#11250 is aimed at msr-track-3-capture-command — none of them is aimed at main/u);
 
-  const two = stackOrder([pr(1, 'm'), pr(2, 'm-2')]);
-  assert.equal(two.ok, false);
-  assert.match(two.reason, /both aimed at main — two stacks, not one/u);
 
-  const fork = stackOrder([pr(1, 'm'), pr(2, 'm-2', 'm'), pr(3, 'm-3', 'm')]);
-  assert.equal(fork.ok, false);
-  assert.match(fork.reason, /#2 and #3 are both aimed at m — a fork, not a stack/u);
 
-  const cycle = stackOrder([pr(1, 'm'), pr(2, 'm-2', 'm-3'), pr(3, 'm-3', 'm-2')]);
-  assert.equal(cycle.ok, false);
-  assert.match(cycle.reason, /the bases form a cycle/u);
-
-  const twice = stackOrder([pr(1, 'm'), pr(2, 'm')]);
-  assert.equal(twice.ok, false);
-  assert.match(twice.reason, /#1 and #2 are both on m/u);
-});
-
-test('stackOrder: a base outside the list is not a stack even when one is aimed at main', () => {
-  const stray = stackOrder([pr(1, 'm'), pr(2, 'm-2', 'somebody-else')]);
-  assert.equal(stray.ok, false);
-  assert.match(stray.reason, /#2 is aimed at somebody-else, which is neither main nor another open pull request's branch/u);
-});
-
-/**
- * `merged_into` and `off_default` are what the round reports and what the
- * runner reads. Its own "the call returned zero" is not evidence that
- * anything landed on main — a round on #363 said "merged as 7dcbf96" and was
- * right, into the stacked base it was aimed at, and everyone read "on main".
- */
-test('landingNote: a merge that did not land on main is not recorded as merged', () => {
-  assert.equal(landingNote({ merged: true, merged_into: 'main', default_branch: 'main' }), 'merged');
-  assert.equal(landingNote({ merged: true, merged_into: 'msr-track-3', default_branch: 'main', off_default: true }), 'off-main');
-  assert.equal(landingNote({ merged: true, merged_into: 'msr-track-3', off_default: false }), 'off-main', 'the base is read even when the round did not flag it');
-});
-
-test('landingNote: a red gate is the pull request left open, and says so', () => {
-  assert.equal(landingNote({ merged: false, stopped_at: 'red', reason: 'two tests are red' }), 'open,gate-red');
-  assert.equal(landingNote({ merged: false, stopped_at: 'lease', reason: 'held' }), 'open,gate-lease');
-  assert.equal(landingNote({ merged: false, stopped_at: 'drift' }), 'open,gate-drift');
-  assert.equal(landingNote({ merged: false }), 'open,gate-unknown');
-  assert.equal(landingNote(null), 'open');
-});
 
 /* ------------------------------------------------------------------ repair */
 
@@ -729,74 +655,10 @@ const heldEntry = (over = {}) => ({
 });
 const openPr = (number, head) => ({ number, headRefName: head, baseRefName: 'main' });
 
-test('heldRepair: a held pull request with no repair yet is a repair session', () => {
-  const entries = [heldEntry()];
-  const openPrs = [openPr(9, 'm')];
-  const choice = heldRepair({ entries, openPrs, project: 'm', repo: 'memoro' });
-  assert.equal(choice.kind, 'repair');
-  assert.equal(choice.entry.pr, 9);
-  assert.equal(choice.entry.branch, 'm');
 
-  // Another project's hold, and another repository's #9, are not this one's.
-  assert.equal(heldRepair({ entries, openPrs, project: 'other', repo: 'memoro' }), null);
-  assert.equal(heldRepair({ entries, openPrs, project: 'm', repo: 'memoro-cli' }), null);
-  // And a hold whose pull request is not open is not one either — the round
-  // reconciles the file, but a lane that could not ask GitHub does not act on
-  // a stale entry.
-  assert.equal(heldRepair({ entries, openPrs: [openPr(10, 'm-2')], project: 'm', repo: 'memoro' }), null);
-  assert.equal(heldRepair({ entries, openPrs: [], project: 'm', repo: 'memoro' }), null);
-});
 
-test('heldRepair: the branch comes off GitHub when the entry names none', () => {
-  const choice = heldRepair({ entries: [heldEntry({ branch: null })], openPrs: [openPr(9, 'm-4')], project: 'm', repo: 'memoro' });
-  assert.equal(choice.entry.branch, 'm-4');
-});
 
-test('heldRepair: a pull request already repaired once is the brief\'s, and says so', () => {
-  const choice = heldRepair({ entries: [heldEntry({ repairs: 1 })], openPrs: [openPr(9, 'm')], project: 'm', repo: 'memoro' });
-  assert.equal(choice.kind, null);
-  assert.equal(choice.reason, 'held-after-repair');
-  assert.equal(choice.skip, '#9 is held before merge after a repair — the brief\'s');
-});
 
-/**
- * A session told `sql:pr-ci — exit 1` and nothing else guesses: on 2026-09-03
- * three rounds were retried on a stale head before anybody knew why. The
- * prompt carries every red test by name and what a failed command gate
- * printed.
- */
-test('repairPrompt: the pull request, the branch, the reason, and everything the gate saw', () => {
-  const prompt = repairPrompt({
-    name: 'm',
-    repo: 'memoro',
-    pr: 11274,
-    branch: 'm-2',
-    reason: '2 tests red: tests/a.test.js, tests/b.test.js',
-    note: 'open,gate-red',
-    red: ['tests/a.test.js > one', 'tests/b.test.js > two'],
-    gates: [{ name: 'sql:pr-ci', output: 'admission missing for 0042_x.sql' }],
-  });
-  assert.match(prompt, /`m` workarea of memoro/u);
-  assert.match(prompt, /on branch\n`m-2`, whose pull request #11274 the runner would not land/u);
-  assert.match(prompt, /2 tests red: tests\/a\.test\.js/u);
-  assert.match(prompt, /The 2 tests the gate found red, all of them:\n {2}tests\/a\.test\.js > one\n {2}tests\/b\.test\.js > two/u);
-  assert.match(prompt, /The gate `sql:pr-ci` failed\. What it printed:\n {2}admission missing for 0042_x\.sql/u);
-  assert.match(prompt, /Make it green and push to the same branch/u);
-  assert.match(prompt, /do not delete or skip a test to pass/u);
-  assert.match(prompt, /set the step this pull request carries to `blocked`|Set the step this pull/u);
-  assert.match(prompt, /the one repair session this pull request gets/u);
-  assert.doesNotMatch(prompt, /plan boundary/u, 'the trespass paragraph is for a trespass');
-});
-
-test('repairPrompt: a plan trespass is told which change to undo', () => {
-  const prompt = repairPrompt({
-    name: 'm', repo: 'memoro', pr: 9, branch: 'm', note: 'plan-trespass',
-    reason: 'the session changed more of the plan than its step: goal: a step session does not change it',
-  });
-  assert.match(prompt, /goal: a step session does not change it/u);
-  assert.match(prompt, /The problems above are the plan boundary/u);
-  assert.match(prompt, /undo the change to any step that\nis not the one this pull request carries/u);
-});
 
 test('stepOfPr: the step that names the pull request, and the deliverable one before it does', () => {
   const { plan } = record({
@@ -836,7 +698,7 @@ test('mcOwnFiles: the two trees a running runner is already holding, and nothing
  */
 test('WORKAREA_BLOCKS: the persistent refusals, under names a plan can carry', () => {
   assert.deepEqual(Object.keys(WORKAREA_BLOCKS).sort(),
-    ['branch', 'dirty', 'held-after-repair', 'role-missing', 'sync', 'tool-missing', 'worktree']);
+    ['branch', 'dirty', 'role-missing', 'sync', 'tool-missing', 'worktree']);
   // Every key is a word the runner already refuses in, so the two lists cannot
   // drift into naming different things.
   const refusals = RUN_REFUSALS.map((item) => item.reason);
@@ -853,3 +715,10 @@ test('WORKAREA_BLOCKS: the persistent refusals, under names a plan can carry', (
 
 // `lanes` and its `--total` form are parsed and printed in
 // tests/mc/commands/run-lanes.test.js, beside the verb they belong to.
+
+test('landingNote: a merge that did not land on main is not recorded as merged', () => {
+  assert.equal(landingNote({ merged: true, merged_into: 'main', default_branch: 'main' }), 'merged');
+  assert.equal(landingNote({ merged: true, merged_into: 'msr-track-3', default_branch: 'main', off_default: true }), 'off-main');
+  assert.equal(landingNote({ merged: false, stopped_at: 'red' }), 'open,gate-red');
+  assert.equal(landingNote(null), 'open');
+});
