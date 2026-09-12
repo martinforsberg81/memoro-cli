@@ -56,7 +56,7 @@ describe('bare mc', () => {
     try {
       const result = runMcCli([], fx.env);
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'NEXT', 'INTAKE', 'PROGRAMMES', 'WORK']) {
+      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'NEXT', 'MERGES', 'INTAKE', 'PROGRAMMES', 'WORK']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
       // The two workareas nothing explains are one line in WORK — the numbers
@@ -73,7 +73,7 @@ describe('bare mc', () => {
       const result = runMcCli(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'sessions', 'next', 'intake', 'programmes', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'caches', 'notes']);
       // No plan on main here, so there are no projects and both folders are
       // under the heading for the ones nothing explains — numbered from 1,
       // because the projects above them are none.
@@ -116,7 +116,7 @@ describe('bare mc', () => {
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
       const printed = runMcCli([], fx.env).stdout;
-      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'NEXT', 'INTAKE', 'PROGRAMMES', 'WORK']) {
+      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'NEXT', 'MERGES', 'INTAKE', 'PROGRAMMES', 'WORK']) {
         const seen = printed.match(new RegExp(`^\\s+${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }
@@ -212,11 +212,11 @@ describe('the verbs that became mc', () => {
 });
 
 describe('the page flags', () => {
-  it('reads --json and --fresh, and rejects the rest — --watch included', () => {
-    assert.deepEqual(parsePageArgs([]), { json: false, fresh: false });
-    assert.deepEqual(parsePageArgs(['--json', '--fresh']), { json: true, fresh: true });
-    // What the page does anyway, still accepted so step 2's habit keeps working.
-    assert.deepEqual(parsePageArgs(['--offline']), { json: false, fresh: false });
+  it('reads --json, --fresh and --offline, and rejects the rest — --watch included', () => {
+    assert.deepEqual(parsePageArgs([]), { json: false, fresh: false, offline: false });
+    assert.deepEqual(parsePageArgs(['--json', '--fresh']), { json: true, fresh: true, offline: false });
+    // Ruling 20: the ordinary page fetches; --offline is what skips it.
+    assert.deepEqual(parsePageArgs(['--offline']), { json: false, fresh: false, offline: true });
     assert.match(parsePageArgs(['--sessions']).error, /unknown argument: --sessions/u);
     // Removed 2026-08-29: a page redrawn on a timer is not a live page.
     assert.match(parsePageArgs(['--watch']).error, /unknown argument: --watch/u);

@@ -43,7 +43,6 @@ export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turn
  */
 export const SESSION_DEFAULTS = Object.freeze({
   step: Object.freeze({ model: 'sonnet', effort: 'medium', advisor: 'opus' }),
-  repair: Object.freeze({ model: 'opus', effort: null, advisor: null }),
 });
 // The context window at which a claude step or repair session compacts
 // (`--autocompact`, 100k–1M on claude 2.1.268). Over 2026-09-05..12 the mean
@@ -174,9 +173,8 @@ export const RUN_REFUSALS = Object.freeze([
   { reason: 'worktree', read: false, why: 'the round makes a missing worktree; that `git worktree add` failed is the outcome of that action' },
   { reason: 'dirty', read: true },
   { reason: 'prs-unknown', read: true },
-  { reason: 'held-after-repair', read: true },
   { reason: 'in-flight', read: true },
-  { reason: 'branch', read: true },
+  { reason: 'branch', read: false, why: 'the branch a step starts on is made by the round (`freshBranch`); that `git checkout -b` failed is the outcome of that action' },
   { reason: 'sync', read: false, why: 'the fetch and the merge of origin/main are the round\'s own writes, and their failure is what they returned' },
   // There was a tenth word here until 2026-09-08, and it was the only one the
   // reading answered out of a file the runner had written rather than out of
@@ -223,7 +221,6 @@ export const WORKAREA_BLOCKS = Object.freeze({
   sync: 'merge-uncommittable',
   'role-missing': 'role-missing',
   'tool-missing': 'tool-missing',
-  'held-after-repair': 'held-after-repair',
 });
 
 /** The names alone, for a reader that spells them rather than maps to them. */
@@ -255,47 +252,6 @@ export function inFlight(openPrs = []) {
   };
 }
 
-/**
- * A pull request the runner would not land is not simply work in flight.
- *
- * `inFlight` refuses the project every round while such a pull request is
- * open, and that refusal is right for work a session is still doing and wrong
- * for work nothing is going to finish: the seven held on 2026-09-03..04 each
- * stood still until a person read runner.log. So before the refusal, the round
- * asks `held.json` — a pull request held with no repair yet gets one repair
- * session, in the workarea, on its own branch, told exactly why it was held.
- *
- * One repair per pull request, and no loop: still held after it, and it is the
- * brief's. `repairs` is the whole memory of that, and the skip says so, because
- * `#N is open — not starting a step` says nothing about who is expected to act.
- *
- * Pure over the entries and the open list. Returns `{ kind: 'repair', entry }`,
- * a `{ kind: null, skip }` refusal, or null when nothing of this project's is
- * held and the ordinary rules apply.
- */
-export function heldRepair({ entries = [], openPrs = [], project = null, repo = null } = {}) {
-  if (!openPrs.length) return null;
-  const open = new Map(openPrs.map((pr) => [Number(pr.number), pr]));
-  const mine = entries.filter((entry) => entry.project === project
-    && (entry.repo == null || repo == null || entry.repo === repo)
-    && open.has(Number(entry.pr)));
-  if (!mine.length) return null;
-  const first = mine.find((entry) => !entry.repairs);
-  if (!first) {
-    const [waiting] = mine;
-    return {
-      kind: null,
-      reason: 'held-after-repair',
-      skip: `#${waiting.pr} is held before merge after a repair — the brief's`,
-      entry: waiting,
-    };
-  }
-  // The branch off GitHub when the entry does not name one: an entry written
-  // by an older runner, or by hand, still has a pull request that is on
-  // something, and a repair session has to stand on it.
-  const branch = first.branch || open.get(Number(first.pr))?.headRefName || null;
-  return { kind: 'repair', entry: { ...first, branch } };
-}
 
 /**
  * The step a pull request carries, for judging what a session was allowed to
@@ -390,7 +346,7 @@ export function kindFor(name, { plans }) {
  * `machineState` asks in, minus everything that needs a worktree — this is
  * read from what `queue()` already fetched, so a pick costs no git at all.
  */
-function pickState(name, { plans = [], prs = [], prsFailed = [], held = [] } = {}) {
+function pickState(name, { plans = [], prs = [], prsFailed = [] } = {}) {
   const kind = kindFor(name, { plans });
   if (kind.startsWith('skip:')) return { runnable: false, reason: kind.slice('skip:'.length) };
   const repo = plans.find((p) => p.project === name)?.repo || null;
@@ -400,15 +356,9 @@ function pickState(name, { plans = [], prs = [], prsFailed = [], held = [] } = {
   // later. `queue()` has already written the line naming the repository.
   if (prsFailed.includes(repo)) return { runnable: false, reason: 'prs-unknown' };
   const openPrs = openPrsFor({ prs, name, names: plans.map((p) => p.project), repo });
-  // A hold at `repairs: 0` is not a refusal: it is one repair session owed,
-  // which is a thing the runner starts. Only a spent repair stops the project.
-  const repair = heldRepair({ entries: held, openPrs, project: name, repo });
-  if (repair?.skip) return { runnable: false, reason: repair.reason };
-  if (!repair) {
-    const flight = inFlight(openPrs);
-    if (flight) return { runnable: false, reason: flight.reason };
-  }
-  return { runnable: true, kind: repair ? 'repair' : kind };
+  const flight = inFlight(openPrs);
+  if (flight) return { runnable: false, reason: flight.reason };
+  return { runnable: true, kind };
 }
 
 /**
@@ -435,11 +385,11 @@ function pickState(name, { plans = [], prs = [], prsFailed = [], held = [] } = {
  * see. Given none, the reading is the plan and the open pull requests.
  */
 export function nextFor({
-  repo = null, world = {}, claimed = new Set(), passed = new Set(), held = [], state = null,
+  repo = null, world = {}, claimed = new Set(), passed = new Set(), state = null,
 } = {}) {
   const { names = [], plans = [], prs = [], prsFailed = [] } = world;
   const byProject = new Map(plans.map((plan) => [plan.project, plan]));
-  const read = state || ((name) => pickState(name, { plans, prs, prsFailed, held }));
+  const read = state || ((name) => pickState(name, { plans, prs, prsFailed }));
   for (const name of names) {
     const at = byProject.get(name)?.repo || null;
     if (repo != null && at !== repo) continue;
@@ -451,70 +401,6 @@ export function nextFor({
   return null;
 }
 
-/* --------------------------------------------------------------- landing */
-
-/**
- * The order a project's open pull requests must land in, bottom first.
- *
- * The runner lands what a session left behind, and a session that could not
- * branch its later steps from `main` leaves a stack. `mc merge` refuses a
- * batch aimed at several bases, so a stack needs an order rather than a call:
- * land the bottom, retarget the one above it at `main`, rebase it onto the
- * squash that just landed, land it, and so on (memoro's `AGENTS.md` §
- * *Landing a stack*, measured on a three-step memoro-cli stack 2026-09-01).
- *
- * The shape a stack has: exactly one pull request aimed at the default
- * branch, and every other one aimed at the head of exactly one of the
- * others. Anything else — two aimed at `main`, two aimed at the same branch,
- * a cycle, a base that is nobody's head — is not a stack this understands,
- * and then nothing lands. #11250 was the cost of not asking: a pull request
- * based on the branch of #11249, squash-merged into it, logged
- * `success,merged`, and `main` received nothing.
- *
- * Pure, over the list `queue()` already fetches: `{ number, headRefName,
- * baseRefName }` and nothing else, so the whole decision is tested with no
- * network.
- *
- * Returns `{ ok: true, order }` bottom first, or `{ ok: false, reason }`.
- */
-export function stackOrder(prs = [], { defaultBranch = 'main' } = {}) {
-  const list = (prs || []).filter(Boolean);
-  if (!list.length) return { ok: true, order: [] };
-  const heads = new Map();
-  for (const pr of list) {
-    const seen = heads.get(pr.headRefName);
-    if (seen) return { ok: false, reason: `#${seen.number} and #${pr.number} are both on ${pr.headRefName}` };
-    heads.set(pr.headRefName, pr);
-  }
-  const bottom = list.filter((pr) => pr.baseRefName === defaultBranch);
-  if (!bottom.length) {
-    const aimed = list.map((pr) => `#${pr.number} is aimed at ${pr.baseRefName}`).join(', ');
-    return { ok: false, reason: `${aimed} — none of them is aimed at ${defaultBranch}` };
-  }
-  if (bottom.length > 1) {
-    return { ok: false, reason: `${names(bottom)} are both aimed at ${defaultBranch} — two stacks, not one` };
-  }
-  const above = new Map();
-  for (const pr of list) {
-    if (pr === bottom[0]) continue;
-    if (!heads.has(pr.baseRefName)) {
-      return { ok: false, reason: `#${pr.number} is aimed at ${pr.baseRefName}, which is neither ${defaultBranch} nor another open pull request's branch` };
-    }
-    const rival = above.get(pr.baseRefName);
-    if (rival) return { ok: false, reason: `#${rival.number} and #${pr.number} are both aimed at ${pr.baseRefName} — a fork, not a stack` };
-    above.set(pr.baseRefName, pr);
-  }
-  const order = [];
-  for (let at = bottom[0]; at; at = above.get(at.headRefName)) order.push(at);
-  if (order.length !== list.length) {
-    const loose = list.filter((pr) => !order.includes(pr));
-    return { ok: false, reason: `${names(loose)} do not sit above #${bottom[0].number} — the bases form a cycle` };
-  }
-  return { ok: true, order };
-}
-
-const names = (prs) => prs.map((pr) => `#${pr.number}`).join(' and ');
-
 /**
  * What a landing round leaves in the runs.tsv note, after `success,`.
  *
@@ -522,11 +408,8 @@ const names = (prs) => prs.map((pr) => `#${pr.number}`).join(' and ');
  * exist because a round on #363 said "merged as 7dcbf96" and was right — into
  * the stacked base it was aimed at — while everyone read "on main". A merge
  * that did not land on the default branch is not a merge this reports as one:
- * `off-main` is its own outcome, not `merged` and not `open`.
- *
- * A red gate is not a failure to work around. It is `open,gate-red`: the pull
- * request stays where it is, and `inFlight` then keeps the project from
- * starting anything else until somebody has dealt with it.
+ * `off-main` is its own outcome, not `merged` and not `open`. Read by the
+ * docs landings the runner still makes (the archive pull request).
  */
 export function landingNote(report, { defaultBranch = 'main' } = {}) {
   if (!report) return 'open';
@@ -789,9 +672,9 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
     'to know that the code in front of it does not show. Plus `met` on the',
     '`success_criteria` you actually met: the criterion and its check are',
     "Martin's words and stay as they are, only `met` is yours. Nothing else: not",
-    'another step, not the goal, the contract or the scope. The runner compares',
-    'the file before and after and will leave your PR unmerged if you changed',
-    'anything else.',
+    'another step, not the goal, the contract or the scope. `mc merge` compares',
+    'the plan on main with yours at the door and refuses the pull request if',
+    'you changed anything else.',
     '',
     'If the contract must change, or a later step is wrong, set this step to',
     '`blocked` with `blocked_by: { "kind": "decision" | "project", "name": … }` —',
@@ -799,73 +682,15 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
     'nobody can unblock — and stop. Say it in the pull request too, with one',
     'recommendation rather than a menu; that is where it will be read.',
     '',
-    'Do not merge. Do not ask questions. Stop when the PR exists.',
+    'Build it, set your step `done` with its `pr`, open the pull request, then',
+    `run \`mc merge ${repo} <pr>\` yourself until it says merged — a red comes`,
+    'back to you: fix it and run it again. Never `gh pr merge`. Giving up is',
+    '`mc step failed --reason "…"`. Do not ask questions.',
     '',
     planExcerpt(plan, index, step),
   ].join('\n');
 }
 
-/**
- * The one repair session a held pull request gets, told what the gate saw.
- *
- * Everything the session needs that it cannot read off the branch: which pull
- * request, which branch, why the runner would not land it, and — where the
- * hold came from a gate — every red test by name and the output of every
- * command gate that failed. A session told `sql:pr-ci — exit 1` and nothing
- * else guesses; that is what happened on 2026-09-03, three rounds long.
- */
-export function repairPrompt({ name, repo, pr, branch, reason, note = null, red = [], gates = [], conflicts = [] }) {
-  const lines = [
-    `You are in the \`${name}\` workarea of ${repo} (this worktree), on branch`,
-    `\`${branch}\`, whose pull request #${pr} the runner would not land:`,
-    '',
-    reason,
-    '',
-  ];
-  if (red.length) {
-    lines.push(`The ${red.length} test${red.length === 1 ? '' : 's'} the gate found red, all of them:`, ...red.map((test) => `  ${test}`), '');
-  }
-  for (const gate of gates) {
-    lines.push(`The gate \`${gate.name}\` failed. What it printed:`, ...String(gate.output).split('\n').map((line) => `  ${line}`), '');
-  }
-  // A pull request held *because* it conflicts with main is the common case:
-  // the gate refused it for the conflict, and the runner's own sync then hits
-  // the same one. Resolving it is not a detour from the repair, it is the
-  // repair — see `runProject`, where a conflict no longer refuses this session.
-  lines.push(...conflictPreamble(conflicts, [
-    'commit the merge, and push. For a pull request held because it conflicts',
-    'with main, that is the whole repair; where the reason names something else',
-    'as well, it is the first thing and the reason below is the rest.',
-  ]));
-  lines.push(
-    'Make it green and push to the same branch — the runner lands it after you.',
-    'Do not open another pull request, do not merge it yourself, do not lower a',
-    'threshold and do not delete or skip a test to pass. The gate decides; a',
-    'repair obeys it.',
-    '',
-  );
-  if (note === 'plan-trespass') {
-    lines.push(
-      'The problems above are the plan boundary: undo the change to any step that',
-      "is not the one this pull request carries, and to the goal, the contract, the",
-      "scope and the criteria themselves. Keep that step's own `status`, `pr` and",
-      '`comments`, and `met` on the criteria it met.',
-      '',
-    );
-  }
-  lines.push(
-    'If green needs a decision — an SQL admission, a change to the contract, a',
-    'threshold somebody has to agree to — do not take it. Set the step this pull',
-    'request carries to `blocked` with `blocked_by: { "kind": "decision" |',
-    '"project", "name": … }`, say in the pull request what the answer is about with',
-    'one recommendation rather than a menu, push, and stop.',
-    '',
-    'This is the one repair session this pull request gets. If it is still held',
-    "after you, it is a person's, through the brief — so say what you found either",
-    'way.',
-  );
-  return lines.join('\n');
-}
 
 /* --------------------------------------------------------------- headless */
 
@@ -909,6 +734,16 @@ export function repairPrompt({ name, repo, pr, branch, reason, note = null, red 
  * context has a ceiling; codex has no such flag. The helper and intake turns
  * pass `autocompact: null` — they are not this runner's step lane, and
  * step-cost's contract leaves them as they were.
+ *
+ * Every claude launch gets `--disallowedTools Agent`. A headless session
+ * has no use for a subagent: the step is bounded by its plan, the strong
+ * model is reached through `--advisor`, and a subagent runs on whatever
+ * model the repository's instruction files name, outside the plan's
+ * `runner` choice. Measured 2026-09-12 over the first 41 sonnet step
+ * sessions: 19 spawned opus subagents on memoro's `CLAUDE.md` instruction,
+ * 2 111 of the era's 6 556 model requests, about a quarter of its cost, and
+ * one 17-turn parent waited 41 minutes on a 319-turn child that runs.tsv
+ * never saw. The flag holds whatever any repository's files say.
  */
 export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
@@ -919,7 +754,7 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   const io = stream
     ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
     : ['--output-format', 'json'];
-  return ['-p', ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...instr, ...io];
+  return ['-p', ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, '--disallowedTools', 'Agent', ...instr, ...io];
 }
 
 /** One stream-json user message, as `deps.session` writes it on claude's stdin. */
@@ -1103,8 +938,11 @@ export function tsvHeader() {
  * defaults for the session's kind (`SESSION_DEFAULTS`). `model`, `effort` and
  * `advisor` resolve step over plan over default, one key at a time, so a step
  * that names only its effort keeps the plan's model. `advisor: 'off'` at any
- * level means no advisor. `tool`, `check_in_minutes` and `stall_minutes` are
- * the plan's alone.
+ * level means no advisor, and so is an advisor that is the model itself: a
+ * plan or step on `opus` gets no advisor unless it names a different one
+ * (Martin, 2026-09-12: "Om step har opus => advisor = null, inte
+ * opus+opus."). `tool`, `check_in_minutes` and `stall_minutes` are the plan's
+ * alone.
  *
  * The defaults belong to claude and to nothing else. `opus` is a claude
  * alias; handed to `codex -m` it names a model that tool does not have, and
@@ -1124,11 +962,12 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
   const named = (key) => [step[key], plan[key]].find((value) => value !== undefined && value !== null && value !== '');
   const advisor = named('advisor') ?? defaults.advisor ?? null;
   const effort = named('effort') ?? defaults.effort ?? null;
+  const model = named('model') ?? defaults.model ?? null;
   return {
     tool,
-    model: named('model') ?? defaults.model ?? null,
+    model,
     effort: claude && EFFORT_LEVELS.includes(effort) ? effort : null,
-    advisor: claude && advisor !== 'off' ? advisor : null,
+    advisor: claude && advisor !== 'off' && advisor !== model ? advisor : null,
     checkInMinutes: minutes(plan.check_in_minutes, DEFAULT_CHECK_IN_MINUTES),
     stallMinutes: minutes(plan.stall_minutes, DEFAULT_STALL_MINUTES),
   };

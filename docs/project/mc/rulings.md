@@ -518,6 +518,104 @@ new prompt rule about turns or test counts, and the plan-trespass rate.
 
 **Carried by [`step-cost/PLAN.json`](step-cost/PLAN.json).**
 
+Addendum 2026-09-12, at the plan session: an advisor that is the session's own
+model is no advisor.
+
+> "Om step har opus => advisor = null, inte opus+opus." (Martin, 2026-09-12)
+
+`sessionSettings` in `run-plan.js` returns `advisor: null` when the resolved
+advisor equals the resolved model; a plan or step on `opus` that wants one
+names a different model. Carried by memoro-cli #702.
+
+## 19 · A step is work the runner takes from start to finish; investigation is the planning session's
+
+`ruling · 2026-09-12` · raised by Martin at the plan session, from the cost of stuck sessions
+
+Step sessions were being handed testing, design exploration and analysis, and
+plans were written with a later step depending on what an earlier one would
+find — step-cost's own step 3 was gated on a grep its instruction told the
+session to run, and went `blocked` on the result. Since 2026-08-25, 15 step
+sessions were killed on the budget with nothing landed and 22 ended
+`plan-trespass`, each costing a repair session; and every stuck session costs a
+person reading its transcript.
+
+> "Step används till fel saker, t ex testning, designutforskning, analys. Det
+> hör inte hemma där. Det ska köras i mc plan-sessionen. Det som läggs i ett
+> projekts STEP ska vara en färdig körbar plan som runner kan ta från a till ö.
+> Om inte, så hör det inte hemma där. Nu byggs det ihop konstigt som att steg 3
+> är blocked av steg 2:s utfall etc." … "Det försvinner massor med tokens på att
+> utreda sessioner som fastnat." (Martin, 2026-09-12)
+
+So: a step is executable end to end by a headless session from the plan alone.
+Investigation, measurement, exploration and "find out whether" belong to the
+planning session, with Martin at the terminal, and are finished before the
+plan is written. A step whose content depends on an earlier step's finding is
+not written; the plan ends where knowledge ends, and the planning session
+writes the next steps when the code is there to read. Carried into
+`docs/project/README.md` § *The steps* (both repositories),
+`canon/roles/_plan-writing.md` and `canon/roles/plan.md` by memoro-cli #702;
+no runner change — the runner cannot tell an investigation from a step, so the
+rule is the plan author's.
+
+## 20 · Plans are read from `main` after a fetch, and the page shows the merges
+
+`ruling · 2026-09-12` · raised by Martin at the plan session, from a stale page
+
+`mc status <name>` preferred the workarea's `PLAN.json` over `origin/main`
+(`src/mc/status-project.js`), and the page read `origin/main` from
+`plans.json` without fetching unless `--fresh` was typed
+(`src/mc/page-collect.js`). A workarea's copy is whatever branch the folder
+stands on, and an un-fetched `origin/main` is whatever the runner last fetched,
+so both surfaces showed plans the runner would not read. The gate round in
+flight was on no surface at all: `~/.memoro/mc/gate-running.json` was written
+by the round and read by nothing but the next round.
+
+> "Låt oss uppdatera lite hur mc fungerar. Den ska göra git-anrop och läsa
+> från main istället för lokala plan filer. Just nu ses inaktuell info.
+> Dessutom: Låt oss visa 'merger'. Current + kö." (Martin, 2026-09-12)
+
+So: every reading surface fetches and reads `origin/main`, and none reads a
+workarea's plan; `--offline` is the only way to skip the fetch. GitHub is not
+asked on every refresh — open pull requests stay in `prs.json` behind
+`--fresh`. And the page gets a MERGES section between NEXT and RUNNER: the
+round landing now (the lock, which now carries its phase), the queue the merge
+lane will take, and the held pull requests, which move there from NEXT.
+
+**Carried by [`main-and-merges/PLAN.json`](main-and-merges/PLAN.json).**
+
+## 21 · A step lands its own pull request, and there is no repair
+
+`ruling · 2026-09-12` · raised by Martin at the plan session, from the failure
+analysis of 2026-09-05..12
+
+The runner landed a step's pull request after the session had gone: the gate
+went red, `held.json` got an entry, and the next round started a fresh `repair`
+session on `opus` to read a branch it had never seen (22 repair rows, 156
+minutes, median 33 turns; 21 of 51 non-landed sessions were a gate stop). The
+step role said "Do not merge: the runner lands it after you." The planning
+session proposed keeping the mechanism and moving the fix session into the
+landing.
+
+> "Vi kan inte ha både en repair runda och en merge runda." … "Jag beskriver
+> samma beteende såsom det är tänkt I SAMMA SESSION. DET SKA INTE FINNAS
+> 'FIX'-SESSIONER. = DUBBEL KOSTNAD NÄR EN NY SESSION SKA LÄSA IN SIG PÅ ALLT
+> IGEN I GANSKA MÅNGA TURNS." … "Kanske vi ska göra så här istället runner step
+> kör direkt 'mc merge #'. Då körs direkt rätt tester. Om fel, fås svaret
+> tillbaka och kan fixas. Om grönt, så sker merge direkt och inga tester behöver
+> köras ytterligare en gång." … "Done ska naturligtvis vara en del av pr. Annars
+> måste ju en ny PR köras igen. Dubbel arbete. Om merge failar så sätts ändå inte
+> done i main." … "Ja, och med väntan i mc merge. Som tar nästa uppdrag så fort
+> det pågående är klart." (Martin, 2026-09-12)
+
+So: the step session sets `done` and `pr` in the plan, in the pull request with
+the code, and runs `mc merge <repo> <pr>` itself; a red comes back to the same
+session; green is the merge, measured once. `mc merge` waits for its turn in
+order of arrival and checks the plan boundary at the door. There is no repair
+session, no `held.json` and no merge lane: an open pull request a session could
+not land is a person's through the brief.
+
+**Carried by [`step-lands-itself/PLAN.json`](step-lands-itself/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som

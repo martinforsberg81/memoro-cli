@@ -86,6 +86,10 @@ export async function runMergeRound({
   // A batch's fallback rounds run inside the batch's lease; they neither
   // take nor give back what they did not claim (the gate's own rule).
   holdLease = true,
+  // The round log's and the gate lock's word for what this round is —
+  // `merge` unless the caller says otherwise, so `mc merge` reads as `merge`
+  // in the lock without every call site having to say so.
+  mode = 'merge',
 } = {}) {
   const startedAt = clock();
   // Kept as well as printed — see the note on the gate's own `say`. This is
@@ -166,7 +170,7 @@ export async function runMergeRound({
 
   try {
     const verdict = await gate({
-      repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false,
+      repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false, mode,
     });
     report.gate = verdict;
     report.pr = { ...report.pr, ...verdict.pr };
@@ -188,7 +192,7 @@ export async function runMergeRound({
         }
         say(`— round for #${number}`);
         const round = await runMergeRound({
-          repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false,
+          repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode,
         });
         report.batch.rounds.push(round);
         report.batch.merges.push({ number, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });
@@ -344,7 +348,7 @@ export async function runMergeRound({
               }
               say(`— round for #${later}`);
               const round = await runMergeRound({
-                repoPath, pr: later, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false,
+                repoPath, pr: later, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode,
               });
               report.batch.rounds.push(round);
               report.batch.merges.push({ number: later, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });

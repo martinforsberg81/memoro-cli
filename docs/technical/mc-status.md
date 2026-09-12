@@ -8,7 +8,7 @@ off the network, both skipped by `--offline`.
 
 Everything the verb prints is read from files the runner and the sessions
 already write. This note says which file every fact comes from, why the plan
-is read from the workarea rather than from `origin/main`, and what the status
+is read from `origin/main` and never from the workarea, and what the status
 board that `mc status` used to print was before it went.
 
 Bare `mc status` prints no list. **The page is `mc`** (decision mc-3,
@@ -31,7 +31,7 @@ project built: `nowBlock`, `kindFor`, `pidAlive`, `decisionsBlock` and
 
 ```
 mc-status — memoro-cli · mc
-  plan        docs/project/mc/mc-status/PLAN.json (workarea memoro-cli)
+  plan        docs/project/mc/mc-status/PLAN.json (origin/main)
   workarea    ~/mc/mc-status
   status      ready
   budget      150k
@@ -54,6 +54,20 @@ OPEN PR
   none on this branch
 ```
 
+When this project's own open pull request is the one the gate lock names,
+the OPEN PR block says so instead of just naming the pull request:
+
+```
+OPEN PR
+  #427 mc status <name>
+  #427 is landing now — running 17 test files (4 min)
+```
+
+and a `check`-mode round (`mc test`, measuring rather than merging) reads
+`#427 is being measured (mc test), not landed` — the same
+`runningMerge` reading the page's own MERGES section draws
+([`mc-ui.md`](mc-ui.md)).
+
 `--json` prints the same object the renderer takes. `--offline` skips the
 fetch and the `gh` call; the one thing it changes besides the OPEN PR block is
 the status row, and it says so — see *The status row says the pair* below.
@@ -70,10 +84,11 @@ From the page's menu, `s <name>` runs this same verb and redraws
 
 | fact | file | written by |
 |---|---|---|
-| the plan, its state and its steps | `<workarea>/<repo>/docs/project/<programme>/<name>/PLAN.json`, else the same path on `origin/main` | the step sessions, through `mc run` |
+| the plan, its state and its steps | `docs/project/<programme>/<name>/PLAN.json` on `origin/main`, after a `git fetch` | the step sessions, through `mc run` |
 | the workarea exists | `~/mc/<name>/` holding a checkout with a `.git` | `mc run`, `mc work` — never `mc plan`, whose session lives under `~/mc/plan/` and is not a workarea |
 | the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
+| whether that pull request is the round landing right now | `~/.memoro/mc/gate-running.json`, joined to a name and a holder (`runningMerge`, `merges-collect.js`) | `mc merge`/`mc test`, for the length of the round |
 | whether the runner could start it at all | the workarea's `git status --porcelain`, `~/mc/runner/held.json`, the same open pull requests, and whether `~/mc/runner/STOP` is there | `mc run`, and whoever left the workarea dirty |
 
 The readers are shared, not re-implemented: `planFields`, `scanDecisions`,
@@ -84,18 +99,18 @@ answered.
 
 Nothing is asked of tmux and nothing of `ps`. A project is not a session.
 
-## The plan is read from the workarea, not from main
+## The plan is read from origin/main, never the workarea (ruling 20)
 
-A step is written, pushed, and merged **afterwards**, so `origin/main` is one
-step behind for as long as the pull request is open — and the plan a person
-asks about is almost always one that is being worked on right now. So:
+A workarea's checkout is whatever branch that folder happens to stand on —
+mid-step, that can be a plan the runner would never act on, because the
+runner steps from `origin/main`. Before ruling 20 (2026-09-12) the row
+preferred the workarea's copy when there was one, which meant `mc status`
+and the runner could disagree about what a project's plan said. Now there is
+only one reading:
 
-- the workarea's working copy is preferred when there is one,
-- `origin/main` is used when there is not,
-- and the row says which: `(workarea memoro-cli)` or `(origin/main)`.
-
-When both exist and their frontmatters differ, the row adds
-`differs from origin/main`. The page never picks one silently.
+- the plan is fetched and read from `origin/main`, always,
+- the row says so — `(origin/main)` — and says nothing else,
+- and a name that has a workarea but no plan there is still reported.
 
 A name that has a workarea but no plan anywhere is answered too — with
 `no plan — this is a workarea without a project`. Those are the closure
@@ -138,11 +153,9 @@ and no others:
 The workarea's absolute path is folded to `~`; it is otherwise most of a
 terminal row.
 
-**The machine half is asked of the plan on `origin/main`**, not of the workarea
-copy the rows above it are read from, because `origin/main` is the copy the
-runner picks from. Where the two differ the plan row already says
-`differs from origin/main`, and a plan that is `ready` in the workarea while
-main's is `blocked` now says so on the status row as well.
+**The machine half is asked of the same plan on `origin/main`** that the rows
+above it are read from (ruling 20) — there is one copy in play, not two, so
+this row and the plan row can no longer disagree about which plan they mean.
 
 **`--offline` changes this row, and that is the honest answer rather than a
 promise.** With no `gh` call the repository lands in `prsFailed`, which is the
@@ -222,28 +235,31 @@ offers**, so it cannot rot back into a menu of things that exit 2.
 | `src/mc/status-render.js` | the drawing primitives — `painter`, `width`, `pad`, `clip`, `elapsed` |
 | `src/mc/prices.js` | the dated list-price table |
 
-The builders are pure — `fieldRows`, `wrap`,
-`renderProject`, `findWorkareaPlan`, `findMainPlan` each take read data and
-return their part — so `tests/mc/status-project.test.js` and
+The builders are pure — `fieldRows`, `wrap`, `renderProject` each take read
+data and return their part — so `tests/mc/status-project.test.js` and
 `tests/mc/status-collect.test.js` build every case from fixture files, with
 git injected and `gh` stubbed. No test starts a session, opens a worktree or
 reaches the network.
 
 ## Speed
 
-Measured 2026-08-30 on this machine, three runs each:
+Measured 2026-08-30 on this machine, three runs each, and re-measured
+2026-09-12 after ruling 20 (`mc status main-and-merges`, three runs each: 2.26,
+1.64, 1.77 s live; 0.17, 0.14, 0.14 s `--offline`) — unchanged, because this
+verb already fetched before reading the plan:
 
 | | live | `--offline` |
 |---|---|---|
-| `mc status <name>` | 1.7–2.2 s | 0.13–0.16 s |
+| `mc status <name>` | 1.7–2.3 s | 0.13–0.17 s |
 | `mc --json` (the page) | 6.0 s | 5.8 s |
 
 The verb is inside the five-second bound the plan set, and its live cost is
-the two `git fetch`es and the `gh` call. The page is not, and `--offline`
-barely changes it — which says the time is local work (73 areas under
-`~/mc` walked, 24 git worktrees inspected), not the network. That number belongs to `mc`, and
-[`docs/technical/mc-ui.md`](mc-ui.md) is where it is answered; it is recorded
-here because this is where it was measured.
+the two `git fetch`es and the `gh` call. The page's own number moved with
+ruling 20 — every ordinary print of `mc` now fetches too, where before only a
+merge did — and that number belongs to `mc`, not this verb:
+[`docs/technical/mc-ui.md`](mc-ui.md) § *What a refresh costs* is where it is
+answered; it is recorded here only because this verb's cost was measured
+alongside it.
 
 ## History
 

@@ -20,7 +20,7 @@
  * A step the runner cannot start is written down instead of met again. A
  * refusal that is a fact about the workarea or this machine — a dirty worktree,
  * a branch that could not be moved, a merge that would not commit, a role or a
- * tool that is missing, a pull request held after its one repair — sets that
+ * tool that is missing — sets that
  * step `blocked` on `main` with `blocked_by: { kind: "workarea", name }` and one
  * comment naming the path, through a docs-only pull request the runner lands
  * itself (`blockStep`). Then nothing picks the project until `mc brief` or a
@@ -59,13 +59,11 @@
  * makes the `<name>`/`<name>-<suffix>` convention that matches a pull request
  * to a project true. The rules are project-prs.js and `inFlight`.
  *
- * A pull request the runner will **not** land is written down rather than
- * logged and forgotten: `~/mc/runner/held.json` carries every one of them with
- * the reason — a red gate, a plan trespass, a session that timed out with its
- * work pushed — and an entry leaves the file when its pull request lands or
- * stops being open. It is mc's own state beside `runner.json`, never a status
- * in a plan, and it is what the page draws as `held before merge`. The rules
- * are held.js.
+ * Where a step stands is the register's word (`register.js`, ruling 21):
+ * `running` with the session's pid before the session, and after it `done`
+ * when the session's own `mc merge` landed the pull request, `failed` when it
+ * did not — the runner lands nothing of a session's and repairs nothing. A
+ * step the runner could not start is `blocked` there too.
  *
  * `~/mc/queue.md` is Martin's "these first" and nothing else: names of
  * projects that still have a step to run, one per line. The chores rewrite it
@@ -107,12 +105,9 @@ import {
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
-import {
-  bumpRepairs, heldPath, holdDetails, holdPr, holdReason, holdsAfterSession, parseHeld,
-  reconcileHeld, releasePr, samePr,
-} from './held.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
-import { readPlanText, unauthorisedChanges, validatePlan } from './plan-schema.js';
+import { readPlanText, unauthorisedChanges } from './plan-schema.js';
+import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
@@ -126,7 +121,6 @@ import { runDocsMerge } from './docs-merge.js';
 import { runMergeRound } from './repo-merge.js';
 import { pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
-import { dequeue, mergesPath, parseQueue, queueOrder } from './merge-queue.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
@@ -135,20 +129,12 @@ import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, REFUSAL, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs,
-  heldRepair, helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, nextFor,
-  queueFileText, readSessionOutput, repairPrompt, sessionResult, sessionSettings, describeSettings,
-  describeWatch, stackOrder, stepOfPr, stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
+  helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, nextFor,
+  queueFileText, readSessionOutput, sessionResult, sessionSettings, describeSettings, describeWatch,
+  stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
-
-/**
- * A landing that met another round. `busy` is the gate lock (one gate round
- * on this machine), `lease` the repository lease (one holder per repository);
- * both are live rounds that end in minutes, and the runner waits for them
- * rather than leaving the pull request open — see `landPr`.
- */
-export const BUSY_STOPS = ['busy', 'lease'];
 
 /**
  * The refusals a lane waits out rather than moves past: they are facts about
@@ -159,8 +145,6 @@ export const BUSY_STOPS = ['busy', 'lease'];
  * takes the next name instead — see `pass`.
  */
 export const WAIT_REFUSALS = new Set(['skipped', 'skipped:prs-unknown', 'skipped:sync']);
-export const LAND_WAIT_MS = 45 * 60 * 1000;
-export const LAND_RETRY_MS = 30 * 1000;
 /** How often an idle lane looks again while an UPDATE waits for the quiet moment. */
 export const UPDATE_POLL_MS = 30 * 1000;
 /** How often a lane held back by the total cap looks for a free slot again. */
@@ -196,10 +180,13 @@ function sh(cmd, args, { cwd, timeout = 120_000 } = {}) {
  * second lane would never get to start. The output is collected here instead
  * of by `maxBuffer`, and capped rather than allowed to eat the machine.
  */
-export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, checkIn = null, spawn: spawnFn = spawn }) {
+export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, checkIn = null, onSpawn = null, spawn: spawnFn = spawn }) {
   return new Promise((resolve) => {
     const piped = prompt != null;
     const child = spawnFn(bin, args, { cwd, stdio: [piped ? 'pipe' : 'ignore', 'pipe', 'pipe'], env });
+    // The register records the pid as the step's session (ruling 21); a
+    // record, not the session, so a throwing recorder must not end the run.
+    if (child.pid && onSpawn) { try { onSpawn(child.pid); } catch { /* recorded elsewhere */ } }
     const cap = 256 << 20;
     const collect = (stream, onChunk) => {
       const chunks = [];
@@ -349,9 +336,15 @@ export function realDeps(env = process.env) {
     // 1.9 h of 12.5 h tool time — and 17 calls were killed on the timeout
     // itself. A suite run is one call now. The same ten minutes is why
     // `DEFAULT_STALL_MINUTES` is twenty.
+    //
+    // `options.env` is what the runner adds for this session — `MC_STEP=<project>:<index>`,
+    // so `mc step` and `mc merge` inside it know which step they are — and
+    // `onSpawn` gets the child's pid the moment there is one: the register
+    // records it as the step's session, which is how `mc merge` finds the
+    // process to end when the step has landed (ruling 21).
     session: (options) => streamSession({
       ...options,
-      env: { ...env, BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000' },
+      env: { ...env, BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000', ...(options.env || {}) },
     }),
     // `mc run --update`: this runner's replacement, on the code that is on
     // disk now. Node read its whole module graph at process start, so the only
@@ -368,21 +361,6 @@ export function realDeps(env = process.env) {
 }
 
 /* --------------------------------------------------------------- runner */
-
-/**
- * The plan a repair session's edits are judged against, and the step it was
- * allowed to edit. Null when there is no plan to judge by at all.
- *
- * An ordinary repair is judged against the plan it was handed — the step that
- * names this pull request is its own. A repair of a `plan-trespass` is judged
- * against the plan on origin/main, because the plan it was handed is the
- * trespass: the step's work has not landed, or it would not be held.
- */
-function repairBaseline(entry, plan, onMain) {
-  if (!plan?.path) return null;
-  const before = entry.note === 'plan-trespass' && onMain ? onMain : plan.plan;
-  return before ? { before, index: stepOfPr(before, entry.pr) } : null;
-}
 
 export function createRunner({
   merge = true, deps = realDeps(),
@@ -409,14 +387,6 @@ export function createRunner({
     // that is too late to answer "what is running now", which is why these
     // exist.
     runner: join(root, 'runner', 'runner.json'),
-    // Every pull request the runner would not land, with the reason it did
-    // not. mc's own state beside the two above, never a status in a plan —
-    // see held.js.
-    held: heldPath(root),
-    // Every pull request a hand `mc merge` could not land and handed to the
-    // merge lane. The same kind of state again, and the one file the lane
-    // reads to know it has work — see merge-queue.js.
-    merges: mergesPath(root),
     // With more than one lane per repository (`mc lanes`), the first keeps
     // the file's old name and the rest number themselves, so the page —
     // which reads `current-*.json` by name — needs no new rule.
@@ -445,6 +415,58 @@ export function createRunner({
     deps.log(line);
   };
   const gitOut = (cwd, args) => { const r = deps.git(cwd, args); return r.ok ? String(r.stdout ?? '').trimEnd() : null; };
+
+  /* ------------------------------------------------------------- register */
+
+  /**
+   * The register's IO, through this runner's dependencies: `read` and
+   * `writeJson` are the fixture's in a test, and the lock is the real one
+   * only where the dependencies are (`deps.lock`), because a test's work root
+   * is not a directory.
+   */
+  const register = {
+    root,
+    read: deps.read,
+    write: writeJson,
+    lock: deps.lock || ((_root, fn) => fn()),
+    get now() { return stamp(); },
+  };
+  const alive = deps.alive || pidAlive;
+
+  /** One step's state, written. Says what it wrote; a refusal is a line, not a crash. */
+  function recordStep(name, index, patch) {
+    try {
+      return updateStep({ root, project: name, index, patch, read: deps.read, write: writeJson, lock: register.lock, now: stamp() });
+    } catch (error) {
+      say(`${name}: the register refused step ${index + 1} → ${patch.status || 'the patch'}: ${error?.message || error}`);
+      return null;
+    }
+  }
+
+  /**
+   * A `running` step whose session is not there is a step nothing will
+   * finish: the runner that held it was killed, or the machine slept through
+   * it. It is `failed` with that reason, so the picker does not wait on it
+   * for ever and a person sees it where every other failed step is. A pid
+   * this process owns and is still awaiting is alive, so this never touches
+   * a lane's own session.
+   */
+  function sweepRunning(plans) {
+    return plans.map((record) => {
+      const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
+      let out = record;
+      steps.forEach((step, index) => {
+        if (step?.status !== 'running') return;
+        const entry = readEntry(root, record.project, { read: deps.read });
+        const pid = entry?.steps?.[index]?.session?.pid;
+        if (pid && alive(pid)) return;
+        say(`${record.project}: step ${index + 1} was running under pid ${pid ?? 'none'}, which is gone — failed`);
+        const written = recordStep(record.project, index, { status: 'failed', reason: `the session (pid ${pid ?? 'unknown'}) is gone without a result` });
+        if (written) out = applyEntry(out, written);
+      });
+      return out;
+    });
+  }
   const stopRequested = () => deps.exists(paths.stop);
   const updateRequested = () => deps.exists(paths.update);
 
@@ -640,179 +662,7 @@ export function createRunner({
     return { ok: true, moved: next };
   }
 
-  /* --------------------------------------------------- held before merge */
-
-  /**
-   * `~/mc/runner/held.json`, read-modify-written through these three and
-   * nowhere else.
-   *
-   * Every lane may hold a pull request, and two lanes land at the same time,
-   * so the file is never held open across an await: it is read, changed and
-   * written whole (`writeJsonAtomic`) inside one turn, which is what makes a
-   * lane's hold safe beside another's. The rules themselves are pure, in
-   * held.js.
-   */
-  const heldNow = () => parseHeld(deps.read(paths.held));
-
-  function hold(entry) {
-    writeJson(paths.held, holdPr(heldNow(), { ...entry, since: stamp() }));
-  }
-
-  /** This pull request's one repair, counted before the session starts. */
-  function countRepair(repo, pr) {
-    writeJson(paths.held, bumpRepairs(heldNow(), { repo, pr: Number(pr) }));
-  }
-
-  function release(repo, pr) {
-    const entries = heldNow();
-    const kept = releasePr(entries, { repo, pr: Number(pr) });
-    if (kept.length !== entries.length) writeJson(paths.held, kept);
-  }
-
-  /**
-   * `merges.json` — what a refused `mc merge` handed the lane, read and
-   * written with the discipline `held.json` has and for the same reason: the
-   * verb writes it from another process, the merge lane writes it from this
-   * one, so it is read, changed and written whole in one turn. The rules are
-   * pure, in merge-queue.js.
-   */
-  const queuedNow = () => parseQueue(deps.read(paths.merges));
-
-  /**
-   * This pull request is not the lane's to try any more — because the lane has
-   * just had an answer about it, or because it is no longer open at all. One
-   * entry per pull request in one file is the rule: what would not land is
-   * `held.json`'s, with its one-repair count, and the queue holds only what
-   * has not been tried yet.
-   */
-  function dropQueued(repo, pr) {
-    const entries = queuedNow();
-    const kept = dequeue(entries, { repo, pr: Number(pr) });
-    if (kept.length === entries.length) return false;
-    writeJson(paths.merges, kept);
-    return true;
-  }
-
-  /**
-   * Both files against what the round has just asked GitHub. A pull request
-   * somebody merged or closed by hand is not held any more and is not queued
-   * any more, and nothing else would ever have taken it out of either file.
-   *
-   * The queue is reconciled here rather than in a second function of its own:
-   * it is the same question about the same `gh pr list` the round has already
-   * paid for, and a repository GitHub could not be asked for is unknown rather
-   * than empty in both — `reconcileHeld` is pure over `{ repo, pr }` and knows
-   * nothing about which file the entries came out of.
-   *
-   * With one difference, and it is what `since` is for. The held file is
-   * written by this process alone, so an entry in it is always older than the
-   * list; `merges.json` is written by whatever terminal ran `mc merge`, and an
-   * entry that arrived *after* the list was read is not absent from it, it is
-   * younger than it. Dropping it would throw away the one thing this project
-   * exists to keep — a refusal nobody is going to retype — for a round's worth
-   * of `gh pr list` over two repositories. So only what was queued before the
-   * list was taken is judged by it.
-   */
-  function reconcileHold({ prs = [], repos: asked = [], since = null }) {
-    const entries = heldNow();
-    if (entries.length) {
-      const { kept, dropped } = reconcileHeld(entries, { prs, repos: asked });
-      if (dropped.length) {
-        for (const entry of dropped) say(`held: ${entry.project} #${entry.pr} is no longer open — no longer held before merge`);
-        writeJson(paths.held, kept);
-      }
-    }
-    const queued = queuedNow();
-    if (!queued.length) return;
-    const judged = queued.filter((entry) => !since || !entry.since || entry.since <= since);
-    const { dropped } = reconcileHeld(judged, { prs, repos: asked });
-    if (!dropped.length) return;
-    for (const entry of dropped) say(`merge lane: ${entry.repo} #${entry.pr} is no longer open — no longer queued for merge`);
-    writeJson(paths.merges, queued.filter((entry) => !dropped.some((gone) => samePr(gone, entry))));
-  }
-
   /* --------------------------------------------------------------- landing */
-
-  /**
-   * The one door. `mc merge`'s own round, in this process — `repo-merge.js`,
-   * not a shell out to `mc`, because the runner *is* mc.
-   *
-   * There is no `gh pr merge` left in here. The old `mergePr` squash-merged
-   * whatever the branch's pull request was and waited only for `mergeable`, so
-   * a step landed without the gate at all — and never read the base it landed
-   * on: on 2026-09-02 at 13:00 that squashed #11250 into
-   * `msr-track-3-capture-command`, the branch of #11249 the runner had left
-   * open eighty minutes earlier, logged `success,merged`, and `main` received
-   * nothing. Martin, 2026-09-02: only `mc merge` may be used.
-   *
-   * What the round gives back and this reads: `merged_into` and `off_default`,
-   * through `landingNote`. The runner's own "it returned zero" is not evidence
-   * that anything landed on main.
-   *
-   * The gate costs a round — 20–35 minutes on memoro — where the old merge
-   * cost seconds. That is the price of the contract, and `land_seconds` is
-   * where a reader of runs.tsv sees it.
-   */
-  async function landPr(repo, name, pr, { branch = null } = {}) {
-    const round = () => deps.mergeRound({
-      repoPath: repo.path,
-      pr: Number(pr),
-      // Who holds the repository for the length of the round. `currentHolder()`
-      // would answer `user@host` from wherever the runner process happens to
-      // stand; the workarea is the answer `mc repo who` is asked for.
-      holder: { name, kind: 'work-area' },
-      onProgress: (message) => say(`${name}: merge #${pr} — ${message}`),
-    });
-    let report = await round();
-    // The gate lock and the repository lease both *refuse* a second round
-    // rather than queueing it (gate-lock.js: one gate round on this machine;
-    // repo-lease.js: one holder per repository), and that stays as it is —
-    // the guarantee is one suite at a time. What changes is what this caller
-    // does with the refusal: it used to log `#N left open` and move on, which
-    // parked the project until a person merged by hand, because an open pull
-    // request stops its project. Two lanes landing at once did that to each
-    // other; with several steps in flight per repository it would be routine.
-    // So a refused round waits — for a live round, which is minutes — and
-    // asks again, up to `LAND_WAIT_MS` in all.
-    const t0 = deps.now().getTime();
-    let waited = false;
-    while (report && BUSY_STOPS.includes(report.stopped_at) && deps.now().getTime() - t0 < LAND_WAIT_MS) {
-      if (!waited) say(`${name}: merge #${pr} — waiting for the gate: ${report.reason}`);
-      waited = true;
-      await deps.sleep(LAND_RETRY_MS);
-      if (stopRequested()) break;
-      report = await round();
-    }
-    if (waited) say(`${name}: merge #${pr} — waited ${Math.round((deps.now().getTime() - t0) / 1000)}s for the gate`);
-    const note = landingNote(report);
-    if (note === 'merged') {
-      // It landed, so nothing holds it any more — including a hold an earlier
-      // round wrote, which is how a repaired pull request leaves the file.
-      release(repo.name, pr);
-      say(`${name}: merged #${pr} into ${report.merged_into} through the gate`);
-      askForUpdate(repo, name, pr);
-    } else if (note.startsWith('off-')) say(`${name}: #${pr} was merged into ${report.merged_into}, NOT main — not recorded as merged`);
-    else {
-      // The one place the runner knows a pull request is held and why, and
-      // until now the only trace was this line. Written down first, said
-      // second.
-      const reason = report?.reason || 'the merge round said nothing';
-      // With what the gate saw: the red tests by name and the output of every
-      // command gate that failed. The report is the only place either exists,
-      // and the repair session is the reader.
-      hold({ project: name, repo: repo.name, pr: Number(pr), branch, reason, note, ...holdDetails(report) });
-      say(`${name}: #${pr} left open — ${reason}`);
-    }
-    // And whatever the answer was, this pull request is not waiting for the
-    // merge lane any more: it landed, or it is `held.json`'s now with its
-    // one-repair rule. Written after the hold rather than before, so a crash
-    // between the two leaves the pull request in a file rather than in
-    // neither. It is here and not in the lane because a step lane's landing
-    // answers a queued pull request just as well — a hand `mc merge` that was
-    // refused on the project's own step is the ordinary case.
-    if (dropQueued(repo.name, pr)) say(`merge lane: #${pr} is off the queue — ${note}`);
-    return note;
-  }
 
   /**
    * The second writer of `runner/UPDATE`, and the only one that is not a
@@ -864,89 +714,6 @@ export function createRunner({
   }
 
   /**
-   * Retarget and replay the branch above one that has just landed.
-   *
-   * A squashed base leaves every branch above it conflicting even when its
-   * author did nothing wrong — the gate merges origin/main into the candidate
-   * before measuring, and against a squash of the branch below that merge
-   * conflicts wherever the two touched the same lines. Measured on a
-   * three-step memoro-cli stack on 2026-09-01: both remaining branches went
-   * from MERGEABLE to CONFLICT the moment the first one landed.
-   *
-   * `git rebase --onto origin/main <the old base's head>` replays only what
-   * has not landed. A conflict is not resolved here, and it is not the
-   * conflicted `git merge origin/main` a step session is handed: a squashed
-   * base breaking the branch above it is a different cause with a different
-   * answer. Abort, name the files, and stop on this project.
-   */
-  function replayOnto(worktree, name, pr, wasAt) {
-    if (!wasAt) return { ok: false, why: `where ${pr.headRefName} left ${pr.baseRefName} could not be read` };
-    const edited = deps.gh(worktree, ['pr', 'edit', String(pr.number), '--base', 'main']);
-    if (!edited.ok) return { ok: false, why: `#${pr.number} could not be retargeted at main (${lastLine(edited)})` };
-    deps.git(worktree, ['fetch', '-q', 'origin']);
-    if (deps.git(worktree, ['rebase', '--onto', 'origin/main', wasAt, pr.headRefName]).ok) {
-      const pushed = deps.git(worktree, ['push', '-q', '--force-with-lease', 'origin', pr.headRefName]);
-      if (pushed.ok) return { ok: true };
-      return { ok: false, why: `${pr.headRefName} was rebased onto origin/main but could not be pushed (${lastLine(pushed)})` };
-    }
-    const conflicts = (gitOut(worktree, ['diff', '--name-only', '--diff-filter=U']) || '').split('\n').filter(Boolean);
-    deps.git(worktree, ['rebase', '--abort']);
-    return { ok: false, why: `${pr.headRefName} conflicts with what just landed in: ${conflicts.join(' ') || 'unknown files'}` };
-  }
-
-  /**
-   * Everything this project has open, landed through the gate, bottom first.
-   *
-   * Normally that is one pull request — step 1's rule means the project had
-   * none open when the session started. A session that could not branch its
-   * later work from main leaves a stack, and `stackOrder` is the only thing
-   * that decides whether this is one: not a stack it understands means
-   * nothing lands and a line saying why.
-   *
-   * Returns `{ note, seconds }` — the runs.tsv note after `success,`, and how
-   * long the landing itself took.
-   */
-  async function landProject(worktree, repo, name, prs) {
-    const t0 = deps.now().getTime();
-    const took = () => Math.round((deps.now().getTime() - t0) / 1000);
-    const stack = stackOrder(prs);
-    if (!stack.ok) {
-      say(`${name}: ${stack.reason} — landing none of them`);
-      // Not one of these is going to be landed by anything the runner does
-      // next, and every one of them keeps the project from starting a step.
-      for (const pr of prs) hold({ project: name, repo: repo.name, pr: Number(pr.number), branch: pr.headRefName, reason: stack.reason, note: 'open,not-a-stack' });
-      return { note: 'open,not-a-stack', seconds: took() };
-    }
-    if (!stack.order.length) return { note: 'open', seconds: took() };
-    if (stack.order.length > 1) say(`${name}: a stack of ${stack.order.length}, landing bottom first: ${stack.order.map((pr) => `#${pr.number}`).join(' → ')}`);
-    // Where each branch left its base, read now and not later: a base branch
-    // is gone from the remote the moment the pull request on it is merged, and
-    // this is the commit `--onto` replays the branch above off.
-    const forkedAt = new Map(stack.order.map((pr) => [
-      pr.number, gitOut(worktree, ['merge-base', `origin/${pr.baseRefName}`, `origin/${pr.headRefName}`]),
-    ]));
-    let note = 'open';
-    for (const [i, pr] of stack.order.entries()) {
-      if (i > 0) {
-        const replayed = replayOnto(worktree, name, pr, forkedAt.get(pr.number));
-        // The one below it has landed and this one has not. `open,stack-stopped`
-        // rather than anything with `merged` in it: something of this project's
-        // is still open, and a note that reads as merged would let the round
-        // that closes workareas take this one away.
-        if (!replayed.ok) {
-          say(`${name}: ${replayed.why} — stopping on this project for the round`);
-          hold({ project: name, repo: repo.name, pr: Number(pr.number), branch: pr.headRefName, reason: replayed.why, note: 'open,stack-stopped' });
-          return { note: 'open,stack-stopped', seconds: took() };
-        }
-      }
-      note = await landPr(repo, name, pr.number, { branch: pr.headRefName });
-      deps.git(worktree, ['fetch', '-q', 'origin']);
-      if (note !== 'merged') return { note, seconds: took() };
-    }
-    return { note, seconds: took() };
-  }
-
-  /**
    * The archive pull request, landed through `mc merge --docs`.
    *
    * It removes `docs/project/<programme>/<project>/` and adds a row to
@@ -977,176 +744,6 @@ export function createRunner({
     return false;
   }
 
-  /* ------------------------------------------------------------ merge lane */
-
-  /**
-   * One turn of the merge lane: the oldest queued pull request, landed through
-   * the same `landPr` a step's own pull request goes through. Returns the
-   * landing note, or null when there is nothing queued.
-   *
-   * It takes no slot. `takeSlot` counts steps, this is not one — no session,
-   * no workarea, no plan — and the requirement the queue exists for is that a
-   * merge does not wait for a step lane to come free: the refusals it answers
-   * are the ones a person was retrying by hand while every lane was busy. What
-   * it does share is what every landing shares and cannot not share: this
-   * machine's one gate lock and the repository's lease, both of which `landPr`
-   * already waits for rather than gives up on (`BUSY_STOPS`, `LAND_WAIT_MS`).
-   *
-   * `name` is what the log line calls this landing. The project whose workarea
-   * stands on the entry's branch when there is one — `projectForBranch` over
-   * the workareas, the one rule for reading a branch as a project, rather than
-   * a second matcher of its own — and the branch itself when there is none, so
-   * that the line still names something a person can go and find.
-   */
-  let merging = 0;
-  async function mergeQueued() {
-    const [entry] = queueOrder(queuedNow());
-    if (!entry) return null;
-    const repo = repos.find((item) => item.name === entry.repo) || null;
-    if (!repo) {
-      // Nothing on this machine can land it, and leaving it would make the
-      // lane read the same unlandable entry every LAND_RETRY_MS for ever.
-      dropQueued(entry.repo, entry.pr);
-      say(`merge lane: #${entry.pr} is queued for ${entry.repo || 'no repository'}, which this machine does not have — dropped`);
-      return 'no-repo';
-    }
-    const project = projectForBranch(entry.branch, workareas());
-    const name = project || entry.branch || `#${entry.pr}`;
-    merging += 1;
-    try {
-      say(`merge lane: landing ${repo.name} #${entry.pr} (queued ${entry.since || 'at some point'} — ${entry.reason})`);
-      const note = await landPr(repo, name, entry.pr, { branch: entry.branch });
-      // A project's own held pull request is its round's to repair — that rule
-      // is `heldRepair`, it runs in the project's workarea, and nothing here
-      // duplicates it. A pull request that belongs to no project is reached by
-      // no round at all, so the lane is the only thing that can give it the one
-      // repair every held pull request is owed; see `laneRepair`.
-      if (note === 'merged' || project) return note;
-      // The repaired landing is what the lane's answer about this pull request
-      // is, when there was one. Null means no repair was launched, and then the
-      // answer is the landing that held it.
-      return (await laneRepair(repo, entry)) ?? note;
-    } finally {
-      merging -= 1;
-    }
-  }
-
-  /**
-   * The one repair of a held pull request no round will ever reach.
-   *
-   * `heldRepair` finds a repair *per project*, inside a round, and runs it in
-   * that project's workarea: a held entry whose `project` is not a name the
-   * queue walks is never looked at, so it stood at `repairs: 0` for ever and
-   * nobody was told. That is every pull request a person queued by hand off a
-   * branch mc did not name — which is the ordinary case for `mc merge`, since
-   * `mc merge` is what a person types about their own branch.
-   *
-   * So the lane reaches it. A workarea keyed on the branch (the call `mc work
-   * add` makes), the same `repair` role and the same `repairPrompt` the round
-   * hands out, `countRepair` before the session because a session killed as
-   * stalled still had its turn, and one more `landPr`. After that the entry
-   * reads `repairs: 1` and it is the brief's — the lane has dropped it from the
-   * queue already, so nothing brings it back here.
-   *
-   * It takes no slot, for the reason the lane takes none: the requirement is
-   * that a merge does not wait for a step lane, and this is the merge's own
-   * second try at the same pull request. The lane is one loop and runs one
-   * session at a time, so what it adds to the machine is one — `total + 1`.
-   *
-   * Returns the landing note of the repaired pull request, or null when no
-   * repair was launched at all.
-   */
-  async function laneRepair(repo, entry) {
-    const pr = Number(entry.pr);
-    const branch = entry.branch;
-    const done = (why) => { say(`merge lane: #${pr} is held and gets no repair here — ${why}; it is the brief's`); return null; };
-    if (!branch) return done('the entry names no branch to stand on');
-    // What `landPr` has just written, read back rather than assumed: an entry
-    // that is not there is a landing that held nothing (an `off-main` merge),
-    // and one that already carries a repair has had its turn. The second is
-    // also the guard against the one overlap there is — a branch named after a
-    // project whose plan is on main but which has no workarea on this machine
-    // reads as project-less here and as its own to `heldRepair` there, and
-    // `countRepair` below is what stops the two giving it two repairs.
-    const held = heldNow().find((item) => samePr(item, { repo: repo.name, pr }));
-    if (!held) return null;
-    if (held.repairs) return done('it has had its one repair already');
-    if (stopRequested()) return done('STOP is present');
-    // The same refusal `waitForSlot` makes: from the moment an UPDATE is read
-    // nothing starts a session, or a drain meant to end within one session's
-    // length becomes two.
-    if (updateRequested()) return done('an UPDATE is pending');
-    const worktree = join(root, branch, repo.name);
-    if (!deps.exists(worktree)) {
-      say(`merge lane: #${pr} belongs to no project — making a ${repo.name} workarea from ${branch} for its one repair`);
-      deps.git(repo.path, ['fetch', '-q', 'origin']);
-      const added = deps.addWorktree({ name: branch, repo: repo.path, branch, from: `origin/${branch}`, env: deps.env });
-      if (!added.ok) return done(`a workarea for ${branch} could not be made (${added.reason})`);
-    }
-    const on = gitOut(worktree, ['branch', '--show-current']);
-    if (on !== branch) return done(`${worktree} stands on ${on || 'no branch'}, not on ${branch}`);
-    // Asserted rather than handled: a repair may not run in a worktree with a
-    // merge in progress (`mc-run.md`, *Held before merge*), and the workarea
-    // this repair runs in was just made from the branch — nothing has merged
-    // anything into it. A worktree that is mid-merge anyway is one this lane
-    // did not make, and the answer to that is a person, not a second rule.
-    if (deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
-      return done(`a merge is in progress in ${worktree}, which a fresh workarea cannot have`);
-    }
-    const role = deps.role('repair');
-    if (!role?.overlay) return done('canon/roles/repair.md is missing');
-    // No plan to read the session's settings off — a pull request with no
-    // project has none — so it is a repair's defaults, which is what every
-    // plan that says nothing gets.
-    const settings = sessionSettings({}, null, { kind: 'repair' });
-    const launch = deps.launch(settings.tool);
-    if (!launch?.ok) return done(`${settings.tool} is not available (${launch?.hint || launch?.reason})`);
-    await quotaHold();
-    const prompt = repairPrompt({ name: branch, repo: repo.name, ...held });
-    // Counted before the session, the rule `held.js` states: a repair killed as
-    // stalled still had its one turn.
-    countRepair(repo.name, pr);
-    say(`${branch}: #${pr} is held before merge and belongs to no project — the merge lane's one repair session: ${held.reason}`);
-    const instructions = instructionsFor(launch.id, await deps.profile(), role.overlay);
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
-    const ts = stamp().replace(/[-:]/gu, '');
-    const out = join(paths.log, `${branch}-${ts}`);
-    say(`${branch}: repair starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})`);
-    const t0 = deps.now().getTime();
-    // No `current-<repo>.json`: this is not a step, and the page's RUNNER block
-    // draws that file as one. What says the lane is busy is `mergeBusy`, and it
-    // covers the session because `merging` is held around the whole of
-    // `mergeQueued` — including this. So a check-in here is a line in the log
-    // and nothing on the page.
-    const result = await deps.session({
-      bin: launch.spec.bin, args, cwd: worktree,
-      ...watchFor(launch, settings, { prompt, name: branch, kind: 'repair' }),
-    });
-    const seconds = Math.round((deps.now().getTime() - t0) / 1000);
-    writeSessionLogs(out, result);
-    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled });
-    const note = read.note === 'stalled' ? 'stalled,open' : read.note;
-    logRun({
-      ts: stamp(), name: branch, kind: 'repair', exit: result.status, seconds, pr: String(pr),
-      turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite,
-      session: read.session, note, model: settings.model,
-    });
-    say(`${branch}: repair done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}`);
-    if (read.quota) await quotaPause();
-    // And the gate decides, as it did the first time. Held again keeps
-    // `repairs: 1` (`holdPr`), which is what makes this the last word the
-    // runner has on this pull request.
-    return landPr(repo, branch, pr, { branch });
-  }
-
-  /**
-   * Is the lane inside a round right now? The drain asks: an UPDATE hands the
-   * runner over when nothing is in flight anywhere, and a handover in the
-   * middle of a squash is exactly what `landPr`'s lease exists to prevent.
-   * The lane leaves no `current-<repo>.json` — it is not a step and the page's
-   * RUNNER block would draw it as one — so this is how it counts as in flight.
-   */
-  const mergeBusy = () => merging > 0;
 
   const lastLine = (r) => String(r.stderr || '').trim().split('\n').at(-1) || String(r.stdout || '').trim() || 'no reason given';
 
@@ -1323,117 +920,37 @@ export function createRunner({
   /* ------------------------------------------------------------- blocking */
 
   /**
-   * The one thing the runner writes into a plan: a step it could not start.
+   * A step the runner could not start, written down where the state lives:
+   * `blocked` in the register with `blocked_by: { kind: 'workarea', name }`
+   * and the detail as the reason, so nothing picks the project again until
+   * `mc step ready` — and nothing in a plan file moves for it. Until
+   * 2026-09-12 this was a docs-only pull request the runner opened and landed
+   * itself, because the state lived in the plan on main and there was no
+   * other way to it (ruling 21: the register).
    *
-   * A refusal that is a fact about the workarea or this machine (`WORKAREA_BLOCKS`,
-   * run-plan.js) does not go away by itself, and until 2026-09-08 the runner met
-   * every one of them again ten minutes later — for days, with nothing on `main`
-   * saying the project was stuck and the plan reading `ready` in every surface.
-   * Martin, 2026-09-08: "Om det var något som en LLM skulle kunna ta beslut som
-   * så skulle det ha gjorts vid första Runner-försöket. Då är det det som är
-   * fel. Rätt svar är inte en Runner-runda till." (Ruling 17.)
-   *
-   * So it is written down once, where the runner already obeys: the first
-   * not-done step of the plan on `origin/main` goes `blocked` with
-   * `blocked_by: { kind: 'workarea', name: <reason> }` and one appended comment
-   * naming the workarea and what was in it. `kindFor` then reads `skip:blocked`
-   * and the picker never reaches the project again (`nextFor`). The way back is
-   * `mc brief` or a planning session setting the step `ready`; the runner never
-   * writes `ready` and never retries on its own.
-   *
-   * It lands the way an archive lands — a worktree of its own from origin/main,
-   * a docs-only pull request through `landDocsPr`, which is the door a plan edit
-   * has (`docs-merge.js` refuses anything outside `docs/`). The branch carries
-   * the project's name as its prefix on purpose: `projectForBranch`
-   * (project-prs.js) then reads a block pull request that did *not* land as this
-   * project's own open one, so `inFlight` keeps it out of every pick until it
-   * does. Nothing else has to know the branch exists.
-   *
-   * Returns true when the block is recorded on a branch — landed or left open —
-   * and false when nothing was written, which the line above it says.
+   * Says which step, and refuses to write over a step that is already
+   * blocked — the world this lane read was stale, and a second reason on the
+   * same step is the same fact twice.
    */
   async function blockStep({ repo, name, reason, detail }) {
-    const branch = `${name}-blocked-${stamp().replace(/[-:]/gu, '')}`;
-    const worktree = join(root, 'runner', 'block', repo.name);
-    if (deps.exists(worktree)) deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
-    if (!deps.git(repo.path, ['worktree', 'add', '-b', branch, worktree, 'origin/main']).ok) {
-      say(`${name}: the worktree to write the block in could not be made — the step is not blocked, only skipped`);
-      return false;
-    }
-    try {
-      return await blockIn({ repo, worktree, branch, name, reason, detail });
-    } finally {
-      deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
-      deps.git(repo.path, ['branch', '-D', branch]);
-    }
-  }
-
-  /** The plan edit itself, inside the worktree that was made for it. */
-  async function blockIn({ repo, worktree, branch, name, reason, detail }) {
-    const found = planOf(worktree, name);
-    const plan = found?.plan || null;
-    if (!plan) {
-      say(`${name}: the plan on origin/main ${found ? 'does not parse' : 'is gone'} — nothing to block`);
-      return false;
-    }
-    const index = plan.steps.findIndex((step) => step?.status !== 'done');
-    if (index < 0) { say(`${name}: every step of the plan on origin/main is done — nothing to block`); return false; }
-    const step = plan.steps[index];
-    // Already blocked: the world this lane read is stale — another lane, or an
-    // earlier pick, has written it. Say so and leave the plan alone; a second
-    // comment on the same step is the same fact twice.
+    const entry = readEntry(root, name, { read: deps.read });
+    if (!entry) { say(`${name}: not in the register — nothing to block`); return false; }
+    const index = currentIndex(entry);
+    if (index < 0) { say(`${name}: every step is done — nothing to block`); return false; }
+    const step = entry.steps[index];
     if (step.status === 'blocked') {
       say(`${name}: step ${index + 1} is already blocked on ${step.blocked_by?.kind || 'something'} ${step.blocked_by?.name || '(unnamed)'} — not written again`);
       return false;
     }
     const area = join(root, name, repo.name);
-    step.status = 'blocked';
-    step.blocked_by = { kind: 'workarea', name: reason };
-    step.comments = [...(step.comments || []),
-      `Blocked by mc run on ${stamp()}: ${detail}. The workarea is ${area}. `
-      + 'mc brief or a planning session sets this step ready again once the workarea is fixed; the runner does not retry.'];
-    // A plan the runner made unreadable is the failure `plan-intake.js` exists
-    // for, and it must not be this runner's: nothing is committed unless the
-    // file it wrote still parses as a plan.
-    const check = validatePlan(plan);
-    if (!check.ok) {
-      say(`${name}: the block would leave the plan unreadable (${check.problems[0]}) — nothing written`);
-      return false;
-    }
-    const relative = found.path.slice(`${worktree}/`.length);
-    deps.write(found.path, `${JSON.stringify(plan, null, 2)}\n`);
-    const title = `Block ${name} step ${index + 1}: ${reason}`;
-    const body = [
-      detail,
-      '',
-      `The workarea is \`${area}\`.`,
-      '',
-      'This is the one thing `mc run` writes into a plan: a step it could not',
-      'start. The way back is `mc brief` or a planning session setting the step',
-      '`ready` again once the workarea is fixed — the runner never writes `ready`',
-      'and never retries this on its own.',
-    ].join('\n');
-    deps.git(worktree, ['add', '--', relative]);
-    if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok
-      || !deps.git(worktree, ['push', '-q', '-u', 'origin', 'HEAD']).ok) {
-      say(`${name}: the block could not be committed or pushed — the step is not blocked, only skipped`);
-      return false;
-    }
-    const created = deps.gh(worktree, ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body]);
-    const listed = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number']);
-    const pr = (/(\d+)\s*$/u.exec(created.stdout.trim())?.[1]) || (listed.ok && listed.stdout.trim()) || null;
-    if (!pr) {
-      say(`${name}: the block PR could not be opened (${lastLine(created)}) — the step is not blocked, only skipped`);
-      return false;
-    }
-    say(`${name}: step ${index + 1} blocked on workarea ${reason} — #${pr}`);
-    // A landing that is refused leaves the pull request open, and that is not a
-    // loss: `inFlight` covers the project from here, so nothing picks it again
-    // either way, and the brief reads open pull requests.
-    if (merge && !await landDocsPr(worktree, name, pr)) {
-      say(`${name}: #${pr} carries the block and is still open — the project starts nothing until it lands`);
-    }
-    return true;
+    const written = recordStep(name, index, {
+      status: 'blocked',
+      blocked_by: { kind: 'workarea', name: reason },
+      reason: `${detail}. The workarea is ${area}.`,
+      comment: `Blocked by mc run on ${stamp()}: ${detail}. The workarea is ${area}. mc step ready ${name} ${index + 1} once it is fixed; the runner does not retry.`,
+    });
+    if (written) say(`${name}: step ${index + 1} blocked on workarea ${reason}`);
+    return written;
   }
 
   /* -------------------------------------------------------------- closing */
@@ -1919,34 +1436,12 @@ export function createRunner({
     // read `ready` while the step's work sits in an open pull request. The
     // rule itself is `inFlight`, beside `chooseKind` in run-plan.js.
     const openPrs = openPrsFor({ prs, name, names: plans.map((p) => p.project), repo: repo.name });
-    // Unless it is a pull request the runner itself would not land. That is not
-    // work in flight — nothing is going to finish it — and its first round back
-    // is one repair session rather than the same skip for ever. `heldRepair`
-    // holds the whole rule, including the second round, which is the brief's.
-    const repair = heldRepair({ entries: heldNow(), openPrs, project: name, repo: repo.name });
-    // Its one repair is spent and the pull request is still held: nothing the
-    // runner does next moves it, so the step says so on `main` too. The picker
-    // passes such a project over before it ever gets here (`nextFor`); this is
-    // the hold that arrived between the pick and the run.
-    if (repair?.skip) return block(repair.reason, repair.skip);
-    if (!repair) {
-      const flight = inFlight(openPrs);
-      if (flight) return refuse(flight.reason, flight.skip);
-    }
+    const flight = inFlight(openPrs);
+    if (flight) return refuse(flight.reason, flight.skip);
     // A session must be somewhere it can push from. The push-guard asks the
-    // same question at the wrong end — after ninety minutes of work. A repair
-    // is the exception: its branch carries the work being repaired, so it is
-    // stood on rather than left behind.
-    if (repair) {
-      const on = gitOut(worktree, ['branch', '--show-current']);
-      if (repair.entry.branch && on !== repair.entry.branch
-        && !deps.git(worktree, ['checkout', '-q', repair.entry.branch]).ok) {
-        return block(REFUSAL.branch, `#${repair.entry.pr} is on ${repair.entry.branch}, which this workarea could not check out`);
-      }
-    } else {
-      const moved = freshBranch(worktree, name);
-      if (!moved.ok) return block(REFUSAL.branch, moved.why);
-    }
+    // same question at the wrong end — after ninety minutes of work.
+    const moved = freshBranch(worktree, name);
+    if (!moved.ok) return block(REFUSAL.branch, moved.why);
 
     const sync = syncMain(worktree, name);
     // A fetch that failed is the network and this lane waits it out; a merge
@@ -1980,27 +1475,27 @@ export function createRunner({
       deps.git(worktree, ['merge', '--abort']);
       say(`${name}: ${why} — the merge of origin/main is aborted, still conflicting in: ${conflicts.join(' ')}`);
     };
-    // A repair used to be refused in a worktree with a merge in progress, on
-    // the reasoning that the merge was not its job. That deadlocked the most
-    // common hold there is: a pull request held *because* it conflicts with
-    // main hits the same conflict when the runner syncs, so the repair was
-    // refused for the very reason it was owed — every round, for ever.
-    // Measured 2026-09-05: #612 and #614 both sat at `repairs: 0` with the
-    // gate's reason reading `conflicts with origin/main`. Resolving the merge
-    // is the repair; `repairPrompt` is handed the files.
     // The one plan conflict that still stops a step: git could give neither the
     // plan's rule its three sides nor main's copy (`resolvePlanConflict`), so
     // the plan on disk is a half-merged file no session can be handed a step
     // from. Nothing the runner does next changes that, so it is blocked like
-    // any merge that would not commit. A repair is the exception, as it is for
-    // every conflict: resolving the merge is what the repair is for.
+    // any merge that would not commit.
     const planAt = plan?.path?.startsWith(`${worktree}/`) ? plan.path.slice(worktree.length + 1) : null;
-    if (!repair && planAt && conflicts.includes(planAt)) {
+    if (planAt && conflicts.includes(planAt)) {
       abandonMerge(`${planAt} could not be resolved`);
       return block(REFUSAL.sync, `origin/main was merged in and ${planAt} could be resolved neither by the plan's rule nor by taking main's copy`);
     }
-    const choice = repair ? { kind: 'repair' } : chooseKind({ plan });
-    if (conflicts.length && choice.kind !== 'step' && choice.kind !== 'repair') {
+    // What the worktree's file says a step *is*, with the register's word on
+    // where it *stands* laid over it for the choice — and only for the
+    // choice: the prompt quotes the file, and the boundary check after the
+    // session compares the file the session was handed with the one it left,
+    // so a register state on some other step must not read as an edit.
+    const standing = (found) => {
+      const entry = found?.plan ? readEntry(root, name, { read: deps.read }) : null;
+      return entry ? applyEntry({ ...found, project: name }, entry) : found;
+    };
+    const choice = chooseKind({ plan: standing(plan) });
+    if (conflicts.length && choice.kind !== 'step') {
       // The way here is `runStep` driven by hand past the picker — the plan on
       // disk is main's and it refuses the project itself. A project main's plan
       // refuses is never picked at all (`nextFor`, run-plan.js), so no worktree
@@ -2023,9 +1518,8 @@ export function createRunner({
       abandonMerge(`canon/roles/${kind}.md is missing`);
       return block(REFUSAL['role-missing'], `canon/roles/${kind}.md is missing on this machine`);
     }
-    // Step over plan over the kind's defaults (ruling 18). A repair is not a
-    // step, so a step's own `runner` is not what it runs on; the plan's is.
-    const settings = sessionSettings(plan?.plan?.runner, kind === 'step' ? choice.step?.runner : null, { kind });
+    // Step over plan over the kind's defaults (ruling 18).
+    const settings = sessionSettings(plan?.plan?.runner, choice.step?.runner, { kind });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) {
       abandonMerge(`${settings.tool} is not available`);
@@ -2045,16 +1539,7 @@ export function createRunner({
       return 'skipped';
     }
     const now = deps.now();
-    const prompt = kind === 'repair'
-      ? repairPrompt({ name, repo: repo.name, ...repair.entry, conflicts })
-      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, now });
-    // Counted before the session runs, not after: a repair killed as stalled
-    // still had its one turn, and a count written afterwards would give the next
-    // round a second repair for the same pull request.
-    if (kind === 'repair') {
-      countRepair(repo.name, repair.entry.pr);
-      say(`${name}: #${repair.entry.pr} is held before merge — one repair session: ${repair.entry.reason}`);
-    }
+    const prompt = stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, now });
     const instructions = instructionsFor(launch.id, await deps.profile(), role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
 
@@ -2091,6 +1576,17 @@ export function createRunner({
       }),
     };
     writeJson(currentPath, current);
+    // The step is running, says the register — with the session's pid as
+    // soon as there is one, which is what `mc merge` ends when the step
+    // lands.
+    const stepIndex = choice.index;
+    const stepBranch = gitOut(worktree, ['branch', '--show-current']) || name;
+    if (stepIndex != null) {
+      recordStep(name, stepIndex, {
+        status: 'running', branch: stepBranch, pr: null, reason: null,
+        session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool },
+      });
+    }
     let result;
     try {
       result = await deps.session({
@@ -2099,6 +1595,11 @@ export function createRunner({
           prompt, name, kind,
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
+        env: stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree },
+        onSpawn: (childPid) => {
+          if (stepIndex == null) return;
+          recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool } });
+        },
       });
     } finally {
       remove(currentPath);
@@ -2145,62 +1646,41 @@ export function createRunner({
     const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled });
     let { note } = read;
 
-    // The boundary, checked instead of asked for. A step session edits its own
-    // step, the criteria it met and what the code taught it; a session that
-    // rewrote a step it did not run, added one, or widened the scope leaves a
-    // PR the runner will not merge. Nothing is reverted here — the branch is
-    // the session's work and Martin reads the PR.
-    //
-    // A repair is checked the same way, and a repair of a `plan-trespass` is
-    // checked against the plan on **origin/main** rather than against the one
-    // it was handed: the worktree's plan already carries the trespass, so
-    // judging the repair by it would call the trespass repaired the moment
-    // nothing more was touched, and the runner would land what it refused to
-    // land an hour earlier.
-    //
-    // A step session whose conflict was in the plan itself is judged against
-    // the plan on origin/main for the same reason, the other way round: the
-    // copy it was handed is the branch's HEAD, and the merge that stopped is
-    // precisely main's edits to that file. Judging by HEAD would read every
-    // one of them — a step somebody else finished, a criterion somebody else
-    // met — as a step this session had no business touching.
-    let problems = [];
-    const onMain = plans.find((p) => p.project === name)?.plan || null;
-    const planConflicted = Boolean(plan?.path) && conflicts.some((path) => plan.path.endsWith(`/${path}`));
-    const judged = kind === 'repair'
-      ? repairBaseline(repair.entry, plan, onMain)
-      : (kind === 'step' ? { before: (planConflicted && onMain) || plan.plan, index: choice.index } : null);
-    if (judged && note === 'success') {
-      const after = readPlanText(deps.read(plan.path) || '');
-      const trespass = after.plan
-        ? unauthorisedChanges(judged.before, after.plan, judged.index)
-        : { ok: false, problems: [`the plan no longer parses: ${after.problems[0]}`] };
-      if (!trespass.ok) {
-        note = 'plan-trespass';
-        problems = trespass.problems;
-        for (const problem of trespass.problems) say(`${name}: ${problem}`);
-        say(`${name}: #${pr} left open — the session changed more of the plan than its step`);
-      }
-    }
-
-    // The second birthplace of a hold: a pull request this session left behind
-    // that nothing is going to land. A trespass, a session killed as stalled
-    // with its work pushed, a tool that printed no result — all of them leave a
-    // branch `inFlight` refuses the project on every later round, and until now
-    // the only trace was a runs.tsv note.
-    if (pr !== '-' && holdsAfterSession(note)) {
-      hold({ project: name, repo: repo.name, pr: Number(pr), branch, reason: holdReason({ note, problems }), note });
-    }
-    // The row says what the page and the brief count: a stall that left a pull
-    // request behind is `stalled,open`, the way a landing that did not is
-    // `success,open`.
-    if (note === 'stalled' && pr !== '-') note = 'stalled,open';
-
-    let landSeconds = null;
-    if (merge && openNow.length && note === 'success') {
-      const landed = await landProject(worktree, repo, name, openNow);
-      note = `success,${landed.note}`;
-      landSeconds = landed.seconds;
+    // Where the step stands now is the register's word, not this process's
+    // (ruling 21). The session ran `mc merge` itself: green wrote `done` and
+    // ended the session, so the process under this lane came back with a
+    // signal and no JSON, and that is the ordinary end of a landed step. A
+    // session that gave up wrote `failed` with its reason. Anything still
+    // `running` when the process is gone is failed here: a pull request
+    // left open the session did not land, or no pull request at all. A
+    // quota answer is no session and the step goes back to `ready`. The
+    // runner lands nothing of a session's and never retries a failed step;
+    // `mc step ready` is the way back.
+    const landSeconds = null;
+    const after = readEntry(root, name, { read: deps.read })?.steps?.[choice.index] || null;
+    // The row's note keeps the session's own exit word — `success`,
+    // `timeout`, `no-json`, `failed` — and says after it where the step
+    // stands: a step `mc merge` landed is `success,merged` however the
+    // process died, because the verb ends the session on purpose.
+    if (after?.status === 'done') {
+      note = 'success,merged';
+      say(`${name}: #${after.pr || pr} landed through mc merge from the session — step ${choice.index + 1} is done`);
+      if (after.pr) askForUpdate(repo, name, after.pr);
+    } else if (after?.status === 'failed') {
+      note = `${note},failed`;
+      say(`${name}: step ${choice.index + 1} failed by the session's own word — ${after.reason}`);
+    } else if (after?.status === 'blocked') {
+      note = `${note},blocked`;
+      say(`${name}: step ${choice.index + 1} is blocked by the session on ${after.blocked_by?.kind} ${after.blocked_by?.name}`);
+    } else if (read.quota) {
+      recordStep(name, choice.index, { status: 'ready', session: null });
+    } else {
+      const reason = pr !== '-'
+        ? `#${pr} is open and the session ended ${note} (rc ${result.status}) without landing it`
+        : `the session ended ${note} (rc ${result.status}) with no pull request`;
+      recordStep(name, choice.index, { status: 'failed', pr: Number(pr) || null, branch, reason });
+      say(`${name}: step ${choice.index + 1} failed — ${reason}`);
+      note = `${note},failed`;
     }
 
     logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model });
@@ -2234,15 +1714,17 @@ export function createRunner({
     const prs = [];
     const prsFailed = [];
     const askedRepos = [];
-    // When the list below was taken, for the one reader that needs to know a
-    // pull request could have been queued after it — `reconcileHold`.
-    const askedAt = stamp();
     for (const repo of repos) {
       if (only && repo.name !== only) continue;
       if (!deps.exists(join(repo.path, '.git'))) continue;
       askedRepos.push(repo.name);
       deps.git(repo.path, ['fetch', '-q', 'origin']);
-      plans.push(...listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }));
+      // The plan on main says what each step is; the register says where it
+      // stands (register.js). A plan the register has never seen is seeded
+      // from its own file here, once, and a step whose session is gone —
+      // a runner killed under it, a machine that slept — is failed here,
+      // because a `running` step with no process is one nothing will finish.
+      plans.push(...sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register)));
       const asked = deps.gh(repo.path, PR_LIST_ARGS);
       try {
         if (!asked.ok) throw new Error(asked.stderr.trim().split('\n').at(-1) || 'gh pr list failed');
@@ -2252,11 +1734,6 @@ export function createRunner({
         say(`${repo.name}: GitHub could not be asked what is open (${error?.message || error}) — no step starts in this repository this round`);
       }
     }
-    // What is open is the whole answer to what is still held, and the round
-    // has just paid for it. A repository GitHub could not be asked for is
-    // unknown rather than empty, so nothing of its is dropped on a bad
-    // network.
-    reconcileHold({ prs, repos: askedRepos.filter((repo) => !prsFailed.includes(repo)), since: askedAt });
     return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans, prs, prsFailed };
   }
 
@@ -2270,7 +1747,7 @@ export function createRunner({
    * already been refused on.
    */
   function nextStep({ repo = null, world = {}, passed = new Set() } = {}) {
-    return nextFor({ repo, world, claimed: claims, passed, held: heldNow() });
+    return nextFor({ repo, world, claimed: claims, passed });
   }
 
   /**
@@ -2378,11 +1855,9 @@ export function createRunner({
 
   return {
     paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, archiveDone, queue, stopRequested,
-    held: heldNow,
-    queued: queuedNow, mergeQueued, mergeBusy,
     writeUnreadable,
     blockStep,
-    updateRequested, syncMain, freshBranch, landProject, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
+    updateRequested, syncMain, freshBranch, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
   };
 }
@@ -2503,11 +1978,8 @@ export async function runLoop({
       // UPDATE the runner wrote for itself at 09:30 was still pending two
       // hours later, running old code the whole time. Martin chose the drain
       // (A) over an immediate handover with two runners (B).
-      // Nothing in flight anywhere: no step lane in a session, and the merge
-      // lane not inside a round. The merge lane counts because a handover mid
-      // squash is what its lease exists to prevent, and it leaves no
-      // `current-<repo>.json` to be counted by.
-      const quiet = () => runner.paths.currents().length === 0 && !runner.mergeBusy();
+      // Nothing in flight anywhere: no step lane in a session.
+      const quiet = () => runner.paths.currents().length === 0;
       const lane = async (repo, index) => {
         const tag = count > 1 ? `${repo.name}#${index + 1}` : repo.name;
         let draining = false;
@@ -2545,32 +2017,6 @@ export async function runLoop({
           if (runner.stopRequested()) return { stop: true };
         }
       };
-      /**
-       * The merge lane: one loop for the whole process, beside the repository
-       * lanes and the chore loop, that takes no step and only lands what a
-       * refused `mc merge` queued.
-       *
-       * One and not one per repository: the gate is one round at a time on
-       * this machine anyway (gate-lock.js), so a second merge lane could only
-       * ever wait for the first — with the difference that it would do its
-       * waiting inside `landPr`, holding a round open for a pull request in
-       * the other repository that has nothing to do with it.
-       *
-       * STOP and UPDATE are read where every other lane reads them: at a round
-       * boundary, which for this lane is between two queued pull requests.
-       * Never inside `landPr` — a landing that is handed over halfway is the
-       * failure the lease exists to prevent — so a handover waits out the
-       * round in flight, and `quiet()` above is what makes it wait.
-       */
-      const mergeLane = async () => {
-        for (;;) {
-          if (runner.stopRequested()) return { stop: true };
-          if (runner.updateRequested()) return { update: true };
-          // Nothing queued is the ordinary case: look again in
-          // LAND_RETRY_MS, the same clock `landPr` waits on a busy gate with.
-          if (!await runner.mergeQueued()) await deps.sleep(LAND_RETRY_MS);
-        }
-      };
       const choreLoop = async () => {
         for (;;) {
           if (runner.stopRequested() || runner.updateRequested()) return {};
@@ -2579,7 +2025,7 @@ export async function runLoop({
         }
       };
       const lanes = runner.repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)));
-      const results = await Promise.all([...lanes, choreLoop(), mergeLane()]);
+      const results = await Promise.all([...lanes, choreLoop()]);
       if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
       if (results.some((r) => r.update) && await update()) return 0;
       runner.say('runner exit — the update did not hand over');

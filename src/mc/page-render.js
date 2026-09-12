@@ -1,5 +1,5 @@
 /**
- * How the page looks: the five sections `page-collect.js` gathers, drawn as
+ * How the page looks: the sections `page-collect.js` gathers, drawn as
  * lines.
  *
  * The rules the drawing keeps:
@@ -54,6 +54,8 @@ const MARK = { running: '●', waiting: '◆', stopped: '■', quiet: '·' };
 /** Where a plan stands, one colour each, wherever a status is printed. */
 const STATUS_TONE = {
   ready: ['green'],
+  running: ['yellow'],
+  failed: ['red', 'bold'],
   blocked: ['red'],
   done: ['grey'],
   // A plan that does not parse is not a quiet state: the runner will refuse it
@@ -64,9 +66,6 @@ const STATUS_TONE = {
 /** What is being done, one colour each, wherever a kind is printed. */
 const KIND_TONE = {
   step: ['green'],
-  // A repair is the runner's next move on a held pull request, not new work —
-  // yellow, the same as the held rows further down the section.
-  repair: ['yellow'],
   triage: ['blue'],
   brief: ['cyan'],
   plan: ['cyan'],
@@ -540,18 +539,7 @@ function nextLines(lines, c, wide, next) {
       styles: ['grey'],
     }]
     : [];
-  // A pull request the runner would not land is not a lane's depth, but it is
-  // the reason a project is not in the order at all — so it rides on the
-  // heading's own count line, where the section's answer already is.
-  const held = next.held?.count
-    ? [{ text: ' · ', styles: ['grey'] }, { text: `held before merge ${next.held.count}`, styles: ['yellow', 'bold'] }]
-    : [];
-  // Beside it, and green rather than yellow: a queued merge is the runner's
-  // own next move — nobody has to type anything for it to land.
-  const queued = next.queued?.count
-    ? [{ text: ' · ', styles: ['grey'] }, { text: `queued for merge ${next.queued.count}`, styles: ['green', 'bold'] }]
-    : [];
-  heading(lines, c, wide, 'NEXT', [{ text: counts, styles: ['grey'] }, ...order, ...held, ...queued], 'mc status <name>');
+  heading(lines, c, wide, 'NEXT', [{ text: counts, styles: ['grey'] }, ...order], 'mc status <name>');
 
   for (const lane of next.lanes || []) {
     lines.push(`     ${paint(c, between([
@@ -583,55 +571,19 @@ function nextLines(lines, c, wide, next) {
       { text: `skipped ${next.skipped.count} (${reasons})`, styles: ['grey'] },
     ], wide - 7)}`);
   }
-  heldLines(lines, c, wide, next.held);
-  queuedLines(lines, c, wide, next.queued);
   staleLine(lines, c, wide, next.stale);
-}
-
-/** How many held pull requests the page names before it only counts them. */
-export const HELD_DRAWN = 6;
-
-/**
- * One row per pull request the runner left open: the project, the number, and
- * the reason it was not landed.
- *
- * Yellow, like `blocker finished` under it: nothing in the runner is going to
- * move this on its own — it waits on a repair session or on a person. Drawn
- * under the skips because that is what it is: the skips now count a held
- * project too (`held-after-repair`, `in-flight` — nextSection reads the
- * machine as well as the plans), and these rows say which pull request and
- * why, which a count of two never could.
- *
- * The reason is clipped rather than the row: the project and the number are
- * what a person acts on, and `mc --json` carries every entry whole.
- */
-function heldLines(lines, c, wide, held) {
-  if (!held?.count) return;
-  for (const item of held.items.slice(0, HELD_DRAWN)) {
-    const left = `· ${item.project || 'unknown'}  #${item.pr}  `;
-    const reason = clip(one(item.reason), Math.max(8, wide - 7 - left.length));
-    lines.push(`       ${paint(c, [
-      { text: left, styles: ['yellow', 'bold'] },
-      { text: reason, styles: ['yellow'] },
-    ], wide - 7)}`);
-  }
-  const more = held.count - Math.min(held.count, HELD_DRAWN);
-  if (more) lines.push(`       ${paint(c, [{ text: `· … ${more} more`, styles: ['yellow'] }], wide - 7)}`);
 }
 
 /** How many queued pull requests the page names before it only counts them. */
 export const QUEUED_DRAWN = 6;
 
 /**
- * One row per pull request a hand `mc merge` left for the runner's merge lane:
- * the repository, the number, why the round it was given did not land, and how
- * long it has been waiting.
- *
- * Under the held rows, and green where those are yellow, because the two say
- * opposite things to the person reading them: a held pull request waits for
- * them, a queued one does not. The repository is drawn rather than a project —
- * a queued pull request need not belong to one, and the number is only a
- * number until the repository is beside it.
+ * One row per `mc merge` waiting for its turn at the gate: the repository,
+ * the number, what it is waiting behind, and since when. Green, because a
+ * waiter does not wait on anyone — the round ahead of it ends in minutes. The
+ * repository is drawn rather than a project: a waiting pull request need not
+ * belong to one, and the number is only a number until the repository is
+ * beside it.
  */
 function queuedLines(lines, c, wide, queued) {
   if (!queued?.count) return;
@@ -647,6 +599,49 @@ function queuedLines(lines, c, wide, queued) {
   }
   const more = queued.count - Math.min(queued.count, QUEUED_DRAWN);
   if (more) lines.push(`       ${paint(c, [{ text: `· … ${more} more`, styles: ['green'] }], wide - 7)}`);
+}
+
+/**
+ * The one round running now, as a row: green like a running RUNNER lane,
+ * because it is the same fact — something is in flight and nobody has to do
+ * anything for it to move. `mode: 'check'` is `mc test`, not `mc merge`, so it
+ * says so rather than reading as a landing that is not one: *measuring, not
+ * landing*.
+ */
+function landingLine(c, wide, landing) {
+  if (!landing) return paint(c, [{ text: '· nothing landing', styles: ['grey'] }], wide - 7);
+  const label = `${MARK.running} ${landing.repo}${landing.pr != null ? ` #${landing.pr}` : ''}`;
+  const tail = [];
+  if (landing.mode === 'check') tail.push({ text: 'measuring, not landing' });
+  if (landing.phase) tail.push({ text: landing.phase });
+  tail.push({ text: ageWords(landing.age_seconds), styles: ['grey'] });
+  return paint(c, [
+    { text: label, styles: ['green', 'bold'] },
+    landing.holder ? { text: `  ${landing.holder}` } : null,
+    { text: '  ' },
+    ...between(tail, ' · '),
+  ], wide - 7);
+}
+
+/**
+ * MERGES — the one gate round landing now, and the waiters behind it.
+ *
+ * Between NEXT and RUNNER because it is the third fact about the same
+ * question, *what is the runner doing with a pull request*: NEXT is the order
+ * it would still start, RUNNER is the steps it is running, and this is what a
+ * pull request is doing once a step has become a round — landing, or waiting
+ * for its turn. The held rows went with `held.json` (ruling 21).
+ */
+function mergesLines(lines, c, wide, merges, at) {
+  const parts = [];
+  if (merges.landing) parts.push({ text: '1 landing', styles: ['grey'] });
+  if (merges.queued.count) parts.push({ text: `${merges.queued.count} waiting`, styles: ['grey'] });
+  const counts = parts.length
+    ? between(parts, ' · ')
+    : [{ text: 'nothing landing, nothing waiting', styles: ['grey'] }];
+  heading(lines, c, wide, 'MERGES', counts, 'mc merge <repo> <pr>');
+  lines.push(`       ${landingLine(c, wide, merges.landing)}`);
+  queuedLines(lines, c, wide, merges.queued);
 }
 
 /**
@@ -1079,14 +1074,19 @@ export function renderPageLines(data, {
   // somebody asking what to do next is already looking.
   blockedLines(lines, c, wide, data.programmes?.blocked);
   lines.push('');
+  mergesLines(lines, c, wide, data.merges, at);
+  lines.push('');
   runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
   lines.push('');
   deskLine(lines, c, wide, 'HELPER', sessions.desks?.helper, 'mc helper');
   deskLine(lines, c, wide, 'BRIEF', sessions.desks?.brief, 'mc brief');
 
+  const prsAge = data.caches?.prs?.fetched ? `, PRs ${ageWords(data.caches.prs.age_seconds)} old` : ', no PR cache yet';
   const cache = data.caches?.fresh
     ? 'fresh — fetched and asked GitHub'
-    : `offline${data.caches?.prs?.fetched ? `, PRs ${ageWords(data.caches.prs.age_seconds)} old` : ', no PR cache yet'} — --fresh asks GitHub`;
+    : data.caches?.offline
+      ? `offline — plans as last fetched${prsAge}`
+      : `fetched origin${prsAge} — --fresh asks GitHub`;
   lines.push('');
   say(lines, c, wide, 2, cache);
   for (const note of data.notes || []) {

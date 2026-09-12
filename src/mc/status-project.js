@@ -3,31 +3,33 @@
  * now, the last
  * three runner steps, and the open PR on its branch.
  *
- * The plan is read from the workarea's working tree when there is one, and
- * from origin/main otherwise, because the workarea copy is the newer of the
- * two whenever a session has written a step and the PR is not merged yet;
- * when they differ the page says so rather than choosing silently.
+ * The plan is read from `origin/main` after a `git fetch` and from nowhere
+ * else — a workarea's copy is whatever branch the folder happens to stand
+ * on, and the runner reads main, so a page that preferred the workarea could
+ * show a plan the runner would not act on (ruling 20). `--offline` skips the
+ * fetch and says the plan is main as it was last fetched.
  *
  * The status row says the pair: what the plan is in, and — when this machine
  * has something to say about it — whether the runner could start it at all
- * (`machineState`, status-collect.js). The plan half is read as above; the
- * machine half is asked of the plan on `origin/main`, because that is the copy
- * the round reads.
+ * (`machineState`, status-collect.js). The machine half is asked of the same
+ * plan on `origin/main`.
  *
  * Like the page (status-collect.js): no model, nothing written, nothing
  * started. The builders are pure so the test can feed them fixtures.
  */
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { defaultRepos, runsFor } from './brief-collect.js';
-import { heldPath, parseHeld } from './held.js';
 import { mergesPath, parseQueue } from './merge-queue.js';
+import { runningMerge } from './merges-collect.js';
+import { ageWords } from './page-cache.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
+import { overlayPlans } from './register.js';
 import { machineDetail, machineState } from './status-collect.js';
 
 /* ---------------------------------------------------------------- builders */
@@ -64,11 +66,10 @@ export function fieldRows(plan, problems = [], machine = null, home = homedir())
 /**
  * What the machine adds to the plan's own word, or null when it adds nothing.
  *
- * Three cases and no others. A refusal the plan already says — `blocked`,
+ * Two cases and no others. A refusal the plan already says — `blocked`,
  * `done` — is dropped, because the row would then read `blocked · blocked`;
  * a refusal the plan does not say is the whole point and is spelled out. And
- * `runnable` is silent except for one repair owed, which is the runner's next
- * move here being a repair rather than the step the plan names.
+ * `runnable` is silent.
  *
  * The silent case is the one that must stay silent: most projects have nothing
  * in the way, and a row that grew a clause for every one of them would be
@@ -76,7 +77,7 @@ export function fieldRows(plan, problems = [], machine = null, home = homedir())
  */
 export function machineNote(machine, status, home = homedir()) {
   if (!machine) return null;
-  if (machine.runnable) return machine.kind === 'repair' ? sentence(machine, home) : null;
+  if (machine.runnable) return null;
   if (machine.reason === status) return null;
   return sentence(machine, home);
 }
@@ -90,9 +91,9 @@ function sentence(machine, home) {
 /** One line per step: where the project got to, and where it stopped. */
 export function stepRows(plan) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
-  const mark = { done: '✓', ready: '▸', blocked: '■' };
+  const mark = { done: '✓', ready: '▸', running: '●', failed: '✗', blocked: '■' };
   return steps.map((step, index) => {
-    const waiting = step.blocked_by ? ` on ${step.blocked_by.kind} ${step.blocked_by.name}` : '';
+    const waiting = step.blocked_by ? ` on ${step.blocked_by.kind} ${step.blocked_by.name}` : (step.status === 'failed' && step.pr ? ` — #${step.pr} open` : '');
     const state = step.status === 'done'
       ? (step.pr ? `#${step.pr}` : 'done')
       : `${step.status}${waiting}`;
@@ -121,15 +122,15 @@ export function wrap(text, width, pad) {
 }
 
 export function renderProject({
-  name, repo, programme, path, source, unmerged, plan, problems = [], workarea, runs, prs, machine = null,
-  queued = [], notes = [],
+  name, repo, programme, path, plan, problems = [], workarea, runs, prs, machine = null,
+  queued = [], landing = null, notes = [],
 }) {
   const out = [];
   out.push(`${name} — ${[repo, programme].filter(Boolean).join(' · ') || 'no repository'}`);
   const label = 11;
   const indent = 2 + label + 1;
   const row = (key, value) => out.push(`  ${key.padEnd(label)} ${wrap(value, 92 - indent, indent)}`);
-  if (path) row('plan', `${path} (${source}${unmerged ? ', differs from origin/main' : ''})`);
+  if (path) row('plan', `${path} (origin/main)`);
   row('workarea', tilde(workarea) || 'none');
   for (const [key, value] of fieldRows(plan, problems, machine)) row(key, value);
   if (!path) out.push('  no plan — this is a workarea without a project');
@@ -160,11 +161,18 @@ export function renderProject({
   out.push('OPEN PR');
   if (!prs.length) out.push('  none for this project');
   for (const pr of prs) out.push(`  #${pr.number}  ${clip(pr.title, 70)}${pr.headRefName ? `  (${pr.headRefName})` : ''}`);
+  // The gate round itself, ahead of the queue: a pull request already landing
+  // is not merely going to move, it is moving right now.
+  if (landing) {
+    out.push(landing.mode === 'check'
+      ? `  #${landing.pr} is being measured (mc test), not landed`
+      : `  #${landing.pr} is landing now — ${landing.phase || 'running'} (${ageWords(landing.age_seconds)})`);
+  }
   // What is going to happen to it without anybody typing again. A queued pull
   // request is not in the machine row above — nothing about this project is in
   // the way; the merge is simply somebody else's now.
   for (const entry of queued) {
-    out.push(`  #${entry.pr} is queued for merge${entry.since ? ` (since ${when(entry.since)})` : ''} — ${entry.reason}`);
+    out.push(`  #${entry.pr} is waiting for the gate${entry.since ? ` (since ${when(entry.since)})` : ''} — ${entry.reason}`);
   }
   for (const note of notes) out.push('', `note: ${note}`);
   return `${out.join('\n')}\n`;
@@ -181,23 +189,6 @@ function execAsync(cmd, args, opts = {}) {
   return new Promise((resolve) => {
     execFile(cmd, args, { encoding: 'utf8', timeout: 20_000, maxBuffer: 8 << 20, ...opts }, (error, stdout) => resolve({ ok: !error, stdout: stdout || '' }));
   });
-}
-
-/** The `docs/project/<programme>/<name>/PLAN.json` inside a workarea checkout. */
-export function findWorkareaPlan(dir, name) {
-  let entries = [];
-  try { entries = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return null; }
-  for (const entry of entries) {
-    const root = join(dir, entry.name);
-    if (!existsSync(join(root, '.git'))) continue;
-    let programmes = [];
-    try { programmes = readdirSync(join(root, 'docs', 'project')); } catch { continue; }
-    for (const programme of programmes) {
-      const path = `docs/project/${programme}/${name}/PLAN.json`;
-      if (existsSync(join(root, path))) return { repo: entry.name, programme, path, file: join(root, path) };
-    }
-  }
-  return null;
 }
 
 /** Every project with a plan in an `ls-tree` of `docs/project` on origin/main. */
@@ -246,6 +237,7 @@ export async function collectProject(name, {
   git = runGit,
   exec = execAsync,
   read = (path) => readFileSync(path, 'utf8'),
+  merges = runningMerge,
 } = {}) {
   const root = workRoot(env);
   const notes = [];
@@ -257,23 +249,20 @@ export async function collectProject(name, {
 
   const dir = join(root, name);
   const workarea = existsSync(dir) ? dir : null;
-  const local = workarea ? findWorkareaPlan(dir, name) : null;
   const main = findMainPlan(present, name, { git });
-  if (!local && !main && !workarea) return null;
+  if (!main && !workarea) return null;
 
-  let localPlan = null;
-  if (local) {
-    try { localPlan = readPlanText(read(local.file)); } catch { notes.push(`${local.path}: unreadable in the workarea`); }
-  }
-  const mainPlan = main ? readPlanText(main.text) : null;
-  const chosen = localPlan || mainPlan || { plan: null, problems: [] };
-  const plan = chosen.plan;
-  const problems = chosen.problems;
-  const source = localPlan ? `workarea ${local.repo}` : 'origin/main';
-  const unmerged = Boolean(localPlan?.plan && mainPlan?.plan
-    && JSON.stringify(localPlan.plan) !== JSON.stringify(mainPlan.plan));
-  const repo = main?.repo || local?.repo || null;
-  const programme = main?.programme || local?.programme || null;
+  // The file's word on each step, then the register's over it (register.js).
+  const filed = main ? readPlanText(main.text) : null;
+  const [overlaid] = main && filed?.plan
+    ? overlayPlans([{ repo: main.repo, programme: main.programme, project: name, path: main.plan, legacy: false, plan: filed.plan, problems: [] }], { root })
+    : [null];
+  const mainPlan = filed ? { ...filed, plan: overlaid?.plan ?? filed.plan } : null;
+  const plan = mainPlan?.plan ?? null;
+  const problems = mainPlan?.problems ?? [];
+  const repo = main?.repo || null;
+  const programme = main?.programme || null;
+  if (offline) notes.push('plan is origin/main as last fetched');
 
   let tsv = '';
   try { tsv = read(join(root, 'runner', 'log', 'runs.tsv')); } catch { notes.push('no runner/log/runs.tsv'); }
@@ -282,7 +271,7 @@ export async function collectProject(name, {
   // on `<name>` or on `<name>-<n>`, and asking `--head <name>` printed nothing
   // for a project whose three branches all had one open (2026-09-02).
   const prs = [];
-  const repoPath = main?.path || (local ? join(dir, local.repo) : present[0]?.path);
+  const repoPath = main?.path || present[0]?.path;
   // What GitHub was not asked is not the same as nothing being open, and the
   // reading below refuses to guess: `--offline` and a failed `gh` both leave
   // the repository unknown, which is a refusal of its own.
@@ -301,31 +290,39 @@ export async function collectProject(name, {
 
   // The other half of the pair: would the runner start this now. Asked of the
   // plan on origin/main, because that is the copy the round reads, and of the
-  // files this machine keeps — held.json, the STOP file, the worktree.
+  // files this machine keeps — the STOP file, the worktree.
   const machine = machineState(name, {
     plans: mainPlansFor(name, main, mainPlan),
     prs: asked,
     prsFailed,
-    held: readHeld(root, read),
     stop: existsSync(join(root, 'runner', 'STOP')),
     root,
     // `git` here answers with a string or null; the reading wants ok and text.
     git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
   });
 
+  // The gate round, matched against this project's own fetched pull requests
+  // rather than a branch: `runningMerge`'s object carries no branch, only a
+  // repository and a pull request number. Matching through `prs` rather than
+  // asking again means `--offline` and a failed `gh` leave it silent, same as
+  // the pull requests themselves above.
+  const running = merges({ repos: present });
+  const landing = running && running.repo === repo && prs.some((pr) => pr.number === running.pr)
+    ? running
+    : null;
+
   return {
     name,
     repo,
     programme,
-    path: local?.path || main?.plan || null,
-    source,
-    unmerged,
+    path: main?.plan || null,
     plan,
     problems,
     workarea,
     runs: runsFor(tsv, name, 3),
     prs,
     machine,
+    landing,
     // The entries waiting for the runner's merge lane whose branch is this
     // project's — the same longest-name rule the pull requests above are
     // matched by (project-prs.js), so it holds with GitHub unreachable too.
@@ -365,11 +362,6 @@ function mainPlansFor(name, main, mainPlan) {
     },
     ...(main.names || []).filter((other) => other !== name).map((other) => ({ project: other, repo: main.repo })),
   ];
-}
-
-/** `~/mc/runner/held.json` as the runner reads it: unreadable means empty. */
-function readHeld(root, read) {
-  try { return parseHeld(read(heldPath(root))); } catch { return []; }
 }
 
 /** `~/mc/x` reads better than the absolute path on a page a person reads. */

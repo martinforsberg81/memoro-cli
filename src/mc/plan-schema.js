@@ -36,7 +36,15 @@ export const PLAN_VERSION = 1;
 // for days. Its `name` is one of `WORKAREA_BLOCKS` (run-plan.js) and the step's
 // last comment says which workarea and what was in it. The way back is the same
 // for all three: `mc brief` or a planning session sets the step `ready` again.
-export const STEP_STATUSES = Object.freeze(['ready', 'done', 'blocked']);
+//
+// `running` and `failed` (2026-09-12) are the register's words, never a plan
+// file's: the register (`register.js`) is where a step's state lives, and
+// readers lay it over the plan (`overlayPlans`), so a plan object in memory
+// can say a step is running — a session is on it — or failed — its session
+// ended without landing, and the reason is on the register entry. Neither is
+// `ready`, so neither is handed out; a failed step is a person's, through
+// `mc step ready` (ruling 21).
+export const STEP_STATUSES = Object.freeze(['ready', 'running', 'done', 'failed', 'blocked']);
 export const BLOCKER_KINDS = Object.freeze(['decision', 'project', 'workarea']);
 
 const STATUSES = new Set(STEP_STATUSES);
@@ -369,13 +377,14 @@ export function deliverableStep(plan) {
   if (state.status === 'done') return { step: null, index: -1, reason: 'done', why: 'every step is done', problems: [] };
   if (state.status !== 'ready') {
     const waiting = state.step?.blocked_by;
-    return {
-      step: null,
-      index: state.index,
-      reason: state.status,
-      why: `step ${state.index + 1} is ${state.status} on ${waiting?.kind || 'something'} ${waiting?.name || '(unnamed)'}`,
-      problems: [],
-    };
+    const why = state.status === 'blocked'
+      ? `step ${state.index + 1} is blocked on ${waiting?.kind || 'something'} ${waiting?.name || '(unnamed)'}`
+      : (state.status === 'running'
+        ? `step ${state.index + 1} is running${state.step?.pr ? ` (#${state.step.pr})` : ''}`
+        : (state.status === 'failed'
+          ? `step ${state.index + 1} failed${state.step?.pr ? ` — #${state.step.pr} is open` : ''}; mc step ready starts it again`
+          : `step ${state.index + 1} is ${state.status}`));
+    return { step: null, index: state.index, reason: state.status, why, problems: [] };
   }
   return { step: state.step, index: state.index, reason: null, why: null, problems: [] };
 }

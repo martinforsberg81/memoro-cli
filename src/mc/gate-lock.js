@@ -64,10 +64,14 @@ export function runningRound({ root = mcHome(), alive = isAlive } = {}) {
  * running }` when somebody else does — `running` is what to tell the operator,
  * and it is the other round's own words rather than a guess.
  */
-export function takeGateLock({ repo, pr, root = mcHome(), alive = isAlive, now = new Date() } = {}) {
+export function takeGateLock({
+  repo, pr, mode = null, root = mcHome(), alive = isAlive, now = new Date(),
+} = {}) {
   const running = runningRound({ root, alive });
   if (running) return { ok: false, running };
-  const mine = { pid: process.pid, repo: repo || null, pr: pr ?? null, since: now.toISOString() };
+  const mine = {
+    pid: process.pid, repo: repo || null, pr: pr ?? null, mode: mode || null, since: now.toISOString(),
+  };
   try {
     writeJsonAtomic(gateLockPath(root), mine, { mode: 0o600 });
   } catch {
@@ -91,6 +95,40 @@ export function releaseGateLock({ root = mcHome() } = {}) {
     const raw = JSON.parse(readFileSync(gateLockPath(root), 'utf8'));
     if (raw?.pid !== process.pid) return false;
     rmSync(gateLockPath(root), { force: true });
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * What the round's own narration last said, kept beside the pid that is
+ * saying it.
+ *
+ * The same guard `releaseGateLock` uses, for the same reason: a round whose
+ * pid was reaped may have had the lock taken over while it was dying, and a
+ * phase written after that would be one round's words in another's file. A
+ * write that throws returns false — the phase is a courtesy, like
+ * `onProgress`, and a round must not stop because a status line could not be
+ * saved.
+ *
+ * Thrown away rather than kept: a round narrates every line it runs (`say` in
+ * `repo-gate.js` and `repo-merge.js`), tens of them a round, so a phase
+ * within the last second of the one already on disk is not written again —
+ * one write a second is plenty for a page nobody refreshes faster than that.
+ */
+export function noteGatePhase({ root = mcHome(), message, now = new Date() } = {}) {
+  let raw = null;
+  try { raw = JSON.parse(readFileSync(gateLockPath(root), 'utf8')); } catch { return false; }
+  if (raw?.pid !== process.pid) return false;
+  if (raw.phase_at) {
+    const last = Date.parse(raw.phase_at);
+    if (Number.isFinite(last) && now.getTime() - last < 1000) return true;
+  }
+  try {
+    writeJsonAtomic(gateLockPath(root), {
+      ...raw,
+      phase: String(message).slice(0, 200),
+      phase_at: now.toISOString(),
+    }, { mode: 0o600 });
     return true;
   } catch { return false; }
 }

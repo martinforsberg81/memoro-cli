@@ -13,7 +13,7 @@ import { describe, it } from 'node:test';
 import {
   UNDOCUMENTED_KEYS, UNPLANNED_KEYS,
   blockedSteps,
-  collectBrief, heldForBrief, intakeRows, lastBriefTime, listPlans, parseCatFileBatch, parsePlanFrontmatter,
+  collectBrief, failedSteps, intakeRows, lastBriefTime, listPlans, parseCatFileBatch, parsePlanFrontmatter,
   listProposals, planFields, renderBrief,
   queueNames, runsFor, runsSince, showBatch, summariseRuns, waitingOnHands,
 } from '../../src/mc/brief-collect.js';
@@ -37,20 +37,6 @@ function workRoot() {
     '',
   ].join('\n'));
   writeFileSync(join(root, 'queue.md'), '# round 3\ndocx-editor\n\nsql-readiness-session-A\n');
-  // What the runner would not land: one whose repair session has already run
-  // and left it held, one the runner is about to repair itself.
-  writeFileSync(join(root, 'runner', 'held.json'), JSON.stringify([
-    {
-      project: 'sql-readiness-session-A', repo: 'memoro', pr: 10963, branch: 'sql-readiness-session-A-2',
-      reason: 'the session changed more of the plan than its step', note: 'plan-trespass',
-      since: '2026-08-25T19:20:00Z', repairs: 0,
-    },
-    {
-      project: 'docx-editor', repo: 'memoro', pr: 10958, branch: 'docx-editor-3',
-      reason: '2 tests red: docx/export.test.js and docx/import.test.js', note: 'open,gate-red',
-      since: '2026-08-25T18:10:00Z', repairs: 1, red: ['docx/export.test.js', 'docx/import.test.js'],
-    },
-  ], null, 2));
   mkdirSync(join(root, 'proposals'), { recursive: true });
   // Its own room beside intake, not inside it: intake is what the turn
   // reads, proposals are what came out of reading it.
@@ -208,25 +194,20 @@ describe('the intake tables the runner writes', () => {
 });
 
 /**
- * `~/mc/runner/held.json` — the pull requests the runner would not land. The
- * brief takes the ones a repair session has already tried and failed on; an
- * entry still at `repairs: 0` is the runner's next round and not Martin's
- * hour, and raising it would ask him to decide what a session is about to try.
+ * *Failed steps* — every step the register says did not land (ruling 21),
+ * read off the plans as the register overlays them.
  */
-describe('held before merge', () => {
-  it('takes the repaired ones only, oldest first', () => {
-    const text = JSON.stringify([
-      { project: 'b', repo: 'memoro', pr: 2, branch: 'b-1', reason: 'red', since: '2026-09-03T10:00:00Z', repairs: 1 },
-      { project: 'a', repo: 'memoro', pr: 1, branch: 'a-1', reason: 'red', since: '2026-09-02T10:00:00Z', repairs: 2 },
-      { project: 'c', repo: 'memoro-cli', pr: 3, branch: 'c-1', reason: 'red', since: '2026-09-01T10:00:00Z', repairs: 0 },
+describe('failed steps', () => {
+  it('takes every failed step, in plan order, with its pull request and the last comment', () => {
+    const plans = [
+      { repo: 'memoro', programme: 'p', project: 'b', plan: { steps: [{ title: 'One', status: 'done', pr: 1 }, { title: 'Two', status: 'failed', pr: 2, comments: ['x', 'Failed: red'] }] } },
+      { repo: 'memoro-cli', programme: 'p', project: 'a', plan: { steps: [{ title: 'Only', status: 'ready' }] } },
+      { repo: 'memoro', programme: 'p', project: 'legacy', legacy: true, plan: null },
+    ];
+    assert.deepEqual(failedSteps(plans), [
+      { repo: 'memoro', programme: 'p', project: 'b', step: 2, title: 'Two', pr: 2, comment: 'Failed: red' },
     ]);
-    assert.deepEqual(heldForBrief(text).map((h) => [h.project, h.repairs]), [['a', 2], ['b', 1]]);
-  });
-
-  it('is nothing at all for a file that is empty, absent or unreadable', () => {
-    assert.deepEqual(heldForBrief('[]'), []);
-    assert.deepEqual(heldForBrief(null), []);
-    assert.deepEqual(heldForBrief('{ not json'), []);
+    assert.deepEqual(failedSteps([]), []);
   });
 });
 
@@ -305,7 +286,7 @@ describe('ready, and the runner cannot start it', () => {
 });
 
 /**
- * *Blocked* — the third and largest member of the family *Held before merge*
+ * *Blocked* — the third and largest member of the family *Failed steps*
  * and *Ready, and the runner cannot start it* belong to: a project standing
  * still, and Martin's. Nothing gathered these until now; the only trace of one
  * was inside *Plan status*, where the blocker arrives clipped to 110 characters
@@ -427,7 +408,7 @@ describe('collectBrief', () => {
     assert.equal(text, result.text);
     const order = ['## Merged since last brief', '## Opened, not merged', '## Proposals',
       '## Plan status', '## Archived without a note', '## Workareas with no project on main',
-      '## Plans that do not parse', '## Runner', '## Production', '## Held before merge',
+      '## Plans that do not parse', '## Runner', '## Production', '## Failed steps',
       '## Ready, and the runner cannot start it', '## Blocked', '## Queue'];
     let at = -1;
     for (const heading of order) {
@@ -461,14 +442,12 @@ describe('collectBrief', () => {
     assert.match(text, /`~\/mc\/runner\/undocumented-closures\.md` is append-only/u);
     assert.doesNotMatch(text, /~\/mc\/intake\//u, 'no runner table is named in the inbox any more');
     assert.match(text, /Last 24 h: 3 steps \(step 2, triage 1\) — merged 1, left open 1, failed 0, timed out 1/u);
-    // The pull requests the runner would not land: the repaired one is the
-    // brief's, the one still waiting for its repair session is the runner's.
-    assert.deepEqual(result.data.held.map((h) => h.pr), [10958]);
-    assert.match(text, /\| docx-editor \| memoro \| #10958 \| docx-editor-3 \| 1 \| 2 tests red: docx\/export\.test\.js and docx\/import\.test\.js \|/u);
-    assert.doesNotMatch(text, /\| sql-readiness-session-A \| memoro \| #10963 \|/u);
-    assert.match(text, /1 pull request the runner would not land, its one repair session already behind it/u);
-    // And it is said at the top, not only in the ninth section of a long file.
-    assert.match(text, /\*\*1 pull request held before merge\*\* after its repair/u);
+    // No repository on this machine, so no plan and no failed step (ruling 21:
+    // a failed step is a plan's step as the register overlays it — `failedSteps`
+    // is tested on its own above).
+    assert.deepEqual(result.data.failed, []);
+    assert.match(text, /## Failed steps\n\n_none_/u);
+    assert.doesNotMatch(text, /failed step\*\*/u);
     assert.match(text, /- docx-editor\n- sql-readiness-session-A/u);
     assert.match(text, /memoro: no checkout/u);
     // No memoro on this machine is no production reading, said as an absence

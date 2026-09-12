@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  intakeSection, nextSection, programmesSection, runnerSection, sessionsSection,
+  intakeSection, mergesSection, nextSection, programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { frameWrites, reprintPlan } from '../../src/mc/page-frame.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
@@ -20,6 +20,7 @@ function emptyPage(ageSeconds) {
     runner: runnerSection({ rows: [], now: NOW, alive: () => false }),
     sessions: sessionsSection({ now: NOW, alive: () => false }),
     next: nextSection({ plans: [] }),
+    merges: mergesSection({}),
     intake: intakeSection({ digest: null, proposals: [], now: NOW }),
     programmes: programmesSection({ areas: [], plans: [] }),
     caches: {
@@ -47,19 +48,19 @@ describe('the difference between two frames', () => {
     const after = frame(10800);
     // Exactly one row of the real page differs: the cache line at the foot.
     const changed = before.reduce((all, line, index) => (line === after[index] ? all : [...all, index]), []);
-    assert.deepEqual(changed, [18]);
+    assert.deepEqual(changed, [21]);
 
-    // The page's first line sits 23 rows above the cursor: the 19 rows of the
+    // The page's first line sits 26 rows above the cursor: the 22 rows of the
     // page, then the blank, the two key lines and the blank the menu prints,
     // then the prompt row the cursor is sitting on — `lines.length + 4`.
-    const writes = frameWrites(before, after, { above: 23 });
-    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[18]}\r\x1b[5B`);
+    const writes = frameWrites(before, after, { above: 26 });
+    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[21]}\r\x1b[5B`);
 
     // Said as the criterion says it: the cursor is positioned once, one row is
     // written, and the writes return to where they started.
     assert.equal(writes.match(/\x1b\[\d+[AB]/gu).length, 2);
     assert.equal(writes.match(/\x1b\[2K/gu).length, 1);
-    for (const line of before.filter((text, index) => text !== '' && index !== 18)) {
+    for (const line of before.filter((text, index) => text !== '' && index !== 21)) {
       assert.equal(writes.includes(line), false, `wrote a row that had not changed: ${line}`);
     }
   });
@@ -132,15 +133,15 @@ describe('the difference between two frames', () => {
     const after = [...frame(10800)];
     after[2] = '  a row nobody can see any more';
     // A terminal ten rows tall: the cursor is on the last of them, so nine
-    // rows above it can be addressed. Row 18 is five up and is rewritten; row 2
-    // is twenty-one up, off the screen, and is not.
-    const writes = frameWrites(before, after, { above: 23, rows: 10 });
-    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[18]}\r\x1b[5B`);
+    // rows above it can be addressed. Row 21 is five up and is rewritten; row 2
+    // is twenty-four up, off the screen, and is not.
+    const writes = frameWrites(before, after, { above: 26, rows: 10 });
+    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[21]}\r\x1b[5B`);
     assert.equal(writes.includes(after[2]), false);
     // With nothing left to say on screen, that is no bytes at all.
     const hidden = [...before];
     hidden[2] = '  a row nobody can see any more';
-    assert.equal(frameWrites(before, hidden, { above: 23, rows: 10 }), '');
+    assert.equal(frameWrites(before, hidden, { above: 26, rows: 10 }), '');
   });
 
   it('reprints a grown frame from the first row it can still reach', () => {

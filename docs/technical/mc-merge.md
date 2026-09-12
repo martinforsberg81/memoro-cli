@@ -65,6 +65,40 @@ the merge-log line are all described where they live —
 [`docs/mc-command-matrix.md`](../mc-command-matrix.md). There is still no flag
 that merges a red gate.
 
+## The door
+
+Before the wait and before the gate, a pull request from a project branch is
+checked against the plan it claims to be landing. `gh pr view --json
+headRefName,baseRefName` names the branch; if `projectForBranch(headRefName,
+<names>)` finds no project, the branch is not one — a planning session's
+`plan/<programme>` branch rewrites plans on purpose — and nothing is checked at
+all. Otherwise the project's `PLAN.json` is read twice, `git show
+origin/<base>:<path>` and `git show origin/<headRefName>:<path>` after a fetch,
+and compared with `unauthorisedChanges(mainPlan, headPlan,
+stepOfPr(headPlan, pr))` — the same comparison a step session's own
+post-session check makes on itself, now made from the far side of the door,
+before the gate rather than after the fact. A head plan that does not parse is
+a trespass in its own right (`the plan no longer parses: <first problem>`),
+never a silent pass. A head byte-identical to main's passes without running
+the comparison at all — the ordinary case for a docs-only or code-only pull
+request.
+
+Not ok stops at `plan-trespass`, one line per problem on stderr as `mc:
+plan-trespass — <problem>`, recorded in `gate-rounds.jsonl` like any stop,
+never queued, exit 1: a plan trespass is not a busy gate someone else will
+clear. `planBoundary({ repoPath, pr, git, gh })` in
+[`src/mc/merge-boundary.js`](../../src/mc/merge-boundary.js) is where this
+lives, pure over the two texts and the index where it can be, because the
+runner relies on the same function rather than keeping its own copy.
+
+`gh` or `git` failing to answer fails the check open, not closed — a network
+hiccup must not turn every merge into a trespass stop — and it fails closed
+only for a genuine trespass or a head plan that no longer parses.
+
+**Known gap:** the door checks one pull request. `mc merge <repo> <pr1>
+<pr2>` — a batch — does not run it; a batch is out of this step's scope, not a
+believed-safe case.
+
 ## The docs form
 
 [`src/mc/docs-merge.js`](../../src/mc/docs-merge.js), about eighty lines, is the
@@ -420,15 +454,64 @@ branches the caller named, for the pull requests a batch does land.
 
 Two leases, and between them a merge round cannot overlap another:
 
-- **the repository lease** — one round per repository. A second `mc merge` on
-  the same repository is refused by name, with who holds it and for what.
+- **the repository lease** — one round per repository.
 - **the suite right** — one full suite on this machine, whoever holds it. Two
   rounds on *different* repositories therefore cannot both be measuring at
-  once; the second stops at `suite-lease`.
+  once.
 
 Both carry the holder's pid, so a round that was killed rather than finished
 is reaped by the next claim instead of blocking forever. Neither blocks git:
 they refuse `mc`, and nothing else.
+
+**A second `mc merge` no longer refuses on either — it waits.** Since
+step-lands-itself, a call whose `mode` is `merge` writes itself into
+`~/mc/runner/merges.json` as a waiter (`repo`, `pr`, `branch`, `since`,
+`holder`, `pid: process.pid`) and polls every `MERGE_POLL_MS` (15 s):
+whichever live entry is oldest, across every repository, takes the gate lock
+next when neither it nor that entry's own repository lease is held — a waiter
+behind a lease it cannot get keeps its place rather than blocking a later
+arrival whose own repository is free (`nextWaiter` in
+[`src/mc/merge-queue.js`](../../src/mc/merge-queue.js)). An entry whose pid is
+no longer alive is dropped by the next call that polls, the same reasoning the
+gate lock itself uses.
+
+It prints one `mc: waiting behind …` line on stderr the first time it waits
+and one `mc: waited <n>s` line when it stops. Past `MERGE_WAIT_MS` (8
+minutes — a session's own Bash call is capped at ten) it prints `mc: still
+waiting behind … after 8 min — run this again; the place in the queue is
+kept` and exits 3, leaving its entry in place: the next call for the same
+pull request replaces the entry's pid and keeps its `since`, so the wait
+already spent is not lost to a retry.
+
+This is `mc merge`'s own wait, not the runner's merge lane: `busy` and `lease`
+no longer reach `queueRefusal` (`QUEUEABLE_STOPS` in `merge-queue.js` is now
+`red`, `pr-tests`, `extra-gate`, `merge` only), because a round that already
+waited itself out cannot also be handed to the lane to retry. `red`,
+`pr-tests`, `extra-gate` and `merge` are unchanged: those still queue for the
+runner, which repairs or re-measures rather than merely waiting for a lock to
+free.
+
+The gate lock also carries `mode` — `check`, `merge` or `full`, the same word
+the round log writes beside it — and `phase`/`phase_at`, rewritten each time
+the round's own narration says something new, but only by the pid the lock
+still names: a round whose lock was taken over while it was dying must never
+overwrite the round that took it. Ruling 20 (Martin, 2026-09-12) asked for a
+MERGES section on the page, current round plus queue; this is where the
+current round's name, mode and phase come from — `runningMerge` in
+`src/mc/merges-collect.js` joins the lock to the repository's name and its
+lease's holder, so the page reads a sentence rather than a slug and a pid.
+
+**And the register** (ruling 21). For a pull request that is a step's —
+`MC_STEP=<project>:<index>` in the calling session's environment, or a branch
+a register entry stands on (`stepForMerge`, [`src/mc/merge-step.js`](../../src/mc/merge-step.js))
+— the verb writes the outcome where the state lives. On green the step is
+`done` with the pull request and the commit it landed as, and the session that
+called is ended — `SIGTERM` to the pid the register holds — because a landed
+step has no further turn to take and its process tree is worth nothing. On
+red the attempt is counted and the gate's reason kept on the entry, and the
+lines the verb prints are that session's next instruction. Nothing is queued
+for a merge lane any more: a red is the caller's to fix, in the session that
+wrote the code, and the lane's one repair session is gone.
 
 ## The full run nobody asks for
 

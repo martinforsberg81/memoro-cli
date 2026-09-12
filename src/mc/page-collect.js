@@ -14,6 +14,9 @@
  * next       — the order `mc run` would take (`assembleQueue`), one block per
  *              lane and three deep: what each lane starts now, how much of the
  *              walk is runnable, and what is skipped, counted by reason.
+ * merges     — the one gate round running now (`runningMerge`), and the two
+ *              queues behind it: what `mc merge` left for the runner's lane,
+ *              and what the runner refuses to land at all.
  * intake     — the helper's newest digest per repository, what is new in it,
  *              the `!` lines split into message, fingerprint and count, and
  *              how many proposals nobody has queued or dropped.
@@ -47,13 +50,14 @@ import {
   DAY_MS, defaultRepos, listProgrammes, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { lastAttempt, lastDeploy } from './deploys.js';
-import { heldEntries, heldPath } from './held.js';
 import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
+import { runningMerge } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
+import { overlayPlans } from './register.js';
 import { planState } from './plan-schema.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
@@ -394,7 +398,7 @@ export function sessionsSection({
  * reader gets the plan-shaped answer alone, exactly as before.
  */
 export function nextSection({
-  queueText = '', plans = [], held = [], queued: forMerge = [], deep = LANE_DEEP, staleNamed = STALE_NAMED,
+  queueText = '', plans = [], deep = LANE_DEEP, staleNamed = STALE_NAMED,
   lanes: perRepo = 1,
   machine = () => null,
 } = {}) {
@@ -427,8 +431,6 @@ export function nextSection({
     if (kind.startsWith('skip')) return { ...base, kind, runnable: false, machine: null };
     const state = machine(name) || null;
     if (state && !state.runnable) return { ...base, kind: `skip:${state.reason}`, runnable: false, machine: state };
-    // `repair` rather than `step` where a held pull request is owed one: the
-    // kind drawn beside the name is what the runner would actually start.
     return { ...base, kind: state?.kind || kind, runnable: true, machine: state };
   });
   const runnable = items.filter((item) => item.runnable);
@@ -449,8 +451,6 @@ export function nextSection({
     lanes,
     more: lanes.reduce((n, lane) => n + lane.more, 0),
     skipped: { count: skipped.length, reasons },
-    held: heldSection(held),
-    queued: queuedSection(forMerge),
     stale: staleSection(plans, staleNamed),
   };
 }
@@ -503,35 +503,22 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
 }
 
 /**
- * The pull requests the runner would not land (`~/mc/runner/held.json`),
- * oldest first — the one that has been standing still longest is the one to
- * read.
+ * MERGES — the one round running now, and the waiters behind it: every
+ * `mc merge` standing in line for the gate (`merges.json`, with its pid).
  *
- * Every entry is carried, not the first few: `mc --json` is read by programs
- * and by the brief, and a held pull request that fell off a display cap is a
- * project standing still that nothing was told about. The page draws what fits
- * and counts the rest (page-render.js), which is where a cap belongs.
+ * `landing` is `runningMerge`'s own object (merges-collect.js) or null — this
+ * function does not read the lock itself, so its tests never touch a real
+ * one. The held rows went with `held.json` (ruling 21): a step that did not
+ * land is `failed` in the register and drawn where every other plan state is.
  */
-function heldSection(held) {
-  const items = heldEntries(held)
-    .sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
-  return { count: items.length, items };
-}
-
-/**
- * The pull requests a hand `mc merge` could not land and left for the runner's
- * merge lane (`~/mc/runner/merges.json`), oldest first — the order the lane
- * itself takes them in.
- *
- * Beside the held rows because they are the two halves of one answer: what
- * nothing will move until a person acts, and what the runner is going to land
- * without being asked again. Every entry is carried for the reason
- * `heldSection` carries every one of its own — `mc --json` is read by programs,
- * and the page is where a cap belongs.
- */
-function queuedSection(queued) {
-  const items = queueOrder(queueEntries(queued));
-  return { count: items.length, items };
+export function mergesSection({ landing = null, queued = [], now } = {}) {
+  const queuedItems = queueOrder(queueEntries(queued));
+  void now;
+  return {
+    landing,
+    queued: { count: queuedItems.length, items: queuedItems },
+    count: (landing ? 1 : 0) + queuedItems.length,
+  };
 }
 
 /** The stale blockers as the line draws them: how many, and the first few. */
@@ -995,25 +982,35 @@ export function readAreas(root, repoNames) {
  * Everything the page shows, in one object: one key per section, plus what the
  * caches did and whatever could not be read.
  *
- * Offline is the default and the whole point — plans come from `plans.json`
- * keyed by the `origin/main` sha, open PRs from `prs.json` with their age said
- * out loud. `--fresh` is the opt-in that fetches, asks GitHub and refills both.
+ * Plans come from `origin/main` after a `git fetch`, cached in `plans.json`
+ * keyed by its sha (page-cache.js); open PRs come from `prs.json` with their
+ * age said out loud, refilled only by `--fresh`. `--offline` skips the fetch
+ * and reads the plans as they were last fetched (ruling 20).
  */
 export async function collectPage({
   env = process.env,
   now = new Date(),
   repos = defaultRepos(env),
   fresh = false,
+  offline = false,
   git = runGit,
   run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }),
   exec = execAsync,
   alive = pidAlive,
   laneCount = readLaneCount,
   cache = { loadPlans, loadPrs, savePrs },
+  merges = runningMerge,
 } = {}) {
   const root = workRoot(env);
   const notes = [];
   const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
+
+  let fetched = false;
+  if (!offline) {
+    const results = await Promise.all(present.map((repo) => exec('git', ['-C', repo.path, 'fetch', '-q', 'origin'])
+      .then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — plans may be stale`); return r.ok; })));
+    fetched = present.length === 0 || results.some(Boolean);
+  }
 
   let prs = { prs: [], fetched: null, age_seconds: null };
   // The repositories whose open pull requests are unknown rather than none:
@@ -1021,18 +1018,13 @@ export async function collectPage({
   // reading below would otherwise call a project runnable on that silence.
   const prsFailed = [];
   if (fresh) {
-    // Fetch and gh per repository, side by side: serial they were the whole
-    // budget on their own.
     const asked = [];
-    await Promise.all(present.flatMap((repo) => [
-      exec('git', ['-C', repo.path, 'fetch', '-q', 'origin']).then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — plans may be stale`); }),
-      exec('gh', PR_LIST_ARGS, { cwd: repo.path }).then((r) => {
-        try {
-          if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
-          else { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list failed`); }
-        } catch { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list unreadable`); }
-      }),
-    ]));
+    await Promise.all(present.map((repo) => exec('gh', PR_LIST_ARGS, { cwd: repo.path }).then((r) => {
+      try {
+        if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
+        else { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list failed`); }
+      } catch { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list unreadable`); }
+    })));
     prs = cache.savePrs({ root, prs: asked, now });
   } else {
     prs = cache.loadPrs({ root, now });
@@ -1042,7 +1034,10 @@ export async function collectPage({
       : 'no PR cache yet — --fresh asks GitHub and fills it');
   }
 
-  const { plans, sources } = cache.loadPlans({ root, repos: present, now, git });
+  // The file's word on each step, then the register's over it: the plan on
+  // main says what a step is, the register where it stands (register.js).
+  const { plans: filed, sources } = cache.loadPlans({ root, repos: present, now, git });
+  const plans = overlayPlans(filed, { root, now: now.toISOString().replace(/\.\d{3}Z$/u, 'Z') });
   let tsv = '';
   try { tsv = readFileSync(join(root, 'runner', 'log', 'runs.tsv'), 'utf8'); } catch { notes.push('no runner/log/runs.tsv'); }
   const rows = runsSince(tsv, new Date(now.getTime() - DAY_MS));
@@ -1061,7 +1056,6 @@ export async function collectPage({
   // Read once, for NOW and for the queue reading both: they are the same two
   // facts, and asking twice is how two answers on one page come to differ.
   const stop = existsSync(join(root, 'runner', 'STOP'));
-  const held = heldEntries(readJson(heldPath(root)));
   const queuedForMerge = queueEntries(readJson(mergesPath(root)));
 
   // Read once for both sections: RUNNER draws one row per lane, NEXT bolds
@@ -1098,8 +1092,6 @@ export async function collectPage({
     next: nextSection({
       queueText,
       plans,
-      held,
-      queued: queuedForMerge,
       // How many lane loops each repository has, so the block bolds as many
       // heads as there are lanes to start them (`mc run lanes`).
       lanes: laneSetting.per_repo,
@@ -1107,12 +1099,14 @@ export async function collectPage({
         plans,
         prs: prs.prs,
         prsFailed,
-        held,
         stop,
         root,
         // `git` answers with a string or null here; the reading wants ok and text.
         git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
       }),
+    }),
+    merges: mergesSection({
+      landing: merges({ repos: present, alive }), queued: queuedForMerge, now,
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({
@@ -1121,7 +1115,9 @@ export async function collectPage({
       running: runner.steps.map((step) => step.name).filter(Boolean),
       programmes: present.flatMap((repo) => listProgrammes(repo)),
     }),
-    caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length } },
+    caches: {
+      fresh, offline, fetched, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length },
+    },
     notes,
   };
 }

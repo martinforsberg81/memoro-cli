@@ -13,7 +13,8 @@ projects that do not serve that do not belong under it.
 ## What a PLAN.json is
 
 A plan is instructions for a headless session that has read nothing else, with
-nobody watching. `mc run` hands it the step it is to do, and it opens a PR. That
+nobody watching. `mc run` hands it the step it is to do, and it opens a PR and
+lands it through `mc merge` itself (ruling 21). That
 is the whole test of a plan: can that session do this step, and know when it is
 finished?
 
@@ -40,10 +41,12 @@ the door.
   `stall_minutes`.
   Only what the runner actually reads; there is no field here that nothing
   enforces. `effort` is one of `low`, `medium`, `high`, `xhigh`, `max`;
-  `advisor` is a model name, or `off` for none. What a key leaves unsaid is the
-  runner's default for the session's kind — a step runs on `sonnet` at `medium`
-  with `opus` as advisor, a repair on `opus` with neither (ruling 18,
-  [`docs/technical/mc-run.md`](../technical/mc-run.md) § *The session*).
+  `advisor` is a model name, or `off` for none, and an advisor that is the
+  model itself is none. What a key leaves unsaid is the runner's default for
+  the session's kind — a step runs on `sonnet` at `medium` with `opus` as
+  advisor, a step or plan on `opus` with no advisor, a repair on `opus` with
+  neither (ruling 18, [`docs/technical/mc-run.md`](../technical/mc-run.md)
+  § *The session*).
 
 ### The steps
 
@@ -64,9 +67,19 @@ carries:
   could not start because of a fault in the workarea or on this machine that a
   person has to fix, with the name from its fixed list (`dirty-worktree`,
   `worktree-missing`, `branch-unmovable`, `merge-uncommittable`, `role-missing`,
-  `tool-missing`, `held-after-repair`) and the workarea named in the step's last
-  comment. It is answered by fixing the workarea and setting the step `ready`,
-  not by a decision.
+  `tool-missing`) and the workarea named in the step's last
+  comment. It is answered by fixing the workarea and `mc step ready`, not by a
+  decision.
+
+  **Since 2026-09-12 these state fields are read from the file once and then
+  live in the register** (`~/mc/runner/projects/<project>.json`, `src/mc/register.js`
+  in memoro-cli — ruling 21): the plan on `main` says what a step *is*, the
+  register where it *stands*, and every reader lays the second over the first.
+  The register knows two states the file never carries: `running`, a session
+  is on the step, and `failed`, its session ended without landing and `reason`
+  says why. A transition is `mc step <status>`, never a pull request. The
+  fields stay in the file for now so a plan written today still reads; they go
+  from the schema when the last reader of them does.
 - `runner` — optional: `model`, `effort`, `advisor`, for a step that needs
   something other than the plan's. Each key overrides the plan's `runner` on
   its own, and a step that names only its effort keeps the plan's model.
@@ -86,6 +99,20 @@ carries:
   evening: "den ska bli bara en 'comments' … det behövs någonstans att skriva
   kommentarer"). The name is plain on purpose: a field whose name is a doctrine
   is either left empty or filled with what it is not.
+
+**A step is work the runner can take from start to finish**, and nothing else.
+Investigation, measurement, design exploration, a test run to see what happens,
+"find out whether" — none of that is a step. It is the planning session's, with
+Martin at the terminal, and it is done *before* the plan is written, so that
+every step stands on an answer the plan already carries. A step whose
+instruction depends on what an earlier step will find is not a step either: if
+the plan cannot say what step 3 does until step 2 has run, step 3 is not known
+yet, and the plan ends at step 2 (ruling 19, Martin, 2026-09-12: *"Det som
+läggs i ett projekts STEP ska vara en färdig körbar plan som runner kan ta från
+a till ö. Om inte, så hör det inte hemma där."*). The test of every step is the
+one at the top of this file: can a headless session that has read nothing else
+do it, and know when it is finished? A step that has to stop and ask costs a
+session, a repair, and a person reading a transcript to find out why.
 
 The plan has **no status of its own**: it is the state of the first step that is
 not done, and a plan whose steps are all done is done. The runner looks at that
@@ -176,15 +203,14 @@ and inside its own step only `status`, `pr`, `comments` and `blocked_by` — its
 `instruction`, `done_when` and `runner` are compared like every other step's,
 so a session cannot soften what it was asked to do or pick the model it runs on.
 
-**The runner writes one thing into a plan: a step it could not start.** When
-`mc run` meets a fault in the workarea or on this machine that a person has to
-fix — a dirty worktree, a branch it cannot move, a merge that will not commit, a
-missing role or tool, a pull request still held after its one repair — it sets
-the first step that is not done to `blocked` with `blocked_by: { kind:
-"workarea", name }` and appends one comment naming the workarea, through a
-docs-only pull request it lands itself. Nothing else in the plan is touched. It
-never writes `ready` and never retries: the brief or a planning session sets the
-step `ready` again once the workarea is fixed
+**The runner writes nothing into a plan.** When `mc run` meets a fault in the
+workarea or on this machine that a person has to fix — a dirty worktree, a
+branch it cannot move, a merge that will not commit, a missing role or tool —
+it sets the first step that is not done to `blocked` with `blocked_by: { kind:
+"workarea", name }` **in the register**, with one comment naming the workarea.
+Until 2026-09-12 that was a docs-only pull request the runner opened and landed
+itself, because the state lived in the plan on main. It never writes `ready`
+and never retries: `mc step ready <project> <n>` once the workarea is fixed
 ([`docs/technical/mc-run.md`](../technical/mc-run.md) § *Blocked by the runner*).
 
 When the code says a coming step is wrong, that is not a revision the step

@@ -144,7 +144,7 @@ repository. What it does, for as long as the runner runs:
 2. **Read the world for its repository** — `queue({ only: repo })`:
    `~/mc/queue.md`, every `PLAN.json` on that repository's `origin/main`, and
    `gh pr list --state open`, on the same trip to the network. The open list
-   also reconciles `held.json`: an entry whose pull request is no longer open
+   also reconciles the register: a `running` step whose session is gone is failed
    leaves it.
 3. **Pick** — `nextFor` ([`run-plan.js`](../../src/mc/run-plan.js)): the first
    name in `assembleQueue`'s order (*The queue*) that is in this repository and
@@ -153,9 +153,7 @@ repository. What it does, for as long as the runner runs:
    - whose repository GitHub answered for (`prs-unknown` otherwise — a lane
      that cannot see what is open starts nothing),
    - that has no open pull request (`inFlight`) — unless it is a pull request
-     `held.json` holds at `repairs: 0`, which is one repair session owed and is
      picked as `repair`,
-   - that is not held after its one repair (`heldRepair`),
    - that no other lane has claimed (`claims`),
    - and that this pass has not already been refused on (`passed`).
 
@@ -223,13 +221,10 @@ project used to.
    in 4, or whose plan an earlier archive already took off `main`, which
    `project_log.md` is what still knows.
 
-**The merge lane** is the third kind of loop: one for the whole process, taking
-what a refused `mc merge` queued (*The merge*).
-
 **`--once`** is one pass with one lane over the whole order, both
 repositories: the same pick, the same refusals, and out after the first step
 that ran (`once: exiting`) or when nothing is left (`once: nothing to run`). No
-chores and no merge lane — the flag exists to watch one step, and a model turn
+chores — the flag exists to watch one step, and a model turn
 over production is not what somebody typing it asked for.
 
 **It refuses to start while another runner is alive**, naming the pid that
@@ -350,11 +345,10 @@ fault that is a moment's, and not the project's, is waited out.
 |---|---|---|
 | `dirty-worktree` | `dirty` | 4 — the comment names up to five of the files |
 | `worktree-missing` | `worktree` | 2 — `git worktree add` failed; git's reason |
-| `branch-unmovable` | `branch` | 8 — `<name>-<n>` could not be made, or a repair's branch could not be checked out |
+| `branch-unmovable` | `branch` | 8 — `<name>-<n>` could not be made |
 | `merge-uncommittable` | `sync` | 9 — every conflict resolved and the commit refused; a merge git refused with no conflict at all (unrelated histories, a stale `index.lock`); a `PLAN.json` neither the plan's rule nor `main`'s copy could settle |
 | `role-missing` | `role-missing` | 10 |
 | `tool-missing` | `tool-missing` | 10 — the adapter's hint |
-| `held-after-repair` | `held-after-repair` | 6 — the pull request and its hold |
 
 The names are `WORKAREA_BLOCKS` (`run-plan.js`), keyed by the refusal word so
 the two lists are one. Where a merge is in progress when the fault is met, it is
@@ -365,16 +359,9 @@ and not a tree with everything staged.
 when it was the *fetch* that failed (the same word — `syncMain` says which, and
 the lane keeps the names it blocked in `persistent` to tell them apart); an
 UPDATE read while waiting for a slot. Neither blocked nor waited: `in-flight`,
-because an open pull request is work and not a fault, and a hold at
-`repairs: 0`, because that is a repair the runner starts.
-
-**One gap, found writing this.** The picker passes over a project held after
-its repair *before* `runStep` is reached (`pickState`, `run-plan.js`), so in a
-running runner `held-after-repair` is written onto a plan only when the hold
-arrives between a pick and its run. Such a project is not lost — `held.json`,
-the page and the brief's *Held before merge* all name it — but its plan on
-`main` goes on saying `ready`. The fix is a proposal
-(`2026-09-11-held-after-repair-never-blocked`), not this document's.
+because an open pull request is work and not a fault. A step whose session
+ended without landing is not a refusal at all: it is `failed` in the register
+(*The register*), and the plan's own word passes the project over.
 
 A live tmux session is **not** a reason at all. It used to be, and it was a
 second, undeclared way to stop work — whether a step ran depended on which
@@ -482,7 +469,7 @@ neither can answer the other's:**
 
 A plan can be `ready` for days while nothing can start it. On 2026-09-05 both
 of memoro-cli's unfinished plans read `ready` in every surface a person uses
-while `held.json` held #612 and #614 and the whole queue was stopped; the one
+while #612 and #614 were held before merge and the whole queue was stopped; the one
 place that knew was `runner.log`, which carried 9 827 `, skip` lines. That is
 what the second reading is for. Since 2026-09-08 the runner closes most of that
 gap itself: a fault a person has to act on becomes `blocked` on `main`, so the
@@ -569,7 +556,10 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
   `--effort`. Without it claude falls back to the machine's own
   `effortLevel`, which is why the step default names one. Anything else is
   refused by the schema.
-- **`advisor:`** — a model name passed as `--advisor`, or `off` for none. The
+- **`advisor:`** — a model name passed as `--advisor`, or `off` for none. An
+  advisor that is the session's own model is none too: a plan or step on
+  `opus` runs without one unless it names a different advisor (Martin,
+  2026-09-12: *"Om step har opus => advisor = null, inte opus+opus."*). The
   flag is not in `claude --help`; it is documented at
   code.claude.com/docs/en/advisor.md and was accepted by claude 2.1.268 on
   2026-09-11.
@@ -597,8 +587,11 @@ is a `plan-trespass`.
 The prompt is `stepPrompt`: you are in this workarea, your plan is on disk at
 this path, do `steps[i]`, its `done_when` is your success criterion, say in the
 PR body how you verified it, what in the plan file you may edit, and — if the
-contract must change — stop with the step `blocked` and say so in the PR. "Do
-not merge. Do not ask questions. Stop when the PR exists." Below that comes
+contract must change — stop with the step `blocked` and say so in the PR. Then
+the ending, since ruling 21: build it, set the step `done` with its `pr`, open
+the pull request, and run `mc merge <repo> <pr>` yourself until it says merged
+— a red comes back to the same session, which fixes it and runs it again;
+giving up is `mc step failed --reason "…"`. Below that comes
 **the part of the plan the step needs, not the file**: rendered from the parsed
 plan, each part under a `----- <heading> -----` line the session can search
 for — `goal`, `contract`, `out_of_scope`, `success_criteria` (index, `met`,
@@ -624,6 +617,17 @@ A step and a repair get it; the helper and intake turns, which share
 json` and their own wall-clock timeout, because step-cost's contract leaves
 them be.
 
+No claude launch of the runner's may spawn a subagent: every one gets
+`--disallowedTools Agent`. A step is bounded by its plan, the strong model is
+reached through `--advisor`, and a subagent runs on whatever model the
+repository's instruction files name rather than the plan's `runner` choice.
+Over the first 41 sonnet step sessions (2026-09-11..12) 19 spawned opus
+subagents on memoro's `CLAUDE.md` instruction — 2 111 of the era's 6 556 model
+requests and about a quarter of its cost, invisible in `runs.tsv`, which
+counts the parent's turns only. Three of those sessions ended their turn with
+"I'll review its diff when it reports back" and no PR, because in a headless
+session nothing reports back. The flag holds whatever any repository's files say.
+
 Next to that body go the Coding Profile, `canon/roles/_common.md` and
 `canon/roles/step.md` — assembled by `instructionsFor` and passed through the
 channel each tool already has, with nothing written into the worktree to carry
@@ -635,6 +639,7 @@ The two argument lists are the only place the tools differ:
 ```
 claude  -p [--model …] [--effort …] [--advisor …] \
         --permission-mode acceptEdits --autocompact 150000 \
+        --disallowedTools Agent \
         --append-system-prompt <instructions> \
         --input-format stream-json --output-format stream-json --verbose
 codex   exec --json --sandbox danger-full-access [-m …] \
@@ -732,169 +737,28 @@ landing stops on that project.
 Merge direct is the policy for both repositories (Martin, 2026-08-25). The
 runner does not review; `mc brief` is what shows Martin what merged.
 
-**A hand `mc merge` that was refused becomes the runner's.** The verb runs the
-merge round it always ran and prints what it always printed; what changed on
-2026-09-06 is what becomes of one that did not land. Six stops are ones the
-merge lane can do something about — `busy` and `lease` (this machine's one gate
-lock, or the repository, is somebody else's for the minute), `red`, `pr-tests`,
-`extra-gate` and `merge` — and each writes one entry to
-**`~/mc/runner/merges.json`**: repository and number together as the identity,
-the branch the gate read, the reason, the stop, a `since` a second queueing does
-not move, and who typed it. The rules are pure in
-[`src/mc/merge-queue.js`](../../src/mc/merge-queue.js), the shape `held.js` has
-and for the same reason. A stop at `pr` is not queued — GitHub could not be
-asked, or there is no such pull request, and nothing on this machine can land
-what it cannot name — and neither is a batch or a `--check`, which measured and
-was never asked to land. The caller gets one line, `queued — the runner's merge
-lane lands #N, or holds it after one repair`, and **exit 0**: the merge is now
-somebody's rather than nobody's. Measured 2026-09-06: `mc merge memoro-cli 671`
-was refused fourteen times in twenty minutes by the runner's own landings, and
-every one of those refusals was a person typing again.
+**A refused `mc merge` was the runner's, until 2026-09-12.** A round the
+verb could not land wrote the pull request into `~/mc/runner/merges.json`
+and a merge lane in the runner landed it, or gave it one repair. Both are
+gone with ruling 21: `mc merge` waits out a busy gate itself
+([`mc-merge.md`](mc-merge.md) § *One round at a time*), a red is the
+caller's to fix, and `merges.json` holds only the waiters — every `mc merge`
+standing in line, with its pid — which is what the page's MERGES draws.
 
-**Without a running runner nothing is queued**, and the terminal is what it was
-before this project plus one line on stderr saying no runner is there to take
-the refusal. *A runner is running* is `runner.json` with a live pid, read
-through the same `readRunner` the loop reads it with, so the verb and the runner
-cannot disagree about who is holding the machine.
+### Held before merge — history
 
-**The lane that lands them** is one loop for the whole process, beside the
-repository lanes and the chores (*Lanes*, below). It takes the oldest entry
-every 30 s and hands it to the same `landPr` a step's own pull request goes
-through, so it waits out a busy gate exactly as a step's landing does — up to 45
-minutes — and writes `held.json` when the gate goes red. The entry leaves the
-queue on whatever the answer was, dropped inside `landPr` *after* the hold is
-written, so a crash between the two leaves the pull request in a file rather
-than in neither; from then on a red one is `held.json`'s, with the one-repair
-rule every held pull request has. A step lane's own landing answers a queued
-pull request just as well, which is the ordinary case — a hand merge is usually
-refused *because* the project's lane was landing that same pull request — and a
-queued landing that changed mc's own code writes `UPDATE` exactly as a step's
-does, since the runner should not go on running old code because the change came
-in by hand. An entry whose pull request somebody merged or closed by hand leaves
-at `reconcileHold`, where a held entry leaves, with one guard of its own: the
-open list is the `gh pr list` of the last reading of the world, and
-`merges.json` is written by another process, so an entry younger than that
-reading is left alone rather than judged absent from a list taken before it
-existed.
-
-Measured live, 2026-09-06T23:46Z, with the repository's whole suite holding the
-gate: `mc merge memoro-cli 681` stopped at `busy`, printed the queued line and
-exited 0 in under a second; the lane read the entry four seconds later, waited
-40 s for the gate, and GitHub merged #681 into `main` at 23:47:22Z with nobody
-typing again. The merge round before it, against a free gate, landed in 4 s and
-wrote no queue file at all.
-
-### Held before merge
-
-A landing that does not land leaves a pull request open, and an open pull
-request stops its project: `inFlight` keeps it out of every later pick. Until
-2026-09-04 the only trace of *why* was a `runner.log` line and a runs.tsv note
-— `success,open,gate-red`, `plan-trespass`, `open,not-a-stack`. Counted over
-2026-09-03..04: of 55 step rows seven ended that way, and each of those seven
-projects stood still until a person read the log, found the reason, fixed the
-branch by hand and typed `mc merge`.
-
-So the runner writes the fact down. **`~/mc/runner/held.json`** is one entry
-per pull request it would not land — `{ project, repo, pr, branch, reason,
-note, since, repairs }`, and, when a gate held it, `red` (every red test by
-name) and `gates` (`{ name, output }` per failed command gate, clipped at
-`OUTPUT_CAP`). It is mc's own state beside `runner.json` and
-`current-<repo>.json`, **never a status in a `PLAN.json`** — `ready`/`done`/`blocked`
-are still the whole of `STEP_STATUSES`, and the one thing the runner writes into
-a plan is a `blocked` step (*Blocked by the runner*). The rules are pure in
-[`src/mc/held.js`](../../src/mc/held.js); `run.js` reads-changes-writes the file
-whole through `hold()`, `countRepair()`, `release()` and `reconcileHold()`,
-because any lane may hold a pull request while another is landing one.
-
-`repo` is part of the identity, not decoration: two repositories number their
-pull requests independently, so memoro #9 and memoro-cli #9 are different
-work and a release keyed on the number alone would drop the wrong entry.
-
-**Two birthplaces.** `landPr`'s `else` — the gate went red, the merge round
-stopped, the stack was not one — writes the gate's own `reason` plus what
-`holdDetails(report)` took off it. The report is the only place a command
-gate's output ever exists: `gate-rounds.jsonl` keeps the red names capped at
-forty and no output at all, and the report itself lives in memory for the
-length of that gate round, so it is read there or it is lost. The other is
-`runStep`, when a session ends with a pull request open and a note that is
-neither `success` nor `quota` (`holdsAfterSession`) — a `plan-trespass` with
-its problems named, a session killed as stalled with its work pushed, a tool that
-printed no result.
-
-**One death.** An entry leaves when its pull request is no longer open. `landPr`
-releases what it lands, and `queue()` checks the file against the open list
-every reading of the world fetches, so a pull request somebody merged or closed
-by hand leaves by itself with a line saying so. A repository `gh` could not be
-asked for is *unknown* rather than empty: nothing of its is dropped on a bad
-network.
-
-**Then one repair.** Before `inFlight` passes the project over, the pick asks
-the file. A held pull request with `repairs: 0` is not work in flight — nothing
-is going to finish it — so the project gets a `repair` session instead of a
-skip: in its own workarea, standing on the entry's branch (a repair never calls
-`freshBranch`; that branch carries the work), told the pull request, the
-branch, the reason, every red test by name and every failed gate's output
-(`repairPrompt`, `canon/roles/repair.md`), and the conflicting files when
-merging main in stopped. It makes the branch green and pushes to the same
-branch — the runner lands it afterwards through the same `landPr` — or it sets
-its step `blocked` with a `blocked_by` and says what the answer is about. It
-never merges, never lowers a threshold, never deletes a test to pass: the gate
-decides and the repair obeys it.
-
-The repair is counted **before** the session starts, not after. A repair killed
-as stalled still had its turn, and a count written afterwards would hand the
-next pick a second one for the same pull request.
-
-A repair of a `plan-trespass` is judged against the plan on **origin/main**,
-not the plan in the worktree: the worktree's plan already carries the trespass,
-so judging by it would call the trespass repaired the moment the session
-touched nothing more, and the runner would land what it refused an hour
-earlier. `repairBaseline` picks the baseline and `stepOfPr` the index — the
-step that names this pull request, or the deliverable one before that edit has
-landed. An ordinary repair is judged against the worktree's plan, so a repair
-that oversteps is held again like any step.
-
-**A held pull request with no project gets its one repair from the merge lane.**
-The repair above is found *per project*, by a lane's pick, and runs in that
-project's workarea — so an entry whose branch is no project's is reached by no
-lane at all, and stood at `repairs: 0` for ever with nobody told. That is the
-ordinary shape of a hand `mc merge`, which is a person typing about their own
-branch. So the merge lane does the reaching: where a landing it made held a pull
-request `projectForBranch` calls nobody's, the lane makes a workarea from the
-entry's branch (the call `mc work add` makes), counts the repair *before* the
-session as the rule above says, runs the same `repair` role on the same
-`repairPrompt`, and lands once more. After that the entry reads `repairs: 1` and
-it is the brief's, exactly as a project's own held pull request is. It re-reads
-`held.json` before it launches and refuses an entry that already carries a
-repair, which is what stops the one branch both readings could claim — a branch
-named after a plan that is on main with no workarea on this machine — from being
-given two. STOP or a pending UPDATE stops a repair *starting*, the same refusal
-`waitForSlot` makes for a step, because an hour-long session begun under a
-drain stretches the drain into two. The workarea is fresh from the branch, so
-the rule that a repair may not run in a worktree with a merge in progress is
-asserted rather than handled; and an entry that names no branch — a merge round
-refused before the gate ran has none to give — gets no repair here and says so.
-The session writes no `current-<repo>.json`, because it is not a step and the
-page's RUNNER block draws that file as one; what says the machine is busy is the
-lane's own `mergeBusy`, and what makes the hour visible afterwards is a runs.tsv
-row with `kind: repair` and the branch in the name column.
-
-**And then it stops.** `repairs >= 1` is a skip again: the picker passes the
-project over (`held-after-repair`), and where the hold arrives between a pick
-and its run, `runStep` blocks the step on `main` under that name with `#N is
-held before merge after a repair — the brief's` as its detail. No loop: a pull
-request its one repair could not save is a person's decision, and it reaches
-Martin in `mc brief`'s *Held before merge* section — merge by hand, close, or
-block the step with a decision, one proposal each (see
-[`mc-brief.md`](mc-brief.md)). Between briefs it is on the page: NEXT draws
-`held before merge N` with project, pull request and reason under it, and
-`mc --json` carries `next.held` whole (see [`mc-ui.md`](mc-ui.md)).
-
-One gap worth knowing: the picker passes over a project whose plan on
-`origin/main` is blocked, done or unparseable before `runStep` is reached, so
-such a project's held pull request gets neither a repair nor a line in
-runner.log. It is still in `held.json`, which is why both the page and the
-brief read the file rather than the log.
+Until 2026-09-12 a landing that did not land wrote `~/mc/runner/held.json`
+— one entry per pull request the runner would not land, with the gate's
+reason, its red names and its failed gates' output — and the project's next
+round was one `repair` session on that branch, told what the gate saw, after
+which the pull request was the brief's (`heldRepair`, `repairPrompt`,
+`canon/roles/repair.md`, `laneRepair` for a pull request no project's round
+reached). Measured 2026-09-05..12: 22 repair sessions, 156 minutes, median 33
+turns, each re-reading a branch it had never seen. Ruling 21 took all of it
+out: the step session runs `mc merge` itself and fixes its own red with the
+diff in its context, a step that did not land is `failed` in the register
+(*The register*), and there is no second session. `held.json` is gone, and
+the brief's *Held before merge* is *Failed steps*.
 
 ## Lanes
 
@@ -1001,21 +865,11 @@ counter is one runner process's own, so a second `mc run` on this machine has a
 second counter and the two do not see each other. One unattended runner is the
 case this is built for; `mc run --once` beside it is refused.
 
-**The merge lane is outside both numbers, and the ceiling is `total + 1`.** It
-is not one of the `per_repo` loops and it never takes a slot — `takeSlot` counts
-steps and this is not one: no session, no workarea, no plan. That is the
-requirement the queue exists for, since the refusals it answers are the ones a
-person was retrying by hand *while every lane was busy*, and a merge that waited
-for a step lane would answer them no faster. It lands one pull request at a time
-and runs at most one repair session, so a machine with a merge lane in it runs
-at most `total` steps and one more thing: **`total + 1`**. What it does share is
-what no landing can avoid sharing — this machine's one gate lock and the
-repository's lease, both of which `landPr` waits for rather than gives up on.
-STOP and UPDATE it reads where the step lanes read them, between two picks,
-which for this lane is between two queued pull requests and never inside a
-landing; and because it writes no `current-<repo>.json` for the drain to count,
-it answers the drain itself through `mergeBusy()`, so a handover cannot arrive
-in the middle of a squash.
+**There is no merge lane any more** (ruling 21, 2026-09-12): a step session
+lands its own pull request through `mc merge`, inside its own session and its
+own slot, so the ceiling on what runs is `total` and nothing more. Until then
+a third loop landed what a refused hand `mc merge` had queued and ran one
+repair session per held pull request, outside both numbers.
 
 `mc run lanes` with no argument prints both numbers and how many steps are in
 flight while it is read — `3 per repository, 3 in total — 2 in flight`, or
@@ -1126,11 +980,11 @@ thing it writes into a repository: a blocked step (below).
   Readers — the page's RUNNER block, `mc status <name>` — glob
   `current-*.json` rather than opening one fixed path, which is why the block
   is a list of lines and not a line.
-- **`held.json`** — every pull request a landing did not land, with the reason
-  and how many repairs it has had. One file for the machine, written by
-  whichever lane held or released something; see *Held before merge*.
-- **`merges.json`** — every pull request a refused `mc merge` handed the merge
-  lane, and only what the lane has not tried yet: repository, number, branch,
+- **`projects/<project>.json`** — the register: where every step of every
+  project stands (*The register*). Written by the runner and by `mc step` and
+  `mc merge`, never by a pull request.
+- **`merges.json`** — every `mc merge` waiting for its turn at the gate, with
+  its pid (`mc-merge.md` § *One round at a time*): repository, number, branch,
   reason, stop, `since` and who typed it. Written by the verb, in whatever
   terminal it was typed in, and emptied by the lane one entry at a time; see
   *The merge*.
@@ -1160,59 +1014,37 @@ to a person.
 
 ### Blocked by the runner
 
-**The runner writes one thing into a plan: a step it could not start.** When a
-fault in the table under *What the worktree decides* is met, `blockStep`
-(`run.js`) writes the project's first step that is not `done`:
+**The runner writes nothing into a plan.** When a fault in the table under
+*What the worktree decides* is met, `blockStep` (`run.js`) writes the
+project's first step that is not `done` **in the register**
+(`~/mc/runner/projects/<project>.json`, [`register.js`](../../src/mc/register.js)):
 
 - `status: "blocked"`,
 - `blocked_by: { "kind": "workarea", "name": <the name from WORKAREA_BLOCKS> }`,
+- `reason`: the detail and the workarea's path,
 - and one paragraph appended to that step's `comments`:
-  `Blocked by mc run on <stamp>: <detail>. The workarea is <path>. mc brief or a
-  planning session sets this step ready again once the workarea is fixed; the
-  runner does not retry.`
+  `Blocked by mc run on <stamp>: <detail>. The workarea is <path>. mc step ready
+  <project> <n> once it is fixed; the runner does not retry.`
 
-Nothing else in the file changes — it is exactly the edit `unauthorisedChanges`
-allows a step session on its own step, and a test holds the runner to that
-shape. The plan is checked with `validatePlan` before it is committed: a plan
-the runner made unreadable is the failure `plan-intake.js` exists for, and it
-must not be this runner's. If that step is already `blocked` — another lane, or
-an earlier pick, wrote it from a world this one read a minute ago — nothing is
-written and the line says so.
+If that step is already `blocked` — another lane, or an earlier pick, wrote it
+from a world this one read a minute ago — nothing is written and the line says
+so. Nothing is opened, committed, pushed or landed for it: until 2026-09-12 a
+block was a docs-only pull request from `~/mc/runner/block/<repo>` on a branch
+named `<name>-blocked-<stamp>`, landed through `mc merge --docs`, because the
+state lived in the plan on main and there was no other way to it. Ruling 21
+moved the state out of the plan (*The register*, below), and the pull request
+went with it.
 
-**How it reaches `main`.** Like an archive: a worktree of the repository at
-`~/mc/runner/block/<repo>` on a fresh branch from `origin/main`, a commit titled
-`Block <name> step <i>: <name of the block>` with the detail as its body, a push,
-`gh pr create` with the same title and a body that says the way back, and
-`landDocsPr` — the docs door, `mc merge --docs`. The worktree and the branch are
-removed in a `finally`. Under `--no-merge` the pull request is left open.
-
-**The branch is `<name>-blocked-<stamp>`, named after the project on purpose.**
-`projectForBranch` then reads a block pull request that did *not* land — the
-docs door refused it, or `--no-merge` — as the project's own open pull request,
-so `inFlight` keeps the project out of every pick until it lands; nothing else
-has to know the branch exists, and the brief reads open pull requests. Once it
-lands, the plan on `main` says `blocked` and `kindFor` answers `skip:blocked`:
-the project is never picked again until somebody sets the step `ready`.
-
-If the block cannot be written at all — the worktree, the commit, the push or
-the pull request fails — the line says `the step is not blocked, only skipped`,
-the lane still moves to the next name, and the project is met again when the
-world is next read.
-
-**The way back is `mc brief` or a planning session, and nothing else.** The
-brief lists these steps in its *Blocked* section under *Waiting on a workarea*,
-with the comment the runner wrote, and puts them as *fix the workarea, then set
-the step ready* rather than as a decision; a planning session may set one
-`ready` under the rules in [`docs/project/README.md`](../project/README.md),
-§ *Who writes what*. No verb was added. The runner never writes `ready` and never
-retries on its own, because the retry was the fault:
+**The way back is `mc step ready <project> <n>`, from the brief or a person,
+and nothing else.** The brief lists these steps in its *Blocked* section under
+*Waiting on a workarea*, with the comment the runner wrote, and puts them as
+*fix the workarea, then set the step ready* rather than as a decision. The
+runner never writes `ready` and never retries on its own, because the retry
+was the fault:
 
 > "Hela upplägget med 'runda' är fel. Allt ska inte provas. Runner ska ta next
-> step. Punkt." … "Dessutom så är kodningen med jämna och ojämna rader för
-> vilket projekt som tas ur bota dumt skapat så det får vi fixa till. Varje
-> lane tar nästa step under NEXT, men inte samma projekt för två olika lanes."
-> … "Vägen tillbaka är via brief eller en plan-session. Om det var något som
-> en LLM skulle kunna ta beslut som så skulle det ha gjorts vid första
+> step. Punkt." … "Vägen tillbaka är via brief eller en plan-session. Om det var
+> något som en LLM skulle kunna ta beslut som så skulle det ha gjorts vid första
 > Runner-försöket. Då är det det som är fel. Rätt svar är inte en Runner-runda
 > till." (Martin, 2026-09-08 — ruling 17 of the `mc` programme, carried by the
 > `runner-next-step` project and closed with it)
@@ -1220,6 +1052,52 @@ retries on its own, because the retry was the fault:
 What the runner *can* settle by itself it settles at the first attempt instead
 of blocking: `main`'s copy of a `PLAN.json` the plan's rule cannot merge, and
 the abort of a merge a killed session left.
+
+### The register
+
+A plan on `main` is a document — goal, contract, scope, criteria, the steps'
+instructions — written by a person and changed rarely. Where the work
+*stands* is process: it changes at every step boundary and has to be visible
+the second it does. Until 2026-09-12 it lived inside the plan file, so every
+transition was a pull request through the gate, every reader needed a fetch
+not to lie, every session was checked for editing more of the file than its
+own step, and the runner kept `held.json`, `merges.json` and `current-*.json`
+beside the plan for the state the file could not hold between a session
+ending and its pull request landing.
+
+> "Någonting i hela designen av mc/git-integrationen/runner är helt fel. Vi
+> diskuterar detaljer som inte ska behöva diskuteras med rätt design." …
+> "Ok på registret." (Martin, 2026-09-12 — ruling 21)
+
+So the state lives in **the register**: one file per project under
+`~/mc/runner/projects/`, written whole and atomically under one lock
+(`register.js`), one entry per step keyed by the step's index in the plan —
+`status` (`ready` · `running` · `done` · `failed` · `blocked`), `pr`, `branch`,
+`blocked_by`, `reason`, `comments`, `session` (pid, start, model, lane while
+running), `attempts`, `landed` (sha and time). The plan on main still says what
+a step is; every reader lays the register over it (`overlayPlans`) and sees the
+plan record it always saw, with the register's word for the state — the
+picker, the page, the brief and `mc status` changed their source, not their
+shape. A plan the register has never seen is seeded from its own state fields
+once; after that the file's copies are ignored.
+
+**What the runner writes there.** `running`, with the session's pid the moment
+there is one, before the session (`MC_STEP=<project>:<index>` goes into the
+session's environment so `mc step` and `mc merge` inside it know which step
+they are). After the session: `done` with the pull request and the commit main
+stands at when the landing landed — the step's own fields as the session left
+them in the plan it landed, so a session that set its step `blocked` on a
+decision is `blocked` in the register too; `failed` with the gate's reason when
+the landing held it, or with the session's exit when it left no pull request
+at all; `ready` again after a quota answer, which is no session. A `running`
+step whose session is gone — a runner killed under it — is failed on the next
+reading of the world (`sweepRunning`). A failed step is never picked again:
+`kindFor` answers `skip:failed`, and `mc step ready` is the way back. And
+`blocked` for a fault it met before the session, as above.
+
+**What a person writes there** is `mc step`: `failed --reason`, `blocked --on`,
+`ready`, `done`. `ready` is refused while the step's pull request is open — a
+step set ready over an open pull request would be run again on top of it.
 
 ## Sleeping and stopping
 
@@ -1262,7 +1140,7 @@ nothing about it.
 
 - `tests/mc/run-plan.test.js` — the rules with no process at all: queue
   assembly and tidying, `nextFor` (the order, a claimed name, an in-flight
-  name, a held-after-repair name, a blocked plan, one repository at a time),
+  name, a blocked plan, one repository at a time),
   `chooseKind`, the headless argument lists, the reading of a session's output,
   the runs.tsv row, `sessionSettings`, `helperDue`.
 - `tests/mc/run.test.js` — lane passes and the chores against fake git, gh,

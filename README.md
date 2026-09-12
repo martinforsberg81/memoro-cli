@@ -54,8 +54,6 @@ mc sessions list          # active sessions across machines
 mc sessions send <id|label> "<msg>"
 ```
 
-Inside any wrapped Claude session, the slash command `/memoro-coordinator` opens the coordinator role — Claude shows the current snapshot of your other sessions and helps you route attention across them. `/memoro-coordinator-suggest` recommends a next step per session for the "where should I spend the next 30 minutes?" triage moment.
-
 Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped transparently to and from it. A WebSocket to Memoro delivers remote dispatches by writing into the tool's PTY stdin — they land as real user turns. No tmux, no Claude Code modifications, terminal-native scrollback works.
 
 ## Commands

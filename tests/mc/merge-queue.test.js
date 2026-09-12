@@ -11,12 +11,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  QUEUEABLE_STOPS, dequeue, enqueue, mergesPath, parseQueue, queueEntries, queueOrder, queuedFor, queueable,
+  dequeue, dropDeadEntries, enqueue, mergesPath, nextWaiter, parseQueue, queueEntries, queueOrder,
+  queuedFor,
 } from '../../src/mc/merge-queue.js';
 
 const entry = (over = {}) => ({
-  repo: 'memoro-cli', pr: 671, branch: 'merge-queue', reason: 'the gate is busy',
-  stopped_at: 'busy', since: '2026-09-06T18:00:00Z', holder: 'martin@host', ...over,
+  repo: 'memoro-cli', pr: 671, branch: 'merge-queue', reason: 'the gate is red',
+  stopped_at: 'red', since: '2026-09-06T18:00:00Z', holder: 'martin@host', ...over,
 });
 
 test('the file sits beside the runner\'s other state', () => {
@@ -34,7 +35,15 @@ test('an entry keeps the shape the lane and the page read, whatever the file say
   const [read] = queueEntries([{ pr: '9', repo: 'memoro' }]);
   assert.deepEqual(read, {
     repo: 'memoro', pr: 9, branch: null, reason: 'no reason given', stopped_at: null, since: null, holder: null,
+    pid: null,
   });
+});
+
+test('a no-pid entry round-trips through the file as no-pid, not pid 0', () => {
+  // `Number(null)` is `0`, a finite number — the trap this guards against.
+  const [written] = queueEntries([entry({ pid: null })]);
+  const [reread] = queueEntries(JSON.parse(JSON.stringify([written])));
+  assert.equal(reread.pid, null, 'a refusal entry read back from disk is still not a waiter');
 });
 
 test('queueing the same pull request again keeps how long it has waited', () => {
@@ -58,14 +67,21 @@ test('the lane takes them oldest first', () => {
   assert.deepEqual(queueOrder(entries).map((item) => item.pr), [2, 3]);
 });
 
-test('only the stops the lane can do something about are queued', () => {
-  for (const stop of ['busy', 'lease', 'red', 'pr-tests', 'extra-gate', 'merge']) {
-    assert.equal(queueable(stop), true, `${stop} is one the lane can try again`);
-  }
-  // A pull request nothing on this machine can name, and the stops that mean
-  // something else has to happen first.
-  for (const stop of ['pr', 'drift', 'merge-unknown', 'batch', null, undefined]) {
-    assert.equal(queueable(stop), false, `${stop} is not the lane's`);
-  }
-  assert.equal(QUEUEABLE_STOPS.length, 6, 'a seventh stop needs a sentence beside the list');
+
+test('a dead pid is litter, dropped by whoever polls next', () => {
+  const entries = [entry({ pid: 111 }), entry({ pr: 9, pid: 222 }), entry({ pr: 5 })];
+  const dropped = dropDeadEntries(entries, { alive: (pid) => pid === 111 });
+  assert.deepEqual(dropped.map((item) => item.pr), [671, 5], 'the dead waiter is gone, the refusal entry with no pid is untouched');
+});
+
+test('the oldest live waiter takes the lock; a waiter behind a held lease keeps its place', () => {
+  const entries = [
+    entry({ pr: 1, pid: 1, since: '2026-09-06T17:00:00Z' }),
+    entry({ repo: 'memoro', pr: 2, pid: 2, since: '2026-09-06T17:05:00Z' }),
+  ];
+  const heldByLease = nextWaiter(entries, { leaseHeld: (repo) => repo === 'memoro-cli' });
+  assert.equal(heldByLease.pr, 2, 'memoro-cli\'s lease is held, so the later memoro waiter goes instead');
+  const bothFree = nextWaiter(entries, { leaseHeld: () => false });
+  assert.equal(bothFree.pr, 1, 'both free: the oldest entry, whichever repository');
+  assert.equal(nextWaiter([entry({ pid: null })]), null, 'a refusal entry with no pid is not a waiter');
 });
