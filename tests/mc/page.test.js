@@ -665,7 +665,7 @@ describe('MERGES', () => {
     // The rows say which repository, which number, why the round it was given
     // did not land, and how long it has been waiting.
     const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /MERGES.*2 queued/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /MERGES.*2 waiting/u.test(line)), lines.join('\n'));
     assert.ok(lines.some((line) => /^ {7}· memoro {2}#11541 {2}another gate round is running {2}\(since 08-29 09:30Z\)$/u.test(line)),
       lines.join('\n'));
   });
@@ -699,7 +699,7 @@ describe('MERGES', () => {
   it('says nothing landing when no round is running', () => {
     const lines = renderPageLines(pageData({ merges: mergesSection({}) }), { columns: 120 });
     assert.ok(lines.some((line) => /· nothing landing$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /MERGES {2}nothing landing, nothing queued/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /MERGES {2}nothing landing, nothing waiting/u.test(line)), lines.join('\n'));
   });
 });
 

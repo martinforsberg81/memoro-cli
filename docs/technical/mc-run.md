@@ -735,10 +735,14 @@ runner does not review; `mc brief` is what shows Martin what merged.
 
 **A hand `mc merge` that was refused becomes the runner's.** The verb runs the
 merge round it always ran and prints what it always printed; what changed on
-2026-09-06 is what becomes of one that did not land. Six stops are ones the
-merge lane can do something about — `busy` and `lease` (this machine's one gate
-lock, or the repository, is somebody else's for the minute), `red`, `pr-tests`,
-`extra-gate` and `merge` — and each writes one entry to
+2026-09-06 is what becomes of one that did not land. Since step-lands-itself,
+`busy` and `lease` (this machine's one gate lock, or the repository, is
+somebody else's for the minute) no longer reach this queue at all: the verb
+now waits them out itself, in `merges.json` order, up to `MERGE_WAIT_MS` (see
+[`mc-merge.md`](mc-merge.md) § *One round at a time*) — a call that already
+waited itself cannot also be handed to this lane to retry. Four stops remain
+ones the merge lane can do something about — `red`, `pr-tests`, `extra-gate`
+and `merge` — and each writes one entry to
 **`~/mc/runner/merges.json`**: repository and number together as the identity,
 the branch the gate read, the reason, the stop, a `since` a second queueing does
 not move, and who typed it. The rules are pure in
