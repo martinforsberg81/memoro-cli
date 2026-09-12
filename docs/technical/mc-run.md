@@ -569,7 +569,10 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
   `--effort`. Without it claude falls back to the machine's own
   `effortLevel`, which is why the step default names one. Anything else is
   refused by the schema.
-- **`advisor:`** — a model name passed as `--advisor`, or `off` for none. The
+- **`advisor:`** — a model name passed as `--advisor`, or `off` for none. An
+  advisor that is the session's own model is none too: a plan or step on
+  `opus` runs without one unless it names a different advisor (Martin,
+  2026-09-12: *"Om step har opus => advisor = null, inte opus+opus."*). The
   flag is not in `claude --help`; it is documented at
   code.claude.com/docs/en/advisor.md and was accepted by claude 2.1.268 on
   2026-09-11.

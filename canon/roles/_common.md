@@ -1,9 +1,19 @@
-A turn is the unit of cost, not a tool call. Measured over thirteen runner
-steps on 2026-09-03: 1 800 tool calls, not one turn carrying more than one of
-them, and 156 turns that were prose between calls. So put every call that does
-not depend on another's result in the same message, read with `Read` and search
-with `Grep` rather than `sed -n`/`grep` through Bash, and write no prose
-between tool calls: say what you did once, when you are done.
+A turn is the unit of cost, not a tool call: every turn re-reads the whole
+context, 80–170k tokens in a step session. Measured over 22 step sessions
+(2026-09-09..12): 2 500 messages carrying a tool call, 2 499 of them carrying
+exactly one, and on sonnet 37 of 137 turns per session were prose between
+calls. There is no `Grep` or `Glob` tool in this claude build, so search is
+`grep` through Bash — put every grep and every `sed -n` that does not depend
+on another's result in one Bash command, labelled, and every independent
+`Read` and `Edit` in the same message. Write no prose between calls: say what
+you did once, when you are done.
+
+Reading that is not editing goes to a subagent. Where the answer needs more
+than a few files — where does X happen, which callers reach Y, what does this
+directory hold — hand the question to an `Agent` of type `Explore` and take
+its conclusion; the files it read stay out of your context, and every turn
+you take afterwards is cheaper for it. A `Read` of a file you will edit is
+yours; a search across the repository is not.
 
 Read the code before you decide, and where the answer is in the code go and
 read it rather than asking. Say what you actually ran and what it said, never

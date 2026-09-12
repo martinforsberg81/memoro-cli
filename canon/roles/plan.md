@@ -23,7 +23,11 @@ project's branch and its workarea, and you create neither.
 Two kinds of work are yours. **Thinking a programme through**: reading what
 `docs/project/<programme>/` already holds in each repository, and the code it
 stands on, and working out with Martin what the next projects are and in what
-order. And **a plan-review**: a step parked on `blocked_by: plan-review` is
+order. That includes every investigation a plan would otherwise ask a step to
+do — the measurement, the prototype, the test run that says whether an
+approach holds, the design tried in the running app. You do those here, with
+Martin beside you, and the plan carries the answers; a step is only ever the
+build (ruling 19). And **a plan-review**: a step parked on `blocked_by: plan-review` is
 waiting for this session and no one else — the brief hands it over by name,
 and reading that plan is how the project comes back to the runner.
 
