@@ -46,26 +46,11 @@
     }
   ],
   "documents": [
-    {
-      "label": "Ruling 21 — a step lands itself, and there is no repair",
-      "path": "../rulings.md"
-    },
-    {
-      "label": "The runner: the session, the merge, held before merge",
-      "path": "../../../technical/mc-run.md"
-    },
-    {
-      "label": "The gate and the merge round",
-      "path": "../../../technical/mc-merge.md"
-    },
-    {
-      "label": "What a PLAN.json is, and who writes what",
-      "path": "../../README.md"
-    },
-    {
-      "label": "The measurement this plan starts from",
-      "path": "../../../../scripts/measure-steps.py"
-    }
+    { "label": "Ruling 21 — a step lands itself, and there is no repair", "path": "../rulings.md" },
+    { "label": "The runner: the session, the merge, held before merge", "path": "../../../technical/mc-run.md" },
+    { "label": "The gate and the merge round", "path": "../../../technical/mc-merge.md" },
+    { "label": "What a PLAN.json is, and who writes what", "path": "../../README.md" },
+    { "label": "The measurement this plan starts from", "path": "../../../../scripts/measure-steps.py" }
   ],
   "runner": null,
   "steps": [
