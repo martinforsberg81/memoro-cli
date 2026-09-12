@@ -803,9 +803,10 @@ per pull request it would not land — `{ project, repo, pr, branch, reason,
 note, since, repairs }`, and, when a gate held it, `red` (every red test by
 name) and `gates` (`{ name, output }` per failed command gate, clipped at
 `OUTPUT_CAP`). It is mc's own state beside `runner.json` and
-`current-<repo>.json`, **never a status in a `PLAN.json`** — `ready`/`done`/`blocked`
-are still the whole of `STEP_STATUSES`, and the one thing the runner writes into
-a plan is a `blocked` step (*Blocked by the runner*). The rules are pure in
+`current-<repo>.json`, **never a status in a `PLAN.json`** — a plan file carries
+`ready`/`done`/`blocked` and nothing else; `running` and `failed` in
+`STEP_STATUSES` are the register's words, laid over a plan in memory and never
+written to one (*The register*). The rules are pure in
 [`src/mc/held.js`](../../src/mc/held.js); `run.js` reads-changes-writes the file
 whole through `hold()`, `countRepair()`, `release()` and `reconcileHold()`,
 because any lane may hold a pull request while another is landing one.
@@ -1136,59 +1137,37 @@ to a person.
 
 ### Blocked by the runner
 
-**The runner writes one thing into a plan: a step it could not start.** When a
-fault in the table under *What the worktree decides* is met, `blockStep`
-(`run.js`) writes the project's first step that is not `done`:
+**The runner writes nothing into a plan.** When a fault in the table under
+*What the worktree decides* is met, `blockStep` (`run.js`) writes the
+project's first step that is not `done` **in the register**
+(`~/mc/runner/projects/<project>.json`, [`register.js`](../../src/mc/register.js)):
 
 - `status: "blocked"`,
 - `blocked_by: { "kind": "workarea", "name": <the name from WORKAREA_BLOCKS> }`,
+- `reason`: the detail and the workarea's path,
 - and one paragraph appended to that step's `comments`:
-  `Blocked by mc run on <stamp>: <detail>. The workarea is <path>. mc brief or a
-  planning session sets this step ready again once the workarea is fixed; the
-  runner does not retry.`
+  `Blocked by mc run on <stamp>: <detail>. The workarea is <path>. mc step ready
+  <project> <n> once it is fixed; the runner does not retry.`
 
-Nothing else in the file changes — it is exactly the edit `unauthorisedChanges`
-allows a step session on its own step, and a test holds the runner to that
-shape. The plan is checked with `validatePlan` before it is committed: a plan
-the runner made unreadable is the failure `plan-intake.js` exists for, and it
-must not be this runner's. If that step is already `blocked` — another lane, or
-an earlier pick, wrote it from a world this one read a minute ago — nothing is
-written and the line says so.
+If that step is already `blocked` — another lane, or an earlier pick, wrote it
+from a world this one read a minute ago — nothing is written and the line says
+so. Nothing is opened, committed, pushed or landed for it: until 2026-09-12 a
+block was a docs-only pull request from `~/mc/runner/block/<repo>` on a branch
+named `<name>-blocked-<stamp>`, landed through `mc merge --docs`, because the
+state lived in the plan on main and there was no other way to it. Ruling 21
+moved the state out of the plan (*The register*, below), and the pull request
+went with it.
 
-**How it reaches `main`.** Like an archive: a worktree of the repository at
-`~/mc/runner/block/<repo>` on a fresh branch from `origin/main`, a commit titled
-`Block <name> step <i>: <name of the block>` with the detail as its body, a push,
-`gh pr create` with the same title and a body that says the way back, and
-`landDocsPr` — the docs door, `mc merge --docs`. The worktree and the branch are
-removed in a `finally`. Under `--no-merge` the pull request is left open.
-
-**The branch is `<name>-blocked-<stamp>`, named after the project on purpose.**
-`projectForBranch` then reads a block pull request that did *not* land — the
-docs door refused it, or `--no-merge` — as the project's own open pull request,
-so `inFlight` keeps the project out of every pick until it lands; nothing else
-has to know the branch exists, and the brief reads open pull requests. Once it
-lands, the plan on `main` says `blocked` and `kindFor` answers `skip:blocked`:
-the project is never picked again until somebody sets the step `ready`.
-
-If the block cannot be written at all — the worktree, the commit, the push or
-the pull request fails — the line says `the step is not blocked, only skipped`,
-the lane still moves to the next name, and the project is met again when the
-world is next read.
-
-**The way back is `mc brief` or a planning session, and nothing else.** The
-brief lists these steps in its *Blocked* section under *Waiting on a workarea*,
-with the comment the runner wrote, and puts them as *fix the workarea, then set
-the step ready* rather than as a decision; a planning session may set one
-`ready` under the rules in [`docs/project/README.md`](../project/README.md),
-§ *Who writes what*. No verb was added. The runner never writes `ready` and never
-retries on its own, because the retry was the fault:
+**The way back is `mc step ready <project> <n>`, from the brief or a person,
+and nothing else.** The brief lists these steps in its *Blocked* section under
+*Waiting on a workarea*, with the comment the runner wrote, and puts them as
+*fix the workarea, then set the step ready* rather than as a decision. The
+runner never writes `ready` and never retries on its own, because the retry
+was the fault:
 
 > "Hela upplägget med 'runda' är fel. Allt ska inte provas. Runner ska ta next
-> step. Punkt." … "Dessutom så är kodningen med jämna och ojämna rader för
-> vilket projekt som tas ur bota dumt skapat så det får vi fixa till. Varje
-> lane tar nästa step under NEXT, men inte samma projekt för två olika lanes."
-> … "Vägen tillbaka är via brief eller en plan-session. Om det var något som
-> en LLM skulle kunna ta beslut som så skulle det ha gjorts vid första
+> step. Punkt." … "Vägen tillbaka är via brief eller en plan-session. Om det var
+> något som en LLM skulle kunna ta beslut som så skulle det ha gjorts vid första
 > Runner-försöket. Då är det det som är fel. Rätt svar är inte en Runner-runda
 > till." (Martin, 2026-09-08 — ruling 17 of the `mc` programme, carried by the
 > `runner-next-step` project and closed with it)
@@ -1196,6 +1175,52 @@ retries on its own, because the retry was the fault:
 What the runner *can* settle by itself it settles at the first attempt instead
 of blocking: `main`'s copy of a `PLAN.json` the plan's rule cannot merge, and
 the abort of a merge a killed session left.
+
+### The register
+
+A plan on `main` is a document — goal, contract, scope, criteria, the steps'
+instructions — written by a person and changed rarely. Where the work
+*stands* is process: it changes at every step boundary and has to be visible
+the second it does. Until 2026-09-12 it lived inside the plan file, so every
+transition was a pull request through the gate, every reader needed a fetch
+not to lie, every session was checked for editing more of the file than its
+own step, and the runner kept `held.json`, `merges.json` and `current-*.json`
+beside the plan for the state the file could not hold between a session
+ending and its pull request landing.
+
+> "Någonting i hela designen av mc/git-integrationen/runner är helt fel. Vi
+> diskuterar detaljer som inte ska behöva diskuteras med rätt design." …
+> "Ok på registret." (Martin, 2026-09-12 — ruling 21)
+
+So the state lives in **the register**: one file per project under
+`~/mc/runner/projects/`, written whole and atomically under one lock
+(`register.js`), one entry per step keyed by the step's index in the plan —
+`status` (`ready` · `running` · `done` · `failed` · `blocked`), `pr`, `branch`,
+`blocked_by`, `reason`, `comments`, `session` (pid, start, model, lane while
+running), `attempts`, `landed` (sha and time). The plan on main still says what
+a step is; every reader lays the register over it (`overlayPlans`) and sees the
+plan record it always saw, with the register's word for the state — the
+picker, the page, the brief and `mc status` changed their source, not their
+shape. A plan the register has never seen is seeded from its own state fields
+once; after that the file's copies are ignored.
+
+**What the runner writes there.** `running`, with the session's pid the moment
+there is one, before the session (`MC_STEP=<project>:<index>` goes into the
+session's environment so `mc step` and `mc merge` inside it know which step
+they are). After the session: `done` with the pull request and the commit main
+stands at when the landing landed — the step's own fields as the session left
+them in the plan it landed, so a session that set its step `blocked` on a
+decision is `blocked` in the register too; `failed` with the gate's reason when
+the landing held it, or with the session's exit when it left no pull request
+at all; `ready` again after a quota answer, which is no session. A `running`
+step whose session is gone — a runner killed under it — is failed on the next
+reading of the world (`sweepRunning`). A failed step is never picked again:
+`kindFor` answers `skip:failed`, and `mc step ready` is the way back. And
+`blocked` for a fault it met before the session, as above.
+
+**What a person writes there** is `mc step`: `failed --reason`, `blocked --on`,
+`ready`, `done`. `ready` is refused while the step's pull request is open — a
+step set ready over an open pull request would be run again on top of it.
 
 ## Sleeping and stopping
 

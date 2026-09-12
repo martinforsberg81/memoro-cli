@@ -400,6 +400,8 @@ through all three sections.
 | plan status | colour |
 |---|---|
 | `ready` | green |
+| `running` | yellow |
+| `failed` | red bold |
 | `blocked` | red |
 | `done` | grey |
 | `invalid` | red bold |

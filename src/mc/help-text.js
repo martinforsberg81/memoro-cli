@@ -29,6 +29,9 @@ THE PAGE
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc dev list                      Which dev server runs in which worktree
   mc status <name>                 One project, whole
+  mc step <project>                Where each step stands, from the register
+  mc step failed|blocked|ready|done  Move one step: a session gives up, a
+                                    person starts it again
   mc work <name>                   Open that workarea
 
 IN FULL

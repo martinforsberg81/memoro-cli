@@ -54,6 +54,8 @@ const MARK = { running: '●', waiting: '◆', stopped: '■', quiet: '·' };
 /** Where a plan stands, one colour each, wherever a status is printed. */
 const STATUS_TONE = {
   ready: ['green'],
+  running: ['yellow'],
+  failed: ['red', 'bold'],
   blocked: ['red'],
   done: ['grey'],
   // A plan that does not parse is not a quiet state: the runner will refuse it

@@ -90,7 +90,9 @@ describe('the brief role', () => {
     assert.match(overlay, /project\s+blocker\*{2}\s+is\s+sequencing/u);
     assert.match(overlay, /`mc\s+plan\s+<programme>`/u);
     assert.match(overlay, /named\s+decision\*{2}\s+is\s+the\s+list\s+you\s+actually\s+work/u);
-    assert.match(overlay, /write\n?into\s+that\s+step's\s+`comments`/u);
+    // The way back is a register write with the reason beside it, never a plan edit.
+    assert.match(overlay, /`mc\s+step\s+ready\s+<project>\s+<n>\n?\s*--reason/u);
+    assert.match(overlay, /failed\s+step\*{2}\s+is\s+the\s+runner's\s+writing/u);
   });
 
   /**

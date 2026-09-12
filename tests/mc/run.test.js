@@ -527,7 +527,8 @@ test('skips: dirty worktree, a blocked step', async () => {
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /dirty: uncommitted changes that are not a merge in progress \(x\) — \/w\/dirty\/memoro/u, 'the machine gets its own line, with the files and the workarea');
-  assert.match(log, /dirty: step 1 blocked on workarea dirty-worktree — #950/u, 'and it is written down on main, once, rather than met again in ten minutes');
+  assert.match(log, /dirty: step 1 blocked on workarea dirty-worktree/u, 'and it is written down in the register, once, rather than met again in ten minutes');
+  assert.equal(registerOf(f, 'dirty').steps[0].status, 'blocked');
   assert.doesNotMatch(log, /wait: /u, 'a blocked plan is never picked, and the page is where it shows');
 });
 
@@ -3248,7 +3249,6 @@ test('the merge lane starts no repair under STOP or a pending UPDATE', async () 
  * One case per name in `WORKAREA_BLOCKS`, driven the way a lane drives it, and
  * the last test below asserts every name has one.
  */
-const BLOCK_PLAN = (name = 'm') => `/w/runner/block/memoro/docs/project/prog/${name}/PLAN.json`;
 
 const BLOCKS = [
   {
@@ -3357,7 +3357,7 @@ const BLOCKS = [
 ];
 
 for (const kase of BLOCKS) {
-  test(`blocked: ${kase.what} — the step is \`${kase.block}\` on main, in a docs PR the runner lands`, async () => {
+  test(`blocked: ${kase.what} — the step is \`${kase.block}\` in the register, and no plan file moves`, async () => {
     const f = kase.make();
     const name = kase.name || 'm';
     const runner = createRunner({ deps: f.deps });
@@ -3367,17 +3367,17 @@ for (const kase of BLOCKS) {
     assert.equal(f.calls.sessions.length, 0, 'a blocked project spends no session');
     const log = f.files['/w/runner/log/runner.log'];
     assert.match(log, kase.detail, 'the reason is said in the log, with the workarea');
-    assert.match(log, new RegExp(`${name}: step \\d+ blocked on workarea ${kase.block} — #950`, 'u'));
+    assert.match(log, new RegExp(`${name}: step \\d+ blocked on workarea ${kase.block}$`, 'mu'));
 
-    // The pull request: docs-only by construction, from a branch named after
-    // the project so `projectForBranch` reads it as the project's own.
-    const created = f.calls.gh.find((c) => c[0] === '/w/runner/block/memoro' && c[2] === 'create');
-    assert.ok(created, 'a pull request was opened');
-    assert.match(created[created.indexOf('--title') + 1], new RegExp(`^Block ${name} step \\d+: ${kase.block}$`, 'u'));
-    assert.match(created[created.indexOf('--head') + 1], new RegExp(`^${name}-blocked-\\d{8}T\\d{6}Z$`, 'u'));
-    assert.match(created[created.indexOf('--body') + 1], /mc brief. or a planning session setting the step/u);
-    assert.deepEqual(f.calls.docsRounds.map((c) => c.repoPath), ['/w/runner/block/memoro'], 'landed through mc merge --docs');
-    assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'worktree' && c[2] === 'remove'), 'the block worktree is taken down again');
+    // The register, not a pull request: the state lives in mc's own file
+    // (ruling 21), so nothing is opened, landed or checked out for it.
+    const step = registerOf(f, name).steps.find((item) => item.status === 'blocked');
+    assert.ok(step, 'the step is blocked in the register');
+    assert.deepEqual(step.blocked_by, { kind: 'workarea', name: kase.block });
+    assert.match(step.reason, new RegExp(`The workarea is /w/${name}/memoro`, 'u'));
+    assert.equal(f.calls.gh.some((c) => c[2] === 'create'), false, 'no pull request');
+    assert.deepEqual(f.calls.docsRounds, [], 'nothing lands');
+    assert.equal(f.calls.git.some((c) => c[1] === 'worktree' && c[2] === 'add' && String(c[4] || '').includes('/runner/block/')), false, 'no block worktree');
   });
 }
 
@@ -3408,24 +3408,18 @@ test('the block writes exactly the status, the blocker and one comment on the fi
   const runner = createRunner({ deps: f.deps });
   await runner.runStep('m', runner.queue());
 
-  const before = JSON.parse(plan({ steps: two }));
-  const after = JSON.parse(f.files[BLOCK_PLAN()]);
-  assert.deepEqual(unauthorisedChanges(before, after, 1), { ok: true, problems: [] });
-  assert.deepEqual(after.steps[0], before.steps[0], 'the step that is done is untouched');
+  const after = registerOf(f, 'm');
+  assert.equal(after.steps[0].status, 'done', 'the step that is done is untouched');
+  assert.equal(after.steps[0].pr, 7);
+  assert.deepEqual(after.steps[0].comments, ['Landed.']);
   assert.equal(after.steps[1].status, 'blocked');
   assert.deepEqual(after.steps[1].blocked_by, { kind: 'workarea', name: 'dirty-worktree' });
-  assert.deepEqual(after.success_criteria, before.success_criteria);
   assert.equal(after.steps[1].comments.length, 1, 'one paragraph, appended');
   assert.equal(after.steps[1].comments[0],
     'Blocked by mc run on 2026-08-29T10:00:00Z: uncommitted changes that are not a merge in progress (x). '
-    + 'The workarea is /w/m/memoro. mc brief or a planning session sets this step ready again once the '
-    + 'workarea is fixed; the runner does not retry.');
-  // The rest of the plan, byte for byte what it was: the runner rewrites the
-  // file, so everything it did not mean to change has to come back identical.
-  assert.deepEqual({ ...after, steps: null }, { ...before, steps: null });
-  assert.equal(after.steps[1].title, 'Two');
-  // And it is the file the pull request carries.
-  assert.ok(f.calls.git.some((c) => c[0] === '/w/runner/block/memoro' && c[1] === 'add' && c.at(-1) === 'docs/project/prog/m/PLAN.json'));
+    + 'The workarea is /w/m/memoro. mc step ready m 2 once it is fixed; the runner does not retry.');
+  // The plan file on main is not what moved: nothing was written under docs/.
+  assert.equal(Object.keys(f.files).some((path) => path.includes('/runner/block/')), false);
 });
 
 /**
@@ -3440,16 +3434,14 @@ test('once the block is on main the project is never picked again, and the lane 
   assert.equal(runner.nextStep({ repo: 'memoro', world: runner.queue() })?.name, 'm', 'm is first while its plan says ready');
 
   await runner.runStep('m', runner.queue());
-  // The landing, in the fixture: what the block PR wrote is what origin/main
-  // now carries.
-  plans.memoro.m = f.files[BLOCK_PLAN()];
+  // The register is what the next reading of the world carries; main is untouched.
   const world = runner.queue();
   assert.equal(runner.nextStep({ repo: 'memoro', world })?.name, 'n', 'the picker moves on, and never comes back to m');
   // Driven past the picker by hand, the machine still meets the dirty worktree
   // — it is asked before the plan is read — but the block is written once: the
   // step on main already says so, and a second comment is the same fact twice.
   assert.equal(await runner.runStep('m', world), 'skipped:dirty');
-  assert.equal(f.calls.docsRounds.length, 1, 'one block pull request, not one per pick');
+  assert.deepEqual(f.calls.docsRounds, [], 'no block pull request at all');
   assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 is already blocked on workarea dirty-worktree — not written again/u);
   // `mc status` reads the same block, off the plan, before it asks this
   // machine anything at all.
@@ -3467,25 +3459,10 @@ test('a step another pick has already blocked is not written again', async () =>
   });
   const runner = createRunner({ deps: f.deps });
   // Driven past the picker, which would never have offered a blocked plan.
+  runner.queue();
   await runner.blockStep({ repo: runner.repos[0], name: 'm', reason: 'dirty-worktree', detail: 'x' });
   assert.deepEqual(f.calls.docsRounds, [], 'nothing is landed');
   assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 is already blocked on decision prog-1 — not written again/u);
-});
-
-/**
- * The block is a pull request like any other, and a landing that is refused
- * leaves it open. That is not a loss: `inFlight` covers the project from there,
- * so nothing picks it again either way, and the brief reads open pull requests.
- */
-test('a block whose landing is refused is left open, and the project still starts nothing', async () => {
-  const f = fixture({
-    plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], session: okSession(),
-    block: { memoro: { mergeFails: true } },
-  });
-  const runner = createRunner({ deps: f.deps });
-  assert.equal(await runner.runStep('m', runner.queue()), 'skipped:dirty');
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /m: #950 carries the block and is still open — the project starts nothing until it lands/u);
 });
 
 /* ------------------------------------------- the round and the reading agree */
@@ -3509,6 +3486,9 @@ test('a block whose landing is refused is left open, and the project still start
  * be said at all (`refuse`), and naming it there without teaching the reading
  * fails this file.
  */
+/** The register's entry for a project, as the runner wrote it. */
+const registerOf = (f, name) => JSON.parse(f.files[`/w/runner/projects/${name}.json`]);
+
 const roundReason = (outcome) => (outcome === 'stop'
   ? 'stop'
   : (String(outcome).startsWith('skipped:') ? String(outcome).slice('skipped:'.length) : null));
@@ -3721,4 +3701,81 @@ test('a ready project with a clean workarea reads runnable', () => {
   const world = createRunner({ deps: f.deps }).queue();
   const reading = readingOf(f, 'm', world);
   assert.deepEqual(reading, { runnable: true, reason: null, detail: null, since: null, kind: 'step' });
+});
+
+/* --------------------------------------------------------- the register */
+
+/**
+ * Where a step stands lives in the register, not in the plan on main
+ * (ruling 21, register.js): the runner writes `running` with the session's
+ * pid before the session, and the outcome after it — `done` with the pull
+ * request when the landing landed, `failed` with the gate's reason when it
+ * did not, `failed` with the exit when there was no pull request at all.
+ */
+test('register: a step is running with its pid, then done with its pull request and the commit main stands at', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  const inner = f.deps.session;
+  let seen = null;
+  f.deps.session = (call) => {
+    call.onSpawn(31337);
+    seen = registerOf(f, 'alpha').steps[0];
+    return inner(call);
+  };
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.equal(seen.status, 'running', 'running while the session is');
+  assert.equal(seen.session.pid, 31337, 'with the pid onSpawn handed over');
+  assert.equal(seen.branch, 'alpha');
+  const [call] = f.calls.sessions;
+  assert.deepEqual(call.env, { MC_STEP: 'alpha:0', MC_PROJECT: 'alpha', MC_REPO: 'memoro', MC_WORKAREA: '/w/alpha/memoro' }, 'the session is told which step it is');
+  const after = registerOf(f, 'alpha').steps[0];
+  assert.equal(after.status, 'done');
+  assert.equal(after.pr, 77);
+  assert.equal(after.session, null, 'a step that is not running has no session');
+  assert.ok(after.landed?.at, 'and when it landed');
+});
+
+test('register: a landing the gate held leaves the step failed with the gate\'s own reason, and the picker never offers it again', async () => {
+  const f = fixture({
+    plans: { memoro: { alpha: ready, beta: ready } }, session: okSession(), gh: { alpha: { number: 77 } },
+    rounds: { 77: { ok: false, merged: false, stopped_at: 'red', reason: 'two tests the change reaches are red' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  const step = registerOf(f, 'alpha').steps[0];
+  assert.equal(step.status, 'failed');
+  assert.equal(step.pr, 77);
+  assert.equal(step.reason, 'two tests the change reaches are red');
+  // The next reading of the world: alpha is failed, not in flight, and beta is next.
+  const world = runner.queue();
+  assert.equal(world.plans.find((p) => p.project === 'alpha').status, 'failed');
+  assert.equal(runner.nextStep({ repo: 'memoro', world })?.name, 'beta');
+  assert.equal(await runner.runStep('alpha', world), 'skipped:failed', 'driven past the picker, the plan\'s word refuses it');
+});
+
+test('register: a session that ends with no pull request is failed with its exit, and a quota answer puts the step back to ready', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: () => ({ status: 1, stdout: '', stderr: 'boom', timedOut: false }) });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  const step = registerOf(f, 'alpha').steps[0];
+  assert.equal(step.status, 'failed');
+  assert.match(step.reason, /the session ended no-json \(rc 1\) with no pull request/u);
+
+  const q = fixture({ plans: { memoro: { alpha: ready } }, session: () => ({ status: 1, stdout: '', stderr: "You've hit your usage limit", timedOut: false }) });
+  const quota = createRunner({ deps: q.deps });
+  await quota.pass();
+  assert.equal(registerOf(q, 'alpha').steps[0].status, 'ready', 'no session ran, so nothing failed');
+});
+
+test('register: a running step whose session is gone is failed on the next reading of the world', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, livePids: [] });
+  f.files['/w/runner/projects/alpha.json'] = JSON.stringify({
+    project: 'alpha', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/alpha/PLAN.json',
+    steps: [{ status: 'running', session: { pid: 99999, started: '2026-08-29T09:00:00Z' } }],
+  });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  assert.equal(world.plans[0].status, 'failed');
+  assert.match(registerOf(f, 'alpha').steps[0].reason, /pid 99999\) is gone/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: step 1 was running under pid 99999, which is gone — failed/u);
 });
