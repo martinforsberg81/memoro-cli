@@ -376,6 +376,20 @@ const okTurn = async () => ({
   wrote: [{ file: '2026-08-29-a.md', title: 'A' }], waiting: [{ file: '2026-08-29-a.md' }], groundNotes: [],
 });
 
+/**
+ * A session that lands its own pull request, the way a real one does through
+ * `mc merge` (ruling 21): the register says the step is done with its pull
+ * request, and the process comes back — here with a result, live with the
+ * SIGTERM the verb sends.
+ */
+const landsItself = (f, name, pr, inner = okSession()) => (call) => {
+  const entry = JSON.parse(f.files[`/w/runner/projects/${name}.json`]);
+  const index = entry.steps.findIndex((step) => step.status === 'running');
+  entry.steps[index] = { ...entry.steps[index], status: 'done', pr, session: null, landed: { sha: 'abc', at: 'now' } };
+  f.files[`/w/runner/projects/${name}.json`] = JSON.stringify(entry);
+  return inner(call);
+};
+
 /** runs.tsv rows as objects, header and all. */
 function runRows(files) {
   const tsv = files['/w/runner/log/runs.tsv'] || '';
@@ -483,7 +497,8 @@ test('queue: queue.md first, then plans on origin/main of both repositories', ()
 });
 
 test('one step: worktree made from origin/main, session through the adapter, PR merged, row logged', async () => {
-  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'alpha', 77)(call); };
   const runner = createRunner({ deps: f.deps });
   const r = await runner.pass();
   assert.equal(r.ran, 1);
@@ -506,13 +521,13 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
     call.args[call.args.indexOf('--append-system-prompt') + 1],
     `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nROLE step`,
   );
-  assert.deepEqual(f.calls.rounds.map((c) => [c.repoPath, c.pr]), [['/home/memoro', 77]], 'landed through mc merge, not gh pr merge');
+  assert.deepEqual(f.calls.rounds, [], 'the session landed it through mc merge itself; the runner lands nothing of a step\'s');
   const rows = f.files['/w/runner/log/runs.tsv'].trim().split('\n');
   assert.equal(rows[0].split('\t').length, 15);
-  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t0\tsonnet');
+  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t-\tsonnet');
   assert.ok(f.files['/w/alpha-20260829T100000Z.json'] === undefined);
   assert.ok('/w/runner/log/alpha-20260829T100000Z.json' in f.files);
-  assert.match(f.files['/w/runner/log/runner.log'], /alpha: merged #77 into main through the gate\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged land=0s/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: #77 landed through mc merge from the session — step 1 is done\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged$/mu);
 });
 
 test('skips: dirty worktree, a blocked step', async () => {
@@ -831,7 +846,9 @@ test("a step session handed main's plan has its work judged against main", async
     conflicts: { c: [PLAN_AT] },
     stages: { c: { [PLAN_AT]: { 1: text(base), 2: text(branch), 3: text(main) } } },
     gh: { c: { number: 94, title: 'Step two' } },
-    session: (call) => { f.files[`/w/c/memoro/${PLAN_AT}`] = text(resolved); return okSession()(call); },
+    // The session lands itself (ruling 21); the plan boundary is `mc merge`'s
+    // door now (merge-step.js), judged against main there.
+    session: (call) => { f.files[`/w/c/memoro/${PLAN_AT}`] = text(resolved); return landsItself(f, 'c', 94)(call); },
   });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
@@ -841,7 +858,7 @@ test("a step session handed main's plan has its work judged against main", async
   assert.match(call.args[1], /Main touched step two\./u, "main's copy, not the branch's");
   assert.doesNotMatch(call.args[1], /This branch touched step two\./u);
   const [row] = runRows(f.files).filter((r) => r.name === 'c');
-  assert.equal(row.note, 'success,merged', 'main\'s own edits to the plan are not a trespass');
+  assert.equal(row.note, 'success,merged');
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /left open — the session changed more of the plan/u);
 });
 
@@ -1014,7 +1031,7 @@ test('a timed-out session is logged as timeout with exit 142', async () => {
   const f = fixture({ plans: { memoro: { t: ready } }, session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true }) });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\ttimeout\t-\tsonnet\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\ttimeout,failed\t-\tsonnet\n/u);
 });
 
 /**
@@ -1026,16 +1043,17 @@ test('a timed-out session is logged as timeout with exit 142', async () => {
  * #11250 into the branch of #11249 and logged `success,merged` while `main`
  * received nothing.
  */
-test('a red gate leaves the pull request open and says so in the row', async () => {
-  const f = fixture({
-    plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
-    rounds: { 9: { ok: false, merged: false, merged_into: null, stopped_at: 'red', reason: 'two tests the change reaches are red' } },
-  });
+test('a step\'s pull request the session did not land is failed in the register, and the runner lands nothing', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession() });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.equal(f.calls.rounds.length, 1);
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,gate-red\t\d+\t\w+\n/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 left open — two tests the change reaches are red/u);
+  assert.equal(f.calls.rounds.length, 0, 'no round of the runner\'s: the landing is the session\'s (ruling 21)');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,failed\t-\t\w+\n/u);
+  const step = registerOf(f, 'm').steps[0];
+  assert.equal(step.status, 'failed');
+  assert.equal(step.pr, 9);
+  assert.equal(step.reason, '#9 is open and the session ended success (rc 0) without landing it');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 failed — #9 is open and the session ended success/u);
 });
 
 /* ------------------------------------------------------- held before merge */
@@ -1051,19 +1069,6 @@ test('a red gate leaves the pull request open and says so in the row', async () 
  * status in a plan.
  */
 const heldFile = (files) => JSON.parse(files['/w/runner/held.json'] || '[]');
-
-test('a pull request the gate would not land is written to held.json with its reason', async () => {
-  const f = fixture({
-    plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
-    rounds: { 9: { ok: false, merged: false, merged_into: null, stopped_at: 'red', reason: 'two tests the change reaches are red' } },
-  });
-  await createRunner({ deps: f.deps }).pass();
-  assert.deepEqual(heldFile(f.files), [{
-    project: 'm', repo: 'memoro', pr: 9, branch: 'm',
-    reason: 'two tests the change reaches are red', note: 'open,gate-red',
-    since: '2026-08-29T10:00:00Z', repairs: 0,
-  }]);
-});
 
 test('a held pull request that lands leaves the file', async () => {
   const f = fixture({ plans: { memoro: { m: ready } } });
@@ -1102,34 +1107,17 @@ test('a held pull request somebody merged or closed by hand leaves the file the 
   assert.deepEqual(heldFile(blind.files).map((entry) => entry.pr), [500, 501]);
 });
 
-test('a session that changed more of the plan than its step is held, with the problems as the reason', async () => {
-  const path = '/w/m/memoro/docs/project/prog/m/PLAN.json';
-  const f = fixture({
-    plans: { memoro: { m: ready } },
-    gh: { m: { number: 9 } },
-    session: (call) => {
-      const after = JSON.parse(f.files[path]);
-      after.goal = ['Something else entirely.'];
-      f.files[path] = JSON.stringify(after, null, 2);
-      return okSession()(call);
-    },
-  });
-  await createRunner({ deps: f.deps }).pass();
-  assert.equal(f.calls.rounds.length, 0, 'a trespassing session lands nothing');
-  assert.deepEqual(heldFile(f.files).map((entry) => [entry.project, entry.pr, entry.note, entry.reason]), [[
-    'm', 9, 'plan-trespass',
-    'the session changed more of the plan than its step: goal: a step session does not change it',
-  ]]);
-});
-
-test('a session that timed out with its pull request open is held too', async () => {
+test('a step session that ended with its pull request open is failed with that reason — nothing is held', async () => {
   const f = fixture({
     plans: { memoro: { t: ready } }, gh: { t: { number: 5 } },
     session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true }),
   });
   await createRunner({ deps: f.deps }).pass();
-  assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.note, entry.reason]),
-    [[5, 'timeout', 'the session timed out with the pull request open']]);
+  assert.deepEqual(heldFile(f.files), [], 'held.json is the repair path\'s, and a step has none');
+  const step = registerOf(f, 't').steps[0];
+  assert.equal(step.status, 'failed');
+  assert.equal(step.reason, '#5 is open and the session ended timeout (rc 142) without landing it');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\ttimeout,failed\t/u);
 });
 
 /* ------------------------------------------------------------- the repair */
@@ -1297,39 +1285,38 @@ test('a repair that undoes the trespass lands', async () => {
   assert.deepEqual(heldFile(f.files), []);
 });
 
-test('a merge that landed somewhere other than main is not recorded as merged', async () => {
-  const f = fixture({
-    plans: { memoro: { m: ready } }, gh: { m: { number: 11250 } }, session: okSession(),
-    rounds: { 11250: { ok: true, merged: true, merged_into: 'msr-track-3-capture-command', off_default: true } },
-  });
+/**
+ * `landProject` still lands what the runner itself opens and what a repair
+ * leaves — a step's own pull request is the session's to land (ruling 21).
+ * Driven directly, as the repair path drives it.
+ */
+const landing = (over = {}) => {
+  const f = fixture({ plans: { memoro: { m: ready } }, areas: area(), session: okSession(), ...over });
   const runner = createRunner({ deps: f.deps });
-  await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,off-main\t\d+\t\w+\n/u);
+  const repo = runner.repos.find((r) => r.name === 'memoro');
+  return { f, runner, land: (prs) => runner.landProject('/w/m/memoro', repo, 'm', prs) };
+};
+
+test('a merge that landed somewhere other than main is not recorded as merged', async () => {
+  const { f, land } = landing({ rounds: { 11250: { ok: true, merged: true, merged_into: 'msr-track-3-capture-command', off_default: true } } });
+  const landed = await land([{ number: 11250, headRefName: 'm', baseRefName: 'main' }]);
+  assert.equal(landed.note, 'off-main');
   assert.match(f.files['/w/runner/log/runner.log'], /#11250 was merged into msr-track-3-capture-command, NOT main/u);
 });
 
 test('a pull request aimed at a branch that is nobody head lands nothing', async () => {
-  const f = fixture({
-    plans: { memoro: { m: ready } }, gh: { m: { number: 11250, base: 'msr-track-3-capture-command' } }, session: okSession(),
-  });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
+  const { f, land } = landing();
+  const landed = await land([{ number: 11250, headRefName: 'm', baseRefName: 'msr-track-3-capture-command' }]);
+  assert.equal(landed.note, 'open,not-a-stack');
   assert.equal(f.calls.rounds.length, 0, 'nothing is handed to the merge round');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,not-a-stack\t\d+\t\w+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /#11250 is aimed at msr-track-3-capture-command — none of them is aimed at main — landing none of them/u);
-  // Nothing else is going to land it either, so it is held with the reason
-  // rather than left to a log line.
   assert.deepEqual(heldFile(f.files).map((entry) => [entry.pr, entry.note]), [[11250, 'open,not-a-stack']]);
 });
 
 test('a stack is landed bottom first, each one above it retargeted and replayed', async () => {
-  const f = fixture({
-    plans: { memoro: { m: ready } },
-    gh: { m: [{ number: 3, head: 'm-3', base: 'm-2' }, { number: 1, head: 'm', base: 'main' }, { number: 2, head: 'm-2', base: 'm' }] },
-    session: okSession(),
-  });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
+  const { f, land } = landing();
+  const landed = await land([{ number: 3, headRefName: 'm-3', baseRefName: 'm-2' }, { number: 1, headRefName: 'm', baseRefName: 'main' }, { number: 2, headRefName: 'm-2', baseRefName: 'm' }]);
+  assert.equal(landed.note, 'merged');
   assert.deepEqual(f.calls.rounds.map((c) => c.pr), [1, 2, 3], 'bottom first, whatever order GitHub listed them in');
   assert.deepEqual(f.calls.rounds.map((c) => c.repoPath), ['/home/memoro', '/home/memoro', '/home/memoro']);
   assert.deepEqual(f.calls.git.filter((c) => c[1] === 'rebase').map((c) => c.slice(1)), [
@@ -1337,31 +1324,20 @@ test('a stack is landed bottom first, each one above it retargeted and replayed'
     ['rebase', '--onto', 'origin/main', 'forked-origin/m-3', 'm-3'],
   ]);
   assert.ok(f.calls.gh.some((c) => c.includes('edit') && c.includes('2') && c.includes('--base') && c.includes('main')));
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\t\w+\n/u);
 });
 
 test('a stacked branch that conflicts after the one below lands is aborted, not resolved', async () => {
-  const f = fixture({
-    plans: { memoro: { m: ready } },
-    gh: { m: [{ number: 1, head: 'm', base: 'main' }, { number: 2, head: 'm-2', base: 'm' }] },
-    session: okSession(), rebaseFails: ['m-2'], conflicts: { m: ['a.js'] },
-  });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
+  const { f, land } = landing({ rebaseFails: ['m-2'], conflicts: { m: ['a.js'] } });
+  const landed = await land([{ number: 1, headRefName: 'm', baseRefName: 'main' }, { number: 2, headRefName: 'm-2', baseRefName: 'm' }]);
+  assert.equal(landed.note, 'open,stack-stopped');
   assert.deepEqual(f.calls.rounds.map((c) => c.pr), [1], 'the one above it is not handed to the gate');
   assert.ok(f.calls.git.some((c) => c[1] === 'rebase' && c[2] === '--abort'));
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,stack-stopped\t\d+\t\w+\n/u);
   assert.match(f.files['/w/runner/log/runner.log'], /m-2 conflicts with what just landed in: a\.js/u);
 });
 
 test('two pull requests aimed at main are not a stack and nothing lands', async () => {
-  const f = fixture({
-    plans: { memoro: { m: ready } },
-    gh: { m: [{ number: 1, head: 'm', base: 'main' }, { number: 2, head: 'm-2', base: 'main' }] },
-    session: okSession(),
-  });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
+  const { f, land } = landing();
+  await land([{ number: 1, headRefName: 'm', baseRefName: 'main' }, { number: 2, headRefName: 'm-2', baseRefName: 'main' }]);
   assert.equal(f.calls.rounds.length, 0);
   assert.match(f.files['/w/runner/log/runner.log'], /#1 and #2 are both aimed at main — two stacks, not one/u);
 });
@@ -1533,11 +1509,12 @@ test('UPDATE file: a handover that does not start keeps this runner going', asyn
  */
 test('a landing that changed src/mc/ writes UPDATE itself', async () => {
   const f = fixture({
-    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } },
     prFiles: { 9: ['src/mc/plan-schema.js', 'tests/mc/plan-schema.test.js'] },
   });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'm', 9)(call); };
   await createRunner({ deps: f.deps }).pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\t\w+\n/u, 'it landed as usual');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t-\t\w+\n/u, 'it landed as usual');
   assert.ok('/w/runner/UPDATE' in f.files, 'the runner merged its own code and asked for nothing');
   assert.match(f.files['/w/runner/log/runner.log'], /m: #9 changed mc's own code \(src\/mc\/plan-schema\.js\) — UPDATE written/u);
   // GitHub's own file list for the merged pull request, not the gate's report
@@ -1550,29 +1527,32 @@ test('a landing that changed src/mc/ writes UPDATE itself', async () => {
 
 test('a landing that changed canon/ writes UPDATE too — the roles are quoted into the next prompt', async () => {
   const f = fixture({
-    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } },
     prFiles: { 9: ['canon/roles/step.md'] },
   });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'm', 9)(call); };
   await createRunner({ deps: f.deps }).pass();
   assert.ok('/w/runner/UPDATE' in f.files);
 });
 
 test('a landing that touched neither src/mc/ nor canon/ writes nothing', async () => {
   const f = fixture({
-    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } },
     // The near misses on purpose: a prefix is a prefix, so `src/mcp/` is not
     // `src/mc/` and `canonical.md` is not `canon/`. A handover costs a fresh
     // process, and most memoro-cli landings are these.
     prFiles: { 9: ['docs/technical/mc-run.md', 'src/mcp/server.js', 'canonical.md', 'tests/mc/run.test.js'] },
   });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'm', 9)(call); };
   await createRunner({ deps: f.deps }).pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\t\w+\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t-\t\w+\n/u);
   assert.equal('/w/runner/UPDATE' in f.files, false, 'a handover was asked for that nothing needed');
   assert.equal(/UPDATE written/u.test(f.files['/w/runner/log/runner.log']), false);
 });
 
 test('a landing whose files GitHub will not name asks for no update, and says why', async () => {
-  const f = fixture({ plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession() });
+  const f = fixture({ plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } } });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'm', 9)(call); };
   const inner = f.deps.gh;
   f.deps.gh = (cwd, args) => (args[1] === 'view' && args.includes('files')
     ? { ok: false, stdout: '', stderr: 'gh: not logged in' }
@@ -1584,9 +1564,10 @@ test('a landing whose files GitHub will not name asks for no update, and says wh
 
 test('STOP already written: the code lands, and the next runner reads it because it is a new process', async () => {
   const f = fixture({
-    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } },
     prFiles: { 9: ['src/mc/run.js'] },
   });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'm', 9)(call); };
   const inner = f.deps.session;
   f.deps.session = (call) => { f.files['/w/runner/STOP'] = ''; return inner(call); };
   await createRunner({ deps: f.deps }).pass();
@@ -1596,9 +1577,12 @@ test('STOP already written: the code lands, and the next runner reads it because
 
 test('the loop hands over after a step that landed mc own code, with nobody typing --update', async () => {
   const f = fixture({
-    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    plans: { 'memoro-cli': { m: ready } }, gh: { m: { number: 9 } },
     prFiles: { 9: ['src/mc/run.js'] },
   });
+  // The session lands its own pull request (ruling 21); the runner then asks
+  // GitHub which files it changed, exactly as it did after its own landing.
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'm', 9)(call); };
   const handovers = [];
   f.deps.handOver = async ({ paths, say }) => {
     handovers.push(paths.update);
@@ -2646,7 +2630,7 @@ test('a pull request from the branch the worktree stands on is the project\'s, w
  * minutes, so the landing waits and asks again.
  */
 test('a landing that meets another round waits for it, and lands', async () => {
-  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 70, title: 'Step' } }, session: okSession() });
+  const { f, land } = landing();
   let asked = 0;
   f.deps.mergeRound = async () => {
     asked += 1;
@@ -2655,23 +2639,22 @@ test('a landing that meets another round waits for it, and lands', async () => {
   };
   let slept = 0;
   f.deps.sleep = async () => { slept += 1; };
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
+  const landed = await land([{ number: 70, headRefName: 'm', baseRefName: 'main' }]);
+  assert.equal(landed.note, 'merged');
   assert.equal(asked, 3, 'the round was asked again after each refusal');
   assert.ok(slept >= 2, 'it waited between the asks');
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /alpha: merge #70 — waiting for the gate: another gate round is running on this machine \(pid 9\)/u);
-  assert.match(log, /alpha: merge #70 — waited \d+s for the gate/u);
-  assert.match(log, /alpha: merged #70 into main through the gate/u);
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\talpha\tstep\t.*\tsuccess,merged\t/u);
+  assert.match(log, /m: merge #70 — waiting for the gate: another gate round is running on this machine \(pid 9\)/u);
+  assert.match(log, /m: merge #70 — waited \d+s for the gate/u);
+  assert.match(log, /m: merged #70 into main through the gate/u);
 });
 
 test('a landing refused for any other reason is left open, as before', async () => {
-  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 70, title: 'Step' } }, session: okSession(), rounds: { 70: { ok: false, merged: false, stopped_at: 'red', reason: '2 tests red' } } });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
+  const { f, land } = landing({ rounds: { 70: { ok: false, merged: false, stopped_at: 'red', reason: '2 tests red' } } });
+  const landed = await land([{ number: 70, headRefName: 'm', baseRefName: 'main' }]);
+  assert.equal(landed.note, 'open,gate-red');
   assert.equal(f.calls.rounds.length, 1, 'a red round is not asked again');
-  assert.match(f.files['/w/runner/log/runner.log'], /alpha: #70 left open — 2 tests red/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: #70 left open — 2 tests red/u);
 });
 
 /**
@@ -3714,12 +3697,12 @@ test('a ready project with a clean workarea reads runnable', () => {
  */
 test('register: a step is running with its pid, then done with its pull request and the commit main stands at', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 77, title: 'Alpha step' } } });
-  const inner = f.deps.session;
   let seen = null;
   f.deps.session = (call) => {
+    f.calls.sessions.push(call);
     call.onSpawn(31337);
     seen = registerOf(f, 'alpha').steps[0];
-    return inner(call);
+    return landsItself(f, 'alpha', 77)(call);
   };
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
@@ -3735,17 +3718,22 @@ test('register: a step is running with its pid, then done with its pull request 
   assert.ok(after.landed?.at, 'and when it landed');
 });
 
-test('register: a landing the gate held leaves the step failed with the gate\'s own reason, and the picker never offers it again', async () => {
-  const f = fixture({
-    plans: { memoro: { alpha: ready, beta: ready } }, session: okSession(), gh: { alpha: { number: 77 } },
-    rounds: { 77: { ok: false, merged: false, stopped_at: 'red', reason: 'two tests the change reaches are red' } },
-  });
+test('register: a step the session gave up on is failed by its own word, and the picker never offers it again', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready, beta: ready } }, gh: { alpha: { number: 77 } } });
+  // The session's own `mc step failed --reason`: the register moves, the process ends.
+  f.deps.session = (call) => {
+    const entry = JSON.parse(f.files['/w/runner/projects/alpha.json']);
+    entry.steps[0] = { ...entry.steps[0], status: 'failed', pr: 77, reason: 'two tests the change reaches are red', session: null };
+    f.files['/w/runner/projects/alpha.json'] = JSON.stringify(entry);
+    return okSession()(call);
+  };
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
   const step = registerOf(f, 'alpha').steps[0];
   assert.equal(step.status, 'failed');
   assert.equal(step.pr, 77);
   assert.equal(step.reason, 'two tests the change reaches are red');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\talpha\tstep\t.*\tsuccess,failed\t/u);
   // The next reading of the world: alpha is failed, not in flight, and beta is next.
   const world = runner.queue();
   assert.equal(world.plans.find((p) => p.project === 'alpha').status, 'failed');

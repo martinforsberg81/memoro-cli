@@ -501,6 +501,18 @@ current round's name, mode and phase come from — `runningMerge` in
 `src/mc/merges-collect.js` joins the lock to the repository's name and its
 lease's holder, so the page reads a sentence rather than a slug and a pid.
 
+**And the register** (ruling 21). For a pull request that is a step's —
+`MC_STEP=<project>:<index>` in the calling session's environment, or a branch
+a register entry stands on (`stepForMerge`, [`src/mc/merge-step.js`](../../src/mc/merge-step.js))
+— the verb writes the outcome where the state lives. On green the step is
+`done` with the pull request and the commit it landed as, and the session that
+called is ended — `SIGTERM` to the pid the register holds — because a landed
+step has no further turn to take and its process tree is worth nothing. On
+red the attempt is counted and the gate's reason kept on the entry, and the
+lines the verb prints are that session's next instruction. Nothing is queued
+for a merge lane any more: a red is the caller's to fix, in the session that
+wrote the code, and the lane's one repair session is gone.
+
 ## The full run nobody asks for
 
 `mc test nightly start` runs `mc test <repo> --full` for every repository mc

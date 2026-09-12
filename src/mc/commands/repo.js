@@ -28,7 +28,8 @@ import {
   queuedFor, queueable,
 } from '../merge-queue.js';
 import { planBoundary } from '../merge-boundary.js';
-import { controlPaths, readRunner } from '../run-control.js';
+import { landedPatch, redPatch, stepForMerge } from '../merge-step.js';
+import { listEntries, updateStep } from '../register.js';
 import { pidAlive } from '../status-collect.js';
 import { workRoot } from '../paths.js';
 import { painter } from '../status-render.js';
@@ -281,53 +282,6 @@ export function helperMergeRefusal(holder, { check = false } = {}) {
   return 'REFUSED — the helper\'s tool does not carry mc merge without --check: the helper produces evidence, it does not land code';
 }
 
-/**
- * A refused round, written down for the runner's merge lane.
- *
- * The round has already run and already said what it said — nothing here
- * changes the ordinary process. What it changes is what becomes of the
- * refusal: instead of being the caller's problem (fourteen hand retries on
- * #671 in twenty minutes, 2026-09-06), it becomes an entry in
- * `~/mc/runner/merges.json` that the lane lands, or holds after one repair.
- *
- * Three refusals are not queued. A round that landed has nothing to queue; a
- * stop the lane could do nothing about stays as it is (`queueable`,
- * merge-queue.js); and a batch is out of this project's scope — it already
- * falls back to one round per pull request, and one entry per pull request out
- * of a batch is a later question.
- *
- * "A runner is running" is `runner.json` with a live pid, read through the
- * same `readRunner` the runner's own loop reads it with. Without one nothing
- * would ever pick the entry up, so nothing is written and the caller is told.
- *
- * @returns {{running: boolean, entry: object|null}|null} — null when there is
- *   nothing to queue and nothing to say about it.
- */
-function queueRefusal(report, { repoPath, holder, root, deps = {} }) {
-  if (!report || report.ok || report.batch) return null;
-  if (!queueable(report.stopped_at)) return null;
-  const read = deps.read || ((path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } });
-  const runner = (deps.readRunner || readRunner)({
-    paths: controlPaths(root), read, alive: deps.alive || pidAlive,
-  });
-  if (!runner?.alive) return { running: false, entry: null };
-  const repo = basename(String(repoPath).replace(/\/+$/u, ''));
-  const now = deps.now ? deps.now() : new Date();
-  const entries = enqueue(parseQueue(read(mergesPath(root))), {
-    repo,
-    pr: Number(report.pr?.number),
-    // The branch is the gate's — the lane needs it to find the workarea the
-    // pull request stands on. A round refused before the gate ran (a lease
-    // somebody else holds) has no branch to give, and the lane says so.
-    branch: report.gate?.pr?.head || null,
-    reason: report.reason || `the round stopped at ${report.stopped_at}`,
-    stopped_at: report.stopped_at,
-    since: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'),
-    holder: holder?.name || null,
-  });
-  (deps.writeJson || writeJsonAtomic)(mergesPath(root), entries);
-  return { running: true, entry: queuedFor(entries, repo, Number(report.pr?.number)) };
-}
 
 function spawnTool(tool) {
   return (args, options = {}) => spawnSync(tool, args, { cwd: options.cwd, encoding: 'utf8' });
@@ -506,32 +460,53 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
     recordRound(report, { mode });
   }
 
-  // Only a landing round queues: `--check` measures and was never asked to
-  // land anything, so a red check is a verdict and not a refusal.
-  const queued = opts.check ? null : queueRefusal(report, {
-    repoPath, holder, root: deps.root || workRoot(process.env), deps,
-  });
-  // Exit 0 when queued: the caller asked for a merge, and the merge is now
-  // somebody's rather than nobody's.
-  const code = report.ok || queued?.entry ? 0 : 1;
-  // On stderr, so a no-runner terminal is byte-for-byte what it was before
-  // this project on the channel the verdict is read from.
-  const noRunner = queued && !queued.running
-    ? 'mc: no runner is running to take the refusal — start one, or run this again\n'
-    : null;
+  // The register, for a step (ruling 21): `done` and the session ended on
+  // green; the attempt and the reason on anything else, for the same session
+  // to read and fix. Whose step this is comes from `MC_STEP` in the calling
+  // session's environment, else from the register entry the pull request's
+  // branch stands on (merge-step.js). Nothing is queued for anybody any more:
+  // a red is the caller's, and the merge lane's one repair session is gone.
+  const said = [];
+  if (single) {
+    const env = deps.env || process.env;
+    const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
+    for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
+    const askGh = deps.gh || spawnTool('gh');
+    let head = null;
+    try { head = JSON.parse(askGh(['pr', 'view', String(opts.pr), '--json', 'headRefName'], { cwd: repoPath }).stdout)?.headRefName || null; } catch { head = null; }
+    const step = stepForMerge({ env, head, entries: listEntries(root, io) });
+    if (step) {
+      const stamp = () => (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
+      try {
+        if (report.ok && report.merged && !report.off_default) {
+          updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: opts.pr, report, now: stamp() }), now: stamp(), ...io });
+          said.push(`mc: ${step.project} step ${step.index + 1} is done — the register says so`);
+          const pid = step.entry.steps[step.index]?.session?.pid;
+          const alive = deps.alive || pidAlive;
+          if (pid && alive(pid)) {
+            (deps.kill || ((target, signal) => process.kill(target, signal)))(pid, 'SIGTERM');
+            said.push(`mc: the step's session (pid ${pid}) is ended — nothing more for it to do`);
+          }
+        } else if (!report.ok) {
+          updateStep({ root, project: step.project, index: step.index, patch: redPatch({ step: step.entry.steps[step.index], report }), now: stamp(), ...io });
+          said.push(`mc: ${step.project} step ${step.index + 1} — attempt ${(step.entry.steps[step.index]?.attempts || 0) + 1} did not land; fix it here and run this again`);
+        }
+      } catch (error) {
+        said.push(`mc: the register could not be written (${error?.message || error}) — the merge stands as the lines above say`);
+      }
+    }
+  }
 
+  const code = report.ok ? 0 : 1;
   if (opts.json) {
-    stdout.write(`${JSON.stringify(queued?.entry ? { ...report, queued: true, queue_entry: queued.entry } : report, null, 2)}\n`);
-    if (noRunner) stderr.write(noRunner);
+    stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    for (const line of said) stderr.write(`${line}\n`);
     return code;
   }
 
   const lines = opts.check ? gateLines(report) : mergeLines(report);
   for (const line of lines) stdout.write(`${line}\n`);
-  if (queued?.entry) {
-    stdout.write(`mc: queued — the runner's merge lane lands #${queued.entry.pr}, or holds it after one repair (mc shows the queue)\n`);
-  }
-  if (noRunner) stderr.write(noRunner);
+  for (const line of said) stdout.write(`${line}\n`);
   return code;
 }
 

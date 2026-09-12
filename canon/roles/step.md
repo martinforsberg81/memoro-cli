@@ -24,9 +24,33 @@ found in your step's `comments`, set your step `blocked` with
 `blocked_by: { "kind": "decision" | "project", "name": … }` — both required —
 and open a PR saying what the answer is about.
 
-Otherwise build it, set your step `done` with its `pr`, and open a PR whose
-body includes the `PLAN.json` diff. Do not merge: the runner lands it after
-you, and its gate re-runs the test selection on the merged tree.
+Otherwise build it, and land it yourself — in this order, and in this session:
+
+1. Run what `done_when` names, and fix what it finds.
+2. Commit the code, push, and open a pull request from this branch. Then set
+   your step `done` with its `pr` (the number) in the plan file, commit that
+   as a second commit on the same branch, and push.
+3. Run `mc merge <repo> <pr>` in the foreground and read every line it prints.
+   `merged #N into main` — the step is done; the register says so and the
+   session is ended for you. There is nothing more to do.
+   A red — the lines name every red test and every failed command gate with
+   its output. Fix the code (never lower a threshold, never delete, skip or
+   weaken a test: the gate decides), commit, push to the same branch, and run
+   `mc merge` again on the same pull request.
+   `plan-trespass` — undo the change to whatever is not your own step's
+   `status`, `pr`, `comments` or a criterion's `met`, commit, push, run it
+   again. `conflicts with origin/main` — merge `origin/main` into this branch,
+   keep both intents, push, run it again. `still waiting … run this again` —
+   run it again.
+
+You never run `gh pr merge`, never open a second pull request, and never set
+`done` on a step whose pull request you could not land. When you have tried
+the same red three times with nothing new to try, or a fix needs a decision
+that is not yours, stop: write what the gate said and what you tried into the
+pull request and into your step's `comments`, push, run
+`mc step failed --reason "<why, in one sentence>"`, and end. Your pull request
+stays open with the work in it; a person picks it up from the brief, and
+`mc step ready` is the way back.
 
 A worktree handed to you with `git merge origin/main` in progress is still
 your step. The prompt names the files it stopped on; resolve them, commit the

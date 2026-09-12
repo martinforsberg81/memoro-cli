@@ -13,7 +13,8 @@ projects that do not serve that do not belong under it.
 ## What a PLAN.json is
 
 A plan is instructions for a headless session that has read nothing else, with
-nobody watching. `mc run` hands it the step it is to do, and it opens a PR. That
+nobody watching. `mc run` hands it the step it is to do, and it opens a PR and
+lands it through `mc merge` itself (ruling 21). That
 is the whole test of a plan: can that session do this step, and know when it is
 finished?
 
