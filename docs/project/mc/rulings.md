@@ -557,6 +557,32 @@ writes the next steps when the code is there to read. Carried into
 no runner change — the runner cannot tell an investigation from a step, so the
 rule is the plan author's.
 
+## 20 · Plans are read from `main` after a fetch, and the page shows the merges
+
+`ruling · 2026-09-12` · raised by Martin at the plan session, from a stale page
+
+`mc status <name>` preferred the workarea's `PLAN.json` over `origin/main`
+(`src/mc/status-project.js`), and the page read `origin/main` from
+`plans.json` without fetching unless `--fresh` was typed
+(`src/mc/page-collect.js`). A workarea's copy is whatever branch the folder
+stands on, and an un-fetched `origin/main` is whatever the runner last fetched,
+so both surfaces showed plans the runner would not read. The gate round in
+flight was on no surface at all: `~/.memoro/mc/gate-running.json` was written
+by the round and read by nothing but the next round.
+
+> "Låt oss uppdatera lite hur mc fungerar. Den ska göra git-anrop och läsa
+> från main istället för lokala plan filer. Just nu ses inaktuell info.
+> Dessutom: Låt oss visa 'merger'. Current + kö." (Martin, 2026-09-12)
+
+So: every reading surface fetches and reads `origin/main`, and none reads a
+workarea's plan; `--offline` is the only way to skip the fetch. GitHub is not
+asked on every refresh — open pull requests stay in `prs.json` behind
+`--fresh`. And the page gets a MERGES section between NEXT and RUNNER: the
+round landing now (the lock, which now carries its phase), the queue the merge
+lane will take, and the held pull requests, which move there from NEXT.
+
+**Carried by [`main-and-merges/PLAN.json`](main-and-merges/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
