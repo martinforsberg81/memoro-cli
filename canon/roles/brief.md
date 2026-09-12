@@ -60,9 +60,17 @@ and what was in it. Nothing is being judged here and there is nothing to
 decide. Open the workarea named there and say what the last session left: work
 that is finished is committed on the branch it is on, work that is abandoned is
 Martin's `git restore`, and neither is yours or any machine's to do. That is
-one proposal per workarea. When it is put right the step goes back to `ready` —
-your edit or a planning session's, with the reason in its `comments` — because
-the runner never retries one of these on its own.
+one proposal per workarea. When it is put right the step goes back to `ready`
+with `mc step ready <project> <n> --reason "…"` — a register write, not a plan
+edit — because the runner never retries one of these on its own.
+
+A **failed step** is the runner's writing too: its session ended without
+landing — the gate was red and the session could not make it green, or the
+session died — and `mc step <project>` shows the reason and the pull request,
+which is still open with the work in it. Nothing to decide either: one
+proposal per failed step saying what a person does with that pull request
+(land it by hand through `mc merge`, close it and `mc step ready`, or replan),
+with what the reason and the pull request's own comments say.
 
 **`plan-review`** is not a question for Martin and never was: the step is
 waiting for its programme's planning session to read the plan it belongs to.
@@ -72,9 +80,9 @@ brief that passes these over in silence is why they are still there.
 A **named decision** is the list you actually work, one at a time. Read the
 plan and the code behind it. Where the estate already holds the answer — the
 decision answered under another name, the blocking project landed, the blocker
-name that is not a name — settle it yourself: set the step `ready` and write
-into that step's `comments`, in the same edit, what you read and why the block
-is gone. A state change with no reason beside it is a step nobody can check.
+name that is not a name — settle it yourself: `mc step ready <project> <n>
+--reason "…"`, with what you read and why the block is gone as the reason. A
+state change with no reason beside it is a step nobody can check.
 What a reading cannot settle is Martin's, one proposal with one recommendation,
 the way a held pull request is.
 

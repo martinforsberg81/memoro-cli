@@ -30,6 +30,7 @@ import { ageWords } from './page-cache.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
+import { overlayPlans } from './register.js';
 import { machineDetail, machineState } from './status-collect.js';
 
 /* ---------------------------------------------------------------- builders */
@@ -92,9 +93,9 @@ function sentence(machine, home) {
 /** One line per step: where the project got to, and where it stopped. */
 export function stepRows(plan) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
-  const mark = { done: '✓', ready: '▸', blocked: '■' };
+  const mark = { done: '✓', ready: '▸', running: '●', failed: '✗', blocked: '■' };
   return steps.map((step, index) => {
-    const waiting = step.blocked_by ? ` on ${step.blocked_by.kind} ${step.blocked_by.name}` : '';
+    const waiting = step.blocked_by ? ` on ${step.blocked_by.kind} ${step.blocked_by.name}` : (step.status === 'failed' && step.pr ? ` — #${step.pr} open` : '');
     const state = step.status === 'done'
       ? (step.pr ? `#${step.pr}` : 'done')
       : `${step.status}${waiting}`;
@@ -253,7 +254,12 @@ export async function collectProject(name, {
   const main = findMainPlan(present, name, { git });
   if (!main && !workarea) return null;
 
-  const mainPlan = main ? readPlanText(main.text) : null;
+  // The file's word on each step, then the register's over it (register.js).
+  const filed = main ? readPlanText(main.text) : null;
+  const [overlaid] = main && filed?.plan
+    ? overlayPlans([{ repo: main.repo, programme: main.programme, project: name, path: main.plan, legacy: false, plan: filed.plan, problems: [] }], { root })
+    : [null];
+  const mainPlan = filed ? { ...filed, plan: overlaid?.plan ?? filed.plan } : null;
   const plan = mainPlan?.plan ?? null;
   const problems = mainPlan?.problems ?? [];
   const repo = main?.repo || null;

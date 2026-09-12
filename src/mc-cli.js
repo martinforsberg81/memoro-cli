@@ -123,6 +123,7 @@ async function routeV1Command(args) {
     run: './mc/commands/run.js',
     roles: './mc/commands/roles.js',
     log: './mc/commands/log.js',
+    step: './mc/commands/step.js',
   };
   return Object.hasOwn(modules, command)
     ? runModule(modules[command], args.slice(1))

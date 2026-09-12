@@ -116,7 +116,7 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(held[1], /the brief's/u, 'the section no longer says where the repair stops');
     // And that it is mc's own state: a fourth step status would make the
     // paragraph that promises there is none wrong.
-    assert.deepEqual([...STEP_STATUSES], ['ready', 'done', 'blocked']);
+    assert.deepEqual([...STEP_STATUSES], ['ready', 'running', 'done', 'failed', 'blocked']);
     assert.match(held[1], /never a status in a `PLAN\.json`/u);
   });
 

@@ -111,7 +111,8 @@ import {
   reconcileHeld, releasePr, samePr,
 } from './held.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
-import { readPlanText, unauthorisedChanges, validatePlan } from './plan-schema.js';
+import { readPlanText, unauthorisedChanges } from './plan-schema.js';
+import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
@@ -242,9 +243,16 @@ export function realDeps(env = process.env) {
     // ran `npm test` in the background and polled it in `sleep` loops of
     // 120 s — 212 such calls, 1.9 h of 12.5 h tool time — and 17 calls were
     // killed on the timeout itself. A suite run is one call now.
-    session: ({ bin, args, cwd, timeoutMs }) => new Promise((resolve) => {
-      const sessionEnv = { ...env, BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000' };
+    //
+    // `env` is what the runner adds for this session — `MC_STEP=<project>:<index>`,
+    // so `mc step` and `mc merge` inside it know which step they are — and
+    // `onSpawn` gets the child's pid the moment there is one: the register
+    // records it as the step's session, which is how `mc merge` finds the
+    // process to end when the step has landed (ruling 21).
+    session: ({ bin, args, cwd, timeoutMs, env: extra = {}, onSpawn = null }) => new Promise((resolve) => {
+      const sessionEnv = { ...env, BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000', ...extra };
       const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGTERM', env: sessionEnv });
+      if (child.pid && onSpawn) { try { onSpawn(child.pid); } catch { /* a record, not the session */ } }
       const cap = 256 << 20;
       const collect = (stream) => {
         const chunks = [];
@@ -363,6 +371,58 @@ export function createRunner({
     deps.log(line);
   };
   const gitOut = (cwd, args) => { const r = deps.git(cwd, args); return r.ok ? String(r.stdout ?? '').trimEnd() : null; };
+
+  /* ------------------------------------------------------------- register */
+
+  /**
+   * The register's IO, through this runner's dependencies: `read` and
+   * `writeJson` are the fixture's in a test, and the lock is the real one
+   * only where the dependencies are (`deps.lock`), because a test's work root
+   * is not a directory.
+   */
+  const register = {
+    root,
+    read: deps.read,
+    write: writeJson,
+    lock: deps.lock || ((_root, fn) => fn()),
+    get now() { return stamp(); },
+  };
+  const alive = deps.alive || pidAlive;
+
+  /** One step's state, written. Says what it wrote; a refusal is a line, not a crash. */
+  function recordStep(name, index, patch) {
+    try {
+      return updateStep({ root, project: name, index, patch, read: deps.read, write: writeJson, lock: register.lock, now: stamp() });
+    } catch (error) {
+      say(`${name}: the register refused step ${index + 1} → ${patch.status || 'the patch'}: ${error?.message || error}`);
+      return null;
+    }
+  }
+
+  /**
+   * A `running` step whose session is not there is a step nothing will
+   * finish: the runner that held it was killed, or the machine slept through
+   * it. It is `failed` with that reason, so the picker does not wait on it
+   * for ever and a person sees it where every other failed step is. A pid
+   * this process owns and is still awaiting is alive, so this never touches
+   * a lane's own session.
+   */
+  function sweepRunning(plans) {
+    return plans.map((record) => {
+      const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
+      let out = record;
+      steps.forEach((step, index) => {
+        if (step?.status !== 'running') return;
+        const entry = readEntry(root, record.project, { read: deps.read });
+        const pid = entry?.steps?.[index]?.session?.pid;
+        if (pid && alive(pid)) return;
+        say(`${record.project}: step ${index + 1} was running under pid ${pid ?? 'none'}, which is gone — failed`);
+        const written = recordStep(record.project, index, { status: 'failed', reason: `the session (pid ${pid ?? 'unknown'}) is gone without a result` });
+        if (written) out = applyEntry(out, written);
+      });
+      return out;
+    });
+  }
   const stopRequested = () => deps.exists(paths.stop);
   const updateRequested = () => deps.exists(paths.update);
 
@@ -1204,117 +1264,37 @@ export function createRunner({
   /* ------------------------------------------------------------- blocking */
 
   /**
-   * The one thing the runner writes into a plan: a step it could not start.
+   * A step the runner could not start, written down where the state lives:
+   * `blocked` in the register with `blocked_by: { kind: 'workarea', name }`
+   * and the detail as the reason, so nothing picks the project again until
+   * `mc step ready` — and nothing in a plan file moves for it. Until
+   * 2026-09-12 this was a docs-only pull request the runner opened and landed
+   * itself, because the state lived in the plan on main and there was no
+   * other way to it (ruling 21: the register).
    *
-   * A refusal that is a fact about the workarea or this machine (`WORKAREA_BLOCKS`,
-   * run-plan.js) does not go away by itself, and until 2026-09-08 the runner met
-   * every one of them again ten minutes later — for days, with nothing on `main`
-   * saying the project was stuck and the plan reading `ready` in every surface.
-   * Martin, 2026-09-08: "Om det var något som en LLM skulle kunna ta beslut som
-   * så skulle det ha gjorts vid första Runner-försöket. Då är det det som är
-   * fel. Rätt svar är inte en Runner-runda till." (Ruling 17.)
-   *
-   * So it is written down once, where the runner already obeys: the first
-   * not-done step of the plan on `origin/main` goes `blocked` with
-   * `blocked_by: { kind: 'workarea', name: <reason> }` and one appended comment
-   * naming the workarea and what was in it. `kindFor` then reads `skip:blocked`
-   * and the picker never reaches the project again (`nextFor`). The way back is
-   * `mc brief` or a planning session setting the step `ready`; the runner never
-   * writes `ready` and never retries on its own.
-   *
-   * It lands the way an archive lands — a worktree of its own from origin/main,
-   * a docs-only pull request through `landDocsPr`, which is the door a plan edit
-   * has (`docs-merge.js` refuses anything outside `docs/`). The branch carries
-   * the project's name as its prefix on purpose: `projectForBranch`
-   * (project-prs.js) then reads a block pull request that did *not* land as this
-   * project's own open one, so `inFlight` keeps it out of every pick until it
-   * does. Nothing else has to know the branch exists.
-   *
-   * Returns true when the block is recorded on a branch — landed or left open —
-   * and false when nothing was written, which the line above it says.
+   * Says which step, and refuses to write over a step that is already
+   * blocked — the world this lane read was stale, and a second reason on the
+   * same step is the same fact twice.
    */
   async function blockStep({ repo, name, reason, detail }) {
-    const branch = `${name}-blocked-${stamp().replace(/[-:]/gu, '')}`;
-    const worktree = join(root, 'runner', 'block', repo.name);
-    if (deps.exists(worktree)) deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
-    if (!deps.git(repo.path, ['worktree', 'add', '-b', branch, worktree, 'origin/main']).ok) {
-      say(`${name}: the worktree to write the block in could not be made — the step is not blocked, only skipped`);
-      return false;
-    }
-    try {
-      return await blockIn({ repo, worktree, branch, name, reason, detail });
-    } finally {
-      deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
-      deps.git(repo.path, ['branch', '-D', branch]);
-    }
-  }
-
-  /** The plan edit itself, inside the worktree that was made for it. */
-  async function blockIn({ repo, worktree, branch, name, reason, detail }) {
-    const found = planOf(worktree, name);
-    const plan = found?.plan || null;
-    if (!plan) {
-      say(`${name}: the plan on origin/main ${found ? 'does not parse' : 'is gone'} — nothing to block`);
-      return false;
-    }
-    const index = plan.steps.findIndex((step) => step?.status !== 'done');
-    if (index < 0) { say(`${name}: every step of the plan on origin/main is done — nothing to block`); return false; }
-    const step = plan.steps[index];
-    // Already blocked: the world this lane read is stale — another lane, or an
-    // earlier pick, has written it. Say so and leave the plan alone; a second
-    // comment on the same step is the same fact twice.
+    const entry = readEntry(root, name, { read: deps.read });
+    if (!entry) { say(`${name}: not in the register — nothing to block`); return false; }
+    const index = currentIndex(entry);
+    if (index < 0) { say(`${name}: every step is done — nothing to block`); return false; }
+    const step = entry.steps[index];
     if (step.status === 'blocked') {
       say(`${name}: step ${index + 1} is already blocked on ${step.blocked_by?.kind || 'something'} ${step.blocked_by?.name || '(unnamed)'} — not written again`);
       return false;
     }
     const area = join(root, name, repo.name);
-    step.status = 'blocked';
-    step.blocked_by = { kind: 'workarea', name: reason };
-    step.comments = [...(step.comments || []),
-      `Blocked by mc run on ${stamp()}: ${detail}. The workarea is ${area}. `
-      + 'mc brief or a planning session sets this step ready again once the workarea is fixed; the runner does not retry.'];
-    // A plan the runner made unreadable is the failure `plan-intake.js` exists
-    // for, and it must not be this runner's: nothing is committed unless the
-    // file it wrote still parses as a plan.
-    const check = validatePlan(plan);
-    if (!check.ok) {
-      say(`${name}: the block would leave the plan unreadable (${check.problems[0]}) — nothing written`);
-      return false;
-    }
-    const relative = found.path.slice(`${worktree}/`.length);
-    deps.write(found.path, `${JSON.stringify(plan, null, 2)}\n`);
-    const title = `Block ${name} step ${index + 1}: ${reason}`;
-    const body = [
-      detail,
-      '',
-      `The workarea is \`${area}\`.`,
-      '',
-      'This is the one thing `mc run` writes into a plan: a step it could not',
-      'start. The way back is `mc brief` or a planning session setting the step',
-      '`ready` again once the workarea is fixed — the runner never writes `ready`',
-      'and never retries this on its own.',
-    ].join('\n');
-    deps.git(worktree, ['add', '--', relative]);
-    if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok
-      || !deps.git(worktree, ['push', '-q', '-u', 'origin', 'HEAD']).ok) {
-      say(`${name}: the block could not be committed or pushed — the step is not blocked, only skipped`);
-      return false;
-    }
-    const created = deps.gh(worktree, ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body]);
-    const listed = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number']);
-    const pr = (/(\d+)\s*$/u.exec(created.stdout.trim())?.[1]) || (listed.ok && listed.stdout.trim()) || null;
-    if (!pr) {
-      say(`${name}: the block PR could not be opened (${lastLine(created)}) — the step is not blocked, only skipped`);
-      return false;
-    }
-    say(`${name}: step ${index + 1} blocked on workarea ${reason} — #${pr}`);
-    // A landing that is refused leaves the pull request open, and that is not a
-    // loss: `inFlight` covers the project from here, so nothing picks it again
-    // either way, and the brief reads open pull requests.
-    if (merge && !await landDocsPr(worktree, name, pr)) {
-      say(`${name}: #${pr} carries the block and is still open — the project starts nothing until it lands`);
-    }
-    return true;
+    const written = recordStep(name, index, {
+      status: 'blocked',
+      blocked_by: { kind: 'workarea', name: reason },
+      reason: `${detail}. The workarea is ${area}.`,
+      comment: `Blocked by mc run on ${stamp()}: ${detail}. The workarea is ${area}. mc step ready ${name} ${index + 1} once it is fixed; the runner does not retry.`,
+    });
+    if (written) say(`${name}: step ${index + 1} blocked on workarea ${reason}`);
+    return written;
   }
 
   /* -------------------------------------------------------------- closing */
@@ -1880,7 +1860,16 @@ export function createRunner({
       abandonMerge(`${planAt} could not be resolved`);
       return block(REFUSAL.sync, `origin/main was merged in and ${planAt} could be resolved neither by the plan's rule nor by taking main's copy`);
     }
-    const choice = repair ? { kind: 'repair' } : chooseKind({ plan });
+    // What the worktree's file says a step *is*, with the register's word on
+    // where it *stands* laid over it for the choice — and only for the
+    // choice: the prompt quotes the file, and the boundary check after the
+    // session compares the file the session was handed with the one it left,
+    // so a register state on some other step must not read as an edit.
+    const standing = (found) => {
+      const entry = found?.plan ? readEntry(root, name, { read: deps.read }) : null;
+      return entry ? applyEntry({ ...found, project: name }, entry) : found;
+    };
+    const choice = repair ? { kind: 'repair' } : chooseKind({ plan: standing(plan) });
     if (conflicts.length && choice.kind !== 'step' && choice.kind !== 'repair') {
       // The way here is `runStep` driven by hand past the picker — the plan on
       // disk is main's and it refuses the project itself. A project main's plan
@@ -1966,9 +1955,30 @@ export function createRunner({
         instructions,
       }),
     });
+    // The step is running, says the register — with the session's pid as
+    // soon as there is one, which is what `mc merge` ends when the step
+    // lands. A repair is not a step and has no entry of its own.
+    const stepIndex = kind === 'step' ? choice.index : null;
+    const stepBranch = gitOut(worktree, ['branch', '--show-current']) || name;
+    if (stepIndex != null) {
+      recordStep(name, stepIndex, {
+        status: 'running', branch: stepBranch, pr: null, reason: null,
+        session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool },
+      });
+    }
     let result;
     try {
-      result = await deps.session({ bin: launch.spec.bin, args, cwd: worktree, timeoutMs: settings.budgetMinutes * 60_000 });
+      result = await deps.session({
+        bin: launch.spec.bin,
+        args,
+        cwd: worktree,
+        timeoutMs: settings.budgetMinutes * 60_000,
+        env: stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree },
+        onSpawn: (childPid) => {
+          if (stepIndex == null) return;
+          recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool } });
+        },
+      });
     } finally {
       remove(currentPath);
       dropSlot();
@@ -2069,6 +2079,38 @@ export function createRunner({
       landSeconds = landed.seconds;
     }
 
+    // Where the step stands now, in the register (ruling 21). Landed: the
+    // step's own fields as the session left them in the plan it landed —
+    // `done` with its pull request, or `blocked` on a decision the session
+    // raised — plus the commit main now stands at. Anything else is `failed`
+    // with the reason: the gate's, when the landing held it; the session's
+    // exit, when it left no pull request at all. A quota answer is no session
+    // and the step goes back to `ready`. The runner never retries a failed
+    // step; `mc step ready` is the way back.
+    if (kind === 'step') {
+      const landedPlan = note === 'success,merged' ? readPlanText(deps.read(plan.path) || '').plan : null;
+      const own = landedPlan?.steps?.[choice.index];
+      if (own) {
+        const status = own.status === 'blocked' ? 'blocked' : 'done';
+        recordStep(name, choice.index, {
+          status,
+          pr: Number(pr) || own.pr || null,
+          branch,
+          blocked_by: status === 'blocked' ? own.blocked_by : null,
+          comments: Array.isArray(own.comments) ? own.comments : [],
+          landed: { sha: gitOut(worktree, ['rev-parse', 'origin/main']) || null, at: stamp() },
+          reason: null,
+        });
+      } else if (read.quota) {
+        recordStep(name, choice.index, { status: 'ready', session: null });
+      } else {
+        const held = pr !== '-' ? heldNow().find((entry) => samePr(entry, { repo: repo.name, pr: Number(pr) })) : null;
+        const reason = held?.reason
+          || (pr !== '-' ? `#${pr} is open and the runner did not land it (${note})` : `the session ended ${note} (rc ${result.status}) with no pull request`);
+        recordStep(name, choice.index, { status: 'failed', pr: Number(pr) || null, branch, reason });
+      }
+    }
+
     logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
     if (read.quota) await quotaPause();
@@ -2108,7 +2150,12 @@ export function createRunner({
       if (!deps.exists(join(repo.path, '.git'))) continue;
       askedRepos.push(repo.name);
       deps.git(repo.path, ['fetch', '-q', 'origin']);
-      plans.push(...listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }));
+      // The plan on main says what each step is; the register says where it
+      // stands (register.js). A plan the register has never seen is seeded
+      // from its own file here, once, and a step whose session is gone —
+      // a runner killed under it, a machine that slept — is failed here,
+      // because a `running` step with no process is one nothing will finish.
+      plans.push(...sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register)));
       const asked = deps.gh(repo.path, PR_LIST_ARGS);
       try {
         if (!asked.ok) throw new Error(asked.stderr.trim().split('\n').at(-1) || 'gh pr list failed');

@@ -34,6 +34,7 @@ import {
   workRoot,
 } from './paths.js';
 import { PR_FIELDS } from './project-prs.js';
+import { overlayPlans } from './register.js';
 import { RUN_REFUSALS } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
 import { machineDetail, machineState, pidAlive, readCurrents } from './status-collect.js';
@@ -1079,7 +1080,10 @@ export async function collectBrief({
   merged.sort((a, b) => a.mergedAt.localeCompare(b.mergedAt));
   opened.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-  const plans = present.flatMap((repo) => listPlans(repo, { git, batch }));
+  // The file's word on each step, then the register's over it (register.js).
+  const plans = overlayPlans(present.flatMap((repo) => listPlans(repo, { git, batch })), {
+    root, now: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'),
+  });
 
   let tsv = '';
   try { tsv = read(join(root, 'runner', 'log', 'runs.tsv')); } catch { notes.push('no runner/log/runs.tsv'); }

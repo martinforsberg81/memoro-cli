@@ -58,6 +58,7 @@ import { runningMerge } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
+import { overlayPlans } from './register.js';
 import { planState } from './plan-schema.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
@@ -1040,7 +1041,10 @@ export async function collectPage({
       : 'no PR cache yet — --fresh asks GitHub and fills it');
   }
 
-  const { plans, sources } = cache.loadPlans({ root, repos: present, now, git });
+  // The file's word on each step, then the register's over it: the plan on
+  // main says what a step is, the register where it stands (register.js).
+  const { plans: filed, sources } = cache.loadPlans({ root, repos: present, now, git });
+  const plans = overlayPlans(filed, { root, now: now.toISOString().replace(/\.\d{3}Z$/u, 'Z') });
   let tsv = '';
   try { tsv = readFileSync(join(root, 'runner', 'log', 'runs.tsv'), 'utf8'); } catch { notes.push('no runner/log/runs.tsv'); }
   const rows = runsSince(tsv, new Date(now.getTime() - DAY_MS));
