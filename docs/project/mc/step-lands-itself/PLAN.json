@@ -57,7 +57,7 @@
     {
       "title": "`mc merge` waits for its turn, in order of arrival, and refuses a plan trespass at the door",
       "status": "done",
-      "pr": null,
+      "pr": 711,
       "blocked_by": null,
       "comments": [
         "Built as specified: waitTurn() in src/mc/commands/repo.js owns the whole wait — the merges.json entry, the one-time \"waiting behind\" line, the \"waited Ns\" line, the MERGE_WAIT_MS timeout line and its exit 3, all in one function, called from gate()'s single-PR loop with a contended flag so a round that just reported busy/lease is forced through the full wait rather than re-reading a lock that already looks free. nextWaiter() in merge-queue.js takes the oldest live entry, across every repository, deferring to a waiter whose own repository lease is held. busy and lease are removed from QUEUEABLE_STOPS. The door is planBoundary() in the new src/mc/merge-boundary.js: gh pr view for the branch, projectForBranch to find the project (or skip the check entirely), unauthorisedChanges(mainPlan, headPlan, stepOfPr(...)) to find a trespass, fail-open on any gh/git/no-project-match failure, fail-closed only for a genuine trespass or an unparseable head plan.",
