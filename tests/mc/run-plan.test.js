@@ -490,14 +490,19 @@ test('sessionSettings: step and repair defaults, plan and step overrides, adviso
   assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', budgetMinutes: 90 });
   assert.deepEqual(sessionSettings(undefined, null, { kind: 'repair' }), { tool: 'claude', model: 'opus', effort: null, advisor: null, budgetMinutes: 90 });
 
-  // The plan overrides the default key by key.
-  assert.deepEqual(sessionSettings({ model: 'opus' }), { tool: 'claude', model: 'opus', effort: 'medium', advisor: 'opus', budgetMinutes: 90 });
+  // The plan overrides the default key by key. A plan on opus keeps the
+  // default advisor in name, but an advisor that is the model itself is no
+  // advisor (Martin, 2026-09-12: "Om step har opus => advisor = null, inte
+  // opus+opus.").
+  assert.deepEqual(sessionSettings({ model: 'opus' }), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings({ model: 'opus', advisor: 'sonnet' }).advisor, 'sonnet');
   assert.deepEqual(sessionSettings({ effort: 'high', advisor: 'sonnet' }, null, { kind: 'repair' }), { tool: 'claude', model: 'opus', effort: 'high', advisor: 'sonnet', budgetMinutes: 90 });
 
   // The step overrides the plan, again key by key.
   const plan = { model: 'opus', effort: 'low', advisor: 'opus' };
-  assert.deepEqual(sessionSettings(plan, { effort: 'xhigh' }), { tool: 'claude', model: 'opus', effort: 'xhigh', advisor: 'opus', budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings(plan, { effort: 'xhigh' }), { tool: 'claude', model: 'opus', effort: 'xhigh', advisor: null, budgetMinutes: 90 });
   assert.deepEqual(sessionSettings(plan, { model: 'haiku', effort: null }), { tool: 'claude', model: 'haiku', effort: 'low', advisor: 'opus', budgetMinutes: 90 });
+  assert.deepEqual(sessionSettings({}, { model: 'opus' }).advisor, null, 'a step on opus gets no opus advisor');
 
   // `off` at any level is no advisor, and a step can turn off the plan's.
   assert.equal(sessionSettings({ advisor: 'off' }).advisor, null);

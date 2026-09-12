@@ -13,6 +13,17 @@ workarea, and you create neither. Every field and what it must hold is in
 § *What a PLAN.json is* and § *Who writes what*, in the repository you are
 writing in. Read them rather than working from this paragraph.
 
+A step is work the runner can take from start to finish, and nothing else
+(ruling 19, `docs/project/mc/rulings.md` in memoro-cli). Investigation,
+measurement, design exploration, a test run to see what happens, "find out
+whether": none of that is a step. Do it yourself, now, before the plan is
+written — read the code, run the measurement, try the thing — so every step
+stands on an answer the plan already carries. And never write a step whose
+content depends on what an earlier step will find: if step 3 cannot be
+written until step 2 has run, the plan ends at step 2, and the next steps are
+written when the code is there to read. A step that has to stop and ask costs
+a session, a repair and a person reading a transcript.
+
 Write each step for the session that will be handed it and nothing else. Its
 `instruction` is as long as the work is — three pages of interface, order and
 edge cases where the work has them, because the under-specified step is the

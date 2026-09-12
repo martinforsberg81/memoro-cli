@@ -987,7 +987,10 @@ export function tsvHeader() {
  * defaults for the session's kind (`SESSION_DEFAULTS`). `model`, `effort` and
  * `advisor` resolve step over plan over default, one key at a time, so a step
  * that names only its effort keeps the plan's model. `advisor: 'off'` at any
- * level means no advisor. `tool` and `budget_minutes` are the plan's alone.
+ * level means no advisor, and so is an advisor that is the model itself: a
+ * plan or step on `opus` gets no advisor unless it names a different one
+ * (Martin, 2026-09-12: "Om step har opus => advisor = null, inte
+ * opus+opus."). `tool` and `budget_minutes` are the plan's alone.
  *
  * The defaults belong to claude and to nothing else. `opus` is a claude
  * alias; handed to `codex -m` it names a model that tool does not have, and
@@ -1007,11 +1010,12 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
   const named = (key) => [step[key], plan[key]].find((value) => value !== undefined && value !== null && value !== '');
   const advisor = named('advisor') ?? defaults.advisor ?? null;
   const effort = named('effort') ?? defaults.effort ?? null;
+  const model = named('model') ?? defaults.model ?? null;
   return {
     tool,
-    model: named('model') ?? defaults.model ?? null,
+    model,
     effort: claude && EFFORT_LEVELS.includes(effort) ? effort : null,
-    advisor: claude && advisor !== 'off' ? advisor : null,
+    advisor: claude && advisor !== 'off' && advisor !== model ? advisor : null,
     budgetMinutes: Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_BUDGET_MINUTES,
   };
 }

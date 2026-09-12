@@ -518,6 +518,45 @@ new prompt rule about turns or test counts, and the plan-trespass rate.
 
 **Carried by [`step-cost/PLAN.json`](step-cost/PLAN.json).**
 
+Addendum 2026-09-12, at the plan session: an advisor that is the session's own
+model is no advisor.
+
+> "Om step har opus => advisor = null, inte opus+opus." (Martin, 2026-09-12)
+
+`sessionSettings` in `run-plan.js` returns `advisor: null` when the resolved
+advisor equals the resolved model; a plan or step on `opus` that wants one
+names a different model. Carried by memoro-cli #702.
+
+## 19 · A step is work the runner takes from start to finish; investigation is the planning session's
+
+`ruling · 2026-09-12` · raised by Martin at the plan session, from the cost of stuck sessions
+
+Step sessions were being handed testing, design exploration and analysis, and
+plans were written with a later step depending on what an earlier one would
+find — step-cost's own step 3 was gated on a grep its instruction told the
+session to run, and went `blocked` on the result. Since 2026-08-25, 15 step
+sessions were killed on the budget with nothing landed and 22 ended
+`plan-trespass`, each costing a repair session; and every stuck session costs a
+person reading its transcript.
+
+> "Step används till fel saker, t ex testning, designutforskning, analys. Det
+> hör inte hemma där. Det ska köras i mc plan-sessionen. Det som läggs i ett
+> projekts STEP ska vara en färdig körbar plan som runner kan ta från a till ö.
+> Om inte, så hör det inte hemma där. Nu byggs det ihop konstigt som att steg 3
+> är blocked av steg 2:s utfall etc." … "Det försvinner massor med tokens på att
+> utreda sessioner som fastnat." (Martin, 2026-09-12)
+
+So: a step is executable end to end by a headless session from the plan alone.
+Investigation, measurement, exploration and "find out whether" belong to the
+planning session, with Martin at the terminal, and are finished before the
+plan is written. A step whose content depends on an earlier step's finding is
+not written; the plan ends where knowledge ends, and the planning session
+writes the next steps when the code is there to read. Carried into
+`docs/project/README.md` § *The steps* (both repositories),
+`canon/roles/_plan-writing.md` and `canon/roles/plan.md` by memoro-cli #702;
+no runner change — the runner cannot tell an investigation from a step, so the
+rule is the plan author's.
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som

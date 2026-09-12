@@ -39,10 +39,12 @@ the door.
 - `runner` — optional: `tool`, `model`, `effort`, `advisor`, `budget_minutes`.
   Only what the runner actually reads; there is no field here that nothing
   enforces. `effort` is one of `low`, `medium`, `high`, `xhigh`, `max`;
-  `advisor` is a model name, or `off` for none. What a key leaves unsaid is the
-  runner's default for the session's kind — a step runs on `sonnet` at `medium`
-  with `opus` as advisor, a repair on `opus` with neither (ruling 18,
-  [`docs/technical/mc-run.md`](../technical/mc-run.md) § *The session*).
+  `advisor` is a model name, or `off` for none, and an advisor that is the
+  model itself is none. What a key leaves unsaid is the runner's default for
+  the session's kind — a step runs on `sonnet` at `medium` with `opus` as
+  advisor, a step or plan on `opus` with no advisor, a repair on `opus` with
+  neither (ruling 18, [`docs/technical/mc-run.md`](../technical/mc-run.md)
+  § *The session*).
 
 ### The steps
 
@@ -84,6 +86,20 @@ carries:
   evening: "den ska bli bara en 'comments' … det behövs någonstans att skriva
   kommentarer"). The name is plain on purpose: a field whose name is a doctrine
   is either left empty or filled with what it is not.
+
+**A step is work the runner can take from start to finish**, and nothing else.
+Investigation, measurement, design exploration, a test run to see what happens,
+"find out whether" — none of that is a step. It is the planning session's, with
+Martin at the terminal, and it is done *before* the plan is written, so that
+every step stands on an answer the plan already carries. A step whose
+instruction depends on what an earlier step will find is not a step either: if
+the plan cannot say what step 3 does until step 2 has run, step 3 is not known
+yet, and the plan ends at step 2 (ruling 19, Martin, 2026-09-12: *"Det som
+läggs i ett projekts STEP ska vara en färdig körbar plan som runner kan ta från
+a till ö. Om inte, så hör det inte hemma där."*). The test of every step is the
+one at the top of this file: can a headless session that has read nothing else
+do it, and know when it is finished? A step that has to stop and ask costs a
+session, a repair, and a person reading a transcript to find out why.
 
 The plan has **no status of its own**: it is the state of the first step that is
 not done, and a plan whose steps are all done is done. The runner looks at that
