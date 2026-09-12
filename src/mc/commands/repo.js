@@ -350,7 +350,7 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
     repo: repoPath, mode, holder: holder?.name || null,
     prs: opts.prs?.length ? opts.prs : [opts.pr].filter(Boolean),
   });
-  const round = { repoPath, pr: opts.pr, prs: opts.prs, full: Boolean(opts.full), holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
+  const round = { repoPath, pr: opts.pr, prs: opts.prs, full: Boolean(opts.full), mode, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
   const report = opts.check ? await runGate(round) : await (deps.mergeRound || runMergeRound)(round);
   // Every round leaves a line — merged, stopped, refused — so "has the gate
   // ever caught anything?" is a count, not a reading of survivors (A7).
