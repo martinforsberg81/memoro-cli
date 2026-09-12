@@ -671,11 +671,11 @@ function landingLine(c, wide, landing) {
 function mergesLines(lines, c, wide, merges, at) {
   const parts = [];
   if (merges.landing) parts.push({ text: '1 landing', styles: ['grey'] });
-  if (merges.queued.count) parts.push({ text: `${merges.queued.count} queued`, styles: ['grey'] });
+  if (merges.queued.count) parts.push({ text: `${merges.queued.count} waiting`, styles: ['grey'] });
   if (merges.held.count) parts.push({ text: `${merges.held.count} held`, styles: ['grey'] });
   const counts = parts.length
     ? between(parts, ' · ')
-    : [{ text: 'nothing landing, nothing queued', styles: ['grey'] }];
+    : [{ text: 'nothing landing, nothing waiting', styles: ['grey'] }];
   heading(lines, c, wide, 'MERGES', counts, 'mc merge <repo> <pr>');
   lines.push(`       ${landingLine(c, wide, merges.landing)}`);
   queuedLines(lines, c, wide, merges.queued);
