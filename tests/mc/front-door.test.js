@@ -212,11 +212,11 @@ describe('the verbs that became mc', () => {
 });
 
 describe('the page flags', () => {
-  it('reads --json and --fresh, and rejects the rest — --watch included', () => {
-    assert.deepEqual(parsePageArgs([]), { json: false, fresh: false });
-    assert.deepEqual(parsePageArgs(['--json', '--fresh']), { json: true, fresh: true });
-    // What the page does anyway, still accepted so step 2's habit keeps working.
-    assert.deepEqual(parsePageArgs(['--offline']), { json: false, fresh: false });
+  it('reads --json, --fresh and --offline, and rejects the rest — --watch included', () => {
+    assert.deepEqual(parsePageArgs([]), { json: false, fresh: false, offline: false });
+    assert.deepEqual(parsePageArgs(['--json', '--fresh']), { json: true, fresh: true, offline: false });
+    // Ruling 20: the ordinary page fetches; --offline is what skips it.
+    assert.deepEqual(parsePageArgs(['--offline']), { json: false, fresh: false, offline: true });
     assert.match(parsePageArgs(['--sessions']).error, /unknown argument: --sessions/u);
     // Removed 2026-08-29: a page redrawn on a timer is not a live page.
     assert.match(parsePageArgs(['--watch']).error, /unknown argument: --watch/u);

@@ -3,22 +3,22 @@
  * now, the last
  * three runner steps, and the open PR on its branch.
  *
- * The plan is read from the workarea's working tree when there is one, and
- * from origin/main otherwise, because the workarea copy is the newer of the
- * two whenever a session has written a step and the PR is not merged yet;
- * when they differ the page says so rather than choosing silently.
+ * The plan is read from `origin/main` after a `git fetch` and from nowhere
+ * else — a workarea's copy is whatever branch the folder happens to stand
+ * on, and the runner reads main, so a page that preferred the workarea could
+ * show a plan the runner would not act on (ruling 20). `--offline` skips the
+ * fetch and says the plan is main as it was last fetched.
  *
  * The status row says the pair: what the plan is in, and — when this machine
  * has something to say about it — whether the runner could start it at all
- * (`machineState`, status-collect.js). The plan half is read as above; the
- * machine half is asked of the plan on `origin/main`, because that is the copy
- * the round reads.
+ * (`machineState`, status-collect.js). The machine half is asked of the same
+ * plan on `origin/main`.
  *
  * Like the page (status-collect.js): no model, nothing written, nothing
  * started. The builders are pure so the test can feed them fixtures.
  */
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -121,7 +121,7 @@ export function wrap(text, width, pad) {
 }
 
 export function renderProject({
-  name, repo, programme, path, source, unmerged, plan, problems = [], workarea, runs, prs, machine = null,
+  name, repo, programme, path, plan, problems = [], workarea, runs, prs, machine = null,
   queued = [], notes = [],
 }) {
   const out = [];
@@ -129,7 +129,7 @@ export function renderProject({
   const label = 11;
   const indent = 2 + label + 1;
   const row = (key, value) => out.push(`  ${key.padEnd(label)} ${wrap(value, 92 - indent, indent)}`);
-  if (path) row('plan', `${path} (${source}${unmerged ? ', differs from origin/main' : ''})`);
+  if (path) row('plan', `${path} (origin/main)`);
   row('workarea', tilde(workarea) || 'none');
   for (const [key, value] of fieldRows(plan, problems, machine)) row(key, value);
   if (!path) out.push('  no plan — this is a workarea without a project');
@@ -181,23 +181,6 @@ function execAsync(cmd, args, opts = {}) {
   return new Promise((resolve) => {
     execFile(cmd, args, { encoding: 'utf8', timeout: 20_000, maxBuffer: 8 << 20, ...opts }, (error, stdout) => resolve({ ok: !error, stdout: stdout || '' }));
   });
-}
-
-/** The `docs/project/<programme>/<name>/PLAN.json` inside a workarea checkout. */
-export function findWorkareaPlan(dir, name) {
-  let entries = [];
-  try { entries = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return null; }
-  for (const entry of entries) {
-    const root = join(dir, entry.name);
-    if (!existsSync(join(root, '.git'))) continue;
-    let programmes = [];
-    try { programmes = readdirSync(join(root, 'docs', 'project')); } catch { continue; }
-    for (const programme of programmes) {
-      const path = `docs/project/${programme}/${name}/PLAN.json`;
-      if (existsSync(join(root, path))) return { repo: entry.name, programme, path, file: join(root, path) };
-    }
-  }
-  return null;
 }
 
 /** Every project with a plan in an `ls-tree` of `docs/project` on origin/main. */
@@ -257,23 +240,15 @@ export async function collectProject(name, {
 
   const dir = join(root, name);
   const workarea = existsSync(dir) ? dir : null;
-  const local = workarea ? findWorkareaPlan(dir, name) : null;
   const main = findMainPlan(present, name, { git });
-  if (!local && !main && !workarea) return null;
+  if (!main && !workarea) return null;
 
-  let localPlan = null;
-  if (local) {
-    try { localPlan = readPlanText(read(local.file)); } catch { notes.push(`${local.path}: unreadable in the workarea`); }
-  }
   const mainPlan = main ? readPlanText(main.text) : null;
-  const chosen = localPlan || mainPlan || { plan: null, problems: [] };
-  const plan = chosen.plan;
-  const problems = chosen.problems;
-  const source = localPlan ? `workarea ${local.repo}` : 'origin/main';
-  const unmerged = Boolean(localPlan?.plan && mainPlan?.plan
-    && JSON.stringify(localPlan.plan) !== JSON.stringify(mainPlan.plan));
-  const repo = main?.repo || local?.repo || null;
-  const programme = main?.programme || local?.programme || null;
+  const plan = mainPlan?.plan ?? null;
+  const problems = mainPlan?.problems ?? [];
+  const repo = main?.repo || null;
+  const programme = main?.programme || null;
+  if (offline) notes.push('plan is origin/main as last fetched');
 
   let tsv = '';
   try { tsv = read(join(root, 'runner', 'log', 'runs.tsv')); } catch { notes.push('no runner/log/runs.tsv'); }
@@ -282,7 +257,7 @@ export async function collectProject(name, {
   // on `<name>` or on `<name>-<n>`, and asking `--head <name>` printed nothing
   // for a project whose three branches all had one open (2026-09-02).
   const prs = [];
-  const repoPath = main?.path || (local ? join(dir, local.repo) : present[0]?.path);
+  const repoPath = main?.path || present[0]?.path;
   // What GitHub was not asked is not the same as nothing being open, and the
   // reading below refuses to guess: `--offline` and a failed `gh` both leave
   // the repository unknown, which is a refusal of its own.
@@ -317,9 +292,7 @@ export async function collectProject(name, {
     name,
     repo,
     programme,
-    path: local?.path || main?.plan || null,
-    source,
-    unmerged,
+    path: main?.plan || null,
     plan,
     problems,
     workarea,

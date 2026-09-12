@@ -22,10 +22,10 @@
  *                     nothing loops — the fork is `interactive()` below and
  *                     there is no second opinion about it
  *
- * The page is offline: it answers from `~/mc/runner/plans.json` and
- * `~/mc/runner/prs.json` and says how old the PR cache is. `--fresh` is the
- * opt-in that fetches and asks GitHub. `--offline` is still accepted and does
- * nothing — it is what the page does now.
+ * Every print fetches `origin/main` first (ruling 20), so `plans.json` stays
+ * current; `prs.json` and its age still come from cache and are only refilled
+ * by `--fresh`, which also asks GitHub. `--offline` skips the fetch and reads
+ * the plans as they were last fetched.
  *
  * `--json` prints the same object the renderer takes, so the two surfaces
  * cannot drift.
@@ -41,7 +41,7 @@ import { openArea, parseArgs, runVerb, startSomething } from './work.js';
 
 const USAGE = [
   'usage — mc                       the page, and at a terminal a way in',
-  '        mc --json [--fresh]      the same page, as one object',
+  '        mc --json [--fresh|--offline]   the same page, as one object',
   '        mc status <name>         one project',
 ].join('\n');
 
@@ -72,7 +72,7 @@ export async function run(argv, deps = {}) {
   // One way to make a page, used by both surfaces: the width and the
   // colour are read per draw.
   const page = async () => {
-    const data = await collect({ fresh: opts.fresh });
+    const data = await collect({ fresh: opts.fresh, offline: opts.offline });
     return {
       data,
       lines: renderPageLines(data, {
@@ -84,7 +84,7 @@ export async function run(argv, deps = {}) {
     };
   };
   if (opts.json) {
-    stdout.write(`${JSON.stringify(await collect({ fresh: opts.fresh }), null, 2)}\n`);
+    stdout.write(`${JSON.stringify(await collect({ fresh: opts.fresh, offline: opts.offline }), null, 2)}\n`);
     return 0;
   }
   const first = await page();
@@ -114,14 +114,12 @@ export function readerFor({ stdout, lines, page }) {
 }
 
 export function parsePageArgs(argv) {
-  const opts = { json: false, fresh: false };
+  const opts = { json: false, fresh: false, offline: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--json') { opts.json = true; continue; }
     if (arg === '--fresh') { opts.fresh = true; continue; }
-    // What the page does by default. Accepted so a habit and a script that
-    // learnt it in step 2 keep working.
-    if (arg === '--offline') continue;
+    if (arg === '--offline') { opts.offline = true; continue; }
     return { ...opts, error: `unknown argument: ${arg}` };
   }
   return opts;

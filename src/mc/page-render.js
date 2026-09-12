@@ -1079,9 +1079,12 @@ export function renderPageLines(data, {
   deskLine(lines, c, wide, 'HELPER', sessions.desks?.helper, 'mc helper');
   deskLine(lines, c, wide, 'BRIEF', sessions.desks?.brief, 'mc brief');
 
+  const prsAge = data.caches?.prs?.fetched ? `, PRs ${ageWords(data.caches.prs.age_seconds)} old` : ', no PR cache yet';
   const cache = data.caches?.fresh
     ? 'fresh — fetched and asked GitHub'
-    : `offline${data.caches?.prs?.fetched ? `, PRs ${ageWords(data.caches.prs.age_seconds)} old` : ', no PR cache yet'} — --fresh asks GitHub`;
+    : data.caches?.offline
+      ? `offline — plans as last fetched${prsAge}`
+      : `fetched origin${prsAge} — --fresh asks GitHub`;
   lines.push('');
   say(lines, c, wide, 2, cache);
   for (const note of data.notes || []) {

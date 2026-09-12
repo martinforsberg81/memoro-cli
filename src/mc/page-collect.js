@@ -995,15 +995,17 @@ export function readAreas(root, repoNames) {
  * Everything the page shows, in one object: one key per section, plus what the
  * caches did and whatever could not be read.
  *
- * Offline is the default and the whole point — plans come from `plans.json`
- * keyed by the `origin/main` sha, open PRs from `prs.json` with their age said
- * out loud. `--fresh` is the opt-in that fetches, asks GitHub and refills both.
+ * Plans come from `origin/main` after a `git fetch`, cached in `plans.json`
+ * keyed by its sha (page-cache.js); open PRs come from `prs.json` with their
+ * age said out loud, refilled only by `--fresh`. `--offline` skips the fetch
+ * and reads the plans as they were last fetched (ruling 20).
  */
 export async function collectPage({
   env = process.env,
   now = new Date(),
   repos = defaultRepos(env),
   fresh = false,
+  offline = false,
   git = runGit,
   run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }),
   exec = execAsync,
@@ -1015,24 +1017,26 @@ export async function collectPage({
   const notes = [];
   const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
 
+  let fetched = false;
+  if (!offline) {
+    const results = await Promise.all(present.map((repo) => exec('git', ['-C', repo.path, 'fetch', '-q', 'origin'])
+      .then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — plans may be stale`); return r.ok; })));
+    fetched = present.length === 0 || results.some(Boolean);
+  }
+
   let prs = { prs: [], fetched: null, age_seconds: null };
   // The repositories whose open pull requests are unknown rather than none:
   // what nobody asked and what failed read the same to a list, and the queue
   // reading below would otherwise call a project runnable on that silence.
   const prsFailed = [];
   if (fresh) {
-    // Fetch and gh per repository, side by side: serial they were the whole
-    // budget on their own.
     const asked = [];
-    await Promise.all(present.flatMap((repo) => [
-      exec('git', ['-C', repo.path, 'fetch', '-q', 'origin']).then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — plans may be stale`); }),
-      exec('gh', PR_LIST_ARGS, { cwd: repo.path }).then((r) => {
-        try {
-          if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
-          else { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list failed`); }
-        } catch { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list unreadable`); }
-      }),
-    ]));
+    await Promise.all(present.map((repo) => exec('gh', PR_LIST_ARGS, { cwd: repo.path }).then((r) => {
+      try {
+        if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
+        else { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list failed`); }
+      } catch { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list unreadable`); }
+    })));
     prs = cache.savePrs({ root, prs: asked, now });
   } else {
     prs = cache.loadPrs({ root, now });
@@ -1121,7 +1125,9 @@ export async function collectPage({
       running: runner.steps.map((step) => step.name).filter(Boolean),
       programmes: present.flatMap((repo) => listProgrammes(repo)),
     }),
-    caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length } },
+    caches: {
+      fresh, offline, fetched, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length },
+    },
     notes,
   };
 }
