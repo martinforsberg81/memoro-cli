@@ -525,7 +525,7 @@ model is no advisor.
 
 `sessionSettings` in `run-plan.js` returns `advisor: null` when the resolved
 advisor equals the resolved model; a plan or step on `opus` that wants one
-names a different model. Carried by memoro-cli #701.
+names a different model. Carried by memoro-cli #702.
 
 ## 19 · A step is work the runner takes from start to finish; investigation is the planning session's
 
@@ -553,7 +553,7 @@ plan is written. A step whose content depends on an earlier step's finding is
 not written; the plan ends where knowledge ends, and the planning session
 writes the next steps when the code is there to read. Carried into
 `docs/project/README.md` § *The steps* (both repositories),
-`canon/roles/_plan-writing.md` and `canon/roles/plan.md` by memoro-cli #701;
+`canon/roles/_plan-writing.md` and `canon/roles/plan.md` by memoro-cli #702;
 no runner change — the runner cannot tell an investigation from a step, so the
 rule is the plan author's.
 
