@@ -614,6 +614,17 @@ a plan needing another, and the measurement after twenty sessions
 A step and a repair get it; the helper and intake turns, which share
 `headlessArgs`, do not.
 
+No claude launch of the runner's may spawn a subagent: every one gets
+`--disallowedTools Agent`. A step is bounded by its plan, the strong model is
+reached through `--advisor`, and a subagent runs on whatever model the
+repository's instruction files name rather than the plan's `runner` choice.
+Over the first 41 sonnet step sessions (2026-09-11..12) 19 spawned opus
+subagents on memoro's `CLAUDE.md` instruction — 2 111 of the era's 6 556 model
+requests and about a quarter of its cost, invisible in `runs.tsv`, which
+counts the parent's turns only. Three of those sessions ended their turn with
+"I'll review its diff when it reports back" and no PR, because in a headless
+session nothing reports back. The flag holds whatever any repository's files say.
+
 Next to that body go the Coding Profile, `canon/roles/_common.md` and
 `canon/roles/step.md` — assembled by `instructionsFor` and passed through the
 channel each tool already has, with nothing written into the worktree to carry
@@ -625,6 +636,7 @@ The two argument lists are the only place the tools differ:
 ```
 claude  -p <prompt> [--model …] [--effort …] [--advisor …] \
         --permission-mode acceptEdits --autocompact 150000 \
+        --disallowedTools Agent \
         --append-system-prompt <instructions> --output-format json
 codex   exec --json --sandbox danger-full-access [-m …] \
         -c instructions=<instructions> <prompt>
