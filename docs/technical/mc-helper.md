@@ -7,7 +7,8 @@ acts on until Martin picks it up at `mc brief` or `mc plan`.
 
 | | what it does |
 |---|---|
-| `mc helper` | **the desk.** A foreground session in `~/mc/helper/` that takes Martin's report of a bug or something that should be better, and writes it as a proposal. No digest, no production, no fix |
+| `mc helper` | **the desk.** A foreground session in `~/mc/helper/` — resumed if one is there — that takes Martin's report of a bug or something that should be better, and writes it as a proposal. No digest, no production, no fix |
+| `--new` | the desk again, but a fresh conversation rather than the one already there |
 | `mc helper --intake` | **the eye.** The day's digest per repository, then the inbox drained: one headless turn per file, oldest first, each file archived the moment its turn ends |
 | `mc helper --collect` | the eye's script half alone: write `~/mc/intake/errors-<repo>-<date>.md` for each repository, with the delta against that repository's previous digest. **No model, no writes to production** |
 | `--since <iso>` | the window; default is the last 24 h |
@@ -75,8 +76,10 @@ directory and an archive already; the drain lists files.
 
 ## The desk
 
-`mc helper` with no flags opens a fresh foreground session — the terminal's,
-never tmux, never `--resume` — standing in `~/mc/helper/`, wearing the
+`mc helper` with no flags opens the foreground session — the terminal's,
+never tmux; the conversation already in `~/mc/helper/` resumed with no
+intro, a fresh one when there is none or on `--new` (Martin, 2026-09-13) —
+standing in `~/mc/helper/`, wearing the
 `helper` role (`canon/roles/helper.md`, Sonnet). Its shape is `mc brief`'s:
 a room of its own under the work root, no repository, no workarea.
 

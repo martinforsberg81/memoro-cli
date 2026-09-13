@@ -12,8 +12,10 @@ This verb puts them. It is two halves that share nothing but a file:
 
 - **`mc brief --collect`** — a script, no model, that gathers the ground
   into `~/mc/brief/<ISO timestamp>.md`.
-- **`mc brief`** — that, and then a fresh foreground session whose first
-  words are the file.
+- **`mc brief`** — that, and then the foreground brief session: the one
+  already in the work root resumed and handed the file as its next words, or
+  a fresh one whose first words are the file when there is none or `--new`
+  says so.
 
 It replaced the resident PM and the pm-helper (`~/mc/mc-utredning/utredning-2026-08-24.md`
 §9–13, D-0218). Nothing in it is resident: no daemon, no watcher, no inbox,
@@ -175,8 +177,10 @@ delete.
 
 The bare verb opens **an ordinary foreground terminal program** — `spawn`
 with `stdio: 'inherit'` through `openInWorkArea`
-([`src/mc/work-open.js:127`](../../src/mc/work-open.js)) — not tmux, never
-`--resume`. Opus by default from the role, `--codex` allowed through the
+([`src/mc/work-open.js:127`](../../src/mc/work-open.js)) — not tmux. The
+brief session already there is resumed (`pick: null`) and today's file rides
+as `resumePrompt`, a reply into it; `--new` starts fresh (Martin,
+2026-09-13). Opus by default from the role, `--codex` allowed through the
 adapter, the Coding Profile appended, then `canon/roles/_common.md` and the
 overlay from [`canon/roles/brief.md`](../../canon/roles/brief.md) — assembled
 like every other session's ([`mc-roles.md`](mc-roles.md)) — and the brief file
@@ -294,8 +298,9 @@ is printed uncut, that the hand-off names its programme, and that neither
 special case is folded into the list above it.
 
 `tests/mc/commands/brief.test.js` covers the verb: that `--collect` stops
-after the file, that the bare verb opens a new foreground conversation in
-the work root with the overlay and the brief as its first words, and that the
+after the file, that the bare verb opens the foreground conversation in the
+work root — resumed, with the brief as its next words either way, fresh on
+`--new` — with the overlay and the brief as its first words, and that the
 overlay asks for a proposal rather than a menu. It reads the overlay itself
 rather than a copy of it.
 

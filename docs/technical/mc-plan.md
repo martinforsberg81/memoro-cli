@@ -116,8 +116,11 @@ nobody. Nothing at all is the only failure.
 **Assembles the prompt**, in `planLaunch` — a pure function, so a test can read
 it without starting anything.
 
-**Hands it to `openInWorkArea`** with `pick: 'new'`, which is the same launch
-path `mc brief` and `mc worker` use:
+**Hands it to `openInWorkArea`** with `pick: null` — the conversation already
+in the programme directory is resumed, with no intro, and a new one starts
+only when there is none or `--new` says so (Martin, 2026-09-13: "Existerar
+det en session, ska samma öppnas utan intro"). It is the same launch path
+`mc brief` and `mc worker` use:
 [`src/mc/work-open.js`](../../src/mc/work-open.js), `spawn` with `stdio:
 'inherit'`. There is no second launcher. NOW says `plan` for exactly as long as
 the session holds the terminal, through the foreground register.
@@ -171,7 +174,11 @@ predicts this programme's deliverable, which is what the prompt is still held
 to.
 
 The prompt rides as the **last positional argument**, which is how both tools
-take opening words, and only for a new conversation.
+take opening words, and only for a new conversation. It names the programme
+and where the session stands, and then waits: the reading list and the
+`plan-review` hand-off it used to carry are the role's (`canon/roles/plan.md`),
+and a session told to start by reading and reporting spent its first turn on
+an intro nobody asked for.
 
 ## Questions
 
@@ -193,8 +200,10 @@ of which starts a session:
   `<project>`, `PR`, `pull request`, `mc merge`, `push`, `programme document`
   or `Then stop`. This is the assertion that keeps the prompt from growing
   back;
-- the prompt does name the programme, the directory, the branch, both
-  checkouts, and the two things to read;
+- the prompt does name the programme, the directory, the branch and both
+  checkouts, and asks for no reading and no report; the `plan-review` hand-off
+  is the role's, not the prompt's;
+- the launch resumes (`pick: null`) and `--new` starts fresh;
 - the role has a body: it says what a planning session is for and what is not
   its work, carries the plan-writing rules by `@include` rather than by copy,
   and a launch with no body behind the role is refused rather than started;

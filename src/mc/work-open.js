@@ -14,7 +14,11 @@
  *
  * `prompt` is the conversation's opening words, given to a new conversation
  * only: both tools take it as the last positional argument. A resumed
- * conversation already has its own history and is not spoken over.
+ * conversation already has its own history and is not spoken over — unless
+ * the caller hands a `resumePrompt`, which lands as a reply to wherever that
+ * conversation stopped. `mc brief` uses it: the brief file is new every time,
+ * and a resumed brief session that was not handed it would have nothing to
+ * meet about.
  */
 import { spawnSync } from 'node:child_process';
 
@@ -36,6 +40,7 @@ export async function openInWorkArea({
   model = null,
   overlay = null,
   prompt = null,
+  resumePrompt = null,
   defaultModel = null,
   defaultModelTool = null,
   // Which verb opened this, and in which area — the two words NOW needs to
@@ -96,7 +101,7 @@ export async function openInWorkArea({
   const instructions = resuming ? null : instructionsFor(toolId, await readProfile({ env }), overlay);
   const profile = resuming ? [] : profileArgs(toolId, instructions);
   const args = resuming
-    ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || []
+    ? [...(launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || []), ...(resumePrompt ? [resumePrompt] : [])]
     : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...profile, ...(prompt ? [prompt] : [])];
 
   log('work.open', {
@@ -112,7 +117,7 @@ export async function openInWorkArea({
     // which role text this launch handed over that is still there tomorrow.
     role: roleName || null,
     role_digest: textDigest(instructions),
-    prompt: !resuming && Boolean(prompt),
+    prompt: resuming ? Boolean(resumePrompt) : Boolean(prompt),
     profile: profile.length > 0,
     known_here: before.length,
   });

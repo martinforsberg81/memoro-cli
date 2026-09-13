@@ -1,8 +1,9 @@
 /**
  * `mc helper` — the desk, and the eye on production behind the same verb.
  *
- * The bare verb is **the desk**: a fresh foreground session standing in
- * `~/mc/helper/`, with Martin in it, whose whole job is to take what he says
+ * The bare verb is **the desk**: a foreground session standing in
+ * `~/mc/helper/` — resumed if one is there, fresh with `--new` or when there
+ * is none — with Martin in it, whose whole job is to take what he says
  * is broken or should be better and write it down as a proposal in
  * `~/mc/proposals/`. It reads no digest and it does not touch the
  * proposals already waiting — adding is all it does.
@@ -30,7 +31,7 @@ import { INTAKE_PER_ROUND } from '../run-plan.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
 
-const USAGE = 'usage — mc helper [--codex|--claude] [--model <model>]\n'
+const USAGE = 'usage — mc helper [--new] [--codex|--claude] [--model <model>]\n'
   + '        mc helper --intake [--collect] [--since <iso>] [--limit <n>] [--threshold <n>] [--model <model>]\n';
 
 /** The flags that only mean something to the digest, named once for the refusal. */
@@ -40,7 +41,7 @@ export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const scanned = scanArgs(argv, {
-    booleans: ['--intake', '--collect'],
+    booleans: ['--intake', '--collect', '--new'],
     strictValues: ['--since', '--limit', '--threshold', '--model'],
     toolSugar: true,
   });
@@ -137,10 +138,12 @@ export async function run(argv, deps = {}) {
 }
 
 /**
- * The bare verb: a new foreground conversation in `~/mc/helper/` wearing the
- * `helper` role. Same shape as `mc brief` — the terminal's session, never
- * tmux, never `--resume` — and its own directory rather than `~/mc/intake/`,
- * which is the intake turn's material and none of its business.
+ * The bare verb: the foreground conversation in `~/mc/helper/` wearing the
+ * `helper` role — the one already there, resumed with no intro, or a new one
+ * when there is none or `--new` says so (Martin, 2026-09-13). Same shape as
+ * `mc brief` — the terminal's session, never tmux — and its own directory
+ * rather than `~/mc/intake/`, which is the intake turn's material and none of
+ * its business.
  *
  * The directories are made here rather than by the session: a session told to
  * write into a path that does not exist has one avoidable way to fail.
@@ -171,7 +174,7 @@ async function openDesk({ flags, stdout, stderr, deps }) {
     areaRoot: dir,
     worktree: { repo: null, path: dir, is_git: false },
     tool: flags.tool || role.tools?.[0] || 'claude',
-    pick: 'new',
+    pick: flags.new ? 'new' : null,
     // NOW says "mc helper" while this is up. Its room is nobody's workarea,
     // so there is no area name to give it.
     verb: 'helper',

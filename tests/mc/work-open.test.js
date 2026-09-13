@@ -112,6 +112,17 @@ describe('openInWorkArea and --model', () => {
     assert.equal(result.resumed, true);
     assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID]);
   });
+
+  // `prompt` is opening words and a resume is not an opening; `resumePrompt`
+  // is the one thing a caller can say into a resumed conversation, as a reply.
+  it('a resume ignores prompt and appends resumePrompt last', async () => {
+    const { areaRoot, worktree, env } = fixture({
+      entries: [{ type: 'user', message: { content: 'first' } }],
+    });
+    const { calls, options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, ...options, prompt: 'INTRO', resumePrompt: 'TODAY' });
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, 'TODAY']);
+  });
 });
 
 describe('openInWorkArea in a role area', () => {

@@ -3,10 +3,11 @@
  *
  * `--collect` is the script half: gather the ground into
  * `~/mc/brief/<date>.md` with no model. The bare verb does that and then
- * opens a fresh foreground session — the terminal's, never tmux, never
- * `--resume` — standing in the work root, with the Coding Profile, the
- * `brief` role from `canon/roles/brief.md` and the brief file as its opening
- * words.
+ * opens the foreground brief session — the terminal's, never tmux — standing
+ * in the work root. A brief session already there is resumed and handed the
+ * new brief file as its next words; with none, or with `--new`, a fresh one
+ * starts with the Coding Profile, the `brief` role from `canon/roles/brief.md`
+ * and the brief file as its opening words (Martin, 2026-09-13).
  *
  * It used to be the *decision* session too: it read `<area>/decisions/*.md`,
  * listed what waited on Martin, and its one written output was a
@@ -23,10 +24,10 @@ import { scanArgs } from './flags.js';
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  const scanned = scanArgs(argv, { booleans: ['--collect', '--offline'], strictValues: ['--model'], toolSugar: true });
+  const scanned = scanArgs(argv, { booleans: ['--collect', '--offline', '--new'], strictValues: ['--model'], toolSugar: true });
   if (scanned.error || scanned.positional.length) {
     stderr.write(`mc: ${scanned.error || `unknown argument ${scanned.positional[0]}`}\n`);
-    stderr.write('usage — mc brief [--collect] [--offline] [--codex|--claude] [--model <model>]\n');
+    stderr.write('usage — mc brief [--collect] [--offline] [--new] [--codex|--claude] [--model <model>]\n');
     return 2;
   }
   const { flags } = scanned;
@@ -51,7 +52,7 @@ export async function run(argv, deps = {}) {
     areaRoot: root,
     worktree: { repo: null, path: root, is_git: false },
     tool: flags.tool || role.tools?.[0] || 'claude',
-    pick: 'new',
+    pick: flags.new ? 'new' : null,
     // NOW says "mc brief" while this is up. It stands in the work root, which
     // is nobody's area, so there is no name to give it.
     verb: 'brief',
@@ -63,6 +64,9 @@ export async function run(argv, deps = {}) {
     model: flags.model,
     overlay: launch.overlay,
     prompt: launch.prompt,
+    // The brief is new every time it is collected, so a resumed session gets
+    // it too — as a reply, not an intro.
+    resumePrompt: launch.prompt,
     defaultModel: role.model,
     defaultModelTool: role.tools?.[0] || null,
   });
