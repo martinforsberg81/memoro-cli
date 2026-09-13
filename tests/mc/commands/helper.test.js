@@ -75,7 +75,7 @@ async function invoke(argv, data = {}, turn = TURN(), over = {}) {
 }
 
 describe('mc helper — the desk', () => {
-  it('opens a fresh foreground session in ~/mc/helper/, and collects nothing', async () => {
+  it('opens the foreground session in ~/mc/helper/, resumed if there, and collects nothing', async () => {
     const result = await invoke([]);
     assert.equal(result.code, 0);
     assert.equal(result.seen.called, undefined, 'the desk reads no digest');
@@ -84,7 +84,7 @@ describe('mc helper — the desk', () => {
     assert.match(result.opened.areaRoot, /\/helper$/u);
     assert.equal(result.opened.worktree.path, result.opened.areaRoot);
     assert.equal(result.opened.worktree.is_git, false);
-    assert.equal(result.opened.pick, 'new');
+    assert.equal(result.opened.pick, null);
     assert.equal(result.opened.verb, 'helper');
     assert.equal(result.opened.tool, 'claude');
     assert.equal(result.opened.defaultModel, 'sonnet');
@@ -108,6 +108,11 @@ describe('mc helper — the desk', () => {
     const result = await invoke(['--codex', '--model', 'fable']);
     assert.equal(result.opened.tool, 'codex');
     assert.equal(result.opened.model, 'fable');
+  });
+
+  it('--new starts a fresh conversation instead of resuming', async () => {
+    const result = await invoke(['--new']);
+    assert.equal(result.opened.pick, 'new');
   });
 
   /**

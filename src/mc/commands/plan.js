@@ -51,7 +51,7 @@ export const planArea = (programme) => `${PLAN_HOME}/${programme}`;
 /** The branch a planning session commits on, in every repository it holds. */
 export const planBranch = (programme) => `${PLAN_HOME}/${programme}`;
 
-const USAGE = 'usage — mc plan [<programme>] [--codex|--claude] [--model <model>]\n';
+const USAGE = 'usage — mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]\n';
 
 /** What `chooseProgramme` returns for "not one of these" — never a real name. */
 const NEW_PROGRAMME = Symbol('new programme');
@@ -108,12 +108,17 @@ export async function run(argv, deps = {}) {
   // The session stands in the programme's own directory rather than in either
   // checkout: both repositories are siblings under it, and a programme that
   // spans them should not have to be opened in one of them by guess.
+  //
+  // A programme's session is picked up where it was, not started over: a
+  // conversation already in this directory is resumed, with no intro, and
+  // only `--new` starts another (Martin, 2026-09-13: "Existerar det en
+  // session, ska samma öppnas utan intro").
   const launch = planLaunch({ programme, repos: ready.repos, role });
   const result = await (deps.open || openInWorkArea)({
     areaRoot: ready.path,
     worktree: { repo: null, path: ready.path, is_git: false },
     tool: opts.tool || role.tools?.[0] || 'claude',
-    pick: 'new',
+    pick: opts.fresh ? 'new' : null,
     verb: 'plan',
     areaName: planArea(programme),
     roleName: role.name || 'plan',
@@ -272,8 +277,8 @@ export function programmeLabel(row) {
 /* --------------------------------------------------------------- the launch */
 
 /**
- * The whole of what a planning session is told: which programme, where it
- * stands, and what to read first.
+ * The whole of what a new planning session is told: which programme and where
+ * it stands. Martin opens; what to read follows from what he asks.
  *
  * It stops there on purpose. An earlier version of this prompt went on to name
  * the deliverable — a programme document, one `PLAN.json` per project that can
@@ -286,17 +291,14 @@ export function programmeLabel(row) {
  * prompt that answers them in advance is guessing, and a session that follows
  * the guess is doing the wrong work confidently.
  *
- * So the reading is named and nothing else is: `docs/project/README.md`, which
- * is where the convention and the `PLAN.json` schema actually live, and the
- * programme's own directory. What a planning session *is* — the programme as
- * the unit, the plan-review, the projects the brief has already decided and
- * this session therefore does not take — is `canon/roles/plan.md` and reaches
- * the session behind the profile, the way every other role's does.
- *
- * The one addition is not a deliverable either: a step parked on `plan-review`
- * is this session's by definition, and the brief hands it over by name. That is
- * a fact about work already on `main`, not a guess about what this session will
- * produce.
+ * It used to go on to name what to read first and to say that a `plan-review`
+ * park is this session's. Both are in `canon/roles/plan.md`, which reaches the
+ * session behind the profile the way every other role's does, and a session
+ * told to start by reading and reporting spent its first turn on an intro
+ * Martin had not asked for (Martin, 2026-09-13). What a planning session *is*
+ * — the programme as the unit, the plan-review, the projects the brief has
+ * already decided and this session therefore does not take — is the role's
+ * to say.
  *
  * This function used to read `canon/roles/_common.md` and paste it into the
  * prompt, because a role with no overlay inherits nothing: `instructionsFor`
@@ -313,20 +315,9 @@ export function planLaunch({ programme, repos = [], role }) {
     `You stand in \`~/mc/plan/${programme}/\`, with ${beside} beside you — each a`,
     `worktree on branch \`plan/${programme}\`. This is not a workarea: nothing`,
     '`mc run` does can reach it.',
-  ];
-  // The one thing a planning session is told about a plan it has not opened:
-  // `plan-review` is its work. `canon/roles/brief.md` sends it here by name, and
-  // a hand-off nobody at the receiving end has heard of is a hand-off that
-  // stops. The role file says it too, in general; this says it about the
-  // programme now on the screen, which is the form the session can act on.
-  lines.push(
     '',
-    'Martin is at the terminal. Start by reading `docs/project/README.md` and what',
-    `\`docs/project/${programme}/\` already holds in each repository, and say what`,
-    'you found. A step of this programme stopped on `blocked_by: plan-review` is',
-    'waiting for this session and no one else: the brief names the programme and',
-    'hands it over, and reading that plan is how it comes back.',
-  );
+    'Martin is at the terminal. Wait for him.',
+  ];
   return { overlay: role.overlay || null, prompt: lines.join('\n'), model: role.model || null };
 }
 
@@ -338,7 +329,7 @@ function parseArgs(argv) {
   if (argv.includes('--repo')) {
     return { error: 'a programme spans both repositories — mc plan takes no --repo' };
   }
-  const scanned = scanArgs(argv, { strictValues: ['--model'], toolSugar: true });
+  const scanned = scanArgs(argv, { booleans: ['--new'], strictValues: ['--model'], toolSugar: true });
   if (scanned.error) return { error: scanned.error };
   const words = scanned.positional;
   if (words.length > 1) return { error: `unexpected argument ${words[1]}` };
@@ -346,5 +337,6 @@ function parseArgs(argv) {
     name: words[0] || null,
     model: scanned.flags.model || null,
     tool: scanned.flags.tool || null,
+    fresh: Boolean(scanned.flags.new),
   };
 }

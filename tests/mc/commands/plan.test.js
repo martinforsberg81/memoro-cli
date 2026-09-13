@@ -157,7 +157,7 @@ describe('the picker', () => {
 });
 
 describe('the prompt', () => {
-  it('names the programme, where it stands, and what to read — and stops', () => {
+  it('names the programme and where it stands — and waits for Martin', () => {
     const launch = planLaunch({
       programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
     });
@@ -166,9 +166,10 @@ describe('the prompt', () => {
     assert.match(launch.prompt, /`memoro\/` and `memoro-cli\/`/u);
     assert.match(launch.prompt, /branch `plan\/msr-core`/u);
     assert.match(launch.prompt, /not a workarea/u);
-    // The two things to read, and they are the only instruction there is.
-    assert.match(launch.prompt, /docs\/project\/README\.md/u);
-    assert.match(launch.prompt, /docs\/project\/msr-core\//u);
+    // No reading list and no report asked for: Martin opens (2026-09-13).
+    assert.match(launch.prompt, /Wait for him\./u);
+    assert.ok(!launch.prompt.includes('docs/project/'), launch.prompt);
+    assert.ok(!/say what\s+you found/u.test(launch.prompt), launch.prompt);
     assert.equal(launch.model, 'fable');
     assert.equal(launch.overlay, readCanonRole('plan').overlay);
   });
@@ -209,17 +210,15 @@ describe('the prompt', () => {
     assert.ok(!launch.prompt.includes(shared), launch.prompt);
   });
 
-  // The receiving end of the brief's hand-off. `plan-review` is the park every
-  // plan converted to the schema carries, and it has never been a question for
-  // Martin: the brief names the programme, and this is the session that reads
-  // the plan. The role file says it in general; the prompt says it about the
-  // programme on the screen.
-  it('tells the session that a plan-review park is its own', () => {
-    const { prompt } = planLaunch({
+  // The receiving end of the brief's hand-off is the role's to say, not the
+  // prompt's: `canon/roles/plan.md` carries `plan-review`, and the prompt no
+  // longer repeats it (Martin, 2026-09-13 — the intro was inaktuell).
+  it('leaves the plan-review hand-off to the role', () => {
+    const { prompt, overlay } = planLaunch({
       programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'),
     });
-    assert.match(prompt, /`blocked_by:\s*plan-review`/u);
-    assert.match(prompt, /waiting\s+for\s+this\s+session\s+and\s+no\s+one\s+else/u);
+    assert.ok(!prompt.includes('plan-review'), prompt);
+    assert.match(overlay, /blocked_by:\s*plan-review/u);
   });
 
   it('names only the checkout it actually got', () => {
@@ -291,6 +290,21 @@ describe('the launch', () => {
     assert.equal(opened[0].areaRoot, '/work/plan/msr-core');
     assert.equal(opened[0].worktree.path, '/work/plan/msr-core');
     assert.equal(opened[0].areaName, 'plan/msr-core');
+    // The session already in the directory is picked up, with no intro;
+    // `pick: null` is `openInWorkArea`'s "the most recent one here, else new".
+    assert.equal(opened[0].pick, null);
+  });
+
+  it('--new starts another conversation instead of resuming', async () => {
+    const opened = [];
+    const code = await run(['msr-core', '--new'], {
+      stdout: sink(),
+      stderr: sink(),
+      repos: REPOS,
+      ensure: () => ({ ok: true, path: '/work/plan/msr-core', repos: ['memoro', 'memoro-cli'] }),
+      open: (options) => { opened.push(options); return { ok: true, code: 0 }; },
+    });
+    assert.equal(code, 0);
     assert.equal(opened[0].pick, 'new');
   });
 });

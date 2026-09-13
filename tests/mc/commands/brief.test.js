@@ -129,7 +129,7 @@ describe('mc brief', () => {
     assert.match(out.stderr, /memoro: no checkout/u);
   });
 
-  it('bare: collects, then a fresh conversation in the work root, foreground, with overlay and prompt', async () => {
+  it('bare: collects, then the conversation in the work root, foreground, with overlay and the brief either way', async () => {
     const { stdout, stderr } = io();
     let seen = null;
     const code = await run(['--model', 'fable'], {
@@ -138,12 +138,24 @@ describe('mc brief', () => {
     assert.equal(code, 0);
     assert.equal(seen.areaRoot, process.env.MC_WORK_ROOT);
     assert.equal(seen.worktree.path, process.env.MC_WORK_ROOT);
-    assert.equal(seen.pick, 'new');
+    // The brief session there is resumed; `--new` is the only fresh start.
+    assert.equal(seen.pick, null);
     assert.equal(seen.tool, 'claude');
     assert.equal(seen.model, 'fable');
     assert.equal(seen.defaultModel, 'opus');
     assert.match(seen.overlay, /^You are the brief session/u);
     assert.match(seen.prompt, /Start the meeting/u);
+    // A resumed session gets today's brief as a reply — it is new every time.
+    assert.equal(seen.resumePrompt, seen.prompt);
+  });
+
+  it('--new starts a fresh conversation', async () => {
+    const { stdout, stderr } = io();
+    let seen = null;
+    await run(['--new'], {
+      stdout, stderr, collect: async () => COLLECTED, open: async (o) => { seen = o; return { ok: true, code: 0 }; },
+    });
+    assert.equal(seen.pick, 'new');
   });
 
   it('refuses a stray word', async () => {
