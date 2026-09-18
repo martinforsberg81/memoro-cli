@@ -94,13 +94,16 @@ describe('the decision shape every role writes', () => {
    * The boundary the runner checks on the way back in. It is in the overlay as
    * well, so a session is told before it is caught.
    */
-  it('step is told which four things are its to edit, and that it is checked', () => {
+  it('step is told the one thing in the file that is its to edit, that state goes through mc step, and that it is checked', () => {
     const { overlay } = readCanonRole('step');
     assert.match(overlay, phrase('You never write the plan\'s steps'));
-    assert.match(overlay, phrase('its `status`, its `pr`, and its `comments`'));
+    assert.match(overlay, phrase('`mc step` writes it'));
+    assert.match(overlay, phrase('`mc step note "…"`'));
+    assert.match(overlay, phrase('`mc step blocked --on <decision-name>`'));
     assert.match(overlay, phrase('`met` on the criteria you actually met'));
-    assert.match(overlay, phrase('This is checked, not asked'));
-    assert.match(overlay, phrase('a session that changed anything else leaves a PR it will not'));
+    assert.match(overlay, phrase('The file is checked, not asked'));
+    assert.match(overlay, phrase('leaves a PR it will not merge'));
+    assert.doesNotMatch(overlay, /set\s+your step `done`/u, 'mc merge writes done; the file is not where it goes');
   });
 
   /**

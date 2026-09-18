@@ -60,7 +60,7 @@ describe('the brief role', () => {
     assert.match(overlay, /\*Held before merge\*/u);
     assert.match(overlay, /`mc merge <repo> <pr>`/u);
     assert.match(overlay, /`gh pr close`/u);
-    assert.match(overlay, /`blocked_by`/u);
+    assert.match(overlay, /`mc step blocked --on <decision>`/u);
     assert.match(overlay, /One proposal per pull request, never a menu/u);
   });
 

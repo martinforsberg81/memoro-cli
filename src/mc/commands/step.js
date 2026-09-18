@@ -4,7 +4,8 @@
  *   mc step                                  this session's step, from MC_STEP
  *   mc step <project>                        every step of a project
  *   mc step failed [<project> <n>] --reason "…"     the session gave up
- *   mc step blocked [<project> <n>] --on <decision> [--reason "…"]
+ *   mc step blocked [<project> <n>] --on <decision> | --on-project <project> [--reason "…"]
+ *   mc step note [<project> <n>] "…"                a paragraph for the next reader
  *   mc step ready <project> <n> [--reason "…"]      a person starts it again
  *   mc step done <project> <n> [--pr <n>]           landed by hand
  *
@@ -21,10 +22,11 @@ import { spawnSync } from 'node:child_process';
 
 import { currentIndex, listEntries, parseStepEnv, readEntry, updateStep } from '../register.js';
 import { workRoot } from '../paths.js';
-import { defaultRepos } from '../brief-collect.js';
+import { defaultRepos, listPlans } from '../brief-collect.js';
+import { NAME_RE } from '../plan-schema.js';
 import { scanArgs } from './flags.js';
 
-const STATES = new Set(['failed', 'blocked', 'ready', 'done']);
+const STATES = new Set(['failed', 'blocked', 'ready', 'done', 'note']);
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -35,7 +37,7 @@ export async function run(argv, deps = {}) {
   const io = { read: deps.read, write: deps.write, lock: deps.lock };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
 
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--reason', '--on', '--pr'] });
+  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--reason', '--on', '--on-project', '--pr'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
 
@@ -50,7 +52,11 @@ export async function run(argv, deps = {}) {
     return 0;
   }
 
-  const [status, ...rest] = positional;
+  const [status, ...line] = positional;
+  // A note's text is the last word on the line; the rest names the step.
+  const note = status === 'note' ? line.pop() : null;
+  if (status === 'note' && !(note && note.trim()) ) { stderr.write('mc: a note says something — mc step note [<project> <n>] "…"\n'); return 2; }
+  const rest = line;
   const target = resolveTarget(rest, env);
   if (!target) { stderr.write('mc: which step? mc step <status> <project> <n>, or MC_STEP in a runner session\n'); return 2; }
   const entry = readEntry(root, target.project, io);
@@ -59,15 +65,23 @@ export async function run(argv, deps = {}) {
   if (index < 0 || index >= entry.steps.length) { stderr.write(`mc: ${target.project} has no step ${index + 1}\n`); return 2; }
   const step = entry.steps[index];
 
-  const patch = { status };
+  const patch = status === 'note' ? { comment: note.trim() } : { status };
   if (status === 'failed') {
     if (!flags.reason) { stderr.write('mc: a failed step says why — --reason "…"\n'); return 2; }
     patch.reason = flags.reason;
     patch.comment = `Failed on ${now}: ${flags.reason}`;
   }
   if (status === 'blocked') {
-    if (!flags.on) { stderr.write('mc: a blocked step names what it waits for — --on <decision-or-project>\n'); return 2; }
-    patch.blocked_by = { kind: /^[a-z0-9][a-z0-9-]*$/u.test(flags.on) ? 'decision' : 'decision', name: flags.on };
+    const name = flags.on || flags['on-project'];
+    if (!name || (flags.on && flags['on-project'])) { stderr.write('mc: a blocked step names the one thing it waits for — --on <decision> or --on-project <project>\n'); return 2; }
+    // The same shape the plan schema holds a blocker's name to: a sentence
+    // here made the page call the whole plan unparseable (2026-09-18).
+    if (!NAME_RE.test(name)) { stderr.write(`mc: "${name}" is not a name — lower-case letters, digits and hyphens; what it waits for in more words goes in --reason\n`); return 2; }
+    if (flags['on-project']) {
+      const known = (deps.projects || projectsOnMain)(env);
+      if (known && !known.includes(name)) { stderr.write(`mc: no project ${name} has a plan on main — a step blocked on it would wait for ever\n`); return 1; }
+    }
+    patch.blocked_by = { kind: flags.on ? 'decision' : 'project', name };
     patch.reason = flags.reason || null;
     if (flags.reason) patch.comment = `Blocked on ${now}: ${flags.reason}`;
   }
@@ -86,7 +100,9 @@ export async function run(argv, deps = {}) {
   }
   try {
     const next = updateStep({ root, project: target.project, index, patch, now, ...io });
-    stdout.write(`mc: ${target.project} step ${index + 1} — ${step.status} → ${next.steps[index].status}\n`);
+    stdout.write(status === 'note'
+      ? `mc: ${target.project} step ${index + 1} — noted\n`
+      : `mc: ${target.project} step ${index + 1} — ${step.status} → ${next.steps[index].status}\n`);
     return 0;
   } catch (error) {
     stderr.write(`mc: ${error?.message || error}\n`);
@@ -102,6 +118,12 @@ function resolveTarget(rest, env) {
     return { project: rest[0], index };
   }
   return parseStepEnv(env.MC_STEP);
+}
+
+/** Every project with a plan on a repo's main, or null when none could be read. */
+function projectsOnMain(env) {
+  const names = defaultRepos(env).flatMap((repo) => { try { return listPlans(repo).map((plan) => plan.project); } catch { return []; } });
+  return names.length ? names : null;
 }
 
 /** What GitHub says of a pull request: OPEN, MERGED, CLOSED — or null when it cannot be asked. */
@@ -139,7 +161,8 @@ export function usage() {
     'usage — mc step                                   this session\'s step (MC_STEP)\n',
     '        mc step <project> [--json]                 every step of a project\n',
     '        mc step failed [<project> <n>] --reason "…"\n',
-    '        mc step blocked [<project> <n>] --on <name> [--reason "…"]\n',
+    '        mc step blocked [<project> <n>] --on <decision> | --on-project <project> [--reason "…"]\n',
+    '        mc step note [<project> <n>] "…"\n',
     '        mc step ready <project> <n> [--reason "…"]\n',
     '        mc step done <project> <n> [--pr <n>]\n',
   ].join('');

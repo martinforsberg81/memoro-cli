@@ -11,25 +11,29 @@ success criterion, and the PR body says how you verified it.
 
 **You never write the plan's steps** — not a new one, not a rewrite of one
 that has not run, nor `goal`, `contract`, `out_of_scope` or the criteria
-themselves. Four things are yours, three of them inside your own step: its
-`status`, its `pr`, and its `comments` — paragraph strings holding whatever
-the next reader needs that the code in front of them does not show. The
-fourth is `met` on the criteria you actually met. This is checked, not asked:
-the runner compares the file it handed you with the file you leave, and a
-session that changed anything else leaves a PR it will not merge.
+themselves. One thing in the plan file is yours: `met` on the criteria you
+actually met. Where your step stands is not in the file at all: it is in the
+register mc keeps, `mc step` writes it, and the file's `status`, `pr`,
+`blocked_by` and `comments` are read by nothing. What the next reader needs
+that the code does not show goes in the pull request body and as
+`mc step note "…"`, a paragraph a call. The file is checked, not asked:
+`mc merge` compares the plan on main with yours, and a session that changed
+another step, the goal, the contract or the scope leaves a PR it will not
+merge.
 
 So when the code contradicts the plan — your step cannot be done as written,
-or a later step is wrong — you stop instead of repairing it. Put what you
-found in your step's `comments`, set your step `blocked` with
-`blocked_by: { "kind": "decision" | "project", "name": … }` — both required —
-and open a PR saying what the answer is about.
+or a later step is wrong — you stop instead of repairing it. Say what you
+found with `mc step note`, run `mc step blocked --on <decision-name>` (or
+`--on-project <project>`; a name, not a sentence) with `--reason "…"`, and
+open a PR saying what the answer is about.
 
 Otherwise build it, and land it yourself — in this order, and in this session:
 
 1. Run what `done_when` names, and fix what it finds.
-2. Commit the code, push, and open a pull request from this branch. Then set
-   your step `done` with its `pr` (the number) in the plan file, commit that
-   as a second commit on the same branch, and push.
+2. Commit the code, push, and open a pull request from this branch. The
+   whole step: a pull request that lands is a `done` step whatever its body
+   says is left, so a part you cannot finish is `mc step failed`, not a
+   partial landing.
 3. Run `mc merge <repo> <pr>` in the foreground and read every line it prints.
    `merged #N into main` — the step is done; the register says so and the
    session is ended for you. There is nothing more to do.
@@ -37,9 +41,8 @@ Otherwise build it, and land it yourself — in this order, and in this session:
    its output. Fix the code (never lower a threshold, never delete, skip or
    weaken a test: the gate decides), commit, push to the same branch, and run
    `mc merge` again on the same pull request.
-   `plan-trespass` — undo the change to whatever is not your own step's
-   `status`, `pr`, `comments` or a criterion's `met`, commit, push, run it
-   again. `conflicts with origin/main` — merge `origin/main` into this branch,
+   `plan-trespass` — undo every change to the plan file that is not a
+   criterion's `met`, commit, push, run it again. `conflicts with origin/main` — merge `origin/main` into this branch,
    keep both intents, push, run it again. `still waiting … run this again` —
    run it again.
 
@@ -47,7 +50,7 @@ You never run `gh pr merge`, never open a second pull request, and never set
 `done` on a step whose pull request you could not land. When you have tried
 the same red three times with nothing new to try, or a fix needs a decision
 that is not yours, stop: write what the gate said and what you tried into the
-pull request and into your step's `comments`, push, run
+pull request and a `mc step note`, push, run
 `mc step failed --reason "<why, in one sentence>"`, and end. Your pull request
 stays open with the work in it; a person picks it up from the brief, and
 `mc step ready` is the way back.

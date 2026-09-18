@@ -22,9 +22,9 @@
  * register mc owns, one writer, never a merge — *"Ok på registret."*
  *
  * So: one file per project, `~/mc/runner/projects/<project>.json`, written
- * whole and atomically, holding one entry per step keyed by the step's index
- * in the plan. The plan on `main` is still what says what a step *is*; the
- * register says where it *stands*. Readers join the two (`overlayPlans`) and
+ * whole and atomically, holding one entry per step, in the plan's order and
+ * matched to it by the step's key (`stepKey`). The plan on `main` is still
+ * what says what a step *is*; the register says where it *stands*. Readers join the two (`overlayPlans`) and
  * see the same plan record they always saw, with the register's word for
  * `status`, `pr`, `blocked_by` and `comments` — so the picker, the page, the
  * brief and `mc status` change their source and not their shape.
@@ -41,7 +41,7 @@ import { closeSync, openSync, readFileSync, readdirSync, rmSync, writeSync } fro
 import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
-import { planSummary } from './plan-schema.js';
+import { BLOCKER_KINDS, NAME_RE, planSummary } from './plan-schema.js';
 
 export const REGISTER_SCHEMA = 'mc-register';
 export const REGISTER_VERSION = 1;
@@ -71,9 +71,20 @@ export function registerPath(root, project) {
 /** A step nobody has touched: ready, on nothing, with nothing to say. */
 export function emptyStep() {
   return {
-    status: 'ready', pr: null, branch: null, blocked_by: null, reason: null, comments: [],
+    key: null, status: 'ready', pr: null, branch: null, blocked_by: null, reason: null, comments: [],
     session: null, attempts: 0, landed: null, updated: null,
   };
+}
+
+/**
+ * What a step is called when its place in `steps[]` moves: the label its
+ * title opens with (`W4.1.2 — actions: …` is `W4.1.2`), or the whole title
+ * when it has none. A planning session inserts and reorders steps; the state
+ * has to follow the step and not the slot it stood in.
+ */
+export function stepKey(fileStep) {
+  const title = typeof fileStep?.title === 'string' ? fileStep.title.trim() : '';
+  return title.split(/\s+[—–-]\s+/u)[0].trim() || null;
 }
 
 const int = (value) => (Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : null);
@@ -87,6 +98,7 @@ function normaliseStep(step) {
   const status = STEP_STATES.includes(step.status) ? step.status : 'ready';
   return {
     ...base,
+    key: typeof step.key === 'string' && step.key ? step.key : null,
     status,
     pr: int(step.pr),
     branch: typeof step.branch === 'string' && step.branch ? step.branch : null,
@@ -139,6 +151,7 @@ function stepFromPlan(fileStep, now) {
   const status = stateOf(fileStep);
   return {
     ...emptyStep(),
+    key: stepKey(fileStep),
     status,
     pr: int(fileStep?.pr),
     blocked_by: status === 'blocked' && plain(fileStep?.blocked_by) ? { kind: String(fileStep.blocked_by.kind), name: String(fileStep.blocked_by.name) } : null,
@@ -167,19 +180,45 @@ export function seedEntry(record, now = null) {
 }
 
 /**
- * An entry brought up to the plan it describes: a step the plan has and the
- * entry does not — a planning session added one — is seeded from the file;
- * a step the entry has and the plan no longer does is dropped, because the
- * runner cannot hand out a step that is not written. Steps are matched by
- * index, which is what a plan's `steps[]` is: an order.
+ * An entry brought up to the plan it describes. Steps are matched by their
+ * key (`stepKey`), so a step a planning session moved keeps its state, a step
+ * it inserted is seeded from the file, and one it removed is dropped — the
+ * runner cannot hand out a step that is not written. Until 2026-09-18 the
+ * match was by index, and moving W4.1.2 behind W4.1.8 re-labelled six steps'
+ * state until the register file was edited by hand.
+ *
+ * A key the entry does not know, in a slot whose old key the plan no longer
+ * has, is that step retitled: it keeps its state. An entry written before
+ * keys takes them from the plan by index, which is what it asserted anyway;
+ * a plan whose keys are not unique is matched by index as before.
+ *
+ * A `running` step that would move is left where it is, with the rest of the
+ * entry, until its session ends: the session knows itself as
+ * `MC_STEP=<project>:<index>`, and a write to that index has to reach it.
  *
  * Returns `{ entry, changed }` so the caller writes only when something moved.
  */
 export function reconcileEntry(entry, record, now = null) {
   const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
-  const had = entry.steps.length;
-  const next = steps.map((step, index) => entry.steps[index] || stepFromPlan(step, now));
-  const changed = had !== steps.length
+  const keys = steps.map(stepKey);
+  const unique = keys.every(Boolean) && new Set(keys).size === keys.length;
+  const keyed = entry.steps.map((state, index) => (state.key ? state : { ...state, key: keys[index] ?? null }));
+  let next;
+  if (!unique) {
+    next = steps.map((step, index) => keyed[index] || stepFromPlan(step, now));
+  } else {
+    const known = new Map(keyed.map((state, index) => [state.key, index]));
+    const wanted = new Set(keys);
+    next = steps.map((step, index) => {
+      if (known.has(keys[index])) return keyed[known.get(keys[index])];
+      const here = keyed[index];
+      if (here && !wanted.has(here.key)) return { ...here, key: keys[index] };
+      return stepFromPlan(step, now);
+    });
+    const running = keyed.findIndex((state) => state.status === 'running');
+    if (running >= 0 && next[running]?.key !== keyed[running].key) return { entry, changed: false };
+  }
+  const changed = next.length !== entry.steps.length || next.some((state, index) => state !== entry.steps[index])
     || entry.plan !== (record.path ?? null) || entry.repo !== (record.repo ?? null) || entry.programme !== (record.programme ?? null);
   return {
     entry: changed ? { ...entry, repo: record.repo ?? entry.repo, programme: record.programme ?? entry.programme, plan: record.path ?? entry.plan, updated: now ?? entry.updated, steps: next } : entry,
@@ -231,6 +270,9 @@ export function patchStep(entry, index, patch = {}, now = null) {
   }
   if (next.status === 'blocked' && !(plain(next.blocked_by) && next.blocked_by.kind && next.blocked_by.name)) {
     throw new Error(`${entry.project} step ${index + 1}: a blocked step names what it waits for (blocked_by)`);
+  }
+  if (rest.blocked_by && next.status === 'blocked' && !(BLOCKER_KINDS.includes(next.blocked_by.kind) && NAME_RE.test(next.blocked_by.name))) {
+    throw new Error(`${entry.project} step ${index + 1}: blocked_by is { kind: ${BLOCKER_KINDS.join(' | ')}, name } and the name is a name, not a sentence`);
   }
   if (next.status === 'failed' && !(typeof next.reason === 'string' && next.reason.trim())) {
     throw new Error(`${entry.project} step ${index + 1}: a failed step says why (reason)`);

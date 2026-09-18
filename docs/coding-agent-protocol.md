@@ -70,10 +70,14 @@ mc merge    → the gate, then the squash
   its own: it is the state of the first step that is not done. See
   [`docs/project/README.md`](project/README.md).
 - **You do not write plan state by hand.** `mc plan <programme>` opens the
-  session a plan is written in, with Martin in it. A step session edits its own
-  step's `status`, `pr` and `comments`, and `met` on the criteria it met — and
-  `mc run` compares the file before and after, so a session that touched a step
-  it did not run leaves a PR the runner will not merge.
+  session a plan is written in, with Martin in it. Where a step stands is in
+  the register mc keeps (`~/mc/runner/projects/`), written by `mc step` and
+  `mc merge` and never in the file: the file's `status`, `pr` and `comments`
+  seed a plan the register has not seen and are read by nothing after that. A
+  step session's one edit to the plan is `met` on the criteria it met —
+  `mc merge` compares the file at the door, so a session that touched a step
+  leaves a PR it will not merge. A planning session starts a parked step with
+  `mc step ready <project> <n>`, not by editing the file.
 - **You do not decide.** An open question becomes a
   `decisions/<programme>-<n>.md` file at the root of the session that raised it
   — `~/mc/<workarea>/` for a step session, `~/mc/plan/<programme>/` for a

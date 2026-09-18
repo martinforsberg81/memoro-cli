@@ -27,7 +27,7 @@ import {
   MERGE_POLL_MS, MERGE_WAIT_MS, dequeue, dropDeadEntries, enqueue, mergesPath, nextWaiter, parseQueue, queueOrder,
 } from '../merge-queue.js';
 import { planBoundary } from '../merge-boundary.js';
-import { landedPatch, redPatch, stepForMerge } from '../merge-step.js';
+import { landedPatch, redPatch, remainderOf, stepForMerge } from '../merge-step.js';
 import { listEntries, updateStep } from '../register.js';
 import { pidAlive } from '../status-collect.js';
 import { workRoot } from '../paths.js';
@@ -472,14 +472,20 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
     for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
     const askGh = deps.gh || spawnTool('gh');
     let head = null;
-    try { head = JSON.parse(askGh(['pr', 'view', String(opts.pr), '--json', 'headRefName'], { cwd: repoPath }).stdout)?.headRefName || null; } catch { head = null; }
+    let body = null;
+    try {
+      const seen = JSON.parse(askGh(['pr', 'view', String(opts.pr), '--json', 'headRefName,body'], { cwd: repoPath }).stdout);
+      head = seen?.headRefName || null;
+      body = seen?.body || null;
+    } catch { head = null; }
     const step = stepForMerge({ env, head, entries: listEntries(root, io) });
     if (step) {
       const stamp = () => (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
       try {
         if (report.ok && report.merged && !report.off_default) {
-          updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: opts.pr, report, now: stamp() }), now: stamp(), ...io });
+          updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: opts.pr, report, now: stamp(), body }), now: stamp(), ...io });
           said.push(`mc: ${step.project} step ${step.index + 1} is done — the register says so`);
+          if (remainderOf(body)) said.push(`mc: #${opts.pr} names a remainder — it is on the step for the planning session to home`);
           const pid = step.entry.steps[step.index]?.session?.pid;
           const alive = deps.alive || pidAlive;
           if (pid && alive(pid)) {

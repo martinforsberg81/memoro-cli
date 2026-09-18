@@ -30,8 +30,8 @@ session to retype what you have just read is waste.
 *Held before merge* is yours to decide, and until you say something that
 project runs nothing. One proposal per pull request, never a menu, and one of
 three — `mc merge <repo> <pr>` by hand when the red is not the change's and you
-can say why, `gh pr close` with a line in the step's `comments` when the work
-itself is wrong, or the step set `blocked` with a `blocked_by` decision when
+can say why, `gh pr close` with a `mc step note` on the step when the work
+itself is wrong, or `mc step blocked --on <decision>` when
 the answer is Martin's.
 
 *Ready, and the runner cannot start it* is the same waiting from the other

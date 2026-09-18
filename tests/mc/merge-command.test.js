@@ -26,7 +26,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { gate } from '../../src/mc/commands/repo.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
-import { stepForMerge } from '../../src/mc/merge-step.js';
+import { remainderOf, stepForMerge } from '../../src/mc/merge-step.js';
 import { registerPath } from '../../src/mc/register.js';
 
 let root = null;
@@ -339,13 +339,13 @@ function register(stepOver = {}) {
 const entryNow = () => JSON.parse(readFileSync(registerPath(root, 'merge-queue'), 'utf8'));
 
 /** FREE, plus what a step needs: a session's environment, a kill that records, a lock that is nobody's. */
-function stepDeps(report, { env = {}, head = null, alive = () => true } = {}) {
+function stepDeps(report, { env = {}, head = null, body = null, alive = () => true } = {}) {
   const kills = [];
   const d = deps(report, {
     overrides: {
       ...FREE,
       env: { MC_WORK_ROOT: root, ...env },
-      gh: (args) => (args[1] === 'view' && head ? { status: 0, stdout: JSON.stringify({ headRefName: head }) } : { status: 1, stdout: '' }),
+      gh: (args) => (args[1] === 'view' && (head || body) ? { status: 0, stdout: JSON.stringify({ headRefName: head, body }) } : { status: 1, stdout: '' }),
       kill: (pid, signal) => { kills.push([pid, signal]); },
       alive,
       lock: (_root, fn) => fn(),
@@ -382,6 +382,20 @@ describe('mc merge writes the register for a step, and ends the session on green
     assert.match(out.out, /^mc: merge-queue step 2 is done — the register says so$/mu);
     assert.match(out.out, /^mc: the step's session \(pid 4242\) is ended — nothing more for it to do$/mu);
     assert.equal(after.steps[0].status, 'done');
+  });
+
+  it('green with a `## Remainder` in the pull request: still done, and the step says what no step holds yet', async () => {
+    register();
+    const body = '## What\n\nthree modules of four\n\n## Remainder\n\n`smart-search.js` — 16 sites, 24 env records.\n\n## Verified\n\nnpm test';
+    const { out, io } = stepDeps(landed(), { env: { MC_STEP: 'merge-queue:1' }, body });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, io), 0);
+    const after = entryNow();
+    assert.equal(after.steps[1].status, 'done');
+    assert.equal(after.steps[1].landed.remainder, '`smart-search.js` — 16 sites, 24 env records.');
+    assert.match(after.steps[1].comments.at(-1), /^#671 landed with a remainder no step holds yet — `smart-search\.js`/u);
+    assert.match(out.out, /^mc: #671 names a remainder — it is on the step for the planning session to home$/mu);
+    assert.equal(remainderOf('## Remainder\n\nNone.\n'), null);
+    assert.equal(remainderOf('no such heading'), null);
   });
 
   it('red: the attempt is counted and the reason kept, and the session is left to fix it', async () => {
