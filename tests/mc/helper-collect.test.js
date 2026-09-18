@@ -12,6 +12,7 @@
  * No network, no model, no memoro checkout: every source is injected.
  */
 import assert from 'node:assert/strict';
+import { sameCommit } from '../../src/mc/helper-collect.js';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -350,6 +351,12 @@ describe('mc helper --collect — the deploy section', () => {
     const section = (await collect(g)).text.split('## Deploy')[1];
     assert.match(section, /`\/api\/version`: build 23533 · `b3e65b6`, built 2026-08-29 04:05/u);
     assert.match(section, /\*\*Production is answering `b3e65b6`, not mc's last deploy `1a2b3c4`\.\*\*/u);
+  });
+
+  it('reads one commit at two lengths as one commit', () => {
+    assert.equal(sameCommit('b3e65b6', 'b3e65b6f00aa11bb22cc33dd44ee55ff66778899'), true);
+    assert.equal(sameCommit('b3e65b6', '1a2b3c4'), false);
+    assert.equal(sameCommit('', 'b3e65b6'), false);
   });
 
   // The page is offline and instant, so this is the only place the answer is

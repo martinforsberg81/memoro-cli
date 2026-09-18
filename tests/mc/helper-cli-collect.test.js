@@ -60,6 +60,8 @@ describe('a fingerprint is a signature, not a line', () => {
   it('numbers and hashes are stripped, so a defect does not look like N defects', () => {
     assert.equal(signature('x', 'merged #11082 as 7dcbf96'), signature('x', 'merged #11137 as a1b2c3d'));
     assert.notEqual(signature('x', 'stopped at lease'), signature('x', 'stopped at drift'));
+    // A name keeps its digits: two projects are two stories.
+    assert.notEqual(signature('x', 'step', { name: 'sql-w1-universe-closure' }), signature('x', 'step', { name: 'sql-w10-product-domains-closure' }));
     // Stable across days: the delta against yesterday depends on it.
     assert.equal(fingerprintOf(signature('round stopped', 'memoro at lease')),
       fingerprintOf(signature('round stopped', 'memoro at lease')));

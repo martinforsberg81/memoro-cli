@@ -338,3 +338,15 @@ describe('reserved names', () => {
     assert.match(reservedRoleHint('HELPER'), /mc helper\)/u);
   });
 });
+
+describe('the role catalogue', () => {
+  // A role that goes is removed on purpose, and one that arrives is added on
+  // purpose: `repair.md` went with ruling 21 and nothing would have said so
+  // had it stayed.
+  it('is exactly the roles mc ships', () => {
+    assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
+      '_common.md', '_plan-writing.md', 'brief.md', 'helper.md', 'intake.md', 'plan.md', 'step.md', 'worker.md',
+    ]);
+  });
+});
+

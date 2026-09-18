@@ -159,6 +159,9 @@ describe('runner log', () => {
     assert.equal(s.timeout, 1);
     assert.equal(s.failed, 0);
     assert.equal(s.cacheRead, 3683298 + 12463655);
+    assert.equal(s.merged + s.open + s.failed + s.timeout + s.other, s.steps, 'one bucket a row — the line adds up');
+    const clean = summariseRuns([{ kind: 'helper', note: 'success,0-proposals', exit: '0' }]);
+    assert.equal(clean.other, 1);
   });
 
   it('keeps the last rows of one project, whatever the window', () => {
