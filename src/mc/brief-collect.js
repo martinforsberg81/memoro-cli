@@ -339,19 +339,24 @@ export function summariseRuns(rows) {
   const kinds = {};
   let merged = 0; let open = 0; let failed = 0; let timeout = 0;
   let cacheRead = 0; let output = 0; let seconds = 0;
+  let other = 0;
   for (const row of rows) {
     kinds[row.kind] = (kinds[row.kind] || 0) + 1;
+    // One bucket a row, so the numbers add up to `steps` by construction: on
+    // 2026-09-11 the line read as a partition, was not one, and sent Martin
+    // looking for four missing steps. A stall is the runner's only kill since
+    // ruling 18, and counts where the wall-clock timeout it replaced did.
     if (row.note.includes('merged')) merged += 1;
-    else if (row.note.includes('open')) open += 1;
-    // A stall is the runner's only kill since ruling 18, and counts where the
-    // wall-clock timeout it replaced did.
-    if (row.note.includes('timeout') || row.note.startsWith('stalled')) timeout += 1;
+    else if (row.note.includes('timeout') || row.note.startsWith('stalled')) timeout += 1;
     else if (row.exit !== '0' || !row.note.startsWith('success')) failed += 1;
+    else if (row.note.includes('open')) open += 1;
+    // A clean helper or intake turn, a step with nothing to land yet.
+    else other += 1;
     cacheRead += Number(row.cache_read) || 0;
     output += Number(row.output) || 0;
     seconds += Number(row.seconds) || 0;
   }
-  return { steps: rows.length, kinds, merged, open, failed, timeout, cacheRead, output, seconds };
+  return { steps: rows.length, kinds, merged, open, failed, timeout, other, cacheRead, output, seconds };
 }
 
 /* ------------------------------------------------------------ failed steps */
@@ -962,7 +967,7 @@ export function renderBrief({
 
   const s = runs.summary;
   out.push('## Runner', '');
-  out.push(`Last 24 h: ${s.steps} steps (${Object.entries(s.kinds).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}) — merged ${s.merged}, left open ${s.open}, failed ${s.failed}, timed out ${s.timeout}.`);
+  out.push(`Last 24 h: ${s.steps} steps (${Object.entries(s.kinds).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}) — merged ${s.merged}, left open ${s.open}, failed ${s.failed}, timed out ${s.timeout}, other ${s.other ?? 0}.`);
   out.push(`Tokens: cache_read ${fmt(s.cacheRead)}, output ${fmt(s.output)}; wall ${Math.round(s.seconds / 60)} min.`);
   if (runs.rows.length) {
     out.push('', '| when | project | kind | s | pr | note |', '|---|---|---|---|---|---|');

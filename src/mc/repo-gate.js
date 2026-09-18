@@ -56,6 +56,7 @@ import { mcHome, workGatePath } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
 import { ensureWorkDeps } from './work-deps.js';
+import { recordRound } from './repo-round-log.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
@@ -278,6 +279,16 @@ export async function runGate({
       // round ended by signal rather than by verdict, and a release that
       // throws must not be able to take it with it.
       log('gate.killed', { repo: repoFileSlug(repoPath), signal, pr: label, holder: holder?.name || null });
+      // And the round log's own end line, so a round somebody stopped reads
+      // `killed` and not "round died" — a start with no end is what a crash
+      // leaves, and this was not one (2026-09-07).
+      try {
+        recordRound({
+          ok: false, stopped_at: 'killed', reason: `cut short by ${signal}`, repo: repoPath,
+          ...(numbers.length > 1 ? { batch: { prs: numbers, merges: [] } } : { pr: { number: numbers[0] } }),
+          holder: holder?.name || null, started_at: new Date(startedAt).toISOString(),
+        }, { mode: gateMode, root });
+      } catch { /* the releases below matter more */ }
       if (holdLease) releaseLease({ repoPath, holder, root });
       if (ownGateLock) releaseGateLock({ root });
       say(`round cut short by ${signal} — the lease and the round lock are released`);

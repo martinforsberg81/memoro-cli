@@ -66,10 +66,13 @@ export const CLI_ROW_CAP = 60;
 export function signature(kind, ...parts) {
   const body = parts
     .filter((part) => part !== null && part !== undefined && part !== '')
-    .map((part) => String(part)
+    // A part given as `{ name }` is a name — a project, a workarea — and is
+    // kept as written: `sql-w1-universe-closure` and `sql-w10-…` are two
+    // projects, and the digit strip made them one (2026-09-06).
+    .map((part) => (part && typeof part === 'object' ? String(part.name ?? '') : String(part)
       .replace(/\b[0-9a-f]{7,}\b/gu, '<hash>')
       .replace(/\d+/gu, 'N')
-      .replace(/\/[^\s]*\/([^/\s]+)/gu, '$1'))
+      .replace(/\/[^\s]*\/([^/\s]+)/gu, '$1')))
     .join(' ');
   return `${kind}: ${body}`.slice(0, 300);
 }
@@ -90,7 +93,7 @@ export function cliRows({ root = mcHome(), work = workRoot(), since, now = new D
   const counts = new Map();
   const notes = [];
   const bump = (kind, message, at, status) => {
-    const sig = signature(kind, message);
+    const sig = signature(kind, ...(Array.isArray(message) ? message : [message]));
     const key = fingerprintOf(sig);
     const row = counts.get(key) || { fingerprint: key, count: 0, status, message: sig, lastSeen: null };
     row.count += 1;
@@ -179,7 +182,7 @@ export function cliRows({ root = mcHome(), work = workRoot(), since, now = new D
       // `success` that exited 1 is a real anomaly — the session reported it
       // had finished and the process disagreed — and it is invisible if the
       // note is the only thing rendered.
-      bump('runner step', `${cell[kind] || 'step'} ${cell[name] || '?'} — ${outcome || 'no note'} (exit ${code})`, cell[at], 'runner');
+      bump('runner step', [cell[kind] || 'step', { name: cell[name] || '?' }, `— ${outcome || 'no note'} (exit ${code})`], cell[at], 'runner');
     }
   } catch (error) { notes.push(`runs.tsv: ${error.message}`); }
 

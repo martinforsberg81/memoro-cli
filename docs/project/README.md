@@ -4,8 +4,8 @@ Plan work here is handled exactly as it is in memoro: `docs/project/<programme>/
 where each project directory holds a `PLAN.json` the runner can act on. The
 `<project>` name is what `mc run` will call that project's branch and its
 workarea; the planning session chooses it and creates neither. The section
-below is the same text as memoro's `docs/project/README.md` — one shape, both
-repositories, no local dialect.
+below describes the same shape as memoro's `docs/project/README.md`; this
+copy is the one kept current with mc (the register, the `workarea` blocker).
 
 There is one programme here, `mc`. mc is built only for memoro me (D-0205);
 projects that do not serve that do not belong under it.

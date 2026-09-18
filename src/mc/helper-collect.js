@@ -531,8 +531,11 @@ export function renderDigest({
   else if (live) {
     out.push(`- \`/api/version\`: build ${live.build ?? '?'} · \`${sha7(live.commit) || '?'}\``
       + `${live.buildTime ? `, built ${short(live.buildTime)}` : ''}`);
-    if (live.commit && deploy.mc?.sha && live.commit !== deploy.mc.sha) {
-      out.push(`- **Production is answering \`${sha7(live.commit)}\`, not mc's last deploy \`${sha7(deploy.mc.sha)}\`.** `
+    // One side may be abbreviated: the same commit at two lengths is not a mismatch.
+    if (live.commit && deploy.mc?.sha && !sameCommit(live.commit, deploy.mc.sha)) {
+      // Seven characters unless those are the same seven: then the whole of both.
+      const [answers, shipped] = sha7(live.commit) === sha7(deploy.mc.sha) ? [live.commit, deploy.mc.sha] : [sha7(live.commit), sha7(deploy.mc.sha)];
+      out.push(`- **Production is answering \`${answers}\`, not mc's last deploy \`${shipped}\`.** `
         + 'Somebody deployed another way, or that deploy did not take.');
     }
   }
@@ -785,4 +788,10 @@ async function collectCli({ env, now, since, threshold, cli = cliCollect }) {
       open: measured.open, failing, lastRun: measured.lastRun,
     },
   };
+}
+
+/** Two shas name one commit when either is a prefix of the other. */
+export function sameCommit(a, b) {
+  const [x, y] = [String(a).trim().toLowerCase(), String(b).trim().toLowerCase()];
+  return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
 }

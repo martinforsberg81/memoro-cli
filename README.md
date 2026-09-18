@@ -67,7 +67,6 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `mc auth status [--json]` | Single-screen health check |
 | `mc auth memoro [--logout]` | Token login/logout for CI or headless setup |
 | `mc auth <claude\|codex\|gemini>` | Re-check one tool's status + fix hint |
-| `mc coding-profile read\|diff\|write` | LLM-callable read, compare, and full-replacement update flow for your Coding Profile |
 | `mc new <name> [--from <ref>] [--tool <id>]` | Create worktree + launch tool |
 | `mc list [--rich\|--awaiting\|--safe-to-end\|--orphans]` | List sessions with filters |
 | `mc status <name>` | Per-session derived status |
@@ -97,17 +96,11 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `mc sessions send <id\|label> <msg>` | Dispatch a message into another session |
 | `mc sessions read <id\|label>` | Fetch a peer session's recent transcript |
 
-### Coding Profile workflow
+### Coding Profile
 
-Durable work-method changes are explicit and dialogue-based. A coding agent
-should read the current profile, discuss the intended change with you, diff the
-candidate profile, then write only after approval.
-
-```sh
-mc coding-profile read --json
-mc coding-profile diff --stdin
-mc coding-profile write --stdin --base-revision <n> --summary "<summary>"
-```
+Work-method changes are yours and live in Memoro. mc reads the profile and
+hands it to a new conversation as a launch argument; it has no verb for
+editing one (`mc coding-profile` went with mc-cut), so it is edited in Memoro.
 
 When the profile does not exist yet, `read --json` returns `base_revision: 0`
 and a compact `template_markdown` for revision 1.

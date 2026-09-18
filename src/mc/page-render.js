@@ -287,6 +287,7 @@ function dayLine(lines, c, wide, day) {
     count('open', day.open, ['grey']),
     count('failed', day.failed, ['red']),
     count('timed out', day.timeout, ['yellow']),
+    ...(day.other ? [count('other', day.other, ['grey'])] : []),
     cost ? { text: `${cost} list (${day.model}, ${day.prices_dated})`, styles: ['grey'] } : null,
   ], ' · '), wide - 2)}`);
 }

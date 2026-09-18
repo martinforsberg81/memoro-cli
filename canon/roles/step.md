@@ -67,6 +67,10 @@ the PR from it. The runner knows a project's pull requests by that name: one
 from a branch you named yourself it neither lands nor sees as in flight, and
 it will run the next step on top of your unlanded work.
 
+Nothing runs in the background: no `run_in_background`, no `&`, no process
+you mean to come back to. `mc merge` ends this session the moment it lands,
+and whatever is still running then is lost with it. Wait in the foreground.
+
 Verify what `done_when` names, and stop: screenshots, dev servers and proof
 scripts are for a `done_when` that asks for them. Measured over 59 step
 sessions (2026-09-01..03), half of a step's hour was not the work.
