@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import {
   STEP_STATES, applyEntry, currentIndex, overlayPlans, parseEntry, parseStepEnv, patchStep, reconcileEntry,
-  registerPath, seedEntry, updateStep,
+  registerPath, seedEntry, stepKey, updateStep,
 } from '../../src/mc/register.js';
 import { PLAN_SCHEMA, PLAN_VERSION, deliverableStep, validatePlan } from '../../src/mc/plan-schema.js';
 
@@ -136,4 +136,51 @@ test('currentIndex is the running step, else the first not done; parseStepEnv re
   assert.deepEqual(parseStepEnv('items-sweep:3'), { project: 'items-sweep', index: 3 });
   assert.equal(parseStepEnv('nope'), null);
   assert.equal(parseStepEnv(undefined), null);
+});
+
+test('stepKey is the label a title opens with, or the whole title', () => {
+  assert.equal(stepKey({ title: 'W4.1.2 — actions: the W4 scope in W1\'s action modules' }), 'W4.1.2');
+  assert.equal(stepKey({ title: 'The hero object' }), 'The hero object');
+  assert.equal(stepKey({ title: 'sql-readiness closes' }), 'sql-readiness closes');
+  assert.equal(stepKey({}), null);
+});
+
+test('reconcileEntry matches by key: a moved step keeps its state, an inserted one is seeded, a retitled one stays', () => {
+  const titled = (label, over = {}) => step({ title: `${label} — what it does`, ...over });
+  let entry = seedEntry(record([titled('A'), titled('B'), titled('C')]), 't0');
+  entry = patchStep(entry, 0, { status: 'done', pr: 7 }, 't1');
+  entry = patchStep(entry, 1, { status: 'failed', reason: 'red', branch: 'p' }, 't1');
+
+  // B moves behind C, and X is inserted in front: 2026-09-18, W4.1.2 behind W4.1.8.
+  const moved = reconcileEntry(entry, record([titled('X'), titled('A'), titled('C'), titled('B')]), 't2');
+  assert.equal(moved.changed, true);
+  assert.deepEqual(moved.entry.steps.map((s) => [s.key, s.status]), [['X', 'ready'], ['A', 'done'], ['C', 'ready'], ['B', 'failed']]);
+  assert.equal(moved.entry.steps[3].reason, 'red');
+
+  // A label nobody knows, in the slot of one the plan no longer has: the same step, retitled.
+  const renamed = reconcileEntry(entry, record([titled('A1'), titled('B'), titled('C')]), 't2');
+  assert.deepEqual(renamed.entry.steps.map((s) => [s.key, s.status]), [['A1', 'done'], ['B', 'failed'], ['C', 'ready']]);
+
+  // Nothing moved, nothing written.
+  assert.equal(reconcileEntry(entry, record([titled('A'), titled('B'), titled('C')]), 't2').changed, false);
+});
+
+test('reconcileEntry gives an entry written before keys its keys by index, and leaves a running step where its session knows it', () => {
+  const titled = (label) => step({ title: `${label} — x` });
+  const old = parseEntry(JSON.stringify({ project: 'p', steps: [{ status: 'done', pr: 3 }, { status: 'ready' }] }));
+  const keyed = reconcileEntry(old, record([titled('A'), titled('B')]), 't1');
+  assert.equal(keyed.changed, true);
+  assert.deepEqual(keyed.entry.steps.map((s) => [s.key, s.status]), [['A', 'done'], ['B', 'ready']]);
+
+  const running = patchStep(keyed.entry, 1, { status: 'running', session: { pid: 1 } }, 't2');
+  const held = reconcileEntry(running, record([titled('B'), titled('A')]), 't3');
+  assert.equal(held.changed, false, 'MC_STEP names an index; the move waits for the session to end');
+  assert.equal(held.entry, running);
+});
+
+test('patchStep refuses a blocker whose name is a sentence or whose kind the plan schema does not know', () => {
+  const entry = seedEntry(record([step()]), 't0');
+  assert.throws(() => patchStep(entry, 0, { status: 'blocked', blocked_by: { kind: 'decision', name: 'project:sql-w1-universe-closure' } }), /a name, not a sentence/u);
+  assert.throws(() => patchStep(entry, 0, { status: 'blocked', blocked_by: { kind: 'whim', name: 'q-1' } }), /kind/u);
+  assert.equal(patchStep(entry, 0, { status: 'blocked', blocked_by: { kind: 'project', name: 'sql-w1-universe-closure' } }).steps[0].status, 'blocked');
 });

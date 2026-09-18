@@ -128,7 +128,7 @@ describe('mc worker', () => {
     // the pull request. There is no PM and no decision file. The overlay is
     // several lines, so it is read off the whole recording.
     const recorded = readFileSync(log, 'utf8');
-    assert.match(recorded, /`status: blocked`/u);
+    assert.match(recorded, /`mc step blocked --on <decision-name>`/u);
     assert.match(recorded, /in the pull request/u);
     assert.doesNotMatch(recorded, /escalate to the PM/iu);
     assert.doesNotMatch(recorded, /decisions\//u);

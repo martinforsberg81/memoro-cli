@@ -49,13 +49,42 @@ export function stepForMerge({ env = {}, head = null, entries = [] } = {}) {
   return index >= 0 ? { project, index, entry, from: 'project' } : null;
 }
 
-/** The register patch for a step whose pull request has just landed. */
-export function landedPatch({ pr, report, now }) {
+/**
+ * What a pull request's body says it left undone: the text under a
+ * `## Remainder` heading, up to the next heading of that level or higher.
+ * Null when there is none, or when it says nothing.
+ *
+ * A pull request that lands is a `done` step, and memoro #11732 landed three
+ * modules of four: the fourth had no step left, and nothing but the pull
+ * request's own body said so (2026-09-13). sql-readiness writes the heading
+ * by protocol (memoro #11812); any project may.
+ */
+export function remainderOf(body) {
+  const lines = String(body || '').split(/\r?\n/u);
+  const start = lines.findIndex((line) => /^#{1,2}\s+remainder\s*$/iu.test(line.trim()));
+  if (start < 0) return null;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^#{1,2}\s/u.test(line));
+  const text = (end < 0 ? rest : rest.slice(0, end)).join('\n').trim();
+  if (!text || /^(none|nothing|n\/a|-|—)\.?$/iu.test(text)) return null;
+  return text.length > REMAINDER_MAX ? `${text.slice(0, REMAINDER_MAX).trimEnd()} …` : text;
+}
+const REMAINDER_MAX = 1200;
+
+/**
+ * The register patch for a step whose pull request has just landed. A
+ * remainder rides in `landed` and as a comment on the step, which is what
+ * every reader of a step already shows — so a planning session sees that a
+ * `done` step left something without opening the pull request.
+ */
+export function landedPatch({ pr, report, now, body = null }) {
+  const remainder = remainderOf(body);
   return {
     status: 'done',
     pr: Number(pr),
     reason: null,
-    landed: { sha: report?.merge_commit || null, into: report?.merged_into || null, at: now },
+    landed: { sha: report?.merge_commit || null, into: report?.merged_into || null, at: now, ...(remainder ? { remainder } : {}) },
+    ...(remainder ? { comment: `#${Number(pr)} landed with a remainder no step holds yet — ${remainder}` } : {}),
   };
 }
 

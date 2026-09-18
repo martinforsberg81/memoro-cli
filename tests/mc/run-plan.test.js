@@ -314,16 +314,21 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
   assert.match(p, /Done when: the object draws in both themes/u);
   // The boundary is in the prompt as well as the role, because it is what the
   // runner checks on the way back in.
-  assert.match(p, /not\nanother step, not the goal, the contract or the scope/u);
-  assert.match(p, /set this step to\n`blocked` with `blocked_by:/u, 'it still says how to stop on a question it cannot answer');
+  assert.match(p, /another step, the goal, the contract or the scope/u);
+  assert.match(p, /`mc step blocked --on <decision-name> --reason "…"`/u, 'it still says how to stop on a question it cannot answer');
+  // Ruling 21: state is the register's. A prompt that sends it to the file
+  // sends it nowhere (memoro #11723 showed `ready` for six days).
+  assert.doesNotMatch(p, /In the plan file you may edit/u);
+  assert.doesNotMatch(p, /set your step `done`/u);
+  assert.match(p, /`mc step note "…"`/u);
+  assert.match(p, /a pull request that lands is a `done` step/u);
   // The two shapes the prompt never stated, and the two a session got wrong on
   // 2026-09-02: `action-window` wrote a `blocked_by` that was not
   // `{ kind, name }` at 10:18, and `msr-track-3` rewrote a criterion's own text
   // at 12:27. Both are checked on the way back in, so both are said here.
-  assert.match(p, /its\n`comments` — an array of paragraph strings/u);
   assert.doesNotMatch(p, /merge origin\/main` is in progress/u, 'no conflict, no preamble');
-  assert.match(p, /"kind": "decision" \| "project", "name"/u);
-  assert.match(p, /only `met` is yours/u);
+  assert.match(p, /--on-project/u);
+  assert.match(p, /exactly one thing is yours: `met`/u);
   assert.match(p, /Your plan is on disk in this worktree at `docs\/project\/p\/x\/PLAN\.json`/u);
   // The runner only ever starts a plan whose first unfinished step is ready, so
   // a step is never handed an answered decision to apply (Martin, 2026-08-29).

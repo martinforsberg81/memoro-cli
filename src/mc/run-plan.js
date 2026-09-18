@@ -613,8 +613,8 @@ function stepField(key, value) {
  * the project's own terms in full, the session's step in full, and every
  * other step as one line.
  *
- * It used to be the whole file. The session has that file in its worktree and
- * edits it there, so the copy in the prompt was only ever for reading — and it
+ * It used to be the whole file. The session has that file in its worktree,
+ * so the copy in the prompt was only ever for reading — and it
  * was read on every turn, because it was in the prompt. The other steps'
  * instructions are what made it large (memoro's `sql-w1-universe-closure` was
  * 115k characters on 2026-09-11); a session that needs one reads the file.
@@ -666,26 +666,33 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
     'That sentence is your success criterion for this session — verify it before',
     'you stop, and say in the PR body how you verified it.',
     '',
-    `In the plan file you may edit that step's \`status\`, its \`pr\` (the number,`,
-    'not the URL), and its',
-    '`comments` — an array of paragraph strings, whatever the next session needs',
-    'to know that the code in front of it does not show. Plus `met` on the',
-    '`success_criteria` you actually met: the criterion and its check are',
-    "Martin's words and stay as they are, only `met` is yours. Nothing else: not",
-    'another step, not the goal, the contract or the scope. `mc merge` compares',
-    'the plan on main with yours at the door and refuses the pull request if',
-    'you changed anything else.',
+    'Where your step stands is not in the plan file. It is in the register mc',
+    'keeps, and `mc step` is how you write it — the file\'s `status`, `pr`,',
+    '`blocked_by` and `comments` are read by nothing, and a state written there',
+    'is a state nobody sees (2026-09-12: a step blocked in the file showed',
+    '`ready` for six days). In the plan file exactly one thing is yours: `met`',
+    'on the `success_criteria` you actually met — the criterion and its check',
+    "are Martin's words and stay as they are. `mc merge` compares the plan on",
+    'main with yours at the door and refuses the pull request if you changed',
+    'another step, the goal, the contract or the scope.',
     '',
-    'If the contract must change, or a later step is wrong, set this step to',
-    '`blocked` with `blocked_by: { "kind": "decision" | "project", "name": … }` —',
-    'required, because a blocked step that does not say what it waits for is one',
-    'nobody can unblock — and stop. Say it in the pull request too, with one',
+    'What the next session needs to know that the code in front of it does not',
+    'show goes in the pull request body, and as `mc step note "…"` — one',
+    'paragraph a call, shown to whoever reads this step next.',
+    '',
+    'If the contract must change, or a later step is wrong, stop: run',
+    '`mc step blocked --on <decision-name> --reason "…"` (or `--on-project',
+    '<project>` when it waits for another project) — the name is a name, lower',
+    'case and hyphens, because a blocked step that does not say what it waits for',
+    'is one nobody can unblock. Say it in the pull request too, with one',
     'recommendation rather than a menu; that is where it will be read.',
     '',
-    'Build it, set your step `done` with its `pr`, open the pull request, then',
-    `run \`mc merge ${repo} <pr>\` yourself until it says merged — a red comes`,
-    'back to you: fix it and run it again. Never `gh pr merge`. Giving up is',
-    '`mc step failed --reason "…"`. Do not ask questions.',
+    'Build all of it — a pull request that lands is a `done` step, whatever its',
+    'body says is left; what you cannot finish is `mc step failed`, not a partial',
+    `landing. Open the pull request, then run \`mc merge ${repo} <pr>\` yourself`,
+    'until it says merged — that writes `done` and the pull request for you; a',
+    'red comes back to you: fix it and run it again. Never `gh pr merge`. Giving',
+    'up is `mc step failed --reason "…"`. Do not ask questions.',
     '',
     planExcerpt(plan, index, step),
   ].join('\n');
