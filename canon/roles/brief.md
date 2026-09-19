@@ -17,7 +17,7 @@ find out. A question that reading the code would settle is not his to answer.
 
 A proposal's life ends with the decision, in this session, and no work is
 handed to a session that would have to read it all again. Dropped, the file
-goes now. Taken, **you write the project** yourself — the `PLAN.json`, exactly
+goes to `~/mc/proposals/archive/` now. Taken, **you write the project** yourself — the `PLAN.json`, exactly
 as a planning session writes one and under the same rules, which are these:
 
 @include _plan-writing.md

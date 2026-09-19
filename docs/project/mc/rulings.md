@@ -616,6 +616,39 @@ not land is a person's through the brief.
 
 **Carried by [`step-lands-itself/PLAN.json`](step-lands-itself/PLAN.json).**
 
+## 22 · The brief gathers no document, a planning room gets no discard verb, and a settled proposal is archived
+
+`ruling · 2026-09-19` · raised at the plan session that turned the proposals left
+open by the triage of 2026-09-18 into one project
+
+Three questions the open proposals could not settle from the code. Whether
+`mc brief --collect` and the gathered `~/mc/brief/<date>.md` go
+(`brief-and-helper-surfaces`, 2026-08-31) — the options were keep both, since
+#719 had just made a resumed brief receive the new document; drop the flag and
+keep the document; or drop both:
+
+> "Ta bort båda" (Martin, 2026-09-19)
+
+What `mc plan discard <programme>` should do (`mc-plan-lifecycle`, 2026-09-02) —
+remove worktrees, branch, room and conversations and refuse on unlanded work;
+the same with a list verb; or no verb:
+
+> "Stryk punkten" (Martin, 2026-09-19)
+
+And what becomes of a proposal once it is settled, which had no convention
+beyond deletion when a project consumes it:
+
+> "Proposals bör arkiveras. Flytta till archive mapp." (Martin, 2026-09-19)
+
+So: `mc brief` opens its session with the role and nothing gathered, and the
+session reads the page, `mc status` and `mc step` itself. A planning room is
+still removed by hand. A settled proposal — built, dropped, or consumed by a
+plan — is moved to `~/mc/proposals/archive/`, which `listProposals` does not
+read. The two proposals no reading could decide (`gate-round-died-recurred`,
+`dev-server-exits-under-browser-round`) were archived undecided the same day.
+
+**Carried by [`mc-open-proposals/PLAN.json`](mc-open-proposals/PLAN.json).**
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som

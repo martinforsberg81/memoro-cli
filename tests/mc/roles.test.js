@@ -240,7 +240,7 @@ describe('a passage two roles share', () => {
   const DEFINING = [
     /A plan is instructions for a headless session that has read nothing else/u,
     /`readPlanText` prints every\nproblem at once/u,
-    /A proposal that becomes a project is deleted in the same commit/u,
+    /A proposal that becomes a project is moved to/u,
   ];
   const read = (file) => readFileSync(join(canonRolesDir(), file), 'utf8');
 

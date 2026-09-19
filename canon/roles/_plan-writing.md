@@ -45,12 +45,12 @@ until somebody notices. Validate before you push: `readPlanText` prints every
 problem at once, and `mc status <project>` prints them for a plan already on
 `main`.
 
-A proposal that becomes a project is deleted in the same commit that creates
-it, and named in the pull request body — `~/mc/proposals/` is in neither
+A proposal that becomes a project is moved to `~/mc/proposals/archive/` in the
+same move that creates it (ruling 22), and named in the pull request body — `~/mc/proposals/` is in neither
 repository, so that body is the only place the record can live. Whatever the
 proposal held that the plan needs — the measurement, the file and the line,
 the reason the fix is that one — has to be in the plan first, because
-afterwards there is no other copy.
+no session reads the archive.
 
 A decision the plan leans on is cited by name and never by path, and a ruling
 belongs to its programme: `docs/project/<programme>/rulings.md`, with the

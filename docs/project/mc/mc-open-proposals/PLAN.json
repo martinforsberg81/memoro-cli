@@ -1,0 +1,203 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "The mc proposals left open after the triage of 2026-09-18 are built: every verb answers --help, the plan door judges a pull request against the plan its branch started from, a landed branch whose merge conflicts is read as landed, the quota pause lasts until the reset the refusal names, a session has a scratch directory outside its worktree, a hung process after a result is not a stalled step, mc status reads a killed merge the way the runner does, the brief gathers no document, and the documentation no longer describes the repair session."
+  ],
+  "contract": [
+    "Ruling 21 stands: a step still `running` in the register when its process is gone is `failed`; nothing here lands or retries a session's work.",
+    "The dirty-worktree refusal is not softened: an untracked file in a worktree still stops the step.",
+    "The plan door keeps failing open on anything it could not read.",
+    "`mc helper --collect` and `mc helper --intake` are untouched.",
+    "`brief-collect.js` stays as a file: `defaultRepos`, `listPlans`, `listProgrammes`, `listProposals`, `planFields`, `catFileBatch`, `showBatch`, `parseRuns`, `runsFor` are imported by the page, the runner, `mc status`, `mc plan` and the helper."
+  ],
+  "out_of_scope": [
+    "`mc plan discard` and any lifecycle verb for a planning session — dropped by Martin, 2026-09-19.",
+    "The cause of `gate-round-died` and the dev server exiting under a browser round — both proposals archived undecided, 2026-09-19.",
+    "memoro's `docs/project/README.md` and memoro's `error-tracker.js` — memoro's repository, not this project's.",
+    "Removing the `## Remainder`/state-field tolerance the door kept in #720."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "Every verb the dispatcher routes answers --help with its usage on stdout and exit 0.",
+      "check": "`for v in status work repo merge test dev deploy worker brief helper plan run roles log step; do mc $v --help >/dev/null || echo $v; done` prints nothing; `mc test dev --help` exits 0."
+    },
+    {
+      "met": false,
+      "criterion": "A plan edit that lands on main while a step runs is not attributed to the step's pull request.",
+      "check": "The new case in tests/mc/merge-boundary.test.js: base moved steps[3] after the merge base, head edits only its own step — `ok: true`."
+    },
+    {
+      "met": false,
+      "criterion": "A quota refusal that names its reset holds every lane until then.",
+      "check": "The new test in tests/mc/run.test.js: a result text `resets Sep 11 at 3pm (Europe/Stockholm)` makes the lanes sleep until 2026-09-11T13:01:00Z in slices, and starts no session before it."
+    },
+    {
+      "met": false,
+      "criterion": "`mc brief` opens the session with no gathered document, and `--collect` is an unknown flag.",
+      "check": "`mc brief --collect` exits 2; `grep -rn \"renderBrief\\|collectBrief\" src` is empty; `npm test` is green."
+    },
+    {
+      "met": false,
+      "criterion": "No document or comment describes a repair session, `held.json` or `stalled,open` as something mc does.",
+      "check": "`grep -rniE \"repair session|a repair on|stalled,open\" docs/technical docs/project/README.md src/mc` finds only dated history sentences."
+    }
+  ],
+  "documents": [
+    {
+      "label": "Rulings (19, 21)",
+      "path": "docs/project/mc/rulings.md"
+    },
+    {
+      "label": "The runner",
+      "path": "docs/technical/mc-run.md"
+    },
+    {
+      "label": "The brief",
+      "path": "docs/technical/mc-brief.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "--help on every verb",
+      "status": "ready",
+      "done_when": "`mc <verb> --help` and `mc <verb> -h` print that verb's usage on stdout and exit 0 for every verb in `routeV1Command`'s table, and tests/mc/help.test.js walks the table to prove it.",
+      "instruction": [
+        "Today `--help` is `unknown flag: --help` followed by the usage on stderr and exit 2 on every verb but `deploy` (`scanArgs` in src/mc/commands/flags.js refuses any `--` word a verb did not declare). A step session hit it twice on `mc test dev --help` on 2026-09-11 and it is logged as a failed mc call. Answer it once, in the dispatcher, not in fifteen verbs.",
+        "In src/mc-cli.js, `runModule(path, argv)`: after the import, if `argv` contains `--help` or `-h` as a whole word, write `module.usage()` to stdout (ensure one trailing newline) and return 0 without calling `run`. The `modules` table in `routeV1Command` is the list of verbs; export it (or a function returning it) so the test can walk it.",
+        "Every module in that table exports `usage()` returning a string. dev.js, deploy.js, test.js, step.js and merge.js already do. repo.js and log.js have a private `function usage()` — export it. helper.js, plan.js, run.js and home.js hold a `USAGE` constant — add `export function usage()` returning it (join the array where it is one). work.js, worker.js, brief.js, roles.js and status-project.js write a usage literal inline on stderr — lift each literal into an exported `usage()` and have the existing error path call it, text unchanged. src/cli/status.js (the `status` entry) parses its own arguments and has no usage text; give it an exported `usage()` returning status-project.js's.",
+        "Remove deploy.js's own `--help` boolean and its `if (opts.help)` branch (deploy.js:73–79 and :371) — the dispatcher answers before `run` is called. Keep `usage()` there.",
+        "A multi-form verb prints its whole usage whatever sub-verb came before `--help` (`mc test dev --help` prints test.js's `usage()`); no per-sub-verb text is written in this step.",
+        "tests/mc/help.test.js: for every entry of the exported table, import the module, assert `typeof usage === 'function'` and that the string starts with `usage`. One test that drives `runModule`'s rule with `['dev', '--help']` for `test` and sees exit 0 and the usage on stdout, nothing on stderr. Update the deploy test that passes `--help` to `run` if there is one.",
+        "docs/mc-command-matrix.md and src/mc/help-text.js already promise `mc <command> --help`; leave the promise, it is now true. Add a changelog.d entry the way the directory's other entries are written."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The plan door compares against the merge base",
+      "status": "ready",
+      "done_when": "`planBoundary` reads its `before` plan from `git merge-base origin/<base> origin/<head>` and falls back to `origin/<base>` only when that cannot be read, with a test for a plan edit that landed on main after the branch started.",
+      "instruction": [
+        "src/mc/merge-boundary.js, `planBoundary`: `before` is `git show origin/<base>:<path>` — main as it is now. A planning commit that lands on main after the step's branch was cut makes main differ from the head at steps the session never touched, and `unauthorisedChanges` reports them as the session's (memoro #11603, 2026-09-08: `steps[30]: changed by the session that ran step 7`, which was #11600's edit on main).",
+        "After the fetch and after `path` is known: `git merge-base origin/<base> origin/<head>`; when it exits 0 and `git show <sha>:<path>` exits 0, that text is the `before` text. When either fails — no common ancestor, or the plan did not exist at the merge base — use `origin/<base>:<path>` exactly as today. The door still fails open (`notChecked`) on the reads it fails open on now.",
+        "The byte-identical shortcut compares the chosen `before` text with the head's. `stepOfPr(after.plan, pr)` and `unauthorisedChanges(before.plan, after.plan, index)` are unchanged. The project list and `path` still come from `ls-tree origin/<base>`.",
+        "A branch that merged origin/main into itself has the merged main commit as its merge base, so main's edits up to that merge are in `before` and are not the session's — that is the intended reading, say it in the module's doc comment, and replace the comment's sentence about \"a base copy that will not `git show`\" so it names the fallback.",
+        "tests/mc/merge-boundary.test.js drives `planBoundary` with injected `git` and `gh`. Add: (1) merge-base plan P0, main plan P1 = P0 with `steps[3]` changed, head plan = P0 with its own step's `status`/`pr`/`comments` changed → `{ checked: true, ok: true }`; (2) the same with the head also changing `steps[3].instruction` relative to P0 → `ok: false` naming steps[3]; (3) `merge-base` exits 1 → behaves as today against `origin/<base>`. Existing fakes must answer the new `merge-base` call; make the default fake return a sha whose `show` yields the same text the test gave for `origin/<base>`.",
+        "docs/technical: the section of mc-run.md or mc-merge text that describes the door (`grep -n \"plan-trespass\" docs/technical/*.md`) says what `before` is. Changelog entry."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A landed branch whose merge conflicts reads landed",
+      "status": "ready",
+      "done_when": "`branchLanded` answers `landed` for a branch with no commit after its merged pull request even when `git merge-tree` conflicts, and `freshBranch` moves such a workarea to `<name>-<n>`.",
+      "instruction": [
+        "src/mc/branch-landed.js: `git merge-tree --write-tree origin/main <branch>` exits 1 on a conflict, the helper returns null and the answer is `unknown`. `freshBranch` (src/mc/run.js, `grep -n \"freshBranch\"`) treats `unknown` as work and leaves the workarea on a branch that has landed; on 2026-09-11 `step-cost` step 2 ran on `step-cost-2` after #693 had landed from it, was handed a conflict on main's own later edit, and had its push refused by the push-guard at the end of the session.",
+        "`branchLanded` stays local and network-free; do not add `gh` to it. Add the second question to `freshBranch`, where the network is already used: when `branchLanded` says `unknown`, ask GitHub what the push-guard asks (`pushVerdict` in src/mc/push-guard.js asks `gh pr list --head <branch> --state merged`, but returns no head sha and is not changed here): through the `gh` seam run.js already uses for `gh pr list --head <branch> --state open`, run `gh pr list --head <branch> --state merged --limit 5 --json number,mergedAt,headRefOid`, take the newest by `mergedAt`, and if its `headRefOid` equals the branch's current tip (`git rev-parse <branch>`) the branch is landed: take the same path as `landed`. A tip that differs from the merged head is work after the landing — leave it, as today. `gh` failing leaves it `unknown`, as today.",
+        "tests/mc/run.test.js has `freshBranch` cases (`grep -n \"freshBranch\\|branchLanded\" tests/mc/run.test.js`). Add: `branchLanded` → `unknown`, merged PR with head sha equal to the tip → the workarea is moved to `<name>-<n>` from origin/main; same with a different tip → not moved; `gh` fails → not moved. tests/mc/branch-landed.test.js is unchanged.",
+        "Update the doc comment in branch-landed.js (`unknown` … \"conflict\") to say who asks the second question, and docs/technical/mc-run.md where `freshBranch` is described. Changelog entry."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The quota pause lasts until the reset the refusal names",
+      "status": "ready",
+      "done_when": "A quota answer whose text carries `resets …` holds every lane until one minute after that time, in slices that end on STOP or UPDATE; one without a readable time keeps the thirty minutes.",
+      "instruction": [
+        "src/mc/run.js `quotaPause()` sleeps `QUOTA_SLEEP_MS` (30 min, run-plan.js:65) whatever the refusal said. On 2026-09-08 a weekly limit that reset three days later cost eight launches of `sql-w5-relationship-closure`, one every thirty minutes, each `rc=1 3s note=quota`. The refusal text carries the time. Every one of the 104 refusals in `~/mc/runner/log/` has the same form: `You've hit your weekly limit · resets Sep 11 at 3pm (Europe/Stockholm)`.",
+        "In src/mc/run-plan.js, beside `quotaSeen`, add `export function quotaResetAt(text, now = new Date())` → `Date | null`. Pattern: `resets (?:(<Mon>) (<d>) at )?(<h>)(?::(<mm>))?\\s?(am|pm)(?: \\((<IANA zone>)\\))?`, case-insensitive, month as a three-letter English abbreviation. No date means today in that zone, or tomorrow when that time has already passed. A date earlier than `now` by more than a day means next year. No zone means the machine's. Convert zone wall time to an instant with `Intl.DateTimeFormat('en-US', { timeZone, … }).formatToParts` — compute the zone's offset at the candidate instant and correct once; no dependency is added. An unknown zone name or anything unparseable returns null. Never return a time more than eight days after `now` — return null instead.",
+        "`parseSession` (run-plan.js, the three places that set `quota`) also returns `quotaReset: quota ? quotaResetAt(<the same text it tested>, now) : null`; the dash object carries `quotaReset: null`.",
+        "`quotaPause(until = null)` in run.js: the deadline is `until + 60 s` when `until` is a Date in the future, else `now + QUOTA_SLEEP_MS`. It sleeps in slices of `Math.min(remaining, QUOTA_SLEEP_MS)` through `deps.sleep`, and between slices returns early when `stopRequested()` or `updateRequested()` is true — a pause of days must not make the runner deaf to STOP and UPDATE. The shared `quotaSleep` promise stays one promise for all lanes. The log line says the time: `quota seen — every lane sleeping until <ISO> (the refusal's reset)` or the old thirty-minute wording. Both callers (`if (turn.quota) await quotaPause()` near line 1236 and `if (read.quota) await quotaPause()` near line 1688) pass the parsed reset. `deps.now` — use whatever clock run.js already injects (`grep -n \"deps.now\\|Date.now\" src/mc/run.js`); if there is none, add `now: () => new Date()` to `realDeps`.",
+        "Tests. tests/mc/run-plan.test.js: `quotaResetAt` for the logged string with `now = 2026-09-08T09:05:00Z` → `2026-09-11T13:00:00.000Z`; `resets 3pm (Europe/Stockholm)` at 2026-09-08T09:05Z → same day 13:00Z, and at 14:00Z → next day; `resets Jan 2 at 9:30am (America/New_York)` from 2026-12-30 → 2027-01-02T14:30Z; garbage and an unknown zone → null. tests/mc/run.test.js: a session result with the logged text makes the recorded sleeps sum to the deadline and no session starts before it; a STOP file appearing after the first slice ends the pause.",
+        "docs/technical/mc-run.md: the quota paragraph (`grep -n -i \"quota\" docs/technical/mc-run.md`). Changelog entry."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A scratch directory per run",
+      "status": "ready",
+      "done_when": "Every step session is started with `MC_SCRATCH` naming an existing directory `~/mc/runner/scratch/<project>-<stamp>/`, `canon/roles/_common.md` tells a session to put probes there, and the chore pass removes scratch directories older than seven days.",
+      "instruction": [
+        "A killed session's throwaway measuring script is an untracked file, and an untracked file is a dirty worktree that stops the project until a person deletes it: `mail-window-overlay-integrity` stood 31 rounds on three `*.tmp.mjs` files (2026-09-04), `connections-section` 12 rounds on two probes. The check is right and stays. There is nowhere else to put such a file, and `canon/` says nothing about it.",
+        "src/mc/paths.js: `export const RUNNER_SCRATCH = 'scratch'` and `export function runnerScratchDir(env)` → `join(runnerDir(env), RUNNER_SCRATCH)`, beside the other runner paths.",
+        "src/mc/run.js, where the session env is built (the `env:` line with `MC_STEP`, `MC_PROJECT`, `MC_REPO`, `MC_WORKAREA`, near line 1598): before the session starts, make `join(runnerScratchDir(), `${name}-${<the run's stamp already used for its log file name>}`)` with `mkdirSync(…, { recursive: true })` through whatever fs seam run.js uses for its other writes, and add `MC_SCRATCH: <that path>` to the env for every kind of session the runner starts, not only when `stepIndex != null` — the other four variables keep their condition. A mkdir that throws is logged with `say` and the session starts without the variable.",
+        "The chore pass (the function that calls `archive-plan` and `close-workarea`; `grep -n \"closeWorkareas\\|archivePlans\\|chore\" src/mc/run.js`): remove every directory under `runnerScratchDir()` whose mtime is more than seven days old, `rmSync(…, { recursive: true, force: true })`, one `say` line with the count when it is not zero. Never touches anything outside that directory; a name that is not a directory is left.",
+        "canon/roles/_common.md: one paragraph — a probe, a measuring script, a slice of output or any file that is not part of the change goes in `$MC_SCRATCH` (a directory outside the repository, yours for this session, removed after a week), never in the worktree: an untracked file left in the worktree by a session that dies stops the project until a person deletes it. In a session with no `MC_SCRATCH` (a foreground one) use the system temp directory. If a test pins the role texts' content or length (`grep -rn \"_common\" tests/mc`), update it.",
+        "Tests in tests/mc/run.test.js: the session fake receives `env.MC_SCRATCH`, the directory exists and lies under the runner's scratch dir; the chore pass removes an eight-day-old scratch directory and keeps a one-day-old one. docs/technical/mc-run.md § *The session* lists the variable with the other four. Changelog entry."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A process that hangs after its result is not a stalled step",
+      "status": "ready",
+      "done_when": "Once `streamSession` has seen the `result` line, the process gets `RESULT_GRACE_MS` (two minutes) to exit and is then killed with the result standing: status 0, `stalled: false`, and the `runs.tsv` note is the session's own word.",
+      "instruction": [
+        "src/mc/run.js `streamSession`: the stall timer is re-armed on every stdout chunk and outlives the `result` on purpose. On 2026-09-13 `sql-w2-search-closure` finished (`\"type\":\"result\"`, `subtype: success`, 72.7 min) and its process then sat twenty minutes without exiting; the stall guard killed it, the run was logged `142 … stalled,failed`, and the reason read `the session ended stalled (rc 142) without landing it` — as if the session had never finished. The lane was also held twenty minutes for nothing.",
+        "Change: in `onResultLine`, after closing stdin, clear the stall timer and arm one `setTimeout` of `RESULT_GRACE_MS` (export `RESULT_GRACE_MS = 2 * 60 * 1000` from run-plan.js beside `DEFAULT_STALL_MINUTES`, and let `streamSession` take `resultGraceMs` as an option defaulting to it, so a test can pass 10). It is armed whether or not `stallMs` is set. `armStall` returns at once when `resultSeen` is true, so later chunks do not move it. When it fires: set a new flag `lingered = true`, `stop()`, `child.kill('SIGTERM')` — `stalled` stays false. On `close`: `status: stalled ? TIMEOUT_EXIT : (lingered ? 0 : (status ?? 1))`, `timedOut: stalled`, `stalled`, and add `lingered` to the resolved object. `stop()` clears this timer too.",
+        "The result line is only scanned for when the prompt is piped (`piped`), which is every step session; an unpiped session keeps today's behaviour exactly.",
+        "Nothing in the judgement after the session changes (run.js near line 1660): a step still `running` in the register is `failed` by ruling 21 — but its note is now `success,failed` and its reason `#N is open and the session ended success (rc 0) without landing it`, which is what happened. When `result.lingered`, add one `say` line: `<name>: the process did not exit within 2m of its result — killed, the result stands`.",
+        "tests/mc/run.test.js has `streamSession` cases with a fake `spawn` (`grep -n \"streamSession\" tests/mc/run.test.js`). Add: a child that writes a result line and never closes → killed after `resultGraceMs`, resolves `status: 0, stalled: false, lingered: true` and the stdout still holds the result; a child that writes chunks after the result does not extend the grace; a child that never writes a result still stalls with 142 as today.",
+        "docs/technical/mc-run.md: the sentence near line 908 (`It is armed at spawn and outlives the result`) becomes what is true now, and the sentence near line 575 about `stalled,open … which is then held` is removed — no code produces `stalled,open` and nothing is held (ruling 21). Changelog entry."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "mc status reads a killed merge the way the runner does",
+      "status": "ready",
+      "done_when": "`machineState` answers runnable for a worktree whose only dirt is a merge of origin/main left in progress, keeps `dirty` when there is other work beside it, and the `RUN_REFUSALS` agreement table has both cases.",
+      "instruction": [
+        "`runStepClaimed` (src/mc/run.js near line 1415) runs `git merge --abort` when `MERGE_HEAD` exists, then does its dirty check. `machineState` in src/mc/status-collect.js was not taught that: `dirtyWorktree` reads the merge's rows as `a merge stopped in <path>: …`, reason `dirty`, so the page's NEXT and `mc status <name>` say the project waits on a person while the lane would abort the merge and run it.",
+        "A merge in progress does not only leave unmerged rows: every file main changed is staged (`M `, `A `, `D ` — a letter in the first column, a blank second). What a person or a session left beside the merge has a non-blank second column (` M`, `MM`, `AM`, ` D`) or is untracked (`??`). Unmerged rows are the seven codes in `UNMERGED`.",
+        "In `machineState`, before `dirtyWorktree` is called: `const merging = git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok` — a read-only question, which this module's rule allows. When `merging`, read the porcelain rows with the two status columns kept as written (the existing row parser trims them; parse `line.slice(0, 2)` before trimming) and call the worktree clean when every row is either `UNMERGED` or has a blank second column and is not `??`. Otherwise — and whenever `MERGE_HEAD` is absent — `dirtyWorktree` answers as today. Do not run `merge --abort` here; this module reads.",
+        "tests/mc/run.test.js, the `RUN_REFUSALS` agreement table (`grep -n \"RUN_REFUSALS\" tests/mc/run.test.js`): add a case with `MERGE_HEAD` present and rows `UU a.js`, `M  b.js` → the runner starts the step and `machineState` says runnable; and one with the same plus ` M c.js` → both say `dirty`. tests/mc/status-collect.test.js: the two readings directly, and that the porcelain's leading-space rows are parsed by column (` M c.js` as first line — the git fake must not trim it).",
+        "docs/technical/mc-status.md where `dirty` is described. Changelog entry."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The documentation no longer describes the repair session",
+      "status": "ready",
+      "done_when": "No sentence in docs/technical, docs/project/README.md or a comment in src/mc describes a repair session, a repair kind, `held.json` or a merge lane as something mc does today, and `checkInPrompt` has no `repair` branch.",
+      "instruction": [
+        "Ruling 21 (#714, 2026-09-12) removed the repair session, `held.json` and the merge lane. What still says otherwise, found 2026-09-19: docs/project/README.md:47 (`a repair on opus with neither`) and :115 (`costs a session, a repair, and a person`); docs/technical/mc-roles.md:106 (`repair.md look present`); src/mc/run-plan.js comments at :40, :47, :210, :259, :711, :777 and the dead `if (kind === 'repair')` branch in `checkInPrompt` (:788); src/mc/status-collect.js and src/mc/brief-collect.js mention `held.json` in comments; docs/technical/mc-run.md. Line numbers move — find them with `grep -rniE \"repair|held\\.json|merge lane\" docs/technical docs/project/README.md src/mc canon`.",
+        "Rule for each hit: a sentence that says what mc does now and is wrong is rewritten to what is true (a step's defaults are `sonnet`/`medium`/`opus` advisor, a plan session's `opus`; a failed step is `failed` in the register with a reason, and `mc step ready` is the way back). A dated sentence that tells history (`until 2026-09-12 a held pull request…`, `the repair path is gone (ruling 21)`) stays — it explains why the code looks as it does. docs/project/mc/rulings.md, docs/project/project_log.md, CHANGELOG.md and changelog.d are history and are not edited.",
+        "`checkInPrompt` (run-plan.js): remove the `kind` parameter's `repair` branch and keep the step wording; if `kind` has no other use, remove the parameter and its callers' argument (`grep -n \"checkInPrompt\" src tests -r`). Remove any test that only pins the repair wording. `npm test` stays green.",
+        "`~/mc/runner/held.json` still exists on this machine as a leftover file; it is not this step's to delete. If any code still reads it (`grep -rn \"held.json\\|heldPath\" src/mc --include=*.js` outside comments), say so in a comment on this step and leave the code alone."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The brief gathers no document",
+      "status": "ready",
+      "done_when": "`mc brief` opens or resumes the brief session with the role and no gathered document; `--collect`, `--offline`, `collectBrief`, `renderBrief` and everything only they used are gone; `canon/roles/brief.md` tells the session where the ground is read.",
+      "instruction": [
+        "Martin, 2026-09-19, on whether `mc brief --collect` and the gathered document go: \"Ta bort båda\". The brief keeps no script. Today `mc brief` (src/mc/commands/brief.js) runs `collectBrief` — fetches, asks `gh`, reads plans, runs, tables — writes `~/mc/brief/<date>.md` and hands the text to the session as its first words, and to a resumed session as a reply. The page (`mc`), `mc status <name>` and `mc step <project>` now carry the same ground, live, and the document is a second copy of it that is stale by the second question.",
+        "src/mc/commands/brief.js: flags are `--new`, `--model`, and the tool sugar; `--collect` and `--offline` become unknown flags by no longer being declared. No collect call, no `mc: <path> (…s) — n merged` line. `briefLaunch({ role })` returns the overlay and the prompt `Start the meeting.`; a resumed session gets no `resumePrompt` (it is resumed where it was, as `mc helper` does — read helper.js's call of `openInWorkArea`). Everything else in the `openInWorkArea` call stays: it stands in `workRoot()`, verb `brief`, the role register fields. Rewrite the file's doc comment to what the verb is now, keeping the dated paragraph about the decision apparatus.",
+        "src/mc/brief-collect.js: delete `collectBrief`, `renderBrief`, and then every function, constant and import in the file that nothing in `src/` references any more — work outward from those two until `grep` finds a caller for everything left. The contract names what other modules import and must stay; check each remaining export with `grep -rn \"<name>\" src` before deleting and keep anything with a caller outside this file (for instance `briefDir` is used by the brief role's unblock worktree text but check the code, `failedSteps`/`blockedSteps`/`waitingOnHands`/`productionState`/`summariseRuns` may be used by the page or `mc status`). The file keeps its name — nine modules import from it; renaming is not this step. Rewrite its header comment to say what it is now: the shared readers of plans, runs and the runner's tables.",
+        "canon/roles/brief.md: the opening (`Your first message is ~/mc/brief/<date>.md, gathered by a script and whole already…`) becomes: nothing is gathered for you; the ground is read where it lives — `mc --fresh` for the page (the runner, the queue, failed and blocked steps, the intake, the workareas), `mc status <name>` and `mc step <project>` for one project, `ls ~/mc/proposals/` for the proposals, `~/mc/runner/undocumented-closures.md`, `unplanned-workareas.md` and `unreadable-plans.md` for the runner's three questions, `gh pr list --state merged` per repository for what landed. Read the page first, then start. Every later reference in the role to a section of the brief document (`Held before merge`, `the brief has only their names`, `Ready, and the runner cannot start it`) is reworded to the surface that now shows it; the instructions about what to do with a failed step, a plan-review, a named decision and the unblock worktree under `~/mc/brief/unblock/` are unchanged. If a test pins the role's text or hash (`grep -rn \"brief\" tests/mc/roles* tests/mc/canon*`), update it.",
+        "Tests: tests/mc/commands/brief.test.js is rewritten for the new verb (opens with `Start the meeting.`, resumes with no prompt, `--collect` exits 2, missing role exits 1). tests/mc/brief-collect.test.js loses the cases for deleted functions and keeps the rest. Fix whatever else `npm test` turns red (`close-live`, `page`, `run`, `helper` tests mention the brief — most only import shared readers).",
+        "Docs: docs/technical/mc-brief.md is rewritten to the verb as it is (it is 310 lines about the collect; most of it goes — keep what describes the session, the role and the unblock pull request). src/mc/help-text.js and docs/mc-command-matrix.md lose `--collect`/`--offline` for `mc brief`. Other docs that mention the gathered brief (`grep -rln \"mc brief\\|~/mc/brief/\" docs/technical docs/coding-agent-protocol.md`) are corrected where they describe today and left where they tell dated history. `status-collect.js`'s `machineDetail` comment names the brief's *Ready, and the runner cannot start it* as a reader — it no longer is. The five gathered files in `~/mc/brief/` are Martin's to delete; the code leaves the directory alone. Add a row to docs/project/project_log.md for this project as the close-out, and a changelog entry."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
