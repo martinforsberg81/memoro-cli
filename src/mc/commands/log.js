@@ -218,7 +218,7 @@ export function parseArgs(argv) {
   };
 }
 
-function usage() {
+export function usage() {
   return 'usage — mc log [<run>] [--failures] [--open] [--repo <repo>] [--since <iso>]\n'
     + '              [--verb <verb>] [--limit <n>] [--all] [--where] [--json]\n';
 }

@@ -28,13 +28,17 @@ import { scanArgs } from './flags.js';
 
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
+export function usage() {
+  return 'usage — mc worker <name> [task] [--model <model>] [--tmux] [--codex|--claude]\n';
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const opts = parseArgs(argv);
   if (opts.error || !opts.name) {
     stderr.write(`mc: ${opts.error || 'which worker? mc worker <name>'}\n`);
-    stderr.write('usage — mc worker <name> [task] [--model <model>] [--tmux] [--codex|--claude]\n');
+    stderr.write(usage());
     return 2;
   }
   if (reservedRoleName(opts.name)) {

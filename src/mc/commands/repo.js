@@ -836,7 +836,7 @@ function seconds(ms) {
   return `${value}s`;
 }
 
-function usage() {
+export function usage() {
   return [
     'usage — mc repo status [repo] [--json] [--offline]\n',
     '        mc repo watch start [--interval <seconds>]\n',

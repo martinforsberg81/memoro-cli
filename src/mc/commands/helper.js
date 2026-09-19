@@ -37,6 +37,10 @@ const USAGE = 'usage — mc helper [--new] [--codex|--claude] [--model <model>]\
 /** The flags that only mean something to the digest, named once for the refusal. */
 const DIGEST_FLAGS = ['--since', '--limit', '--threshold'];
 
+export function usage() {
+  return USAGE;
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
