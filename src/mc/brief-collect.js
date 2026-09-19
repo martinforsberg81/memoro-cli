@@ -910,8 +910,15 @@ export function renderBrief({
   else {
     for (const p of proposals) out.push(`- \`${p.file}\``);
     out.push('', 'Open the ones worth opening. Each is a reading, not work yet: it becomes a '
-      + 'project — a `PLAN.json` on main, then its name in `~/mc/queue.md` — or it is dropped. '
-      + 'The file goes either way, at the moment that is decided.');
+      + 'project — a `PLAN.json` on main, then its name in `~/mc/queue.md` — or it is built '
+      + 'here, or it is dropped.');
+    out.push('', '**A handled proposal is always archived: move the file to '
+      + '`~/mc/proposals/archive/` and say in one line at its foot what happened — built and '
+      + 'where it landed, or dropped and why. Built, planned or dropped, the file moves the '
+      + 'moment it is decided, and this is never a question for Martin.** A proposal only '
+      + 'partly handled is not archived: rewrite it in place to what is actually left, with '
+      + 'the date and what closed the rest, so the list says what it is waiting on rather than '
+      + 'what it said the day it was written.');
   }
   out.push('');
 
