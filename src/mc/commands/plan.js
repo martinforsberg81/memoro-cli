@@ -56,6 +56,10 @@ const USAGE = 'usage — mc plan [<programme>] [--new] [--codex|--claude] [--mod
 /** What `chooseProgramme` returns for "not one of these" — never a real name. */
 const NEW_PROGRAMME = Symbol('new programme');
 
+export function usage() {
+  return USAGE;
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;

@@ -70,13 +70,13 @@ export const REPO = 'memoro';
 const short = (sha) => (sha ? String(sha).slice(0, 7) : null);
 
 export function parseDeployArgs(argv) {
-  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json', '--help'] });
-  const opts = { dryRun: false, json: false, help: false };
+  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json'] });
+  const opts = { dryRun: false, json: false };
   if (scanned.error) return { ...opts, error: scanned.error };
   if (scanned.positional.length) {
     return { ...opts, error: `mc deploy takes no arguments (${scanned.positional[0]}) — it deploys memoro's main, and nothing else` };
   }
-  return { dryRun: scanned.flags['dry-run'], json: scanned.flags.json, help: scanned.flags.help };
+  return { dryRun: scanned.flags['dry-run'], json: scanned.flags.json };
 }
 
 export function usage() {
@@ -368,7 +368,6 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
-  if (opts.help) { stdout.write(usage()); return 0; }
 
   const repos = deps.repos || defaultRepos(env);
   const path = repos.find((repo) => repo.name === REPO)?.path;

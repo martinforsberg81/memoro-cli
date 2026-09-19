@@ -40,3 +40,6 @@ export async function run(argv, deps = {}) {
   const module = await import('../mc/commands/status-project.js');
   return module.run(argv, deps);
 }
+
+// What `mc status --help` prints: the one form that answers.
+export { usage } from '../mc/commands/status-project.js';

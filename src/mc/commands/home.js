@@ -45,6 +45,10 @@ const USAGE = [
   '        mc status <name>         one project',
 ].join('\n');
 
+export function usage() {
+  return USAGE;
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;

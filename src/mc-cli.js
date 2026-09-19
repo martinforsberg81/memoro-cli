@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { VERB_MODULES, runModule } from './mc-verbs.js';
+
 const rawArgv = process.argv.slice(2);
 const argv = [];
 for (const arg of rawArgv) {
@@ -108,25 +110,8 @@ async function routeV1Command(args) {
   // homes, generation journals, the pre-V1 move — and that store is what
   // `mc-cut` is removing. A verb that reports on machinery nobody runs is a
   // second product's front door left standing in this one's hallway.
-  const modules = {
-    status: './cli/status.js',
-    work: './mc/commands/work.js',
-    repo: './mc/commands/repo.js',
-    merge: './mc/commands/merge.js',
-    test: './mc/commands/test.js',
-    dev: './mc/commands/dev.js',
-    deploy: './mc/commands/deploy.js',
-    worker: './mc/commands/worker.js',
-    brief: './mc/commands/brief.js',
-    helper: './mc/commands/helper.js',
-    plan: './mc/commands/plan.js',
-    run: './mc/commands/run.js',
-    roles: './mc/commands/roles.js',
-    log: './mc/commands/log.js',
-    step: './mc/commands/step.js',
-  };
-  return Object.hasOwn(modules, command)
-    ? runModule(modules[command], args.slice(1))
+  return Object.hasOwn(VERB_MODULES, command)
+    ? runModule(VERB_MODULES[command], args.slice(1))
     : null;
 }
 
@@ -140,9 +125,4 @@ function moved(verb) {
   console.error('    mc                  the page, and at a terminal a way in');
   console.error('    mc status <name>    one project');
   return 2;
-}
-
-async function runModule(path, argv) {
-  const module = await import(path);
-  return (await module.run(argv)) ?? 0;
 }

@@ -21,13 +21,17 @@ import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
 
+export function usage() {
+  return 'usage — mc brief [--collect] [--offline] [--new] [--codex|--claude] [--model <model>]\n';
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const scanned = scanArgs(argv, { booleans: ['--collect', '--offline', '--new'], strictValues: ['--model'], toolSugar: true });
   if (scanned.error || scanned.positional.length) {
     stderr.write(`mc: ${scanned.error || `unknown argument ${scanned.positional[0]}`}\n`);
-    stderr.write('usage — mc brief [--collect] [--offline] [--new] [--codex|--claude] [--model <model>]\n');
+    stderr.write(usage());
     return 2;
   }
   const { flags } = scanned;

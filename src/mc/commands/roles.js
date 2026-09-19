@@ -28,15 +28,21 @@ import {
 } from '../roles.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
 
+export function usage() {
+  return [
+    'usage — mc roles list [--json]\n',
+    '        mc roles show <role> [--json]\n',
+    '        mc roles check [<role>] [--json]\n',
+  ].join('');
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const opts = parseArgs(argv);
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
-    stderr.write('usage — mc roles list [--json]\n');
-    stderr.write('        mc roles show <role> [--json]\n');
-    stderr.write('        mc roles check [<role>] [--json]\n');
+    stderr.write(usage());
     return 2;
   }
 

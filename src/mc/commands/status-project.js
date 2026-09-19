@@ -4,6 +4,10 @@
  */
 import { collectProject, renderProject } from '../status-project.js';
 
+export function usage() {
+  return 'usage — mc status <name> [--json] [--offline]\n';
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -12,13 +16,13 @@ export async function run(argv, deps = {}) {
     if (arg === '--json' || arg === '--offline') continue;
     if (arg.startsWith('--')) {
       stderr.write(`mc: unknown argument ${arg}\n`);
-      stderr.write('usage — mc status <name> [--json] [--offline]\n');
+      stderr.write(usage());
       return 2;
     }
     names.push(arg);
   }
   if (names.length !== 1) {
-    stderr.write('usage — mc status <name> [--json] [--offline]\n');
+    stderr.write(usage());
     return 2;
   }
   const data = await (deps.collect || collectProject)(names[0], { offline: argv.includes('--offline') });

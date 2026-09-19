@@ -131,7 +131,7 @@ beforeEach(() => {
 
 describe('mc deploy — the arguments', () => {
   it('takes --dry-run and --json, and nothing positional', () => {
-    assert.deepEqual(parseDeployArgs(['--dry-run']), { dryRun: true, json: false, help: false });
+    assert.deepEqual(parseDeployArgs(['--dry-run']), { dryRun: true, json: false });
     assert.match(parseDeployArgs(['memoro']).error, /takes no arguments \(memoro\)/u);
     assert.match(parseDeployArgs(['--force']).error, /unknown flag: --force/u);
   });

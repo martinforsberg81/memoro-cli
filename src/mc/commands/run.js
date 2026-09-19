@@ -49,6 +49,10 @@ const USAGE = [
   `                                    repository at once, both 1–${LANES_MAX}; no argument prints both`,
 ].join('\n');
 
+export function usage() {
+  return USAGE;
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;

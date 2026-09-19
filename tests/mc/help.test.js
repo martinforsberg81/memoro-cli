@@ -23,6 +23,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
+import { VERB_MODULES, runModule } from '../../src/mc-verbs.js';
 import { runMc } from './_helpers/cli.js';
 
 /**
@@ -46,7 +47,7 @@ function tableVerbs(file, declaration) {
 /** Every verb mc routes: the page's own table, and the capability table. */
 function routedVerbs() {
   return [
-    ...tableVerbs('mc-cli.js', 'modules'),
+    ...Object.keys(VERB_MODULES),
     ...tableVerbs('bin-mc.js', 'CAPABILITIES'),
   ];
 }
@@ -94,5 +95,43 @@ describe('mc --help', () => {
     assert.equal(result.status, 0, `stderr:${result.stderr}`);
     assert.doesNotMatch(result.stdout, /§\d/u);
     assert.doesNotMatch(result.stdout, /\bMVP\b/u);
+  });
+});
+
+describe('mc <verb> --help', () => {
+  it('every verb in the dispatcher table exports a usage that starts with "usage"', async () => {
+    for (const [verb, path] of Object.entries(VERB_MODULES)) {
+      const module = await import(new URL(`../../src/${path}`, import.meta.url));
+      assert.equal(typeof module.usage, 'function', `${verb} exports no usage()`);
+      assert.match(module.usage(), /^usage/u, `${verb}'s usage does not start with "usage"`);
+    }
+  });
+
+  it('answers --help and -h on stdout with exit 0, and never calls run', async () => {
+    for (const [verb, path] of Object.entries(VERB_MODULES)) {
+      const { usage } = await import(new URL(`../../src/${path}`, import.meta.url));
+      for (const flag of ['--help', '-h']) {
+        let out = '';
+        const code = await runModule(path, [flag], { stdout: { write: (text) => { out += text; } } });
+        assert.equal(code, 0, `${verb} ${flag}`);
+        assert.ok(out.startsWith('usage'), `${verb} ${flag} printed no usage`);
+        assert.equal(out, usage().endsWith('\n') ? usage() : `${usage()}\n`);
+      }
+    }
+  });
+
+  it('prints the whole usage for a multi-form verb whatever sub-verb came first', async () => {
+    let out = '';
+    const code = await runModule(VERB_MODULES.test, ['dev', '--help'], { stdout: { write: (text) => { out += text; } } });
+    const { usage } = await import('../../src/mc/commands/test.js');
+    assert.equal(code, 0);
+    assert.equal(out, usage());
+  });
+
+  it('the real binary: mc test dev --help is stdout, exit 0, silent on stderr', () => {
+    const result = runMc(['test', 'dev', '--help']);
+    assert.equal(result.status, 0, `stderr:${result.stderr}`);
+    assert.match(result.stdout, /^usage/u);
+    assert.equal(result.stderr, '');
   });
 });
