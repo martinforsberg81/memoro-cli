@@ -1467,8 +1467,8 @@ describe('collectPage', () => {
     assert.deepEqual(data.next.skipped.reasons, { 'in-flight': 1, blocked: 1, done: 1 });
     assert.deepEqual(data.next.lanes.map((lane) => [lane.repo, lane.items.map((item) => item.name)]),
       [['memoro', ['docx-editor']]]);
-    assert.deepEqual([...new Set(gitArgs)], ['status --porcelain'],
-      'the reading asks the worktree one read-only question and nothing else');
+    assert.deepEqual([...new Set(gitArgs)].sort(), ['rev-parse -q --verify MERGE_HEAD', 'status --porcelain'],
+      'the reading asks the worktree two read-only questions — is a merge left in it, and what is dirty — and nothing else');
     // And beside it, `merges.json`: what a hand `mc merge` handed to the
     // runner's merge lane rather than to whoever typed it.
     assert.deepEqual(data.merges.queued.items.map((item) => [item.repo, item.pr, item.stopped_at]),

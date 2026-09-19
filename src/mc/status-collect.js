@@ -126,7 +126,12 @@ export function machineState(name, {
   // from origin/main. One that is there and dirty parks the project every
   // round until a person acts, which is the line this reading exists for.
   if (worktree && exists(worktree)) {
-    const dirt = dirtyWorktree(worktree, { gitOut, mtime });
+    // What the runner does first (`runStepClaimed`, run.js): a merge of
+    // origin/main left in progress is aborted before the dirty check. This
+    // module reads, so it asks the same question and reads the rows as the
+    // abort would leave them.
+    const merging = Boolean(git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])?.ok);
+    const dirt = dirtyWorktree(worktree, { gitOut, mtime, merging });
     if (dirt) return no(REFUSAL.dirty, dirt.detail, dirt.since);
   }
   if (prsFailed.includes(repo)) return no(REFUSAL['prs-unknown'], 'GitHub could not be asked what this repository has open');
@@ -183,13 +188,20 @@ const UNMERGED = /^(?:DD|AU|UD|UA|DU|AA|UU)$/u;
  * the round skips on it — but a person needs to know which of the two it is,
  * so the sentence says.
  */
-function dirtyWorktree(worktree, { gitOut, mtime = fileMtime }) {
+function dirtyWorktree(worktree, { gitOut, mtime = fileMtime, merging: inMerge = false }) {
   const porcelain = gitOut(['status', '--porcelain']) || '';
   if (!porcelain.trim()) return null;
+  // The two status columns are parsed as written, before anything is trimmed:
+  // ` M x` (a blank first column) is not `M  x`.
   const rows = porcelain.split('\n').filter((line) => line.trim()).map((line) => {
     const at = /^(..)\s(.*)$/u.exec(line);
-    return at ? { xy: at[1].trim(), path: at[2].trim() } : { xy: '', path: line.trim() };
+    return at ? { code: at[1], xy: at[1].trim(), path: at[2].trim() } : { code: '', xy: '', path: line.trim() };
   });
+  // A merge in progress stages every file main changed (`M `, `A `, `D `) and
+  // marks the conflicts unmerged; the runner aborts all of that. What it does
+  // not touch is what sits beside the merge: a worktree change (a non-blank
+  // second column) or an untracked file.
+  if (inMerge && rows.every((row) => UNMERGED.test(row.code) || row.code[1] === ' ')) return null;
   const shown = rows.slice(0, 3).map((row) => row.path).join(', ') + (rows.length > 3 ? ` +${rows.length - 3}` : '');
   const merging = rows.some((row) => UNMERGED.test(row.xy));
   const since = rows

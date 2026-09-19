@@ -17,7 +17,7 @@ import { machineState } from '../../src/mc/status-collect.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -53,6 +53,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     }
   }
   const log = [];
+  const aborted = new Set();
   const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
@@ -248,12 +249,21 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       // `git status --porcelain` writes for a path it stopped on, and the
       // round skips the project on it exactly as it does on a modified file.
       if (args[0] === 'status') {
+        // A merge in progress with its rows as git writes them; once aborted,
+        // only what a merge does not own is left — a worktree change or an
+        // untracked file (second column not blank), never a staged row.
+        const rows = mergeRows[cwd.split('/')[2]];
+        if (rows) {
+          const left = aborted.has(cwd) ? rows.filter((row) => row[1] !== ' ' && !/^(?:DD|AU|UD|UA|DU|AA|UU)/u.test(row)) : rows;
+          return { ok: true, stdout: left.join('\n') };
+        }
         if (unmerged.some((d) => cwd.includes(`/${d}/`))) return { ok: true, stdout: 'UU canon/roles/step.md\n?? scratch.md' };
         return { ok: true, stdout: dirty.some((d) => cwd.includes(`/${d}/`)) ? ' M x' : '' };
       }
       // A fetch a workarea cannot do: `syncMain` gives up on it, and no
       // reading of the files could have known beforehand.
       if (args[0] === 'fetch' && fetchFails.includes(cwd.split('/')[2])) return { ok: false, stdout: '', stderr: 'could not read from remote' };
+      if (args[0] === 'merge' && args[1] === '--abort') { aborted.add(cwd); return { ok: true, stdout: '' }; }
       if (args[0] === 'merge' && args.includes('origin/main')) {
         const name = cwd.split('/')[2];
         return conflicts[name] ? { ok: false, stdout: '', stderr: 'CONFLICT' } : { ok: true, stdout: '' };
@@ -264,7 +274,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       // the answer is otherwise no. `rev-parse origin/main^{tree}` is
       // branchLanded's base.
       if (args[0] === 'rev-parse') {
-        if (args.at(-1) === 'MERGE_HEAD') return { ok: mergeLeft.includes(cwd.split('/')[2]), stdout: 'mergehead' };
+        if (args.at(-1) === 'MERGE_HEAD') return { ok: mergeLeft.includes(cwd.split('/')[2]) || (cwd.split('/')[2] in mergeRows && !aborted.has(cwd)), stdout: 'mergehead' };
         if (args[1] === 'origin/main^{tree}') return { ok: true, stdout: 'basetree' };
         // `rev-parse --abbrev-ref HEAD` in a workarea's checkout: the branch
         // it actually sits on. `heads` names the ones that are not the folder.
@@ -3090,6 +3100,12 @@ const CASES = [
     detail: /a merge stopped in \/w\/m\/memoro: canon\/roles\/step\.md, scratch\.md/u,
   },
   {
+    reason: 'dirty',
+    what: 'work left beside a merge in the workarea',
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), mergeRows: { m: ['UU a.js', 'M  b.js', ' M c.js'] }, session: okSession() }),
+    detail: /a merge stopped in \/w\/m\/memoro: a\.js, b\.js, c\.js/u,
+  },
+  {
     reason: 'prs-unknown',
     what: 'GitHub could not be asked what is open',
     make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), prsFail: ['memoro'], session: okSession() }),
@@ -3172,6 +3188,25 @@ for (const kase of CASES) {
     }
   });
 }
+
+/**
+ * The half of the agreement the table above cannot hold, because it lists
+ * refusals: a merge of origin/main left in progress and nothing else beside
+ * it. The round aborts it and starts the step, so the reading has to say
+ * runnable — `a merge stopped in …` was a project waiting on a person that
+ * the lane would have run.
+ */
+test('a merge left in progress with nothing beside it: the round starts the step and the reading says runnable', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, areas: area(), mergeRows: { m: ['UU a.js', 'M  b.js'] }, session: okSession() });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  const reading = readingOf(f, 'm', world);
+  assert.equal(reading.runnable, true, `the reading said ${reading.reason}: ${reading.detail}`);
+  assert.ok(!f.calls.git.some((c) => c[1] === 'merge' && c[2] === '--abort'), 'the reading aborts nothing');
+  await runner.runStep('m', world);
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/m/memoro' && c[1] === 'merge' && c[2] === '--abort'));
+  assert.equal(f.calls.sessions.length, 1, 'the round started the step');
+});
 
 test('every reason the round can refuse on is in the table above', () => {
   const covered = new Set(CASES.map((kase) => kase.reason));
