@@ -103,7 +103,7 @@ if (!role?.overlay) { say(`${name}: canon/roles/${kind}.md is missing — skip`)
 ```
 
 A shared preamble folded in ahead of that check would make a missing
-`repair.md` look present, and the runner would launch a ninety-minute session
+`step.md` look present, and the runner would launch a ninety-minute session
 with no instructions for what it is doing.
 
 ## The assembler

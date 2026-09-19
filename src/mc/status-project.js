@@ -47,7 +47,7 @@ import { machineDetail, machineState } from './status-collect.js';
  * three in the morning when the runner refuses it.
  *
  * The status row carries both halves, because a person reads one row and acts:
- * `ready · #614 is held before merge after a repair` is the answer, and
+ * `ready · uncommitted work in ~/mc/<name>/memoro: …` is the answer, and
  * `ready` on a row of its own with the machine's answer under it is a row that
  * invites them to stop at the first one. On 2026-09-05 that is exactly what
  * this printed — `ready`, for two projects the runner could not have started.
@@ -323,7 +323,7 @@ export async function collectProject(name, {
     prs,
     machine,
     landing,
-    // The entries waiting for the runner's merge lane whose branch is this
+    // The `mc merge` calls waiting for the gate whose branch is this
     // project's — the same longest-name rule the pull requests above are
     // matched by (project-prs.js), so it holds with GitHub unreachable too.
     queued: queuedFor(root, read, { name, repo, names: main?.names || [name] }),

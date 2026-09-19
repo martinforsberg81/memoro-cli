@@ -79,7 +79,7 @@ export function workAreaPath(name, env = process.env) {
 
 /**
  * `~/mc/runner/` — everything the runner writes about its own rounds:
- * `runner.json`, `current-<repo>.json`, `held.json`, `log/`, and the three
+ * `runner.json`, `current-<repo>.json`, `log/`, and the three
  * tables below.
  *
  * The tables used to live in `~/mc/intake/`, which was the wrong room for a

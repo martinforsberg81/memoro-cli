@@ -44,8 +44,7 @@ the door.
   `advisor` is a model name, or `off` for none, and an advisor that is the
   model itself is none. What a key leaves unsaid is the runner's default for
   the session's kind — a step runs on `sonnet` at `medium` with `opus` as
-  advisor, a step or plan on `opus` with no advisor, a repair on `opus` with
-  neither (ruling 18, [`docs/technical/mc-run.md`](../technical/mc-run.md)
+  advisor, and a plan session (`mc plan`) on `opus` (ruling 18, [`docs/technical/mc-run.md`](../technical/mc-run.md)
   § *The session*).
 
 ### The steps
@@ -112,7 +111,7 @@ läggs i ett projekts STEP ska vara en färdig körbar plan som runner kan ta fr
 a till ö. Om inte, så hör det inte hemma där."*). The test of every step is the
 one at the top of this file: can a headless session that has read nothing else
 do it, and know when it is finished? A step that has to stop and ask costs a
-session, a repair, and a person reading a transcript to find out why.
+session, a failed step, and a person reading a transcript to find out why.
 
 The plan has **no status of its own**: it is the state of the first step that is
 not done, and a plan whose steps are all done is done. The runner looks at that

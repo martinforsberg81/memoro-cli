@@ -47,7 +47,7 @@ DECISIONS
 
 LAST RUNS
   08-29 06:42Z  step        880s  #427    success,merged
-  08-30 11:31Z  repair      384s  —       success
+  08-30 11:31Z  step        384s  #481    success,merged
   08-30 11:44Z  step        737s  #476    success,merged
 
 OPEN PR
@@ -89,7 +89,7 @@ From the page's menu, `s <name>` runs this same verb and redraws
 | the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
 | whether that pull request is the round landing right now | `~/.memoro/mc/gate-running.json`, joined to a name and a holder (`runningMerge`, `merges-collect.js`) | `mc merge`/`mc test`, for the length of the round |
-| whether the runner could start it at all | the workarea's `git status --porcelain`, `~/mc/runner/held.json`, the same open pull requests, and whether `~/mc/runner/STOP` is there | `mc run`, and whoever left the workarea dirty |
+| whether the runner could start it at all | the workarea's `git status --porcelain`, the same open pull requests, and whether `~/mc/runner/STOP` is there | `mc run`, and whoever left the workarea dirty |
 
 The readers are shared, not re-implemented: `planFields`, `scanDecisions`,
 `parseDecision`, `runsFor` and `defaultRepos` all come from
@@ -123,13 +123,12 @@ candidates `mc run` will not remove by itself; the page lists them and
 was read as *this is being worked on, or is about to be*. Those are two
 questions and until 2026-09-05 only the first was answered here: on that day
 `mc status intake-inbox` and `mc status role-instructions` both printed a bare
-`ready` while #612 and #614 sat in `held.json` and nothing could start either
-project. So the row carries both halves, and it carries them on **one** row —
+`ready` while #612 and #614 sat in `held.json` (which ruling 21 removed on
+2026-09-12) and nothing could start either project. So the row carries both halves, and it carries them on **one** row —
 `ready` with the machine's answer on a row of its own is a row that invites a
 reader to stop at the first one:
 
 ```
-  status      ready · #614 is held before merge after a repair — the brief's (since 09-03 10:00Z)
   status      ready · uncommitted work in ~/mc/connections-section/memoro: hop-measure.mjs,
               probe.mjs (since 09-05 10:03Z)
   status      ready
@@ -138,17 +137,14 @@ reader to stop at the first one:
 The second half is `machineState` (`status-collect.js`), the same reading the
 page's NEXT and the brief draw; what the two readings are and why there are two
 is [`mc-run.md`](mc-run.md) § *The two readings, and what each answers*.
-`machineNote` is the rule for when it says nothing, and there are three cases
+`machineNote` is the rule for when it says nothing, and there are two cases
 and no others:
 
 - **a refusal the plan already names is dropped.** The row exists to stop
   `ready` being read as runnable, not to print `blocked · blocked`.
 - **`runnable` is silent.** That is most projects, and it is the case that must
   stay silent: a clause on every row would be noise nobody reads the day it
-  matters. The third example above is exactly what it was before this existed.
-- **the one loud `runnable` case is a hold still owed its repair**, because what
-  the runner would start there is a repair session and not the step the plan
-  names.
+  matters. The last example above is exactly what it was before this existed.
 
 The workarea's absolute path is folded to `~`; it is otherwise most of a
 terminal row.

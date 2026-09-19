@@ -39,8 +39,8 @@
  * The strictness has a cost, and it is said out loud rather than discovered:
  * a change whose reached tests include one that is already red on main is red,
  * and cannot land until that test is green. The differential form let that
- * through, at the price of measuring main every round to find out. The repair
- * is a selector that reaches fewer unrelated tests, which belongs in the
+ * through, at the price of measuring main every round to find out. The way
+ * out is a selector that reaches fewer unrelated tests, which belongs in the
  * repository rather than in a second measurement here.
  */
 import { spawn, spawnSync } from 'node:child_process';

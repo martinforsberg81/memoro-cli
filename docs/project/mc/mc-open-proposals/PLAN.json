@@ -39,7 +39,7 @@
       "check": "`mc brief --collect` exits 2; `grep -rn \"renderBrief\\|collectBrief\" src` is empty; `npm test` is green."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No document or comment describes a repair session, `held.json` or `stalled,open` as something mc does.",
       "check": "`grep -rniE \"repair session|a repair on|stalled,open\" docs/technical docs/project/README.md src/mc` finds only dated history sentences."
     }

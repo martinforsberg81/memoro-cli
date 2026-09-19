@@ -468,7 +468,7 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
   // to read and fix. Whose step this is comes from `MC_STEP` in the calling
   // session's environment, else from the register entry the pull request's
   // branch stands on (merge-step.js). Nothing is queued for anybody any more:
-  // a red is the caller's, and the merge lane's one repair session is gone.
+  // a red is the caller's, whoever calls.
   const said = [];
   if (single) {
     const env = deps.env || process.env;
