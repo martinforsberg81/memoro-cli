@@ -514,6 +514,63 @@ export function helperDue({ tsv = '', now = new Date(), hour = HELPER_HOUR_UTC }
 }
 
 /**
+ * The nightly's chore: a full run of every repository mc knows, once a day.
+ *
+ * Its `runs.tsv` rows carry `nightly` in both the name and the kind column, as
+ * the helper's carry `helper`, and for the same reason: the row is the whole
+ * state. There is no stamp file and no pid file beside it to fall out of step.
+ */
+export const NIGHTLY_KIND = 'nightly';
+export const NIGHTLY_NAME = 'nightly';
+
+/**
+ * Once a day.
+ *
+ * The cadence is Martin's day rather than a cron expression: one full reading
+ * of every repository mc knows, which is about 400 s of this machine on the
+ * two it knows today. The number sits here beside the chore that uses it, as
+ * `HELPER_HOUR_UTC` does, and there is no flag to change it.
+ */
+export const NIGHTLY_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Is the nightly tick due? Twenty-four hours since the last one, measured from
+ * that tick's own row and never from an hour of the clock.
+ *
+ * This is `helperDue`'s shape and deliberately not its rule. A wall-clock hour
+ * is the wrong cadence for a laptop twice over: asleep at the hour it never
+ * sees it, and a scheduler that notices the miss on waking fires a burst of
+ * catch-up runs at breakfast (`nightly-loop.js`). Measured from the last tick,
+ * sleep simply stretches the gap and the first tick after waking is one tick.
+ *
+ * A row is written whether the tick measured, skipped or threw, so the gate
+ * asks only that a tick happened — a tick that failed is not retried ten
+ * minutes later in a loop. A row whose `ts` does not parse says nothing about
+ * when a tick happened and is passed over; with no readable row at all the
+ * tick is due, and the row it writes then is the one that closes the gate.
+ */
+export function nightlyDue({ tsv = '', now = new Date(), intervalMs = NIGHTLY_INTERVAL_MS } = {}) {
+  const times = parseRuns(tsv)
+    .filter((row) => row.kind === NIGHTLY_KIND)
+    .map((row) => Date.parse(row.ts))
+    .filter((ms) => !Number.isNaN(ms));
+  if (!times.length) return { due: true, why: null };
+  const last = Math.max(...times);
+  const gone = now.getTime() - last;
+  const ago = `the last tick was ${spanOf(gone)} ago (${new Date(last).toISOString()})`;
+  if (gone >= intervalMs) return { due: true, why: ago };
+  return { due: false, why: `${ago}; the next is due in ${spanOf(intervalMs - gone)}` };
+}
+
+/** A span of time as a person says it: minutes below two hours, hours above. */
+function spanOf(ms) {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 120) return `${minutes} min`;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  return `${hours} h`;
+}
+
+/**
  * The runs.tsv note for one repository's collect. The outcome comes first and
  * the detail after, because the run summary reads a note that does not start
  * with `success` as a failure — and every helper row until 2026-09-05 was

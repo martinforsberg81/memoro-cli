@@ -17,7 +17,7 @@ import { machineState } from '../../src/mc/status-collect.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -54,7 +54,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   }
   const log = [];
   const aborted = new Set();
-  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [] };
+  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
   /** `/w/runner/block/<repo>` — and the one it writes a blocked step in. */
@@ -139,6 +139,8 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     },
     collect: async (options) => { calls.collects.push(options); return collect(options); },
     helperTurn: async (options) => { calls.turns.push(options); return helperTurn(options); },
+    // The nightly's tick, faked: what proves it ran is `calls.ticks` and its row.
+    nightlyTick: async (options) => { calls.ticks.push(options); return nightly(options); },
     // The one door, faked: `rounds` is what `mc merge`'s round reports back,
     // keyed by pull request number. The default is the happy one — landed, on
     // main — because every test that is not about the merge wants that and
@@ -1127,7 +1129,7 @@ test('a workarea with no plan is not in the queue, and gets no step and no skip 
   assert.deepEqual(runner.queue().names, [], 'queue.md named it; it has no plan, so it is not queued');
   await round(runner);
   assert.equal(f.calls.sessions.length, 0);
-  assert.deepEqual(runRows(f.files).filter((r) => r.kind !== 'helper'), []);
+  assert.deepEqual(runRows(f.files).filter((r) => r.kind !== 'helper' && r.kind !== 'nightly'), []);
   const log = f.files['/w/runner/log/runner.log'] || '';
   assert.doesNotMatch(log, /fresh: /u, 'no skip line — nobody reads it');
   // The two lines it does get are the two places somebody looks: the queue
@@ -1777,7 +1779,7 @@ test('the helper waits for 05:00Z, and runs in the first round after it', async 
   const early = fixture({ now: '2026-08-29T04:59:00Z' });
   await round(createRunner({ deps: early.deps }));
   assert.equal(early.calls.collects.length, 0);
-  assert.equal(runRows(early.files).length, 0);
+  assert.deepEqual(runRows(early.files).filter((r) => r.kind === 'helper'), []);
 
   const late = fixture({ now: '2026-08-29T05:00:00Z' });
   await round(createRunner({ deps: late.deps }));
@@ -1843,6 +1845,87 @@ test('a STOP file stops the collect and the drain as well as the steps', async (
   await round(createRunner({ deps: f.deps }));
   assert.equal(f.calls.collects.length, 0);
   assert.equal(f.calls.turns.length, 0);
+});
+
+/* ------------------------------------------------------ the nightly's tick */
+
+/**
+ * The tick is the third and last thing a chore pass does. Like the helper, a
+ * row in runs.tsv is its whole state — but the cadence is a day since the last
+ * row, not an hour of the clock, and STOP is asked before it and between the
+ * repositories it measures.
+ */
+const NIGHTLY_HEADER = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n';
+const nightlyRowAt = (ts) => `${ts}\tnightly\tnightly\t0\t900\t-\t-\t-\t-\t-\t-\t-\tsuccess,2-measured,0-unchanged\n`;
+
+test('the nightly tick is performed when a day has passed since the last, and its row says so', async () => {
+  const f = fixture({
+    now: '2026-08-29T10:00:00Z',
+    runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-28T09:00:00Z'),
+    nightly: async () => ({ runs: [{ stopped_at: null }, { stopped_at: 'unchanged' }], skipped: null, stopped: false }),
+  });
+  await createRunner({ deps: f.deps }).chores();
+  assert.equal(f.calls.ticks.length, 1);
+  assert.equal(typeof f.calls.ticks[0].shouldStop, 'function');
+  const rows = runRows(f.files).filter((r) => r.kind === 'nightly');
+  assert.equal(rows.length, 2, 'the old row and the new one');
+  assert.deepEqual({ name: rows[1].name, exit: rows[1].exit, pr: rows[1].pr, note: rows[1].note },
+    { name: 'nightly', exit: '0', pr: '-', note: 'success,1-measured,1-unchanged' });
+  assert.match(f.files['/w/runner/log/runner.log'], /nightly: a full run of every repository — the last tick was 25 h ago/u);
+});
+
+test('the very first tick is due at once, and a tick 2 h old is not due', async () => {
+  const first = fixture({});
+  await createRunner({ deps: first.deps }).chores();
+  assert.equal(first.calls.ticks.length, 1);
+
+  const recent = fixture({ now: '2026-08-29T10:00:00Z', runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-29T08:00:00Z') });
+  await createRunner({ deps: recent.deps }).chores();
+  assert.equal(recent.calls.ticks.length, 0);
+  assert.equal(runRows(recent.files).filter((r) => r.kind === 'nightly').length, 1, 'no second row');
+});
+
+test('a STOP file means no tick: the suite is never started', async () => {
+  const f = fixture({});
+  f.files['/w/runner/STOP'] = '';
+  await round(createRunner({ deps: f.deps }));
+  assert.equal(f.calls.ticks.length, 0);
+  assert.deepEqual(runRows(f.files).filter((r) => r.kind === 'nightly'), []);
+});
+
+test('a STOP file that appears mid-tick is what the tick sees before its next repository', async () => {
+  const f = fixture({
+    nightly: async ({ shouldStop }) => {
+      const before = shouldStop();
+      f.files['/w/runner/STOP'] = '';
+      return { runs: [{ stopped_at: null }], skipped: null, stopped: !before && shouldStop() };
+    },
+  });
+  await createRunner({ deps: f.deps }).chores();
+  const [row] = runRows(f.files).filter((r) => r.kind === 'nightly');
+  assert.equal(row.exit, '0');
+  assert.match(row.note, /^success,1-measured,0-unchanged,stopped$/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /nightly: stopped — 1 repository read/u);
+});
+
+test('a tick that throws is a failed row and is not retried in the same day', async () => {
+  const f = fixture({ nightly: async () => { throw new Error('disk full'); } });
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  const rows = runRows(f.files).filter((r) => r.kind === 'nightly');
+  assert.equal(rows.length, 1, 'the second pass finds the row and waits');
+  assert.equal(rows[0].exit, '1');
+  assert.equal(rows[0].note, 'tick-failed,disk full');
+  assert.equal(f.calls.ticks.length, 1);
+});
+
+test('a UPDATE file ends the tick the way STOP does', async () => {
+  const f = fixture({
+    nightly: async ({ shouldStop }) => { f.files['/w/runner/UPDATE'] = ''; return { runs: [], skipped: null, stopped: shouldStop() }; },
+  });
+  await createRunner({ deps: f.deps }).chores();
+  assert.match(runRows(f.files).find((r) => r.kind === 'nightly').note, /,stopped$/u);
 });
 
 /* -------------------------------------------------------------- the drain */

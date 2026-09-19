@@ -5,7 +5,7 @@ import {
   RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
   AUTOCOMPACT_TOKENS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, chooseKind, collectNote,
   describeSettings, describeWatch, headlessArgs, helperDue,
-  inFlight, intakeNote, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
+  inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen,
   readSessionOutput, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow, userMessageLine,
@@ -667,6 +667,35 @@ test('helperDue: not before 05:00Z, and only once per UTC day', () => {
   assert.equal(helperDue({ tsv: today, now: new Date('2026-08-29T23:00:00Z') }).due, false);
   assert.match(helperDue({ tsv: today, now: new Date('2026-08-29T23:00:00Z') }).why, /already ran today/u);
   assert.equal(helperDue({ tsv: today, now: new Date('2026-08-30T05:00:00Z') }).due, true, 'a new UTC day is a new run');
+});
+
+/**
+ * The nightly's cadence is a day since the last tick's row — not a clock hour —
+ * and the row is the only state. Only a `nightly` row counts.
+ */
+test('nightlyDue: never ticked is due, a day after the last is due, sooner is not', () => {
+  const nightly = (ts) => tsvRow({ ts, name: 'nightly', kind: 'nightly', exit: 0, seconds: 900, pr: '-', note: 'success,2-measured,0-unchanged' });
+  const now = new Date('2026-08-29T10:00:00Z');
+  assert.deepEqual(nightlyDue({ now }), { due: true, why: null });
+  assert.deepEqual(nightlyDue({ tsv: RUNS(helperRow('2026-08-29T05:01:00Z')), now }), { due: true, why: null }, 'a helper row is not a tick');
+
+  const old = nightlyDue({ tsv: RUNS(nightly('2026-08-28T09:00:00Z')), now });
+  assert.equal(old.due, true);
+  assert.match(old.why, /the last tick was 25 h ago \(2026-08-28T09:00:00\.000Z\)/u);
+
+  const recent = nightlyDue({ tsv: RUNS(nightly('2026-08-29T08:00:00Z')), now });
+  assert.equal(recent.due, false);
+  assert.match(recent.why, /2 h ago.*the next is due in 22 h/u);
+
+  assert.equal(nightlyDue({ tsv: RUNS(nightly('2026-08-28T10:00:00Z')), now }).due, true, 'exactly 24 h is due');
+  assert.equal(nightlyDue({ tsv: RUNS(nightly('2026-08-28T10:00:01Z')), now }).due, false);
+});
+
+test('nightlyDue: the latest row counts, and an unparseable ts is ignored', () => {
+  const nightly = (ts) => tsvRow({ ts, name: 'nightly', kind: 'nightly', exit: 0, seconds: 1, pr: '-', note: 'success' });
+  const now = new Date('2026-08-29T10:00:00Z');
+  assert.equal(nightlyDue({ tsv: RUNS(nightly('2026-08-01T00:00:00Z'), nightly('2026-08-29T09:00:00Z')), now }).due, false);
+  assert.equal(nightlyDue({ tsv: RUNS(nightly('not-a-time')), now }).due, true);
 });
 
 /**

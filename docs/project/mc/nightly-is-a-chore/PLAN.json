@@ -22,22 +22,22 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A running runner performs the tick when it is due, and records it in runs.tsv.",
       "check": "In `tests/mc/run.test.js`, a chore pass over a fake runs.tsv whose newest `nightly` row is 25 h old calls the injected tick once and appends a row whose `kind` is `nightly`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A tick that is not yet due is not performed.",
       "check": "Same test: a `nightly` row 2 h old leaves the injected tick uncalled and writes no row."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc run stop` means no background suite runs.",
       "check": "Two assertions in `tests/mc/run.test.js`. A chore pass with the STOP file present never calls the tick, even when it is due. And a tick already under way, driven through the injected per-repository seam with STOP appearing after the first repository, does not start the second repository's suite."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Nothing can start a nightly process any more.",
       "check": "`mc test nightly start` and `mc test nightly stop` exit 2 with the usage text. `grep -rn 'startNightly\\|stopNightly\\|nightlyStatePath' src/` returns nothing. No file is written at `~/.memoro/mc/nightly/nightly.json` by any code path."
     },

@@ -26,29 +26,36 @@
  * copy of it, so the scheduled reading and the asked-for one cannot disagree
  * about what a repository's whole suite is.
  *
- * And since 2026-09-04 the nightly is started, stopped and asked here too:
- * `mc test nightly start | stop | status` is the scheduled form of the round
- * above, under the verb whose round it runs (`mc repo nightly` was the old
- * spelling and answers with this one).
+ * And since 2026-09-04 the nightly is asked after here too: `mc test nightly
+ * status` reads the scheduled form of the round above, under the verb whose
+ * round it runs (`mc repo nightly` was the old spelling and answers with this
+ * one). Nothing starts or stops it from here: the tick is a chore of the
+ * runner, taken when a day has passed since the last (`runNightly`, `run.js`),
+ * and `mc run stop` is what stops it.
+ *
+ * It is a meter and nothing else. Whatever it finds refuses no merge, delays no
+ * round and changes no verdict (ruled by Martin, 2026-09-02).
  */
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { nightlyReading } from '../nightly-history.js';
+import { nightlyLogPath } from '../nightly.js';
+import { runnerDir } from '../paths.js';
+import { NIGHTLY_INTERVAL_MS, nightlyDue } from '../run-plan.js';
+import { pidAlive } from '../status-collect.js';
 import { listServers } from '../dev-servers.js';
 import {
   accountAvailable, answers, callerWorktree, ensureDevServer, forgetToken, isLoopback, notInDev, readDeclaration,
   runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
 } from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
-import {
-  DEFAULT_INTERVAL_MS as NIGHTLY_INTERVAL_MS, nightlyState, startNightly, stopNightly,
-} from '../nightly.js';
 import { renderNightlyLines } from '../repo-render.js';
 import { scanArgs } from './flags.js';
 import { gate, parseMergeArgs } from './repo.js';
 
-/** The scheduler's three words, the watcher's three words. One grammar. */
-const METER_VERBS = ['start', 'stop', 'status'];
+/** The one word left: the tick is the runner's, so there is nothing to start or stop. */
+const METER_VERBS = ['status'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -486,16 +493,14 @@ function readStdin(stream) {
 }
 
 /**
- * The full run nobody asks for: start it, stop it, or ask after it.
+ * The full run nobody asks for: ask after it.
  *
- * Explicit on purpose — no page starts a background process — and this one
- * runs whole suites, which pin the machine for minutes at a time. A process
- * that appears because somebody read a page is bad enough when it costs a
- * fetch.
+ * Nothing here starts a process — no page does, and this one would run whole
+ * suites, which pin the machine for minutes at a time. The tick is a chore of
+ * the runner and happens when it is due and the runner is running.
  *
  * It is a meter and nothing else. Whatever it finds refuses no merge, delays
- * no round and changes no verdict (ruled by Martin, 2026-09-02), so stopping
- * it costs a reading and never a decision.
+ * no round and changes no verdict (ruled by Martin, 2026-09-02).
  */
 async function nightly(argv, { stdout, stderr }) {
   const opts = parseNightlyArgs(argv);
@@ -504,53 +509,23 @@ async function nightly(argv, { stdout, stderr }) {
     stderr.write(usage());
     return 2;
   }
-
-  if (opts.verb === 'start') {
-    const started = startNightly({ intervalMs: opts.intervalMs });
-    if (!started.ok && started.reason === 'already-running') {
-      stdout.write(`mc: the nightly is already running (pid ${started.pid}, every ${every(started.interval_ms)})\n`);
-      return 0;
-    }
-    if (!started.ok) {
-      stderr.write(`mc: could not start the nightly (${started.reason})\n`);
-      return 1;
-    }
-    stdout.write(`mc: a full run of every repository every ${every(started.interval_ms)} (pid ${started.pid})\n`);
-    stdout.write(`mc: it writes ${started.log} and nothing else — it merges nothing and blocks nothing\n`);
-    stdout.write('mc: a tick that finds a gate round running skips and says so; it never queues behind one\n');
-    return 0;
-  }
-
-  if (opts.verb === 'stop') {
-    const stopped = await stopNightly();
-    if (!stopped.stopped) {
-      stdout.write(stopped.abandoned
-        ? 'mc: no nightly was running — cleared the pid file it left behind\n'
-        : 'mc: no nightly is running\n');
-      return 0;
-    }
-    stdout.write(`mc: stopped the nightly (pid ${stopped.pid})${stopped.forced ? ' — it had to be killed' : ''}\n`);
-    return 0;
-  }
-
   return status(opts, { stdout });
 }
 
 /**
- * Whether it is running — and what it found.
+ * Where the tick comes from — and what it found.
  *
  * The reading is here because it is the question the nightly exists for: red,
  * and since when. It was printed only under `mc repo status`'s *full run*
- * section, which is a page somebody has to know to go to; a person who started
- * this thing should be able to read it where they started it. The rows are
+ * section, which is a page somebody has to know to go to. The rows are
  * `repo-render.js`'s own, so the two pages cannot drift.
  *
- * Every repository the loop would measure gets a block, whether or not it has
+ * Every repository the tick would measure gets a block, whether or not it has
  * ever been measured: a meter that is silent about a repository it runs on is
  * one nobody can tell from a meter that has not run.
  */
 async function status(opts, { stdout }) {
-  const state = nightlyState();
+  const state = tickState();
   const repos = (await knownRepos()).map((repo) => ({ ...repo, nightly: nightlyReading(repo.path) }));
   if (opts.json) {
     stdout.write(`${JSON.stringify({
@@ -567,38 +542,51 @@ async function status(opts, { stdout }) {
   return 0;
 }
 
+/**
+ * The runner's state, and what it makes of the tick.
+ *
+ * Read from the files the runner leaves — `runner.json` for a pid that is
+ * tested for life, `STOP` for a stop nobody has cleared, `runs.tsv` for the
+ * last tick — because there is no process of the nightly's own to ask.
+ */
+export function tickState({ env = process.env, now = new Date(), alive = pidAlive } = {}) {
+  const dir = runnerDir(env);
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  let record = null;
+  try { record = JSON.parse(read(join(dir, 'runner.json')) ?? ''); } catch { /* no runner has been here */ }
+  const pid = Number(record?.pid);
+  const live = Number.isInteger(pid) && pid > 0 && alive(pid);
+  const stopFile = read(join(dir, 'STOP')) !== null;
+  const due = nightlyDue({ tsv: read(join(dir, 'log', 'runs.tsv')) || '', now, intervalMs: NIGHTLY_INTERVAL_MS });
+  return {
+    runner: {
+      running: live,
+      pid: live ? pid : null,
+      started_at: live ? record?.started || null : null,
+      // `mc run stop` leaves the file until the next start; a runner that is
+      // alive with STOP present is on its way out and will start no tick.
+      stop_requested: stopFile,
+    },
+    tick: { due: due.due, detail: due.why },
+    interval_ms: NIGHTLY_INTERVAL_MS,
+    log: nightlyLogPath(),
+  };
+}
+
 export function parseNightlyArgs(argv) {
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--interval'] });
-  const opts = { verb: 'status', json: scanned.flags.json, intervalMs: NIGHTLY_INTERVAL_MS };
+  const scanned = scanArgs(argv, { booleans: ['--json'] });
+  const opts = { verb: 'status', json: scanned.flags.json };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
   // Bare `mc test nightly` is the question about the nightly, the way bare
   // `mc repo watch` is the question about the watcher.
   const word = positional.shift() || 'status';
-  if (!METER_VERBS.includes(word)) return { ...opts, error: `mc test nightly ${word}? — start, stop or status` };
+  if (!METER_VERBS.includes(word)) return { ...opts, error: `mc test nightly ${word}? — status is the only word; the tick is the runner's chore` };
   opts.verb = word;
   // It measures every repository mc knows; naming one would be a different
   // command, and that command is `mc test <repo> --full`.
   if (positional.length) return { ...opts, error: `mc test nightly takes no repository (${positional[0]}) — mc test ${positional[0]} --full is the one-off` };
-  if (scanned.flags.interval !== null) {
-    const value = Number(scanned.flags.interval);
-    if (!Number.isFinite(value) || value < 1) return { ...opts, error: '--interval needs a number of seconds' };
-    opts.intervalMs = Math.round(value * 1000);
-  }
   return opts;
-}
-
-/**
- * The same number, said the way a day-long cadence reads.
- *
- * `--interval` is seconds here and on `mc repo watch start`, because one flag
- * with two units across sibling verbs is a trap — but "every 86400s" is not a
- * sentence anybody checks, so the nightly prints hours.
- */
-function every(ms) {
-  const value = Number(ms) || 0;
-  if (value < 3_600_000) return `${Math.round(value / 1000)}s`;
-  return `${Math.round((value / 3_600_000) * 10) / 10}h`;
 }
 
 export function usage() {
@@ -609,8 +597,6 @@ export function usage() {
     '        mc test token [--set | --rm]             the production test account, kept by mc\n',
     '        mc test <repo> <pr> [<pr>...] [--json]   measure the change; merge nothing\n',
     '        mc test <repo> --full [--json]           the repository\'s whole suite, on the default branch\n',
-    '        mc test nightly start [--interval <seconds>]\n',
-    '        mc test nightly stop\n',
-    '        mc test nightly status [--json]          whether it runs, and what it found\n',
+    '        mc test nightly status [--json]          where the tick comes from, and what it found\n',
   ].join('');
 }

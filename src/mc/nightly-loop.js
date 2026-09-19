@@ -1,10 +1,9 @@
 /**
- * The nightly's round, and the loop around it.
+ * The nightly's round.
  *
- * Kept apart from the process control (`nightly.js`) and from the runner that
- * starts it, for the reason the watcher's round is: a tick is a plain async
- * function, so a test can run one and read what it wrote without spawning
- * anything.
+ * Kept apart from the runner that calls it (`runNightly` in `run.js`), for the
+ * reason the watcher's round is: a tick is a plain async function, so a test
+ * can run one and read what it wrote without spawning anything.
  *
  * ## What a tick is
  *
@@ -41,9 +40,11 @@
  * neither failure: sleep simply stretches the gap, and the first tick after
  * waking is one tick.
  *
- * The first tick happens when the scheduler starts, rather than an interval
- * later. Starting it is itself a request for a reading, and a meter whose
- * first answer arrives tomorrow is one nobody trusts today.
+ * Who asks is the runner's chore loop, which reads the last tick from its own
+ * `runs.tsv` (`nightlyDue`, `run-plan.js`). A tick has no process of its own,
+ * and `mc run stop` is answered before each repository (`shouldStop` below):
+ * a tick is about twenty minutes, and a STOP written in the middle of one must
+ * not wait for the second repository's suite.
  *
  * ## A branch that has not moved is not measured again
  *
@@ -68,7 +69,7 @@
 import { gateLockPath, describeRunning, runningRound } from './gate-lock.js';
 import { tryGit } from './git.js';
 import { mcHome } from './paths.js';
-import { DEFAULT_INTERVAL_MS } from './nightly.js';
+import { appendNightlyLog } from './nightly.js';
 import { nightlyReading, recordNightlyRun } from './nightly-history.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { runGate } from './repo-gate.js';
@@ -135,15 +136,24 @@ export function remoteHead(repoPath) {
  * the lock back for the next repository.
  */
 export async function nightlyTick({
-  root = mcHome(), env = process.env, say = () => {},
+  root = mcHome(), env = process.env, say = () => {}, narrate = say,
   repos = null, round = scheduledRound, clock = () => Date.now(), head = remoteHead,
+  shouldStop = () => false,
 } = {}) {
   const at = new Date(clock()).toISOString();
   const known = repos || await knownRepos({ env });
   const runs = [];
   let skipped = null;
+  let stopped = false;
 
   for (const repo of known) {
+    // Asked in the same place as the lock, and first: a STOP written while the
+    // previous repository's suite was running ends the tick here, so `mc run
+    // stop` never waits for a second suite. What was measured stays measured.
+    if (shouldStop()) {
+      stopped = true;
+      break;
+    }
     const running = runningRound({ root });
     if (running) {
       skipped = skip(repo, running, clock, { root });
@@ -175,7 +185,7 @@ export async function nightlyTick({
     say(`${repo.name} — full run started`);
     let report = null;
     try {
-      report = await round({ repoPath: repo.path, root, env, say });
+      report = await round({ repoPath: repo.path, root, env, say: narrate });
     } catch (error) {
       // A round that threw is this repository's answer and nothing else's:
       // the tick goes on to the next, exactly as the watcher's loop goes on
@@ -245,34 +255,28 @@ export async function nightlyTick({
     recordNightlyRun({ ...skipped, started_at: skipped.at, stopped_at: 'busy', red: null }, { root });
     say(`${skipped.repo}  skipped  ${skipped.reason}`);
   }
-  return { at, runs, skipped };
+  return { at, runs, skipped, stopped };
 }
 
 /**
- * Tick, wait, tick.
+ * A tick whose every word is written to the nightly's log, and whose summaries
+ * only are handed on.
  *
- * A tick that throws is logged and the loop goes on, for the watcher's
- * reason: a repository that cannot be read tonight is a gap in one reading,
- * never a reason to stop reading.
+ * The log is the record of what happened at night — it is how the September
+ * 2026 outage was diagnosed — so it keeps the round's whole narration with a
+ * timestamp on each line; `say` is the caller's own channel and receives the
+ * per-repository lines alone.
  */
-export async function nightlyLoop({
-  intervalMs = DEFAULT_INTERVAL_MS, root = mcHome(), env = process.env,
-  rounds = Infinity, shouldStop = () => false, log = () => {}, tick = nightlyTick,
-} = {}) {
-  for (let round = 0; round < rounds && !shouldStop(); round += 1) {
-    try {
-      const outcome = await tick({ root, env, say: log });
-      const unchanged = outcome.runs.filter((run) => run.stopped_at === 'unchanged').length;
-      log(`tick: ${outcome.runs.length - unchanged} measured${unchanged ? `, ${unchanged} unchanged` : ''}${outcome.skipped ? ', then skipped' : ''}`);
-    } catch (error) {
-      log(`tick failed: ${error?.message || String(error)}`);
-    }
-    if (shouldStop()) break;
-    // The next tick starts an interval after this one *finished*, not on a
-    // fixed clock — see the header: a laptop that slept through the hour
-    // simply has a longer gap, and never a burst of catch-up runs.
-    await sleep(intervalMs, shouldStop);
-  }
+export async function loggedTick({ root = mcHome(), say = () => {}, ...rest } = {}) {
+  const write = (message) => {
+    try { appendNightlyLog(`${new Date().toISOString()}  ${message}\n`, { root }); } catch { /* a log that cannot be written is not a tick that failed */ }
+  };
+  return nightlyTick({
+    root,
+    ...rest,
+    narrate: write,
+    say: (message) => { write(message); say(message); },
+  });
 }
 
 /**
@@ -281,13 +285,13 @@ export async function nightlyLoop({
  * The same list `mc repo status` shows, derived from the board the way that
  * page derives it, so a repository is measured for exactly the reason it
  * appears there — and stops being measured the same way. Offline because the
- * round fetches for itself a moment later, and a scheduler that could not
+ * round fetches for itself a moment later, and a tick that could not
  * reach the network should still say what it could not do rather than fail at
  * the door.
  *
  * Exported because `mc test nightly status` reports one block per repository
  * and must report on the ones the tick will actually measure — a second list
- * there could name a repository the loop never visits.
+ * there could name a repository the tick never visits.
  */
 export async function knownRepos({ env = process.env } = {}) {
   const report = await repoStatus({ env, offline: true });
@@ -329,7 +333,7 @@ function skip(repo, running, clock, { root, reason = null } = {}) {
  * commit of the branch it measured, and how it came out.
  *
  * All of it on one line on purpose. The start is written separately, before
- * the round, so a killed scheduler still shows what it had begun — but a
+ * the round, so a killed tick still shows what it had begun — but a
  * reader answering "what happened last night" should not have to pair two
  * lines to learn the four facts.
  */
@@ -348,12 +352,4 @@ function line(run) {
 
 function seconds(ms) {
   return `${Math.round((Number(ms) || 0) / 100) / 10}s`;
-}
-
-async function sleep(ms, shouldStop) {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    if (shouldStop()) return;
-    await new Promise((resolve) => { setTimeout(resolve, Math.max(1, Math.min(200, deadline - Date.now()))); });
-  }
 }

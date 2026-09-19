@@ -48,13 +48,9 @@ import { scanArgs } from './flags.js';
 const VERBS = ['status', 'watch', 'nightly', 'claim', 'release', 'who', 'merge', 'rounds', 'guard', 'push-check'];
 // `merge` and `nightly` stay in the list only so the old spellings can be
 // answered with where they went; neither is a verb here any more.
-// The two meters have the same three words, and deliberately the same three:
-// the nightly (`mc test nightly`, `commands/test.js`) is a second background
-// process beside the watcher, and a second grammar for starting one would be a
-// thing to remember.
 const METER_VERBS = ['start', 'stop', 'status'];
 const LEASE_VERBS = ['claim', 'release', 'who'];
-const INTERVAL_ELSEWHERE = '--interval belongs to mc repo watch start or mc test nightly start';
+const INTERVAL_ELSEWHERE = '--interval belongs to mc repo watch start';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
