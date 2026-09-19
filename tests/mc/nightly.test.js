@@ -25,7 +25,7 @@ import { addArea, fixture, json, snapshot } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { nightlyLogPath, nightlyStatePath } from '../../src/mc/nightly.js';
-import { recordNightlyRun } from '../../src/mc/nightly-history.js';
+import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/mc/nightly-history.js';
 import { nightlyLoop, nightlyTick } from '../../src/mc/nightly-loop.js';
 
 const home = () => mkdtempSync(join(tmpdir(), 'mc-nightly-'));
@@ -171,6 +171,125 @@ describe('a tick', () => {
       assert.equal(outcome.runs[0].red, null, 'a run that never ran must not carry an empty red set');
       assert.equal(outcome.runs[1].stopped_at, 'declaration');
       assert.match(said.join('\n'), /stopped at declaration/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('a tick, when the branch has not moved', () => {
+  const SHA = 'a'.repeat(40);
+  const OTHER = 'b'.repeat(40);
+  const seed = (root, commit = SHA) => recordNightlyRun({
+    repo: 'memoro', path: '/repos/memoro', started_at: '2026-09-02T02:00:00.000Z', duration_ms: 300_000,
+    commit, verdict: 'red', stopped_at: 'red', reason: null, red: ['data-bus event names'], tests: 17_982,
+  }, { root });
+  const tick = (root, head, extra = {}) => {
+    const asked = [];
+    const said = [];
+    return nightlyTick({
+      root, repos: [REPOS[0]], head, say: (message) => said.push(message),
+      round: ({ repoPath }) => { asked.push(repoPath); return report({ red: ['data-bus event names'], verdict: 'red', commit: OTHER }); },
+      ...extra,
+    }).then((outcome) => ({ outcome, asked, said }));
+  };
+
+  it('the head the last measurement covered is not measured, and is written down as measuring nothing', async () => {
+    const root = home();
+    try {
+      seed(root);
+      const { outcome, asked, said } = await tick(root, () => SHA);
+      assert.deepEqual(asked, []);
+      assert.equal(outcome.runs.length, 1);
+      assert.equal(outcome.runs[0].red, null);
+      const { runs } = readNightlyHistory('/repos/memoro', { root });
+      assert.equal(runs.length, 2);
+      assert.equal(runs[1].red, null);
+      assert.equal(runs[1].outcome, 'incomplete');
+      assert.equal(runs[1].stopped_at, 'unchanged');
+      assert.equal(runs[1].commit, SHA);
+      assert.match(said.join('\n'), /memoro {2}unchanged .*main aaaaaaa — .*last measured 2026-09-02T02:00:00\.000Z/u);
+      // The measurement it did not replace is still the reading.
+      assert.equal(nightlyReading('/repos/memoro', { root }).measured.at, '2026-09-02T02:00:00.000Z');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('an unchanged repository does not end the tick: the next one is still visited', async () => {
+    const root = home();
+    try {
+      seed(root);
+      const asked = [];
+      const outcome = await nightlyTick({
+        root, repos: REPOS, head: () => SHA,
+        round: ({ repoPath }) => { asked.push(repoPath); return report(); },
+      });
+      assert.deepEqual(asked, ['/repos/memoro-cli']);
+      assert.equal(outcome.runs.length, 2);
+      assert.equal(outcome.skipped, null);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a head that moved is measured exactly as before', async () => {
+    const root = home();
+    try {
+      seed(root);
+      const { outcome, asked } = await tick(root, () => OTHER);
+      assert.deepEqual(asked, ['/repos/memoro']);
+      const { runs } = readNightlyHistory('/repos/memoro', { root });
+      assert.equal(runs.length, 2);
+      assert.equal(runs[1].commit, OTHER);
+      assert.deepEqual(runs[1].red, ['data-bus event names']);
+      assert.equal(outcome.runs[0].verdict, 'red');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  for (const [name, probe] of [
+    ['null', () => null],
+    ['a throw', () => { throw new Error('Could not resolve host: github.com'); }],
+    ['a differently-cased sha', () => SHA.toUpperCase()],
+  ]) {
+    it(`a head that cannot be read (${name}) is measured, not skipped`, async () => {
+      const root = home();
+      try {
+        seed(root);
+        const { asked } = await tick(root, probe);
+        assert.deepEqual(asked, ['/repos/memoro']);
+        const { runs } = readNightlyHistory('/repos/memoro', { root });
+        assert.equal(runs.length, 2);
+        assert.notEqual(runs[1].stopped_at, 'unchanged');
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+  }
+
+  it('a repository never measured is measured, whatever the head', async () => {
+    const root = home();
+    try {
+      const { asked } = await tick(root, () => SHA);
+      assert.deepEqual(asked, ['/repos/memoro']);
+      assert.equal(readNightlyHistory('/repos/memoro', { root }).runs.length, 1);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a history of nothing but stopped rounds has no commit to compare and is measured', async () => {
+    const root = home();
+    try {
+      recordNightlyRun({
+        repo: 'memoro', path: '/repos/memoro', started_at: '2026-09-02T02:00:00.000Z', duration_ms: 1,
+        commit: SHA, verdict: 'stopped', stopped_at: 'fetch', reason: 'offline', red: null, tests: null,
+      }, { root });
+      const { asked } = await tick(root, () => SHA);
+      assert.deepEqual(asked, ['/repos/memoro']);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a live gate round still ends the tick before the probe is asked', async () => {
+    const root = home();
+    try {
+      seed(root);
+      writeFileSync(gateLockPath(root), JSON.stringify({ pid: process.pid, repo: 'memoro', pr: 1, since: '2026-09-03T02:00:00.000Z' }));
+      let probed = 0;
+      const { outcome, asked } = await tick(root, () => { probed += 1; return SHA; });
+      assert.equal(probed, 0);
+      assert.deepEqual(asked, []);
+      assert.ok(outcome.skipped);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
@@ -398,6 +517,25 @@ describe('mc test nightly status — red, and since when', () => {
       assert.deepEqual(json(runMcCli(['test', 'nightly', 'status', '--json'], fx.env)).repos.repo, {
         runs: 0, last: null, measured: null, red: [],
       });
+    } finally { fx.cleanup(); }
+  });
+
+  it('says a repository was skipped because nothing changed, and still shows the last measurement', () => {
+    const fx = fixture({ name: 'nightly' });
+    addArea(fx, 'alpha', 'alpha');
+    try {
+      record(fx, ago(2), ['data-bus event names'], 'a'.repeat(40));
+      recordNightlyRun({
+        repo: 'repo', path: fx.dir, started_at: ago(1), duration_ms: 400,
+        commit: 'a'.repeat(40), verdict: 'stopped', stopped_at: 'unchanged',
+        reason: 'main is still aaaaaaa, last measured x', red: null, tests: null,
+      }, { root: fx.mcHome });
+
+      const page = runMcCli(['test', 'nightly', 'status'], fx.env);
+      assert.equal(page.status, 0, page.stderr);
+      assert.match(page.stdout, /full run\s+.*1 red of 2,445\s+aaaaaaa/u);
+      assert.match(page.stdout, /skipped, nothing changed/u);
+      assert.doesNotMatch(page.stdout, /last tried/u);
     } finally { fx.cleanup(); }
   });
 });

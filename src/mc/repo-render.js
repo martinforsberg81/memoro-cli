@@ -204,7 +204,12 @@ function nightlyRows(c, repo, now) {
     : c(`${state.runs} run${state.runs === 1 ? '' : 's'}, none of them measured anything`, 'yellow'));
 
   // Only when it is not the run above: the same run said twice reads as two.
-  if (state.last && state.last.outcome === 'incomplete') {
+  if (state.last && state.last.outcome === 'incomplete' && state.last.stopped_at === 'unchanged') {
+    // Nothing failed: the branch sat where the measurement above already
+    // covers, so it was not run again.
+    rows.push(c(`checked ${ago(state.last.at, now) || 'just now'} — skipped, nothing changed`, 'grey')
+      + `${state.last.reason ? c(`: ${state.last.reason}`, 'grey') : ''}`);
+  } else if (state.last && state.last.outcome === 'incomplete') {
     rows.push(`${c(`last tried ${ago(state.last.at, now) || 'just now'} — ${state.last.stopped_at || 'stopped'}`, 'yellow')}`
       + `${state.last.reason ? c(`: ${state.last.reason}`, 'grey') : ''}`);
   }

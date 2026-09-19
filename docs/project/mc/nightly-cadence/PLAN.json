@@ -21,32 +21,32 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A repository whose remote default branch is at the commit of its last measurement is not measured, and the skip is written down as a run that measured nothing.",
       "check": "In `tests/mc/nightly.test.js`, a tick whose injected head probe returns the same sha the stored history carries: the injected `round` is never called, and `readNightlyHistory` gains one entry whose `red` is `null` and whose `outcome` is `incomplete`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A repository whose remote default branch has moved is measured exactly as before.",
       "check": "Same test file: the probe returns a different sha, `round` is called once for that repository, and the stored run carries the commit and the red names the report gave."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A head that cannot be read is measured, not skipped.",
       "check": "Same test file, two cases: a probe that returns `null` and a probe that throws. Both call `round` once. Neither writes a skip."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A repository that has never been measured is measured.",
       "check": "Same test file: an empty history with any head value calls `round` once. There is no commit to compare against, so there is no case in which the first tick on a fresh machine is skipped."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Red-since is unchanged by a skip that sat between two measurements.",
       "check": "In `tests/mc/nightly-history.test.js`, a history of measured-red, then an unchanged skip, then measured-red with the same name: `nightlyReading().red[0].since` is the timestamp of the first red run, and `runs` counts two, not one."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc test nightly status` says the repository was skipped because nothing changed, and still shows the last real measurement and its commit.",
       "check": "Run `mc test nightly status` against a home whose history ends in an unchanged skip. The repository's block names the skip and its reason, and the `full run` line still reports the earlier measurement's verdict, count and sha — the two lines `nightlyReading` already separates as `last` and `measured`."
     }
