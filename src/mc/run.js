@@ -626,6 +626,23 @@ export function createRunner({
   }
 
   /**
+   * Did the newest pull request merged from `branch` carry the branch's tip?
+   * Then no commit came after the landing. GitHub failing, no merged pull
+   * request, or a different tip is `false` — the branch stays where it is.
+   */
+  function mergedAtTip(worktree, branch) {
+    const asked = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'merged', '--limit', '5',
+      '--json', 'number,mergedAt,headRefOid']);
+    if (!asked.ok) return false;
+    let merged;
+    try { merged = JSON.parse(String(asked.stdout || '[]')); } catch { return false; }
+    if (!Array.isArray(merged) || !merged.length) return false;
+    const newest = merged.reduce((a, b) => (String(b.mergedAt || '') > String(a.mergedAt || '') ? b : a));
+    const tip = gitOut(worktree, ['rev-parse', branch]);
+    return Boolean(tip && newest.headRefOid === tip);
+  }
+
+  /**
    * The workarea, moved to a branch it can still push to.
    *
    * `action-window` stood on `action-window`, which had merged as #11177 and
@@ -641,6 +658,15 @@ export function createRunner({
    * A branch that has not landed is left exactly where it is — it carries
    * work, and an open pull request on it has already ended this round above.
    *
+   * `branchLanded` cannot answer when the merge against origin/main conflicts:
+   * main has edited, since, what the branch's own pull request carried, and
+   * `unknown` used to read as work. `step-cost` step 2 ran on `step-cost-2`
+   * on 2026-09-11 after #693 had landed from it, was handed that conflict, and
+   * had its push refused at the end. So on `unknown` — and only there — the
+   * network the runner already uses is asked what the push-guard asks: a
+   * merged pull request from this branch whose head is the branch's tip means
+   * nothing came after the landing (`mergedAtTip`).
+   *
    * Returns `{ ok, moved, why }`: `moved` is the new branch, or null when the
    * workarea was already somewhere it could push from.
    */
@@ -650,7 +676,8 @@ export function createRunner({
     // Detached, or git could not say: not a branch this can reason about.
     if (!branch) return { ok: true, moved: null };
     const landed = branchLanded(worktree, branch, { run: (args) => gitOut(worktree, args) });
-    if (landed !== 'landed') return { ok: true, moved: null };
+    if (landed === 'ahead') return { ok: true, moved: null };
+    if (landed === 'unknown' && !mergedAtTip(worktree, branch)) return { ok: true, moved: null };
     const local = (gitOut(worktree, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']) || '').split('\n');
     const remote = (gitOut(worktree, ['ls-remote', '--heads', 'origin']) || '').split('\n')
       .map((line) => line.split('refs/heads/')[1]);

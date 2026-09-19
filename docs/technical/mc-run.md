@@ -327,8 +327,15 @@ this GitHub at this moment, in this order (`runStepClaimed`):
    N" says nothing — is moved to `<name>-<n>` from `origin/main`, the smallest
    `<n>` no branch local or remote is using, *before* a session starts, because
    `push-guard.js` would otherwise refuse the push at the end of it. Asked of
-   every workarea under `~/mc` on 2026-09-02, 44 stood on a landed branch. A
-   branch that has *not* landed carries work and is left exactly where it is. A
+   every workarea under `~/mc` on 2026-09-02, 44 stood on a landed branch. When
+   the merge against `origin/main` conflicts, `branch-landed.js` answers
+   `unknown` and stays local; `freshBranch` then asks GitHub what the push-guard
+   asks — the newest pull request merged from the branch, and whether its head
+   is the branch's tip. It is: nothing came after the landing, and the branch
+   is moved the same way (`step-cost-2` ran on a landed branch on 2026-09-11
+   for want of this). A different tip, no merged pull request or a `gh` that
+   fails leaves it. A branch that has *not* landed carries work and is left
+   exactly where it is. A
    repair stands on its pull request's branch instead.
 9. **`git merge origin/main`** — **never** a rebase, which is what nights 1–2
    of the shell runner cost to learn (`syncMain`, below).
