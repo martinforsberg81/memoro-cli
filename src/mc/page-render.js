@@ -933,25 +933,6 @@ function blockersFitting(blockers, leads, space) {
 }
 
 /**
- * A programme's blocked projects as one row: how many, the numbers that still
- * open them, and what holds them.
- *
- * Twelve rows saying `blocked` with twelve different names is twelve rows of
- * the same fact; the fact worth the room is which blocker holds them. The
- * numbers stay because they are what a person types — a collapsed project is
- * still openable, and this row is where its number went.
- */
-function collapsedLine(c, wide, blocked) {
-  const room = wide - 8;
-  const head = [
-    { text: `${blocked.count} blocked`, styles: statusTone('blocked') },
-    { text: `  ·  ${numberRanges(blocked.numbers)}`, styles: ['grey'] },
-  ];
-  const holders = blockersFitting(blocked.blockers, '  ·  ', room - head.reduce((n, part) => n + part.text.length, 0));
-  return `        ${paint(c, fitting([...head, { text: holders, styles: ['grey'] }], room), room)}`;
-}
-
-/**
  * The one line worth more than every red cell under it: how many projects are
  * stopped, how many of them wait on an answer and how many on another project,
  * and the blockers holding the most.
@@ -994,15 +975,15 @@ function programmesLines(lines, c, wide, programmes, expand) {
 
   for (const group of groups) {
     lines.push(programmeLine(c, wide, group));
-    // What is actionable keeps its row; what is stopped becomes one row for the
-    // programme. `a` at the menu draws the page again with nothing collapsed —
-    // the same rows, the same numbers, all of them.
+    // What is actionable keeps its row; what is stopped is the `N blocked` on
+    // the programme's own heading and nothing more — a row under it said the
+    // same thing twice (Martin, 2026-09-19). The numbers still open them, BRIEF
+    // says what holds them, and `a` at the menu draws every one of them again.
     const collapsed = expand ? null : group.blocked;
     const held = new Set(collapsed ? collapsed.names : []);
     for (const project of group.projects) {
       if (!held.has(project.name)) lines.push(projectLine(c, wide, project));
     }
-    if (collapsed) lines.push(collapsedLine(c, wide, collapsed));
   }
   if (programmes.no_workarea) {
     say(lines, c, wide, 7, `${programmes.no_workarea} of them ${programmes.no_workarea === 1 ? 'has' : 'have'} no workarea yet — opening by number makes one`);

@@ -1246,7 +1246,7 @@ describe('the page', () => {
     // The blocked project is one row for its programme — the number that still
     // opens it, and what holds it — and the line that adds them all up is under
     // NEXT, where somebody is looking for what to do.
-    assert.match(text, /^ {8}1 blocked {2}· {2}1 {2}· {2}assistant-avatar-1 1$/mu);
+    assert.doesNotMatch(text, /^ {8}1 blocked {2}·/mu, 'the programme heading has said it, and BRIEF says what holds it');
     assert.doesNotMatch(text, /avatar-self-serve/u, 'a blocked project is collapsed, not listed');
     assert.match(text, /^ {7}1 blocked · 1 on a decision · held most by assistant-avatar-1 1$/mu);
     assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
@@ -1280,7 +1280,7 @@ describe('the page', () => {
     // 5 is the orphan workarea, which is a line in WORK rather than a row of
     // its own either way — `a` is about projects.
     assert.deepEqual(numbers(all), [1, 2, 3, 4]);
-    assert.deepEqual(numbers(collapsed), [2, 3, 4], 'the collapsed row is where 1 went');
+    assert.deepEqual(numbers(collapsed), [2, 3, 4], '1 is the `1 blocked` on its programme\'s heading, and still opens');
     assert.match(all.join('\n'), /^ {4}1 · avatar-self-serve\s+memoro\s+blocked/mu);
     assert.ok(!all.some((line) => / {8}1 blocked {2}· {2}1/u.test(line)), 'nothing left to collapse');
     // The rollup is not a drawing choice: it counts the plans, and it says the
@@ -1289,17 +1289,17 @@ describe('the page', () => {
       assert.ok(lines.some((line) => /1 blocked · 1 on a decision · held most by assistant-avatar-1 1/u.test(line)));
     }
 
-    // Four blocked projects in two programmes: three rows go, two collapsed
-    // rows come, and the page is a row shorter for it. That is the whole trade
-    // — shorter by collapsing what is not actionable, never by leaving work out.
+    // Four blocked projects in two programmes: four rows go and none comes —
+    // the count on each programme's heading is what is left of them, because a
+    // row under it said the same thing twice (Martin, 2026-09-19).
     const many = pageData({ programmes: programmesSection({ plans: STOPPED, areas: [] }) });
     const short = renderPageLines(many, { columns: 120, now: NOW });
     const long = renderPageLines(many, { columns: 120, now: NOW, expand: true });
-    assert.equal(long.length - short.length, 2);
+    assert.equal(long.length - short.length, 4);
     assert.deepEqual(numbers(long), [1, 2, 3, 4, 5]);
     assert.deepEqual(numbers(short), [5], 'only d-four, the one that is ready');
-    assert.match(short.join('\n'), /^ {8}3 blocked {2}· {2}2–4 {2}· {2}plan-review 2, home-on-msr 1$/mu);
-    assert.match(short.join('\n'), /^ {8}1 blocked {2}· {2}1 {2}· {2}home-on-msr 1$/mu);
+    assert.ok(!short.some((line) => /^ {8}\d+ blocked/u.test(line)), short.join('\n'));
+    assert.ok(short.some((line) => /^ {2}\S+\s+1 ready · 3 blocked/u.test(line)), short.join('\n'));
     assert.match(short.join('\n'), /^ {7}4 blocked · 2 on a decision, 2 on a project · held most by home-on-msr 2, plan-review 2$/mu);
   });
 
@@ -1688,7 +1688,6 @@ describe('the palette', () => {
     '',
     'bold+cyan grey green grey red grey grey grey', // PROGRAMMES  3 programmes · 4 projects  ready 2 · blocked 1 · done 1
     'bold+cyan grey grey red grey', //                 assistant-avatar  0 ready · 1 blocked   ·  no plan session
-    'red grey grey', //                                  1 blocked  ·  1  ·  assistant-avatar-1 1
     'bold+cyan green grey grey grey', //               docx-editing-surface  1 ready · 0 blocked   ·  no plan session
     'grey grey grey green grey grey green', //       2 · docx-editor  memoro  ready  1/2  Step 2, …  08-29 09:00Z step
     'bold+cyan green grey grey grey', //               mc  1 ready · 0 blocked   ·  no plan session
@@ -1842,12 +1841,11 @@ describe('the palette', () => {
     // line for all of them now: the numbers that still open them, and the file.
     assert.deepEqual(signature(rowWith(lines, 'unplanned-workareas.md')).split(' '), ['grey', 'grey', 'grey']);
     assert.ok(!lines.some((line) => strip(line).includes('e-none')), 'a folder is a count, not a row');
-    // Collapsed, the count that stands in for those rows is the status's own
-    // red, and everything behind it — the numbers, the blockers — is grey. So
-    // is the rollup line under NEXT, which is the same word about the same
-    // projects and had better not be a second colour for them.
+    // Collapsed, the count that stands in for those rows is on the programme's
+    // heading in the status's own red. So is the rollup line under BRIEF, which
+    // is the same word about the same projects and had better not be a second
+    // colour for them.
     const collapsed = paintedPage(pageData({ programmes: programmesSection({ plans: STOPPED, areas: [] }) }));
-    assert.deepEqual(signature(rowWith(collapsed, '2–4')).split(' '), ['red', 'grey', 'grey']);
     assert.deepEqual(signature(rowWith(collapsed, 'held most by')).split(' '), ['red', 'grey', 'grey']);
     // And a programme's counts: green while something is ready, red while
     // something is stopped, grey for a count of nothing.

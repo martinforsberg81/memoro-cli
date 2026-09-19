@@ -19,6 +19,9 @@ section: Changed
   update has been asked for and since when, how long the runner has been up and
   on which commit. `mc run` writes that commit into `runner.json`. The line
   about the PR cache's age is gone from the page; `--json` has it.
+- **A programme's blocked projects are the count on its heading.** The
+  collapsed row under it said the same number again; `a` still draws every
+  project, and BRIEF says what holds them.
 
 section: Fixed
 

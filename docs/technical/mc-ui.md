@@ -63,17 +63,18 @@ below is about.
   whether or not any of its projects have a plan the runner can read; one that
   exists only as an open planning session is drawn too, and says `no project
   yet` where the counts would be.
-  **A programme's blocked projects are one row.** Thirty-three of forty-four
-  projects were `blocked` on 2026-09-06, and the page said so thirty-three
-  times without once saying what would move any of them. So a project that is
-  `ready`, `done` or in flight keeps its full row, and the stopped ones become
-  one row for the programme: how many, the numbers that still open them
-  (`1–3, 7`), and the blockers holding them, biggest first. Nothing leaves the
-  page — the numbering runs through every project of every programme whether or
-  not a row is drawn for it, a number opens a project either way, and `a` at
-  the menu draws them all again. The blocker is `blocked_by: { kind, name }` on
-  the step the status is about — the first that is not done, the only one the
-  runner considers — read off the plan and never parsed back out of the `next`
+  **A programme's blocked projects are a count on its heading, and no row.**
+  Thirty-three of forty-four projects were `blocked` on 2026-09-06, and the
+  page said so thirty-three times. So a project that is `ready`, `done` or in
+  flight keeps its full row, and the stopped ones are the `N blocked` on the
+  programme's own heading. They were one collapsed row under it as well — how
+  many, their numbers, their blockers — which said the count twice (Martin,
+  2026-09-19); what holds them is BRIEF's rollup. Nothing leaves the page: the
+  numbering runs through every project of every programme whether or not a row
+  is drawn for it, a number opens a project either way, and `a` at the menu
+  draws them all again. The blocker is `blocked_by: { kind, name }` on the step
+  the status is about — the first that is not done, the only one the runner
+  considers — read off the plan and never parsed back out of the `next`
   sentence.
 - **WORK** — everything running that the runner did not start, oldest first:
   `mc plan` on a programme is not here (it is on that programme's heading), so
