@@ -35,7 +35,7 @@ writes:
 |---|---|
 | Merged since last brief | `gh pr list --state merged --search merged:>=<since>`, per repository |
 | Opened, not merged | `gh pr list --state open` |
-| Proposals | `~/mc/proposals/*.md`, what `mc helper`'s turn wrote |
+| Proposals | `~/mc/proposals/*.md`, what `mc helper`'s turn wrote — `archive/` is a directory, so it is not listed |
 | Plan status | every `docs/project/*/*/PLAN.json` on `origin/main` of both repositories |
 | Archived without a note | `~/mc/runner/undocumented-closures.md` |
 | Workareas with no project on main | `~/mc/runner/unplanned-workareas.md` |
@@ -267,6 +267,28 @@ because the same trap is one directory away: `~/mc/proposals/` is now counted
 and never parsed, for the same reason. A reader that decides what counts as a
 proposal is a reader that can decide wrongly, silently, about a file somebody
 wrote for Martin.
+
+## What the brief does with a proposal
+
+The section is a list and a rule, and the rule is the half that gets skipped.
+A proposal is a reading, not work: it becomes a project (`PLAN.json` on main,
+then its name in `~/mc/queue.md`), or the brief builds it, or it is dropped.
+
+**Whichever of the three happens, the file is archived: it moves to
+`~/mc/proposals/archive/` with one line at its foot saying what happened —
+built and where it landed, or dropped and why.** The move happens at the
+moment it is decided, and the brief does it without asking. Asking costs a
+round trip for a filesystem move nobody would refuse, and the cost of not
+moving it is the real one: a proposal already built stays in every brief until
+somebody re-reads it to find that out. That is how 2026-09-19's list came to
+carry four gate-red proposals that main had fixed days earlier.
+
+`archive/` is a directory, and `listProposals` filters on `.md`, so an
+archived proposal drops out of the listing with no second mechanism.
+
+A proposal only **partly** handled does not move. Rewrite it in place to what
+is actually left, dated, saying what closed the rest — so the list says what
+the proposal is waiting on rather than what it said the day it was written.
 
 ## Speed
 
