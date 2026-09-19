@@ -869,8 +869,8 @@ export function sessionResult(stdout) {
  * and its note is `stalled`. `timedOut` alone is the helper turn's own
  * wall-clock cap, which that lane keeps, and stays `timeout`.
  */
-export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timedOut = false, stalled = false }) {
-  const dash = { turns: '-', session: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-' };
+export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timedOut = false, stalled = false, now = new Date() }) {
+  const dash = { turns: '-', session: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-', quotaReset: null };
   // A limit answer is what the tool says when it refuses: one or two turns
   // and the limit text as the whole result. Session prose that mentions a
   // quota (a PR body about quota rows, say) is not a limit — 2026-08-29 the
@@ -878,18 +878,21 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   if (stalled) return { ...dash, note: 'stalled', quota: false };
   if (timedOut) return { ...dash, note: 'timeout', quota: false };
   if (toolId === 'codex') {
-    const quota = exitCode !== 0 && quotaSeen(`${stdout}\n${stderr}`);
-    return { ...dash, ...readCodexEvents(stdout), note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota };
+    const text = `${stdout}\n${stderr}`;
+    const quota = exitCode !== 0 && quotaSeen(text);
+    return { ...dash, ...readCodexEvents(stdout), note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota, quotaReset: quota ? quotaResetAt(text, now) : null };
   }
   const json = sessionResult(stdout);
   if (!json) {
-    const quota = quotaSeen(`${stdout}\n${stderr}`);
-    return { ...dash, note: quota ? 'quota' : 'no-json', quota };
+    const text = `${stdout}\n${stderr}`;
+    const quota = quotaSeen(text);
+    return { ...dash, note: quota ? 'quota' : 'no-json', quota, quotaReset: quota ? quotaResetAt(text, now) : null };
   }
   const usage = json.usage || {};
   const pick = (v) => (v == null ? '-' : String(v));
   const fewTurns = !(Number(json.num_turns) > 2);
-  const quota = fewTurns && quotaSeen(`${json.result ?? ''}\n${stderr}`);
+  const text = `${json.result ?? ''}\n${stderr}`;
+  const quota = fewTurns && quotaSeen(text);
   return {
     turns: pick(json.num_turns),
     session: pick(json.session_id),
@@ -899,6 +902,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     cacheWrite: pick(usage.cache_creation_input_tokens),
     note: quota ? 'quota' : (json.is_error ? 'failed' : pick(json.subtype ?? '-')),
     quota,
+    quotaReset: quota ? quotaResetAt(text, now) : null,
   };
 }
 
@@ -921,6 +925,63 @@ function readCodexEvents(stdout) {
 
 export function quotaSeen(text) {
   return /rate limit|usage limit|weekly limit|quota|hit your (?:weekly|daily|5-hour) limit/iu.test(String(text || ''));
+}
+
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const RESET_RE = /resets (?:([a-z]{3}) (\d{1,2}) at )?(\d{1,2})(?::(\d{2}))?\s?(am|pm)(?: \(([^)]+)\))?/iu;
+/** A reset further off than this is a misreading, not a limit. */
+const QUOTA_RESET_MAX_MS = 8 * 24 * 60 * 60 * 1000;
+
+/**
+ * The time a quota refusal says it resets — `You've hit your weekly limit ·
+ * resets Sep 11 at 3pm (Europe/Stockholm)` — as an instant, or null when the
+ * text carries none that can be read. No date is today in that zone, or
+ * tomorrow when the time has passed; a date more than a day behind `now` is
+ * next year; no zone is the machine's. A time more than eight days out is
+ * null: the pause is for a reset, not for a guess.
+ */
+export function quotaResetAt(text, now = new Date()) {
+  const m = RESET_RE.exec(String(text || ''));
+  if (!m) return null;
+  const [, mon, dayText, hourText, minText, meridiem, zone] = m;
+  const hour12 = Number(hourText);
+  const minute = minText == null ? 0 : Number(minText);
+  if (hour12 < 1 || hour12 > 12 || minute > 59) return null;
+  const hour = (hour12 % 12) + (meridiem.toLowerCase() === 'pm' ? 12 : 0);
+  const month = mon == null ? null : MONTHS.indexOf(mon.toLowerCase());
+  if (month === -1) return null;
+  const day = dayText == null ? null : Number(dayText);
+  if (day != null && (day < 1 || day > 31)) return null;
+  try {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone || undefined, hourCycle: 'h23',
+      year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
+    });
+    const wall = (instant) => {
+      const parts = Object.fromEntries(fmt.formatToParts(instant).map((p) => [p.type, Number(p.value)]));
+      return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+    };
+    // The zone's wall time as an instant: guess it as UTC, take the zone's
+    // offset there, and correct once for an offset that differs at the answer.
+    const at = (y, mo, d) => {
+      const guess = Date.UTC(y, mo, d, hour, minute);
+      const first = guess - (wall(new Date(guess)) - guess);
+      return new Date(guess - (wall(new Date(first)) - first));
+    };
+    const today = new Date(wall(now));
+    let out;
+    if (month == null) {
+      out = at(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+      if (out.getTime() <= now.getTime()) out = at(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + 1);
+    } else {
+      out = at(today.getUTCFullYear(), month, day);
+      if (out.getTime() < now.getTime() - 24 * 60 * 60 * 1000) out = at(today.getUTCFullYear() + 1, month, day);
+    }
+    if (Number.isNaN(out.getTime()) || out.getTime() > now.getTime() + QUOTA_RESET_MAX_MS) return null;
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 /* --------------------------------------------------------------------- log */

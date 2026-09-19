@@ -1730,6 +1730,44 @@ test('a quota answer in one lane pauses the other, and there is one sleep, not t
   assert.match(f.files['/w/runner/log/runner.log'], /quota\/rate limit seen — every lane sleeping 30m/u);
 });
 
+/**
+ * 2026-09-08: a weekly limit that reset three days later cost eight launches,
+ * one every thirty minutes. The refusal names its reset; the pause lasts
+ * until one minute after it, in slices that STOP and UPDATE can end.
+ */
+test('a quota refusal that names its reset holds every lane until then, in slices', async () => {
+  const slept = [];
+  const events = [];
+  const refused = { status: 1, stdout: JSON.stringify({ subtype: 'success', num_turns: 1, result: "You've hit your weekly limit · resets Sep 11 at 3pm (Europe/Stockholm)" }), stderr: '', timedOut: false };
+  const f = fixture({
+    now: '2026-09-08T09:05:00Z',
+    plans: { memoro: { q: ready, q2: ready } },
+    gh: { q: { number: 5 } },
+    session: (call) => { events.push(`start ${call.cwd.split('/')[2]} after ${slept.reduce((a, b) => a + b, 0)}`); return refused; },
+  });
+  let clock = new Date('2026-09-08T09:05:00Z').getTime();
+  f.deps.now = () => new Date(clock);
+  f.deps.sleep = async (ms) => { slept.push(ms); clock += ms; };
+  await createRunner({ deps: f.deps }).pass();
+
+  const deadline = new Date('2026-09-11T13:01:00Z').getTime() - new Date('2026-09-08T09:05:00Z').getTime();
+  assert.equal(slept.reduce((a, b) => a + b, 0), deadline, `slept ${slept.join(',')}`);
+  assert.ok(slept.length > 1 && slept.every((ms) => ms <= 30 * 60 * 1000), 'in slices of at most thirty minutes');
+  assert.deepEqual(events, ['start q after 0'], 'no session starts before the reset');
+  assert.match(f.files['/w/runner/log/runner.log'], /quota seen — every lane sleeping until 2026-09-11T13:01:00\.000Z \(the refusal's reset\)/u);
+});
+
+test('a STOP file appearing after the first slice ends the quota pause', async () => {
+  const slept = [];
+  const refused = { status: 1, stdout: JSON.stringify({ subtype: 'success', num_turns: 1, result: "You've hit your weekly limit · resets Sep 11 at 3pm (Europe/Stockholm)" }), stderr: '', timedOut: false };
+  const f = fixture({ now: '2026-09-08T09:05:00Z', plans: { memoro: { q: ready } }, gh: { q: { number: 5 } }, session: () => refused });
+  let clock = new Date('2026-09-08T09:05:00Z').getTime();
+  f.deps.now = () => new Date(clock);
+  f.deps.sleep = async (ms) => { slept.push(ms); clock += ms; f.files['/w/runner/STOP'] = ''; };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(slept.length, 1, `one slice, then STOP: ${slept.join(',')}`);
+});
+
 test('STOP ends both lanes after the step each is in', async () => {
   const f = fixture({
     plans: { memoro: { a: ready, a2: ready }, 'memoro-cli': { b: ready, b2: ready } },

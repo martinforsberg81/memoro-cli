@@ -267,7 +267,7 @@ export async function runHelperTurn({
     bin: launch.spec.bin, args, cwd: dir, timeoutMs: minutes * 60_000, env,
   });
   const read = readSessionOutput({
-    toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut,
+    toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now,
   });
   const after = (deps.list || listProposals)(proposals);
   const wrote = after.filter((p) => !before.has(p.file));
@@ -276,6 +276,7 @@ export async function runHelperTurn({
     status: result.status,
     note: read.note,
     quota: read.quota,
+    quotaReset: read.quotaReset,
     turns: read.turns,
     session: read.session,
     // What it cost, in the same columns runs.tsv keeps for a step: the daily
