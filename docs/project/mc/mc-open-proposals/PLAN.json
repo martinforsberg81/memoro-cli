@@ -29,7 +29,7 @@
       "check": "The new case in tests/mc/merge-boundary.test.js: base moved steps[3] after the merge base, head edits only its own step — `ok: true`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A quota refusal that names its reset holds every lane until then.",
       "check": "The new test in tests/mc/run.test.js: a result text `resets Sep 11 at 3pm (Europe/Stockholm)` makes the lanes sleep until 2026-09-11T13:01:00Z in slices, and starts no session before it."
     },
