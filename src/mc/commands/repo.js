@@ -322,8 +322,12 @@ async function waitTurn({ repoPath, opts, root, stderr, deps, t0: sharedT0, cont
   const readLeaseFn = deps.readLease || readLease;
   const askGh = deps.gh || spawnTool('gh');
 
-  const startRunning = readRunningRound({ root, alive });
-  const startLease = readLeaseFn(repoPath, { root });
+  // The gate lock and the leases live under mc's home, where the round writes
+  // them (repo-gate.js) — not under the work root, which is only where the
+  // queue file is. Read from the work root, neither is ever seen: every wait
+  // answers 'go' at once and the round is retried once a second (2026-09-19).
+  const startRunning = readRunningRound({ alive });
+  const startLease = readLeaseFn(repoPath);
   if (!contended && !startRunning && !startLease.held) return 'go';
 
   const branched = askGh(['pr', 'view', String(pr), '--json', 'headRefName'], { cwd: repoPath });
@@ -335,8 +339,8 @@ async function waitTurn({ repoPath, opts, root, stderr, deps, t0: sharedT0, cont
   const behind = (running, lease) => (running ? describeRunning(running) : `${repo} is held by ${lease.holder}`);
 
   for (;;) {
-    const running = readRunningRound({ root, alive });
-    const lease = readLeaseFn(repoPath, { root });
+    const running = readRunningRound({ alive });
+    const lease = readLeaseFn(repoPath);
 
     let entries = dropDeadEntries(parseQueue(read(mergesPath(root))), { alive });
     entries = enqueue(entries, {
