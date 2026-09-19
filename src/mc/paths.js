@@ -108,6 +108,13 @@ export function runnerDir(env = process.env) {
   return join(workRoot(env), RUNNER_HOME);
 }
 
+/** Where a run's throwaway files go: `~/mc/runner/scratch/<project>-<stamp>/`, one directory per session. */
+export const RUNNER_SCRATCH = 'scratch';
+
+export function runnerScratchDir(env = process.env) {
+  return join(runnerDir(env), RUNNER_SCRATCH);
+}
+
 /** One of the three tables, by its filename constant. */
 export function runnerTablePath(file, env = process.env) {
   return join(runnerDir(env), file);

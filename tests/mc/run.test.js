@@ -53,7 +53,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     }
   }
   const log = [];
-  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], checkouts: [], rounds: [], docsRounds: [] };
+  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
   /** `/w/runner/block/<repo>` — and the one it writes a blocked step in. */
@@ -61,6 +61,8 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   // A snapshot of the work root taken inside every session call — the only
   // way to see the files that exist only while a step is in flight.
   const duringSession = [];
+  // A scratch directory's mtime, by path; one not named here is as old as `now`.
+  const scratchAges = {};
   const deps = {
     env,
     now: () => new Date(now),
@@ -116,6 +118,11 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     },
     writeJson: (p, v) => { files[p] = `${JSON.stringify(v, null, 2)}\n`; },
     remove: (p) => { if (!(p in files)) return false; delete files[p]; calls.removed.push(p); return true; },
+    // The scratch directories of `/w/runner/scratch/`, with an age each.
+    mkdir: (p) => { dirs.add(p); },
+    scratchDirs: (p) => [...dirs].filter((d) => d.startsWith(`${p}/`) && !d.slice(p.length + 1).includes('/'))
+      .map((d) => ({ name: d.slice(p.length + 1), mtimeMs: scratchAges[d] ?? Date.parse(now) })),
+    rmTree: (p) => { dirs.delete(p); calls.rmScratch.push(p); return true; },
     pid: 4242,
     addWorktree: ({ name, repo }) => {
       const repoName = repo.split('/').at(-1);
@@ -366,7 +373,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       return { ok: true, stdout: '' };
     },
   };
-  return { deps, files, log, calls, root, duringSession };
+  return { deps, files, dirs, scratchAges, log, calls, root, duringSession };
 }
 
 /** The helper's two halves, faked: a digest that was written and a turn that ran. */
@@ -504,6 +511,46 @@ test('queue: queue.md first, then plans on origin/main of both repositories', ()
   const f = fixture({ queue: 'b\n# c\n', plans: { memoro: { a: ready, b: ready }, 'memoro-cli': { 'mc-run': ready } } });
   const runner = createRunner({ deps: f.deps });
   assert.deepEqual(runner.queue().names, ['b', 'a', 'mc-run']);
+});
+
+test('a step session is started with MC_SCRATCH naming an existing directory under the runner scratch dir', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  const seen = [];
+  f.deps.session = (call) => {
+    f.calls.sessions.push(call);
+    seen.push({ scratch: call.env.MC_SCRATCH, existed: f.dirs.has(call.env.MC_SCRATCH) });
+    return landsItself(f, 'alpha', 77)(call);
+  };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(seen.length, 1);
+  assert.match(seen[0].scratch, /^\/w\/runner\/scratch\/alpha-\d{8}T\d{6}Z$/u);
+  assert.equal(seen[0].existed, true, 'the directory exists when the session starts');
+  assert.equal(f.calls.sessions[0].env.MC_STEP, 'alpha:0');
+});
+
+test('a scratch directory that cannot be made is said, and the session starts without MC_SCRATCH', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  f.deps.mkdir = () => { throw new Error('EACCES'); };
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'alpha', 77)(call); };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal('MC_SCRATCH' in f.calls.sessions[0].env, false);
+  assert.equal(f.calls.sessions[0].env.MC_STEP, 'alpha:0');
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: no scratch directory .*EACCES/u);
+});
+
+test('the chore pass removes a scratch directory older than seven days and keeps a newer one', async () => {
+  const f = fixture({ now: '2026-09-19T10:00:00Z' });
+  const day = 24 * 60 * 60 * 1000;
+  const now = Date.parse('2026-09-19T10:00:00Z');
+  for (const [name, age] of [['old-20260911T090000Z', 8 * day], ['new-20260918T090000Z', 1 * day]]) {
+    f.dirs.add(`/w/runner/scratch/${name}`);
+    f.scratchAges[`/w/runner/scratch/${name}`] = now - age;
+  }
+  await createRunner({ deps: f.deps }).chores();
+  assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/old-20260911T090000Z']);
+  assert.ok(f.dirs.has('/w/runner/scratch/new-20260918T090000Z'));
+  assert.match(f.files['/w/runner/log/runner.log'], /scratch: 1 directory older than seven days removed/u);
 });
 
 test('one step: worktree made from origin/main, session through the adapter, PR merged, row logged', async () => {
@@ -3202,7 +3249,7 @@ test('register: a step is running with its pid, then done with its pull request 
   assert.equal(seen.session.pid, 31337, 'with the pid onSpawn handed over');
   assert.equal(seen.branch, 'alpha');
   const [call] = f.calls.sessions;
-  assert.deepEqual(call.env, { MC_STEP: 'alpha:0', MC_PROJECT: 'alpha', MC_REPO: 'memoro', MC_WORKAREA: '/w/alpha/memoro' }, 'the session is told which step it is');
+  assert.deepEqual(call.env, { MC_STEP: 'alpha:0', MC_PROJECT: 'alpha', MC_REPO: 'memoro', MC_WORKAREA: '/w/alpha/memoro', MC_SCRATCH: '/w/runner/scratch/alpha-20260829T100000Z' }, 'the session is told which step it is, and where its scratch is');
   const after = registerOf(f, 'alpha').steps[0];
   assert.equal(after.status, 'done');
   assert.equal(after.pr, 77);

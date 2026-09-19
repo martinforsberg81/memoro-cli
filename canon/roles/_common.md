@@ -76,3 +76,10 @@ If you are running under `mc run`, none of this is about you. The runner lands
 what you push, in its own round, through the same gate — and an open pull
 request ends your project's round, so a session that lands its own work takes
 that landing out of the record it is kept in. Push, and stop.
+
+A probe, a measuring script, a slice of output, or any other file that is not
+part of the change goes in `$MC_SCRATCH` — a directory outside the repository,
+yours for this session, removed after a week — never in the worktree: an
+untracked file left there by a session that dies stops the project until a
+person deletes it. In a session with no `MC_SCRATCH` (a foreground one) use the
+system temp directory.

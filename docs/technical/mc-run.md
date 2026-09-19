@@ -669,6 +669,19 @@ inside it, and both tools are given the same. The session's Bash also gets a
 ten-minute ceiling (`BASH_DEFAULT_TIMEOUT_MS`), so a suite run is one call
 rather than a detached job polled in two-minute `sleep` loops.
 
+**What the session is told about itself.** A step session's environment carries
+`MC_STEP` (`<project>:<index>`), `MC_PROJECT`, `MC_REPO`, `MC_WORKAREA` (the
+worktree) — and, for every kind of session the runner starts, `MC_SCRATCH`: an
+existing directory `~/mc/runner/scratch/<project>-<stamp>/`, outside the
+worktree, named like the session's log. `canon/roles/_common.md` tells the
+session to put probes and measuring scripts there, because an untracked file in
+the worktree is a dirty worktree and a session that dies leaves it (a
+`*.tmp.mjs` held `mail-window-overlay-integrity` for 31 rounds, 2026-09-04). The
+dirty check is unchanged. A directory that cannot be made is said in
+`runner.log` and the session starts without the variable. The chore pass removes
+every directory under the scratch directory whose mtime is more than seven days
+old, and nothing else.
+
 ### The merge
 
 **The runner lands through `mc merge` and nothing else** (Martin, 2026-09-02).

@@ -95,7 +95,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
@@ -115,7 +115,7 @@ import { handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import {
-  UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerTablePath, workRoot,
+  UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, workRoot,
 } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
 import { runMergeRound } from './repo-merge.js';
@@ -135,6 +135,9 @@ import {
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
+
+/** A session's scratch directory is kept this long after it was last touched. */
+const SCRATCH_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * The refusals a lane waits out rather than moves past: they are facts about
@@ -310,6 +313,17 @@ export function realDeps(env = process.env) {
     // or not at all: `mc status` reads them while they are being written.
     writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
     remove: (path) => { try { rmSync(path, { force: true }); } catch { /* already gone */ } },
+    // A session's scratch directory (`~/mc/runner/scratch/`): made before the
+    // session, and the directories in it that are old enough are taken by the
+    // chore pass. `scratchDirs` lists directories only, with their age.
+    mkdir: (path) => { mkdirSync(path, { recursive: true }); },
+    scratchDirs: (path) => {
+      try {
+        return readdirSync(path, { withFileTypes: true }).filter((e) => e.isDirectory())
+          .map((e) => ({ name: e.name, mtimeMs: statSync(join(path, e.name)).mtimeMs }));
+      } catch { return []; }
+    },
+    rmTree: (path) => { try { rmSync(path, { recursive: true, force: true }); return true; } catch { return false; } },
     pid: process.pid,
     addWorktree,
     profile: () => loadProfile({ env }),
@@ -338,7 +352,8 @@ export function realDeps(env = process.env) {
     // `DEFAULT_STALL_MINUTES` is twenty.
     //
     // `options.env` is what the runner adds for this session — `MC_STEP=<project>:<index>`,
-    // so `mc step` and `mc merge` inside it know which step they are — and
+    // so `mc step` and `mc merge` inside it know which step they are, and
+    // `MC_SCRATCH`, a directory outside the worktree for its probes — and
     // `onSpawn` gets the child's pid the moment there is one: the register
     // records it as the step's session, which is how `mc merge` finds the
     // process to end when the step has landed (ruling 21).
@@ -373,6 +388,7 @@ export function createRunner({
   const paths = {
     queue: join(root, 'queue.md'),
     log: join(root, 'runner', 'log'),
+    scratch: runnerScratchDir(deps.env),
     runs: join(root, 'runner', 'log', 'runs.tsv'),
     runnerLog: join(root, 'runner', 'log', 'runner.log'),
     stop: join(root, 'runner', 'STOP'),
@@ -1636,6 +1652,18 @@ export function createRunner({
         session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool },
       });
     }
+    // A directory outside the worktree for whatever the session measures with:
+    // an untracked file in the worktree is a dirty worktree, and a session that
+    // dies leaves it there. Named like the log it sits beside, for every kind of
+    // session; a directory that cannot be made leaves the variable out.
+    const scratch = join(paths.scratch, `${name}-${ts}`);
+    let scratchEnv = {};
+    try {
+      deps.mkdir(scratch);
+      scratchEnv = { MC_SCRATCH: scratch };
+    } catch (error) {
+      say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
+    }
     let result;
     try {
       result = await deps.session({
@@ -1644,7 +1672,10 @@ export function createRunner({
           prompt, name, kind,
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
-        env: stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree },
+        env: {
+          ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
+          ...scratchEnv,
+        },
         onSpawn: (childPid) => {
           if (stepIndex == null) return;
           recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool } });
@@ -1893,6 +1924,22 @@ export function createRunner({
     const quiet = paths.currents().length === 0;
     const archives = quiet ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
     closeWorkareas(plans, archives.flatMap((a) => a.landed), archivedProjects());
+    sweepScratch();
+  }
+
+  /**
+   * The scratch directories no session is likely to want any more: every
+   * directory directly under `~/mc/runner/scratch/` not touched for a week.
+   * Nothing outside that directory is looked at, and a name that is not a
+   * directory is left.
+   */
+  function sweepScratch() {
+    const cutoff = deps.now().getTime() - SCRATCH_KEEP_MS;
+    let removed = 0;
+    for (const dir of deps.scratchDirs(paths.scratch)) {
+      if (dir.mtimeMs < cutoff && deps.rmTree(join(paths.scratch, dir.name))) removed += 1;
+    }
+    if (removed) say(`scratch: ${removed} director${removed === 1 ? 'y' : 'ies'} older than seven days removed`);
   }
 
   /**
