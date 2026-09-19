@@ -13,8 +13,9 @@
     "The existing seams in `nightlyTick` stay injectable. `tests/mc/nightly.test.js` drives it with `repos`, `round` and `clock` and touches no git and no network; whatever learns the remote head joins them as a parameter with a real default, not a bare call into `git`."
   ],
   "out_of_scope": [
-    "Starting the nightly by itself, at login or on a timer or by any other means. Martin ruled on 2026-09-04 that nothing on this machine runs by itself, with the nightly named — the ruling is in `docs/project/mc/rulings.md` § 9. This project does not touch it and does not argue with it.",
-    "Making the nightly's own liveness visible anywhere it is not visible today. The fact that the meter is dead is read only by `mc test nightly status`; the brief and `mc deploy` read the last *measurement* and not the scheduler's state. That gap is real and it is a separate question Martin has not answered yet. Nothing here closes it.",
+    "What drives the tick. This project changes the body of `nightlyTick`; who calls it is `nightly-is-a-chore`, which follows this one in the queue and moves the whole thing into the runner's `chores()` so that `mc run stop` stops it. Write the skip so it does not care which of the two is driving: a parameter with a default, not a reach into process state.",
+    "Starting the nightly by itself, at login or on a timer or by any other means. Ruling 9 of 2026-09-04 says nothing on this machine runs by itself, with the nightly named, and ruling 23 of 2026-09-19 goes further and takes its process away. This project does not touch either.",
+    "Making the nightly's own liveness visible anywhere it is not visible today. Martin ruled on 2026-09-19 that the nightly's death is not to appear in the brief (ruling 23). Nothing here changes what the brief or `mc deploy` read.",
     "Any change to what `full` selects or runs, to `deferredRules` in memoro's `config/testing-registry.mjs`, or to the gate.",
     "A second cadence, a catch-up burst, a queue for missed nights, or any notion of a run being overdue. A tick that skips is followed by the next tick one interval later, exactly as a tick that measured is."
   ],

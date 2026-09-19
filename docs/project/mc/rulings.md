@@ -649,6 +649,59 @@ read. The two proposals no reading could decide (`gate-round-died-recurred`,
 
 **Carried by [`mc-open-proposals/PLAN.json`](mc-open-proposals/PLAN.json).**
 
+## 23 · The nightly is not a process — it is the runner's chore, and it skips a tree nothing changed
+
+`ruling · 2026-09-19` · raised at the planning session for `test-architecture`,
+after the nightly was found dead for twelve days
+
+Martin asked why the big nightly run was not happening. It had measured
+`72dd376` on 2026-09-07 and nothing since: the ticks of 09-08 and 09-09 stopped
+at fetch with `Could not resolve host: github.com`, and then the machine
+rebooted on 09-10 at 06:52 and killed the detached process, which left its pid
+file behind and nobody to start another. 300 pull requests landed in the gap.
+That gap is not only a missing meter — `deferredRules` in memoro's
+`config/testing-registry.mjs` takes eleven slow-by-construction tests out of
+every per-change selection and leaves them to `full`, and the `msr-contract`
+blanket was retired on the same trade, so for twelve days nothing ran either.
+
+Three answers, and they are one decision. First, whether the tick should skip a
+repository whose branch has not moved:
+
+> "Ja till 'bara om nya merges'" (Martin, 2026-09-19)
+
+Second, whether the brief should report that the nightly is not running — the
+gap that let twelve days pass, since `nightlyState` is read only by
+`mc test nightly status` while the brief and `mc deploy` read the last
+*measurement* and never the meter's own life:
+
+> "nightlys död ska INTE synas i briefen" (Martin, 2026-09-19)
+
+Third, what the thing should be at all:
+
+> "nightly ska inte vara en separat process. Den ska heller inte starta om
+> automatiskt. Den ska vara kopplad till mc; om jag startar mc run så ska mc
+> test kunna köras. Inte annars. Gör jag mc run stop ska det inte kunna köras
+> några bakgrundstest heller." (Martin, 2026-09-19)
+
+So the detached scheduler goes: the spawn, the pid file, the log rotation,
+`mc test nightly start` and `mc test nightly stop`. The tick becomes a chore of
+the runner beside `runHelperDay` and `runIntakeDrain`, and it inherits the
+runner's own life — `~/mc/runner/STOP`, written by `mc run stop` and removed by
+`mc run start`, already ends `chores()` at its first line, so *no background
+test can run while the runner is stopped* falls out of the mechanism rather
+than being a second thing to remember. `mc test nightly status` stays, because
+the reading is still the question the meter exists for.
+
+That order also answers the second question rather than leaving it a gap. A
+brief line saying *the nightly is not running* reports a state that, after this,
+cannot arrive by surprise: either the runner is running and the chore is due, or
+Martin stopped it. This extends ruling 9's *nothing runs by itself* rather than
+overturning it — the nightly now has nothing of its own to start.
+
+**Carried by [`nightly-cadence/PLAN.json`](nightly-cadence/PLAN.json)** (the
+skip) **and [`nightly-is-a-chore/PLAN.json`](nightly-is-a-chore/PLAN.json)** (the
+process), in that queue order.
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som

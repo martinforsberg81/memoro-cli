@@ -1,0 +1,92 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "The nightly has no process of its own. Its tick is a chore of the runner, beside `runHelperDay` and `runIntakeDrain` in `src/mc/run.js`, due when 24 h have passed since the last tick. A running runner means the tick can happen; `mc run stop` means no background suite runs at all, because `chores()` returns at its first line while `~/mc/runner/STOP` exists.",
+    "Nothing starts the nightly and nothing restarts it. `mc test nightly start` and `mc test nightly stop` are gone, with the detached spawn, the pid file and the liveness check that read it. `mc test nightly status` stays, because the reading — red, and since when — is the question the meter exists for, and it answers from the runner's state rather than from a pid file of its own."
+  ],
+  "contract": [
+    "`mc run stop` stops background tests. This is the whole point of the project and it is checked, not assumed: `chores()` already opens with `if (stopRequested()) return;`, and the tick must also test it between repositories, because a tick is about twenty minutes on this machine and a STOP written in the middle of one must not wait for the second repository's suite.",
+    "The nightly remains a meter. It commits nothing, pushes nothing, writes nothing inside a repository, takes no branch, refuses no merge and delays no round — ruled by Martin on 2026-09-02 and restated in the header of `src/mc/commands/test.js`. Becoming a chore does not make it a gate.",
+    "A lane's own gate round still wins. `nightlyTick` asks `runningRound({ root })` before each repository and ends the tick when a round holds the lock; that stays exactly as it is. The chore loop and the lanes run concurrently in one process now rather than in two, which changes nothing about the lock and must not be taken as licence to wait for it.",
+    "The cadence is 24 h measured from the last tick, never a wall-clock hour. `src/mc/nightly-loop.js`'s header gives the reason and it still holds: a laptop asleep at the appointed hour never sees it, and a scheduler that notices the miss on waking fires a catch-up burst at breakfast. `helperDue` in `src/mc/run-plan.js` is the shape to copy, not its calendar-day-plus-hour rule.",
+    "`~/.memoro/mc/nightly/nightly.log` and the per-repository history files beside it survive. The log is how the twelve-day outage of September 2026 was diagnosed at all, and `nightly-history.js` is what `mc test nightly status` and `mc deploy` read. What dies is `nightly.json`, the pid file.",
+    "No new configuration surface. The interval is a constant beside the chore, as `HELPER_HOUR_UTC` is; `--interval` on `mc test nightly start` dies with the verb that carried it."
+  ],
+  "out_of_scope": [
+    "The skip on an unchanged tree. That is `nightly-cadence`, which is ahead of this project in the queue and changes the body of `nightlyTick`; this project changes who calls it. If `nightly-cadence` has already landed when this step starts, leave its condition alone.",
+    "Reporting the nightly's liveness in the brief, in `mc deploy`, or on the page. Martin ruled on 2026-09-19 that the nightly's death is not to appear in the brief, and after this project there is no separate liveness to report: the runner is running or Martin stopped it.",
+    "Any change to what a `--full` round selects or runs, to `runGate`, to the gate lock, or to `mc test <repo> --full` typed by a person.",
+    "The other seven `mc repo` sub-verbs, and the question of where they go. That is this programme's own open question under *What is still open* in `rulings.md`.",
+    "Restarting the runner, or anything that makes the runner itself survive a reboot. Ruling 9 stands: nothing runs by itself."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A running runner performs the tick when it is due, and records it in runs.tsv.",
+      "check": "In `tests/mc/run.test.js`, a chore pass over a fake runs.tsv whose newest `nightly` row is 25 h old calls the injected tick once and appends a row whose `kind` is `nightly`."
+    },
+    {
+      "met": false,
+      "criterion": "A tick that is not yet due is not performed.",
+      "check": "Same test: a `nightly` row 2 h old leaves the injected tick uncalled and writes no row."
+    },
+    {
+      "met": false,
+      "criterion": "`mc run stop` means no background suite runs.",
+      "check": "Two assertions in `tests/mc/run.test.js`. A chore pass with the STOP file present never calls the tick, even when it is due. And a tick already under way, driven through the injected per-repository seam with STOP appearing after the first repository, does not start the second repository's suite."
+    },
+    {
+      "met": false,
+      "criterion": "Nothing can start a nightly process any more.",
+      "check": "`mc test nightly start` and `mc test nightly stop` exit 2 with the usage text. `grep -rn 'startNightly\\|stopNightly\\|nightlyStatePath' src/` returns nothing. No file is written at `~/.memoro/mc/nightly/nightly.json` by any code path."
+    },
+    {
+      "met": false,
+      "criterion": "`mc test nightly status` still answers the question the meter exists for, and says where the tick now comes from.",
+      "check": "Run `mc test nightly status` on this machine with the runner running and again with it stopped. Both print the per-repository readings — last measurement, commit, count and every red name with the date it went red. The first says the tick is the runner's chore and when it is next due; the second says the runner is stopped and that no tick will happen until it is started."
+    },
+    {
+      "met": false,
+      "criterion": "The reading survives the move unchanged.",
+      "check": "After the first chore-driven tick on this machine, `mc test nightly status --json` reports the same shape it does today — `runs`, `last`, `measured`, `red` with `since`, `since_commit`, `runs` and `bounded` per name — and the red-since dates carried over from the history written before the move are not re-dated."
+    }
+  ],
+  "documents": [
+    {
+      "label": "The runner: the chore loop, the STOP file, and what runs beside it",
+      "path": "../../../technical/mc-run.md"
+    },
+    {
+      "label": "The nightly as it is today, under `mc test nightly`",
+      "path": "../../../technical/mc-merge.md"
+    },
+    {
+      "label": "Ruling 23, which this project carries",
+      "path": "../rulings.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "The tick becomes a chore of the runner, and the detached scheduler is deleted",
+      "status": "ready",
+      "done_when": "`chores()` in `src/mc/run.js` performs the nightly tick when 24 h have passed since the last one and never while the STOP file exists; `src/mc/nightly.js`'s process control, the pid file and the `start` and `stop` verbs of `mc test nightly` are gone; `mc test nightly status` still prints every repository's reading and says where the tick now comes from; `npm test` is green.",
+      "instruction": [
+        "This is one step and not two on purpose. Adding the chore without removing the daemon leaves two things that can run the same suite and a status page that reports the liveness of a process no longer doing the work; removing the daemon first leaves no nightly at all. Land it as one change.",
+        "Read four things before touching anything: `src/mc/nightly.js` (the process control this deletes), `src/mc/nightly-loop.js` (the tick, which survives almost untouched), `runHelperDay` and `chores()` in `src/mc/run.js` around lines 1208 and 1886, and `helperDue` in `src/mc/run-plan.js` around line 531. The last two are the precedent this follows in shape, and their headers say why the runs.tsv row is the whole state and why there is no stamp file beside it.",
+        "The due gate. Add `nightlyDue({ tsv, now, intervalMs })` to `src/mc/run-plan.js` beside `helperDue`, with `NIGHTLY_KIND = 'nightly'` and `NIGHTLY_NAME = 'nightly'` beside `HELPER_KIND`, and the interval as a constant there — `DEFAULT_INTERVAL_MS` currently lives in `src/mc/nightly.js` and should move rather than be duplicated. Do not copy `helperDue`'s rule. It gates on a calendar day and an hour of the clock, and the nightly's cadence is deliberately not a clock: the header of `nightly-loop.js` explains that a laptop asleep at the hour never sees it and that a scheduler which notices the miss on waking fires a burst of catch-up runs at breakfast. So `nightlyDue` finds the newest row whose `kind` is `nightly` using `parseRuns` from `src/mc/brief-collect.js`, parses its `ts`, and answers due when `now - ts >= intervalMs`, or due with `why: null` when there is no such row at all. Return the same `{ due, why }` shape `helperDue` returns, and make the `why` a sentence a person reading the runner's output understands: how long ago the last tick was and how long is left.",
+        "The chore. Add `runNightly()` to the runner object in `src/mc/run.js`, modelled on `runHelperDay`: ask the gate, return null when not due, and otherwise say one line, run the tick, and write one runs.tsv row through `logRun` with `name` and `kind` both `nightly`, the seconds it took, `pr: '-'`, and a note summarising what it found. Write the row whether the tick measured, skipped or threw — the gate asks only that a tick happened, exactly as `helperDue` does, so a tick that failed is not retried ten minutes later in a loop. Call it from `chores()` alongside `runHelperDay()` and `runIntakeDrain()`. Put it last of the three: it is the long one, the chore loop is sequential, and the archive and the drain should not wait twenty minutes behind it.",
+        "Where the tick's words go. `nightlyTick` takes a `say` and passes it into `runGate` as `onProgress`, which is where `fetch took 1.1s`, every `# tests` line and the whole suite's narration come from — about two hundred lines per tick. That must not flood the runner's output, and it must not be lost either, because the log is how the September 2026 outage was diagnosed at all. Keep writing the verbose narration to `nightlyLogPath()`, appended and rotated at the same megabyte `nightly.js` rotates at today, and pass the runner's own `say` only the per-repository summary lines that `line()` builds, prefixed `nightly:` the way the helper's lines are prefixed `helper:`. That means the rotation helper and `nightlyLogPath` move out of `nightly.js` before the rest of it is deleted — put them wherever the tick can reach them without importing the process control that is about to be gone.",
+        "STOP, which is the point of the project. `chores()` already opens with `if (stopRequested()) return;`, so a STOP written between two chore passes stops the tick before it begins. That is not enough on its own: a tick is about twenty minutes on this machine, memoro's suite alone took 1121 s on 2026-09-19 under load average 19, and a STOP written during the first repository must not be answered by running the second repository's whole suite first. `nightlyTick` already asks `runningRound({ root })` once per repository at the top of its loop; give it a `shouldStop` parameter checked in the same place, defaulting to a function returning false so the existing tests are unaffected, and have `runNightly` pass the runner's `stopRequested`. A tick that ends this way is a tick that measured what it measured — write the row, say so, and do not treat it as a failure.",
+        "What is deleted. `src/mc/nightly.js` loses `startNightly`, `stopNightly`, `nightlyState`, `nightlyStatePath`, the `NIGHTLY_SCHEMA` and `NIGHTLY_VERSION` constants that described the pid file, and the `alive`, `isRunner`, `signal` and `readJson` helpers that existed only for it; `src/mc/nightly-run.js` goes entirely, since nothing spawns it. In `src/mc/commands/test.js`, the `start` and `stop` branches of `nightly()` go, `METER_VERBS` loses them so `mc test nightly start` exits 2 with the usage, `parseNightlyArgs` loses `--interval`, and the usage text in `usage()` loses the two lines that offered them. Check what else imported any of it — `src/mc/repo-status.js`, `src/mc/repo-gate.js`, `src/mc/repo-render.js`, `src/mc/help-text.js` and `src/mc/commands/repo.js` all mention the nightly somewhere — and follow each reference rather than trusting this list, which was made by grep and not by opening every one of them.",
+        "The status page. `status()` in `src/mc/commands/test.js` builds its header from `nightlyState()`, which is about to stop existing. Replace that header with the runner's state: read `~/mc/runner/runner.json`, which `markRunner` writes with the runner's pid and start time and which `pidAlive` in `src/mc/status-collect.js` already knows how to test, and read the STOP file. Then say the true thing in one of three registers — the runner is running and the next tick is due in so long; the runner is running and a tick is due now; the runner is stopped, so no tick will happen until `mc run start`. The per-repository blocks below it do not change at all: they come from `nightlyReading` and they are the reading Martin actually uses. Do not let the header's new source change `--json`'s per-repository shape, which `mc deploy` and the brief depend on through `nightlyReading` and which criterion 6 checks.",
+        "Tests. `tests/mc/nightly.test.js` today spawns the detached process and waits for pid files; every one of those cases goes with the thing it tested, and the tick cases in the same file stay and must keep passing. Add the gate's own cases to `tests/mc/run-plan.test.js` beside `helperDue`'s: no row at all, a row 25 h old, a row 2 h old, and an unparseable `ts`. Add the chore cases to `tests/mc/run.test.js` beside the helper's: due and called, not due and not called, STOP present and not called, and STOP appearing mid-tick and the second repository not started. That last one is the criterion Martin asked for and the one worth writing first.",
+        "Documentation. `docs/technical/mc-merge.md` carries the nightly from line 526 and describes `mc test nightly start` and the pid file; `docs/technical/mc-run.md` has a *What runs beside it* section at line 1139 whose answer is currently \"nothing, and that is the point\", and a *Sleeping and stopping* section at line 1109 listing what the STOP file reaches. Both need to change, and the second is the one a reader will go to when they ask whether `mc run stop` stops the suite. Say in `mc-run.md` that `--once` runs no chores and therefore no tick, because that is a surprise otherwise.",
+        "One thing that is true now and will not be after this lands, worth a sentence in the pull request. A detached nightly is running on this machine as pid 43088, started 2026-09-19T14:16Z, and it will still be running when this step's session starts unless somebody stopped it. Landing this step removes the code that could stop it politely. Say in the pull request body that `mc test nightly stop` should be run against the installed mc *before* the update, or the process has to be killed by pid afterwards — and that until then the gate lock is what keeps the old process and the new chore from running two suites at once, which is the pre-existing behaviour and not a new risk."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
