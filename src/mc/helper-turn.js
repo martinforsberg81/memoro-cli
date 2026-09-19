@@ -29,10 +29,8 @@
  * naming it is enough. What it may write is one directory, and the role says
  * so in the same words as this comment.
  *
- * A proposal is not a plan and not a queue entry. Martin moves it into
- * `queue.md` at the next brief, or drops it; `mc brief --collect` lists what
- * is waiting. That is why the file has a fixed frontmatter — the brief has
- * to be able to say what kind of thing each one is without a model.
+ * A proposal is not a plan and not a queue entry. It waits in `~/mc/proposals/`
+ * until the brief session reads it and Martin decides; mc reads only its name.
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';

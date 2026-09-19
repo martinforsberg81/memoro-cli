@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { runsSince } from '../../src/mc/brief-collect.js';
+import { parseRuns } from '../../src/mc/brief-collect.js';
 import {
   collectPage, countNewErrors, intakeSection, mergesSection, newErrorLines, nextSection,
   programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
@@ -110,7 +110,7 @@ const TSV = [
   '2026-08-29T10:00:00Z\tmc-ui\tstep\t0\t652\t440\t56\t96\t33172\t4724690\t118362\ts3\tsuccess,merged',
   '2026-08-29T11:00:00Z\tavatar-self-serve\ttriage\t142\t5400\t-\t-\t-\t-\t-\t-\t-\ttimeout',
 ].join('\n');
-const ROWS = runsSince(TSV, new Date('2026-08-28T12:00:00Z'));
+const ROWS = parseRuns(TSV).filter((row) => Date.parse(row.ts) >= Date.parse('2026-08-28T12:00:00Z'));
 const live = () => true;
 
 describe('RUNNER', () => {

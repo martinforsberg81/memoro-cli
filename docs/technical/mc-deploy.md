@@ -33,7 +33,7 @@ mc deploy [--dry-run] [--json]
 It takes no repository argument and never will: memoro-cli is installed, not
 deployed. `REPO` is `memoro` in
 [`src/mc/commands/deploy.js`](../../src/mc/commands/deploy.js), resolved to a
-path through `defaultRepos(env)`, the same reading `mc brief` uses.
+path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
 
 1. **Fetch and read.** `git fetch origin main` in `~/memoro`, then
    `rev-parse origin/main` — the sha that would ship — and its subject. Refs
@@ -156,7 +156,7 @@ not one either — it is fast-forwarded in step 8.
 
 The decisions among them — `no`, no terminal, a held lease, and the three
 worktree refusals — are each written to the record as `outcome: refused` with
-the reason. They are deploys somebody meant to make, and the brief can only see
+the reason. They are deploys somebody meant to make, and the page and the brief can only see
 them if they exist.
 
 A deliberate `no` is exit **1** rather than 0 on purpose, so `mc deploy && …`
@@ -253,11 +253,11 @@ Three readers, and they agree because they read the same row.
   deploy running now, a deploy that failed after the last good one with the step
   it stopped at, and — when the two sources disagree — the difference, in yellow.
   See [`mc-ui.md`](mc-ui.md).
-- **The brief** — a *Production* section between *Runner* and *Held before
-  merge*: the last deploy, `git rev-list --count <it>..origin/main` as what has
-  not shipped, and the nightly's verdict. `canon/roles/brief.md` says what to do
-  with it: a `main` well ahead of production with a green nightly is a deploy to
-  **propose**, one line, for Martin to type. See [`mc-brief.md`](mc-brief.md).
+- **The brief** — the session reads DEPLOY on the page: the last deploy and
+  what has not shipped. `canon/roles/brief.md` says what to do with it: a
+  `main` well ahead of production with a green nightly is a deploy to
+  **propose**, one line, for Martin to type. (Until 2026-09-19 the gathered
+  brief carried a *Production* section of its own.) See [`mc-brief.md`](mc-brief.md).
 - **The helper** — `deployState` in
   [`src/mc/helper-collect.js`](../../src/mc/helper-collect.js) takes the row
   beside `/admin/deploy/logs`, and the age is the freshest of the two, so a

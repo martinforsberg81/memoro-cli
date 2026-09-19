@@ -526,8 +526,7 @@ wherever it is met:
 |---|---|
 | `mc status <name>` | both, on one row — `ready · uncommitted work in ~/mc/connections-section/memoro: probe.mjs (since 09-05 10:03Z)`, `step n is blocked on workarea dirty-worktree` where the runner blocked it, and bare `ready` when this machine has nothing to add ([`mc-status.md`](mc-status.md)) |
 | the page's NEXT (`mc`) | both — a skipped name is counted under its word, a runnable name is drawn as the kind the runner would actually start, and each lane block's head is what that lane picks next ([`mc-ui.md`](mc-ui.md)) |
-| `mc brief --collect` | both — *Blocked* has a group of its own, *Waiting on a workarea*, for what the runner blocked, and *Ready, and the runner cannot start it* for what the plan does not say yet ([`mc-brief.md`](mc-brief.md)) |
-| the page's PROGRAMMES rows, `mc status`'s step rows, the brief's *Plan status* | the plan alone, and that is right: they are about what the plan says |
+| the page's PROGRAMMES rows, `mc status`'s step rows, the page's plan rows | the plan alone, and that is right: they are about what the plan says |
 
 ### The session
 
@@ -994,8 +993,8 @@ thing it writes into a repository: a blocked step (below).
   checkout. Moved, never deleted.
 
 Three more files sit beside them, and are the runner's questions for Martin
-rather than records of what it did — `mc brief --collect` is their only reader
-and renders one section each. `undocumented-closures.md` is appended when a
+rather than records of what it did — the brief session is their only reader,
+sent to each file by its role. `undocumented-closures.md` is appended when a
 project is archived with `doc: none`; `unplanned-workareas.md` and
 `unreadable-plans.md` are rewritten whole every chore pass, so a folder that got
 a plan and a plan somebody fixed each leave their list by themselves.
@@ -1009,8 +1008,8 @@ somebody drops one file into and a turn drains — and two of these three come
 back whole every chore pass, so a turn that read one and filed it away would
 find it there again the next time, forever. They are the runner's own output
 about its own work, so they live with the rest of it. The path is spelled once,
-in `src/mc/paths.js`, for the runner that writes it and the brief that names it
-to a person.
+in `src/mc/paths.js`, for the runner that writes it and the brief role that names it
+to a session.
 
 ### Blocked by the runner
 

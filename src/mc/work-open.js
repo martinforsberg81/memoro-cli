@@ -16,9 +16,8 @@
  * only: both tools take it as the last positional argument. A resumed
  * conversation already has its own history and is not spoken over — unless
  * the caller hands a `resumePrompt`, which lands as a reply to wherever that
- * conversation stopped. `mc brief` uses it: the brief file is new every time,
- * and a resumed brief session that was not handed it would have nothing to
- * meet about.
+ * conversation stopped. Nothing hands one today: `mc brief` resumes where the
+ * session was, as `mc helper` does.
  */
 import { spawnSync } from 'node:child_process';
 

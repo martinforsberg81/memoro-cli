@@ -213,7 +213,7 @@ IN FULL
                                     refusal, is a row in
                                     ~/mc/runner/log/deploys.tsv — written
                                     before the deploy and completed after it,
-                                    and read back by the page, the brief and
+                                    and read back by the page and
                                     mc helper. It takes no repository:
                                     memoro-cli is installed, not deployed
   mc repo guard [repo]             Install the pre-push guard: a push to a
@@ -233,12 +233,10 @@ IN FULL
   mc log --open                    Gate rounds that started and never ended,
                                     with the lease each left behind. It only
                                     reads: releasing one stays your decision
-  mc brief                         The evaluation session: gather what the
-                                    runner merged, opened and is waiting on,
-                                    then decide with a fresh session
-  mc brief --collect [--offline]   Only the file: ~/mc/brief/<date>.md, no
-                                    model, from the runner log, PRs, plans
-                                    on main, decision files and the queue
+  mc brief [--new]                 The evaluation session: opens (or
+                                    resumes) the brief in the work root with
+                                    its role and gathers nothing — it reads
+                                    the page, mc status and mc step itself
   mc helper                        The desk: a session in ~/mc/helper/ that
                                     takes your report of a bug or something
                                     that should be better and writes it into

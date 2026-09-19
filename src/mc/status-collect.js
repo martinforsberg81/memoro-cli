@@ -158,10 +158,9 @@ export function machineState(name, {
  *
  * A workarea's absolute path is most of a terminal row, and every surface that
  * draws this reading draws it in a terminal — `mc status <name>`
- * (status-project.js) and the brief's *Ready, and the runner cannot start it*
- * (brief-collect.js). It lives here, beside the reading it renders, because
- * those two modules cannot import each other: status-project already imports
- * brief-collect, and page-cache imports it too.
+ * (status-project.js) and the page. It lives here, beside the reading it
+ * renders, because those modules cannot import each other: status-project
+ * already imports brief-collect, and page-cache imports it too.
  */
 export function machineDetail(machine, home = homedir()) {
   const said = String(machine?.detail || machine?.reason || '');
@@ -238,9 +237,8 @@ export function pidAlive(pid) {
  * runner wrote it when it started the session.
  *
  * It lives here rather than in page-collect.js because two readers need it and
- * one of them cannot reach that module: the page draws NOW from it, and the
- * brief drops a project the runner is running from *Ready, and the runner
- * cannot start it* (brief-collect.js, which page-collect imports).
+ * one of them cannot reach that module: the page draws NOW from it, and `mc status`
+ * drops a project the runner is running from what it cannot start.
  *
  * A file whose pid is dead is not a running step — `pidAlive` is the test, and
  * both callers apply it — so a crashed runner's leftover file neither claims a

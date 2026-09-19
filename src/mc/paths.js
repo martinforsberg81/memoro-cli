@@ -92,7 +92,7 @@ export function workAreaPath(name, env = process.env) {
  *
  * The names live here, with the rest of the work root's shape, for the same
  * reason `PLAN_HOME` and `WORK_DEPS` do: the runner writes them and
- * `mc brief --collect` reads them, and two copies of one word is how the two
+ * the brief role names them for the session to read, and two copies of one word is how the two
  * drift apart.
  */
 export const RUNNER_HOME = 'runner';

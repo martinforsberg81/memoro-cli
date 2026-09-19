@@ -58,7 +58,7 @@ const MODEL_RE = /^[a-z][a-z0-9._-]{0,63}$/u;
  * somebody can look up. Nothing refuses a blocker for failing it — `sql-goal1-
  * certification` step 4 carries a 79-character sentence, and a schema that
  * started refusing those would park every plan holding one the moment it
- * landed. The brief reports them instead (`blockedSteps`, brief-collect.js),
+ * landed. `mc step <project>` shows a blocker's name and reason instead,
  * which is why this is exported rather than private to the validation.
  */
 export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/u;

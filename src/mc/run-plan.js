@@ -453,7 +453,7 @@ export const HELPER_HOUR_UTC = 5;
  * waiting in a directory that is supposed to drain.
  *
  * `intake` is its own `kind` rather than a second meaning for `helper`: the two
- * are counted separately in `summariseRuns`, `helperDue` is not closed for the
+ * are counted apart (the run summary in the page), `helperDue` is not closed for the
  * day by a drain that happened to run, and a reader of runs.tsv can tell the
  * script that read production from the model that read one file. The cost is
  * that the twelve `helper` rows written before 2026-09-05 mean both things; the
@@ -515,7 +515,7 @@ export function helperDue({ tsv = '', now = new Date(), hour = HELPER_HOUR_UTC }
 
 /**
  * The runs.tsv note for one repository's collect. The outcome comes first and
- * the detail after, because `summariseRuns` reads a note that does not start
+ * the detail after, because the run summary reads a note that does not start
  * with `success` as a failure — and every helper row until 2026-09-05 was
  * `memoro,success,0-proposals`, which it counted as one.
  */

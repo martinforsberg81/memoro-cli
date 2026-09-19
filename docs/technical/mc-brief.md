@@ -1,201 +1,85 @@
 # mc brief — the evaluation and decision session
 
 `mc brief` is the hour Martin sits down. Everything else in mc runs without
-him: the runner takes `ready` plans off `queue.md`, opens PRs and merges
-them, archives what is done and closes the workarea behind it. None of that
-asks a question. The questions pile up anyway — a decision file a step
-session could not answer, a project archived with no note, a folder under
-`~/mc` no plan explains, a proposal the helper wrote — and until they are
-put to the one person who can answer them, they are invisible.
+him: the runner takes `ready` steps, opens PRs and merges them, archives what
+is done and closes the workarea behind it. None of that asks a question. The
+questions pile up anyway — a failed step, a project archived with no note, a
+folder under `~/mc` no plan explains, a proposal the helper wrote — and until
+they are put to the one person who can answer them, they are invisible.
 
-This verb puts them. It is two halves that share nothing but a file:
-
-- **`mc brief --collect`** — a script, no model, that gathers the ground
-  into `~/mc/brief/<ISO timestamp>.md`.
-- **`mc brief`** — that, and then the foreground brief session: the one
-  already in the work root resumed and handed the file as its next words, or
-  a fresh one whose first words are the file when there is none or `--new`
-  says so.
+This verb opens the session that puts them. That is the whole of it: **the
+foreground brief session, with the `brief` role and no gathered document.**
+Nothing is resident — no daemon, no watcher, no inbox — and the runner does
+not know the verb exists. The code is
+[`src/mc/commands/brief.js`](../../src/mc/commands/brief.js), which is a
+`openInWorkArea` call and the role.
 
 It replaced the resident PM and the pm-helper (`~/mc/mc-utredning/utredning-2026-08-24.md`
-§9–13, D-0218). Nothing in it is resident: no daemon, no watcher, no inbox,
-nothing to wake. The runner does not know it exists and runs whether or not
-it is ever called. The code is
-[`src/mc/brief-collect.js`](../../src/mc/brief-collect.js) — pure builders
-plus one `collectBrief` that touches the machine — and
-[`src/mc/commands/brief.js`](../../src/mc/commands/brief.js), which is fifty
-lines: collect, then hand the file to `openInWorkArea`.
+§9–13, D-0218).
 
-## What it reads
+## What it does not do
 
-Thirteen sections, in this order, each from a file something else already
-writes:
+Until 2026-09-19 `mc brief` ran `collectBrief` first: it fetched, asked `gh`,
+read the plans, the runs and the runner's tables, wrote `~/mc/brief/<date>.md`
+and handed the text to the session as its first words — or, to a resumed
+session, as a reply. `mc brief --collect` was the same without the session, and
+`--offline` kept it off the network. All three are gone (Martin, 2026-09-19:
+"Ta bort båda"): `--collect` and `--offline` are unknown flags, exit 2.
 
-| section | source |
+The reason is that the document was a second copy of ground that is read live
+elsewhere, and stale by the second question. The page (`mc`), `mc status
+<name>` and `mc step <project>` carry the same ground now — the runner, the
+queue, failed and blocked steps, the intake, the workareas — and the brief
+keeps no script of its own to drift from them. The file that held the readers,
+[`src/mc/brief-collect.js`](../../src/mc/brief-collect.js), stayed under its
+name because a dozen modules import from it; what is left in it is what the page,
+the runner, `mc status`, `mc plan` and the helper share: `listPlans`,
+`listProgrammes`, `planFields`, `parseRuns`, `runsFor`, `listProposals`,
+`defaultRepos` and the batch readers under them.
+
+The five gathered files already in `~/mc/brief/` are left where they are; the
+code never reads or deletes that directory. (`~/mc/brief/unblock/` below is
+still used.)
+
+## Where the session reads the ground
+
+[`canon/roles/brief.md`](../../canon/roles/brief.md) opens by saying nothing is
+gathered for it and where each thing lives:
+
+| the ground | where |
 |---|---|
-| Merged since last brief | `gh pr list --state merged --search merged:>=<since>`, per repository |
-| Opened, not merged | `gh pr list --state open` |
-| Proposals | `~/mc/proposals/*.md`, what `mc helper`'s turn wrote — `archive/` is a directory, so it is not listed |
-| Plan status | every `docs/project/*/*/PLAN.json` on `origin/main` of both repositories |
-| Archived without a note | `~/mc/runner/undocumented-closures.md` |
-| Workareas with no project on main | `~/mc/runner/unplanned-workareas.md` |
-| Plans that do not parse | `~/mc/runner/unreadable-plans.md` |
-| Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
-| Production | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, `git rev-list --count <it>..origin/main` in `~/memoro`, the nightly's last measurement, and the `/api/version` in `~/mc/runner/version.json` |
-| Failed steps | the `failed` steps of the same plans, as the register overlays them (`~/mc/runner/projects/<project>.json`) |
-| Ready, and the runner cannot start it | `machineState` (`src/mc/status-collect.js`) over every non-legacy plan: the workarea's `git status --porcelain`, the open pull requests, the STOP file — less what `current-<repo>.json` says is running |
-| Blocked | the `blocked` steps of the same plans *Plan status* already parsed, plus `staleBlockers` (`src/mc/stale-blockers.js`) |
-| Queue | `~/mc/queue.md` |
+| the runner, the queue, failed and blocked steps, the intake, the workareas | `mc --fresh`, the page — read first |
+| one project | `mc status <name>`, `mc step <project>` |
+| proposals | `ls ~/mc/proposals/` — names only; `archive/` is a directory |
+| the runner's three questions | `~/mc/runner/undocumented-closures.md`, `unplanned-workareas.md`, `unreadable-plans.md` |
+| what landed | `gh pr list --state merged` in each repository |
 
-The two repositories are `~/memoro` and `~/memoro-cli` (`MC_REPOS_HOME`
-moves them, `MC_WORK_ROOT` moves `~/mc`). Plans are read off the ref, never
-out of a checkout: one `ls-tree` for the names and one `git cat-file
---batch` for every plan's text — the loop this replaced spent a `git show`
-per plan, 1.22 s for memoro's 38 against 54 ms for the whole listing.
-
-**"Since last brief" is the mtime of the newest file in `~/mc/brief/`**, and
-24 hours when there has never been one. There is no state file: the briefs
-themselves are the record of when there was last a brief. The *Runner*
-section is the exception and always looks back 24 h — it is a picture of the
-machine's day, not of the interval.
-
-**Failed steps** is the one section that carries work rather than reporting
-it. A step whose session ended without landing — the gate was red and the
-session could not make it green, or the session died — is `failed` in the
-register (ruling 21; `mc-run.md` § *The register*), and the runner starts
-nothing on it again. Each row is a project standing still, and each is a
-person's: fix the branch and `mc merge` by hand, close the pull request and
-`mc step ready`, or replan — one proposal per step, in
-[`canon/roles/brief.md`](../../canon/roles/brief.md). When there is one at
-all the brief says so in its opening lines, not only in the section. Until
-2026-09-12 this was *Held before merge*, over `~/mc/runner/held.json` and one
-repair session per pull request; both are gone.
-
-**Ready, and the runner cannot start it** is the rest of the same waiting.
-A failed step is one whose session got as far as ending; a session killed
-before it committed never got as far as a pull request: `no-text-in-code` stood from
-2026-09-04T12:37Z on exit 143 with 35 files of finished work uncommitted, and
-`connections-section` from 2026-08-29T21:37Z on a session that exited 0 and
-opened no pull request. Neither was a failed step, neither was in *Workareas
-with no project on main* — both had a project on main, which is what made them
-a loss — and both were skipped every ten minutes with one `, skip` line in
-`runner.log`. Since 2026-09-08 the runner writes such a step `blocked` on
-`main` the first time it meets it (*Waiting on a workarea*, under *Blocked*), so
-this section holds what the plan does not say yet: a workarea the runner has
-not picked since it went dirty, and a repository GitHub would not answer for.
-It asks `machineState` for the same answer the runner refuses on and lists
-what it refuses: the project, what is in the way, since
-when and how long, and the `runs.tsv` row that left it. It is a section of its
-own rather than rows in *Failed steps* because the act differs — a failed
-step takes one of that section's three answers, and a workarea takes a
-person opening it — and a row under prose that promises the wrong answer is a
-row somebody applies the wrong answer to. `prs-unknown` is a fact about a
-repository rather than a project, so it is one line per repository. A project
-the runner has a live session on is left out: its worktree is dirty because
-somebody is working in it this minute, and every row here has to be one a
-person acts on — a lane file whose pid is dead is not a live session, and that
-workarea is precisely what the section is for.
-
-**And a plan that does not parse is not in it either**, which is correct and has
-a cost worth knowing. The section keeps only the refusals whose word is in
-`RUN_REFUSALS` — the machine-shaped ones — so `blocked`, `done` and
-`unparseable` stay *Plan status* rows, where the plan is the first thing to fix.
-`inbox-finish` is what that costs: six files and 165 insertions of apparently
-finished work have stood in its workarea since its session was killed at
-2026-09-02T20:59:43Z, and no surface names the workarea, because the plan above
-it does not parse (measured 2026-09-05). The row that would send somebody there
-is the *Plans that do not parse* one.
-
-**Blocked** is the third and largest section of that same family, and the one
-that carries the most work. A `blocked` step is a project standing still with
-nobody looking: the runner hands out `ready` steps and reads no further, so a
-blocker does not flip itself and nothing in mc ever read one a second time
-until `staleBlockers` did. Measured on `origin/main` 2026-09-05, **45 steps
-were `blocked`** across both repositories and the only trace of any of them was
-one clipped `next` cell in *Plan status*.
-
-The section groups by what the reader does next, which is not what
-`blocked_by.kind` says. **Named decisions** (5 on 2026-09-05) get a table with
-the blocker's full name uncut, because that name is what a session looks the
-answer up by; that is the list a brief works through. **`plan-review`** (12,
-across six programmes) is a `decision` by kind and a hand-off by meaning — the
-park every plan converted to the schema carries until its programme's planning
-session reads it — so it is one line per programme ending in `mc plan
-<programme>`, and never a question for Martin. **Project blockers** (28, of
-which 26 are the sql-readiness families closing in a deliberate order) are
-sequencing: the order is the blocking project's design, the section reads it
-and never moves it, so they are a count.
-
-Two facts ride along under the count because both were invisible and neither
-costs a read. A project blocker whose named project has left `origin/main` is
-`staleBlockers`'s answer, reused rather than recomputed so the page and the
-brief cannot disagree about which blocking project is gone — and the line says
-*is not on main* rather than *is done*, because a project also leaves main when
-it is abandoned, and only a person can say which happened. And a blocker name
-that is not a name (`NAME_RE`, `src/mc/plan-schema.js`, exported for this one
-reader) is neither a live blocker nor a finished one but a plan nothing can
-check: `sql-goal1-certification` step 4 waits on a 99-character sentence. It is
-reported, not refused — making the schema reject one would make every plan
-carrying one unrunnable the moment it landed, which is a separate decision.
-
-The three routes a session takes are in
-[`canon/roles/brief.md`](../../canon/roles/brief.md), and so is the one thing
-that is new: **the brief may write a plan.** Where the estate already holds the
-answer — a decision answered under another name, a blocking project landed — a
-brief session sets that step `ready` itself and writes what it read into the
-step's `comments` in the same edit. Everything else it only reports.
-
-**Production** is the other section that can end in something being done, and
-what it ends in is Martin typing `mc deploy` — never the session, and never the
-runner. It carries three readings and no verdict: the last deploy mc made, how
-many commits `origin/main` is ahead of it, and whether the nightly ever measured
-that tree whole. The role turns those into at most one proposal
-([`canon/roles/brief.md`](../../canon/roles/brief.md)); a gap nobody has
-measured is a reason not to propose one yet. The same row is drawn on the page's
-RUNNER block, and `mc helper` reads it beside `/admin/deploy/logs`, so the three
-cannot say different things about what is live.
-
-Two answers are kept apart everywhere. A file the runner has never written
-is reported as absent; a file it wrote and left empty is reported as none.
-"The runner has not written one yet" is a different thing from "there is
-nothing to report", and reading it as the second is how a board looks clean
-when nobody has looked.
-
-## What it writes
-
-`~/mc/brief/<date>.md`. That is all.
-
-It used to delete answered decision files too. mc had a decision concept —
-`<area>/decisions/*.md`, a `**Beslut:**` line Martin appended, a scan, a
-render, a retirement rule keyed on which plans still waited — and all of it is
-gone. What is decided with Martin is written into the plan it is about, by
-whoever next opens that plan, and a plan comes back to the runner by its first
-unfinished step being `ready`. There is nothing left for mc to read, count or
-delete.
+A file the runner has never written and a file it wrote and left empty are two
+answers, and the session is to read them as two: "the runner has not written
+one yet" is not "there is nothing to report".
 
 ## The session
 
-The bare verb opens **an ordinary foreground terminal program** — `spawn`
-with `stdio: 'inherit'` through `openInWorkArea`
-([`src/mc/work-open.js:127`](../../src/mc/work-open.js)) — not tmux. The
-brief session already there is resumed (`pick: null`) and today's file rides
-as `resumePrompt`, a reply into it; `--new` starts fresh (Martin,
-2026-09-13). Opus by default from the role, `--codex` allowed through the
-adapter, the Coding Profile appended, then `canon/roles/_common.md` and the
-overlay from [`canon/roles/brief.md`](../../canon/roles/brief.md) — assembled
-like every other session's ([`mc-roles.md`](mc-roles.md)) — and the brief file
-as the first prompt. NOW says `brief` for exactly as long as it holds the
-terminal.
+The verb opens **an ordinary foreground terminal program** — `spawn` with
+`stdio: 'inherit'` through `openInWorkArea`
+([`src/mc/work-open.js`](../../src/mc/work-open.js)) — not tmux. The brief
+session already there is resumed where it was (`pick: null`), with no prompt
+of its own, as `mc helper` is; a fresh one starts on `--new`, or when there is
+none, with `Start the meeting.` as its first words (Martin, 2026-09-13; the
+resume prompt went 2026-09-19). Opus by default from the role, `--codex`
+allowed through the adapter, the Coding Profile appended, then
+`canon/roles/_common.md` and the overlay from `canon/roles/brief.md` —
+assembled like every other session's ([`mc-roles.md`](mc-roles.md)). NOW says
+`brief` for exactly as long as it holds the terminal. A missing role is exit 1.
 
-It stands in `~/mc`, the work root, and not in a repository. It writes one
-file, `~/mc/brief/<date>.md`, and giving it a worktree would only put a branch
-under a conversation that must never commit anything.
+It stands in `~/mc`, the work root, and not in a repository. Giving it a
+worktree would only put a branch under a conversation that must never commit
+anything.
 
-The role tells it to take the decisions **one at a time**, each as a
-proposal Martin says GO to — never a menu of options, and never a question
-it has not read the code behind. If it cannot name one thing to do, the
-question is not ready and it says so. Then the two lists the tidying leaves,
-one row at a time. It ends when the lists are empty or Martin says stop.
+The role tells it to take the decisions **one at a time**, each as a proposal
+Martin says GO to — never a menu of options, and never a question it has not
+read the code behind. If it cannot name one thing to do, the question is not
+ready and it says so. It ends when the lists are empty or Martin says stop.
 
 ## How an answer travels
 
@@ -254,23 +138,9 @@ alternative and was rejected: the route above needs no new code and no new
 authority, and a route that has to be built first cannot be walked by the step
 that walks it.
 
-## What is deliberately wide
-
-Nothing, any more. The section that stood here explained how loosely a
-decision file was recognised — anything under `<area>/decisions/` with a `# `
-heading, minus three bookkeeping names — and why the looser rule was worth its
-false positives: the narrower one had been hiding unanswered questions from the
-only person who could answer them.
-
-That reasoning went with the concept. It is worth keeping the shape of it,
-because the same trap is one directory away: `~/mc/proposals/` is now counted
-and never parsed, for the same reason. A reader that decides what counts as a
-proposal is a reader that can decide wrongly, silently, about a file somebody
-wrote for Martin.
-
 ## What the brief does with a proposal
 
-The section is a list and a rule, and the rule is the half that gets skipped.
+The listing is a list and a rule, and the rule is the half that gets skipped.
 A proposal is a reading, not work: it becomes a project (`PLAN.json` on main,
 then its name in `~/mc/queue.md`), or the brief builds it, or it is dropped.
 
@@ -290,43 +160,18 @@ A proposal only **partly** handled does not move. Rewrite it in place to what
 is actually left, dated, saying what closed the rest — so the list says what
 the proposal is waiting on rather than what it said the day it was written.
 
-## Speed
-
-The whole thing is a script, so it must feel like one. Measured 2026-08-29
-against a copy of the real `~/mc` and both real repositories: **1.5 s**
-online and **0.2 s** offline, for 51 plans, 15 decision files, 8 proposals
-and 72 runner rows.
-
-The network is the cost, and it is spent concurrently: one `git fetch` and
-two `gh pr list` per repository, run side by side. Run one after another the
-same calls took 10.4 s, which was the plan's entire budget. `--offline`
-skips all of them and reads only what is on disk.
-
 ## How it is tested
 
-`tests/mc/brief-collect.test.js` covers the parsers on text: decision files
-answered and unanswered, the wide heading rule and the bookkeeping names,
-`retireDecisions`'s three outcomes (removed, held, orphan), plan
-frontmatter including folded scalars, `cat-file --batch` framing on bytes
-rather than characters, the runs.tsv window, and both intake tables
-including absent-versus-empty.
-
-*Blocked* is driven from one fixture holding one of each — sequencing that is
-live, sequencing whose project has left main, the `plan-review` park, a named
-decision, and a decision whose name is a 99-character sentence — through both
-`blockedSteps` and `renderBrief`: that the group is what the reader does and
-not `blocked_by.kind`, that the three counts are right, that the blocker name
-is printed uncut, that the hand-off names its programme, and that neither
-special case is folded into the list above it.
-
-`tests/mc/commands/brief.test.js` covers the verb: that `--collect` stops
-after the file, that the bare verb opens the foreground conversation in the
-work root — resumed, with the brief as its next words either way, fresh on
-`--new` — with the overlay and the brief as its first words, and that the
-overlay asks for a proposal rather than a menu. It reads the overlay itself
-rather than a copy of it.
+`tests/mc/commands/brief.test.js` covers the verb: that it opens the foreground
+conversation in the work root with the overlay and `Start the meeting.`, that
+a resumed session is handed no prompt, that `--new` starts a fresh one, that
+`--collect` and `--offline` exit 2, and that the overlay asks for a proposal
+rather than a menu and says where the ground is read. It reads the overlay
+itself rather than a copy of it. `tests/mc/brief-collect.test.js` covers the
+shared readers on fixtures: the proposal listing, plan frontmatter,
+`cat-file --batch` framing on bytes rather than characters, and `runsFor`.
 
 **Not measured:** the interactive launch itself. No headless session can
 watch a program take the terminal, so what is verified is that the right
 argv is built and spawned with `stdio: 'inherit'`; that the session opens
-and its first turn is the agenda is Martin's to see, once.
+and reads the page first is Martin's to see, once.

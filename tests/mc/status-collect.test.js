@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { runsSince } from '../../src/mc/brief-collect.js';
+import { parseRuns } from '../../src/mc/brief-collect.js';
 import { estimateCost, priceFor } from '../../src/mc/prices.js';
 import { kindFor, machineState, nowBlock, pidAlive } from '../../src/mc/status-collect.js';
 
@@ -49,7 +49,7 @@ const TSV = [
   '2026-08-25T19:00:00Z\tavatar-image-animation\tstep\t0\t652\t10964\t56\t96\t33172\t4724690\t118362\ts3\tsuccess,merged',
   '2026-08-25T19:30:00Z\tfocused-session-ui\ttriage\t142\t5400\t-\t-\t-\t-\t-\t-\t-\ttimeout',
 ].join('\n');
-const ROWS = runsSince(TSV, new Date('2026-08-25T00:00:00Z'));
+const ROWS = parseRuns(TSV).filter((row) => Date.parse(row.ts) >= Date.parse('2026-08-25T00:00:00Z'));
 
 describe('kind', () => {
   it('decides each queued name the way the runner does: only ready runs', () => {
@@ -138,11 +138,11 @@ describe('NOW', () => {
   });
 
   it('carries a pending STOP and the quota answers of the last 24 h', () => {
-    const rows = runsSince([
+    const rows = parseRuns([
       'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
       '2026-08-29T04:00:00Z\tmc-ui\tstep\t1\t8\t-\t1\t-\t-\t-\t-\t-\tquota',
       '2026-08-29T05:00:00Z\tmc-ui\tstep\t0\t600\t9\t9\t-\t-\t-\t-\t-\tsuccess,merged',
-    ].join('\n'), new Date('2026-08-28T10:30:00Z'));
+    ].join('\n'));
     const block = nowBlock({ runner: RUNNER, stop: true, rows, now: NOW, alive: live });
     assert.equal(block.stop, true);
     assert.deepEqual(block.quota, { count: 1, last: '2026-08-29T04:00:00Z' });
