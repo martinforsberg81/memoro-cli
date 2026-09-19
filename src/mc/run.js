@@ -127,7 +127,7 @@ import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './role
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
-  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, REFUSAL, TIMEOUT_EXIT,
+  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs,
   helperDue, inFlight, intakeNote, landingNote, mcOwnFiles, nextBranch, nextFor,
   queueFileText, readSessionOutput, sessionResult, sessionSettings, describeSettings, describeWatch,
@@ -169,11 +169,13 @@ function sh(cmd, args, { cwd, timeout = 120_000 } = {}) {
  * `checkIn(elapsedMinutes, count)` is written as another, and the session
  * judges its own step. A message written mid-turn is folded into that turn;
  * one written after a `result` starts a new turn — so on the first `result`
- * line stdin is ended, no check-in follows, and claude exits. The only kill
- * is the stall guard: `stallMs` without a byte on stdout, armed at spawn and
- * reset on every chunk, SIGTERMs the child and reports `stalled`. Stream-json
+ * line stdin is ended, no check-in follows, and claude exits. Two kills: the
+ * stall guard — `stallMs` without a byte on stdout, armed at spawn and reset
+ * on every chunk, SIGTERMs the child and reports `stalled` (stream-json
  * prints an event per message, so a working session is never silent that
- * long.
+ * long) — and, once the `result` has been seen, the result grace: the
+ * process gets `resultGraceMs` to exit and is then killed with the result
+ * standing (`lingered`, status 0, not stalled).
  *
  * Codex (no `prompt`) keeps its positional prompt with stdin closed, and gets
  * neither a check-in nor a stall guard: nothing kills it.
@@ -183,7 +185,7 @@ function sh(cmd, args, { cwd, timeout = 120_000 } = {}) {
  * second lane would never get to start. The output is collected here instead
  * of by `maxBuffer`, and capped rather than allowed to eat the machine.
  */
-export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, checkIn = null, onSpawn = null, spawn: spawnFn = spawn }) {
+export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onSpawn = null, spawn: spawnFn = spawn }) {
   return new Promise((resolve) => {
     const piped = prompt != null;
     const child = spawnFn(bin, args, { cwd, stdio: [piped ? 'pipe' : 'ignore', 'pipe', 'pipe'], env });
@@ -204,17 +206,19 @@ export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 
     let settled = false;
     let failure = null;
     let stalled = false;
+    let lingered = false;
     let resultSeen = false;
     let stallTimer = null;
+    let graceTimer = null;
     let checkInTimer = null;
     let count = 0;
-    const stop = () => { clearTimeout(stallTimer); clearInterval(checkInTimer); };
+    const stop = () => { clearTimeout(stallTimer); clearTimeout(graceTimer); clearInterval(checkInTimer); };
     const send = (text) => {
       if (!piped || resultSeen || settled || !child.stdin?.writable) return;
       child.stdin.write(userMessageLine(text));
     };
     const armStall = () => {
-      if (!stallMs || stalled || settled) return;
+      if (!stallMs || stalled || resultSeen || settled) return;
       clearTimeout(stallTimer);
       stallTimer = setTimeout(() => {
         if (settled) return;
@@ -231,6 +235,16 @@ export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 
       resultSeen = true;
       clearInterval(checkInTimer);
       try { child.stdin.end(); } catch { /* already closed */ }
+      // The session has answered: from here the process has `resultGraceMs`
+      // to exit, whatever it writes meanwhile and whether or not a stall
+      // guard is set. The stall timer is dropped — the grace replaces it.
+      clearTimeout(stallTimer);
+      graceTimer = setTimeout(() => {
+        if (settled) return;
+        lingered = true;
+        stop();
+        child.kill('SIGTERM');
+      }, resultGraceMs);
     };
     const scan = (chunk) => {
       armStall();
@@ -268,11 +282,12 @@ export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 
     });
     child.on('close', (status) => {
       done({
-        status: stalled ? TIMEOUT_EXIT : (status ?? 1),
+        status: stalled ? TIMEOUT_EXIT : (lingered ? 0 : (status ?? 1)),
         stdout: stdout(),
         stderr: stderr() || (failure ? String(failure.message) : ''),
         timedOut: stalled,
         stalled,
+        lingered,
       });
     });
   });
@@ -1725,6 +1740,7 @@ export function createRunner({
     const pr = String(openNow.find((item) => item.headRefName === branch)?.number ?? '-');
     const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
     let { note } = read;
+    if (result.lingered) say(`${name}: the process did not exit within ${Math.round(RESULT_GRACE_MS / 60_000)}m of its result — killed, the result stands`);
 
     // Where the step stands now is the register's word, not this process's
     // (ruling 21). The session ran `mc merge` itself: green wrote `done` and

@@ -579,10 +579,9 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
   sessions never see one.
 - **`stall_minutes:`** — 20 minutes by default (`DEFAULT_STALL_MINUTES`): how
   long a session may go without a byte on stdout before it is killed. The
-  row says `stalled`, and `stalled,open` when it had a pull request open, which
-  is then held. Twenty is twice the ten-minute ceiling a single Bash call has
-  in a runner session, so a long test run is not a stall. Nothing is killed
-  for how long it has run ([ruling 18](../project/mc/rulings.md)).
+  row says `stalled`. Twenty is twice the ten-minute ceiling a single Bash
+  call has in a runner session, so a long test run is not a stall. Nothing is
+  killed for how long it has run ([ruling 18](../project/mc/rulings.md)).
 
 Effort and advisor are claude's flags (`effortArgs` and `advisorArgs` in the
 claude adapter), so a codex session gets neither, named or not. A step's
@@ -925,8 +924,15 @@ their turns, cost, durations and usage up rather than taking the last.
 
 The only kill is the **stall guard**: a timer re-armed on every byte of
 stdout, and the child `SIGTERM`ed when `stall_minutes` go by without one — the
-row says `stalled`, exit 142. It is armed at spawn and outlives the `result`,
-so a session that hangs after answering is still reaped. Nothing is killed for
+row says `stalled`, exit 142. It is armed at spawn and ends at the `result`:
+from that line the process has `RESULT_GRACE_MS` (two minutes, whatever it
+writes meanwhile, whether or not `stall_minutes` is set) to exit, and is then
+`SIGTERM`ed with the result standing — status 0, `stalled` false, the row's
+note the session's own word, and a line in `runner.log`. A step still `running`
+in the register is `failed` by [ruling 21](../project/mc/rulings.md) as ever,
+its reason now saying the session ended `success` without landing it. That is
+what `sql-w2-search-closure` was owed on 2026-09-13: it finished in 72.7
+minutes, hung twenty, and was logged `stalled,failed`. Nothing is killed for
 how long it has run ([ruling 18](../project/mc/rulings.md)); before step-cost
 a wall-clock budget killed a session that was working because the machine was
 slow or a suite was long. A codex session gets neither: its prompt is an
