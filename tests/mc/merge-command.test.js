@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { gate } from '../../src/mc/commands/repo.js';
+import { gateLockPath, takeGateLock } from '../../src/mc/gate-lock.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { remainderOf, stepForMerge } from '../../src/mc/merge-step.js';
 import { registerPath } from '../../src/mc/register.js';
@@ -195,6 +196,25 @@ describe('mc merge waits out a busy gate or a held lease instead of refusing', (
     assert.match(out.err, /^mc: waiting behind another gate round is running.* — 0 ahead of this one$/mu);
     assert.match(out.err, /^mc: waited \d+s$/mu);
     assert.deepEqual(queue(), [], 'its own entry is gone once its turn ran');
+  });
+
+  it('sees the lock where the round writes it — mc\'s home, not the work root', async () => {
+    // The real reader, no `runningRound` stub: a stub is handed whatever root
+    // the wait passes and hid that the wait passed the wrong one (2026-09-19).
+    assert.equal(takeGateLock({ repo: 'memoro', pr: 11867, mode: 'merge' }).ok, true);
+    let clock = Date.parse('2026-09-06T18:00:00Z');
+    const { out, io } = deps(landed(), {
+      overrides: {
+        readLease: () => ({ held: false, holder: null }),
+        sleep: async (ms) => { clock += ms; rmSync(gateLockPath(home), { force: true }); },
+        now: () => new Date(clock),
+        gh: () => ({ status: 1, stdout: '' }),
+      },
+    });
+    const code = await gate({ repo: 'memoro-cli', pr: 722 }, io);
+    assert.equal(code, 0);
+    assert.match(out.err, /^mc: waiting behind another gate round is running/mu);
+    assert.match(out.err, /^mc: waited 15s$/mu);
   });
 
   it('a dead waiter\'s entry is dropped, and never counted as ahead', async () => {
