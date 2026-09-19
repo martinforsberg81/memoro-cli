@@ -120,7 +120,7 @@ it without starting anything.
 in the programme directory is resumed, with no intro, and a new one starts
 only when there is none or `--new` says so (Martin, 2026-09-13: "Existerar
 det en session, ska samma öppnas utan intro"). It is the same launch path
-`mc brief` and `mc worker` use:
+`mc brief`, `mc helper` and `mc worker` use:
 [`src/mc/work-open.js`](../../src/mc/work-open.js), `spawn` with `stdio:
 'inherit'`. There is no second launcher. NOW says `plan` for exactly as long as
 the session holds the terminal, through the foreground register.

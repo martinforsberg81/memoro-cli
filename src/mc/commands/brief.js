@@ -1,13 +1,15 @@
 /**
  * `mc brief` — the evaluation session.
  *
- * `--collect` is the script half: gather the ground into
- * `~/mc/brief/<date>.md` with no model. The bare verb does that and then
- * opens the foreground brief session — the terminal's, never tmux — standing
- * in the work root. A brief session already there is resumed and handed the
- * new brief file as its next words; with none, or with `--new`, a fresh one
- * starts with the Coding Profile, the `brief` role from `canon/roles/brief.md`
- * and the brief file as its opening words (Martin, 2026-09-13).
+ * Opens the foreground brief session — the terminal's, never tmux — standing
+ * in the work root. A brief session already there is resumed where it was; with
+ * none, or with `--new`, a fresh one starts with the Coding Profile and the
+ * `brief` role from `canon/roles/brief.md`, and `Start the meeting.` as its
+ * opening words. Nothing is gathered for it: the ground is read where it lives
+ * — the page, `mc status`, `mc step` — and the role says where. Until
+ * 2026-09-19 a script (`mc brief --collect`) wrote `~/mc/brief/<date>.md` and
+ * handed the text over as the first words; it was a second copy of what the
+ * page shows live, stale by the second question (Martin, 2026-09-19).
  *
  * It used to be the *decision* session too: it read `<area>/decisions/*.md`,
  * listed what waited on Martin, and its one written output was a
@@ -15,20 +17,19 @@
  * the whole of it, not the format. What a session decides with Martin belongs
  * in the plan it is about.
  */
-import { collectBrief } from '../brief-collect.js';
 import { workRoot } from '../paths.js';
 import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
 
 export function usage() {
-  return 'usage — mc brief [--collect] [--offline] [--new] [--codex|--claude] [--model <model>]\n';
+  return 'usage — mc brief [--new] [--codex|--claude] [--model <model>]\n';
 }
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  const scanned = scanArgs(argv, { booleans: ['--collect', '--offline', '--new'], strictValues: ['--model'], toolSugar: true });
+  const scanned = scanArgs(argv, { booleans: ['--new'], strictValues: ['--model'], toolSugar: true });
   if (scanned.error || scanned.positional.length) {
     stderr.write(`mc: ${scanned.error || `unknown argument ${scanned.positional[0]}`}\n`);
     stderr.write(usage());
@@ -36,21 +37,12 @@ export async function run(argv, deps = {}) {
   }
   const { flags } = scanned;
 
-  const t0 = Date.now();
-  const result = await (deps.collect || collectBrief)({ offline: flags.offline });
-  const seconds = ((Date.now() - t0) / 1000).toFixed(1);
-  const { merged, opened, proposals = [], notes } = result.data;
-  const extra = proposals.length ? `, ${proposals.length} proposal${proposals.length === 1 ? '' : 's'}` : '';
-  stdout.write(`mc: ${result.path} (${seconds}s) — ${merged.length} merged, ${opened.length} open${extra}\n`);
-  for (const note of notes) stderr.write(`mc: ${note}\n`);
-  if (flags.collect) return 0;
-
   const role = readCanonRole('brief');
   if (!role?.overlay) {
     stderr.write('mc: the brief role is missing from this install — expected canon/roles/brief.md with an overlay body\n');
     return 1;
   }
-  const launch = briefLaunch({ path: result.path, text: result.text, role });
+  const launch = briefLaunch({ role });
   const root = workRoot();
   const opened_ = await (deps.open || openInWorkArea)({
     areaRoot: root,
@@ -68,9 +60,6 @@ export async function run(argv, deps = {}) {
     model: flags.model,
     overlay: launch.overlay,
     prompt: launch.prompt,
-    // The brief is new every time it is collected, so a resumed session gets
-    // it too — as a reply, not an intro.
-    resumePrompt: launch.prompt,
     defaultModel: role.model,
     defaultModelTool: role.tools?.[0] || null,
   });
@@ -81,8 +70,7 @@ export async function run(argv, deps = {}) {
   return opened_.code ?? 0;
 }
 
-/** What the session is told: the role as written, and the brief as its first words. */
-export function briefLaunch({ path, text, role }) {
-  const prompt = `This is the brief, from ${path}. Start the meeting.\n\n${text}`;
-  return { overlay: role.overlay, prompt, model: role.model || null };
+/** What the session is told: the role as written, and that the meeting starts. */
+export function briefLaunch({ role }) {
+  return { overlay: role.overlay, prompt: 'Start the meeting.', model: role.model || null };
 }

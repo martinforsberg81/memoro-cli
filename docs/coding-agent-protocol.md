@@ -85,8 +85,8 @@ mc merge    → the gate, then the squash
   Martin answers it in `mc brief`. Those directories are outside git and do not
   survive the session, so a ruling worth keeping is carried into
   [`docs/project/mc/rulings.md`](project/mc/rulings.md) **before** the file is
-  retired — `mc brief --collect` deletes an answered file once no plan is still
-  waiting on it.
+  retired. (`mc brief --collect` deleted an answered file once no plan was
+  still waiting on it; it is gone, and nothing deletes one now.)
 - **A workarea is `~/mc/<project>/memoro-cli`,** a worktree on branch
   `<project>` from `origin/main`. `mc` owns it: it is created by `mc run` when
   it first steps that project, or by `mc work add`, and closed by `mc run` in

@@ -169,9 +169,8 @@ Two things a machine must not decide, so it writes them down and moves on:
   `merge-tree` hit a conflict, which is itself an answer: a branch that
   conflicts with main holds something main does not.
 
-Both are raised in `mc brief`, which is where they are read: two sections,
-*Archived without a note* and *Workareas with no plan on main*, and the brief
-role walks them one row at a time after the decisions. An absent file is
+Both are raised in `mc brief`, which is where they are read: the role sends
+the session to the two files, and it walks them one row at a time. An absent file is
 reported as absent rather than as "none" — the runner has not written one
 yet is a different answer from there is nothing to report.
 

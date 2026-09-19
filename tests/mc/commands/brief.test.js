@@ -1,20 +1,13 @@
 /**
- * `mc brief` — the session half: the brief role ships with mc, the bare
- * verb collects and then opens a fresh foreground conversation in the work
- * root with the overlay and the brief as its first words; `--collect`
- * stops after the file.
+ * `mc brief` — the session: the brief role ships with mc, the verb opens the
+ * foreground conversation in the work root with the overlay and `Start the
+ * meeting.`; nothing is gathered for it.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { briefLaunch, run } from '../../../src/mc/commands/brief.js';
 import { readCanonRole } from '../../../src/mc/roles.js';
-
-const COLLECTED = {
-  path: '/work/brief/2026-08-25T20-00-00Z.md',
-  text: '# Brief — 2026-08-25T20:00:00Z\n\n## Waiting on Martin\n\n| a | b |\n',
-  data: { merged: [1, 2], opened: [3], proposals: [], notes: ['memoro: no checkout'] },
-};
 
 function io() {
   const out = { stdout: '', stderr: '' };
@@ -37,27 +30,28 @@ describe('the brief role', () => {
   });
 
   /**
-   * The two lists the tidying leaves — `mc run` writes both intake files and
-   * reads neither, so the brief is where they are raised. The overlay has to
-   * name them, and has to say the one thing that is not obvious from a row:
+   * The two lists the tidying leaves — `mc run` writes both files and reads
+   * neither, so the brief is where they are raised. The overlay has to say
+   * where they are read, and the one thing that is not obvious from a row:
    * the session removes nothing itself.
    */
   it('walks what the tidying left, and removes nothing itself', () => {
     const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /\*Archived without a note\*/u);
-    assert.match(overlay, /\*Workareas with no project on main\*/u);
+    assert.match(overlay, /~\/mc\/runner\/undocumented-closures\.md/u);
+    assert.match(overlay, /`unplanned-workareas\.md`/u);
+    assert.match(overlay, /`unreadable-plans\.md`/u);
     assert.match(overlay, /`branch: landed`/u);
     assert.match(overlay, /You remove nothing\./u);
   });
 
   /**
-   * A pull request the runner would not land, whose one repair session has
-   * run, is the brief's — and the overlay has to say what an answer to one
-   * looks like, because the three of them are all the session may do.
+   * A pull request the runner would not land is the brief's — and the overlay
+   * has to say what an answer to one looks like, because the three of them
+   * are all the session may do.
    */
-  it('takes the held pull requests, one proposal each', () => {
+  it('takes the pull requests the runner would not land, one proposal each', () => {
     const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /\*Held before merge\*/u);
+    assert.match(overlay, /a\s+step\s+`mc step <project>`\s+shows\s+as\s+failed/u);
     assert.match(overlay, /`mc merge <repo> <pr>`/u);
     assert.match(overlay, /`gh pr close`/u);
     assert.match(overlay, /`mc step blocked --on <decision>`/u);
@@ -72,7 +66,7 @@ describe('the brief role', () => {
    */
   it('proposes what is waiting on hands, and touches no workarea itself', () => {
     const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /\*Ready, and the runner cannot start it\*/u);
+    assert.match(overlay, /`ready`\s+step\s+the\s+runner\s+cannot\s+start/u);
     assert.match(overlay, /you touch none of them/u);
     assert.match(overlay, /`git\n?restore`/u);
   });
@@ -86,7 +80,7 @@ describe('the brief role', () => {
    */
   it('takes the blocked steps, and knows which of the three it settles', () => {
     const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /\*Blocked\*/u);
+    assert.match(overlay, /Blocked\s+steps\s+are\s+the\s+third/u);
     assert.match(overlay, /project\s+blocker\*{2}\s+is\s+sequencing/u);
     assert.match(overlay, /`mc\s+plan\s+<programme>`/u);
     assert.match(overlay, /named\s+decision\*{2}\s+is\s+the\s+list\s+you\s+actually\s+work/u);
@@ -111,51 +105,78 @@ describe('the brief role', () => {
     assert.match(overlay, /Land\s+it\s+before\s+the\s+brief\n?ends/u);
   });
 
-  it('opens with the brief as the first words', () => {
-    const launch = briefLaunch({ ...COLLECTED, role: readCanonRole('brief') });
-    assert.match(launch.prompt, /^This is the brief, from \/work\/brief\/2026-08-25T20-00-00Z\.md\. Start the meeting\.\n\n# Brief/u);
+  /**
+   * The role opens by saying nothing is gathered and where the ground is read:
+   * the page first, then the per-project verbs, the proposals, the runner's
+   * three tables and what landed.
+   */
+  it('says where the ground is read, and that nothing is gathered', () => {
+    const { overlay } = readCanonRole('brief');
+    assert.match(overlay, /Nothing\s+is\s+gathered\s+for\s+you/u);
+    assert.match(overlay, /`mc --fresh`/u);
+    assert.match(overlay, /`mc status <name>`/u);
+    assert.match(overlay, /`ls ~\/mc\/proposals\/`/u);
+    assert.match(overlay, /`gh pr list --state\s+merged`/u);
+    assert.doesNotMatch(overlay, /~\/mc\/brief\/<date>\.md/u);
+  });
+
+  it('opens with the meeting and the role, and nothing gathered', () => {
+    const launch = briefLaunch({ role: readCanonRole('brief') });
+    assert.equal(launch.prompt, 'Start the meeting.');
     assert.equal(launch.model, 'opus');
   });
 });
 
 describe('mc brief', () => {
-  it('--collect writes and reports, and opens nothing', async () => {
-    const { out, stdout, stderr } = io();
-    let opened = 0;
-    const code = await run(['--collect', '--offline'], { stdout, stderr, collect: async ({ offline }) => { assert.equal(offline, true); return COLLECTED; }, open: async () => { opened += 1; return { ok: true }; } });
-    assert.equal(code, 0);
-    assert.equal(opened, 0);
-    assert.match(out.stdout, /2026-08-25T20-00-00Z\.md \(\d+\.\ds\) — 2 merged, 1 open/u);
-    assert.match(out.stderr, /memoro: no checkout/u);
-  });
-
-  it('bare: collects, then the conversation in the work root, foreground, with overlay and the brief either way', async () => {
+  it('opens the conversation in the work root, foreground, with the overlay and no gathered document', async () => {
     const { stdout, stderr } = io();
     let seen = null;
     const code = await run(['--model', 'fable'], {
-      stdout, stderr, collect: async () => COLLECTED, open: async (o) => { seen = o; return { ok: true, code: 0 }; },
+      stdout, stderr, open: async (o) => { seen = o; return { ok: true, code: 0 }; },
     });
     assert.equal(code, 0);
     assert.equal(seen.areaRoot, process.env.MC_WORK_ROOT);
     assert.equal(seen.worktree.path, process.env.MC_WORK_ROOT);
+    assert.equal(seen.verb, 'brief');
+    assert.equal(seen.roleName, 'brief');
     // The brief session there is resumed; `--new` is the only fresh start.
     assert.equal(seen.pick, null);
     assert.equal(seen.tool, 'claude');
     assert.equal(seen.model, 'fable');
     assert.equal(seen.defaultModel, 'opus');
     assert.match(seen.overlay, /^You are the brief session/u);
-    assert.match(seen.prompt, /Start the meeting/u);
-    // A resumed session gets today's brief as a reply — it is new every time.
-    assert.equal(seen.resumePrompt, seen.prompt);
+    assert.equal(seen.prompt, 'Start the meeting.');
+  });
+
+  it('resumes with no prompt of its own — it is where it was', async () => {
+    const { stdout, stderr } = io();
+    let seen = null;
+    await run([], { stdout, stderr, open: async (o) => { seen = o; return { ok: true, code: 0 }; } });
+    assert.equal(seen.resumePrompt, undefined);
+  });
+
+  it('prints nothing of its own before the session opens', async () => {
+    const { out, stdout, stderr } = io();
+    await run([], { stdout, stderr, open: async () => ({ ok: true, code: 0 }) });
+    assert.equal(out.stdout, '');
+    assert.equal(out.stderr, '');
   });
 
   it('--new starts a fresh conversation', async () => {
     const { stdout, stderr } = io();
     let seen = null;
-    await run(['--new'], {
-      stdout, stderr, collect: async () => COLLECTED, open: async (o) => { seen = o; return { ok: true, code: 0 }; },
-    });
+    await run(['--new'], { stdout, stderr, open: async (o) => { seen = o; return { ok: true, code: 0 }; } });
     assert.equal(seen.pick, 'new');
+  });
+
+  it('--collect and --offline are unknown flags', async () => {
+    for (const flag of ['--collect', '--offline']) {
+      const { out, stdout, stderr } = io();
+      let opened = 0;
+      assert.equal(await run([flag], { stdout, stderr, open: async () => { opened += 1; return { ok: true }; } }), 2);
+      assert.equal(opened, 0);
+      assert.match(out.stderr, new RegExp(`unknown flag ${flag}|${flag}`, 'u'));
+    }
   });
 
   it('refuses a stray word', async () => {

@@ -11,7 +11,7 @@
  * So it is written where the other things a machine must not decide are
  * written — `~/mc/runner/`, beside `unplanned-workareas.md`, in the same shape
  * for the same reason: a table rewritten whole each round, so a plan somebody
- * fixed leaves the list by itself, and `mc brief --collect` raises it.
+ * fixed leaves the list by itself, and the brief session reads it.
  *
  * A machine must not decide this one. The fault is in prose a session wrote,
  * and the repair is a judgement about what it meant to say — mc's whole

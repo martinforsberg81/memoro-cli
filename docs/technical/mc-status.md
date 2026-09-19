@@ -93,7 +93,7 @@ From the page's menu, `s <name>` runs this same verb and redraws
 
 The readers are shared, not re-implemented: `planFields`, `scanDecisions`,
 `parseDecision`, `runsFor` and `defaultRepos` all come from
-[`brief-collect.js`](../../src/mc/brief-collect.js), so `mc brief`, the page
+[`brief-collect.js`](../../src/mc/brief-collect.js), so the page
 and this verb cannot disagree about what a plan says or which decision is
 answered.
 

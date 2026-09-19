@@ -1,8 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { UNREADABLE_KEYS, intakeRows } from '../../src/mc/brief-collect.js';
 import { unreadableFile, unreadablePlans, unreadableRow } from '../../src/mc/plan-intake.js';
+
+const UNREADABLE_KEYS = ['project', 'repo', 'problem', 'path'];
+
+/** The rows under the first `|---|` rule, keyed — a pipe inside a cell is written `\|`. */
+function intakeRows(text, keys) {
+  const lines = text.split('\n');
+  const rule = lines.findIndex((line) => /^\s*\|(\s*:?-{2,}:?\s*\|)+\s*$/u.test(line));
+  return lines.slice(rule + 1).filter((line) => line.trim().startsWith('|')).map((line) => {
+    const cells = line.trim().replace(/^\|/u, '').replace(/\|$/u, '').split(/(?<!\\)\|/u)
+      .map((cell) => cell.replace(/\\\|/gu, '|').trim());
+    return Object.fromEntries(keys.map((key, i) => [key, cells[i] ?? '']));
+  });
+}
 
 /**
  * A plan on origin/main the schema refuses. `chooseKind` already answers

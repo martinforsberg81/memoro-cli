@@ -59,14 +59,14 @@ less than it had.
 until 2026-09-05 and now live in `~/mc/runner/`, beside
 `runner.json` and `log/`. `RUNNER_HOME` and the three filenames are in
 `src/mc/paths.js`, with `runnerTablePath` for the runner that writes them and
-`runnerTableLabel` for the brief that names them to a person, so the writer and
+`runnerTableLabel` for the brief role that names them to a session, so the writer and
 the label cannot drift.
 
 Two of them are rewritten **whole every chore pass**, which is the property that
 made the old room wrong the moment the inbox was asked to drain: a turn that read
 one and filed it away would find it back next pass, and the pass after, forever.
 They are the runner's own output about its own work, read by exactly one
-reader — `mc brief --collect`, which renders a section for each — and they
+reader — the brief session, which the role sends to each file — and they
 belong beside the rest of the runner's state. The three files were moved by
 hand: a migration for three files that are rewritten every pass is more code
 than it saves.
@@ -98,8 +98,8 @@ it; the one directory it writes to is `proposals/`.
 
 Two things it nearly always has to ask, because they cannot be read out of
 anything: which repository, and whether this is a new project or a step in
-one that already exists. Both are frontmatter keys, and the frontmatter is
-what `mc brief --collect` reads without a model.
+one that already exists. Both are frontmatter keys — a habit of the desk's proposals, not something mc
+reads.
 
 Both directories — the room and `proposals/` — are made by the verb before
 the session starts. A session told to write into a path that does not exist
@@ -414,12 +414,10 @@ it runs when Martin has something to say.
 
 Nobody automatic. That is the point.
 
-- **`mc brief --collect`** lists every waiting proposal under a **Proposals**
-  section — file, what it proposes (project or step, repo, project), title
-  and the one-line "done when". At the brief Martin queues one in
-  `~/mc/queue.md` and deletes the file, or just deletes the file. It reads
-  the desk's proposals and the eye's the same way, because they are the same
-  file.
+- **`mc brief`** — the session lists the waiting proposals (`ls ~/mc/proposals/`)
+  and opens each one. At the brief Martin has one become a project, or
+  archived to `~/mc/proposals/archive/`. It reads the desk's proposals and the
+  eye's the same way, because they are the same file.
 - **`mc plan <programme>`** is the other way in: open the programme the
   proposal belongs to, with the proposal in front of you. Nothing automatic
   carries one across — `mc plan` takes a programme, not a file, and a proposal
