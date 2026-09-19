@@ -8,7 +8,7 @@ import { describe, it } from 'node:test';
 
 import { runsSince } from '../../src/mc/brief-collect.js';
 import { estimateCost, priceFor } from '../../src/mc/prices.js';
-import { kindFor, nowBlock, pidAlive } from '../../src/mc/status-collect.js';
+import { kindFor, machineState, nowBlock, pidAlive } from '../../src/mc/status-collect.js';
 
 /**
  * Plans as `listPlans` returns them, with the parsed plan on the record: a
@@ -156,3 +156,42 @@ describe('NOW', () => {
   });
 });
 
+
+describe('machineState reads a merge left in progress as the runner does', () => {
+  const plans = [PLANS[3]];
+  // The fake answers `git status` verbatim: the leading space of ` M c.js` is
+  // the porcelain's, and a fake that trimmed it would hide the column bug.
+  const reading = (rows, { merging = true } = {}) => machineState('mc-status', {
+    plans, root: '/w', exists: () => true, mtime: () => null,
+    git: (_cwd, args) => {
+      if (args[0] === 'rev-parse') return { ok: merging, stdout: '' };
+      if (args[0] === 'status') return { ok: true, stdout: rows.join('\n') };
+      return { ok: false, stdout: '' };
+    },
+  });
+
+  it('is runnable when the only dirt is unmerged paths and what main changed', () => {
+    const m = reading(['UU a.js', 'M  b.js', 'A  c.js', 'D  d.js']);
+    assert.equal(m.runnable, true);
+    assert.equal(m.kind, 'step');
+  });
+
+  it('keeps dirty when work sits beside the merge, whichever line it is on', () => {
+    for (const rows of [['UU a.js', 'M  b.js', ' M c.js'], [' M c.js', 'UU a.js', 'M  b.js'], ['UU a.js', 'MM b.js'], ['UU a.js', '?? new.js'], ['UU a.js', ' D gone.js']]) {
+      const m = reading(rows);
+      assert.equal(m.reason, 'dirty', rows.join(' | '));
+      assert.equal(m.runnable, false);
+    }
+  });
+
+  it('is dirty without MERGE_HEAD whatever the rows are — a staged file is then somebody\'s work', () => {
+    assert.equal(reading(['UU a.js', 'M  b.js'], { merging: false }).reason, 'dirty');
+    assert.equal(reading(['M  b.js'], { merging: false }).reason, 'dirty');
+  });
+
+  it('parses the columns as written: a leading-space first line is a worktree change', () => {
+    const m = reading([' M c.js', 'M  b.js']);
+    assert.equal(m.reason, 'dirty');
+    assert.match(m.detail, /uncommitted work in \/w\/mc-status\/memoro: c\.js, b\.js/u);
+  });
+});

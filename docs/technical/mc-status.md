@@ -165,6 +165,18 @@ runner's own refusal for it, so every project reads
 something nearer in the way still reads that: the dirty worktree is asked first,
 online or off.
 
+**A merge of origin/main left in progress is not `dirty`.** The runner aborts
+one before its dirty check (`runStepClaimed`), so the reading asks the same
+question — `git rev-parse -q --verify MERGE_HEAD`, read-only; this module never
+aborts anything — and, when the merge is there, reads the porcelain rows by
+their two status columns as written. Unmerged paths (`UU`, `AA`, …) and the
+files main changed, which a merge stages (`M `, `A `, `D `: a letter, then a
+blank), are the merge's own and the worktree reads clean. Work beside it —
+a non-blank second column (` M`, `MM`, ` D`) or an untracked file (`??`) — is a
+person's or a session's, survives the abort, and keeps `dirty`. Without
+`MERGE_HEAD` the rows are read as before. Until 2026-09-19 this said
+`a merge stopped in <path>` for a workarea the lane would have run.
+
 ## The cost estimate
 
 `prices.js` is a dated list-price table — `PRICES_DATED = '2026-06'` — with
