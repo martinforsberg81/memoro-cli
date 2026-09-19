@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createRunner, runLoop } from '../../src/mc/run.js';
+import { mcCheckout } from '../../src/mc/run-control.js';
 import { RUN_REFUSALS, WORKAREA_BLOCKS } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { unauthorisedChanges } from '../../src/mc/plan-schema.js';
@@ -1153,6 +1154,25 @@ test('runLoop: a second runner refuses to start while the first is alive, and na
   // The holder's own file is left exactly as it was: the refusal must not be
   // the thing that makes the first runner invisible.
   assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']), { pid: 7777, started: '2026-08-29T06:33:25Z' });
+});
+
+/**
+ * A runner executes the code it was spawned with, not what the checkout holds
+ * now, so the page can only say *an update is available* if the runner said
+ * what it is. `rev-parse --short HEAD` in mc's own checkout, once, at the start.
+ */
+test('createRunner: runner.json names the commit the runner started on, when mc runs from a checkout', () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  const checkout = mcCheckout({ exists: () => true });
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => (cwd === checkout && args.join(' ') === 'rev-parse --short HEAD'
+    ? { ok: true, stdout: 'abc1234\n' } : git(cwd, args));
+  createRunner({ deps: f.deps }).markRunner();
+  assert.equal(JSON.parse(f.files['/w/runner/runner.json']).commit, undefined, 'no checkout, no commit — and no git asked');
+
+  f.files[`${checkout}/.git`] = '';
+  createRunner({ deps: f.deps }).markRunner();
+  assert.equal(JSON.parse(f.files['/w/runner/runner.json']).commit, 'abc1234');
 });
 
 test('runLoop: --once is refused by the same check — one worktree, one session', async () => {

@@ -155,6 +155,39 @@ export function reprintPlan(next, { above = 0, rows = Infinity, anchor = null } 
   return { skip, printed, below: skip + Math.max(0, printed - 1) };
 }
 
+/**
+ * Has the top of the page scrolled off the screen? Then some of its rows cannot
+ * be written to, and a change in one of them will never be drawn by
+ * `frameWrites` — it skips them, by design.
+ */
+export function topOffScreen({ above = 0, rows = Infinity, anchor = null } = {}) {
+  if (anchor) return anchor - above < 1;
+  return Number.isFinite(rows) && above > Math.max(0, rows - 1);
+}
+
+/**
+ * The whole page again, from the highest row that can still be reached — every
+ * line of it, including the ones whose old copies have scrolled into history.
+ *
+ * `frameWrites` leaves a row alone once it is above the top of the screen, and
+ * on a page taller than the terminal that is where PROGRAMMES is: a project
+ * went from `running` to `ready` and its row stood there saying `running` until
+ * somebody pressed a key (Martin, 2026-09-19: "status per projekt uppdateras
+ * inte alltid"). History cannot be rewritten, so what changed up there is
+ * printed again down here: the part of the old page still on screen is erased,
+ * the new page is printed whole and scrolls exactly as a first print does, and
+ * scrolling up finds the new page first and what is left of the old one above
+ * it. The caller decides when that is worth it — it costs scrollback — and
+ * afterwards the cursor is on the page's last row: `next.length - 1` below its
+ * first.
+ */
+export function reprintWhole(next, { above = 0, rows = Infinity, anchor = null } = {}) {
+  const after = next || [];
+  const reach = Number.isFinite(rows) ? Math.max(0, rows - 1) : Infinity;
+  if (anchor) return `${CSI}${Math.max(1, anchor - above)};1H${ERASE_BELOW}${after.join('\n')}`;
+  return `\r${up(Math.min(above, reach))}${ERASE_BELOW}${after.join('\n')}`;
+}
+
 /** A frame that has outgrown its footprint: erase from the top of what can be reached, print it again. */
 function reprint(after, { above, rows, anchor }) {
   const { skip } = reprintPlan(after, { above, rows, anchor });

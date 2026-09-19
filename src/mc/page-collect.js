@@ -55,6 +55,7 @@ import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-col
 import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
 import { runningMerge } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
+import { mcCheckout } from './run-control.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
 import { overlayPlans } from './register.js';
@@ -68,8 +69,12 @@ import {
   readCurrents,
 } from './status-collect.js';
 
-/** How many of each list the page names rather than counts. */
-export const LANE_DEEP = 3;
+/**
+ * How many of each list the page names rather than counts. NEXT names four per
+ * repository: every repository with something runnable keeps rows of its own,
+ * so a long queue on one never pushes the other off the list.
+ */
+export const LANE_DEEP = 4;
 export const DECISIONS_NAMED = 3;
 /** How many stale blockers the line names before it only counts them. */
 export const STALE_NAMED = 3;
@@ -190,6 +195,9 @@ export function runnerSection({
   // What `mc run lanes` set: how many lane loops each repository has, and the
   // cap across them. The rows are one per lane, so the page needs the number.
   lanes: setting = { per_repo: 1, total: null },
+  // The plans, for the one thing a lane file does not carry: which step of its
+  // plan the session is on.
+  plans = [],
   now = new Date(), alive = pidAlive,
 } = {}) {
   const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, now, alive });
@@ -199,9 +207,15 @@ export function runnerSection({
     cacheRead: acc.cacheRead + (Number(r.cache_read) || 0),
     cacheWrite: acc.cacheWrite + (Number(r.cache_write) || 0),
   }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  const byProject = new Map(plans.map((plan) => [plan.project, plan]));
+  for (const step of base.steps) {
+    const plan = byProject.get(step.name);
+    step.step = plan?.step ?? null;
+    step.steps = plan?.steps ?? null;
+  }
   return {
     ...base,
-    lanes: lanesOfRunner(base.steps, repos, setting.per_repo),
+    lanes: lanesOfRunner(base.steps, repos, setting),
     setting: { per_repo: setting.per_repo ?? 1, total: setting.total ?? null },
     process,
     // What is in production, under the day it took to get there.
@@ -217,44 +231,40 @@ export function runnerSection({
 }
 
 /**
- * The lanes, `per_repo` per repository, whether or not each has a step.
+ * The lanes, numbered through, whether or not each has a step.
  *
- * A lane is what `mc run` drives — `per_repo` lane loops on every repository,
- * at the same time (`runLoop`, run.js) — and it exists between steps as much
- * as during one. The section drew one row per repository, and only where there
- * was a step, so with `mc run lanes 2` the second lane's step was never drawn
- * and a lane between steps and a lane that had died looked exactly alike:
- * nothing.
+ * A lane is what `mc run` drives and it exists between steps as much as during
+ * one, so the rows are there step or no step: a lane between steps and a lane
+ * that had died used to look exactly alike, which is nothing.
  *
- * A step's lane is the index its current file carries (`lane` in
- * `current-<repo>[-<lane>].json`), so two steps on one repository land on two
- * rows. A step whose index is past the setting — a runner started under a
- * higher count than the file holds now — still gets its row: the file is the
+ * They were one row per repository lane — `memoro #2`, `memoro-cli #4` — which
+ * at four lanes on each of two repositories was eight rows under a cap of five:
+ * three of them could never hold a step at the same time as the rest. The rows
+ * are the slots the runner can actually fill now — `total` when `mc run lanes`
+ * set one, `per_repo` times the repositories otherwise — and a row is `lane 3`
+ * until a step is in it, when the step's own repository is what the row says
+ * (Martin, 2026-09-19).
+ *
+ * The steps fill from the top, oldest first, so a row only moves when a step
+ * above it ends. A step past the count — a runner started under a higher
+ * setting than the file holds now — still gets its row: the lane file is the
  * runner saying it is there, and the page believes it over the setting.
- *
- * The repositories are the ones mc knows, plus any a lane file names that they
- * do not: a `current-<repo>.json` is the runner saying it is in that
- * repository, and the page believes it whether or not there is a checkout of it
- * here.
  *
  * The step is the same object `steps` carries, not a copy — the two cannot
  * disagree about a lane, because there is one of it.
  */
-function lanesOfRunner(steps = [], repos = [], perRepo = 1) {
-  const count = Number.isInteger(perRepo) && perRepo > 0 ? perRepo : 1;
-  const names = [...new Set([...repos, ...steps.map((step) => step.repo)].filter(Boolean))].sort();
-  return [
-    ...names.flatMap((repo) => {
-      const own = steps.filter((step) => step.repo === repo);
-      const width = Math.max(count, ...own.map((step) => (step.lane ?? 0) + 1));
-      return Array.from({ length: width }, (_, lane) => ({
-        repo, lane, step: own.find((step) => (step.lane ?? 0) === lane) || null,
-      }));
-    }),
-    // A `current.json` from before the lanes had repositories: it is a step in
-    // flight and belongs on the page, in a lane with no name.
-    ...steps.filter((step) => !step.repo).map((step) => ({ repo: null, lane: null, step })),
-  ];
+function lanesOfRunner(steps = [], repos = [], setting = {}) {
+  const perRepo = Number.isInteger(setting?.per_repo) && setting.per_repo > 0 ? setting.per_repo : 1;
+  const names = [...new Set([...repos, ...steps.map((step) => step.repo)].filter(Boolean))];
+  const slots = Number.isInteger(setting?.total) && setting.total > 0
+    ? Math.min(setting.total, perRepo * names.length)
+    : perRepo * names.length;
+  const running = [...steps].sort((a, b) => String(a.started || '').localeCompare(String(b.started || ''))
+    || String(a.name).localeCompare(String(b.name)));
+  return Array.from({ length: Math.max(slots, running.length) }, (_, index) => {
+    const step = running[index] || null;
+    return { number: index + 1, repo: step?.repo ?? null, lane: step?.lane ?? null, step };
+  });
 }
 
 /* ---------------------------------------------------------------- SESSIONS */
@@ -620,7 +630,61 @@ export function intakeSection({ digests = [], proposals = [], now = new Date(), 
       first,
     };
   });
-  return { repos, digests: repos.length, proposals: proposals.length };
+  return { repos, digests: repos.length, proposals: proposals.length, proposal_files: proposalSummary(proposals) };
+}
+
+/** How many of the newest proposals BRIEF names. */
+export const PROPOSALS_NAMED = 3;
+
+/**
+ * What lies in `~/mc/proposals`, as BRIEF's one line says it: how far back the
+ * pile reaches and the newest few by name. A proposal is `<date>-<slug>.md`, and
+ * the slug is the only title mc has without opening the file — which is enough
+ * to recognise one, and reading 109 files for a line is not.
+ */
+function proposalSummary(files, named = PROPOSALS_NAMED) {
+  const dated = files
+    .map((file) => /^(\d{4}-\d{2}-\d{2})-(.+)\.md$/u.exec(file))
+    .filter(Boolean)
+    .map((match) => ({ date: match[1], name: match[2] }));
+  return {
+    oldest: dated[0]?.date ?? null,
+    newest: dated.at(-1)?.date ?? null,
+    newest_names: dated.slice(-named).reverse().map((item) => item.name),
+  };
+}
+
+/* ---------------------------------------------------------------------- MC */
+
+/**
+ * mc itself, for the page's last line: how long the runner has been up, the
+ * commit it runs, whether `origin/main` has moved past it, and whether
+ * `mc run --update` has been asked for.
+ *
+ * `behind` is counted from the commit the *runner* started on (`runner.json`,
+ * run.js) and not from the checkout's HEAD when the two are known to differ: a
+ * checkout somebody pulled by hand is already new, and the runner beside it is
+ * still the old code until it hands over. A runner that never said — one
+ * started before it wrote its commit — is measured by the checkout, which is
+ * the best reading there is.
+ */
+export function mcSection({
+  process = null, commit = null, head = null, main = null, behind = null, updateText = null, now = new Date(),
+} = {}) {
+  const asked = Date.parse(String(updateText || '').trim());
+  return {
+    up_seconds: process?.alive ? process.up_seconds : null,
+    // The runner's own word or nothing: the checkout's HEAD is what the *next*
+    // runner would be, and drawing it as `on <sha>` would say the opposite.
+    commit: commit || null,
+    head: head || null,
+    main: main || null,
+    behind: Number.isInteger(behind) ? behind : null,
+    update_requested: updateText == null ? null : {
+      at: Number.isNaN(asked) ? null : new Date(asked).toISOString(),
+      age_seconds: Number.isNaN(asked) ? null : Math.max(0, Math.round((now.getTime() - asked) / 1000)),
+    },
+  };
 }
 
 /* ---------------------------------------------------------------- PROJECTS */
@@ -1000,6 +1064,9 @@ export async function collectPage({
   laneCount = readLaneCount,
   cache = { loadPlans, loadPrs, savePrs },
   merges = runningMerge,
+  // The checkout mc itself runs from, or null. Injected so a test never reads
+  // the real one.
+  checkout = mcCheckout(),
 } = {}) {
   const root = workRoot(env);
   const notes = [];
@@ -1061,8 +1128,9 @@ export async function collectPage({
   // Read once for both sections: RUNNER draws one row per lane, NEXT bolds
   // one head per lane.
   const laneSetting = laneCount();
+  const runnerFile = readJson(join(root, 'runner', 'runner.json'));
   const runner = runnerSection({
-    runner: readJson(join(root, 'runner', 'runner.json')),
+    runner: runnerFile,
     currents: readCurrents(join(root, 'runner')),
     stop,
     rows,
@@ -1071,6 +1139,7 @@ export async function collectPage({
     // died were the same absence until the row existed.
     repos: present.map((repo) => repo.name),
     lanes: laneSetting,
+    plans,
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
     deploy: lastDeploy(env),
@@ -1115,11 +1184,36 @@ export async function collectPage({
       running: runner.steps.map((step) => step.name).filter(Boolean),
       programmes: present.flatMap((repo) => listProgrammes(repo)),
     }),
+    mc: mcSection({
+      process: runner.process,
+      commit: runnerFile?.commit ?? null,
+      ...mcReading(checkout, runnerFile?.commit ?? null, git),
+      updateText: readText(join(root, 'runner', 'UPDATE')),
+      now,
+    }),
     caches: {
       fresh, offline, fetched, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length },
     },
     notes,
   };
+}
+
+function readText(path) {
+  try { return readFileSync(path, 'utf8'); } catch { return null; }
+}
+
+/**
+ * The checkout's HEAD, `origin/main`, and how many commits `origin/main` is
+ * past `base` — the runner's own commit, or HEAD when it never said. The page
+ * has fetched by now (memoro-cli's clone is one of its repositories), so this
+ * is three local reads.
+ */
+function mcReading(checkout, base, git) {
+  if (!checkout) return { head: null, main: null, behind: null };
+  const head = git(checkout, ['rev-parse', '--short', 'HEAD']);
+  const main = git(checkout, ['rev-parse', '--short', 'origin/main']);
+  const count = main ? git(checkout, ['rev-list', '--count', `${base || 'HEAD'}..origin/main`]) : null;
+  return { head, main, behind: count != null && /^\d+$/u.test(count) ? Number(count) : null };
 }
 
 /** The proposal files, by name. A count is all mc does with a proposal. */

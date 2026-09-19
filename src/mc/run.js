@@ -111,7 +111,7 @@ import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from '.
 import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
-import { handOver, readRunner } from './run-control.js';
+import { handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import {
@@ -1846,8 +1846,19 @@ export function createRunner({
     closeWorkareas(plans, archives.flatMap((a) => a.landed), archivedProjects());
   }
 
-  /** runner.json — a runner is here, and this is the pid to test for life. */
-  const markRunner = () => writeJson(paths.runner, { pid, started: stamp() });
+  /**
+   * runner.json — a runner is here, and this is the pid to test for life.
+   *
+   * And the commit it started on, when mc runs from a checkout: a runner
+   * executes the code it was spawned with, not what the checkout holds now, so
+   * the page can only say *an update is available* if the runner said what it
+   * is (the page's MC line). Absent from an install with no checkout.
+   */
+  const markRunner = () => {
+    const dir = mcCheckout({ exists: deps.exists });
+    const commit = dir ? gitOut(dir, ['rev-parse', '--short', 'HEAD']) : null;
+    writeJson(paths.runner, { pid, started: stamp(), ...(commit ? { commit } : {}) });
+  };
   const clearRunner = () => {
     remove(paths.runner);
     for (const file of paths.currents()) remove(file);
