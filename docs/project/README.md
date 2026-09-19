@@ -174,15 +174,16 @@ retype it is a second session's worth of cost for nothing. What stays the
 planning session's is thinking a programme through, and reading a plan a step
 has asked for a review of — `plan-review` is not the brief's.
 
-**A proposal that becomes a project is deleted when the project is created.**
+**A proposal that becomes a project is archived when the project is created**
+(ruling 22: moved to `~/mc/proposals/archive/`, which nothing lists).
 Most projects start as a file in `~/mc/proposals/` — the helper's reading of a
 digest, or a session's of the code — decided with Martin at the brief. The
-session that writes the `PLAN.json` deletes the proposals it consumed, in the
+session that writes the `PLAN.json` archives the proposals it consumed, in the
 same move, and names them in the pull request: they are not in this repository,
 so the PR body is the only place that record can live. Whatever a proposal held
 that the plan needs — the measurement, the file and line, the reason the fix is
-that one — has to be **in the plan first**, because afterwards there is no other
-copy. `~/mc/proposals/` holds what nobody has decided yet and only that; a file
+that one — has to be **in the plan first**, because no session reads
+the archive. `~/mc/proposals/` holds what nobody has decided yet and only that; a file
 left there after its project exists is a decision that gets taken twice.
 
 **That session has no workarea and makes none.** It lives at
