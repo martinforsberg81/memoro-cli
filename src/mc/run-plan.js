@@ -62,6 +62,11 @@ export const DEFAULT_CHECK_IN_MINUTES = 60;
 // (`BASH_DEFAULT_TIMEOUT_MS` in run.js), so a session is never legitimately
 // silent for twenty.
 export const DEFAULT_STALL_MINUTES = 20;
+// How long a claude process may take to exit once its `result` line has been
+// seen. The session has answered by then: a process that hangs past this is
+// killed with the result standing, not stalled (2026-09-13,
+// `sql-w2-search-closure` sat twenty minutes after a successful result).
+export const RESULT_GRACE_MS = 2 * 60 * 1000;
 export const QUOTA_SLEEP_MS = 30 * 60 * 1000;
 export const TIMEOUT_EXIT = 142; // what the shell runner's `perl alarm` left in runs.tsv
 

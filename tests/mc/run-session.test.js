@@ -3,7 +3,7 @@
  * prompt as the first message on stdin, a check-in written every interval,
  * stdin closed on the `result` line, and a kill only after the stall interval
  * went by without a byte on stdout (ruling 18 — nothing is killed for how long
- * it has run). Driven here by a fake child and fake timers, so three hours
+ * it has run), or the result grace after the `result` line. Driven here by a fake child and fake timers, so three hours
  * take no time at all.
  */
 import assert from 'node:assert/strict';
@@ -111,12 +111,49 @@ describe('streamSession', () => {
     assert.equal(result.stalled, true);
   });
 
-  it('still kills a child that hangs silent after its result', async () => {
-    const { child, session } = start();
+  it('kills a child that hangs after its result once the grace is up, and the result stands', async () => {
+    const { child, session } = start({ resultGraceMs: 10 });
     child.say(RESULT);
+    mock.timers.tick(9);
+    assert.deepEqual(child.killed, [], 'the grace is not up yet');
+    mock.timers.tick(1);
+    assert.deepEqual(child.killed, ['SIGTERM']);
+    const result = await session;
+    assert.equal(result.status, 0);
+    assert.equal(result.stalled, false);
+    assert.equal(result.timedOut, false);
+    assert.equal(result.lingered, true);
+    assert.match(result.stdout, /"type":"result"/u);
+  });
+
+  it('arms the grace with no stall guard set, and chunks after the result do not extend it', async () => {
+    const { child, session } = start({ resultGraceMs: 10, stallMs: 0 });
+    child.say(RESULT);
+    mock.timers.tick(6);
+    child.say(JSON.stringify({ type: 'assistant', message: { content: [] } }));
+    mock.timers.tick(4);
+    assert.deepEqual(child.killed, ['SIGTERM']);
+    assert.equal((await session).lingered, true);
+  });
+
+  it('does not kill a child that exits inside the grace, and leaves no timer behind', async () => {
+    const { child, session } = start({ resultGraceMs: 10 });
+    child.say(RESULT);
+    child.emit('close', 0, null);
+    const result = await session;
+    assert.equal(result.lingered, false);
+    mock.timers.tick(1000);
+    assert.deepEqual(child.killed, []);
+  });
+
+  it('still stalls a child that never writes a result, with 142', async () => {
+    const { child, session } = start({ resultGraceMs: 10 });
     run(child, 20);
-    assert.deepEqual(child.killed, ['SIGTERM'], 'the stall guard outlives the result');
-    assert.equal((await session).stalled, true);
+    assert.deepEqual(child.killed, ['SIGTERM']);
+    const result = await session;
+    assert.equal(result.status, 142);
+    assert.equal(result.stalled, true);
+    assert.equal(result.lingered, false);
   });
 
   it('never kills a child that says something every minute, three hours long', async () => {
