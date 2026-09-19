@@ -17,7 +17,7 @@ import { machineState } from '../../src/mc/status-collect.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [] } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -272,8 +272,11 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
           const ref = String(args.at(-1)).replace(/^refs\/heads\//u, '');
           return { ok: (refs[cwd.split('/')[2]] || [cwd.split('/')[2]]).includes(ref), stdout: 'deadbee' };
         }
+        // `rev-parse <branch>`: the tip `freshBranch` compares to the merged head.
+        if (args.length === 2) return { ok: true, stdout: tips[args[1]] || `tip-${args[1]}` };
         return { ok: false, stdout: '' };
       }
+      if (args[0] === 'merge-tree' && conflicted.includes(args.at(-1))) return { ok: false, stdout: 'CONFLICT' };
       if (args[0] === 'merge-tree') return { ok: true, stdout: landed.includes(args.at(-1)) ? 'basetree' : 'othertree' };
       // Where a stacked branch left its base, and the replay onto the squash
       // that landed under it. `rebaseFails` names the branches that conflict.
@@ -344,6 +347,13 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       // `gh[name]` is one pull request or a stack of them; a head nobody named
       // is the branch the workarea stands on.
       const name = cwd.split('/')[2];
+      // What GitHub says merged from a branch: `merged[branch]` is the list, or
+      // the word 'fails' for a `gh` that cannot answer.
+      if (args[1] === 'list' && args.includes('merged')) {
+        const answer = merged[args[args.indexOf('--head') + 1]];
+        if (answer === 'fails') return { ok: false, stdout: '', stderr: 'gh: not logged in' };
+        return { ok: true, stdout: JSON.stringify(answer || []) };
+      }
       const opened = [gh[name]].flat().filter(Boolean).map((pr) => ({
         number: pr.number,
         title: pr.title || 't',
@@ -643,6 +653,52 @@ test('a workarea whose branch has already landed is moved to `<name>-<n>` before
   assert.ok(order >= 0 && f.calls.sessions.length === 1);
   assert.match(f.files['/w/runner/log/runner.log'], /beta: beta has already landed — moved to beta-3 from origin\/main/u);
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tbeta\tstep\t0\t0\t88\t/u);
+});
+
+/**
+ * `git merge-tree` exits 1 on a conflict — main edited, after the landing, the
+ * very file the branch's pull request carried — and `branchLanded` says
+ * `unknown`. `step-cost` step 2 ran on a landed branch on 2026-09-11 for it.
+ */
+test('a landed branch whose merge conflicts is moved when its tip is the merged pull request\'s head', async () => {
+  const f = fixture({
+    areas: { beta: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { beta: ready } },
+    conflicted: ['beta'], refs: { beta: ['beta', 'beta-2'] }, tips: { beta: 'aaa111' },
+    merged: { beta: [{ number: 60, mergedAt: '2026-09-01T10:00:00Z', headRefOid: 'old000' }, { number: 693, mergedAt: '2026-09-10T10:00:00Z', headRefOid: 'aaa111' }] },
+    session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.deepEqual(f.calls.checkouts, [['/w/beta/memoro', 'beta-3']]);
+  assert.match(f.files['/w/runner/log/runner.log'], /beta: beta has already landed — moved to beta-3 from origin\/main/u);
+});
+
+test('a conflicting branch with a commit after its merged pull request is left where it is', async () => {
+  const f = fixture({
+    areas: { beta: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { beta: ready } },
+    conflicted: ['beta'], tips: { beta: 'bbb222' },
+    merged: { beta: [{ number: 693, mergedAt: '2026-09-10T10:00:00Z', headRefOid: 'aaa111' }] },
+    session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.deepEqual(f.calls.checkouts, []);
+});
+
+test('a conflicting branch is left where it is when GitHub cannot be asked, or has merged nothing', async () => {
+  for (const merged of ['fails', []]) {
+    const f = fixture({
+      areas: { beta: { repo: 'memoro', programme: 'prog', plan: ready } },
+      plans: { memoro: { beta: ready } },
+      conflicted: ['beta'], merged: { beta: merged },
+      session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
+    });
+    const runner = createRunner({ deps: f.deps });
+    await runner.pass();
+    assert.deepEqual(f.calls.checkouts, [], JSON.stringify(merged));
+  }
 });
 
 test('a workarea whose branch carries work is left exactly where it is', async () => {

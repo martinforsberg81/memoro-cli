@@ -15,11 +15,14 @@
  * what "landed" means after a squash. A different tree is real work sitting
  * here. A conflict is a question this function cannot answer, and it says
  * so instead of guessing — the same three-way honesty as everything else
- * built today:
+ * built today. It stays local: the second question, for a branch whose merge
+ * conflicts, is asked of GitHub by `freshBranch` (run.js), which already has
+ * the network — is the branch's tip the head of a merged pull request?
  *
  *   'landed'   the content is in main; the commits are a squash artefact
  *   'ahead'    there is work here that main does not have
- *   'unknown'  it could not be determined (conflict, old git, no base)
+ *   'unknown'  it could not be determined (conflict, old git, no base);
+ *              `freshBranch` asks GitHub about a conflict
  */
 import { execFileSync } from 'node:child_process';
 
