@@ -19,7 +19,7 @@ import { STEP_STATUSES } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
 import { REPO_NAMES, TOTAL_POLL_MS } from '../../src/mc/run.js';
 import {
-  AUTOCOMPACT_TOKENS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, DEFAULT_TOOL, HELPER_HOUR_UTC, MC_OWN_TREES, QUOTA_SLEEP_MS,
+  AUTOCOMPACT_TOKENS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, DEFAULT_TOOL, HELPER_HOUR_UTC, QUOTA_SLEEP_MS,
   RUNS_HEADER, SESSION_DEFAULTS,
 } from '../../src/mc/run-plan.js';
 
@@ -93,14 +93,9 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(beside[1], /`mc run --update`/u);
   });
 
-  it('names the trees whose landing hands the runner over, and no others', () => {
-    const merge = /### The merge\n([\s\S]*?)\n## /u.exec(DOC);
-    assert.ok(merge, 'the section that describes the landing is gone');
-    for (const tree of MC_OWN_TREES) assert.ok(merge[1].includes(`\`${tree}\``), `the doc does not name ${tree}`);
-    // A widened list is the failure this pins: the next tree added to the code
-    // has to be argued for in the prose too.
-    assert.equal(MC_OWN_TREES.length, 2, 'a third tree needs its own paragraph here');
-    assert.match(merge[1], /writes `runner\/UPDATE` itself/u);
+  it('says the runner never orders its own handover', () => {
+    assert.match(DOC, /`UPDATE` has no other writer/u);
+    assert.doesNotMatch(DOC, /writes `runner\/UPDATE` itself/u);
   });
 
   it('warns a reader of runs.tsv about a trespass on a step that changed the rules', () => {

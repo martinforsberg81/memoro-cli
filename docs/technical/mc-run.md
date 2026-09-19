@@ -68,10 +68,11 @@ the rules; each lane reads them before it picks.
   exits. `runner.json` is cleared *before* the new process is started, so the
   two never race for it. A checkout that will not fast-forward — local work, or
   diverged — is said out loud and handed over anyway: the restart was asked
-  for. `UPDATE` has one other writer, which is not a person: a landing that
-  changed mc's own code (see *The merge*). `mc run --update` itself is
-  unchanged by that — it is still the order somebody gives, with its own
-  refusals.
+  for. `UPDATE` has no other writer: the runner never orders its own
+  handover. It did for a while — a landing under `src/mc/` or `canon/` wrote
+  the file — and with most memoro-cli landings touching those trees it
+  drained the lanes after nearly every merge. Removed 2026-09-19; Martin
+  runs `--update` when he wants the new code.
 
 **Why `--update` has to exist at all.** Node reads its whole module graph at
 process start and never looks at the disk again. The runner merges pull
@@ -721,25 +722,6 @@ exceptions in kind, not in door: an archive removes a plan directory and adds a
 documentation by construction and land through `mc merge --docs`
 (`landDocsPr`), which checks that against GitHub's own file list and refuses
 anything touching a line of code.
-
-**A landing that changed mc's own code hands the runner over to it.** When the
-gate lands a pull request, the runner asks GitHub which files it changed — the
-same question `--docs` asks, and for the same reason: the gate's report lists
-the *test* files its selection ran, and a local diff is only as fresh as the
-checkout. If any of them is under **`src/mc/`** or **`canon/`**, the runner
-writes `runner/UPDATE` itself, and the drain in *The switch* fast-forwards and
-hands over. Nothing else about the handover changes: it happens between steps,
-never mid-session, and one file is written however many of mc's own pull
-requests the lanes landed.
-
-Those two trees and no others. `src/mc/` is the runner — node read its module
-graph at process start, so a merge of `plan-schema.js` changes nothing about
-the process that merged it — and `canon/` is the roles it quotes into the next
-step's prompt. A change to `tests/`, `docs/` or `scripts/` cannot make the
-running runner wrong, and a handover costs a fresh process; widening this to
-"the repository" would hand over after most memoro-cli landings. The docs door
-cannot trigger it at all: `--docs` refuses anything outside `docs/`, and
-neither of these is under it.
 
 A **stack** needs an order rather than a call — `mc merge` refuses a batch
 aimed at several bases. `stackOrder` in run-plan.js is the whole decision, over

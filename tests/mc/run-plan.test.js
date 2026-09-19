@@ -2,10 +2,10 @@ import { describe, it, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  MC_OWN_TREES, RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
+  RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
   AUTOCOMPACT_TOKENS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, chooseKind, collectNote,
   describeSettings, describeWatch, headlessArgs, helperDue,
-  inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, nextFor, queueFileNames,
+  inFlight, intakeNote, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen,
   readSessionOutput, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow, userMessageLine,
@@ -768,20 +768,6 @@ test('stepOfPr: the step that names the pull request, and the deliverable one be
   });
   assert.equal(stepOfPr(plan, 502), 1, 'the step whose session already wrote its own pr');
   assert.equal(stepOfPr(plan, 503), 2, 'before that edit has landed, the step the runner would hand out');
-});
-
-test('mcOwnFiles: the two trees a running runner is already holding, and nothing beside them', () => {
-  assert.deepEqual(MC_OWN_TREES, ['src/mc/', 'canon/'], 'a third tree needs a line in docs/technical/mc-run.md too');
-  assert.deepEqual(mcOwnFiles(['src/mc/run.js', 'docs/technical/mc-run.md']), ['src/mc/run.js']);
-  assert.deepEqual(mcOwnFiles(['canon/roles/step.md']), ['canon/roles/step.md']);
-  // Prefixes, not substrings: the near misses are real paths in this
-  // repository, and each of them would buy a fresh process for nothing.
-  assert.deepEqual(mcOwnFiles(['src/mcp/server.js', 'src/adapters/index.js', 'canonical.md', 'tests/mc/run.test.js']), []);
-  // GitHub answers `{ path }` objects; the runner asks for the paths. Both
-  // shapes, so neither caller has to remember which it holds.
-  assert.deepEqual(mcOwnFiles([{ path: 'src/mc/run.js' }, { path: 'README.md' }]), ['src/mc/run.js']);
-  assert.deepEqual(mcOwnFiles(null), [], 'no answer is not a reason to hand over');
-  assert.deepEqual(mcOwnFiles([undefined, '']), []);
 });
 
 /**
