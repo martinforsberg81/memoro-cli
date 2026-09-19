@@ -4,8 +4,8 @@
  *
  * Runs before the gate, because a trespass is a fact about the pull request,
  * not about what a suite would measure. Fails open on anything it could not
- * read — `gh` down, the fetch failing, a branch that names no project, a base
- * copy that will not `git show` — because `prFacts` (repo-gate.js) asks
+ * read — `gh` down, the fetch failing, a branch that names no project, a
+ * base or head copy that will not `git show` — because `prFacts` (repo-gate.js) asks
  * GitHub again moments later and stops the round at `pr` when it cannot; a
  * second, different refusal for the same missing answer tells the operator
  * nothing new. The one thing it invents a stop for is a head plan that does
@@ -15,6 +15,15 @@
  * the comparison — most pull requests from a project branch touch code or
  * docs, not the plan, and the comparison is only interesting when the plan
  * moved.
+ *
+ * "Before" is the plan the branch started from, not main as it is now: the
+ * `git merge-base` of `origin/<base>` and `origin/<head>`. A planning commit
+ * that lands on main while the step runs would otherwise read as the
+ * session's own edit. A branch that merged origin/main into itself has that
+ * merged main commit as its merge base, so main's edits up to that merge are
+ * in "before" and are not the session's — the intended reading. When the merge
+ * base cannot be read, or the plan did not exist there, "before" falls back to
+ * `origin/<base>`, main as it is now.
  */
 import { spawnSync } from 'node:child_process';
 
@@ -32,6 +41,21 @@ function names(tree) {
     .map((p) => p.split('/'))
     .filter((parts) => parts.length === 5 && parts[4] === 'PLAN.json')
     .map((parts) => parts[3]);
+}
+
+/**
+ * The plan text the branch started from: `path` at the merge base of the two
+ * refs, else `path` on `origin/<base>`; `null` when neither will `git show`.
+ */
+function beforeText({ askGit, repoPath, base, head, path }) {
+  const mergeBase = askGit(['merge-base', `origin/${base}`, `origin/${head}`], { cwd: repoPath });
+  const sha = mergeBase.status === 0 ? String(mergeBase.stdout || '').trim() : '';
+  if (sha) {
+    const atBase = askGit(['show', `${sha}:${path}`], { cwd: repoPath });
+    if (atBase.status === 0) return atBase;
+  }
+  const onMain = askGit(['show', `origin/${base}:${path}`], { cwd: repoPath });
+  return onMain.status === 0 ? onMain : null;
 }
 
 const notChecked = { checked: false, ok: true, problems: [] };
@@ -68,8 +92,8 @@ export async function planBoundary({ repoPath, pr, git, gh } = {}) {
   });
   if (!path) return notChecked;
 
-  const mainShow = askGit(['show', `origin/${base}:${path}`], { cwd: repoPath });
-  if (mainShow.status !== 0) return notChecked;
+  const mainShow = beforeText({ askGit, repoPath, base, head, path });
+  if (!mainShow) return notChecked;
   const headShow = askGit(['show', `origin/${head}:${path}`], { cwd: repoPath });
   if (headShow.status !== 0) return notChecked;
   if (mainShow.stdout === headShow.stdout) return { checked: true, ok: true, problems: [] };

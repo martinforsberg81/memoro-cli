@@ -72,16 +72,24 @@ checked against the plan it claims to be landing. `gh pr view --json
 headRefName,baseRefName` names the branch; if `projectForBranch(headRefName,
 <names>)` finds no project, the branch is not one — a planning session's
 `plan/<programme>` branch rewrites plans on purpose — and nothing is checked at
-all. Otherwise the project's `PLAN.json` is read twice, `git show
-origin/<base>:<path>` and `git show origin/<headRefName>:<path>` after a fetch,
-and compared with `unauthorisedChanges(mainPlan, headPlan,
-stepOfPr(headPlan, pr))` — the same comparison a step session's own
+all. Otherwise the project's `PLAN.json` is read twice after a fetch — the
+`before` copy is the plan the branch started from, `git show <sha>:<path>` at
+`git merge-base origin/<base> origin/<headRefName>`, and the `after` copy is
+`git show origin/<headRefName>:<path>` — and compared with
+`unauthorisedChanges(beforePlan, headPlan, stepOfPr(headPlan, pr))` — the same comparison a step session's own
 post-session check makes on itself, now made from the far side of the door,
 before the gate rather than after the fact. A head plan that does not parse is
 a trespass in its own right (`the plan no longer parses: <first problem>`),
-never a silent pass. A head byte-identical to main's passes without running
+never a silent pass. A head byte-identical to `before` passes without running
 the comparison at all — the ordinary case for a docs-only or code-only pull
 request.
+
+`before` is the merge base and not `origin/<base>` as it stands, because a
+planning commit that lands on main while the step runs would otherwise read as
+the session's own edit (memoro #11603, 2026-09-08). A branch that merged
+origin/main into itself has that merge as its base, so main's edits up to it
+are in `before` and are not the session's. Only when the merge base cannot be
+read, or the plan did not exist there, is `before` `origin/<base>:<path>`.
 
 Not ok stops at `plan-trespass`, one line per problem on stderr as `mc:
 plan-trespass — <problem>`, recorded in `gate-rounds.jsonl` like any stop,
