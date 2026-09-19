@@ -1700,7 +1700,7 @@ describe('the palette', () => {
     'grey grey grey', //                                 5  ·  ~/mc/runner/unplanned-workareas.md  has them all
     '',
     'bold+cyan cyan grey grey grey grey grey grey', // HELPER  ● open 60 min · claude sonnet · pid 99   mc helper
-    'bold red grey green red', //                        memoro  1 new error, 1 loud · 60 min old   ! loud — 41x 500
+    'red grey green red', //                             memoro  1 new error, 1 loud · 60 min old   ! loud — 41x 500
     '',
     'bold+cyan grey grey', //                          BRIEF  ·  not open                                mc brief
     'yellow', //                                         1 proposal
@@ -1711,7 +1711,7 @@ describe('the palette', () => {
     'grey green', //                                   memoro      docx-editor  step 2/2  Measure paste and IME
     '',
     'bold+cyan green+bold grey grey grey', //          RUNNER  1 in flight · 2 lanes              mc run
-    'green bold green bold grey grey', //            ● memoro-cli  mc-ui  step  20 min  claude opus · 0 check-ins
+    'green green grey grey', //                      ● memoro-cli  mc-ui  step  20 min  claude opus · 0 check-ins
     'grey grey grey', //                             · lane 2      idle
     'red+bold grey', //                              ■ STOP requested — the runner exits after the steps it is in
     'grey grey green grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
@@ -1809,10 +1809,10 @@ describe('the palette', () => {
         }),
       });
       const lines = paintedPage(data);
-      // The lane row: the mark, the name, then the kind — the repository is
-      // the terminal's own text, and has no run of its own.
+      // The lane row: the mark, then the kind — the repository and the name are
+      // the terminal's own text, and have no run of their own.
       const now = signature(rowWith(lines, `● memoro-cli  thing`)).split(' ');
-      assert.equal(now[2], tone, `RUNNER says ${kind} in ${now[2]}`);
+      assert.equal(now[1], tone, `RUNNER says ${kind} in ${now[1]}`);
       assert.equal(signature(rowWith(lines, `${kind} 1/2`)).split(' ').at(-1), tone, `NEXT says ${kind} in its colour`);
       assert.equal(signature(rowWith(lines, 'go on')).split(' ').at(-1), tone, `PROJECTS says ${kind} in its colour`);
     }
@@ -1867,19 +1867,21 @@ describe('the palette', () => {
     });
     const row = (spent, checkIns) => rowWith(paintedPage(stepAt(spent, checkIns)), '● memoro-cli  thing');
     const clock = (spent, checkIns) => signature(row(spent, checkIns)).split(' ');
-    // Before its first check-in the clock carries no colour of its own — it
-    // is text to read, bold because it is the number on the row that moves —
-    // at index 3: the mark, the name, the kind, then the clock, and the greys
-    // of the tool and the count.
+    // Before its first check-in the clock carries no colour of its own and no
+    // bold either — nothing on a lane row is bold (Martin, 2026-09-19) — so the
+    // row is the mark, the kind, and the greys of the tool and the count.
     const QUIET = clock(600);
-    assert.equal(QUIET[3], 'bold', 'ten minutes in, the clock is just a clock');
-    assert.deepEqual(QUIET.slice(4).filter((style) => style !== 'grey'), [], 'the tool and the count are grey');
+    assert.deepEqual(QUIET, ['green', 'green', 'grey', 'grey'], 'ten minutes in, the clock is just a clock');
     assert.deepEqual(clock(3599), QUIET);
     assert.match(strip(row(47 * 60)), /47 min {3}claude opus · 0 check-ins/u);
-    assert.equal(clock(3600)[3], 'yellow+bold', 'past the first check-in');
-    assert.equal(clock(600, 1)[3], 'yellow+bold', 'a check-in the runner wrote turns it too');
+    // Past it the clock is a run of its own, at index 2, and yellow.
+    assert.equal(clock(3600)[2], 'yellow', 'past the first check-in');
+    assert.equal(clock(600, 1)[2], 'yellow', 'a check-in the runner wrote turns it too');
     assert.equal(clock(600, 1).at(-1), 'yellow', 'and the count beside the tool says how many');
     assert.match(strip(row(3 * 3600 + 60, 3)), /3 check-ins/u);
+    for (const line of paintedPage(stepAt(3600, 1))) {
+      if (/^ {2}[●·] /u.test(strip(line)) && /lane \d|thing/u.test(strip(line))) assert.ok(!signature(line).includes('bold'), strip(line));
+    }
     // Ruling 18: nothing is killed for how long it ran, so nothing is over.
     assert.equal(clock(10 * 3600, 10).includes('red+bold'), false);
     assert.doesNotMatch(strip(row(10 * 3600, 10)), /over budget/u);
