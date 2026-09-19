@@ -66,6 +66,23 @@ describe('since when', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('an unchanged skip between two measured reds does not restart the streak', () => {
+    const root = home();
+    try {
+      store(root, measured(0, ['flaky']), {
+        repo: 'memoro', path: REPO, started_at: day(1), duration_ms: 400,
+        commit: '0'.repeat(40), verdict: 'stopped', stopped_at: 'unchanged',
+        reason: 'main is still 0000000', red: null, tests: null,
+      }, measured(2, ['flaky']));
+      const reading = nightlyReading(REPO, { root });
+
+      assert.equal(reading.red[0].since, day(0));
+      assert.equal(reading.red[0].runs, 2, 'the skip was counted as a run of the streak, or broke it');
+      assert.equal(reading.runs, 3);
+      assert.equal(readNightlyHistory(REPO, { root }).runs[1].outcome, 'incomplete');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('a test that went green and broke again is dated to when it broke again', () => {
     const root = home();
     try {

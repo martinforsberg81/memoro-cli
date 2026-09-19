@@ -45,6 +45,18 @@
  * later. Starting it is itself a request for a reading, and a meter whose
  * first answer arrives tomorrow is one nobody trusts today.
  *
+ * ## A branch that has not moved is not measured again
+ *
+ * Before a repository's round, the tick asks the remote where its default
+ * branch is (`remoteHead`) and compares that with the commit of the last run
+ * that actually measured something. Equal, and the tree is the one already
+ * measured: the round is not run, and the tick writes down that it measured
+ * nothing — `red: null`, never `[]`, because an empty list is a green night
+ * and this is not one. Every other answer measures: a moved branch, a
+ * repository never measured, and above all a head that could not be learned,
+ * because an offline machine must never produce a skip that looks like a quiet
+ * night. The probe does not fetch; fetching is the round's own first act.
+ *
  * ## What it leaves behind
  *
  * The log, which is for a person reading it, and one bounded history of runs
@@ -54,9 +66,10 @@
  * nothing.
  */
 import { gateLockPath, describeRunning, runningRound } from './gate-lock.js';
+import { tryGit } from './git.js';
 import { mcHome } from './paths.js';
 import { DEFAULT_INTERVAL_MS } from './nightly.js';
-import { recordNightlyRun } from './nightly-history.js';
+import { nightlyReading, recordNightlyRun } from './nightly-history.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { runGate } from './repo-gate.js';
 import { repoStatus } from './repo-status.js';
@@ -93,6 +106,25 @@ export async function scheduledRound({ repoPath, root = mcHome(), env = process.
 }
 
 /**
+ * Where the remote's default branch is right now, or null when that cannot be
+ * learned.
+ *
+ * `git ls-remote origin HEAD` is one round-trip that fetches nothing and
+ * writes nothing inside the repository. Null for every way of not knowing —
+ * no network, no `origin`, a git error, a spawn failure, an answer that is not
+ * a full sha — because the caller treats them all the same: measure.
+ */
+export function remoteHead(repoPath) {
+  try {
+    const answer = tryGit(repoPath, ['ls-remote', 'origin', 'HEAD']);
+    const sha = String(answer || '').trim().split(/\s+/u)[0] || '';
+    return /^[0-9a-f]{40}$/u.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * One tick: every repository mc knows, measured whole, until something else
  * wants the machine.
  *
@@ -104,7 +136,7 @@ export async function scheduledRound({ repoPath, root = mcHome(), env = process.
  */
 export async function nightlyTick({
   root = mcHome(), env = process.env, say = () => {},
-  repos = null, round = scheduledRound, clock = () => Date.now(),
+  repos = null, round = scheduledRound, clock = () => Date.now(), head = remoteHead,
 } = {}) {
   const at = new Date(clock()).toISOString();
   const known = repos || await knownRepos({ env });
@@ -118,6 +150,28 @@ export async function nightlyTick({
       break;
     }
     const startedAt = clock();
+    const unchanged = unchangedSince(repo, head, { root });
+    if (unchanged) {
+      // A fact about this repository alone, so the tick goes on to the next
+      // one — unlike the lock above, which is a fact about the machine.
+      const run = {
+        repo: repo.name,
+        path: repo.path,
+        started_at: new Date(startedAt).toISOString(),
+        duration_ms: clock() - startedAt,
+        commit: unchanged.sha,
+        verdict: 'stopped',
+        stopped_at: 'unchanged',
+        reason: `main is still ${unchanged.sha.slice(0, 7)}, last measured ${unchanged.measured.at}`,
+        // Null, never []: the type is what says this measured nothing.
+        red: null,
+        tests: null,
+      };
+      runs.push(run);
+      recordNightlyRun(run, { root });
+      say(line(run));
+      continue;
+    }
     say(`${repo.name} — full run started`);
     let report = null;
     try {
@@ -208,7 +262,8 @@ export async function nightlyLoop({
   for (let round = 0; round < rounds && !shouldStop(); round += 1) {
     try {
       const outcome = await tick({ root, env, say: log });
-      log(`tick: ${outcome.runs.length} measured${outcome.skipped ? ', then skipped' : ''}`);
+      const unchanged = outcome.runs.filter((run) => run.stopped_at === 'unchanged').length;
+      log(`tick: ${outcome.runs.length - unchanged} measured${unchanged ? `, ${unchanged} unchanged` : ''}${outcome.skipped ? ', then skipped' : ''}`);
     } catch (error) {
       log(`tick failed: ${error?.message || String(error)}`);
     }
@@ -239,6 +294,22 @@ export async function knownRepos({ env = process.env } = {}) {
   return (report.repos || []).map((repo) => ({ name: repo.name, path: repo.path }));
 }
 
+/**
+ * The remote head and the last measurement, when they are the same commit.
+ *
+ * Exact string equality and nothing cleverer: the probe does not fetch, so
+ * this checkout may not hold the remote commit and no ancestry question could
+ * be answered. Anything else — no measurement to compare with, a head that
+ * cannot be read, a probe that throws — returns null, and null measures.
+ */
+function unchangedSince(repo, head, { root }) {
+  const measured = nightlyReading(repo.path, { root }).measured;
+  if (!measured?.commit) return null;
+  let sha = null;
+  try { sha = head(repo.path); } catch { return null; }
+  return typeof sha === 'string' && sha === measured.commit ? { sha, measured } : null;
+}
+
 /** What was not measured, and whose round it was. */
 function skip(repo, running, clock, { root, reason = null } = {}) {
   return {
@@ -265,6 +336,9 @@ function skip(repo, running, clock, { root, reason = null } = {}) {
 function line(run) {
   const where = run.commit ? run.commit.slice(0, 7) : 'unknown';
   const what = run.verdict === 'stopped' ? `stopped at ${run.stopped_at}` : run.verdict;
+  if (run.stopped_at === 'unchanged') {
+    return `${run.repo}  unchanged  started ${run.started_at}  took ${seconds(run.duration_ms)}  main ${where} — ${run.reason}; not measured again`;
+  }
   const tail = run.verdict === 'stopped'
     ? run.reason
     : `${run.tests ?? 0} tests, ${run.red?.length ?? 0} red`
