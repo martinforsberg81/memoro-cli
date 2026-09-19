@@ -37,14 +37,13 @@ export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turn
  * What a session runs on when neither its step nor its plan says otherwise,
  * per kind (ruling 18, 2026-09-11). A step is `sonnet` at `medium` effort
  * with `opus` as its advisor — the strong model at the decision points rather
- * than on every turn. A repair keeps `opus` with no effort flag and no
- * advisor: it is one session on a pull request somebody else could not land.
- * These are claude's aliases and nobody else's — see `sessionSettings`.
+ * than on every turn. (Until 2026-09-12 a repair session kept `opus` with no
+ * effort flag and no advisor; ruling 21 removed it.) These are claude's aliases and nobody else's — see `sessionSettings`.
  */
 export const SESSION_DEFAULTS = Object.freeze({
   step: Object.freeze({ model: 'sonnet', effort: 'medium', advisor: 'opus' }),
 });
-// The context window at which a claude step or repair session compacts
+// The context window at which a claude step session compacts
 // (`--autocompact`, 100k–1M on claude 2.1.268). Over 2026-09-05..12 the mean
 // context per turn was 112k tokens, 36 of 295 sessions averaged over 200k and
 // one over 300k — every turn paid for all of it. At 150k claude compacts well
@@ -212,8 +211,6 @@ export const REFUSAL = Object.freeze(Object.fromEntries(RUN_REFUSALS.map((item) 
  * waits on it instead: `stop`, `prs-unknown`, `sync` when the *fetch* failed
  * (the same word, told apart at the call site by what `syncMain` returned),
  * the quota pause, and `in-flight` — an open pull request is work, not a fault.
- * A hold at `repairs: 0` is not here either: that is one repair session owed,
- * which is a thing the runner starts.
  *
  * The names are a fixed list because a person reads them in a plan and the page
  * spells them: they say what to fix, not what the code was doing when it found
@@ -261,8 +258,8 @@ export function inFlight(openPrs = []) {
 /**
  * The step a pull request carries, for judging what a session was allowed to
  * change in the plan. The step that names it is the answer when the plan has
- * one — a repair works on a step whose session already wrote its own `pr` —
- * and the deliverable step is the answer before that edit has landed.
+ * one — a session that already wrote its own `pr` on its step — and the
+ * deliverable step is the answer before that edit has landed.
  */
 export function stepOfPr(plan, pr) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
@@ -713,7 +710,7 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
  * gets neither; the instructions
  * (Coding Profile + role overlay) through the same channel `mc work` uses;
  * the prompt is codex's last positional. Claude runs on stream-json both
- * ways (`stream: true`, the step and repair lanes): the prompt is not an
+ * ways (`stream: true`, the step lanes): the prompt is not an
  * argument at all but the first user message `deps.session` writes on stdin,
  * followed by the check-ins, and what comes back is one event per line ending
  * in a `result` line. The helper and intake turns pass `stream: false` and
@@ -779,35 +776,23 @@ export function userMessageLine(text) {
  * (ruling 18). Nothing is killed on elapsed time; instead the session is
  * asked to judge its own step and, if it cannot finish it, to leave it
  * `blocked` on a decision named after the project — `NAME_RE` in
- * plan-schema.js, so the blocker is a name somebody can answer. A repair has
- * no step of its own to block, so it is asked to say so in the pull request.
+ * plan-schema.js, so the blocker is a name somebody can answer.
  */
-export function checkInPrompt({ project, minutes, count, kind = 'step' }) {
-  const lines = [
+export function checkInPrompt({ project, minutes, count }) {
+  return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
     'Judge whether this step can be finished in this session.',
     '',
     'If it can, say so in one line and go on — no other answer is needed.',
     '',
-  ];
-  if (kind === 'repair') {
-    lines.push(
-      'If it cannot — you are going in circles, a test cannot be made green, the',
-      'code does not match what the pull request needs — commit and push what you',
-      'have, say in the pull request what you found and what a person should do',
-      'next, and stop.',
-    );
-  } else {
-    lines.push(
-      'If it cannot — you are going in circles, a test cannot be made green, the',
-      'plan does not match the code — commit what you have, set your step',
-      `\`blocked\` with \`blocked_by: { "kind": "decision", "name": "${project}-check-in" }\``,
-      "and in its `comments` what you found and what the next session should do",
-      'differently, open the pull request, and stop.',
-    );
-  }
-  lines.push('', 'Do not start anything new after a check-in that says it cannot be finished.');
-  return lines.join('\n');
+    'If it cannot — you are going in circles, a test cannot be made green, the',
+    'plan does not match the code — commit what you have, set your step',
+    `\`blocked\` with \`blocked_by: { "kind": "decision", "name": "${project}-check-in" }\``,
+    "and in its `comments` what you found and what the next session should do",
+    'differently, open the pull request, and stop.',
+    '',
+    'Do not start anything new after a check-in that says it cannot be finished.',
+  ].join('\n');
 }
 
 const USAGE_SUMS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];

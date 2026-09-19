@@ -9,7 +9,6 @@
  * runner · production · failed steps · ready and not started · blocked ·
  * queue. Every line comes from a file the runner
  * or a session already writes (`~/mc/runner/log/runs.tsv`,
- * `~/mc/runner/held.json`,
  * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`,
  * `~/mc/runner/*.md`) or from GitHub through `gh`. The pure builders take text
  * and return data so the test can feed them fixtures; `collectBrief` is the
@@ -115,7 +114,7 @@ export function listProposals(dir) {
  * mc's to guess — and all three are therefore questions for the one person who
  * can answer them. This is where they are asked.
  *
- * They live in `~/mc/runner/` (paths.js), beside `held.json` and `log/`, and
+ * They live in `~/mc/runner/` (paths.js), beside `runner.json` and `log/`, and
  * not in `~/mc/intake/` where they were written until 2026-09-04: two of the
  * three are rewritten whole every round, so an inbox that drained one would
  * find it back the next round, forever. This is their only reader.

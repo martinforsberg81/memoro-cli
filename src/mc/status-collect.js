@@ -140,13 +140,13 @@ export function machineState(name, {
   const flight = inFlight(openPrs);
   if (flight) return no(REFUSAL['in-flight'], flight.skip);
   // There was one more reading here until 2026-09-08, out of a file the runner
-  // wrote beside `held.json`: the workarea the last round could not bring to
+  // wrote beside `runner.json`: the workarea the last round could not bring to
   // origin/main, which no reading could work out for itself because an aborted
   // merge leaves the worktree clean. It went with the case — a `PLAN.json` the
   // plan's own rule refuses now takes main's copy and the merge commits
   // (`resolvePlanConflict`, run.js), so nothing is aborted and nothing is
-  // recorded. And until 2026-09-12 a held pull request was read here too, with
-  // its one repair session; the register (ruling 21) is where a step that did
+  // recorded. And until 2026-09-12 a held pull request (`held.json`) was read
+  // here too, with its one repair session; the register (ruling 21) is where a step that did
   // not land stands now, and the plan's own word above already answers it.
   return { runnable: true, reason: null, detail: null, since: null, kind };
 }

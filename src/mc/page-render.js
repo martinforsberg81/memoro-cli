@@ -684,7 +684,7 @@ function landingLine(c, wide, landing) {
  * question, *what is the runner doing with a pull request*: NEXT is the order
  * it would still start, RUNNER is the steps it is running, and this is what a
  * pull request is doing once a step has become a round — landing, or waiting
- * for its turn. The held rows went with `held.json` (ruling 21).
+ * for its turn. The held rows went with `held.json` (ruling 21, 2026-09-12).
  */
 function mergesLines(lines, c, wide, merges, at) {
   const parts = [];

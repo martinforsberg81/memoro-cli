@@ -152,8 +152,7 @@ repository. What it does, for as long as the runner runs:
      (`kindFor`, the same call the page makes),
    - whose repository GitHub answered for (`prs-unknown` otherwise — a lane
      that cannot see what is open starts nothing),
-   - that has no open pull request (`inFlight`) — unless it is a pull request
-     picked as `repair`,
+   - that has no open pull request (`inFlight`),
    - that no other lane has claimed (`claims`),
    - and that this pass has not already been refused on (`passed`).
 
@@ -317,8 +316,9 @@ this GitHub at this moment, in this order (`runStepClaimed`):
    progress, usually somebody's unfinished work about to be stepped on. The
    runner never commits, stashes or discards it.
 5. **What is open on GitHub could not be read** for this repository.
-6. **A held pull request**: at `repairs: 0` the step becomes a `repair`
-   session; after its repair it is the brief's (*Held before merge*).
+6. *(Until 2026-09-12 a held pull request was here: a `repair` session, then
+   the brief's. Ruling 21 removed it; a step that did not land is `failed` in
+   the register — *The register*.)*
 7. **A pull request already in flight** (`inFlight`) — the picker has already
    passed over every project it saw one on, so this is only a pull request that
    opened between the pick and the run.
@@ -335,8 +335,7 @@ this GitHub at this moment, in this order (`runStepClaimed`):
    is moved the same way (`step-cost-2` ran on a landed branch on 2026-09-11
    for want of this). A different tip, no merged pull request or a `gh` that
    fails leaves it. A branch that has *not* landed carries work and is left
-   exactly where it is. A
-   repair stands on its pull request's branch instead.
+   exactly where it is.
 9. **`git merge origin/main`** — **never** a rebase, which is what nights 1–2
    of the shell runner cost to learn (`syncMain`, below).
 10. **The role and the tool**: `canon/roles/<kind>.md` must be there, and the
@@ -404,9 +403,7 @@ Every other conflict is handed to the step session: `stepPrompt` puts a
 preamble above the body naming the conflicting files, saying the merge stopped
 there, and saying it is the first thing the session does and not the job. One
 session resolves the merge and delivers the step, and one pull request carries
-both. A repair is handed its conflicts the same way — a pull request held
-*because* it conflicts with main meets the same conflict when the runner merges
-main into its branch, and resolving it is the repair. If the session leaves the
+both. If the session leaves the
 merge unfinished, the runner aborts it after the session.
 
 **A project's branches are `<name>` or `<name>-<suffix>`.** That convention is
@@ -447,8 +444,7 @@ not about what the session then edits, or what its pull request carries.
 | the plan does not parse | nothing — and a row in `~/mc/runner/unreadable-plans.md` |
 | no plan in the worktree | nothing, silently |
 
-An open pull request is not in the table: the pick answered it, and a held one
-is a `repair` rather than a step.
+An open pull request is not in the table: the pick answered it.
 
 There is no `triage` and there never will be again: the runner runs plans, it
 does not write them. Planning is `mc plan <programme>`, a session at the
@@ -527,8 +523,8 @@ wherever it is met:
 
 | surface | what it says |
 |---|---|
-| `mc status <name>` | both, on one row — `ready · #614 is held before merge after a repair (since 09-03 10:00Z)`, `step n is blocked on workarea dirty-worktree` where the runner blocked it, and bare `ready` when this machine has nothing to add ([`mc-status.md`](mc-status.md)) |
-| the page's NEXT (`mc`) | both — a skipped name is counted under its word, a runnable name is drawn as the kind the runner would actually start, `repair` where a hold is owed one, and each lane block's head is what that lane picks next ([`mc-ui.md`](mc-ui.md)) |
+| `mc status <name>` | both, on one row — `ready · uncommitted work in ~/mc/connections-section/memoro: probe.mjs (since 09-05 10:03Z)`, `step n is blocked on workarea dirty-worktree` where the runner blocked it, and bare `ready` when this machine has nothing to add ([`mc-status.md`](mc-status.md)) |
+| the page's NEXT (`mc`) | both — a skipped name is counted under its word, a runnable name is drawn as the kind the runner would actually start, and each lane block's head is what that lane picks next ([`mc-ui.md`](mc-ui.md)) |
 | `mc brief --collect` | both — *Blocked* has a group of its own, *Waiting on a workarea*, for what the runner blocked, and *Ready, and the runner cannot start it* for what the plan does not say yet ([`mc-brief.md`](mc-brief.md)) |
 | the page's PROGRAMMES rows, `mc status`'s step rows, the brief's *Plan status* | the plan alone, and that is right: they are about what the plan says |
 
@@ -538,13 +534,11 @@ Fresh, headless, and assembled from the plan's `runner`, the step's own
 `runner`, and the defaults for the session's kind (`sessionSettings`). `model`,
 `effort` and `advisor` resolve **step over plan over default**, one key at a
 time — a step that names only its effort keeps the plan's model. `tool`,
-`check_in_minutes` and `stall_minutes` are the plan's alone. A repair reads the plan's `runner` but
-never a step's: it is a session on a pull request, not the step that opened it.
+`check_in_minutes` and `stall_minutes` are the plan's alone.
 
 | kind | `model` | `effort` | `advisor` |
 |---|---|---|---|
 | step | `sonnet` | `medium` | `opus` |
-| repair | `opus` | none | none |
 
 That is [ruling 18](../project/mc/rulings.md) (2026-09-11). Opus at high
 effort on every turn was the cost — 155 step sessions over 2026-09-05..12, all
@@ -554,8 +548,8 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
 
 - **`tool:`** — `claude` by default, resolved through `resolveLaunch`. A tool
   that is not installed is a block with the adapter's own hint.
-- **`model:`** — `sonnet` by default for a step, `opus` for a repair, and
-  those defaults belong to claude alone. They are claude aliases; handed to
+- **`model:`** — `sonnet` by default for a step, and
+  that default belongs to claude alone. They are claude aliases; handed to
   `codex -m` one names a model that tool does not have and the step dies on
   its argument list before reading a word of the plan. A plan on another tool
   that names no model gets none, and the tool picks its own.
@@ -618,7 +612,7 @@ and 36 of 295 sessions averaged over 200k, and every turn pays for all of it.
 The window is a constant in `run-plan.js`, not a plan field — nothing has shown
 a plan needing another, and the measurement after twenty sessions
 (`scripts/measure-steps.py`'s *context per turn* row) is where that would show.
-A step and a repair get it; the helper and intake turns, which share
+A step gets it; the helper and intake turns, which share
 `headlessArgs`, do not — and they keep the positional prompt, `--output-format
 json` and their own wall-clock timeout, because step-cost's contract leaves
 them be.
@@ -947,9 +941,8 @@ stdout and stderr are collected here rather than by `maxBuffer` — capped at
 Everything lives under `~/mc/runner/`, with one exception, which is the one
 thing it writes into a repository: a blocked step (below).
 
-- **`log/runs.tsv`** — one row per step, repair, collect and drained inbox
-  file, and the
-  history keeps the kinds the runner no longer produces:
+- **`log/runs.tsv`** — one row per step and per drained inbox file, and the
+  history keeps the kinds the runner no longer produces (`repair`, `collect`):
   `ts name kind exit seconds pr turns input output cache_read cache_write
   session note land_seconds model`. `seconds` is the session; `land_seconds` is the
   gate round that followed it, `-` when there was none. It is appended rather
@@ -983,8 +976,7 @@ thing it writes into a repository: a blocked step (below).
   The `starting` line says what the session runs on, leaving out what was not
   passed, and how it is watched: `<name>: step starting (claude sonnet · effort
   medium · advisor opus, check-in every 60 min, killed after 20 min silent)`,
-  `(claude opus, check-in every 60 min, killed after 20 min silent)` for a
-  repair, `(codex own default model, no check-in, no stall guard)` for a codex
+  `(codex own default model, no check-in, no stall guard)` for a codex
   plan that names none (`describeSettings`, `describeWatch`). Each check-in is
   a line too: `<name>: check-in 1 at 60 min`.
 - **`log/<name>-<ts>.jsonl`**, **`.json`** and **`.json.err`** — the stream

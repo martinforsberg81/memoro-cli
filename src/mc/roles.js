@@ -114,7 +114,7 @@ export function readCanonRole(name) {
  * It is read here, at assembly, and deliberately not folded into
  * `readCanonRole`'s `overlay`. `run.js` tests `role.overlay` to decide whether
  * a role file is installed at all, and a shared preamble folded in ahead of
- * that check would make a missing `repair.md` look present — a ninety-minute
+ * that check would make a missing `step.md` look present — a ninety-minute
  * session launched with no instructions for what it is doing. `mc roles show`
  * and `tests/mc/roles-decisions.test.js` read `overlay` as the role's own
  * words for the same reason.

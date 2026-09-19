@@ -271,7 +271,7 @@ it is gone.
 What that buys and what it costs are the same sentence: a test the change
 reaches that is **already red on main** now makes the round red, and cannot land
 until that test is green. The differential form let it through, at the price of
-measuring main every round to find out. The repair is a selector that reaches
+measuring main every round to find out. The way out is a selector that reaches
 fewer unrelated tests, and it belongs in the repository rather than in a second
 measurement here.
 
@@ -455,7 +455,7 @@ edited it. Neither conflicted because of the stacking. Compare `git show <old>
 --stat` with `git show <new> --stat` rather than trusting the replay, and push
 with `--force-with-lease`.
 
-The in-batch freshen above is the same repair done inside the round, on
+The in-batch freshen above is the same fix done inside the round, on
 branches the caller named, for the pull requests a batch does land.
 
 ## One round at a time
@@ -491,13 +491,10 @@ kept` and exits 3, leaving its entry in place: the next call for the same
 pull request replaces the entry's pid and keeps its `since`, so the wait
 already spent is not lost to a retry.
 
-This is `mc merge`'s own wait, not the runner's merge lane: `busy` and `lease`
-no longer reach `queueRefusal` (`QUEUEABLE_STOPS` in `merge-queue.js` is now
-`red`, `pr-tests`, `extra-gate`, `merge` only), because a round that already
-waited itself out cannot also be handed to the lane to retry. `red`,
-`pr-tests`, `extra-gate` and `merge` are unchanged: those still queue for the
-runner, which repairs or re-measures rather than merely waiting for a lock to
-free.
+This is `mc merge`'s own wait. Until 2026-09-12 a round that stopped on
+`red`, `pr-tests`, `extra-gate` or `merge` was also written down here for the
+runner's merge lane to retry; ruling 21 removed the lane, and those stops are
+the caller's — the verb prints them and exits.
 
 The gate lock also carries `mode` — `check`, `merge` or `full`, the same word
 the round log writes beside it — and `phase`/`phase_at`, rewritten each time
@@ -517,9 +514,9 @@ a register entry stands on (`stepForMerge`, [`src/mc/merge-step.js`](../../src/m
 called is ended — `SIGTERM` to the pid the register holds — because a landed
 step has no further turn to take and its process tree is worth nothing. On
 red the attempt is counted and the gate's reason kept on the entry, and the
-lines the verb prints are that session's next instruction. Nothing is queued
-for a merge lane any more: a red is the caller's to fix, in the session that
-wrote the code, and the lane's one repair session is gone.
+lines the verb prints are that session's next instruction. A red is the
+caller's to fix, in the session that wrote the code; nothing is queued for
+anybody else (until 2026-09-12 a merge lane and one repair session took it).
 
 ## The full run nobody asks for
 

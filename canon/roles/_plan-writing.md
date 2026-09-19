@@ -22,7 +22,7 @@ stands on an answer the plan already carries. And never write a step whose
 content depends on what an earlier step will find: if step 3 cannot be
 written until step 2 has run, the plan ends at step 2, and the next steps are
 written when the code is there to read. A step that has to stop and ask costs
-a session, a repair and a person reading a transcript.
+a session, a failed step and a person reading a transcript.
 
 Write each step for the session that will be handed it and nothing else. Its
 `instruction` is as long as the work is — three pages of interface, order and

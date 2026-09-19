@@ -62,7 +62,7 @@
  * Where a step stands is the register's word (`register.js`, ruling 21):
  * `running` with the session's pid before the session, and after it `done`
  * when the session's own `mc merge` landed the pull request, `failed` when it
- * did not — the runner lands nothing of a session's and repairs nothing. A
+ * did not — the runner lands nothing of a session's and retries nothing. A
  * step the runner could not start is `blocked` there too.
  *
  * `~/mc/queue.md` is Martin's "these first" and nothing else: names of
@@ -841,7 +841,7 @@ export function createRunner({
    * guard. A codex session gets none of it — its prompt is its last
    * positional and nothing watches it — so its stdin stays closed.
    */
-  function watchFor(launch, settings, { prompt, name, kind, onCheckIn = null }) {
+  function watchFor(launch, settings, { prompt, name, onCheckIn = null }) {
     if (launch.id === 'codex') return {};
     return {
       prompt,
@@ -850,7 +850,7 @@ export function createRunner({
       checkIn: (minutes, count) => {
         say(`${name}: check-in ${count} at ${minutes} min`);
         onCheckIn?.(count, minutes);
-        return checkInPrompt({ project: name, minutes, count, kind });
+        return checkInPrompt({ project: name, minutes, count });
       },
     };
   }
@@ -1684,7 +1684,7 @@ export function createRunner({
       result = await deps.session({
         bin: launch.spec.bin, args, cwd: worktree,
         ...watchFor(launch, settings, {
-          prompt, name, kind,
+          prompt, name,
           onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
         }),
         env: {
@@ -1836,7 +1836,7 @@ export function createRunner({
   /**
    * What this lane takes next: the first name in the queue's order, in this
    * repository, that the plan on `origin/main` says is ready and that nothing
-   * else — an open pull request, a spent repair, another lane's claim — is
+   * else — an open pull request, another lane's claim — is
    * holding. The rule is `nextFor` (run-plan.js), which is the same function
    * the page draws NEXT from; what this adds is the two things only the
    * running process knows: what the lanes are holding, and what this pass has

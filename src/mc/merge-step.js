@@ -7,8 +7,8 @@
  * process tree is worth nothing (Martin: *"Processträdet saknar värde och
  * ska bara tas bort"*). Red comes back to the same session as the gate's own
  * lines, with the attempt counted in the register, and the session fixes it
- * with the diff already in its context. Nothing is queued for a merge lane
- * and nothing is repaired by a second session.
+ * with the diff already in its context. Nothing is queued for anybody and no
+ * second session is started on the pull request.
  *
  * The step is found from `MC_STEP=<project>:<index>` in a runner session's
  * environment, and otherwise from the pull request's branch: the register

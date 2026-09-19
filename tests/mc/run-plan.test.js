@@ -504,9 +504,6 @@ test('checkInPrompt: names the minutes, the count and a blocker the project can 
   assert.match(text, /"kind": "decision", "name": "step-cost-check-in"/u);
   assert.match(text, /Do not start anything new/u);
   assert.match('step-cost-check-in', NAME_RE, 'the blocker name must pass the plan schema');
-  const repair = checkInPrompt({ project: 'mc-thing', minutes: 120, count: 2, kind: 'repair' });
-  assert.match(repair, /check-in number 2/u);
-  assert.doesNotMatch(repair, /blocked_by/u, 'a repair has no step of its own to block');
   assert.equal(userMessageLine('hi'), '{"type":"user","message":{"role":"user","content":"hi"}}\n');
 });
 
