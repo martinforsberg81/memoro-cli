@@ -520,10 +520,16 @@ anybody else (until 2026-09-12 a merge lane and one repair session took it).
 
 ## The full run nobody asks for
 
-`mc test nightly start` runs `mc test <repo> --full` for every repository mc
-knows, on an interval, with nobody typing anything. It is under `mc test`
-because that is the round it runs; it was `mc repo nightly` until 2026-09-04,
-which now prints `mc repo nightly is now mc test nightly` and exits 2.
+The runner runs `mc test <repo> --full` for every repository mc knows, once a
+day, with nobody typing anything. It is a **chore of the runner**
+(`runNightly` in `src/mc/run.js`, the last thing a chore pass does, beside the
+helper and the intake drain); until 2026-09-19 it was a detached process of its
+own, started with `mc test nightly start`, with a pid file and a `stop`, and
+that scheduler is gone — there is no second thing to start, stop and remember,
+and nothing on this machine that can start a nightly but the runner. The verb
+that is left is `mc test nightly status`; it is under `mc test` because that is
+the round the tick runs. It was `mc repo nightly` until 2026-09-04, which now
+prints `mc repo nightly is now mc test nightly` and exits 2.
 
 It exists because memoro's whole suite ran only when a person typed `npm run
 test:full`, and #10529 is what that produced: four days of merges left 31 tests
@@ -534,8 +540,10 @@ It is a **meter**, and the word is load-bearing (ruled by Martin, 2026-09-02):
 nothing it finds refuses a merge, delays a round or changes a verdict. It never
 commits, never pushes, never writes inside a repository and never takes a
 branch. Everything it writes is under mc's home —
-`~/.memoro/mc/nightly/nightly.log` and its pid file beside it — and it is
-entirely optional, exactly like the watcher.
+`~/.memoro/mc/nightly/nightly.log` and the per-repository history beside it.
+There is no pid file: a `nightly.json` left by the old scheduler is read by
+nothing and can be deleted. It is optional in the one way the runner is: no
+runner, no tick.
 
 - **The round is the same round.** Not a copy, and not `npm run test:full`
   directly: it calls `runGate` with the `full: true` a person's `--full` passes,
@@ -553,8 +561,17 @@ entirely optional, exactly like the watcher.
 - **The cadence is measured from the last completed tick**, never from a
   wall-clock hour. A laptop asleep at 03:00 never sees 03:00, and a scheduler
   that notices the miss on waking fires a catch-up burst at breakfast. Sleep
-  simply stretches the gap here. Default once a day; `--interval <seconds>` is
-  the watcher's flag with the watcher's unit.
+  simply stretches the gap here. Once a day, the last tick being the last
+  `kind: nightly` row in `runs.tsv` — that row is the tick's whole state, as the
+  helper's is, and it is written whether the tick measured, was stopped or
+  threw, so a tick that failed is not retried ten minutes later. There is no
+  interval to configure.
+- **STOP reaches it.** A chore pass that finds `~/mc/runner/STOP` starts no
+  tick, and the tick asks for STOP (and UPDATE, which drains the runner) before
+  each repository, so `mc run stop` during a tick means the next repository's
+  suite is never started. The suite already running is not killed; it ends by
+  itself and the tick's row says `stopped`. The runner's own `--once` runs no
+  chores, so it runs no tick.
 - **Three outcomes stay apart.** A run that found nothing, a run that named
   failures, and a run that produced no suite result at all — the lock was held,
   the preparation failed, the declaration stopped it, the process died. The
@@ -582,12 +599,15 @@ it back:
 ```
 
 `mc test nightly status` prints those same rows, one block per repository the
-tick measures, under the running/interval/log lines — the same `nightlyRows`
-called rather than copied, so the two pages cannot answer "red, and since when"
-differently. `--json` carries `running`, `pid`, `interval_ms`, `log` and a
-`repos` object of one reading per repository. A person who started the meter
-reads it where they started it; the repository page is where somebody who is
-asking about a repository finds the same fact.
+tick measures, under a header that says where the tick now comes from — the runner running
+(and when the next tick is due), a tick due now, the runner stopping, or the
+runner stopped and no tick therefore coming until `mc run start` — the same
+`nightlyRows` called rather than copied, so the two pages cannot answer "red,
+and since when" differently. `--json` carries `runner` (`running`, `pid`,
+`started_at`, `stop_requested`), `tick` (`due`, `detail`), `interval_ms`, `log`
+and a `repos` object of one reading per repository — the readings themselves
+unchanged. The repository page is where somebody who is asking about a
+repository finds the same fact.
 
 - **Since when is the first run of the *consecutive* streak.** A test red on
   Monday, green on Tuesday and red on Wednesday has been red since Wednesday.

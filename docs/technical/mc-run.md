@@ -1104,7 +1104,9 @@ step set ready over an open pull request would be run again on top of it.
   of every step, so it ends *every* lane after the step each is in. No lane
   abandons a session that is already running, and the runner refuses to start
   at all while the file exists. Written by `mc run stop`, removed by
-  `mc run start`.
+  `mc run start`. The nightly tick (see *What runs beside it*) is asked the
+  same question before each repository it measures, so it starts no further
+  suite once STOP is there; the suite in flight is not killed.
 - **`~/mc/runner/UPDATE`** — read between picks only, and answered by a
   handover rather than an exit. Written by `mc run --update`; see *The switch*.
 - **An idle lane** sleeps `--idle-sleep` — 600 s unless it is given — and then
@@ -1130,7 +1132,19 @@ step set ready over an open pull request would be run again on top of it.
 
 ## What runs beside it
 
-Nothing, and that is the point. There was a shell supervisor — it fetched,
+Nothing of its own, and that is the point. The runner's chore pass — the
+helper's collect, the intake drain, the tidying — ends with one more chore, the
+**nightly tick**: `runNightly` reads `runs.tsv` and, when 24 hours have passed
+since the last `kind: nightly` row (or there is none), runs
+`mc test <repo> --full` for every repository as a meter and writes its row. A
+chore pass with STOP present performs no tick, `--once` runs no chores and so
+no tick, and the runner's `runningRound` guard is what it was — a gate round a
+lane holds ends the tick for that repository rather than being waited for. The
+detached scheduler that used to do this (`mc test nightly start`, a pid file)
+is deleted; `mc test nightly status` says where the tick now comes from. See
+[`mc-merge.md`](mc-merge.md) § *The full run nobody asks for*.
+
+Nothing else runs beside it. There was a shell supervisor — it fetched,
 fast-forwarded `~/memoro-cli`, ran the runner for one pass and slept — written
 on 2026-08-29 because `mc run` had no way of its own to pick up a merge of its
 own code. It has one now: **`mc run --update`**, read between two picks, which

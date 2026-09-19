@@ -81,6 +81,11 @@
  * turn ends. They used to be one gate and one row, which meant one file could be
  * read a day and only if the collect had also run.
  *
+ * The nightly's tick is the third, and the last a chore pass does: `runNightly`,
+ * a full run of every repository mc knows when a day has passed since the last
+ * one, gated by its own row in runs.tsv. `mc run stop` stops it, between
+ * repositories as well as between passes; `--once` runs no chores and so no tick.
+ *
  * The runner is worked from another terminal by three files under
  * `~/mc/runner/`, all read between two picks and never mid-session: `STOP`
  * ends it, `UPDATE` makes it fast-forward mc's own checkout and hand over to a
@@ -114,6 +119,7 @@ import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
+import { loggedTick } from './nightly-loop.js';
 import {
   UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, workRoot,
 } from './paths.js';
@@ -127,9 +133,9 @@ import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './role
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
-  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, TIMEOUT_EXIT,
+  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs,
-  helperDue, inFlight, intakeNote, landingNote, nextBranch, nextFor,
+  helperDue, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
   queueFileText, readSessionOutput, sessionResult, sessionSettings, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
@@ -351,6 +357,10 @@ export function realDeps(env = process.env) {
     // rather than replaced.
     collect: (options) => collectHelper({ env, ...options }),
     helperTurn: (options) => runHelperTurn({ env, ...options }),
+    // The nightly's tick — every repository's whole suite, in order — with its
+    // narration in `~/.memoro/mc/nightly/nightly.log`. A dependency so a test
+    // can drive the chore without a suite behind it.
+    nightlyTick: (options) => loggedTick({ env, ...options }),
     // The one door work lands through. `mc merge`'s round and `mc merge
     // --docs`', called in process because the runner is mc — not shelled out
     // to, and not replaced by a `gh pr merge` that skips the gate. A
@@ -1226,6 +1236,57 @@ export function createRunner({
   }
 
   /**
+   * The nightly's tick: a full run of every repository mc knows, once a day.
+   * Returns 'ran', 'stopped', 'failed' or null when it was not due.
+   *
+   * A chore beside the helper's and shaped like it: `nightlyDue` is the whole
+   * gate and the row in runs.tsv is the whole state, written whether the tick
+   * measured, skipped or threw, so a tick that failed is not retried ten
+   * minutes later. The difference is the cadence — a day since the last tick,
+   * not an hour of the clock — and the length: a tick is about twenty minutes,
+   * which is why it is the last thing a chore pass does.
+   *
+   * It is a meter. It commits nothing, pushes nothing, writes nothing inside a
+   * repository, and a gate round a lane holds ends the tick rather than being
+   * waited for (`nightlyTick`). What it adds to the runner is that `mc run stop`
+   * reaches it: STOP (and UPDATE, which drains the runner) are asked before
+   * each repository, so a tick under way starts no further suite.
+   */
+  async function runNightly() {
+    const due = nightlyDue({ tsv: deps.read(paths.runs) || '', now: deps.now() });
+    if (!due.due) return null;
+    const t0 = deps.now().getTime();
+    const took = () => Math.round((deps.now().getTime() - t0) / 1000);
+    say(`nightly: a full run of every repository${due.why ? ` — ${due.why}` : ''}`);
+    let outcome = 'ran';
+    let note = '';
+    try {
+      const tick = await deps.nightlyTick({
+        say: (message) => say(`nightly: ${message}`),
+        shouldStop: () => stopRequested() || updateRequested(),
+      });
+      const runs = tick?.runs || [];
+      const unchanged = runs.filter((run) => run.stopped_at === 'unchanged').length;
+      note = `success,${runs.length - unchanged}-measured,${unchanged}-unchanged`
+        + `${tick?.skipped ? ',skipped-behind-a-round' : ''}${tick?.stopped ? ',stopped' : ''}`;
+      if (tick?.stopped) {
+        outcome = 'stopped';
+        say(`nightly: stopped — ${runs.length} repositor${runs.length === 1 ? 'y' : 'ies'} read, the rest wait for the next tick`);
+      }
+    } catch (error) {
+      const reason = error?.message || String(error);
+      say(`nightly: the tick failed — ${reason}. Not retried until the next is due.`);
+      note = `tick-failed,${reason}`;
+      outcome = 'failed';
+    }
+    logRun({
+      ts: stamp(), name: NIGHTLY_NAME, kind: NIGHTLY_KIND, exit: outcome === 'failed' ? 1 : 0, seconds: took(), pr: '-',
+      ...dashes, note,
+    });
+    return outcome;
+  }
+
+  /**
    * The inbox, drained: the oldest files in `~/mc/intake/` up to
    * `INTAKE_PER_ROUND`, one headless turn each, each one archived under
    * `~/mc/runner/log/intake/<date>/` the moment its turn ends.
@@ -1891,6 +1952,9 @@ export function createRunner({
     const archives = quiet ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
     closeWorkareas(plans, archives.flatMap((a) => a.landed), archivedProjects());
     sweepScratch();
+    // Last, and not beside the two chores above: it is the long one, and the
+    // archive and the tidying should not wait twenty minutes behind it.
+    await runNightly();
   }
 
   /**
@@ -1927,7 +1991,7 @@ export function createRunner({
   };
 
   return {
-    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, archiveDone, queue, stopRequested,
+    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runNightly, archiveDone, queue, stopRequested,
     writeUnreadable,
     blockStep,
     updateRequested, syncMain, freshBranch, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,

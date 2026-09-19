@@ -21,13 +21,14 @@
  * called 379 working lines dead. The table is read where it lives now, and the
  * seed list is only what no import edge can reach.
  *
- * Three seeds are not imported by anyone: `lib/update-check-worker.js`,
- * `mc/nightly-run.js` and `mc/repo-watch-run.js` are spawned as child
- * processes by a path literal, so no import graph can see them. They were
+ * Two seeds are not imported by anyone: `lib/update-check-worker.js` and
+ * `mc/repo-watch-run.js` are spawned as child processes by a path literal, so no import graph can see them. They were
  * found by grepping every `.js` path literal in the surviving files against
  * the deletion list, and that grep is the check this script cannot do for
  * itself: a static graph is necessary evidence for a cut, never sufficient.
- * `runtime/broker/c1-child.js` is a fourth, seeded with vault below.
+ * `runtime/broker/c1-child.js` is a third, seeded with vault below. (The
+ * nightly's `mc/nightly-run.js` was a fourth until 2026-09-19, when the tick
+ * became a chore of the runner and the detached scheduler was deleted.)
  *
  * The last two rows are the two costs the contract accepts. `src/vault/`
  * stays whole (Martin, 2026-08-29), and `src/bin.js` + `src/index.js` are
@@ -59,12 +60,11 @@ const LIST = args.includes('--list');
  * (see SPECIFIER), because the hand-kept copy had already drifted: `mc deploy`
  * was routed and never added, so this sweep called a working verb dead. The
  * only seeds left are the ones no import edge can reach — a router that is the
- * root of the graph, and three files started as child processes by path.
+ * root of the graph, and two files started as child processes by path.
  */
 const LIVE = [
   'mc-cli.js',                      // the router: the page's flags, `moved()`
   'lib/update-check-worker.js',     // spawned by path from lib/update-check.js
-  'mc/nightly-run.js',              // spawned by path from mc/nightly.js
   'mc/repo-watch-run.js',           // spawned by path from mc/repo-watch.js
 ];
 
@@ -157,8 +157,8 @@ const page = reach(seed(LIVE), new Set(seed(['bin-mc.js'])));
 const live = reach(seed(LIVE).concat(seed(KEPT)));
 const vault = all.filter((f) => rel(f).startsWith('src/vault/'));
 // `src/vault/engine/c1-claude-lease.js` spawns the C1 child by path and pins
-// its SHA-256, so the child belongs to vault's cost the way `nightly-run.js`
-// belongs to `nightly.js`. No import graph can see either edge.
+// its SHA-256, so the child belongs to vault's cost. No import graph can see
+// that edge.
 const kept = reach(seed(LIVE).concat(seed(KEPT)).concat(seed(PACKAGE))
   .concat(vault).concat(seed(['runtime/broker/c1-child.js'])));
 const dead = all.filter((f) => !kept.has(f));

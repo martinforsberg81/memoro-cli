@@ -115,18 +115,13 @@ IN FULL
   mc test <repo> --full            The repository's own whole suite on the
                                     default branch as fetched — one tree, no
                                     pull request, no selection
-  mc test nightly start [--interval <seconds>]
-                                    That same full round on an interval, with
-                                    nobody asking: every repository mc knows,
-                                    once a day by default, written to a log
-                                    under mc's home. A tick that finds a gate
-                                    round running skips it and says whose round
-                                    it was; nothing it finds refuses a merge or
-                                    delays a round
-  mc test nightly stop             Stop it; a round in flight ends with it
-  mc test nightly status [--json]  Whether it is running, how often and where
-                                    it writes — and, per repository, what the
-                                    last run found: red, and since when
+  mc test nightly status [--json]  Where the tick comes from, and — per
+                                    repository — what the last full run found:
+                                    red, and since when. The tick is a chore of
+                                    the runner, a full run of every repository mc
+                                    knows once a day, taken with nobody asking
+                                    and stopped by mc run stop; nothing it finds
+                                    refuses a merge or delays a round
   mc test dev [--here] [--suite <name>] [--json]
                                     The round no tree can answer: the app
                                     running, measured by the suites the

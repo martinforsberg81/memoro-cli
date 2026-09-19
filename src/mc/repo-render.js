@@ -106,14 +106,18 @@ export function renderWatchLines(state, { colour = false, now = Date.now() } = {
 }
 
 /**
- * The nightly (`mc test nightly status`): whether it is running, how often,
- * where it writes — and, per repository, what it found.
+ * The nightly (`mc test nightly status`): where the tick comes from, where it
+ * writes — and, per repository, what it found.
+ *
+ * The tick is a chore of the runner, so the header is the runner's state in one
+ * of four registers: running with the next tick some way off, running with a
+ * tick due now, running but told to stop, and stopped — in which case no tick
+ * will happen until it is started. `state` is `tickState`'s (`commands/test.js`).
  *
  * The reading below the state is the same `nightlyRows` the repository page
  * prints under *full run*, called rather than copied: two renderings of "red,
  * and since when" would be two answers to it. It is here because it is the
- * question the meter exists for, and somebody who started this thing should be
- * able to read it where they started it.
+ * question the meter exists for.
  */
 export function renderNightlyLines(state, {
   colour = false, columns = 100, repos = [], now = Date.now(),
@@ -121,13 +125,19 @@ export function renderNightlyLines(state, {
   const c = painter(colour);
   const wide = Math.max(60, Math.min(columns, 160));
   const lines = [''];
-  if (state.running) {
-    lines.push(`  ${c('running', 'green')}  pid ${state.pid}  a full run of every repository every ${hours(state.interval_ms)}`);
-    if (state.started_at) lines.push(`  ${c('since', 'grey')}  ${state.started_at}`);
-  } else if (state.abandoned) {
-    lines.push(`  ${c('not running', 'yellow')}  ${c('— a pid file was left behind; mc test nightly stop clears it', 'grey')}`);
+  const { runner, tick } = state;
+  const cadence = `a full run of every repository every ${hours(state.interval_ms)}`;
+  if (!runner.running) {
+    lines.push(`  ${c('runner stopped', 'yellow')}  ${c('— no tick will happen until mc run start', 'grey')}`);
+    lines.push(`  ${c('tick', 'grey')}  ${cadence}, a chore of the runner; ${tick.detail || 'none has run yet'}`);
+  } else if (runner.stop_requested) {
+    lines.push(`  ${c('runner stopping', 'yellow')}  pid ${runner.pid}  ${c('— a STOP is present; no further tick will start', 'grey')}`);
   } else {
-    lines.push(`  ${c('not running', 'grey')}  ${c('— mc test nightly start', 'grey')}`);
+    lines.push(`  ${c('runner running', 'green')}  pid ${runner.pid}  ${c('— the tick is its chore', 'grey')}`);
+    if (runner.started_at) lines.push(`  ${c('since', 'grey')}  ${runner.started_at}`);
+    lines.push(`  ${c('tick', 'grey')}  ${cadence}; ${tick.due
+      ? `a tick is due now — it comes with the runner's next chore pass${tick.detail ? ` (${tick.detail})` : ''}`
+      : tick.detail}`);
   }
   lines.push(`  ${c('log', 'grey')}  ${c(state.log, 'grey')}`);
   for (const repo of repos) {
@@ -169,8 +179,8 @@ function mainRows(c, repo, now) {
 /**
  * What the last full runs of this repository's own suite found, and since when.
  *
- * Two pages print these rows — this one and `mc test nightly status` above,
- * where the meter is started and stopped. One function, because "red, and
+ * Two pages print these rows — this one and `mc test nightly status` above.
+ * One function, because "red, and
  * since when" must read the same wherever it is asked.
  *
  * Here rather than behind a verb, and here whether or not anything is wrong. A
@@ -189,7 +199,7 @@ function nightlyRows(c, repo, now) {
   const state = repo.nightly;
   // A page from a version that had none, or a snapshot taken by one.
   if (!state) return [];
-  if (!state.runs) return [c('never — mc test nightly start', 'grey')];
+  if (!state.runs) return [c('never — the runner\'s chore takes it when it is due', 'grey')];
 
   const rows = [];
   const { measured } = state;
