@@ -6,7 +6,7 @@ import {
   AUTOCOMPACT_TOKENS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, chooseKind, collectNote,
   describeSettings, describeWatch, headlessArgs, helperDue,
   inFlight, intakeNote, intakeQueue, landingNote, mcOwnFiles, nextBranch, nextFor, queueFileNames,
-  queueFileText, quotaSeen,
+  queueFileText, quotaResetAt, quotaSeen,
   readSessionOutput, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow, userMessageLine,
 } from '../../src/mc/run-plan.js';
@@ -426,7 +426,7 @@ test('headlessArgs: claude gets --model, --effort and --advisor, and none when u
 test('readSessionOutput: claude json usage fields, dashes when absent', () => {
   const out = JSON.stringify({ subtype: 'success', num_turns: 7, session_id: 's1', usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30 } });
   const r = readSessionOutput({ toolId: 'claude-code', stdout: out, exitCode: 0 });
-  assert.deepEqual(r, { turns: '7', session: 's1', input: '10', output: '20', cacheRead: '30', cacheWrite: '-', note: 'success', quota: false });
+  assert.deepEqual(r, { turns: '7', session: 's1', input: '10', output: '20', cacheRead: '30', cacheWrite: '-', note: 'success', quota: false, quotaReset: null });
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: 'garbage', exitCode: 1 }).note, 'no-json');
   // The helper's own wall-clock cap is still a timeout; the runner's kill is a stall.
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: '', exitCode: 142, timedOut: true }).note, 'timeout');
@@ -451,7 +451,7 @@ describe('readSessionOutput on a stream-json run', () => {
 
   it('reads the result line when it is the last one', () => {
     const r = readSessionOutput({ toolId: 'claude-code', stdout: [init, assistant, result()].join('\n'), exitCode: 0 });
-    assert.deepEqual(r, { turns: '4', session: 'sid', input: '10', output: '20', cacheRead: '300', cacheWrite: '40', note: 'success', quota: false });
+    assert.deepEqual(r, { turns: '4', session: 'sid', input: '10', output: '20', cacheRead: '300', cacheWrite: '40', note: 'success', quota: false, quotaReset: null });
   });
 
   it('reads it with junk after it', () => {
@@ -488,7 +488,7 @@ describe('readSessionOutput on a stream-json run', () => {
     assert.equal(summed.subtype, 'error_during_execution');
     assert.equal(summed.result, 'blocked');
     const r = readSessionOutput({ toolId: 'claude-code', stdout, exitCode: 0 });
-    assert.deepEqual(r, { turns: '32', session: 'sid-2', input: '11', output: '22', cacheRead: '303', cacheWrite: '44', note: 'failed', quota: false });
+    assert.deepEqual(r, { turns: '32', session: 'sid-2', input: '11', output: '22', cacheRead: '303', cacheWrite: '44', note: 'failed', quota: false, quotaReset: null });
   });
 
   it('keeps the quota rule: a short limit answer is quota', () => {
@@ -531,7 +531,7 @@ test('readSessionOutput: a quota answer is logged as quota, never success', () =
 test('readSessionOutput: codex events give what they give', () => {
   const lines = [JSON.stringify({ type: 'thread.started', thread_id: 't9' }), 'not json', JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 5, cached_input_tokens: 2, output_tokens: 3 } })].join('\n');
   const r = readSessionOutput({ toolId: 'codex', stdout: lines, exitCode: 0 });
-  assert.deepEqual(r, { turns: '-', session: 't9', input: '5', output: '3', cacheRead: '2', cacheWrite: '-', note: 'success', quota: false });
+  assert.deepEqual(r, { turns: '-', session: 't9', input: '5', output: '3', cacheRead: '2', cacheWrite: '-', note: 'success', quota: false, quotaReset: null });
 });
 
 /**
@@ -819,4 +819,40 @@ test('landingNote: a merge that did not land on main is not recorded as merged',
   assert.equal(landingNote({ merged: true, merged_into: 'msr-track-3', default_branch: 'main', off_default: true }), 'off-main');
   assert.equal(landingNote({ merged: false, stopped_at: 'red' }), 'open,gate-red');
   assert.equal(landingNote(null), 'open');
+});
+
+describe('quotaResetAt', () => {
+  const logged = "You've hit your weekly limit · resets Sep 11 at 3pm (Europe/Stockholm)";
+  const iso = (d) => (d ? d.toISOString() : d);
+
+  it('reads the logged refusal as an instant', () => {
+    assert.equal(iso(quotaResetAt(logged, new Date('2026-09-08T09:05:00Z'))), '2026-09-11T13:00:00.000Z');
+  });
+
+  it('a time with no date is today in the zone, or tomorrow when it has passed', () => {
+    const text = "You've hit your limit · resets 3pm (Europe/Stockholm)";
+    assert.equal(iso(quotaResetAt(text, new Date('2026-09-08T09:05:00Z'))), '2026-09-08T13:00:00.000Z');
+    assert.equal(iso(quotaResetAt(text, new Date('2026-09-08T14:00:00Z'))), '2026-09-09T13:00:00.000Z');
+  });
+
+  it('a date that has passed is next year, and minutes and winter offsets are read', () => {
+    assert.equal(iso(quotaResetAt('resets Jan 2 at 9:30am (America/New_York)', new Date('2026-12-30T12:00:00Z'))), '2027-01-02T14:30:00.000Z');
+  });
+
+  it('is null for text it cannot read, an unknown zone, and a time more than eight days out', () => {
+    const now = new Date('2026-09-08T09:05:00Z');
+    assert.equal(quotaResetAt('You have hit the limit', now), null);
+    assert.equal(quotaResetAt('resets Sep 11 at 3pm (Mars/Olympus)', now), null);
+    assert.equal(quotaResetAt('resets Sep 30 at 3pm (Europe/Stockholm)', now), null);
+    assert.equal(quotaResetAt('resets Foo 11 at 3pm (Europe/Stockholm)', now), null);
+    assert.equal(quotaResetAt('resets 13pm', now), null);
+  });
+
+  it('readSessionOutput carries it for a quota answer and null for anything else', () => {
+    const now = new Date('2026-09-08T09:05:00Z');
+    const stdout = JSON.stringify({ subtype: 'success', num_turns: 1, result: logged });
+    assert.equal(iso(readSessionOutput({ toolId: 'claude', stdout, exitCode: 1, now }).quotaReset), '2026-09-11T13:00:00.000Z');
+    const fine = JSON.stringify({ subtype: 'success', num_turns: 9, result: logged });
+    assert.equal(readSessionOutput({ toolId: 'claude', stdout: fine, exitCode: 0, now }).quotaReset, null);
+  });
 });

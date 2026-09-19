@@ -1117,13 +1117,19 @@ step set ready over an open pull request would be run again on top of it.
   handover rather than an exit. Written by `mc run --update`; see *The switch*.
 - **An idle lane** sleeps `--idle-sleep` — 600 s unless it is given — and then
   reads the world again. A lane with a step to run does not sleep at all.
-- **The Claude quota.** The 5-hour limit is one budget for the whole machine,
-  so a quota answer in one lane pauses all of them. The lane that sees the
-  refusal calls `quotaPause`, which logs `every lane sleeping 30m` and holds one
-  promise; every other lane awaits that same promise in `quotaHold` before it
-  starts anything — before a worktree is touched or a session is spent. One
-  sleep, not one per lane, and no session spent to be told the same thing
-  again.
+- **The Claude quota.** The limit is one budget for the whole machine, so a
+  quota answer in one lane pauses all of them. The lane that sees the refusal
+  calls `quotaPause`, which holds one promise; every other lane awaits that
+  same promise in `quotaHold` before it starts anything — before a worktree is
+  touched or a session is spent. One sleep, not one per lane, and no session
+  spent to be told the same thing again. The refusal names its reset —
+  `resets Sep 11 at 3pm (Europe/Stockholm)` — and `quotaResetAt` reads it: the
+  pause lasts until one minute after that time (`quota seen — every lane
+  sleeping until <ISO> (the refusal's reset)`), in slices of at most thirty
+  minutes, and STOP or UPDATE ends it between two slices. A refusal with no
+  readable time, or one more than eight days out, keeps the old
+  `every lane sleeping 30m`. (2026-09-08: a weekly limit that reset three days later cost eight
+  launches, one every thirty minutes.)
 - **What counts as a quota answer** is narrow on purpose: the limit text as
   the *whole result* of a session of one or two turns. Session prose that
   merely mentions a quota — a PR body about quota rows, say — is not one. On

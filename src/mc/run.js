@@ -479,10 +479,32 @@ export function createRunner({
    * calls.
    */
   let quotaSleep = null;
-  async function quotaPause() {
+  /**
+   * Sleep until one minute after the reset the refusal named, or thirty
+   * minutes when it named none. A pause of days goes in slices, and between
+   * two of them STOP and UPDATE end it — the runner is not deaf for a week.
+   */
+  async function quotaPause(until = null) {
     if (quotaSleep) { await quotaSleep; return; }
-    say(`quota/rate limit seen — every lane sleeping ${QUOTA_SLEEP_MS / 60000}m`);
-    quotaSleep = Promise.resolve(deps.sleep(QUOTA_SLEEP_MS));
+    const start = deps.now().getTime();
+    const named = until instanceof Date && until.getTime() > start;
+    const total = named ? until.getTime() + 60_000 - start : QUOTA_SLEEP_MS;
+    say(named
+      ? `quota seen — every lane sleeping until ${new Date(start + total).toISOString()} (the refusal's reset)`
+      : `quota/rate limit seen — every lane sleeping ${QUOTA_SLEEP_MS / 60000}m`);
+    quotaSleep = (async () => {
+      let slept = 0;
+      for (;;) {
+        // The clock and the sum of the slices: the clock is right when the
+        // machine slept through some of it, the sum ends a clock that stands.
+        const remaining = Math.min(start + total - deps.now().getTime(), total - slept);
+        if (remaining <= 0) return;
+        const slice = Math.min(remaining, QUOTA_SLEEP_MS);
+        await deps.sleep(slice);
+        slept += slice;
+        if (stopRequested() || updateRequested()) return;
+      }
+    })();
     try { await quotaSleep; } finally { quotaSleep = null; }
   }
   const quotaHold = async () => { if (quotaSleep) await quotaSleep; };
@@ -1260,7 +1282,7 @@ export function createRunner({
           // The one way the drain fails to terminate, so it is said out loud
           // rather than inferred from the same file appearing every round.
           if (!archived) say(`intake: ${file} could not be moved out of the inbox — the next round will take it again`);
-          if (turn.quota) await quotaPause();
+          if (turn.quota) await quotaPause(turn.quotaReset);
         },
       },
     });
@@ -1670,7 +1692,7 @@ export function createRunner({
       say(`${name}: GitHub could not be asked what this project has open (${error?.message || error}) — nothing is landed this round`);
     }
     const pr = String(openNow.find((item) => item.headRefName === branch)?.number ?? '-');
-    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled });
+    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
     let { note } = read;
 
     // Where the step stands now is the register's word, not this process's
@@ -1712,7 +1734,7 @@ export function createRunner({
 
     logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
-    if (read.quota) await quotaPause();
+    if (read.quota) await quotaPause(read.quotaReset);
     // `merged` and `ran` are both *a step ran*, and the lane picks again on
     // either. They are still told apart because the row and the log line are
     // read by a person, and because a merged step is the one that leaves the
