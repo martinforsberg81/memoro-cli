@@ -42,16 +42,18 @@ print of the page fetches `origin/main` for each repository first — the same
 fetch `mc status <name>` already took — and `--offline` is what skips it,
 reading the plans as they were last fetched rather than as they are now.
 
-## The eight sections
+## The sections
 
-In this order — **what does not move above what does**. NEXT changes with
-every pick, MERGES with every phase a gate round moves through, RUNNER every
-frame, and HELPER and BRIEF while somebody is sitting at them; PROGRAMMES,
-INTAKE and WORK change when a landing lands and not between two frames. The live loop rewrites only rows still on the screen (`page-frame.js`),
-so at the top, under a hundred rows of projects, RUNNER had scrolled into
-history before the prompt was printed and never moved again (2026-09-03). The
-overview stays complete — every project is listed — and what moves sits where
-the eye already is:
+In this order (Martin, 2026-09-19): PROGRAMMES, WORK, HELPER, BRIEF, NEXT,
+RUNNER, MERGES, DEPLOY, and one line for mc itself. It still keeps the rule the
+page had — **what does not move above what does**. PROGRAMMES and WORK are the
+page as a listing; the two desks change when somebody sits down; NEXT changes
+with every pick and RUNNER every frame; MERGES, DEPLOY and the MC line are the
+short end of the page, a few rows that are always within reach of the prompt.
+The live loop rewrites rows where they stand (`page-frame.js`), and a row that
+has scrolled off the top cannot be written to — which is what
+[*a status that changed out of reach*](#a-status-that-changed-out-of-reach)
+below is about.
 
 - **PROGRAMMES** — one heading per programme with its own `x ready · y blocked`
   and the room for its planning session, filled or empty; then one numbered row
@@ -61,18 +63,94 @@ the eye already is:
   whether or not any of its projects have a plan the runner can read; one that
   exists only as an open planning session is drawn too, and says `no project
   yet` where the counts would be.
-  **A programme's blocked projects are one row.** Thirty-three of forty-four
-  projects were `blocked` on 2026-09-06, and the page said so thirty-three
-  times without once saying what would move any of them. So a project that is
-  `ready`, `done` or in flight keeps its full row, and the stopped ones become
-  one row for the programme: how many, the numbers that still open them
-  (`1–3, 7`), and the blockers holding them, biggest first. Nothing leaves the
-  page — the numbering runs through every project of every programme whether or
-  not a row is drawn for it, a number opens a project either way, and `a` at
-  the menu draws them all again. The blocker is `blocked_by: { kind, name }` on
-  the step the status is about — the first that is not done, the only one the
-  runner considers — read off the plan and never parsed back out of the `next`
+  **A programme's blocked projects are a count on its heading, and no row.**
+  Thirty-three of forty-four projects were `blocked` on 2026-09-06, and the
+  page said so thirty-three times. So a project that is `ready`, `done` or in
+  flight keeps its full row, and the stopped ones are the `N blocked` on the
+  programme's own heading. They were one collapsed row under it as well — how
+  many, their numbers, their blockers — which said the count twice (Martin,
+  2026-09-19); what holds them is BRIEF's rollup. Nothing leaves the page: the
+  numbering runs through every project of every programme whether or not a row
+  is drawn for it, a number opens a project either way, and `a` at the menu
+  draws them all again. The blocker is `blocked_by: { kind, name }` on the step
+  the status is about — the first that is not done, the only one the runner
+  considers — read off the plan and never parsed back out of the `next`
   sentence.
+- **WORK** — everything running that the runner did not start, oldest first:
+  `mc plan` on a programme is not here (it is on that programme's heading), so
+  what is left is `mc work`, a session from before `mc plan` took a programme,
+  and a tmux window. Then, in **one line**, the workareas no project explains:
+  the numbers that still open them and `~/mc/runner/unplanned-workareas.md`,
+  which has them all with the one fact the page cannot have — whether the branch
+  has landed. They were twelve rows that never changed, and before that the tail
+  of PROGRAMMES, which made that section answer two questions; a folder with
+  nothing to explain it is work in the sense this heading means, and is often
+  the same folder a session is open in.
+- **HELPER** — the desk, drawn open or not, and under it **what is in the
+  intake it works from**: one row per repository that has a digest
+  (`~/mc/intake/errors-<repo>-<date>.md`) — how many errors are new, how many
+  of them loud, how old the reading is, and the loudest `!` message in what is
+  left of the row. This was INTAKE, a section of its own with up to four `!`
+  lines under each digest, and the tallest thing on the page that nobody acts
+  on from the page: the helper is who reads a digest. A count of loud errors
+  is a number somebody has to go and look up, so the one message stays; the
+  rest, with their fingerprints, are in the digest and in `mc --json`
+  (`intake.repos[].loud_lines`). Below 24 columns of room the message is not
+  drawn at all. One row each rather than the newer of the two, which hid
+  memoro-cli's — the digest about this machine.
+- **BRIEF** — the desk, and **what is waiting for it**: the proposals nobody
+  has queued or dropped — how many, how far back the pile reaches, the newest
+  three by name (the slug of `<date>-<slug>.md`; no file is opened for it) —
+  then the two lines that were under NEXT and are questions for a person.
+  **How many projects are blocked**, how many of them wait on a decision and
+  how many on another project, and the blockers holding the most: `33 blocked
+  · 18 on a decision, 15 on a project · held most by plan-review 12,
+  home-on-msr 7` — PROGRAMMES' own rollup, the names giving way to the width
+  before the fact does. And, in yellow when it is there at all, **blocker
+  finished** — a step that is `blocked` on a project whose plan on
+  `origin/main` is `done` or gone, which is a plan waiting for nothing
+  (`stale-blockers.js`). Only a `project` blocker; a `decision` waits on
+  Martin and there is no artefact to read it against. It reports and nothing
+  more — flipping the step back to `ready` is a plan edit somebody makes.
+- **NEXT** — what `mc run` would start, as **one list**: repository, project,
+  `step n/m` in the kind's own colour, and that step's title. The heading is
+  the one number anybody used — how many are runnable. The order is
+  `assembleQueue`'s, the runner's own (`run-plan.js`): the names
+  `~/mc/queue.md` puts first, then every other non-legacy plan on
+  `origin/main`, alphabetically; the picks are the runner's own picker's —
+  `nextFor` asked repeatedly with each pick claimed, which is what the lanes
+  do ([`mc-run.md`](mc-run.md) § *The pick, in order*) — so a name here is one
+  the runner would actually start, as what it would start it as. **Four rows
+  per repository at the most** (`LANE_DEEP`), and the four are each
+  repository's own: a repository with one runnable project keeps its row
+  however long the other's queue is. It was a block per repository with a
+  heading each, a line for what was skipped and why, and the blocked rollup
+  under that; how much `queue.md` chose, the skips by reason and the rest of
+  each lane are in `mc --json` (`next.from_queue`, `next.skipped`,
+  `next.lanes[].more`), and what is blocked is BRIEF's.
+- **RUNNER** — the heading carries the answer: how many steps are **in
+  flight** (bold green while it is not zero, `not running` in bold yellow when
+  there is no process) and how many lanes there are to hold them. Under it
+  **one row per lane**, numbered through: the slots the runner can actually
+  fill — `total` from `mc run lanes` when there is one, `per_repo` times the
+  repositories otherwise. They were one row per repository lane (`memoro #2`),
+  which at four lanes on each of two repositories under a cap of five was
+  eight rows, three of which could never hold a step beside the others. An
+  idle lane is `lane 3  idle`. With a step in it the same cell is the step's
+  **repository** — the lane's number is not what a running row is read for —
+  then the project in bold, `step 4/6` (which step of its plan, read off the
+  plan because a lane file does not carry it), the clock (bold, because it is
+  the number on the row that moves; yellow past a check-in), and the
+  bookkeeping: tool and model, the advisor when the step has one, and the
+  check-ins the runner has written into the session. The steps fill from the
+  top, oldest first, so a row moves only when one above it ends. The number of
+  turns a session has taken is not on the row: nothing mc writes while a
+  session runs carries it. The pid is not there either — every lane file
+  carries the runner's own. A runner that is not running has no lanes and one
+  line that says so. Then a pending `~/mc/runner/STOP`, the lane files whose
+  process is gone, and one line of the day behind it: steps, merged, open,
+  failed, timed out, and an estimated **list-price** cost — `failed` red and
+  `timed out` yellow only while the count is not zero.
 - **MERGES** — the gate round landing right now, and the two queues behind it
   ([**ruling 20**](#the-surfaces) put a round on the page; the section itself
   is `mergesSection`, `page-collect.js`, and `runningMerge`,
@@ -81,8 +159,8 @@ the eye already is:
   and `nothing landing, nothing waiting` — the literal phrase, not per missing
   part — when both are. Under it, in order: the round itself, green like
   a running RUNNER lane because it is the same fact — `● memoro #11651
-  sql-w5-relationship-closure  running 17 test files · 4 min`, or `· nothing
-  landing` when the gate is idle. A `check`-mode round (`mc test`, not `mc
+  sql-w5-relationship-closure  running 17 test files · 4 min`; with the gate
+  idle the heading has already said so and there is no row. A `check`-mode round (`mc test`, not `mc
   merge`) says so rather than reading as a landing that is not one:
   *measuring, not landing*. Then, unchanged in everything but position:
   **waiting** — `~/mc/runner/merges.json`, every `mc merge` standing in line
@@ -94,108 +172,50 @@ the eye already is:
   (<age>)` or `#N is being measured (mc test), not landed` when the round
   matches this project's own open pull request, and `#N is queued for merge
   (since …)` for a queued one ([`mc-run.md`](mc-run.md) § *The merge*).
-- **INTAKE** — the newest `~/mc/intake/errors-<repo>-<date>.md` per repository,
-  its age, what is new in it, and how many proposals nobody has queued or
-  dropped. A `!` line — a fingerprint that has crossed the threshold, or a
-  condition that has just started failing — is drawn **message first**, with the
-  count and the fingerprint after it. The digest writes them the other way
-  round, and the clip at 100 columns was eating exactly the half that makes
-  somebody look; the fingerprint is what you grep for once you have decided to,
-  so it comes second and gives way to the width first.
-- **WORK** — everything running that the runner did not start, oldest first:
-  `mc plan` on a programme is not here (it is on that programme's heading), so
-  what is left is `mc work`, a session from before `mc plan` took a programme,
-  and a tmux window. Then, in **one line**, the workareas no project explains:
-  the numbers that still open them and `~/mc/runner/unplanned-workareas.md`,
-  which has them all with the one fact the page cannot have — whether the branch
-  has landed. They were twelve rows that never changed, and before that the tail
-  of PROGRAMMES, which made that section answer two questions; a folder with
-  nothing to explain it is work in the sense this heading means, and is often
-  the same folder a session is open in.
-- **NEXT** — the order `mc run` would actually take, and how much of it is
-  runnable. The order is `assembleQueue`'s, the runner's own (`run-plan.js`):
-  the names `~/mc/queue.md` puts first, then **every other non-legacy plan on
-  `origin/main`, alphabetically**. The heading says how many came from the file,
-  so an empty `queue.md` reads as *the order is alphabetical* — which is what
-  the runner is doing — and never as an empty queue. It said *"empty — mc brief
-  queues the next thing"* until 2026-09-06, with the brand row on `0 of 0
-  queued`, while the runner walked 41 projects and ran one; `queue.md` is
-  Martin's *these first* — a name stays in it until its plan is `done` or off
-  `main` — and it was never the queue.
-  Under the heading, **one block per repository**: `mc run` drives that
-  repository's lane loops at the same time, each taking the next runnable name
-  that no other lane has claimed, so the head of *each* lane starts now and a
-  flat list would say one of them is second. The block is drawn by the runner's
-  own picker — `nextFor` (`run-plan.js`) asked repeatedly with each pick claimed,
-  which is what the lanes do ([`mc-run.md`](mc-run.md) § *The pick, in order*)
-  — and as many of its rows as the repository has lanes are the heads. Three deep per lane, the
-  rest of that lane a count on its own row, and every row is the project,
-  `step n/m` in the kind's own colour, and that step's title. The skips are
-  counted by reason underneath, and the reasons are both of the runner's
-  own: what the plan on `origin/main` says (`blocked`, `done`, `unparseable`)
-  and what this machine says (`dirty`, `in-flight`, …) —
-  the two readings of [`mc-run.md`](mc-run.md) § *The two readings, and what
-  each answers*, so a name counted runnable here is one the runner would
-  actually start, and its kind is what it would start it as. A session somebody
-  has open in the workarea is not a reason, because the runner does not decline
-  for it either. Under those, in yellow when it is
-  there at all: **blocker finished** — a step that is `blocked` on a project
-  whose plan on `origin/main` is `done` or gone, which is a plan waiting for
-  nothing (`stale-blockers.js`). Only a `project` blocker; a `decision` waits
-  on Martin and there is no artefact to read it against. It reports and
-  nothing more — flipping the step back to `ready` is a plan edit somebody
-  makes. The heading's `held`/`queued` counts are gone from here; MERGES,
-  right below this section, is where the round and its waiters are drawn.
-  Last under the section, and the one line worth more than every red cell in
-  PROGRAMMES: **how many projects are blocked**, how many of them wait on a
-  decision and how many on another project, and the blockers holding the most —
-  `33 blocked · 18 on a decision, 15 on a project · held most by plan-review 12,
-  home-on-msr 7`. It is PROGRAMMES' own rollup, drawn here because it answers
-  *what should I do* and this is the section somebody asking that is reading.
-  It says `blocked`, the plan's word and the brand row's, rather than a third
-  word for the same projects. The names give way to the width before the fact
-  does: three of them, then two, then one, then none.
-- **RUNNER** — the heading carries the answer: how many steps are **in
-  flight** (bold green while it is not zero, `not running` in bold yellow when
-  there is no process), what `mc run lanes` allows when it is more than the
-  default, and how long the runner has been up. Under it **one row per lane**,
-  whether or not that lane has a step: the lane — `memoro #2` when a repository
-  has more than one, plain `memoro` when it has one — then the project in
-  flight there in bold, its kind, the clock (bold, because it is the number on
-  the row that moves) and the check-ins the runner has written into the session
-  (`47 min · 0 check-ins`; none for codex, which gets none), and what is running it: tool, model,
-  and the advisor model when the step has one. `mc run` drives `per_repo` lanes
-  on every repository at the same time (`mc run lanes`), and a lane is a lane
-  between steps as much as during one — with a row only where there was a
-  step, a lane waiting for its next project and a lane whose process had died
-  were the same absence; and with one row per *repository*, until 2026-09-11,
-  the second lane on memoro was never drawn at all. A lane between steps says
-  `idle`. The pid that used to end the row was the runner's *own*
-  (`current-memoro.json` and `current-memoro-cli.json` both carry it, because
-  both lanes are that one process), so it named neither lane and killed nothing.
-  It is in `mc --json` and in `mc status`. A runner that is not running has no
-  lanes and one line that says so. Then a pending `~/mc/runner/STOP`, the lane
-  files whose process is gone, and one line of the day behind it: steps, merged,
-  open, failed, timed out, and an estimated **list-price** cost — `failed` red
-  and `timed out` yellow only while the count is not zero. The machine, and
-  nothing else. Under the day, one line for **production**, and **what is wrong
-  with it comes first**: a deploy that failed, with the step it stopped at, or
-  one running now; then the sha from the last `deployed` row of
-  `~/mc/runner/log/deploys.tsv`, and last the bookkeeping — how long ago, which
-  build — which is what a narrow terminal drops. The holder is not on the line
-  at all: on 2026-09-06 a failed deploy's own `Deploy source preflight` was
-  clipped off the end while `by martin@laptop` sat in the middle of it. When the
-  `/api/version` the helper last cached names another commit than the last
-  deploy, the line leads with both readings in yellow — that is a deploy made
-  outside the record, or one that did not take, and only a person can say which.
-  The two are compared **on the shorter of them**: `deploys.tsv` records the
-  whole 40-character sha and `/api/version` answers seven, so a plain `!==`
-  called every deploy this machine ever made a mismatch, in bold yellow, with
-  the same `919de24` printed on both sides. The line is absent where neither
-  source knows anything.
-- **HELPER** and **BRIEF** — one row each, drawn open or not. They are
-  singletons, so *"is the helper running?"* is a question an empty row answers
-  as well as a full one.
+- **DEPLOY** — what is in production, on the section's own heading, and
+  **what is wrong with it comes first**: a deploy that failed, with the step
+  it stopped at, or one running now; then the sha from the last `deployed` row
+  of `~/mc/runner/log/deploys.tsv`, and last the bookkeeping — how long ago,
+  which build — which is what a narrow terminal drops. It was a line under
+  RUNNER's day. The holder is not on the line at all: on 2026-09-06 a failed
+  deploy's own `Deploy source preflight` was clipped off the end while `by
+  martin@laptop` sat in the middle of it. When the `/api/version` the helper
+  last cached names another commit than the last deploy, the line leads with
+  both readings in yellow — that is a deploy made outside the record, or one
+  that did not take, and only a person can say which. The two are compared
+  **on the shorter of them**: `deploys.tsv` records the whole 40-character sha
+  and `/api/version` answers seven. Where neither source knows anything the
+  heading says `nothing deployed yet`.
+- **MC** — mc itself, in one line: the version, **whether there is newer code
+  than the runner is running**, how long the runner has been up, and the
+  commit it is on. `mc run` writes the commit it started on into
+  `runner.json` (a runner executes the code it was spawned with, not what the
+  checkout holds now), and the page counts what `origin/main` of mc's own
+  checkout has past it — past the checkout's HEAD for a runner that never
+  said. *Update available — origin/main `<sha>` is N commits ahead · mc run
+  --update* is bold yellow, because nothing changes it but that verb. *Update
+  requested 12 min ago — the runner hands over after this round* is green and
+  is `~/mc/runner/UPDATE` with its own timestamp: somebody has asked, and a
+  handover that is not happening can be seen not happening. Otherwise `up to
+  date`. It replaced the line that said how old the PR cache is, which
+  `mc --json` still carries under `caches`.
+
+### A status that changed out of reach
+
+PROGRAMMES is the top of a page that is taller than most terminals, so its
+rows are the ones that scroll off, and the differ leaves a row alone once it
+is above the top of the screen — history is not rewritten. So a project went
+from `running` to `ready` and its row stood there saying `running` until a key
+was pressed (Martin, 2026-09-19: *"status per projekt uppdateras inte
+alltid"*). Each frame now carries a **key** (`pageKey`, `home.js`): every
+project's status, steps, in-flight mark and open PR — and none of the clocks
+beside them. When the key differs from the last frame's **and** the top of
+the page is off the screen (`topOffScreen`), the page is printed again whole
+(`reprintWhole`, `page-frame.js`): what is left of the old page on screen is
+erased, the new one scrolls exactly as a first print does, and scrolling up
+finds the new page first. It costs scrollback, which is why a planning
+session getting a minute older never triggers it, and a page that fits the
+screen is diffed as it always was.
 
 Two rules the sections keep:
 
@@ -408,7 +428,7 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `RUNNER` `HELPER` `BRIEF` `NEXT` `MERGES` `INTAKE` `PROGRAMMES` `WORK` | bold cyan |
+| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `NEXT` `RUNNER` `MERGES` `DEPLOY` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | RUNNER | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
 | RUNNER | the heading's lane setting and uptime | grey |
@@ -442,11 +462,11 @@ person set it to.
 | MERGES | `measuring, not landing` on a check-mode round | plain |
 | MERGES | a queued row: `· repo  #pr`, the reason, the age | green bold, green, grey |
 | MERGES | a held row: `· project  #pr`, the reason | yellow bold, yellow |
-| INTAKE | the digest's date, under 24 h old, older | green, yellow |
-| INTAKE | new errors, when > 0 | red |
-| INTAKE | proposals, when > 0 | yellow |
-| INTAKE | a `!` line: its mark, its message, the count and fingerprint after it | red, bold, grey |
-| INTAKE | no digest yet, no new errors, no proposals | grey |
+| HELPER | a digest's age, under 24 h old, older | green, yellow |
+| HELPER | new errors, when > 0; the `!` before the loudest message | red |
+| HELPER | no digest yet, no new errors | grey |
+| BRIEF | proposals, when > 0 | yellow |
+| MC | update available; update requested; up to date | bold yellow, green, grey |
 | PROGRAMMES | a project the runner is stepping — `●`, its name | green, bold |
 | PROGRAMMES | a quiet project's name and `next` | plain, plain |
 | PROGRAMMES | the programme heading | bold cyan |

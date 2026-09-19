@@ -12,13 +12,13 @@ import { describe, it } from 'node:test';
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
   collectPage, countNewErrors, intakeSection, mergesSection, newErrorLines, nextSection,
-  programmesSection, readDigests, runnerSection, sessionsSection,
+  programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
 } from '../../src/mc/page-collect.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
-import { run as page } from '../../src/mc/commands/home.js';
+import { pageKey, run as page } from '../../src/mc/commands/home.js';
 
 const NOW = new Date('2026-08-29T12:00:00Z');
 
@@ -164,21 +164,23 @@ describe('RUNNER', () => {
    * row only where there was a step — so a lane waiting for its next project
    * and a lane whose process had died were the same absence.
    */
-  it('carries one lane per repository whether or not that lane has a step', () => {
+  it('carries every lane, numbered through, whether or not it has a step', () => {
     const runner = runnerSection({
       runner: RUNNER, currents: [CURRENT], rows: ROWS, now: NOW, alive: live,
     });
-    assert.deepEqual(runner.lanes.map((lane) => [lane.repo, lane.lane, lane.step?.name ?? null]),
-      [['memoro', 0, null], ['memoro-cli', 0, 'mc-ui']]);
+    // The steps fill from the top: a running row is its step's repository, and
+    // an idle one is only a number.
+    assert.deepEqual(runner.lanes.map((lane) => [lane.number, lane.repo, lane.step?.name ?? null]),
+      [[1, 'memoro-cli', 'mc-ui'], [2, null, null]]);
     // The step on the lane is the one in `steps`, not a copy of it: there is
     // one of it, so the two cannot come to disagree.
-    assert.equal(runner.lanes[1].step, runner.steps[0]);
+    assert.equal(runner.lanes[0].step, runner.steps[0]);
     // A repository nobody named is a lane all the same when a lane file says
     // the runner is in it.
     assert.deepEqual(runnerSection({ runner: RUNNER, currents: [CURRENT], repos: [], now: NOW, alive: live })
       .lanes.map((lane) => lane.repo), ['memoro-cli']);
     assert.deepEqual(runnerSection({ repos: ['memoro'], now: NOW, alive: () => false })
-      .lanes, [{ repo: 'memoro', lane: 0, step: null }]);
+      .lanes, [{ number: 1, repo: null, lane: null, step: null }]);
   });
 
   /**
@@ -189,7 +191,7 @@ describe('RUNNER', () => {
    * never on the page: on 2026-09-11 memoro had two steps in flight and RUNNER
    * showed one of them, over an idle memoro-cli that read like the other half.
    */
-  it('carries per_repo lanes per repository, and a step on the lane its file names', () => {
+  it('carries as many lanes as the runner can fill, and both steps of one repository', () => {
     const second = {
       name: 'docx-editor', kind: 'step', repo: 'memoro-cli', lane: 1, tool: 'claude', model: 'sonnet', advisor: 'opus',
       check_in_minutes: 60, check_ins: 0, started: '2026-08-29T11:50:00Z', pid: 4242, worktree: '/w/docx-editor/memoro-cli',
@@ -198,8 +200,11 @@ describe('RUNNER', () => {
       runner: RUNNER, currents: [CURRENT, second], repos: ['memoro', 'memoro-cli'],
       lanes: { per_repo: 2, total: 3 }, now: NOW, alive: live,
     });
-    assert.deepEqual(runner.lanes.map((lane) => [lane.repo, lane.lane, lane.step?.name ?? null]), [
-      ['memoro', 0, null], ['memoro', 1, null], ['memoro-cli', 0, 'mc-ui'], ['memoro-cli', 1, 'docx-editor'],
+    // Two lanes on each of two repositories under a cap of three is three
+    // rows, not four: the fourth could never hold a step beside the others.
+    // Oldest step first, so a row moves only when one above it ends.
+    assert.deepEqual(runner.lanes.map((lane) => [lane.number, lane.repo, lane.lane, lane.step?.name ?? null]), [
+      [1, 'memoro-cli', 0, 'mc-ui'], [2, 'memoro-cli', 1, 'docx-editor'], [3, null, null, null],
     ]);
     assert.deepEqual(runner.setting, { per_repo: 2, total: 3 });
     // What the step is running on rides along: the advisor is on the row.
@@ -209,15 +214,30 @@ describe('RUNNER', () => {
     const wider = runnerSection({
       runner: RUNNER, currents: [second], repos: ['memoro-cli'], lanes: { per_repo: 1, total: null }, now: NOW, alive: live,
     });
-    assert.deepEqual(wider.lanes.map((lane) => [lane.lane, lane.step?.name ?? null]), [[0, null], [1, 'docx-editor']]);
+    assert.deepEqual(wider.lanes.map((lane) => [lane.number, lane.step?.name ?? null]), [[1, 'docx-editor']]);
+    const over = runnerSection({
+      runner: RUNNER, currents: [CURRENT, second], repos: ['memoro-cli'], lanes: { per_repo: 1, total: null }, now: NOW, alive: live,
+    });
+    assert.equal(over.lanes.length, 2, 'a step past the setting still has its row');
+
+    // Which step of its plan the session is on comes off the plan, because a
+    // lane file does not carry it.
+    const planned = runnerSection({
+      runner: RUNNER, currents: [second], repos: ['memoro-cli'], plans: [{ project: 'docx-editor', step: 4, steps: 6 }],
+      now: NOW, alive: live,
+    });
+    assert.deepEqual([planned.steps[0].step, planned.steps[0].steps], [4, 6]);
+    assert.match(strip(rowWith(paintedPage(pageData({ runner: planned })), 'docx-editor')),
+      /^ {2}● memoro-cli {2}docx-editor {16}step 4\/6 {4}10 min {3}claude sonnet · opus advisor · 0 check-ins$/u);
 
     const lines = paintedPage(pageData({ runner }));
     assert.match(strip(rowWith(lines, 'docx-editor')),
-      /^ {2}● memoro-cli #2 {2}docx-editor {16}step · 10 min · 0 check-ins · claude sonnet · opus advisor$/u);
-    assert.match(strip(rowWith(lines, 'mc-ui')), /^ {2}● memoro-cli #1 {2}mc-ui/u);
-    assert.match(strip(rowWith(lines, 'memoro #2')), /^ {2}· memoro #2 {6}idle$/u);
-    // The heading carries the setting, so a page reader knows what the rows add up to.
-    assert.match(strip(rowWith(lines, 'RUNNER')), /RUNNER {2}2 in flight · lanes 2 per repository, 3 in total · up 120 min/u);
+      /^ {2}● memoro-cli {2}docx-editor {16}step {8}10 min {3}claude sonnet · opus advisor · 0 check-ins$/u);
+    assert.match(strip(rowWith(lines, 'mc-ui')), /^ {2}● memoro-cli {2}mc-ui/u);
+    // An idle lane is a number and nothing else: it has no repository until a
+    // step is in it.
+    assert.match(strip(rowWith(lines, 'lane 3')), /^ {2}· lane 3 {6}idle$/u);
+    assert.match(strip(rowWith(lines, 'RUNNER')), /RUNNER {2}2 in flight · 3 lanes/u);
   });
 
   /**
@@ -226,7 +246,7 @@ describe('RUNNER', () => {
    * both lanes, so the same number was drawn twice and killed nothing. The
    * repository is what tells the two rows apart.
    */
-  it('draws a row per lane naming the repository, and no pid', () => {
+  it('draws a running lane as its repository and an idle one as its number, and no pid', () => {
     const lines = paintedPage(pageData({
       runner: runnerSection({
         runner: RUNNER,
@@ -239,7 +259,7 @@ describe('RUNNER', () => {
         alive: live,
       }),
     }));
-    assert.match(strip(rowWith(lines, 'docx-editor')), /^ {2}● memoro {6}docx-editor {16}step · 10 min · 0 check-ins · claude opus$/u);
+    assert.match(strip(rowWith(lines, 'docx-editor')), /^ {2}● memoro {6}docx-editor {16}step {8}10 min {3}claude opus · 0 check-ins$/u);
     assert.match(strip(rowWith(lines, 'mc-ui')), /^ {2}● memoro-cli {2}mc-ui/u);
     for (const line of lines) assert.doesNotMatch(strip(line), /pid 4242/u, 'the runner’s own pid says nothing about a lane');
 
@@ -248,8 +268,8 @@ describe('RUNNER', () => {
     const idle = paintedPage(pageData({
       runner: runnerSection({ runner: RUNNER, currents: [CURRENT], rows: ROWS, now: NOW, alive: live }),
     }));
-    assert.match(strip(rowWith(idle, 'idle')), /^ {2}· memoro {6}idle$/u);
-    assert.match(strip(rowWith(idle, 'RUNNER')), /RUNNER {2}1 in flight · up 120 min/u);
+    assert.match(strip(rowWith(idle, 'idle')), /^ {2}· lane 2 {6}idle$/u);
+    assert.match(strip(rowWith(idle, 'RUNNER')), /RUNNER {2}1 in flight · 2 lanes/u);
 
     // No runner, no lanes: a lane is something a process drives, and one line
     // says the process is not there. The heading beside it says `mc run`.
@@ -265,7 +285,7 @@ describe('RUNNER', () => {
  * `mc deploy` wrote and the `/api/version` the helper cached. Fixtures only —
  * the page fetches nothing.
  */
-describe('RUNNER — production', () => {
+describe('DEPLOY', () => {
   const SHA = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012';
   const OTHER = 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00';
   const DEPLOYED = {
@@ -293,7 +313,7 @@ describe('RUNNER — production', () => {
     assert.equal(p.age_seconds, 7200);
     assert.equal(p.differs, false);
     assert.equal(p.running, null);
-    assert.equal(strip(line()).trim(), 'production 1a2b3c4 · deployed 2 h ago · build 813');
+    assert.match(strip(line()), /^ {2}DEPLOY {2}production 1a2b3c4 · deployed 2 h ago · build 813 +mc deploy$/u);
     // The holder is on the object and in `mc status`, and not on the line: it
     // is a hostname, it is bookkeeping, and it was being spent before what is
     // wrong (2026-09-06).
@@ -324,12 +344,12 @@ describe('RUNNER — production', () => {
     // Both readings in one statement, because the page cannot say which of them
     // to believe — and how old the reading is after them, where the width can
     // take it without taking the answer.
-    assert.match(strip(drawn), /^ {2}production answers b3e65b6, mc deployed 1a2b3c4 · \/api\/version 60 min old/u);
+    assert.match(strip(drawn), /^ {2}DEPLOY {2}production answers b3e65b6, mc deployed 1a2b3c4 · \/api\/version 60 min old/u);
     // Yellow is the page's colour for what waits on a person, and nothing here
     // can tell which of the two shas is the one to believe.
     // The sha itself carries no colour — it is the text of the line — so the
     // only two runs on the row are the yellow and the grey behind it.
-    assert.equal(signature(drawn), 'yellow+bold grey grey grey');
+    assert.equal(signature(drawn), 'bold+cyan yellow+bold grey grey grey');
   });
 
   it('carries a deploy that is running now, and calls one that never came back late', () => {
@@ -338,11 +358,11 @@ describe('RUNNER — production', () => {
     assert.equal(fresh.running.short, 'b3e65b6');
     assert.equal(fresh.running.late, false);
     assert.match(strip(line({ attempt: { ...DEPLOYED, started, ended: '', sha: OTHER, outcome: 'running' } })),
-      /^ {2}deploying b3e65b6 since 5 min · production 1a2b3c4/u);
+      /^ {2}DEPLOY {2}deploying b3e65b6 since 5 min · production 1a2b3c4/u);
 
     const old = { ...DEPLOYED, started: '2026-08-29T08:00:00Z', ended: '', sha: OTHER, outcome: 'running' };
     assert.equal(section({ attempt: old }).running.late, true);
-    assert.match(strip(line({ attempt: old })), /^ {2}deploying b3e65b6 since 4 h — no end recorded/u);
+    assert.match(strip(line({ attempt: old })), /^ {2}DEPLOY {2}deploying b3e65b6 since 4 h — no end recorded/u);
   });
 
   /**
@@ -358,7 +378,7 @@ describe('RUNNER — production', () => {
     assert.equal(section({ attempt: failed }).failed.stopped_at, 'Deploy source preflight');
     for (const columns of [100, 120]) {
       assert.match(strip(line({ attempt: failed }, { columns })),
-        /^ {2}a deploy failed 30 min ago at Deploy source preflight · production 1a2b3c4/u);
+        /^ {2}DEPLOY {2}a deploy failed 30 min ago at Deploy source preflight · production 1a2b3c4/u);
     }
   });
 
@@ -373,6 +393,8 @@ describe('RUNNER — production', () => {
     const quiet = paintedPage(pageData({ runner: runnerSection({ rows: [], now: NOW, alive: () => false }) }));
     assert.equal(quiet.filter((row) => strip(row).includes('production')).length, 0,
       'a machine that has never deployed and never collected says nothing about production');
+    // The section is there all the same, as the desks are: one of it, always.
+    assert.match(strip(rowWith(quiet, 'DEPLOY')), /^ {2}DEPLOY {2}nothing deployed yet/u);
   });
 });
 
@@ -479,7 +501,7 @@ describe('NEXT', () => {
    * `0 of 0 queued`, while the runner was walking 41 projects and running one.
    * Nothing about the runner's order needs the file to say anything.
    */
-  it('names what the runner would step with queue.md empty, one block per lane', () => {
+  it('names what the runner would step with queue.md empty, as one list', () => {
     const next = nextSection({ queueText: '', plans: PLANS });
     assert.equal(next.from_queue, 0);
     assert.deepEqual(next.lanes.map((lane) => [lane.repo, lane.count, lane.items.map((item) => item.name)]), [
@@ -493,9 +515,13 @@ describe('NEXT', () => {
       [1, 1, 'The page'],
     ]);
     const lines = renderPageLines(pageData({ next }), { columns: 120 });
-    assert.ok(lines.some((line) => /NEXT {2}2 runnable of 4 · the order is alphabetical/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {7}docx-editor\s+step 2\/2\s+Measure paste and IME$/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {7}mc-ui\s+step 1\/1\s+The page$/u.test(line)), lines.join('\n'));
+    // The heading is the one number anybody used, and a row is four columns:
+    // repository, project, which step of its plan, and what the step is called.
+    assert.ok(lines.some((line) => /NEXT {2}2 runnable {2,}mc status <name>$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {5}memoro {6}docx-editor\s+step 2\/2\s+Measure paste and IME$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {5}memoro-cli {2}mc-ui\s+step 1\/1\s+The page$/u.test(line)), lines.join('\n'));
+    // What was skipped, and why, is not the section's to say any more.
+    assert.ok(!lines.some((line) => /skipped \d/u.test(line)), lines.join('\n'));
     assert.ok(!lines.some((line) => /empty — mc brief/u.test(line)), 'the queue file is not the queue');
     // And the brand row above it counts the work rather than the file: with
     // `queue.md` empty it said `0 of 0 queued` while all of this was true.
@@ -505,11 +531,12 @@ describe('NEXT', () => {
     assert.doesNotMatch(brand, /queued/u);
   });
 
-  it('says on the heading how much of the order queue.md chose', () => {
-    const named = renderPageLines(pageData({
-      next: nextSection({ queueText: 'mc-ui\ndocx-editor\n', plans: PLANS }),
-    }), { columns: 120 });
-    assert.ok(named.some((line) => /NEXT {2}2 runnable of 4 · 2 from queue\.md, then alphabetical/u.test(line)), named.join('\n'));
+  it('keeps how much of the order queue.md chose on the object, and off the heading', () => {
+    const next = nextSection({ queueText: 'mc-ui\ndocx-editor\n', plans: PLANS });
+    assert.equal(next.from_queue, 2);
+    const named = renderPageLines(pageData({ next }), { columns: 120 });
+    assert.ok(named.some((line) => /NEXT {2}2 runnable {2,}mc status/u.test(line)), named.join('\n'));
+    assert.ok(!named.some((line) => /queue\.md/u.test(line)), named.join('\n'));
   });
 
   /**
@@ -533,17 +560,20 @@ describe('NEXT', () => {
     assert.deepEqual(short.lanes.map((item) => item.heads), [1]);
   });
 
-  it('draws three deep per lane and counts the rest of that lane', () => {
-    const many = ['a', 'b', 'c', 'd'].map((name) => planRecord({
+  it('draws four per repository, and a repository with one keeps its row', () => {
+    const many = ['a', 'b', 'c', 'd', 'e'].map((name) => planRecord({
       repo: 'memoro', programme: 'p', project: name, status: 'ready', title: `Do ${name}`,
     }));
     const next = nextSection({ queueText: '', plans: [...many, PLANS[2]] });
     assert.deepEqual(next.lanes.map((lane) => [lane.repo, lane.count, lane.items.length, lane.more]), [
-      ['memoro', 4, 3, 1], ['memoro-cli', 1, 1, 0],
+      ['memoro', 5, 4, 1], ['memoro-cli', 1, 1, 0],
     ]);
     assert.equal(next.more, 1);
     const lines = renderPageLines(pageData({ next }), { columns: 120 });
-    assert.ok(lines.some((line) => /^ {5}memoro · 4 runnable · … 1 more$/u.test(line)), lines.join('\n'));
+    const rows = lines.filter((line) => /^ {5}memoro(-cli)? /u.test(line));
+    assert.deepEqual(rows.map((line) => line.trim().split(/\s+/u).slice(0, 2).join(' ')),
+      ['memoro a', 'memoro b', 'memoro c', 'memoro d', 'memoro-cli mc-ui']);
+    assert.ok(lines.some((line) => /NEXT {2}6 runnable/u.test(line)), lines.join('\n'));
   });
 
   // The page used to answer "somebody has a session open here" as a skip of its
@@ -656,8 +686,9 @@ describe('MERGES', () => {
 
   it('says nothing landing when no round is running', () => {
     const lines = renderPageLines(pageData({ merges: mergesSection({}) }), { columns: 120 });
-    assert.ok(lines.some((line) => /· nothing landing$/u.test(line)), lines.join('\n'));
+    // Once, on the heading: a row under it saying the same thing is a row.
     assert.ok(lines.some((line) => /MERGES {2}nothing landing, nothing waiting/u.test(line)), lines.join('\n'));
+    assert.ok(!lines.some((line) => /· nothing landing$/u.test(line)), lines.join('\n'));
   });
 });
 
@@ -715,6 +746,14 @@ describe('INTAKE', () => {
     assert.equal(intake.repos[0].new_errors, 2);
     assert.equal(intake.repos[0].loud, 1);
     assert.equal(intake.proposals, 2);
+    // What lies in proposals, as BRIEF says it: how far back the pile reaches
+    // and the newest by name — read off the file names, never out of the files.
+    assert.deepEqual(intake.proposal_files, { oldest: '2026-08-29', newest: '2026-08-29', newest_names: ['two', 'one'] });
+    const lines = renderPageLines(pageData({ intake }), { columns: 100 });
+    const at = lines.findIndex((line) => /^ {2}BRIEF/u.test(line));
+    assert.match(lines[at + 1], /^ {7}2 proposals · 08-29 · newest two · one$/u);
+    assert.match(lines[lines.findIndex((line) => /^ {2}HELPER/u.test(line)) + 1],
+      /^ {7}memoro {6}2 new errors, 1 loud · 2 h old/u);
   });
 
   /**
@@ -746,13 +785,16 @@ describe('INTAKE', () => {
     assert.deepEqual([condition.message, condition.fingerprint, condition.count],
       ['failing now, and not in the last digest — `gate-round-died (2)`', null, null]);
 
+    // The page draws one row per digest under HELPER, with the loudest message
+    // in what is left of it; the rest are the digest's, and `--json`'s.
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
-    const at = lines.findIndex((line) => /^ {2}INTAKE/u.test(line));
-    assert.match(lines[at + 2], /^ {2} {2}! {2}the first — 90x 500 `one`$/u, 'the `!` lines come under their repository row');
-    assert.match(lines[at + 5], /… 1 more above the threshold/u);
+    const at = lines.findIndex((line) => /^ {2}HELPER/u.test(line));
+    assert.match(lines[at + 1], /^ {7}memoro {6}5 new errors, 4 loud · 2026-08-29 {3}! the first — 90x 500$/u);
+    assert.equal(lines[at + 2], '', 'one row for the digest, then the next section');
+    assert.ok(!lines.some((line) => /the second|above the threshold/u.test(line)), lines.join('\n'));
 
-    // The message keeps most of the row or the fingerprint goes: at 60 columns
-    // a fingerprint and a count would have taken half the line.
+    // Where the message would have no room to be read it is not drawn at all:
+    // the count beside it has already said there is something loud.
     const long = intakeSection({
       digests: [{
         repo: 'memoro',
@@ -762,9 +804,12 @@ describe('INTAKE', () => {
       }],
     });
     const narrow = renderPageLines(pageData({ intake: long }), { columns: 60 });
-    const loud = narrow.find((row) => /^ {4}!/u.test(row));
-    assert.match(loud, /^ {4}! {2}the Workers runtime canceled this request the Worker…$/u);
-    assert.equal(width(loud), 60);
+    const digest = narrow[narrow.findIndex((row) => /^ {2}HELPER/u.test(row)) + 1];
+    assert.match(digest, /^ {7}memoro {6}1 new error, 1 loud · 2026-08-29$/u);
+    const roomy = renderPageLines(pageData({ intake: long }), { columns: 100 });
+    const loud = roomy[roomy.findIndex((row) => /^ {2}HELPER/u.test(row)) + 1];
+    assert.match(loud, /! the Workers runtime canceled this request .*…$/u);
+    assert.equal(width(loud), 100);
   });
 
   it('has no `!` lines to print on a quiet day', () => {
@@ -773,7 +818,8 @@ describe('INTAKE', () => {
     });
     assert.deepEqual(intake.repos[0].loud_lines, []);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
-    const at = lines.findIndex((line) => /^ {2}INTAKE/u.test(line));
+    const at = lines.findIndex((line) => /^ {2}HELPER/u.test(line));
+    assert.match(lines[at + 1], /^ {7}memoro {6}0 new errors · 2026-08-29$/u);
     assert.equal(lines[at + 2], '', 'the repository row, then nothing before the next section');
   });
 
@@ -799,8 +845,8 @@ describe('INTAKE', () => {
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     assert.ok(!lines.some((line) => /no digest yet/u.test(line)), 'the collect has run');
     // One row each, and neither repository is hidden behind the other.
-    assert.ok(lines.some((line) => /^ +memoro · 2026-08-29/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ +memoro-cli · 2026-08-29/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {7}memoro {6}2 new errors/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {7}memoro-cli {2}/u.test(line)), lines.join('\n'));
   });
 
   it('has no digest to name when nothing has been collected at all', () => {
@@ -813,7 +859,8 @@ describe('INTAKE', () => {
     assert.deepEqual(intake.repos, []);
     assert.equal(intake.digests, 0);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
-    assert.ok(lines.some((line) => /INTAKE {2}no digest yet — mc helper --intake has not run/u.test(line)), lines.join('\n'));
+    const at = lines.findIndex((line) => /^ {2}HELPER/u.test(line));
+    assert.match(lines[at + 1], /^ {7}no digest yet — mc helper --intake has not run$/u);
   });
 });
 
@@ -1149,13 +1196,21 @@ const DATA = pageData({
 
 describe('the page', () => {
   it('prints the sections in order — what does not move first, what moves nearest the prompt', () => {
-    const text = renderPage(DATA, { columns: 120, version: '0.7.11', now: NOW });
+    const text = renderPage({
+      ...DATA,
+      mc: mcSection({ process: DATA.runner.process, commit: 'abc1234', main: 'def5678', behind: 2, now: NOW }),
+    }, { columns: 120, version: '0.7.11', now: NOW });
     // The live loop can only rewrite rows still on the screen, so the rows that
     // change are the ones near the prompt: NEXT changes every round, RUNNER
     // every frame, the desks while somebody is at them. The listing above them
     // changes when a round lands, not between two frames — at the top, RUNNER
     // scrolled off under the projects and never moved again (2026-09-03).
-    const at = ['PROGRAMMES', 'INTAKE', 'WORK', 'NEXT', 'MERGES', 'RUNNER', 'HELPER', 'BRIEF'].map((head) => text.indexOf(`  ${head}`));
+    //
+    // The order itself is Martin's (2026-09-19): the listing, the two desks
+    // with what lies on each, what the runner takes next and what it is doing,
+    // and the short end of the page — merges, the deploy, mc itself.
+    const at = ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'NEXT', 'RUNNER', 'MERGES', 'DEPLOY', 'MC  '].map((head) => text.indexOf(`\n  ${head}`));
+    assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     // What is true of the work, and never `0 of 0 queued`: the step in flight,
@@ -1164,35 +1219,34 @@ describe('the page', () => {
     assert.doesNotMatch(text, /queued/u);
     // One row per lane, the repository first and the runner's own pid nowhere:
     // both lane files carry it, so it named neither of them.
-    assert.match(text, /^ {2}● memoro-cli {2}mc-ui\s+step · 20 min · 0 check-ins · claude opus$/mu);
-    assert.match(text, /^ {2}· memoro {6}idle$/mu);
+    assert.match(text, /^ {2}● memoro-cli {2}mc-ui\s+step {8}20 min {3}claude opus · 0 check-ins$/mu);
+    assert.match(text, /^ {2}· lane 2 {6}idle$/mu);
     assert.doesNotMatch(text, /pid 4242/u);
     assert.match(text, /■ STOP requested — the runner exits after the steps it is in/u);
     assert.match(text, /HELPER {2}● open 60 min · claude sonnet · pid 99\s+mc helper/u);
     assert.match(text, /BRIEF {2}· {2}not open\s+mc brief/u);
     assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
     assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
-    assert.match(text, /RUNNER {2}1 in flight · up 120 min\s+mc run/u);
+    assert.match(text, /RUNNER {2}1 in flight · 2 lanes\s+mc run/u);
     assert.match(text, /^ {2}3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)$/mu);
-    assert.match(text, /NEXT {2}2 runnable of 4 · 3 from queue\.md, then alphabetical\s+mc status <name>/u);
+    assert.match(text, /NEXT {2}2 runnable\s+mc status <name>/u);
     assert.doesNotMatch(text, /NEXT[^\n]*queued/u, 'queued moved to MERGES');
     assert.match(text, /MERGES {2}1 waiting\s+mc merge <repo> <pr>/u);
     // One block per lane, three deep, and the row says where in its plan the
     // project is. The lanes run at the same time: both heads start now.
-    assert.match(text, /^ {5}memoro-cli · 1 runnable\n {7}mc-ui\s+step 1\/1\s+The page$/mu);
-    assert.match(text, /^ {5}memoro · 1 runnable\n {7}docx-editor\s+step 2\/2\s+Measure paste and IME$/mu);
-    assert.match(text, /skipped 2 \(done 1, blocked 1\)/u);
+    assert.match(text, /^ {5}memoro-cli {2}mc-ui\s+step 1\/1\s+The page\n {5}memoro {6}docx-editor\s+step 2\/2\s+Measure paste and IME$/mu);
+    assert.doesNotMatch(text, /skipped \d/u, 'NEXT is the order and nothing else');
     assert.match(text, /· memoro {2}#10958 {2}another gate round is running/u);
     assert.doesNotMatch(text, /DECISIONS/u);
-    assert.match(text, /INTAKE {2}1 digest · 1 proposal\s+mc helper --intake/u);
-    assert.match(text, /^ +memoro · 2026-08-29 \(60 min old\) · 1 new error \(1 loud\)$/mu);
+    assert.match(text, /^ {7}memoro {6}1 new error, 1 loud · 60 min old {3}! /mu);
+    assert.match(text, /^ {7}1 proposal$/mu);
     assert.match(text, /PROGRAMMES {2}3 programmes · 4 projects {2}ready 2 · blocked 1 · done 1\s+p {2}plan a programme/u);
     assert.match(text, /^ {2}docx-editing-surface\s+1 ready · 0 blocked\s+·\s{2}no plan session$/mu,
       'the programme is a heading of its own, and it counts its own projects');
     // The blocked project is one row for its programme — the number that still
     // opens it, and what holds it — and the line that adds them all up is under
     // NEXT, where somebody is looking for what to do.
-    assert.match(text, /^ {8}1 blocked {2}· {2}1 {2}· {2}assistant-avatar-1 1$/mu);
+    assert.doesNotMatch(text, /^ {8}1 blocked {2}·/mu, 'the programme heading has said it, and BRIEF says what holds it');
     assert.doesNotMatch(text, /avatar-self-serve/u, 'a blocked project is collapsed, not listed');
     assert.match(text, /^ {7}1 blocked · 1 on a decision · held most by assistant-avatar-1 1$/mu);
     assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
@@ -1202,7 +1256,14 @@ describe('the page', () => {
     // open them, and the file that has them all.
     assert.match(text, /^ {7}5 {2}· {2}~\/mc\/runner\/unplanned-workareas\.md {2}has them all$/mu);
     assert.doesNotMatch(text, /ui-fixes/u, 'twelve rows that never change are a count and a file');
-    assert.match(text, /fetched origin, PRs 2 h old — --fresh asks GitHub/u);
+    // mc itself is the last line: how long the runner has been up, on what, and
+    // that there is newer code than it runs. How old the PR cache is, which was
+    // here, is `--json`'s.
+    assert.match(text, /^ {2}MC {2}0\.7\.11 · update available — origin\/main def5678 is 2 commits ahead · mc run --update · runner up 120 min$/mu);
+    // The commit the runner is on is the first thing the width takes, and the last it gives back.
+    assert.match(renderPage({ ...DATA, mc: mcSection({ process: DATA.runner.process, commit: 'abc1234', behind: 0, now: NOW }) },
+      { columns: 120, version: '0.7.11', now: NOW }), /^ {2}MC {2}0\.7\.11 · up to date · runner up 120 min · on abc1234$/mu);
+    assert.doesNotMatch(text, /--fresh asks GitHub/u);
     assert.match(text, /note: no queue\.md/u);
     assert.ok(!/note: PRs from cache/u.test(text), 'the cache line already says it');
   });
@@ -1219,7 +1280,7 @@ describe('the page', () => {
     // 5 is the orphan workarea, which is a line in WORK rather than a row of
     // its own either way — `a` is about projects.
     assert.deepEqual(numbers(all), [1, 2, 3, 4]);
-    assert.deepEqual(numbers(collapsed), [2, 3, 4], 'the collapsed row is where 1 went');
+    assert.deepEqual(numbers(collapsed), [2, 3, 4], '1 is the `1 blocked` on its programme\'s heading, and still opens');
     assert.match(all.join('\n'), /^ {4}1 · avatar-self-serve\s+memoro\s+blocked/mu);
     assert.ok(!all.some((line) => / {8}1 blocked {2}· {2}1/u.test(line)), 'nothing left to collapse');
     // The rollup is not a drawing choice: it counts the plans, and it says the
@@ -1228,17 +1289,17 @@ describe('the page', () => {
       assert.ok(lines.some((line) => /1 blocked · 1 on a decision · held most by assistant-avatar-1 1/u.test(line)));
     }
 
-    // Four blocked projects in two programmes: three rows go, two collapsed
-    // rows come, and the page is a row shorter for it. That is the whole trade
-    // — shorter by collapsing what is not actionable, never by leaving work out.
+    // Four blocked projects in two programmes: four rows go and none comes —
+    // the count on each programme's heading is what is left of them, because a
+    // row under it said the same thing twice (Martin, 2026-09-19).
     const many = pageData({ programmes: programmesSection({ plans: STOPPED, areas: [] }) });
     const short = renderPageLines(many, { columns: 120, now: NOW });
     const long = renderPageLines(many, { columns: 120, now: NOW, expand: true });
-    assert.equal(long.length - short.length, 2);
+    assert.equal(long.length - short.length, 4);
     assert.deepEqual(numbers(long), [1, 2, 3, 4, 5]);
     assert.deepEqual(numbers(short), [5], 'only d-four, the one that is ready');
-    assert.match(short.join('\n'), /^ {8}3 blocked {2}· {2}2–4 {2}· {2}plan-review 2, home-on-msr 1$/mu);
-    assert.match(short.join('\n'), /^ {8}1 blocked {2}· {2}1 {2}· {2}home-on-msr 1$/mu);
+    assert.ok(!short.some((line) => /^ {8}\d+ blocked/u.test(line)), short.join('\n'));
+    assert.ok(short.some((line) => /^ {2}\S+\s+1 ready · 3 blocked/u.test(line)), short.join('\n'));
     assert.match(short.join('\n'), /^ {7}4 blocked · 2 on a decision, 2 on a project · held most by home-on-msr 2, plan-review 2$/mu);
   });
 
@@ -1373,6 +1434,8 @@ describe('collectPage', () => {
       // this git says it could not answer, and the reading then reads the
       // worktree as clean — the same thing the round does.
       git: (cwd, args) => { gitArgs.push(args.join(' ')); return null; },
+      // No checkout of mc's own: the MC line's three reads are another test's.
+      checkout: null,
       cache: {
         loadPlans: () => ({ plans: PLANS, sources: [{ repo: 'memoro-cli', sha: 'aaa', cached: true }] }),
         loadPrs: () => ({ prs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }], fetched: '2026-08-29T10:00:00Z', age_seconds: 7200 }),
@@ -1550,6 +1613,61 @@ const paintedPage = (data, over = {}) => renderPageLines(data, {
   columns: 120, colour: true, version: '0.7.11', now: NOW, ...over,
 });
 
+describe('MC', () => {
+  const draw = (mc, columns = 120) => rowWith(renderPageLines(pageData({ mc }), { columns, version: '0.7.11', now: NOW }), '  MC  ');
+  const UP = { alive: true, up_seconds: 7200 };
+
+  it('counts what origin/main has that the runner does not, from the runner\'s own commit', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-mc-'));
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(join(root, 'runner', 'runner.json'), JSON.stringify({ pid: 4242, started: '2026-08-29T10:00:00Z', commit: 'abc1234' }));
+    writeFileSync(join(root, 'runner', 'UPDATE'), '2026-08-29T11:48:00.000Z\n');
+    const asked = [];
+    const data = await collectPage({
+      env: { MC_WORK_ROOT: root }, now: NOW, repos: [], offline: true, alive: live,
+      run: () => ({ status: 1, stdout: '' }),
+      checkout: '/code/memoro-cli',
+      git: (cwd, args) => {
+        if (cwd !== '/code/memoro-cli') return null;
+        asked.push(args.join(' '));
+        if (args[0] === 'rev-list') return '3';
+        return args.at(-1) === 'HEAD' ? 'fff0000' : 'def5678';
+      },
+      cache: { loadPlans: () => ({ plans: [], sources: [] }), loadPrs: () => ({ prs: [], fetched: null, age_seconds: null }), savePrs: () => ({}) },
+    });
+    // Measured from the commit the runner started on, not from the checkout's
+    // HEAD: a checkout pulled by hand is new, and the runner beside it is not.
+    assert.ok(asked.includes('rev-list --count abc1234..origin/main'), asked.join(' | '));
+    assert.deepEqual(data.mc, {
+      up_seconds: 7200, commit: 'abc1234', head: 'fff0000', main: 'def5678', behind: 3,
+      update_requested: { at: '2026-08-29T11:48:00.000Z', age_seconds: 720 },
+    });
+  });
+
+  it('says an update is available, that one was asked for, or that there is nothing to do', () => {
+    assert.match(draw(mcSection({ process: UP, commit: 'abc1234', main: 'def5678', behind: 1, now: NOW })),
+      /^ {2}MC {2}0\.7\.11 · update available — origin\/main def5678 is 1 commit ahead · mc run --update · runner up 120 min/u);
+    // Asked for wins over available: the second is true until the handover, and
+    // the first is the news.
+    assert.match(draw(mcSection({ process: UP, commit: 'abc1234', behind: 1, updateText: '2026-08-29T11:48:00Z\n', now: NOW })),
+      /^ {2}MC {2}0\.7\.11 · update requested 12 min ago — the runner hands over after this round · runner up 120 min · on abc1234$/u);
+    assert.match(draw(mcSection({ process: UP, commit: 'abc1234', behind: 0, now: NOW })),
+      /^ {2}MC {2}0\.7\.11 · up to date · runner up 120 min · on abc1234$/u);
+    // Nothing known is nothing said: an install with no checkout has no
+    // origin/main to be behind.
+    assert.match(draw(mcSection({ process: null, now: NOW })), /^ {2}MC {2}0\.7\.11 · runner not running$/u);
+    // A narrow terminal keeps the state and loses the sentence.
+    assert.match(draw(mcSection({ process: UP, behind: 4, main: 'def5678', now: NOW }), 60), /^ {2}MC {2}0\.7\.11 · update available · runner up 120 min$/u);
+  });
+
+  it('gives the live loop a key that moves with a project and not with a clock', () => {
+    const key = (over) => pageKey(pageData({ programmes: programmesSection({ plans: PLANS, areas: [], ...over }) }));
+    assert.equal(key({}), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session getting older is not news');
+    assert.notEqual(key({}), key({ running: ['mc-ui'] }), 'a project the runner took is');
+    assert.equal(pageKey({}), '');
+  });
+});
+
 describe('the palette', () => {
   // One line of the page per row, and the colours it carries. The text beside
   // each is what that row says at 120 columns; the plain page below is the
@@ -1570,7 +1688,6 @@ describe('the palette', () => {
     '',
     'bold+cyan grey green grey red grey grey grey', // PROGRAMMES  3 programmes · 4 projects  ready 2 · blocked 1 · done 1
     'bold+cyan grey grey red grey', //                 assistant-avatar  0 ready · 1 blocked   ·  no plan session
-    'red grey grey', //                                  1 blocked  ·  1  ·  assistant-avatar-1 1
     'bold+cyan green grey grey grey', //               docx-editing-surface  1 ready · 0 blocked   ·  no plan session
     'grey grey grey green grey grey green', //       2 · docx-editor  memoro  ready  1/2  Step 2, …  08-29 09:00Z step
     'bold+cyan green grey grey grey', //               mc  1 ready · 0 blocked   ·  no plan session
@@ -1578,36 +1695,33 @@ describe('the palette', () => {
     'grey grey grey green grey cyan', //             4 · mc-ui  memoro-cli  ready  0/1  Step 1, …  #440
     'grey', //                                           3 of them have no workarea yet
     '',
-    'bold+cyan grey grey yellow grey', //              INTAKE  1 digest · 1 proposal
-    'bold grey green grey red', //                       memoro · 2026-08-29 (60 min old) · 1 new error (1 loud)
-    'red bold grey', //                                !  loud — 41x 500 `abc`
-    '',
     'bold+cyan grey grey', //                          WORK  1 session · 1 workarea with no project
     'yellow bold cyan grey grey grey grey', //       ◆ docx-editor  tmux · open 60 min · mc-docx-editor
     'grey grey grey', //                                 5  ·  ~/mc/runner/unplanned-workareas.md  has them all
     '',
-    'bold+cyan grey grey grey grey', //                NEXT  2 runnable of 4 · 3 from queue.md, then alphabetical
-    'bold grey grey', //                                 memoro-cli · 1 runnable
-    'bold green', //                                       mc-ui        step 1/1  The page
-    'bold grey grey', //                                 memoro · 1 runnable
-    'bold green', //                                       docx-editor  step 2/2  Measure paste and IME
-    'grey', //                                           skipped 2 (done 1, blocked 1)
+    'bold+cyan cyan grey grey grey grey grey grey', // HELPER  ● open 60 min · claude sonnet · pid 99   mc helper
+    'bold red grey green red', //                        memoro  1 new error, 1 loud · 60 min old   ! loud — 41x 500
+    '',
+    'bold+cyan grey grey', //                          BRIEF  ·  not open                                mc brief
+    'yellow', //                                         1 proposal
     'red grey grey', //                                  1 blocked · 1 on a decision · held most by assistant-avatar-1 1
     '',
-    'bold+cyan grey grey', //                           MERGES  1 waiting        mc merge <repo> <pr>
-    'grey', //                                           · nothing landing
-    'green+bold green grey', //                          · memoro  #10958  another gate round is running  (since …)
+    'bold+cyan grey grey', //                          NEXT  2 runnable                          mc status <name>
+    'grey green', //                                   memoro-cli  mc-ui        step 1/1  The page
+    'grey green', //                                   memoro      docx-editor  step 2/2  Measure paste and IME
     '',
-    'bold+cyan green+bold grey grey grey', //          RUNNER  1 in flight · up 120 min           mc run
-    'grey grey grey', //                             · memoro      idle
-    'green grey bold green grey bold grey grey grey grey', // ● memoro-cli  mc-ui  step · 20 min · 0 check-ins · claude opus
+    'bold+cyan green+bold grey grey grey', //          RUNNER  1 in flight · 2 lanes              mc run
+    'green bold green bold grey grey', //            ● memoro-cli  mc-ui  step  20 min  claude opus · 0 check-ins
+    'grey grey grey', //                             · lane 2      idle
     'red+bold grey', //                              ■ STOP requested — the runner exits after the steps it is in
     'grey grey green grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
     '',
-    'bold+cyan cyan grey grey grey grey grey grey', // HELPER  ● open 60 min · claude sonnet · pid 99   mc helper
-    'bold+cyan grey grey', //                          BRIEF  ·  not open                                mc brief
+    'bold+cyan grey grey', //                          MERGES  1 waiting        mc merge <repo> <pr>
+    'green+bold green grey', //                          · memoro  #10958  another gate round is running  (since …)
     '',
-    'grey', //                                         fetched origin, PRs 2 h old — --fresh asks GitHub
+    'bold+cyan grey grey', //                          DEPLOY  nothing deployed yet               mc deploy
+    '',
+    'bold+cyan grey grey', //                          MC  0.7.11 · runner up 120 min
     'grey', //                                         note: no queue.md
   ];
 
@@ -1695,9 +1809,10 @@ describe('the palette', () => {
         }),
       });
       const lines = paintedPage(data);
-      // The lane row: the mark, the repository, the name, then the kind.
+      // The lane row: the mark, the name, then the kind — the repository is
+      // the terminal's own text, and has no run of its own.
       const now = signature(rowWith(lines, `● memoro-cli  thing`)).split(' ');
-      assert.equal(now[3], tone, `RUNNER says ${kind} in ${now[3]}`);
+      assert.equal(now[2], tone, `RUNNER says ${kind} in ${now[2]}`);
       assert.equal(signature(rowWith(lines, `${kind} 1/2`)).split(' ').at(-1), tone, `NEXT says ${kind} in its colour`);
       assert.equal(signature(rowWith(lines, 'go on')).split(' ').at(-1), tone, `PROJECTS says ${kind} in its colour`);
     }
@@ -1726,12 +1841,11 @@ describe('the palette', () => {
     // line for all of them now: the numbers that still open them, and the file.
     assert.deepEqual(signature(rowWith(lines, 'unplanned-workareas.md')).split(' '), ['grey', 'grey', 'grey']);
     assert.ok(!lines.some((line) => strip(line).includes('e-none')), 'a folder is a count, not a row');
-    // Collapsed, the count that stands in for those rows is the status's own
-    // red, and everything behind it — the numbers, the blockers — is grey. So
-    // is the rollup line under NEXT, which is the same word about the same
-    // projects and had better not be a second colour for them.
+    // Collapsed, the count that stands in for those rows is on the programme's
+    // heading in the status's own red. So is the rollup line under BRIEF, which
+    // is the same word about the same projects and had better not be a second
+    // colour for them.
     const collapsed = paintedPage(pageData({ programmes: programmesSection({ plans: STOPPED, areas: [] }) }));
-    assert.deepEqual(signature(rowWith(collapsed, '2–4')).split(' '), ['red', 'grey', 'grey']);
     assert.deepEqual(signature(rowWith(collapsed, 'held most by')).split(' '), ['red', 'grey', 'grey']);
     // And a programme's counts: green while something is ready, red while
     // something is stopped, grey for a count of nothing.
@@ -1755,15 +1869,16 @@ describe('the palette', () => {
     const clock = (spent, checkIns) => signature(row(spent, checkIns)).split(' ');
     // Before its first check-in the clock carries no colour of its own — it
     // is text to read, bold because it is the number on the row that moves —
-    // at index 5: the mark, the repository, the name, the kind, the
-    // separator, then the clock, and the greys of the count and the tool.
+    // at index 3: the mark, the name, the kind, then the clock, and the greys
+    // of the tool and the count.
     const QUIET = clock(600);
-    assert.equal(QUIET[5], 'bold', 'ten minutes in, the clock is just a clock');
-    assert.deepEqual(QUIET.slice(6).filter((style) => style !== 'grey'), [], 'the count and the tool are grey');
+    assert.equal(QUIET[3], 'bold', 'ten minutes in, the clock is just a clock');
+    assert.deepEqual(QUIET.slice(4).filter((style) => style !== 'grey'), [], 'the tool and the count are grey');
     assert.deepEqual(clock(3599), QUIET);
-    assert.match(strip(row(47 * 60)), /47 min · 0 check-ins · claude opus/u);
-    assert.equal(clock(3600)[5], 'yellow+bold', 'past the first check-in');
-    assert.equal(clock(600, 1)[5], 'yellow+bold', 'a check-in the runner wrote turns it too');
+    assert.match(strip(row(47 * 60)), /47 min {3}claude opus · 0 check-ins/u);
+    assert.equal(clock(3600)[3], 'yellow+bold', 'past the first check-in');
+    assert.equal(clock(600, 1)[3], 'yellow+bold', 'a check-in the runner wrote turns it too');
+    assert.equal(clock(600, 1).at(-1), 'yellow', 'and the count beside the tool says how many');
     assert.match(strip(row(3 * 3600 + 60, 3)), /3 check-ins/u);
     // Ruling 18: nothing is killed for how long it ran, so nothing is over.
     assert.equal(clock(10 * 3600, 10).includes('red+bold'), false);

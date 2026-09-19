@@ -7,14 +7,14 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  intakeSection, mergesSection, nextSection, programmesSection, runnerSection, sessionsSection,
+  intakeSection, mcSection, mergesSection, nextSection, programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
-import { frameWrites, reprintPlan } from '../../src/mc/page-frame.js';
+import { frameWrites, reprintPlan, reprintWhole, topOffScreen } from '../../src/mc/page-frame.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 
 const NOW = new Date('2026-08-29T12:00:00Z');
 
-/** The page with nothing running, and one datum — the PR cache's age — to move. */
+/** The page with nothing running, and one datum — how long the runner has been up — to move. */
 function emptyPage(ageSeconds) {
   return {
     runner: runnerSection({ rows: [], now: NOW, alive: () => false }),
@@ -23,6 +23,7 @@ function emptyPage(ageSeconds) {
     merges: mergesSection({}),
     intake: intakeSection({ digest: null, proposals: [], now: NOW }),
     programmes: programmesSection({ areas: [], plans: [] }),
+    mc: mcSection({ process: { alive: true, up_seconds: ageSeconds }, now: NOW }),
     caches: {
       fresh: false,
       plans: [],
@@ -46,15 +47,15 @@ describe('the difference between two frames', () => {
   it('rewrites the one row that changed, and touches no other row', () => {
     const before = frame(7200);
     const after = frame(10800);
-    // Exactly one row of the real page differs: the cache line at the foot.
+    // Exactly one row of the real page differs: the MC line at the foot.
     const changed = before.reduce((all, line, index) => (line === after[index] ? all : [...all, index]), []);
-    assert.deepEqual(changed, [21]);
+    assert.deepEqual(changed, [23]);
 
-    // The page's first line sits 26 rows above the cursor: the 22 rows of the
+    // The page's first line sits 28 rows above the cursor: the 24 rows of the
     // page, then the blank, the two key lines and the blank the menu prints,
     // then the prompt row the cursor is sitting on — `lines.length + 4`.
-    const writes = frameWrites(before, after, { above: 26 });
-    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[21]}\r\x1b[5B`);
+    const writes = frameWrites(before, after, { above: 28 });
+    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[23]}\r\x1b[5B`);
 
     // Said as the criterion says it: the cursor is positioned once, one row is
     // written, and the writes return to where they started.
@@ -133,15 +134,15 @@ describe('the difference between two frames', () => {
     const after = [...frame(10800)];
     after[2] = '  a row nobody can see any more';
     // A terminal ten rows tall: the cursor is on the last of them, so nine
-    // rows above it can be addressed. Row 21 is five up and is rewritten; row 2
-    // is twenty-four up, off the screen, and is not.
-    const writes = frameWrites(before, after, { above: 26, rows: 10 });
-    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[21]}\r\x1b[5B`);
+    // rows above it can be addressed. Row 23 is five up and is rewritten; row 2
+    // is twenty-six up, off the screen, and is not.
+    const writes = frameWrites(before, after, { above: 28, rows: 10 });
+    assert.equal(writes, `\r\x1b[5A\x1b[2K${after[23]}\r\x1b[5B`);
     assert.equal(writes.includes(after[2]), false);
     // With nothing left to say on screen, that is no bytes at all.
     const hidden = [...before];
     hidden[2] = '  a row nobody can see any more';
-    assert.equal(frameWrites(before, hidden, { above: 26, rows: 10 }), '');
+    assert.equal(frameWrites(before, hidden, { above: 28, rows: 10 }), '');
   });
 
   it('reprints a grown frame from the first row it can still reach', () => {
@@ -150,6 +151,32 @@ describe('the difference between two frames', () => {
     // Four rows tall: three rows above the cursor are addressable, so the
     // reprint starts at row 1 and row 0 is left in the scrollback.
     assert.equal(frameWrites(before, after, { above: 4, rows: 4 }), '\r\x1b[3A\x1b[0Jb\nc\nd');
+  });
+});
+
+/**
+ * A project's status changed in a row that has scrolled off the top. The
+ * differ leaves that row alone, correctly, and so it stood there wrong until a
+ * key was pressed (Martin, 2026-09-19). The way out is the whole page again.
+ */
+describe('the whole page again, when what changed is out of reach', () => {
+  it('knows when the top of the page is off the screen', () => {
+    assert.equal(topOffScreen({ above: 9, rows: 10 }), false, 'nine rows up is the top row of a ten-row screen');
+    assert.equal(topOffScreen({ above: 10, rows: 10 }), true);
+    assert.equal(topOffScreen({ above: 500 }), false, 'a height nobody gave is not a height to be past');
+    // The terminal's own word wins over the count.
+    assert.equal(topOffScreen({ above: 9, rows: 10, anchor: 10 }), false);
+    assert.equal(topOffScreen({ above: 10, rows: 50, anchor: 10 }), true);
+  });
+
+  it('prints every line, from the highest row it can reach', () => {
+    const page = ['a', 'b', 'c', 'd'];
+    // Four rows tall, the page's top five rows up: the erase starts three up,
+    // and unlike a growth frame nothing is skipped — row 0 is the row that
+    // changed.
+    assert.equal(reprintWhole(page, { above: 5, rows: 4 }), '\r\x1b[3A\x1b[0Ja\nb\nc\nd');
+    assert.equal(reprintWhole(page, { above: 5, anchor: 3 }), '\x1b[1;1H\x1b[0Ja\nb\nc\nd');
+    assert.equal(reprintWhole(page, { above: 2, anchor: 10 }), '\x1b[8;1H\x1b[0Ja\nb\nc\nd');
   });
 });
 

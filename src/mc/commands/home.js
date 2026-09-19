@@ -79,6 +79,7 @@ export async function run(argv, deps = {}) {
     const data = await collect({ fresh: opts.fresh, offline: opts.offline });
     return {
       data,
+      key: pageKey(data),
       lines: renderPageLines(data, {
         columns: columnsFor(stdout),
         colour: colourFor(stdout, env),
@@ -99,7 +100,7 @@ export async function run(argv, deps = {}) {
   // only there does anything refresh, because this is the only place that
   // knows there is a terminal to refresh.
   if (!(deps.interactive || interactive)()) return 0;
-  const reader = deps.reader || readerFor({ stdout, lines: first.lines, page });
+  const reader = deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
     stdout, stderr, page, reader, open: deps.openArea, expand: (on) => { expand = on; },
   });
@@ -112,9 +113,26 @@ export async function run(argv, deps = {}) {
  * makes every row of the live loop's arithmetic wrong; there the page is
  * printed once and read the old way rather than written to the wrong rows.
  */
-export function readerFor({ stdout, lines, page }) {
-  if (Number(stdout.columns) >= LIVE_MIN_COLUMNS) return liveReader({ stdout, lines, page });
+export function readerFor({ stdout, lines, page, key = null }) {
+  if (Number(stdout.columns) >= LIVE_MIN_COLUMNS) return liveReader({ stdout, lines, page, key });
   return plainReader({ stdout });
+}
+
+/**
+ * Where every project stands, as one string: the facts PROGRAMMES draws that a
+ * person acts on, and none of the clocks beside them.
+ *
+ * The live loop compares it between frames. PROGRAMMES is the top of a page
+ * that is taller than most terminals, so its rows are the ones that scroll out
+ * of reach, and a status that changed up there is the one change worth printing
+ * the page again for (page-frame.js, `reprintWhole`). A planning session's age
+ * changes every minute and is deliberately not in it.
+ */
+export function pageKey(data) {
+  const projects = (data?.programmes?.programmes || []).flatMap((group) => group.projects || []);
+  return projects
+    .map((p) => [p.name, p.status, p.steps?.done ?? '', p.steps?.total ?? '', p.running ? 1 : 0, p.pr ?? ''].join(':'))
+    .join('|');
 }
 
 export function parsePageArgs(argv) {
@@ -228,7 +246,7 @@ export async function menu(first, {
    */
   async function redraw() {
     const next = await page();
-    reader.show(next.lines);
+    reader.show(next.lines, next.key);
     return next.data;
   }
 }

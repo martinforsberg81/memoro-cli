@@ -433,7 +433,7 @@ describe('a page taller than the screen', () => {
    * `answers: false` is a terminal that ignores `CSI 6n` — the by-count path,
    * which has the same arithmetic and had the same fault.
    */
-  function tall({ answers = true, pages = [] } = {}) {
+  function tall({ answers = true, pages = [], key = null } = {}) {
     const term = new Terminal({ cols: WIDTH, rows: HEIGHT, scrollback: 500, allowProposedApi: true });
     const input = keyboard();
     // The terminal's reply arrives on the stream the typing arrives on, which
@@ -463,7 +463,9 @@ describe('a page taller than the screen', () => {
     const reader = liveReader({
       stdout,
       lines: first,
-      page: async () => ({ data: {}, lines: pages.shift() }),
+      key,
+      // A frame is its lines, or its lines and the key `home.js` gives it.
+      page: async () => { const next = pages.shift(); return Array.isArray(next) ? { data: {}, lines: next } : { data: {}, ...next }; },
       intervalMs: 30_000,
       input: () => input,
       setTimer: (fn, ms) => time.set(fn, ms),
@@ -483,6 +485,9 @@ describe('a page taller than the screen', () => {
       screen,
       /** Where a line is, asked of the screen rather than counted again. */
       rowOf: (text) => screen().indexOf(text) + 1,
+      /** Everything the terminal holds, history and screen, top to bottom. */
+      everything: () => Array.from({ length: term.buffer.active.length }, (unused, index) => (
+        term.buffer.active.getLine(index)?.translateToString(true).trimEnd() ?? '')),
       cursorRow: () => term.buffer.active.cursorY + 1,
       at: () => written.length,
       since: (mark) => written.slice(mark).join(''),
@@ -539,6 +544,45 @@ describe('a page taller than the screen', () => {
     );
     // Which is the whole of it: the page on the screen is the page it drew.
     assert.deepEqual(it_.screen().slice(0, 41), changed.slice(57));
+
+    it_.input.type('q\r');
+    assert.equal(await answer, 'q');
+  });
+
+  /**
+   * PROGRAMMES is the top of a page taller than the screen, so a project's
+   * status changes in a row no write can reach — and it stood there saying
+   * `running` until a key was pressed (Martin, 2026-09-19). The frame's `key`
+   * is how the loop knows that what changed up there matters.
+   */
+  it('prints the whole page again when its key changes in a row that has scrolled off', async () => {
+    const same = tallPage(TALL, 3);
+    const moved = tallPage(TALL, 3);
+    const after = tallPage(TALL, 80);
+    const it_ = tall({ key: 'a', pages: [{ lines: same, key: 'a' }, { lines: moved, key: 'b' }, { lines: after, key: 'b' }] });
+    const answer = it_.reader.ask(TAIL, '>');
+    await it_.flush();
+    await settle();
+
+    // Row 3 differs and the key does not: a clock ticking out of reach. Nothing
+    // is written, which is what the differ has always done.
+    const quiet = it_.at();
+    await it_.advance(31_000);
+    assert.equal(it_.since(quiet).includes('in flight'), false);
+
+    // The key moved: the page is printed whole, under what is left of the old
+    // one, and the row that changed is in the terminal at last.
+    await it_.advance(31_000);
+    assert.ok(it_.everything().includes(moved[3]), 'the changed row has been printed, where scrolling up finds it');
+    assert.deepEqual(it_.screen().slice(0, 41), moved.slice(TALL - 41), 'the foot of the new page is above the keys');
+    assert.equal(it_.cursorRow(), HEIGHT, 'and the prompt is back on the last row');
+
+    // The geometry after it is right: the next changed row is written where it is.
+    const was = it_.rowOf(moved[80]);
+    const mark = it_.at();
+    await it_.advance(31_000);
+    assert.ok(it_.since(mark).includes(`${ESC}[${was};1H${ESC}[2K${after[80]}`), JSON.stringify(it_.since(mark)));
+    assert.deepEqual(it_.screen().slice(0, 41), after.slice(TALL - 41));
 
     it_.input.type('q\r');
     assert.equal(await answer, 'q');

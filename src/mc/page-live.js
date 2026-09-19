@@ -73,7 +73,7 @@
 import { closeSync, constants, openSync, readSync } from 'node:fs';
 import { ReadStream } from 'node:tty';
 
-import { frameWrites, reprintPlan } from './page-frame.js';
+import { frameWrites, reprintPlan, reprintWhole, topOffScreen } from './page-frame.js';
 import { ask as askTerminal } from './prompt.js';
 import { clip, width } from './status-render.js';
 
@@ -151,6 +151,10 @@ export function liveReader({
   stdout,
   lines,
   page,
+  // What the first print said about the rows that matter most and sit highest:
+  // `page()` may answer with a `key`, and a frame whose key differs from the
+  // last one drawn is printed whole when the top of the page is out of reach.
+  key = null,
   intervalMs = REFRESH_MS,
   input: openInput = openTty,
   setTimer = setTimeout,
@@ -161,6 +165,7 @@ export function liveReader({
   // have to be compared against something. It says what the rows contain; it
   // is not asked where they are — `footprint` is.
   let current = [...lines];
+  let currentKey = key;
   // The page was printed by the caller, with a newline after it, so the cursor
   // is one row below its last line.
   let footprint = lines.length;
@@ -176,9 +181,10 @@ export function liveReader({
 
   function columnsOf() { return Number(stdout.columns) || 80; }
 
-  function show(next) {
+  function show(next, nextKey = null) {
     stdout.write(`${next.join('\n')}\n`);
     current = [...next];
+    currentKey = nextKey;
     footprint = next.length;
     holding = false;
   }
@@ -288,14 +294,30 @@ export function liveReader({
       // The answer came in while the collect was running: those rows belong to
       // whatever happens next, not to a frame nobody is waiting for any more.
       if (stopped) return;
-      draw(next.lines);
+      draw(next.lines, next.key ?? null);
       schedule();
     }
 
     /** The frame, written where the page stands. */
-    function draw(next) {
+    function draw(next, nextKey = null) {
       const rows = Number(stdout.rows) || Infinity;
       const above = footprint + tailRows;
+
+      // Something the key covers has changed, and the rows that say so have
+      // scrolled off the top: no in-place write can reach them, so the page is
+      // printed again whole. Only then — a page that fits is diffed as ever,
+      // and a clock ticking in a row out of reach is not worth the scrollback.
+      const moved = nextKey !== null && currentKey !== null && nextKey !== currentKey;
+      currentKey = nextKey ?? currentKey;
+      if (moved && !dirty && topOffScreen({ above, rows, anchor })) {
+        stdout.write(`${reprintWhole(next, { above, rows, anchor })}${tail}${promptText}${typed}`);
+        current = [...next];
+        footprint = Math.max(0, next.length - 1);
+        holding = false;
+        tailRows = screenRows(tail, columnsOf());
+        askAnchor();
+        return;
+      }
 
       if (dirty || next.length > current.length) {
         // Grown past its footprint, or drawn for a terminal that has since
