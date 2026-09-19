@@ -138,9 +138,9 @@ below is about.
   eight rows, three of which could never hold a step beside the others. An
   idle lane is `lane 3  idle`. With a step in it the same cell is the step's
   **repository** — the lane's number is not what a running row is read for —
-  then the project in bold, `step 4/6` (which step of its plan, read off the
-  plan because a lane file does not carry it), the clock (bold, because it is
-  the number on the row that moves; yellow past a check-in), and the
+  then the project, `step 4/6` (which step of its plan, read off the
+  plan because a lane file does not carry it), the clock (yellow past a check-in; nothing
+  on a lane row is bold), and the
   bookkeeping: tool and model, the advisor when the step has one, and the
   check-ins the runner has written into the session. The steps fill from the
   top, oldest first, so a row moves only when one above it ends. The number of

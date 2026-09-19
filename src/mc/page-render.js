@@ -313,9 +313,9 @@ const LANE_CLOCK = 8;
  * Then what a person reads a running row for, in that order: the repository,
  * the project, which step of its plan — `step 4/6`, the same words NEXT uses —
  * how long it has run, and after that the bookkeeping: tool and model, the
- * advisor when the step has one, and the check-ins. The clock is bold, because
- * it is the number on the row that changes. There is no end on it: nothing is
- * killed on elapsed time (ruling 18).
+ * advisor when the step has one, and the check-ins. Nothing on the row is bold
+ * (Martin, 2026-09-19); the clock turns yellow past a check-in. There is no end
+ * on it: nothing is killed on elapsed time (ruling 18).
  *
  * The pid is not here. It was, and it was the runner's own — every lane file
  * carries the one process — so the same number was drawn on every row and
@@ -330,7 +330,7 @@ function laneLine(c, wide, lane) {
   const at = s.step && s.steps ? `${s.kind || 'step'} ${s.step}/${s.steps}` : (s.kind || '');
   const checkIns = s.check_ins == null ? null : `${s.check_ins} check-in${s.check_ins === 1 ? '' : 's'}`;
   const named = nameWidth(wide);
-  const left = `  ${c(MARK.running, 'green')} ${where} ${c(pad(clip(s.name, named - 1), named), 'bold')} `
+  const left = `  ${c(MARK.running, 'green')} ${where} ${pad(clip(s.name, named - 1), named)} `
     // Padded outside the paint, so the spaces after a cell are plain ones and
     // a row that ends on a cell ends where its text does.
     + `${cell(c, clip(at, LANE_STEP - 1), LANE_STEP, kindTone(s.kind))} `
@@ -483,7 +483,7 @@ function helperLines(lines, c, wide, session, intake) {
     const errors = repo.first
       ? 'first digest — no baseline'
       : `${repo.new_errors} new error${repo.new_errors === 1 ? '' : 's'}${repo.loud ? `, ${repo.loud} loud` : ''}`;
-    const left = `       ${c(pad(clip(repo.repo, DIGEST_REPO - 1), DIGEST_REPO), 'bold')} ${paint(c, between([
+    const left = `       ${pad(clip(repo.repo, DIGEST_REPO - 1), DIGEST_REPO)} ${paint(c, between([
       { text: errors, styles: !repo.first && repo.new_errors ? ['red'] : ['grey'] },
       // A digest under a day old is green because somebody has looked; older,
       // and the age itself is the thing to see.
@@ -589,11 +589,10 @@ function workLines(lines, c, wide, sessions, unplanned) {
  */
 function elapsedTone(step) {
   const spent = step.elapsed_seconds;
-  if (step.check_ins > 0 || (step.check_in_seconds && spent != null && spent >= step.check_in_seconds)) return ['yellow', 'bold'];
-  // Not white: a clock before its first check-in is text to read, and reads in the
-  // colour the rest of the row does — bold, because it is the one number on
-  // the row that is moving.
-  return ['bold'];
+  if (step.check_ins > 0 || (step.check_in_seconds && spent != null && spent >= step.check_in_seconds)) return ['yellow'];
+  // No bold anywhere on a lane row (Martin, 2026-09-19): before its first
+  // check-in the clock is the terminal's own text, like the name beside it.
+  return [];
 }
 
 /** The widths of a NEXT row: the repository, the project, and its step. */
