@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
-  AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, chooseKind, collectNote,
+  AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, quietPrompt, chooseKind, collectNote,
   describeSettings, describeWatch, headlessArgs, helperDue,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen,
@@ -536,6 +536,13 @@ test('checkInPrompt: names the minutes, the count and a blocker the project can 
   assert.match(text, /Do not start anything new/u);
   assert.match('step-cost-check-in', NAME_RE, 'the blocker name must pass the plan schema');
   assert.equal(userMessageLine('hi'), '{"type":"user","message":{"role":"user","content":"hi"}}\n');
+});
+
+test('quietPrompt: names the silence, each background task, and what follows no answer', () => {
+  const text = quietPrompt({ minutes: 20, tasks: [{ task_id: 'b4swqbpox', task_type: 'local_bash', description: 'node scripts/msr-legacy-projection-compare.mjs' }] });
+  assert.match(text, /written nothing for 20 minutes/u);
+  assert.match(text, /- b4swqbpox: node scripts\/msr-legacy-projection-compare\.mjs/u);
+  assert.match(text, /for another 20 minutes is killed/u);
 });
 
 test('readSessionOutput: a quota answer is logged as quota, never success', () => {

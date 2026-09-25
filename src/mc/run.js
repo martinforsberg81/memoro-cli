@@ -134,7 +134,7 @@ import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, TIMEOUT_EXIT,
-  WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs,
+  WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
   queueFileText, readSessionOutput, sessionResult, sessionSettings, streamSummary, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
@@ -174,14 +174,20 @@ function sh(cmd, args, { cwd, timeout = 120_000 } = {}) {
  * first stream-json user message; every `checkInMs` while the session runs,
  * `checkIn(elapsedMinutes, count)` is written as another, and the session
  * judges its own step. A message written mid-turn is folded into that turn;
- * one written after a `result` starts a new turn — so on the first `result`
- * line stdin is ended, no check-in follows, and claude exits. Two kills: the
- * stall guard — `stallMs` without a byte on stdout, armed at spawn and reset
- * on every chunk, SIGTERMs the child and reports `stalled` (stream-json
- * prints an event per message, so a working session is never silent that
- * long) — and, once the `result` has been seen, the result grace: the
- * process gets `resultGraceMs` to exit and is then killed with the result
- * standing (`lingered`, status 0, not stalled).
+ * one written after a `result` starts a new turn — so on a `result` line
+ * stdin is ended, no check-in follows, and claude exits. Not while a
+ * background task runs: claude reports its set in `background_tasks_changed`
+ * events, and a turn that ended with one alive is a pause — claude starts the
+ * next turn itself when the task finishes — so stdin stays open. Two kills:
+ * the stall guard — `stallMs` without a byte on stdout, armed at spawn and
+ * reset on every chunk, SIGTERMs the child and reports `stalled` — and, once
+ * the `result` has been seen, the result grace: the process gets
+ * `resultGraceMs` to exit and is then killed with the result standing
+ * (`lingered`, status 0, not stalled). A session waiting on a background task
+ * is silent for as long as the task runs, so when the stall guard fires with
+ * one alive it writes `onQuiet(minutes, tasks)` instead of killing, once per
+ * silence: a session that answers it has shown it is alive, and one that does
+ * not is killed at the next `stallMs`.
  *
  * Codex (no `prompt`) keeps its positional prompt with stdin closed, and gets
  * neither a check-in nor a stall guard: nothing kills it.
@@ -191,7 +197,7 @@ function sh(cmd, args, { cwd, timeout = 120_000 } = {}) {
  * second lane would never get to start. The output is collected here instead
  * of by `maxBuffer`, and capped rather than allowed to eat the machine.
  */
-export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onSpawn = null, spawn: spawnFn = spawn }) {
+export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSpawn = null, spawn: spawnFn = spawn }) {
   return new Promise((resolve) => {
     const piped = prompt != null;
     const child = spawnFn(bin, args, { cwd, stdio: [piped ? 'pipe' : 'ignore', 'pipe', 'pipe'], env });
@@ -218,6 +224,10 @@ export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 
     let graceTimer = null;
     let checkInTimer = null;
     let count = 0;
+    // The background tasks claude last reported, and whether this silence has
+    // already been asked about them.
+    let tasks = [];
+    let asked = false;
     const stop = () => { clearTimeout(stallTimer); clearTimeout(graceTimer); clearInterval(checkInTimer); };
     const send = (text) => {
       if (!piped || resultSeen || settled || !child.stdin?.writable) return;
@@ -228,6 +238,12 @@ export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 
       clearTimeout(stallTimer);
       stallTimer = setTimeout(() => {
         if (settled) return;
+        if (tasks.length && onQuiet && !asked) {
+          asked = true;
+          send(onQuiet(Math.round(stallMs / 60_000), tasks));
+          armStall();
+          return;
+        }
         stalled = true;
         stop();
         child.kill('SIGTERM');
@@ -252,17 +268,23 @@ export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 
         child.kill('SIGTERM');
       }, resultGraceMs);
     };
+    // The whole line is searched: claude writes a `result` event's `type`
+    // after its usage, some 2 000 characters in, so a look at the head of the
+    // line never saw one (2026-09-25).
     const scan = (chunk) => {
+      asked = false;
       armStall();
       if (!piped || resultSeen) return;
       const text = partial + decoder.write(chunk);
       const lines = text.split('\n');
       partial = lines.pop();
       for (const line of lines) {
-        if (!line.slice(0, 200).includes('"type":"result"')) continue;
+        const isResult = line.includes('"type":"result"');
+        if (!isResult && !line.includes('"subtype":"background_tasks_changed"')) continue;
         let event = null;
         try { event = JSON.parse(line); } catch { continue; }
-        if (event?.type === 'result') { onResultLine(); return; }
+        if (event?.subtype === 'background_tasks_changed') tasks = Array.isArray(event.tasks) ? event.tasks : [];
+        else if (event?.type === 'result' && !tasks.length) { onResultLine(); return; }
       }
     };
     const stdout = collect(child.stdout, scan);
@@ -812,6 +834,10 @@ export function createRunner({
         say(`${name}: check-in ${count} at ${minutes} min`);
         onCheckIn?.(count, minutes);
         return checkInPrompt({ project: name, minutes, count });
+      },
+      onQuiet: (minutes, tasks) => {
+        say(`${name}: silent ${minutes} min with ${tasks.length} background task(s) running — asked, not killed`);
+        return quietPrompt({ minutes, tasks });
       },
     };
   }

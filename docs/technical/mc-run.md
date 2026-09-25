@@ -578,8 +578,10 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
 - **`stall_minutes:`** — 20 minutes by default (`DEFAULT_STALL_MINUTES`): how
   long a session may go without a byte on stdout before it is killed. The
   row says `stalled`. Twenty is twice the ten-minute ceiling a single Bash
-  call has in a runner session, so a long test run is not a stall. Nothing is
-  killed for how long it has run ([ruling 18](../project/mc/rulings.md)).
+  call has in a runner session, so a long test run is not a stall. A session
+  silent while a background task of its own runs is asked about it first,
+  and killed only if the question gets no answer. Nothing is killed for how
+  long it has run ([ruling 18](../project/mc/rulings.md)).
 
 Effort and advisor are claude's flags (`effortArgs` and `advisorArgs` in the
 claude adapter), so a codex session gets neither, named or not. A step's
@@ -909,6 +911,16 @@ own `result`, and the process exits when stdin closes. So two `result` lines
 are possible — a check-in that crossed the first — and `sessionResult` adds
 their turns, cost, durations and usage up rather than taking the last.
 
+A `result` is not the end while a **background task** runs. A command longer
+than Bash's ten minutes — memoro's G6 comparison, a full `npm test` — goes in
+the background, and a session waiting on one ends its turn; claude starts the
+next turn by itself when the task finishes. claude reports the set in
+`background_tasks_changed` events, and a `result` that arrives with one alive
+leaves stdin open. The whole line is searched for the `result`: claude writes
+its `type` after the usage, some 2 000 characters in, and until 2026-09-25 the
+scan looked only at the first 200 — so no `result` was ever seen, stdin was
+never closed by it, and the result grace below never ran.
+
 The only kill is the **stall guard**: a timer re-armed on every byte of
 stdout, and the child `SIGTERM`ed when `stall_minutes` go by without one — the
 row says `stalled`, exit 142. It is armed at spawn and ends at the `result`:
@@ -919,7 +931,17 @@ note the session's own word, and a line in `runner.log`. A step still `running`
 in the register is `failed` by [ruling 21](../project/mc/rulings.md) as ever,
 its reason now saying the session ended `success` without landing it. That is
 what `sql-w2-search-closure` was owed on 2026-09-13: it finished in 72.7
-minutes, hung twenty, and was logged `stalled,failed`. Nothing is killed for
+minutes, hung twenty, and was logged `stalled,failed`.
+
+A session waiting on a background task is silent for as long as the task
+runs, and the stall guard took that for a hang: 2026-09-12..25, 53 of 289
+step sessions were killed `stalled`, most of them with a turn that ended
+"Waiting for background task …" (0 of 180 before the guard existed). So when
+the guard fires with a background task alive it writes `quietPrompt` instead
+— the silence, each task, and that no answer is a kill — with a line in
+`runner.log`, and re-arms. Any byte from the session answers it, and the next
+silence gets its own question; a session that says nothing to it is killed at
+the next `stall_minutes`, `stalled` as before. Nothing is killed for
 how long it has run ([ruling 18](../project/mc/rulings.md)); before step-cost
 a wall-clock budget killed a session that was working because the machine was
 slow or a suite was long. A codex session gets neither: its prompt is an

@@ -841,6 +841,27 @@ export function checkInPrompt({ project, minutes, count }) {
   ].join('\n');
 }
 
+/**
+ * What the runner writes instead of killing a session that has been silent
+ * for `stall_minutes` while a background task of its own runs. Waiting on
+ * one is silence, and before this every wait longer than the stall guard was
+ * killed as a hang (2026-09-12..25: 53 of 289 step sessions, the G6
+ * comparison and `npm test` among them). An answer shows the session is
+ * alive; none, and it is killed at the next stall.
+ */
+export function quietPrompt({ minutes, tasks }) {
+  return [
+    `From the runner: this session has written nothing for ${minutes} minutes, and`,
+    'these background tasks of yours are still running:',
+    ...tasks.map((t) => `- ${t.task_id || '?'}: ${t.description || ''}`),
+    '',
+    'Look at their output now. If one is making progress, say so in one line —',
+    'you may end your turn again; you are woken when it finishes. If one is',
+    'stuck, stop it and carry on without it. A session that answers nothing',
+    `for another ${minutes} minutes is killed.`,
+  ].join('\n');
+}
+
 const USAGE_SUMS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
 const RESULT_SUMS = ['num_turns', 'total_cost_usd', 'duration_ms', 'duration_api_ms'];
 // Limits, not amounts: the last result's value is the value.

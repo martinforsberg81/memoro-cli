@@ -41,6 +41,7 @@ function start(options = {}) {
     bin: '/bin/claude', args: ['-p'], cwd: '/w', env: {},
     prompt: 'do the step', checkInMs: 60 * MINUTE, stallMs: 20 * MINUTE,
     checkIn: (minutes, count) => { checkIns.push([minutes, count]); return `check-in ${count} at ${minutes}`; },
+    onQuiet: (minutes, tasks) => `quiet ${minutes} ${tasks.map((t) => t.task_id).join(',')}`,
     spawn: (...call) => { spawned.push(call); return child; },
     ...options,
   });
@@ -56,6 +57,9 @@ function run(child, minutes, every = null) {
 }
 
 const RESULT = JSON.stringify({ type: 'result', subtype: 'success', num_turns: 3, session_id: 'sid' });
+/** The result as claude 2.1 writes it: `type` after the usage, far past the line's head. */
+const RESULT_LATE = JSON.stringify({ duration_api_ms: 1, stop_reason: 'end_turn', usage: { padding: 'x'.repeat(2000) }, type: 'result', subtype: 'success' });
+const tasksChanged = (...ids) => JSON.stringify({ type: 'system', subtype: 'background_tasks_changed', tasks: ids.map((task_id) => ({ task_id, task_type: 'local_bash', description: `run ${task_id}` })) });
 
 describe('streamSession', () => {
   beforeEach(() => mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 0 }));
@@ -175,6 +179,48 @@ describe('streamSession', () => {
     run(child, 120);
     assert.deepEqual(child.killed, []);
     assert.deepEqual(checkIns, []);
+  });
+
+  it('finds a result whose type comes after two thousand characters of usage', () => {
+    const { child } = start();
+    child.say(RESULT_LATE);
+    assert.equal(child.stdin.ended, true);
+  });
+
+  it('keeps stdin open on a result while a background task runs, and ends it on the next', () => {
+    const { child, texts } = start();
+    child.say(tasksChanged('b1'));
+    child.say(RESULT_LATE);
+    assert.equal(child.stdin.ended, false, 'claude starts the next turn itself when the task finishes');
+    child.say(tasksChanged());
+    child.say(RESULT_LATE);
+    assert.equal(child.stdin.ended, true);
+    assert.deepEqual(texts(), ['do the step']);
+  });
+
+  it('asks a session silent over a background task instead of killing it, and kills it if no answer comes', async () => {
+    const { child, session, texts } = start();
+    child.say(tasksChanged('b4swqbpox'));
+    child.say(RESULT_LATE);
+    run(child, 20);
+    assert.deepEqual(child.killed, []);
+    assert.equal(texts().at(-1), 'quiet 20 b4swqbpox');
+    child.say(JSON.stringify({ type: 'assistant', message: { content: [] } }));
+    run(child, 20);
+    assert.deepEqual(child.killed, [], 'an answer earns the next silence its own question');
+    assert.equal(texts().filter((t) => t.startsWith('quiet')).length, 2);
+    run(child, 20);
+    assert.deepEqual(child.killed, ['SIGTERM']);
+    assert.equal((await session).stalled, true);
+  });
+
+  it('still kills a silent session with no background task', () => {
+    const { child, texts } = start();
+    child.say(tasksChanged('b1'));
+    child.say(tasksChanged());
+    run(child, 20);
+    assert.deepEqual(child.killed, ['SIGTERM']);
+    assert.equal(texts().some((t) => t.startsWith('quiet')), false);
   });
 
   it('with no prompt, stdin is not piped and nothing is written', async () => {
