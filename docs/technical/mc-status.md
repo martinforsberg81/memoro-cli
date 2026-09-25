@@ -176,7 +176,10 @@ person's or a session's, survives the abort, and keeps `dirty`. Without
 ## The cost estimate
 
 `prices.js` is a dated list-price table — `PRICES_DATED = '2026-06'` — with
-cache writes at 1.25× input and cache reads at 0.1× input. `estimateCost`
+cache writes at 2× input and cache reads at 0.1× input — 2× is the 1-hour
+cache TTL's rate, and the 1-hour cache is what Claude Code writes (a
+session's usage carries `ephemeral_1h_input_tokens`, never the 5-minute
+counter; until 2026-09-25 this used the 5-minute rate, 1.25×). `estimateCost`
 returns dollars for one usage line, or `null` for a model not in the table.
 
 Two things are true about the number and both are printed with it:

@@ -136,7 +136,7 @@ import {
   HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs,
   helperDue, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
-  queueFileText, readSessionOutput, sessionResult, sessionSettings, describeSettings, describeWatch,
+  queueFileText, readSessionOutput, sessionResult, sessionSettings, streamSummary, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -824,7 +824,9 @@ export function createRunner({
    */
   function writeSessionLogs(stem, result) {
     deps.write(`${stem}.jsonl`, result.stdout);
-    const summed = sessionResult(result.stdout);
+    // A session `mc merge` ended has no result line; its turns and usage are
+    // read from the stream instead (`streamSummary`, `subtype: 'killed'`).
+    const summed = sessionResult(result.stdout) || streamSummary(result.stdout);
     if (summed) deps.write(`${stem}.json`, `${JSON.stringify(summed)}\n`);
     deps.write(`${stem}.json.err`, result.stderr);
   }

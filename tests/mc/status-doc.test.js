@@ -32,8 +32,8 @@ describe('docs/technical/mc-status.md says what mc status reads', () => {
     const write = estimateCost({ cacheWrite: 1e6 }, RUNNER_MODEL);
     const input = estimateCost({ input: 1e6 }, RUNNER_MODEL);
     assert.equal(read / input, 0.1);
-    assert.equal(write / input, 1.25);
-    assert.match(DOC, /cache writes at 1\.25× input and cache reads at 0\.1× input/u);
+    assert.equal(write / input, 2);
+    assert.match(DOC, /cache writes at 2× input and cache reads at 0\.1× input/u);
   });
 
   it('names the model every runs.tsv row is priced as', () => {
