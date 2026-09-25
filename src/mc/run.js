@@ -133,10 +133,10 @@ import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './role
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
-  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, TIMEOUT_EXIT,
+  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
-  queueFileText, readSessionOutput, sessionResult, sessionSettings, streamSummary, describeSettings, describeWatch,
+  queueFileText, readSessionOutput, resumePrompt, sessionResult, sessionSettings, streamSummary, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -546,15 +546,19 @@ export function createRunner({
    * Sleep until one minute after the reset the refusal named, or thirty
    * minutes when it named none. A pause of days goes in slices, and between
    * two of them STOP and UPDATE end it — the runner is not deaf for a week.
+   *
+   * A lost login is the same budget in another word: every lane's claude is
+   * the same login, so every lane sleeps on it, and `why` is the line that
+   * says so instead of the quota's.
    */
-  async function quotaPause(until = null) {
+  async function quotaPause(until = null, why = null) {
     if (quotaSleep) { await quotaSleep; return; }
     const start = deps.now().getTime();
     const named = until instanceof Date && until.getTime() > start;
     const total = named ? until.getTime() + 60_000 - start : QUOTA_SLEEP_MS;
-    say(named
+    say(why ? `${why} — every lane sleeping ${QUOTA_SLEEP_MS / 60000}m` : (named
       ? `quota seen — every lane sleeping until ${new Date(start + total).toISOString()} (the refusal's reset)`
-      : `quota/rate limit seen — every lane sleeping ${QUOTA_SLEEP_MS / 60000}m`);
+      : `quota/rate limit seen — every lane sleeping ${QUOTA_SLEEP_MS / 60000}m`));
     quotaSleep = (async () => {
       let slept = 0;
       for (;;) {
@@ -1719,23 +1723,59 @@ export function createRunner({
     } catch (error) {
       say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
     }
+    // One process, or the same session resumed after the API ended it
+    // (`apiInterruption`): the workarea is not touched in between, so what
+    // the session left uncommitted is still there when it goes on. The row,
+    // the logs and the register see one session — the streams joined, the
+    // results summed by `sessionResult` as a check-in's already are.
+    const launchOnce = (resume, text) => deps.session({
+      bin: launch.spec.bin,
+      args: resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt: text, profileArgs, resume }) : args,
+      cwd: worktree,
+      ...watchFor(launch, settings, {
+        prompt: text, name,
+        onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
+      }),
+      env: {
+        ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
+        ...scratchEnv,
+      },
+      onSpawn: (childPid) => {
+        if (stepIndex == null) return;
+        recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool } });
+      },
+    });
     let result;
+    // Whether the last interruption has already been waited out here, so the
+    // quota pause after the row is not a second sleep on the same refusal.
+    let waited = false;
     try {
-      result = await deps.session({
-        bin: launch.spec.bin, args, cwd: worktree,
-        ...watchFor(launch, settings, {
-          prompt, name,
-          onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
-        }),
-        env: {
-          ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
-          ...scratchEnv,
-        },
-        onSpawn: (childPid) => {
-          if (stepIndex == null) return;
-          recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool } });
-        },
-      });
+      let attempt = await launchOnce(null, prompt);
+      result = attempt;
+      for (let resumes = 0; ; resumes += 1) {
+        const last = readSessionOutput({ toolId: launch.id, stdout: attempt.stdout, stderr: attempt.stderr, exitCode: attempt.status, timedOut: attempt.timedOut, stalled: attempt.stalled, now: deps.now() });
+        if (!last.interrupted || last.session === '-') break;
+        // A session that wrote its own end before the API cut it off has
+        // ended; only one the register still calls `running` is resumed.
+        const standing = stepIndex == null ? null : readEntry(root, name, { read: deps.read })?.steps?.[stepIndex]?.status;
+        if (standing && standing !== 'running') break;
+        if (resumes >= RESUME_LIMIT) {
+          say(`${name}: the API ended the session ${resumes + 1} times in a row — not resumed again (${last.said || last.interrupted})`);
+          break;
+        }
+        say(`${name}: the API ended the session (${last.said || last.interrupted}) — ${last.session} is resumed once it answers`);
+        if (last.interrupted === 'server') await deps.sleep(SERVER_RETRY_MS);
+        else await quotaPause(last.interrupted === 'quota' ? last.quotaReset : null, last.interrupted === 'login' ? 'claude is not logged in (`claude /login`)' : null);
+        waited = true;
+        if (stopRequested() || updateRequested()) {
+          say(`${name}: ${stopRequested() ? 'STOP' : 'an UPDATE'} came during the wait — ${last.session} is not resumed`);
+          break;
+        }
+        attempt = await launchOnce(last.session, resumePrompt({ said: last.said || last.interrupted }));
+        waited = false;
+        const joined = result.stdout && !result.stdout.endsWith('\n') ? `${result.stdout}\n` : result.stdout;
+        result = { ...attempt, stdout: `${joined}${attempt.stdout}`, stderr: `${result.stderr}${attempt.stderr}` };
+      }
     } finally {
       remove(currentPath);
       dropSlot();
@@ -1810,9 +1850,10 @@ export function createRunner({
     } else if (read.quota) {
       recordStep(name, choice.index, { status: 'ready', session: null });
     } else {
+      const said = read.said ? ` — the API said "${read.said}"` : '';
       const reason = pr !== '-'
-        ? `#${pr} is open and the session ended ${note} (rc ${result.status}) without landing it`
-        : `the session ended ${note} (rc ${result.status}) with no pull request`;
+        ? `#${pr} is open and the session ended ${note} (rc ${result.status}) without landing it${said}`
+        : `the session ended ${note} (rc ${result.status}) with no pull request${said}`;
       recordStep(name, choice.index, { status: 'failed', pr: Number(pr) || null, branch, reason });
       say(`${name}: step ${choice.index + 1} failed — ${reason}`);
       note = `${note},failed`;
@@ -1820,7 +1861,7 @@ export function createRunner({
 
     logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
-    if (read.quota) await quotaPause(read.quotaReset);
+    if (read.quota && !waited) await quotaPause(read.quotaReset);
     // `merged` and `ran` are both *a step ran*, and the lane picks again on
     // either. They are still told apart because the row and the log line are
     // read by a person, and because a merged step is the one that leaves the

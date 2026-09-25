@@ -1150,6 +1150,100 @@ test('a quota answer is logged as quota, not merged, and the runner sleeps 30 mi
   assert.ok(slept.includes(30 * 60 * 1000));
 });
 
+/**
+ * A session the API ended mid-step is resumed where it stopped: same id, the
+ * workarea untouched in between. 2026-09-21 four sessions of 44 to 293 turns
+ * were written off as failed on `Not logged in`, their work left uncommitted.
+ */
+const apiEndedSession = (result, extra = {}) => () => ({ status: 0, stdout: JSON.stringify({ type: 'result', subtype: 'success', is_error: true, num_turns: 44, session_id: 'sid-1', terminal_reason: 'api_error', result, usage: { input_tokens: 5, output_tokens: 6, cache_read_input_tokens: 7, cache_creation_input_tokens: 8 }, ...extra }), stderr: '', timedOut: false });
+
+test('a session the API logged out is resumed after the login pause, and lands', async () => {
+  const slept = [];
+  const f = fixture({ plans: { memoro: { r: ready } }, session: () => null });
+  f.deps.sleep = async (ms) => { slept.push(ms); };
+  let calls = 0;
+  const loggedOut = apiEndedSession('Not logged in · Please run /login');
+  const lands = landsItself(f, 'r', 51, okSession({ type: 'result' }));
+  f.deps.session = (call) => { f.calls.sessions.push(call); calls += 1; return calls === 1 ? loggedOut(call) : lands(call); };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 2);
+  const [first, second] = f.calls.sessions;
+  assert.ok(!first.args.includes('--resume'));
+  assert.deepEqual(second.args.slice(0, 3), ['-p', '--resume', 'sid-1']);
+  assert.match(second.prompt, /the API ended your last turn with "Not logged in · Please run \/login"/u);
+  assert.equal(second.cwd, first.cwd);
+  assert.ok(slept.includes(30 * 60 * 1000), 'every lane sleeps on a lost login');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /claude is not logged in \(`claude \/login`\) — every lane sleeping 30m/u);
+  assert.match(log, /r: the API ended the session \(Not logged in · Please run \/login\) — sid-1 is resumed once it answers/u);
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+  const [row] = runRows(f.files).filter((r) => r.kind === 'step');
+  assert.equal(row.note, 'success,merged');
+  assert.equal(row.turns, '48', 'both halves of the session are one row: 44 + 4 turns');
+  assert.match(f.files[Object.keys(f.files).find((k) => /\/runner\/log\/r-.*\.jsonl$/u.test(k))], /Not logged in[\s\S]*"session_id":"sid"/u, 'one stream, both halves');
+});
+
+test('a server error is waited out in its own lane for five minutes, then resumed', async () => {
+  const slept = [];
+  const f = fixture({ plans: { memoro: { r: ready } }, session: () => null });
+  f.deps.sleep = async (ms) => { slept.push(ms); };
+  let calls = 0;
+  const overloaded = apiEndedSession('API Error: 529 Overloaded. This is a server-side issue', { api_error_status: 529 });
+  const lands = landsItself(f, 'r', 52, okSession({ type: 'result' }));
+  f.deps.session = (call) => { f.calls.sessions.push(call); calls += 1; return calls === 1 ? overloaded(call) : lands(call); };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 2);
+  assert.deepEqual(slept, [5 * 60 * 1000]);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /every lane sleeping/u);
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+});
+
+test('a limit that ends a long session pauses until the reset and resumes it, once', async () => {
+  const slept = [];
+  const f = fixture({ now: '2026-09-22T07:00:00Z', plans: { memoro: { r: ready } }, session: () => null });
+  let clock = new Date('2026-09-22T07:00:00Z').getTime();
+  f.deps.now = () => new Date(clock);
+  f.deps.sleep = async (ms) => { slept.push(ms); clock += ms; };
+  let calls = 0;
+  const limited = apiEndedSession("You've hit your monthly spend limit · your weekly limit resets Sep 22 at 11am (Europe/Stockholm)", { api_error_status: 429, num_turns: 286 });
+  const lands = landsItself(f, 'r', 53, okSession({ type: 'result' }));
+  f.deps.session = (call) => { f.calls.sessions.push(call); calls += 1; return calls === 1 ? limited(call) : lands(call); };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 2);
+  assert.equal(slept.reduce((a, b) => a + b, 0), 121 * 60 * 1000, 'until 09:00Z and a minute, and no second sleep after the row');
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+});
+
+test('three interruptions in a row end the step as failed, with what the API said', async () => {
+  const f = fixture({ plans: { memoro: { r: ready } }, session: apiEndedSession('API Error: 500 Internal server error.', { api_error_status: 500 }) });
+  f.deps.sleep = async () => {};
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 4, 'the first launch and three resumes');
+  assert.match(f.files['/w/runner/log/runner.log'], /r: the API ended the session 4 times in a row — not resumed again \(API Error: 500 Internal server error\.\)/u);
+  const step = registerOf(f, 'r').steps[0];
+  assert.equal(step.status, 'failed');
+  assert.match(step.reason, /the session ended interrupted \(rc 0\) with no pull request — the API said "API Error: 500 Internal server error\."/u);
+});
+
+test('STOP during the wait leaves the interrupted session unresumed', async () => {
+  const f = fixture({ plans: { memoro: { r: ready } }, session: apiEndedSession('API Error: 500 Internal server error.', { api_error_status: 500 }) });
+  f.deps.sleep = async () => { f.files['/w/runner/STOP'] = ''; };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /r: STOP came during the wait — sid-1 is not resumed/u);
+  assert.equal(registerOf(f, 'r').steps[0].status, 'failed');
+});
+
+test('a session that wrote its own end before the API cut it off is not resumed', async () => {
+  const f = fixture({ plans: { memoro: { r: ready } }, session: () => null });
+  f.deps.sleep = async () => {};
+  const ended = apiEndedSession('API Error: 500 Internal server error.', { api_error_status: 500 });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'r', 54, ended)(call); };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+});
+
 const stalledSession = () => ({ status: 142, stdout: '', stderr: '', timedOut: true, stalled: true });
 
 test('a stalled session is logged as stalled with exit 142', async () => {
