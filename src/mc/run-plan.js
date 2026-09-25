@@ -36,13 +36,14 @@ export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turn
 
 /**
  * What a session runs on when neither its step nor its plan says otherwise,
- * per kind (ruling 18, 2026-09-11). A step is `sonnet` at `medium` effort
- * with `opus` as its advisor — the strong model at the decision points rather
- * than on every turn. (Until 2026-09-12 a repair session kept `opus` with no
- * effort flag and no advisor; ruling 21 removed it.) These are claude's aliases and nobody else's — see `sessionSettings`.
+ * per kind. A step is `opus` at `medium` effort with no advisor (2026-09-25,
+ * ruling 18's second addendum; from 2026-09-11 it was `sonnet` with an `opus`
+ * advisor). (Until 2026-09-12 a repair session kept `opus` with no effort
+ * flag and no advisor; ruling 21 removed it.) These are claude's aliases and
+ * nobody else's — see `sessionSettings`.
  */
 export const SESSION_DEFAULTS = Object.freeze({
-  step: Object.freeze({ model: 'sonnet', effort: 'medium', advisor: 'opus' }),
+  step: Object.freeze({ model: 'opus', effort: 'medium', advisor: null }),
 });
 // The context window at which a claude step session compacts
 // (`--autocompact`, 100k–1M on claude 2.1.268). Over 2026-09-05..12 the mean
@@ -1143,7 +1144,8 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
 
 /**
  * The part of the `starting` line that says what the session runs on:
- * `claude sonnet · effort medium · advisor opus`. What is not set is left
+ * `claude opus · effort medium`, or `claude sonnet · effort medium · advisor
+ * opus` on a plan that names both. What is not set is left
  * out rather than printed as `null`, and a tool that picks its own model says
  * so.
  */
