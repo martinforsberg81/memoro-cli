@@ -538,9 +538,11 @@ time — a step that names only its effort keeps the plan's model. `tool`,
 
 | kind | `model` | `effort` | `advisor` |
 |---|---|---|---|
-| step | `sonnet` | `medium` | `opus` |
+| step | `opus` | `medium` | none |
 
-That is [ruling 18](../project/mc/rulings.md) (2026-09-11). Opus at high
+That is [ruling 18](../project/mc/rulings.md)'s second addendum
+(2026-09-25): opus 5.5, still at `medium`, and no advisor. From 2026-09-11 a
+step was `sonnet` at `medium` with `opus` as advisor, because opus at high
 effort on every turn was the cost — 155 step sessions over 2026-09-05..12, all
 on `claude-opus-5` at this machine's `effortLevel: high` — and the advisor is
 the strong model at the decision points rather than throughout. The defaults
@@ -548,7 +550,7 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
 
 - **`tool:`** — `claude` by default, resolved through `resolveLaunch`. A tool
   that is not installed is a block with the adapter's own hint.
-- **`model:`** — `sonnet` by default for a step, and
+- **`model:`** — `opus` by default for a step, and
   that default belongs to claude alone. They are claude aliases; handed to
   `codex -m` one names a model that tool does not have and the step dies on
   its argument list before reading a word of the plan. A plan on another tool
@@ -557,7 +559,9 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
   `--effort`. Without it claude falls back to the machine's own
   `effortLevel`, which is why the step default names one. Anything else is
   refused by the schema.
-- **`advisor:`** — a model name passed as `--advisor`, or `off` for none. An
+- **`advisor:`** — a model name passed as `--advisor`, or `off` for none;
+  a step has none by default since 2026-09-25, so a plan back on `sonnet`
+  names one if it wants one. An
   advisor that is the session's own model is none too: a plan or step on
   `opus` runs without one unless it names a different advisor (Martin,
   2026-09-12: *"Om step har opus => advisor = null, inte opus+opus."*). The
@@ -963,8 +967,8 @@ thing it writes into a repository: a blocked step (below).
   lane picked (`memoro#2: next — <name> (step i/n)`), what it could not start
   and why, and — once, not every ten minutes — that it has nothing to run.
   The `starting` line says what the session runs on, leaving out what was not
-  passed, and how it is watched: `<name>: step starting (claude sonnet · effort
-  medium · advisor opus, check-in every 60 min, killed after 20 min silent)`,
+  passed, and how it is watched: `<name>: step starting (claude opus · effort
+  medium, check-in every 60 min, killed after 20 min silent)`,
   `(codex own default model, no check-in, no stall guard)` for a codex
   plan that names none (`describeSettings`, `describeWatch`). Each check-in is
   a line too: `<name>: check-in 1 at 60 min`.

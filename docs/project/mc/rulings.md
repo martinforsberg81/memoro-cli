@@ -527,6 +527,19 @@ model is no advisor.
 advisor equals the resolved model; a plan or step on `opus` that wants one
 names a different model. Carried by memoro-cli #702.
 
+Second addendum 2026-09-25, at the plan session: a step runs on opus 5.5, with
+no advisor.
+
+> "Dags att ändra mc runner till opus 5.5. (utan advisor med andra ord)."
+> (Martin, 2026-09-25)
+
+`SESSION_DEFAULTS.step` is `opus` · `medium` · no advisor; the `opus` alias
+resolves to `claude-opus-5-5` on claude 2.1.280. The sonnet era's number to
+compare against, 2026-09-15..25: 233 sessions, 78 % landed, 5.7 USD list per
+landed step, median 105 turns, 74.8k context per turn
+(`scripts/measure-steps.py`). A plan that names `model: sonnet` gets no
+advisor unless it names one too.
+
 ## 19 · A step is work the runner takes from start to finish; investigation is the planning session's
 
 `ruling · 2026-09-12` · raised by Martin at the plan session, from the cost of stuck sessions

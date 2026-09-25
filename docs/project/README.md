@@ -43,8 +43,8 @@ the door.
   enforces. `effort` is one of `low`, `medium`, `high`, `xhigh`, `max`;
   `advisor` is a model name, or `off` for none, and an advisor that is the
   model itself is none. What a key leaves unsaid is the runner's default for
-  the session's kind — a step runs on `sonnet` at `medium` with `opus` as
-  advisor, and a plan session (`mc plan`) on `opus` (ruling 18, [`docs/technical/mc-run.md`](../technical/mc-run.md)
+  the session's kind — a step runs on `opus` at `medium` with no advisor,
+  and a plan session (`mc plan`) on `opus` (ruling 18, [`docs/technical/mc-run.md`](../technical/mc-run.md)
   § *The session*).
 
 ### The steps

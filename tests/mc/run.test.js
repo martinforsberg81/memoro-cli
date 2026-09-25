@@ -582,9 +582,9 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.match(call.checkIn(60, 1), /running for 60 minutes \(this is check-in number 1\)[\s\S]*"name": "alpha-check-in"/u);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: check-in 1 at 60 min/u);
   assert.deepEqual(call.args.slice(-5), ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
-  // Ruling 18: a step is sonnet at medium effort with an opus advisor.
-  assert.deepEqual(call.args.slice(1, 14), ['--model', 'sonnet', '--effort', 'medium', '--advisor', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--tools', 'Bash,Read,Edit,Write,Grep,Glob', '--strict-mcp-config']);
-  assert.match(f.files['/w/runner/log/runner.log'], /alpha: step starting \(claude sonnet · effort medium · advisor opus, check-in every 60 min, killed after 20 min silent\)/u);
+  // Ruling 18's second addendum: a step is opus at medium effort, no advisor.
+  assert.deepEqual(call.args.slice(1, 12), ['--model', 'opus', '--effort', 'medium', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--tools', 'Bash,Read,Edit,Write,Grep,Glob', '--strict-mcp-config']);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: step starting \(claude opus · effort medium, check-in every 60 min, killed after 20 min silent\)/u);
   // The parsed plan, not the file: the step in full under its own heading.
   assert.match(call.prompt, /`alpha` workarea of memoro[\s\S]*----- Your step: steps\[0\] -----\ntitle: The one step/u);
   assert.doesNotMatch(call.prompt, /"schema": ?"mc-plan"/u, 'the file itself is not in the prompt');
@@ -599,7 +599,7 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.deepEqual(f.calls.rounds, [], 'the session landed it through mc merge itself; the runner lands nothing of a step\'s');
   const rows = f.files['/w/runner/log/runs.tsv'].trim().split('\n');
   assert.equal(rows[0].split('\t').length, 15);
-  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t-\tsonnet');
+  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t-\topus');
   assert.ok(f.files['/w/alpha-20260829T100000Z.json'] === undefined);
   // The stream as it came, and the summed result beside it for measure-steps.py.
   assert.ok('/w/runner/log/alpha-20260829T100000Z.jsonl' in f.files);
@@ -1145,7 +1145,7 @@ test('a quota answer is logged as quota, not merged, and the runner sleeps 30 mi
   f.deps.sleep = async (ms) => { slept.push(ms); };
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\tsonnet\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\topus\n/u);
   assert.equal(f.calls.rounds.length, 0);
   assert.ok(slept.includes(30 * 60 * 1000));
 });
@@ -1156,7 +1156,7 @@ test('a stalled session is logged as stalled with exit 142', async () => {
   const f = fixture({ plans: { memoro: { t: ready } }, session: stalledSession });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\tstalled,failed\t-\tsonnet\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\tstalled,failed\t-\topus\n/u);
 });
 
 /**
@@ -1394,7 +1394,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
 
   const during = f.duringSession[0];
   assert.deepEqual(JSON.parse(during['/w/runner/current-memoro.json']), {
-    name: 'alpha', kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', check_in_minutes: 60, check_ins: 0,
+    name: 'alpha', kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', effort: 'medium', advisor: null, check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro', role: stepRole,
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z' });

@@ -597,18 +597,21 @@ test('sessionSettings: tool, check_in_minutes and stall_minutes from the plan, w
 });
 
 /**
- * Ruling 18 (2026-09-11): opus at high effort on every turn was what a step
- * cost, so a step is sonnet at medium with opus as its advisor. A repair keeps
- * opus with neither flag. Each key resolves step over plan over default on its
- * own, so a step naming only its effort keeps the plan's model.
+ * Ruling 18 (2026-09-11) put a step on sonnet at medium with opus as its
+ * advisor; its second addendum (2026-09-25) put it on opus at medium with no
+ * advisor. Each key resolves step over plan over default on its own, so a
+ * step naming only its effort keeps the plan's model.
  */
 test('sessionSettings: the step defaults, plan and step overrides, advisor off, codex getting none', () => {
-  assert.deepEqual(SESSION_DEFAULTS, { step: { model: 'sonnet', effort: 'medium', advisor: 'opus' } }, 'one kind: the repair is gone (ruling 21)');
-  assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'sonnet', effort: 'medium', advisor: 'opus', ...wait() });
+  assert.deepEqual(SESSION_DEFAULTS, { step: { model: 'opus', effort: 'medium', advisor: null } }, 'one kind: the repair is gone (ruling 21)');
+  assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, ...wait() });
+  // Since 2026-09-25 the default names no advisor, so a plan back on sonnet
+  // gets one only by naming it.
+  assert.equal(sessionSettings({ model: 'sonnet' }).advisor, null);
+  assert.equal(sessionSettings({ model: 'sonnet', advisor: 'opus' }).advisor, 'opus');
 
-  // The plan overrides the default key by key. A plan on opus keeps the
-  // default advisor in name, but an advisor that is the model itself is no
-  // advisor (Martin, 2026-09-12: "Om step har opus => advisor = null, inte
+  // The plan overrides the default key by key. An advisor that is the model
+  // itself is no advisor (Martin, 2026-09-12: "Om step har opus => advisor = null, inte
   // opus+opus.").
   assert.deepEqual(sessionSettings({ model: 'opus' }), { tool: 'claude', model: 'opus', effort: 'medium', advisor: null, ...wait() });
   assert.deepEqual(sessionSettings({ model: 'opus', advisor: 'sonnet' }).advisor, 'sonnet');
@@ -622,16 +625,17 @@ test('sessionSettings: the step defaults, plan and step overrides, advisor off, 
   // `off` at any level is no advisor, and a step can turn off the plan's.
   assert.equal(sessionSettings({ advisor: 'off' }).advisor, null);
   assert.equal(sessionSettings({}, { advisor: 'off' }).advisor, null);
-  assert.equal(sessionSettings({ advisor: 'off' }, { advisor: 'opus' }).advisor, 'opus');
+  assert.equal(sessionSettings({ advisor: 'off' }, { advisor: 'fable' }).advisor, 'fable');
 
-  // `sonnet`, `medium` and `opus` are claude's: codex gets no model it did not
+  // `opus` and `medium` are claude's: codex gets no model it did not
   // name, and no effort or advisor even when one is named.
   assert.deepEqual(sessionSettings({ tool: 'codex' }), { tool: 'codex', model: null, effort: null, advisor: null, ...wait() });
   assert.deepEqual(sessionSettings({ tool: 'codex', effort: 'high', advisor: 'opus' }, { model: 'o3' }), { tool: 'codex', model: 'o3', effort: null, advisor: null, ...wait() });
 });
 
 test('describeSettings: what the starting line says a session runs on', () => {
-  assert.equal(describeSettings('claude', sessionSettings({})), 'claude sonnet · effort medium · advisor opus');
+  assert.equal(describeSettings('claude', sessionSettings({})), 'claude opus · effort medium');
+  assert.equal(describeSettings('claude', sessionSettings({ model: 'sonnet', advisor: 'opus' })), 'claude sonnet · effort medium · advisor opus');
   assert.equal(describeSettings('claude', sessionSettings({ model: 'opus' })), 'claude opus · effort medium', 'an opus plan gets no opus advisor');
   assert.equal(describeSettings('codex', sessionSettings({ tool: 'codex' })), 'codex own default model');
 });
