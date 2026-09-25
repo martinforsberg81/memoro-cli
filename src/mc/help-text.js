@@ -25,6 +25,8 @@ THE PAGE
                                     every repository at once; no argument prints both
   mc test <repo> <pr>              Measure a pull request; merge nothing
   mc test dev | prod               The app running, measured — locally or live
+  mc gate                          This worktree's own gate, answered in 2 KB
+  mc publish                       Push this branch, open its pull request
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc dev list                      Which dev server runs in which worktree
@@ -176,6 +178,22 @@ IN FULL
                                     Forget it. Not an error when nothing was
                                     registered — the end state is the one asked
                                     for either way
+  mc gate [--base <ref>] [--json]  The repository's own gate on the tree you
+                                    stand in — npm run ci -- --base-ref
+                                    origin/main where there is a ci script,
+                                    npm test otherwise — with the whole output
+                                    in a file and at most 2 KB printed: GREEN
+                                    or RED, the counts, the failing lines and
+                                    their locations, the file's path. A meter
+                                    for a session before it pushes; mc merge
+                                    measures again and decides
+  mc publish [--title …] [--body …] Push the branch you stand on (never force)
+                                    and open its pull request, or find the one
+                                    it has — title and body from the last
+                                    commit unless given — then one gh pr view.
+                                    Refuses on main, a dirty tree, or a remote
+                                    branch that moved. Ends with the mc merge
+                                    line to run
   mc merge <repo> <pr>             That same measurement, then the landing:
                                     only if nothing new went red and the base
                                     has not moved since, squash-merge, pull the

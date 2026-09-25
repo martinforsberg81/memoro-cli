@@ -13,6 +13,8 @@ export const VERB_MODULES = {
   repo: './mc/commands/repo.js',
   merge: './mc/commands/merge.js',
   test: './mc/commands/test.js',
+  gate: './mc/commands/gate.js',
+  publish: './mc/commands/publish.js',
   dev: './mc/commands/dev.js',
   deploy: './mc/commands/deploy.js',
   worker: './mc/commands/worker.js',

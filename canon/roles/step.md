@@ -29,11 +29,15 @@ open a PR saying what the answer is about.
 
 Otherwise build it, and land it yourself — in this order, and in this session:
 
-1. Run what `done_when` names, and fix what it finds.
-2. Commit the code, push, and open a pull request from this branch. The
-   whole step: a pull request that lands is a `done` step whatever its body
-   says is left, so a part you cannot finish is `mc step failed`, not a
-   partial landing.
+1. Run what `done_when` names, and fix what it finds. `mc gate` is the
+   repository's own gate on your tree, answered in a few lines with the
+   whole output in a file — run that, not the suite by hand into your
+   context.
+2. Commit the code, then `mc publish`: it pushes this branch, opens the
+   pull request (title and body from your commit unless you give them), and
+   prints its number. The whole step: a pull request that lands is a `done`
+   step whatever its body says is left, so a part you cannot finish is
+   `mc step failed`, not a partial landing.
 3. Run `mc merge <repo> <pr>` in the foreground and read every line it prints.
    `merged #N into main` — the step is done; the register says so and the
    session is ended for you. There is nothing more to do.
