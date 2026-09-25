@@ -65,28 +65,91 @@ def norm(bound):
     return f'{padded[:8]}T{padded[8:]}'
 
 
+# List prices, $ per million tokens — src/mc/prices.js, kept by hand. Cache
+# reads at 0.1× input, cache writes at 2× (the 1-hour cache Claude Code writes).
+PRICES = {'claude-opus': (5, 25), 'claude-sonnet-5': (2, 10), 'claude-sonnet': (3, 15), 'claude-haiku': (1, 5), 'claude-fable': (10, 50)}
+
+
+def price(model, usage):
+    best = max((k for k in PRICES if model.startswith(k)), key=len, default=None)
+    if not best:
+        return 0.0
+    i, o = PRICES[best]
+    return (usage.get('input_tokens', 0) * i + usage.get('output_tokens', 0) * o
+            + usage.get('cache_creation_input_tokens', 0) * i * 2 + usage.get('cache_read_input_tokens', 0) * i * 0.1) / 1e6
+
+
+def stream_summary(path):
+    """The result-shaped object `streamSummary` (run-plan.js) makes of a stream with no `result` line.
+
+    A session `mc merge` ended (ruling 21: green ends the process) never prints
+    one; before 2026-09-25 the runner wrote no `.json` for it either, so the
+    landed steps — most of them — were invisible here. Turns are distinct
+    assistant message ids, usage is summed over them, cost is list price.
+    """
+    messages, session, model = {}, None, None
+    for line in open(path, errors='replace'):
+        if '"type":"assistant"' not in line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = event.get('message') or {}
+        if event.get('type') != 'assistant' or not message.get('id') or message.get('model') == '<synthetic>':
+            continue
+        session = event.get('session_id') or session
+        model = message.get('model') or model
+        messages[message['id']] = (message.get('model'), message.get('usage') or {})
+    if not messages:
+        return None
+    usage, by_model, cost = collections.Counter(), {}, 0.0
+    for m, u in messages.values():
+        for key in ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'):
+            usage[key] += u.get(key, 0)
+        into = by_model.setdefault(m, collections.Counter())
+        into['outputTokens'] += u.get('output_tokens', 0)
+        cost += price(m or '', u)
+    return {'subtype': 'killed', 'session_id': session, 'num_turns': len(messages), 'usage': dict(usage),
+            'modelUsage': {m: dict(c) for m, c in by_model.items()}, 'total_cost_usd': cost, 'model': model}
+
+
 def sessions(since, until, min_turns):
-    """Every step session in the window with its result json and transcript."""
+    """Every step session in the window with its result json (or the summary of its stream) and transcript."""
     out = []
-    for path in sorted(glob.glob(f'{LOG}/*-*.json')):
+    for path in sorted(glob.glob(f'{LOG}/*-*.jsonl')):
         stamp = os.path.basename(path).rsplit('-', 1)[1][:15]   # YYYYMMDDTHHMMSS
         if not (norm(since) <= stamp < norm(until)):
             continue
         try:
-            result = json.load(open(path))
+            result = json.load(open(path[:-1]))
         except (json.JSONDecodeError, OSError):
+            result = stream_summary(path)
+        if not result:
             continue
         if (result.get('num_turns') or 0) < min_turns:
             continue
         sid = result.get('session_id')
         transcript = glob.glob(f'{HOME}/.claude/projects/*/{sid}.jsonl') if sid else []
-        out.append((os.path.basename(path)[:-5], result, transcript[0] if transcript else None))
+        name = os.path.basename(path)[:-6]
+        SESSION_OF[name] = sid or ''
+        out.append((name, result, transcript[0] if transcript else None))
     return out
 
 
+def result_chars(part):
+    """How much a tool result put into the context: its text, in characters (≈ 4 per token)."""
+    content = part.get('content')
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(len(c.get('text', '')) for c in content if isinstance(c, dict))
+    return 0
+
+
 def walk(transcript):
-    """Tool calls from a transcript: (tool, class, call→result seconds, think seconds before it)."""
-    calls, order, results, think = {}, [], {}, []
+    """Tool calls from a transcript: (tool, class, call→result seconds, result characters, think seconds before it)."""
+    calls, order, results, sizes, think = {}, [], {}, {}, []
     last_result = None
     multi = 0   # assistant turns that carried more than one tool call — the batching the prompt asks for
     for line in open(transcript):
@@ -115,10 +178,11 @@ def walk(transcript):
                     last_result = ts
                     if part.get('tool_use_id') in calls:
                         results[part['tool_use_id']] = ts
+                        sizes[part['tool_use_id']] = result_chars(part)
     rows = []
     for cid in order:
         name, kind, started = calls[cid]
-        rows.append((name, kind, seconds(started, results[cid]) if cid in results else 0.0))
+        rows.append((name, kind, seconds(started, results[cid]) if cid in results else 0.0, sizes.get(cid, 0)))
     return rows, think, multi
 
 
@@ -143,6 +207,48 @@ def main_model(result):
     return max(usage.items(), key=lambda kv: (kv[1] or {}).get('outputTokens', 0))[0]
 
 
+RUNS = {}
+
+
+def load_runs():
+    """runs.tsv by session id and by (project, start time): a row ended `mc merge`
+    killed carries no session id, so it is found from its project and its start
+    — the row's `ts` minus its `seconds`, which is the log stem's timestamp."""
+    try:
+        with open(f'{LOG}/runs.tsv') as f:
+            header = f.readline().rstrip('\n').split('\t')
+            for line in f:
+                row = dict(zip(header, line.rstrip('\n').split('\t')))
+                note = row.get('note', '')
+                RUNS[row.get('session', '-')] = note
+                try:
+                    start = parse_ts(row['ts']) - dt.timedelta(seconds=int(row['seconds']))
+                except (KeyError, ValueError):
+                    continue
+                RUNS.setdefault(('start', row.get('name')), []).append((start, note))
+    except OSError:
+        pass
+    RUNS['-'] = ''
+
+
+def merged(name):
+    """Did runs.tsv say `merged` for this session (by id, else by project and start within two minutes)?"""
+    if not RUNS:
+        load_runs()
+    sid = SESSION_OF.get(name, '')
+    if sid and sid in RUNS:
+        return 'merged' in RUNS[sid]
+    project, stamp = name.rsplit('-', 1)
+    started = dt.datetime.strptime(stamp, '%Y%m%dT%H%M%SZ').replace(tzinfo=dt.timezone.utc)
+    for start, note in RUNS.get(('start', project), []):
+        if abs((start - started).total_seconds()) <= 120:
+            return 'merged' in note
+    return False
+
+
+SESSION_OF = {}
+
+
 def summary(found, indent=''):
     """Wall, API time, turns, cost and context per turn for a set of sessions."""
     walls = [r['duration_ms'] / 1000 for _, r, _ in found if r.get('duration_ms') is not None]
@@ -154,12 +260,29 @@ def summary(found, indent=''):
     # The number step-cost's step 1 (the plan excerpt, --autocompact) is measured on.
     contexts = [((r.get('usage') or {}).get('cache_read_input_tokens', 0) + (r.get('usage') or {}).get('input_tokens', 0))
                 / r['num_turns'] for _, r, _ in found if r.get('num_turns')]
+    # Cache health: the share of the session's input that was served from cache.
+    # Under ~0.8 something is invalidating the prefix — a changing system prompt,
+    # a tool set that varies — and every turn is paying write price for it.
+    shares = []
+    for _, r, _ in found:
+        u = r.get('usage') or {}
+        read = u.get('cache_read_input_tokens', 0)
+        total = read + u.get('input_tokens', 0) + u.get('cache_creation_input_tokens', 0)
+        if total:
+            shares.append(read / total)
+    # The unit is the landed step, not the session (ruling 18): a session that
+    # gave up early looks cheap per session and is pure cost per landed step.
+    landed = [r['total_cost_usd'] for name, r, _ in found if r.get('total_cost_usd') and merged(name)]
     for line in (quantiles('session wall (min)', walls, 60),
                  quantiles('session API time (min)', apis, 60),
                  quantiles('turns', turns, 1, '{:6.0f}'),
                  quantiles('cost (USD)', costs, 1),
-                 quantiles('context per turn (k tokens)', contexts, 1000)):
+                 quantiles('context per turn (k tokens)', contexts, 1000),
+                 quantiles('cache share of input', shares, 1, '{:6.2f}')):
         print(indent + line)
+    if costs:
+        print(indent + f'{"cost per landed step (USD)":44s} landed={len(landed):3d}/{len(found):<3d} '
+              f'sum/landed={sum(costs) / max(len(landed), 1):6.1f} med(landed)={st.median(landed) if landed else 0:6.1f}')
 
 
 def main():
@@ -187,7 +310,7 @@ def main():
     errors = collections.Counter(str(r.get('result'))[:40] for _, r, _ in found if r.get('is_error'))
     print(f'ended in an API error: {sum(errors.values())} {dict(errors)}\n')
 
-    by_class = collections.defaultdict(lambda: [0, 0.0])
+    by_class = collections.defaultdict(lambda: [0, 0.0, 0])
     tool_calls = collections.Counter()
     tests_per, think_all, timeouts, multi_per = [], [], 0, []
     repeats, test_commands = 0, 0
@@ -199,19 +322,24 @@ def main():
         multi_per.append(multi)
         seen = collections.Counter()
         n_tests = 0
-        for name, kind, secs in rows:
+        for name, kind, secs, chars in rows:
             by_class[kind][0] += 1
             by_class[kind][1] += secs
+            by_class[kind][2] += chars
             tool_calls[name] += 1
             if 118 <= secs <= 126:
                 timeouts += 1
             if kind == 'tests':
                 n_tests += 1
         tests_per.append(n_tests)
+    # Result tokens: what each class put into the context (chars / 4), which every
+    # later turn of that session re-reads. The wall column is where the time went;
+    # this column is where the context went.
     total = sum(v[1] for v in by_class.values()) or 1
-    print(f'{"tool class":24s} {"calls":>6s} {"wall":>8s} {"share":>6s}')
-    for kind, (n, secs) in sorted(by_class.items(), key=lambda kv: -kv[1][1]):
-        print(f'{kind:24s} {n:6d} {secs / 3600:7.1f}h {secs / total * 100:5.0f}%')
+    total_chars = sum(v[2] for v in by_class.values()) or 1
+    print(f'{"tool class":24s} {"calls":>6s} {"wall":>8s} {"share":>6s} {"result ktok":>12s} {"share":>6s} {"tok/call":>9s}')
+    for kind, (n, secs, chars) in sorted(by_class.items(), key=lambda kv: -kv[1][2]):
+        print(f'{kind:24s} {n:6d} {secs / 3600:7.1f}h {secs / total * 100:5.0f}% {chars / 4000:11.0f}k {chars / total_chars * 100:5.0f}% {chars / 4 / max(n, 1):9.0f}')
     print()
     print(quantiles('test-class calls per session', tests_per, 1, '{:6.0f}'))
     print(quantiles('model think time per turn (s)', think_all, 1))

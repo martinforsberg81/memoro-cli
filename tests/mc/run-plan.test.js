@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 
 import {
   RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
-  AUTOCOMPACT_TOKENS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, chooseKind, collectNote,
+  AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, chooseKind, collectNote,
   describeSettings, describeWatch, headlessArgs, helperDue,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen,
-  readSessionOutput, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
+  readSessionOutput, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow, userMessageLine,
 } from '../../src/mc/run-plan.js';
 import { NAME_RE } from '../../src/mc/plan-schema.js';
@@ -382,17 +382,19 @@ test('stepPrompt: a conflicted worktree is a preamble, and the step is still the
 
 test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex is exec --json', () => {
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs });
-  assert.deepEqual(claude, ['-p', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--disallowedTools', 'Agent', '--append-system-prompt', 'PROFILE', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
+  assert.deepEqual(claude, ['-p', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'PROFILE', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
   assert.equal(claude.includes('do it'), false, 'the prompt is the first message on stdin, not an argument');
   assert.equal(AUTOCOMPACT_TOKENS, 150_000);
   // The helper and intake turns opt out: step-cost's contract leaves them be —
   // no compaction, and the positional prompt with one JSON object back.
   const helper = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs, autocompact: null, stream: false });
   assert.equal(helper.includes('--autocompact'), false);
-  assert.deepEqual(helper, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--disallowedTools', 'Agent', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
-  // No launch of the runner's may spawn a subagent, whatever the repository's
-  // instruction files say — the helper included.
-  assert.deepEqual(helper.slice(helper.indexOf('--disallowedTools'), helper.indexOf('--disallowedTools') + 2), ['--disallowedTools', 'Agent']);
+  assert.deepEqual(helper, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
+  // No launch of the runner's has a tool outside the allowlist — no Agent, no
+  // Skill, no MCP server — whatever the repository's instruction files say;
+  // the helper included. Grep and Glob are in it: the default set omits them.
+  assert.equal(CLAUDE_TOOLS, 'Bash,Read,Edit,Write,Grep,Glob');
+  assert.deepEqual(helper.slice(helper.indexOf('--tools'), helper.indexOf('--tools') + 3), ['--tools', CLAUDE_TOOLS, '--strict-mcp-config']);
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'PROFILE', prompt: 'do it', profileArgs });
   assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="PROFILE"', 'do it']);
   assert.equal(codex.includes('--autocompact'), false, 'codex has no such flag');
@@ -428,6 +430,35 @@ test('readSessionOutput: claude json usage fields, dashes when absent', () => {
   const r = readSessionOutput({ toolId: 'claude-code', stdout: out, exitCode: 0 });
   assert.deepEqual(r, { turns: '7', session: 's1', input: '10', output: '20', cacheRead: '30', cacheWrite: '-', note: 'success', quota: false, quotaReset: null });
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: 'garbage', exitCode: 1 }).note, 'no-json');
+});
+
+test('streamSummary: a stream mc merge ended before its result still gives turns, usage, model and session', () => {
+  const ev = (id, usage, model = 'claude-sonnet-5') => JSON.stringify({ type: 'assistant', session_id: 'sid-1', message: { id, model, usage } });
+  const usage1 = { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 2_000 };
+  const usage2 = { input_tokens: 5, output_tokens: 50, cache_read_input_tokens: 52_000, cache_creation_input_tokens: 500 };
+  const stdout = [
+    JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sid-1' }),
+    ev('m1', usage1), ev('m1', usage1),            // one message, two content blocks: one turn
+    ev('m2', usage2),
+    ev('m3', {}, '<synthetic>'),                    // claude's placeholder: not a turn
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [] } }),
+  ].join('\n');
+  const summary = streamSummary(stdout);
+  assert.equal(summary.subtype, 'killed');
+  assert.equal(summary.session_id, 'sid-1');
+  assert.equal(summary.num_turns, 2);
+  assert.deepEqual(summary.usage, { input_tokens: 15, output_tokens: 150, cache_read_input_tokens: 102_000, cache_creation_input_tokens: 2_500 });
+  assert.deepEqual(Object.keys(summary.modelUsage), ['claude-sonnet-5']);
+  // List price on sonnet-5 (2/10): input 15, output 150, cache read 102k at 0.1×, cache write 2.5k at 2×.
+  const expected = (15 * 2 + 150 * 10 + 102_000 * 2 * 0.1 + 2_500 * 2 * 2) / 1e6;
+  assert.ok(Math.abs(summary.total_cost_usd - expected) < 1e-9);
+  assert.equal(streamSummary('garbage'), null);
+  assert.equal(sessionResult(stdout), null, 'a summary is not a result: the session did not answer');
+  // readSessionOutput keeps the note (`no-json`) and fills the row's counts from the stream.
+  const read = readSessionOutput({ toolId: 'claude-code', stdout, exitCode: 143 });
+  assert.equal(read.note, 'no-json');
+  assert.equal(read.quota, false);
+  assert.deepEqual([read.turns, read.session, read.input, read.output, read.cacheRead, read.cacheWrite], ['2', 'sid-1', '15', '150', '102000', '2500']);
   // The helper's own wall-clock cap is still a timeout; the runner's kill is a stall.
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: '', exitCode: 142, timedOut: true }).note, 'timeout');
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: '', exitCode: 142, timedOut: true, stalled: true }).note, 'stalled');

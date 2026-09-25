@@ -617,16 +617,24 @@ A step gets it; the helper and intake turns, which share
 json` and their own wall-clock timeout, because step-cost's contract leaves
 them be.
 
-No claude launch of the runner's may spawn a subagent: every one gets
-`--disallowedTools Agent`. A step is bounded by its plan, the strong model is
-reached through `--advisor`, and a subagent runs on whatever model the
-repository's instruction files name rather than the plan's `runner` choice.
-Over the first 41 sonnet step sessions (2026-09-11..12) 19 spawned opus
-subagents on memoro's `CLAUDE.md` instruction — 2 111 of the era's 6 556 model
-requests and about a quarter of its cost, invisible in `runs.tsv`, which
-counts the parent's turns only. Three of those sessions ended their turn with
-"I'll review its diff when it reports back" and no PR, because in a headless
-session nothing reports back. The flag holds whatever any repository's files say.
+Every claude launch of the runner's gets the tool allowlist
+`--tools Bash,Read,Edit,Write,Grep,Glob` (`CLAUDE_TOOLS`) and
+`--strict-mcp-config`, and so has those six tools and no other — no `Agent`,
+no `Skill`, no Cron, Web or Task tool, no user-level MCP server — whatever
+any repository's files say. Two reasons. A headless session has no use for a
+subagent: a step is bounded by its plan, the strong model is reached through
+`--advisor`, and a subagent runs on whatever model the repository's
+instruction files name rather than the plan's `runner` choice (over the first
+41 sonnet step sessions, 2026-09-11..12, 19 spawned opus subagents on
+memoro's `CLAUDE.md` instruction — a quarter of the era's cost, invisible in
+`runs.tsv`, and three of them ended their turn waiting for a child that never
+reports back). And every tool definition rides in every request: on claude
+2.1.280 the default set minus `Agent` (the `--disallowedTools Agent` this was
+until 2026-09-25) is 18 687 tokens per request, the six are 13 073, and a
+step session re-reads its context ~90 times. The six include `Grep` and
+`Glob`, which the default set omits — until this flag a step searched with
+`grep` and `sed -n` through Bash, 2 866 such calls against 466 native reads
+over 2026-09-15..25, each a screen of file kept in the context.
 
 Next to that body go the Coding Profile, `canon/roles/_common.md` and
 `canon/roles/step.md` — assembled by `instructionsFor` and passed through the
@@ -639,7 +647,7 @@ The two argument lists are the only place the tools differ:
 ```
 claude  -p [--model …] [--effort …] [--advisor …] \
         --permission-mode acceptEdits --autocompact 150000 \
-        --disallowedTools Agent \
+        --tools Bash,Read,Edit,Write,Grep,Glob --strict-mcp-config \
         --append-system-prompt <instructions> \
         --input-format stream-json --output-format stream-json --verbose
 codex   exec --json --sandbox danger-full-access [-m …] \
@@ -964,7 +972,13 @@ thing it writes into a repository: a blocked step (below).
   the session actually printed, kept whole; the one result object read out of
   it (summed when there were two), which is the file
   `scripts/measure-steps.py` reads; and stderr. A session that printed no
-  result has no `.json`.
+  result — the ordinary end of a landed step, since `mc merge` ends the
+  process on green (ruling 21) — gets a `.json` read from the stream instead
+  (`streamSummary`: `subtype: 'killed'`, turns as distinct assistant message
+  ids, usage summed over them, a list-price cost), and its `runs.tsv` row
+  keeps its turns, usage and session id the same way. Until 2026-09-25 those
+  rows were dashes and the file was absent: 6 of 220 step rows over
+  2026-09-18..22 had usage, and the cost per landed step could not be read.
 - **`runner.json`** stays one per machine: a runner is here, and this is the
   pid to test for life. Every start reads it first, so it is a claim that is
   checked rather than one that is only made.

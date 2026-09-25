@@ -18,6 +18,7 @@
  */
 import { parseRuns } from './brief-collect.js';
 import { deliverableStep, EFFORT_LEVELS } from './plan-schema.js';
+import { estimateCost } from './prices.js';
 import { describePr, openPrsFor } from './project-prs.js';
 
 /**
@@ -776,16 +777,26 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
  * pass `autocompact: null` — they are not this runner's step lane, and
  * step-cost's contract leaves them as they were.
  *
- * Every claude launch gets `--disallowedTools Agent`. A headless session
- * has no use for a subagent: the step is bounded by its plan, the strong
- * model is reached through `--advisor`, and a subagent runs on whatever
- * model the repository's instruction files name, outside the plan's
- * `runner` choice. Measured 2026-09-12 over the first 41 sonnet step
- * sessions: 19 spawned opus subagents on memoro's `CLAUDE.md` instruction,
- * 2 111 of the era's 6 556 model requests, about a quarter of its cost, and
- * one 17-turn parent waited 41 minutes on a 319-turn child that runs.tsv
- * never saw. The flag holds whatever any repository's files say.
+ * Every claude launch gets the `CLAUDE_TOOLS` allowlist and
+ * `--strict-mcp-config`. The allowlist replaced `--disallowedTools Agent`
+ * on 2026-09-25: a headless session has no use for a subagent — the step is
+ * bounded by its plan, the strong model is reached through `--advisor`, and a
+ * subagent runs on whatever model the repository's instruction files name,
+ * outside the plan's `runner` choice (measured 2026-09-12 over the first 41
+ * sonnet step sessions: 19 spawned opus subagents on memoro's `CLAUDE.md`
+ * instruction, a quarter of the era's cost) — and it has no use for Skill,
+ * Workflow, Cron, Web or Task tools either. Tool definitions ride in every
+ * request: claude 2.1.280 measured 18 687 tokens/request with the default
+ * set minus Agent, 13 073 with these six, on a context that is re-read ~90
+ * times per step session. The six include `Grep` and `Glob`, which the
+ * default set omits — until this flag a step searched with `grep` through
+ * Bash (2 866 such calls against 466 native reads, 2026-09-15..25).
+ * `--strict-mcp-config` keeps a user-level MCP server, with its own tool
+ * definitions, out of the lane. Whatever any repository's files say, the
+ * session has these tools and no others.
  */
+export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
+
 export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const instr = profileArgs(toolId, instructions);
@@ -795,7 +806,7 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   const io = stream
     ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
     : ['--output-format', 'json'];
-  return ['-p', ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, '--disallowedTools', 'Agent', ...instr, ...io];
+  return ['-p', ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, '--tools', CLAUDE_TOOLS, '--strict-mcp-config', ...instr, ...io];
 }
 
 /** One stream-json user message, as `deps.session` writes it on claude's stdin. */
@@ -833,6 +844,60 @@ const RESULT_SUMS = ['num_turns', 'total_cost_usd', 'duration_ms', 'duration_api
 const MODEL_USAGE_KEPT = new Set(['contextWindow', 'maxOutputTokens']);
 
 const add = (a, b) => (typeof b === 'number' ? (typeof a === 'number' ? a + b : b) : a);
+
+/**
+ * What a stream-json run that never printed a `result` still says about
+ * itself, read from its `assistant` events: the session id (on every
+ * event), the turns (one per distinct message id — an event is printed per
+ * content block, all of one message carrying the same `usage`), the four
+ * usage counts and the per-model split, and a list-price cost for the whole.
+ *
+ * This is the ordinary end of a landed step since ruling 21: the session
+ * runs `mc merge` itself, green writes `done` and ends the process — so
+ * the `result` line never comes, and 2026-09-18..22 runs.tsv had turns and
+ * usage for 6 of 220 step rows. Shaped like a `result` object so
+ * `scripts/measure-steps.py` reads it as one, with `subtype: 'killed'` and
+ * no `result` text: `sessionResult` does not return it, because a session
+ * that answered and one that was ended are different things to
+ * `readSessionOutput` (quota, `is_error`). Null when the stream has no
+ * assistant event at all.
+ */
+export function streamSummary(stdout) {
+  const messages = new Map();
+  let session = null;
+  let last = null;
+  let model = null;
+  for (const line of String(stdout || '').split('\n')) {
+    if (!line.includes('"type":"assistant"')) continue;
+    let event = null;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type !== 'assistant' || !event.message?.id) continue;
+    // `<synthetic>` is claude's own placeholder message (an interrupted turn,
+    // a check-in's acknowledgement); it carries no usage and is not a turn.
+    if (event.message.model === '<synthetic>') continue;
+    session = event.session_id || session;
+    model = event.message.model || model;
+    last = event.message.usage || last;
+    messages.set(event.message.id, { model: event.message.model, usage: event.message.usage || {} });
+  }
+  if (!messages.size) return null;
+  const usage = {};
+  const modelUsage = {};
+  for (const { model: m, usage: u } of messages.values()) {
+    for (const key of USAGE_SUMS) usage[key] = add(usage[key], u[key]) ?? 0;
+    const into = modelUsage[m] || (modelUsage[m] = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 });
+    into.inputTokens += u.input_tokens || 0;
+    into.outputTokens += u.output_tokens || 0;
+    into.cacheReadInputTokens += u.cache_read_input_tokens || 0;
+    into.cacheCreationInputTokens += u.cache_creation_input_tokens || 0;
+  }
+  let cost = 0;
+  for (const [m, u] of Object.entries(modelUsage)) {
+    const c = estimateCost({ input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheReadInputTokens, cacheWrite: u.cacheCreationInputTokens }, m);
+    if (c != null) { u.costUSD = c; cost += c; }
+  }
+  return { type: 'result', subtype: 'killed', is_error: false, session_id: session, num_turns: messages.size, usage, modelUsage, total_cost_usd: cost, model, last_usage: last };
+}
 
 /**
  * The session's result, read from what claude printed: the last `result`
@@ -908,7 +973,18 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   if (!json) {
     const text = `${stdout}\n${stderr}`;
     const quota = quotaSeen(text);
-    return { ...dash, note: quota ? 'quota' : 'no-json', quota, quotaReset: quota ? quotaResetAt(text, now) : null };
+    // No answer, but the turns it took are in the stream: a session `mc
+    // merge` ended keeps its row's turns, usage and session id.
+    const stream = streamSummary(stdout);
+    const counts = stream ? {
+      turns: String(stream.num_turns),
+      session: stream.session_id ?? '-',
+      input: String(stream.usage.input_tokens),
+      output: String(stream.usage.output_tokens),
+      cacheRead: String(stream.usage.cache_read_input_tokens),
+      cacheWrite: String(stream.usage.cache_creation_input_tokens),
+    } : {};
+    return { ...dash, ...counts, note: quota ? 'quota' : 'no-json', quota, quotaReset: quota ? quotaResetAt(text, now) : null };
   }
   const usage = json.usage || {};
   const pick = (v) => (v == null ? '-' : String(v));

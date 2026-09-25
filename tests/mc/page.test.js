@@ -131,7 +131,7 @@ describe('RUNNER', () => {
     assert.equal(runner.process.alive, true);
     assert.equal(runner.day.steps, 3);
     assert.equal(runner.day.timeout, 1);
-    assert.ok(runner.day.cost > 7 && runner.day.cost < 8, `≈ $7.3 list: ${runner.day.cost}`);
+    assert.ok(runner.day.cost > 8 && runner.day.cost < 8.2, `≈ $8.07 list (cache writes at 2×): ${runner.day.cost}`);
   });
 
   // The section is the machine and nothing else now: a person's session is
@@ -1228,7 +1228,7 @@ describe('the page', () => {
     assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
     assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
     assert.match(text, /RUNNER {2}1 in flight · 2 lanes\s+mc run/u);
-    assert.match(text, /^ {2}3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)$/mu);
+    assert.match(text, /^ {2}3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈\$8\.\d\d list \(opus, 2026-06\)$/mu);
     assert.match(text, /NEXT {2}2 runnable\s+mc status <name>/u);
     assert.doesNotMatch(text, /NEXT[^\n]*queued/u, 'queued moved to MERGES');
     assert.match(text, /MERGES {2}1 waiting\s+mc merge <repo> <pr>/u);
