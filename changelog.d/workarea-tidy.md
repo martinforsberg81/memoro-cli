@@ -13,3 +13,14 @@ section: Changed
   `mergedPullAtTip` (`branch-landed.js`), and the runner's `mergedAtTip` now
   asks it there with unchanged behaviour; the per-worktree decision is the
   pure, tested `releaseVerdict` (`work-area.js`).
+
+- **A deleted Claude conversation takes its `<uuid>/` directory with it.**
+  Claude Code keeps a sibling `<session-id>/` directory (subagents, tool
+  results) beside each transcript; `mc work discard ytor --apply` removed five
+  `.jsonl` files and left 203 MB of those behind (2026-09-26).
+  `deleteConversation` now removes the sibling when the id is a uuid
+  (`SESSION_ID`), and `listConversations` counts it in `bytes`
+  (`treeBytes`: symlinks never followed, unreadable entries count 0), so the
+  dry runs of `release` and `discard` show what is really at stake. Nothing
+  else in a project directory is touched — `memory/` survives, and a project
+  directory goes only when it is empty afterwards, as before.
