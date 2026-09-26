@@ -335,6 +335,38 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   };
 }
 
+/**
+ * The app tier for a worktree, started if it is not up, with the lines a
+ * person waits through — `mc test dev` and `mc shot dev` reach the same server
+ * the same way. `json` keeps the progress off stdout, where a caller reads an
+ * answer. Returns `{ ok, server, baseUrl }` or `{ ok: false, error }`.
+ */
+export async function ensureAppServer(worktree, declaration, { json = false, stdout = process.stdout, deps = {} } = {}) {
+  if (!json) stdout.write(`mc: a dev server for ${worktree}…\n`);
+  const ensured = await (deps.ensureDevServer || ensureDevServer)(worktree, declaration, {
+    ...deps,
+    // A cold start is minutes — build, migrations, then wrangler — and
+    // silence for three of them reads as a hang. Say the moment the wrapper
+    // registers, which is when mc knows it is alive.
+    onRegistered: json ? null : (registered) => stdout.write(
+      `mc: ${registered.instance_id} is starting on ${registered.url} — waiting for it to answer\n`,
+    ),
+  });
+  if (!ensured.ok) return { ok: false, error: ensured.error };
+  const { server } = ensured;
+  const baseUrl = String(server.url).replace(/\/+$/u, '');
+  if (!json) {
+    if (ensured.restartedFrom) {
+      stdout.write(`mc: the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}) — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
+    } else {
+      stdout.write(ensured.started
+        ? `mc: started one — ${baseUrl} (${server.instance_id})\n`
+        : `mc: ${baseUrl} was already serving it (${server.instance_id})\n`);
+    }
+  }
+  return { ok: true, server, baseUrl };
+}
+
 function seconds(ms) {
   const value = Math.round(ms / 1000);
   return value >= 120 ? `${Math.round(value / 60)} minutes` : `${value}s`;

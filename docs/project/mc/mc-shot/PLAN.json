@@ -28,7 +28,7 @@
       "check": "Run it on this machine and look at the pictures. `mc shot prod home --me` without a stored session says `mc shot login prod` in one line and exits 1."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No secret leaks.",
       "check": "A test runs a fake capture script that dumps its argv and environment. The token and the cookie are found only in the request file, which is mode 0600 and gone afterwards, and never in mc's stdout or stderr."
     }
