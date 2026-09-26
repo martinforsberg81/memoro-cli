@@ -17,6 +17,7 @@
  *   mc work remove <name> <repo>
  *   mc work release <name> [--apply]
  *   mc work discard <name> [repo] [--apply]
+ *   mc work tidy [--apply] [--days <n>]
  *
  * The directory is the session name, always: `~/mc/<name>`, with a worktree
  * under it per repository, on a branch of that same name. There is no second
@@ -37,6 +38,9 @@ import {
   resolveRepository,
 } from '../work-area.js';
 import { describeAge, describeSize } from '../conversations.js';
+import {
+  DEFAULT_DAYS, applyTidy, gatherTidyFacts, shortPath, tidyPlan,
+} from '../work-tidy.js';
 import { currentHolder } from '../work-identity.js';
 import { toolProcesses } from '../work-status.js';
 import { stopWork } from '../work-stop.js';
@@ -51,7 +55,7 @@ import {
   respawnInBackground, startInBackground,
 } from '../work-open.js';
 
-const VERBS = ['add', 'remove', 'release', 'discard', 'stop', 'list'];
+const VERBS = ['add', 'remove', 'release', 'discard', 'tidy', 'stop', 'list'];
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
 export function usage() {
@@ -63,6 +67,7 @@ export function usage() {
     '        mc work stop <name>\n',
     '        mc work release <name> [--apply]\n',
     '        mc work discard <name> [repo] [--apply]\n',
+    '        mc work tidy [--apply] [--days <n>] [--json]\n',
   ].join('');
 }
 
@@ -216,6 +221,8 @@ export async function runVerb(opts, { stdout, stderr }) {
     return 0;
   }
 
+  if (opts.verb === 'tidy') return tidy(opts, { stdout });
+
   if (opts.verb === 'release') {
     const area = inspectWorkArea(opts.name);
     if (!area.exists) {
@@ -250,6 +257,56 @@ export async function runVerb(opts, { stdout, stderr }) {
   return 2;
 }
 
+/**
+ * Every finished workarea and every transcript nothing will open again
+ * (work-tidy.js). One list: printed by the dry run, executed by the apply —
+ * the apply is handed the plan it printed, never a second computation.
+ */
+async function tidy(opts, { stdout }) {
+  const plan = tidyPlan(gatherTidyFacts(), { days: opts.days });
+  const outcome = opts.apply ? applyTidy(plan) : null;
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({ ok: true, dry_run: !opts.apply, ...plan, ...(outcome ? { outcome } : {}) }, null, 2)}\n`);
+    return 0;
+  }
+  stdout.write(`mc work tidy${opts.apply ? '' : ' — dry run'} (older than ${plan.days} days)\n`);
+  const groups = [['worktrees', plan.worktrees], ['transcripts', plan.transcripts], ['leftovers', plan.leftovers]];
+  for (const [title, items] of groups) {
+    const total = items.reduce((sum, item) => sum + (item.bytes || 0), 0);
+    stdout.write(`\n${title} — ${items.length}, ${describeSize(total)}\n`);
+    for (const item of items.slice(0, 10)) {
+      stdout.write(`  ${shortPath(item.path)} — ${describeSize(item.bytes)} — ${item.why}\n`);
+    }
+    if (items.length > 10) stdout.write(`  … and ${items.length - 10} more\n`);
+  }
+  // The quiet keeps (no cwd, recent, outside the work root) are the ordinary
+  // case; what is said is a keep somebody may want to know the reason for.
+  const said = new Map();
+  for (const item of plan.kept) {
+    if (['T1', 'T2', 'T5', 'recent'].includes(item.rule)) continue;
+    const reason = item.reason || item.why;
+    if (!said.has(reason)) said.set(reason, []);
+    said.get(reason).push(item);
+  }
+  for (const [why, items] of said) {
+    stdout.write(`\nkept — ${why} (${items.length})\n`);
+    for (const item of items.slice(0, 10)) {
+      const detail = item.detail || (item.reason && item.why !== item.reason ? item.why : null);
+      stdout.write(`  ${shortPath(item.path)}${detail ? ` — ${detail}` : ''}\n`);
+    }
+    if (items.length > 10) stdout.write(`  … and ${items.length - 10} more\n`);
+  }
+  if (!outcome) {
+    const any = plan.worktrees.length + plan.transcripts.length + plan.leftovers.length;
+    stdout.write(any ? '\nRun again with --apply.\n' : '\nNothing to remove.\n');
+    return 0;
+  }
+  for (const item of outcome.failed) stdout.write(`\nnot removed  ${shortPath(item.path)} — ${item.why}`);
+  if (outcome.failed.length) stdout.write('\n');
+  const count = outcome.removed.worktrees.length + outcome.removed.transcripts.length + outcome.removed.leftovers.length;
+  stdout.write(`\nremoved ${count} — freed ${describeSize(outcome.bytes)}\n`);
+  return outcome.failed.length ? 1 : 0;
+}
 
 /**
  * A name, a repository, and mc does the rest: the directory, the worktree and
@@ -724,7 +781,7 @@ const LIVE_MS = 2 * 60 * 1000;
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
     booleans: ['--json', '--apply', '--tmux', '--wake', '--anyway'],
-    values: ['--repo', '--from'],
+    values: ['--repo', '--from', '--days'],
     strictValues: ['--model', '--resume'],
     toolSugar: true,
   });
@@ -765,6 +822,16 @@ export function parseArgs(argv) {
 
   opts.verb = head;
   if (head === 'list') return opts;
+  if (head === 'tidy') {
+    if (rest.length) return { ...opts, error: 'mc work tidy takes no name — it looks at every workarea' };
+    const days = scanned.flags.days;
+    opts.days = DEFAULT_DAYS;
+    if (days !== null && days !== undefined) {
+      if (!/^\d+$/u.test(String(days)) || Number(days) < 1) return { ...opts, error: '--days wants a whole number of days, at least 1' };
+      opts.days = Number(days);
+    }
+    return opts;
+  }
   opts.name = rest[0] || null;
   if (!opts.name) return { ...opts, error: 'which piece of work?' };
   if (!NAME.test(opts.name)) return { ...opts, error: `"${opts.name}" cannot be a directory name` };

@@ -74,6 +74,9 @@ IN FULL
   mc work release <name> [--apply] Remove what git says can go; keep the rest
   mc work discard <name> [--apply] Throw it away — worktrees, branches, and the
                                     conversations, which nothing brings back
+  mc work tidy [--apply] [--days <n>]
+                                    Every finished workarea and every transcript
+                                    nothing will open again — dry run first
   mc repo status [repo]            One repository seen whole: main, what the
                                     last full run found on it and since when,
                                     the open pull requests and how far behind

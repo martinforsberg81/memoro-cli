@@ -37,6 +37,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
+| `mc work tidy [--apply] [--days <n>] [--json]` | Every finished workarea and every Claude transcript nothing will open again, in one list with byte totals; `--apply` removes exactly that list. `--days` (default 14, at least 1) is how old a transcript must be. |
 | `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so a reader can tell a stopped session from a dead one; `mc work <name>` removes it. |
 | `mc work list` | The page, as bare `mc work` is. |
 | `mc worker <name> [task]` | A project folder that carries the worker role, read from `canon/roles/worker.md` — the roles mc ships — so a machine with no catalogue still gets the overlay. Every conversation started in the area inherits it and the role's model default. `--model`, `--tmux`, `--codex|--claude`. |
@@ -78,6 +79,30 @@ at this tip`), kept with "cannot tell" otherwise — a doubt, not work. A branch
 that is ahead is never asked.
 `mc work discard` reports what it will destroy and requires `--apply`; it
 does not stop for uncommitted or unmerged work.
+
+`mc work tidy` computes one list (`work-tidy.js`: `gatherTidyFacts` reads,
+the pure `tidyPlan` decides, `applyTidy` executes the list it is handed —
+nothing is recomputed between the dry run and the apply). Three groups:
+**worktrees** — for each area under the work root that holds nothing but git
+worktrees and mc's own marks, is not a role home, and is not a register
+project with a step that is not `done`, the worktrees `mc work release` would
+remove, and the area itself with its conversations when that empties it; the
+apply goes through `releaseWorkArea`, after checking that release would take
+nothing the list did not name. **Transcripts** — each `<uuid>.jsonl` one level
+inside `~/.claude/projects/*/`, first match wins: no readable `cwd` in its
+head, kept; touched within `--days`, kept; its `cwd` is gone, removed; its
+`cwd` is inside a workarea (or `plan/<programme>`), removed unless it is that
+area's newest; anything else, kept. Removed through `deleteConversation`, so
+its `<uuid>/` goes too. **Leftovers** — a `<uuid>/` with no transcript beside
+it and nothing inside touched within `--days`, removed after its shape is
+asserted again. A question that fails — `gh`, `lsof`, a `stat`, a head that
+cannot be read — keeps the thing it was about and says so.
+Never removed: `memory/` and every other entry under `~/.claude/projects`
+that is not `<uuid>.jsonl` or `<uuid>/` (a project directory goes only when
+it is empty afterwards); any directory under `~/mc` that is not a git
+worktree — `runner`, `proposals`, `bin`, `node_modules`, anybody's notes;
+`~/mc/plan/`; Codex conversations (outside an area release empties). The
+apply logs `work-tidy` with counts only.
 
 `mc repo status` reads. It writes nothing but the remote-tracking refs a
 `git fetch` updates, and `--offline` skips even that and says so on the page.
