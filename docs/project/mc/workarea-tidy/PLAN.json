@@ -1,0 +1,95 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "Finished work stops taking disk. `mc work release` knows a squash-merged branch when GitHub says it merged, a deleted conversation takes its whole footprint with it, and one verb — `mc work tidy` — releases every finished workarea and removes the transcripts nothing will open again, dry run first.",
+    "Measured 2026-09-26: the data volume had 2.6 GB free of 228. By hand, 53 workareas were released or discarded and 17 GB came back. 29 of them `mc work release` had kept with \"cannot tell whether main has this content — its merge against origin/main conflicts\"; every one of the 29 had a merged pull request whose head was exactly the branch's tip and a clean tree. `branchLanded` (`src/mc/branch-landed.js`) is local by design and says `unknown` on a conflict; the GitHub question it points to lives only in the runner (`mergedAtTip`, `src/mc/run.js`), and release never asks it. `mc work discard ytor --apply` removed five `.jsonl` transcripts and left 203 MB behind: Claude Code keeps a sibling `<session-id>/` directory (subagents, tool results) that `deleteConversation` (`src/mc/conversations.js`) does not know about, and the dry run's sizes do not count. Martin, 2026-09-26: \"Jag använder /clear för att rensa kontext men det ackumuleras sessioner som saknar värde.\"",
+    "The same day, an ad-hoc shell loop meant to remove orphaned transcripts deleted nearly all of `~/.claude/projects` — every transcript and every project's `memory/` — because a `find` that errored read as \"nothing here\". That is why the transcript half belongs in mc, with the rules written down and tested, and why this plan's contract is mostly about what is never removed."
+  ],
+  "contract": [
+    "**Dry run is the default and the apply does exactly what the dry run printed.** One function computes the list; `--apply` executes that list. Nothing is recomputed between the two.",
+    "**A question that fails means keep.** A `gh` call that errors, a transcript head that cannot be read, a `stat` that throws, a cwd that is null: each one keeps the thing it was asked about, and says so. No deletion is ever the consequence of an error.",
+    "**Only two shapes of thing are ever deleted from `~/.claude/projects`:** a file named `<uuid>.jsonl` and a directory named `<uuid>` beside it (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/`). A project directory itself goes only when it is empty afterwards, as today. `memory/` and every other entry are never opened, never counted and never removed.",
+    "**`mc work tidy` removes only git worktrees and their branches, never a directory mc did not make.** `listWorkAreas` counts every directory under `~/mc` — `runner`, `proposals`, `node_modules`, `bin` — and `releaseWorkArea` removes a non-git subdirectory outright (`rmSync`, `src/mc/work-area.js` about line 369): run over everything, that would take `runner/log`. Tidy never lets that path run.",
+    "**Deletion goes through the existing doors:** `git worktree remove` and `branch -D` as `releaseWorkArea` does, and `deleteConversation` for transcripts. No `rm -rf` of a path built from anything but those two shapes.",
+    "**`mc.log` holds identifiers, paths, codes and counts only.**"
+  ],
+  "out_of_scope": [
+    "The runner calling `mc work tidy` by itself (a later project once this has run by hand for a while).",
+    "Codex conversations in `mc work tidy`'s transcript half; `release` and `discard` keep deleting them through `codex delete` as today.",
+    "Worktrees under `~/mc/plan/<programme>/` (for instance `plan/staff/wt-*`) — a planning session's own business.",
+    "`~/mc/runner/log`, `~/mc/runner/scratch`, npm and system caches.",
+    "Changing what `mc work discard` destroys."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`mc work release` removes a workarea whose branch's merge against origin/main conflicts but whose tip is the head of a merged pull request, and says which pull request; it still keeps one whose tip is past its merged head.",
+      "check": "Rebuild the 2026-09-26 case: `oid=$(gh pr view 468 -R martinforsberg81/memoro-cli --json headRefOid -q .headRefOid)`; `git -C ~/memoro-cli worktree add -b agent-docs ~/mc/tidy-probe/memoro-cli $oid`; `git -C ~/mc/tidy-probe/memoro-cli fetch -q origin`. Paste `mc work release tidy-probe` (expect `would remove  memoro-cli (agent-docs) — #468 merged at this tip`), then `mc work release tidy-probe --apply`, then `mc work release gate-word` (expect it kept: its tip is one commit past #360)."
+    },
+    {
+      "met": false,
+      "criterion": "Deleting a Claude conversation removes its `<uuid>/` sibling too, the dry run's size counts it, and a `memory/` beside it survives.",
+      "check": "The tests in `tests/mc/conversations-delete.test.js` pass; paste their names and `npm test` summary."
+    },
+    {
+      "met": false,
+      "criterion": "`mc work tidy` on this machine prints what it would remove in three groups with byte totals, `--apply` removes exactly that, and `~/mc/runner`, `~/mc/proposals` and every `~/.claude/projects/*/memory/` are untouched.",
+      "check": "Before: `df -h /System/Volumes/Data | tail -1`; `find ~/.claude/projects -path '*/memory/*' -type f | wc -l`; `ls ~/mc/runner ~/mc/proposals | wc -l`. Then paste `mc work tidy` (dry run) and `mc work tidy --apply`. After: the same three commands; the two counts are unchanged and the free space went up. `mc work tidy` again prints nothing to remove except what has aged past `--days` since."
+    }
+  ],
+  "documents": [
+    {
+      "label": "The command matrix (release/discard rules)",
+      "path": "../../../mc-command-matrix.md"
+    },
+    {
+      "label": "Dev-server lifecycle (closing a workarea stops its servers)",
+      "path": "../dev-server-lifecycle/PLAN.json"
+    }
+  ],
+  "steps": [
+    {
+      "title": "`mc work release` asks GitHub when the content check cannot answer",
+      "status": "ready",
+      "done_when": "A worktree whose `landed` is `unknown` is released when its branch's tip is the head of a merged pull request and kept otherwise; the runner's `mergedAtTip` uses the same shared function with unchanged behaviour; the release decision is a pure, tested function; the first success criterion is in the pull request with a changelog fragment.",
+      "instruction": [
+        "**One shared question.** In `src/mc/branch-landed.js` add `export function mergedPullAtTip(dir, branch, { gh = defaultGh, tip = null } = {})`. It runs `gh pr list --head <branch> --state merged --limit 5 --json number,mergedAt,headRefOid` through `gh(args)` (which returns `{ ok, stdout }`, the shape `deps.gh` has in `src/mc/run.js`), picks the newest by `mergedAt` exactly as `mergedAtTip` in `run.js` (about line 725) does, reads the tip with `git -C <dir> rev-parse <branch>` unless `tip` is given, and returns `{ number, merged_at }` when `headRefOid === tip`, otherwise `null`. Any failure — `gh` not ok, unparsable JSON, empty list, no tip — returns `null`. `defaultGh(args)` is `execFileSync('gh', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 })` wrapped to `{ ok, stdout }`. Update the file's header comment: the second question now lives here, and both `run.js` and `work-area.js` ask it.",
+        "**The runner keeps its behaviour.** Replace the body of `mergedAtTip` in `src/mc/run.js` with `Boolean(mergedPullAtTip(worktree, branch, { gh: (args) => deps.gh(worktree, args), tip: gitOut(worktree, ['rev-parse', branch]) }))`. `tests/mc/run.test.js` stays green unchanged.",
+        "**The release decision, pure.** In `src/mc/work-area.js` extract the per-worktree checks inside `releaseWorkArea`'s loop (about lines 368–392) into `export function releaseVerdict(worktree, { inUse = null, pullAtTip = () => null } = {})` returning `{ remove: true, what, landed_by }` or `{ remove: false, why }`. Order and wording unchanged for: not a git checkout (`what: 'directory'`), in use, uncommitted, `landed === 'ahead'`. New: when `unmerged_commits > 0` and `landed` is neither `'landed'` nor `'ahead'`, call `pullAtTip(worktree)`; a result means `{ remove: true, what: 'worktree and branch', landed_by: { pr: number } }`, `null` keeps the existing `cannot tell whether main has this content — its merge against origin/main conflicts; left for a person`. `'ahead'` is never sent to GitHub: a different tree is real work whatever GitHub says.",
+        "**Wire it.** `releaseWorkArea(name, { env, dryRun, gh = null })` computes `inUse` with `directoryInUse` and passes `pullAtTip: (wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {})` to `releaseVerdict`, then removes exactly as today. Carry `landed_by` onto the `removed` item. In `src/mc/commands/work.js` (the release block, about line 228) print `— #<n> merged at this tip` after the branch when `landed_by` is set. `--json` carries it as is.",
+        "**Tests.** A new `tests/mc/work-release-verdict.test.js` on `releaseVerdict`: non-git directory; in use; uncommitted; ahead (and `pullAtTip` not called — assert with a spy); landed; unknown with a PR → removed with `landed_by`; unknown with `null` → kept with the conflict wording. `tests/mc/branch-landed.test.js`: `mergedPullAtTip` with a fake `gh` — newest merged head equals tip → `{ number }`; an older one equals tip but the newest does not → `null`; `gh` not ok → `null`; bad JSON → `null`.",
+        "**Docs and verification.** In `docs/mc-command-matrix.md`, the paragraph after the table (about line 71): a conflict is now asked of GitHub — released when the branch's tip is the head of a merged pull request, kept otherwise. `changelog.d/workarea-tidy.md` in the shape of the other fragments. Verify the first success criterion with this branch's `mc` on PATH through a shim (`exec node <this worktree>/src/mc-cli.js \"$@\"`) and paste the output; remove `~/mc/tidy-probe` afterwards. `npm test` green."
+      ],
+      "comments": []
+    },
+    {
+      "title": "A deleted Claude conversation takes its `<uuid>/` directory with it",
+      "status": "ready",
+      "done_when": "`deleteConversation` removes a Claude transcript's sibling `<uuid>/` directory, `listConversations` counts that directory in `bytes`, nothing else in the project directory is touched, and the tests prove `memory/` survives; the changelog fragment says so.",
+      "instruction": [
+        "**Delete the sibling.** In `src/mc/conversations.js` `deleteConversation`, in the Claude branch, after `rmSync(entry.path, { force: true })`: when `entry.id` matches the uuid pattern in this plan's contract (define it once as `const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u` and export it), `rmSync(join(dirname(entry.path), entry.id), { recursive: true, force: true })`. An id that does not match removes the `.jsonl` only, as today. The empty-directory cleanup after it stays exactly as it is — a directory still holding `memory/` or anything else is not empty and stays.",
+        "**Count it.** In `claudeConversations`, `bytes` becomes the transcript's size plus the recursive size of `<dir>/<id>/` when that directory exists. Write `export function treeBytes(path)`: `lstatSync`, files summed, directories walked with `readdirSync`, symlinks counted as their own size and never followed, any error counting as 0 for that entry. The dry runs of `release` and `discard` then show what is really at stake.",
+        "**Tests.** A new `tests/mc/conversations-delete.test.js` with `CLAUDE_CONFIG_DIR` pointed at a temp directory: (a) `projects/-tmp-area/<uuid>.jsonl` (first line `{\"cwd\":\"/tmp/area\"}`), `projects/-tmp-area/<uuid>/subagents/a.jsonl` and `projects/-tmp-area/memory/MEMORY.md` — after `deleteConversation`, the `.jsonl` and `<uuid>/` are gone and `memory/MEMORY.md` and the project directory remain; (b) the same without `memory/` — the whole project directory is gone; (c) an id that is not a uuid — only its `.jsonl` goes; (d) `listConversations('/tmp/area')` reports `bytes` including the sibling's files.",
+        "**Docs.** Extend `changelog.d/workarea-tidy.md`. `npm test` green."
+      ],
+      "comments": []
+    },
+    {
+      "title": "`mc work tidy`: every finished workarea and every transcript nothing will open again",
+      "status": "ready",
+      "done_when": "`mc work tidy [--apply] [--days <n>] [--json]` exists, computes one list in three groups under the rules below, prints it with byte totals, and with `--apply` removes exactly that list and logs `work-tidy`; tests cover every rule both ways and the incident's cases; help, command matrix and changelog are updated; the third success criterion is in the pull request.",
+      "instruction": [
+        "**Shape.** A new `src/mc/work-tidy.js` with three parts kept apart: `gatherTidyFacts({ env, now, gh })` (all filesystem, git, register and GitHub reading), the pure `tidyPlan(facts, { days })` returning `{ worktrees: [...], transcripts: [...], leftovers: [...], kept: [...] }` where each item carries `path`, `bytes`, `why`, and `applyTidy(plan, { env })` which executes it. `days` defaults to 14 and is at least 1 (`--days 0` is refused with exit 2). `now` is passed in so tests are deterministic.",
+        "**Group 1 — worktrees.** For each area from `listWorkAreas(env, { conversations: false })`: skip a role home (`reservedRoleName(name)` with `areaRoleName(path)`, as `inspectWorkArea` does). Skip, into `kept` with the reason, any area that holds a non-git entry other than `OWN_MARKS` (export `OWN_MARKS` from `work-area.js`) — `runner`, `proposals`, `bin`, `node_modules` and an area with the user's own notes all fall here, and are never passed to `releaseWorkArea`. Skip an area whose name is a register project (`listEntries(workRoot(env))` from `src/mc/register.js`) with any step whose status is not `done` (`why: project <name> has steps left`). For what remains, `releaseVerdict` from step 1 per worktree with the real `directoryInUse` and `mergedPullAtTip`; the items to remove are the worktrees it says `remove` for, with `bytes` from `treeBytes`. `applyTidy` removes them by calling `releaseWorkArea(name, { dryRun: false })` for each such area — it is safe there because only areas with nothing but git worktrees reach this point — and records what it reports.",
+        "**Group 2 — transcripts.** Walk `join(claudeHome(env), 'projects')` one level: each project directory, and in it only entries whose name is `<uuid>.jsonl` (`SESSION_ID` from step 2). Read the head with `readHead` (export it from `conversations.js`). Rules, first match wins: (T1) `cwd` is null or the head cannot be read → keep, silently. (T2) the transcript's mtime is newer than `now - days` → keep. (T3) `cwd` does not exist on disk → remove, `why: its directory is gone`. (T4) `cwd` is inside the work root: its area is the first path segment below `workRoot(env)`, or `plan/<programme>` under `PLAN_HOME`; within each area the newest transcript is kept, every other one is removed, `why: older than <days> days and not <area>'s latest`. (T5) anything else → keep. `bytes` is the transcript plus its `<uuid>/` sibling (`treeBytes`). `applyTidy` removes each through `deleteConversation({ tool: 'claude-code', id, path })` from step 2, so the sibling goes too and an emptied project directory with it.",
+        "**Group 3 — leftovers.** In the same walk, a directory named `<uuid>` with no `<uuid>.jsonl` beside it whose newest mtime anywhere inside is older than `now - days` → remove, `why: left behind by an earlier delete`. This is the only group `applyTidy` removes with `rmSync(path, { recursive: true, force: true })`, and only after asserting again, at the moment of removal, that `basename(path)` matches `SESSION_ID` and its parent is directly inside `projects/`. Every other directory in a project directory — `memory/` first of all — is never read.",
+        "**Errors mean keep.** Wrap each fact-gathering call per item; an exception keeps that item and adds it to `kept` with `why: could not tell — <message>`. `readdirSync` of a project directory that fails skips that directory. Build paths with `join`, never by string, and never shell out for any of this — a directory name beginning with `-` is the normal case under `projects/` (every one of them) and must pass through as a path.",
+        "**The verb.** In `src/mc/commands/work.js` add `tidy` to `VERBS` (about line 54) with `--apply`, `--days <n>` and `--json`; `parseArgs` takes no name. Print one heading per group with its count and total (`describeSize`), then at most ten items per group (`path — size — why`, the home directory shown as `~`), then `… and <n> more` when there are more; then the kept items that carry a reason other than T1/T2/T5, grouped by reason; then `Run again with --apply.` on a dry run, or the bytes actually freed after an apply (`df` is not needed: sum what was removed). `--json` prints the whole plan. On apply, `log('work-tidy', { worktrees, transcripts, leftovers, bytes, failed })` through `src/mc/logger.js` — counts only.",
+        "**Tests.** A new `tests/mc/work-tidy.test.js`. Pure `tidyPlan`: each of T1–T5 matched and missed; T4 keeps each area's newest even when it is old; group 1 keeps an area holding a non-git directory, a role home, and a register project with a `ready` step. Filesystem, with `MC_WORK_ROOT` and `CLAUDE_CONFIG_DIR` pointed at temp directories and `now` fixed: a `runner/log/x` under the work root survives `applyTidy`; a `projects/-Users-x-mc-gone-memoro/memory/MEMORY.md` survives while that directory's old `<uuid>.jsonl` and `<uuid>/` go; a project directory whose name begins with `-` is handled; a leftover `<uuid>/` goes and a same-aged `notes/` beside it stays; an unreadable transcript (mode 000) is kept. Help: `tests/mc/help.test.js` checks verbs against `HELP_TEXT`.",
+        "**Docs and verification.** `src/mc/help-text.js`: `mc work tidy [--apply] [--days <n>]` under release/discard with one line. `docs/mc-command-matrix.md`: a row for the verb and a paragraph with the three groups' rules and the never-removed list from this plan's contract. Extend `changelog.d/workarea-tidy.md`. Verify the third success criterion on this machine with the shim from step 1 and paste every command's output. `npm test` green."
+      ],
+      "comments": []
+    }
+  ]
+}
