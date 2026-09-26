@@ -27,13 +27,21 @@
  * and what to delete — so they cannot disagree with each other.
  */
 import { execFileSync } from 'node:child_process';
-import { openSync, readSync, closeSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { openSync, readSync, closeSync, lstatSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { log } from './logger.js';
 
 const HEAD_BYTES = 65536;
+
+/**
+ * The only name a Claude conversation's own files carry: `<uuid>.jsonl` and,
+ * beside it, a `<uuid>/` directory of subagent transcripts and tool results.
+ * Anything else in a project directory — `memory/` above all — is not a
+ * conversation's and is never removed with one.
+ */
+export const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 export function codexHome(env = process.env) {
   return env.CODEX_HOME || join(homedir(), '.codex');
@@ -166,14 +174,18 @@ function claudeConversations(areaRoot, env) {
       const path = join(root, dir, file);
       const head = readHead(path);
       if (!within(areaRoot, head.cwd)) continue;
+      const id = file.replace(/\.jsonl$/u, '');
+      // The sibling `<id>/` is part of the conversation, often most of it: the
+      // five transcripts `discard ytor` removed left 203 MB there (2026-09-26).
+      const sibling = SESSION_ID.test(id) ? treeBytes(join(root, dir, id)) : 0;
       found.push({
         tool: 'claude-code',
-        id: file.replace(/\.jsonl$/u, ''),
+        id,
         cwd: head.cwd,
         label: head.label,
         path,
         updated_ms: mtimeOf(path),
-        bytes: sizeOf(path),
+        bytes: sizeOf(path) + sibling,
       });
     }
   }
@@ -384,6 +396,22 @@ function sizeOf(path) {
   try { return path ? statSync(path).size : 0; } catch { return 0; }
 }
 
+/**
+ * Everything under a path, in bytes. A symlink counts as itself and is never
+ * followed; whatever cannot be read counts as nothing rather than failing the
+ * whole sum. A path that does not exist is 0.
+ */
+export function treeBytes(path) {
+  let stat = null;
+  try { stat = lstatSync(path); } catch { return 0; }
+  if (!stat.isDirectory()) return stat.size;
+  let names = [];
+  try { names = readdirSync(path); } catch { return 0; }
+  let total = 0;
+  for (const name of names) total += treeBytes(join(path, name));
+  return total;
+}
+
 function mtimeOf(path) {
   try { return statSync(path).mtimeMs; } catch { return 0; }
 }
@@ -416,6 +444,12 @@ export function deleteConversation(entry, env = process.env) {
   try {
     if (entry.path) {
       rmSync(entry.path, { force: true });
+      // The `<id>/` beside it holds the conversation's subagents and tool
+      // results. Only a uuid-shaped id names one: anything else would build a
+      // path to a directory that is not the conversation's.
+      if (SESSION_ID.test(entry.id)) {
+        rmSync(join(dirname(entry.path), entry.id), { recursive: true, force: true });
+      }
       // Claude's directory exists only to hold transcripts. An empty one left
       // behind is the same kind of litter the work areas themselves were.
       const directory = dirname(entry.path);
