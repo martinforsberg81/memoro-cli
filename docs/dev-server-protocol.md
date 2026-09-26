@@ -268,7 +268,7 @@ not parse). That line is the only record of a server that died on its own.
 
 ## Safety contract
 
-mc does not signal a process — admission included: a server that is refused
+mc does not signal a registered server — admission included: a server that is refused
 waits or gives up, and nothing running is stopped to make room. It holds an
 index and answers questions about it; the project's wrapper owns the process,
 and its stop command — the manifest's `control.stop.argv`, `npm run dev --
@@ -282,6 +282,31 @@ finds gone (`dev-server-gone`). This is narrower than the contract this document
 carried until 2026-09-05, which specified four identity checks before mc would
 signal a process — pid alive, manifests matching, live working directory, live
 process group. Nothing signals a process now, so nothing needs them.
+
+The one exception is the reaper, `mc dev reap`, which the runner's chore
+pass runs every pass. It is the only time mc signals a process itself, and it
+signals only what one of exactly three rules proves orphaned:
+
+1. **An unregistered server whose parent is gone.** Parent pid 1, at least
+   `--min-age-seconds` old (600 by default), a command matching
+   `node … scripts/testing/static-server.mjs`, `scripts/testing/measure-server.mjs`
+   or `scripts/dev.mjs`, and no registration with that pid. The age floor is
+   there because mc itself starts servers detached — parent pid 1 from their
+   first second — and they have up to 180 s to register.
+2. **A runtime helper whose parent is gone.** Parent pid 1, at least 120 s
+   old whatever `--min-age-seconds` says, and an esbuild `--service` or a
+   `workerd serve`. Both only ever run under a node parent (wrangler or
+   Miniflare); with pid 1 as parent, nothing will talk to them again.
+3. **A registration whose worktree is gone.** Its stop command lived in the
+   removed worktree, so mc sends SIGTERM to its pid if it is alive and then
+   removes the registration.
+
+Each process gets SIGTERM, up to 5 s to go, then SIGKILL, and each entry is
+logged as `dev-server-reaped` (`kind`, `pid`, `instance_id`, `age_s`, and the
+command's first 80 characters with the home directory as `~`). A process with
+a live parent other than pid 1 is never reaped, and neither is a registered
+server whose worktree still exists, however old. `--dry-run` says what it
+would do and signals nothing.
 
 What remains is the refusal at the door. A manifest is refused, not repaired,
 when it fails any of: the schema version, an `instance_id` that is a name

@@ -111,6 +111,7 @@ import {
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
+import { reap as reapDevServers } from './dev-reap.js';
 import { stopServersUnder } from './dev-servers.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
@@ -355,6 +356,8 @@ export function realDeps(env = process.env) {
     rmdir: (path) => { try { rmSync(path, { recursive: true }); return true; } catch { return false; } },
     // A closing workarea's dev servers, through each manifest's own stop.
     stopServersUnder,
+    // The chore pass's reaper: dev processes nobody owns any more.
+    reapDevServers: () => reapDevServers({ dryRun: false }),
     // The two files that say a runner is here and a step is in flight. Whole
     // or not at all: `mc status` reads them while they are being written.
     writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
@@ -2028,10 +2031,27 @@ export function createRunner({
     const quiet = paths.currents().length === 0;
     const archives = quiet ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
     closeWorkareas(plans, archives.flatMap((a) => a.landed), archivedProjects());
+    await reapOrphans();
     sweepScratch();
     // Last, and not beside the two chores above: it is the long one, and the
     // archive and the tidying should not wait twenty minutes behind it.
     await runNightly();
+  }
+
+  /**
+   * The dev processes nobody owns any more (`dev-reap.js`). A reaper failure
+   * never stops a round: it is said and the pass goes on. Only when a deps
+   * object carries one — a test fixture without it reaps nothing on the
+   * machine running the suite.
+   */
+  async function reapOrphans() {
+    if (!deps.reapDevServers) return;
+    try {
+      const reaped = (await deps.reapDevServers() || []).filter((entry) => entry.done === 'reaped');
+      if (reaped.length) say(`reap: ${reaped.length} orphaned dev process(es) removed`);
+    } catch (error) {
+      say(`reap: failed — ${error?.message || error}`);
+    }
   }
 
   /**

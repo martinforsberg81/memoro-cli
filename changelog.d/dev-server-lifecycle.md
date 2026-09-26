@@ -12,3 +12,11 @@ section: Added
 - **`mc dev stop <instance_id>`** stops one live server through its own stop
   command and logs it. Measured on 2026-09-26: seven registered servers and
   several orphans across worktrees, swap at 6.8–8.2 GB on an 8 GB machine.
+- **`mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]`** removes the
+  dev processes nobody owns any more, and the runner's chore pass runs it
+  every pass: an unregistered static-server, measure-server or `scripts/dev.mjs`
+  whose parent is pid 1 (older than 600 s by default), an esbuild `--service`
+  or `workerd serve` whose parent is pid 1 (older than 120 s), and a
+  registration whose worktree is gone. SIGTERM, 5 s, then SIGKILL; each is
+  logged as `dev-server-reaped`. It is the only time mc signals a process
+  itself (`docs/dev-server-protocol.md` § Safety contract).

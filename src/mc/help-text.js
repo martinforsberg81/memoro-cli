@@ -197,6 +197,12 @@ IN FULL
                                     a worktree's servers itself when mc work
                                     remove or the runner's close takes the
                                     worktree away
+  mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]
+                                   Remove the dev processes nobody owns any
+                                    more — an unregistered server, esbuild or
+                                    workerd whose parent is gone — and
+                                    registrations whose worktree is gone. The
+                                    runner runs it every chore pass
   mc gate [--base <ref>] [--json]  The repository's own gate on the tree you
                                     stand in — npm run ci -- --base-ref
                                     origin/main where there is a ci script,
