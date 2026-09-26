@@ -23,7 +23,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc work release` removes a workarea whose branch's merge against origin/main conflicts but whose tip is the head of a merged pull request, and says which pull request; it still keeps one whose tip is past its merged head.",
       "check": "Rebuild the 2026-09-26 case: `oid=$(gh pr view 468 -R martinforsberg81/memoro-cli --json headRefOid -q .headRefOid)`; `git -C ~/memoro-cli worktree add -b agent-docs ~/mc/tidy-probe/memoro-cli $oid`; `git -C ~/mc/tidy-probe/memoro-cli fetch -q origin`. Paste `mc work release tidy-probe` (expect `would remove  memoro-cli (agent-docs) — #468 merged at this tip`), then `mc work release tidy-probe --apply`, then `mc work release gate-word` (expect it kept: its tip is one commit past #360)."
     },

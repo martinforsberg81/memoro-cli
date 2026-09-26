@@ -109,7 +109,7 @@ import {
   mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
-import { branchLanded } from './branch-landed.js';
+import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { stopServersUnder } from './dev-servers.js';
@@ -726,15 +726,10 @@ export function createRunner({
    * request, or a different tip is `false` — the branch stays where it is.
    */
   function mergedAtTip(worktree, branch) {
-    const asked = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'merged', '--limit', '5',
-      '--json', 'number,mergedAt,headRefOid']);
-    if (!asked.ok) return false;
-    let merged;
-    try { merged = JSON.parse(String(asked.stdout || '[]')); } catch { return false; }
-    if (!Array.isArray(merged) || !merged.length) return false;
-    const newest = merged.reduce((a, b) => (String(b.mergedAt || '') > String(a.mergedAt || '') ? b : a));
-    const tip = gitOut(worktree, ['rev-parse', branch]);
-    return Boolean(tip && newest.headRefOid === tip);
+    return Boolean(mergedPullAtTip(worktree, branch, {
+      gh: (args) => deps.gh(worktree, args),
+      tip: gitOut(worktree, ['rev-parse', branch]),
+    }));
   }
 
   /**

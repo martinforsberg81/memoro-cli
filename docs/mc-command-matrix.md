@@ -72,7 +72,10 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 holds commits main lacks — counted by CONTENT, not by SHA: a squash-merged
 branch whose merge against `origin/main` reproduces main's own tree has
 landed and is released (and the board does not call it unmerged). A merge
-that conflicts is kept with "cannot tell", which is a doubt, not work.
+that conflicts is asked of GitHub: released when the branch's tip is the head
+of the newest pull request merged from it (the line names it, `— #<n> merged
+at this tip`), kept with "cannot tell" otherwise — a doubt, not work. A branch
+that is ahead is never asked.
 `mc work discard` reports what it will destroy and requires `--apply`; it
 does not stop for uncommitted or unmerged work.
 

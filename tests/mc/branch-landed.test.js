@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { branchLanded } from '../../src/mc/branch-landed.js';
+import { branchLanded, mergedPullAtTip } from '../../src/mc/branch-landed.js';
 import { inspectWorkArea, releaseWorkArea, removeWorktree } from '../../src/mc/work-area.js';
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], {
@@ -131,7 +131,7 @@ describe('release and remove act on content', () => {
       writeFileSync(join(fx.repo, 'base.txt'), 'ours\n');
       git(fx.repo, ['commit', '-aqm', 'our base']);
       git(fx.repo, ['update-ref', 'refs/remotes/origin/main', 'main']);
-      const result = releaseWorkArea('x', { env, dryRun: false });
+      const result = releaseWorkArea('x', { env, dryRun: false, gh: () => ({ ok: true, stdout: '[]' }) });
       assert.equal(result.kept.length, 1);
       assert.match(result.kept[0].why, /cannot tell whether main has this content/u);
     } finally { fx.cleanup(); }
@@ -161,5 +161,44 @@ describe('release and remove act on content', () => {
       assert.match(result.branch_kept_why, /3 commits main lacks/u);
       assert.equal(git(fx.repo, ['rev-parse', '--verify', '--quiet', 'feat']).length > 0, true, 'the work survived');
     } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * The second question, asked of GitHub (2026-09-26): 29 workareas kept as
+ * "cannot tell" had each a merged pull request whose head was their tip.
+ * A fake `gh` in the `{ ok, stdout }` shape; every failure is `null`.
+ */
+describe('mergedPullAtTip', () => {
+  const answer = (rows) => () => ({ ok: true, stdout: JSON.stringify(rows) });
+
+  it('returns the newest merged pull request when its head is the tip', () => {
+    const gh = answer([
+      { number: 7, mergedAt: '2026-09-01T00:00:00Z', headRefOid: 'old' },
+      { number: 9, mergedAt: '2026-09-20T00:00:00Z', headRefOid: 'tip' },
+    ]);
+    assert.deepEqual(mergedPullAtTip('/x', 'b', { gh, tip: 'tip' }), { number: 9, merged_at: '2026-09-20T00:00:00Z' });
+  });
+
+  it('is null when an older one matches the tip but the newest does not', () => {
+    const gh = answer([
+      { number: 7, mergedAt: '2026-09-01T00:00:00Z', headRefOid: 'tip' },
+      { number: 9, mergedAt: '2026-09-20T00:00:00Z', headRefOid: 'other' },
+    ]);
+    assert.equal(mergedPullAtTip('/x', 'b', { gh, tip: 'tip' }), null);
+  });
+
+  it('is null when gh fails, answers garbage, answers nothing, or there is no tip', () => {
+    assert.equal(mergedPullAtTip('/x', 'b', { gh: () => ({ ok: false, stdout: '' }), tip: 'tip' }), null);
+    assert.equal(mergedPullAtTip('/x', 'b', { gh: () => ({ ok: true, stdout: 'not json' }), tip: 'tip' }), null);
+    assert.equal(mergedPullAtTip('/x', 'b', { gh: answer([]), tip: 'tip' }), null);
+    assert.equal(mergedPullAtTip('/x', 'b', { gh: () => { throw new Error('boom'); }, tip: 'tip' }), null);
+    assert.equal(mergedPullAtTip('/x', 'b', { gh: answer([{ number: 1, mergedAt: 'x', headRefOid: 'tip' }]), tip: null }), null);
+  });
+
+  it('asks for merged pull requests from the branch', () => {
+    let seen = null;
+    mergedPullAtTip('/x', 'feat', { gh: (args) => { seen = args; return { ok: false }; }, tip: 't' });
+    assert.deepEqual(seen, ['pr', 'list', '--head', 'feat', '--state', 'merged', '--limit', '5', '--json', 'number,mergedAt,headRefOid']);
   });
 });

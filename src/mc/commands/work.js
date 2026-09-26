@@ -226,7 +226,8 @@ export async function runVerb(opts, { stdout, stderr }) {
     if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`); return 0; }
     stdout.write(`mc work release ${opts.name}${opts.apply ? '' : ' — dry run'}\n`);
     for (const item of result.removed) {
-      stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}  ${item.repo}${item.branch ? ` (${item.branch})` : ''}\n`);
+      const landedBy = item.landed_by ? ` — #${item.landed_by.pr} merged at this tip` : '';
+      stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}  ${item.repo}${item.branch ? ` (${item.branch})` : ''}${landedBy}\n`);
     }
     for (const item of result.conversations) {
       stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}  ${conversationLine(item)}\n`);
