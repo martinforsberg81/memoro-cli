@@ -31,6 +31,7 @@ THE PAGE
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc dev list                      Which dev server runs in which worktree
+  mc dev admit <service>           May one more dev server start here?
   mc status <name>                 One project, whole
   mc step <project>                Where each step stands, from the register
   mc step failed|blocked|ready|done  Move one step: a session gives up, a
@@ -179,6 +180,18 @@ IN FULL
                                     Forget it. Not an error when nothing was
                                     registered — the end state is the one asked
                                     for either way
+  mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]
+                                    May one more app server start? At most
+                                    MC_DEV_MAX_SERVERS (2) live servers that are
+                                    not resource_class light, the asker's own
+                                    worktree and service not counted, and none
+                                    while kern.memorystatus_level is under
+                                    MC_DEV_MIN_FREE_PERCENT (15). --wait polls
+                                    for a slot, naming the holders once a
+                                    minute. Exit 0 admitted, 75 refused, with
+                                    the holders; mc test dev asks it before it
+                                    starts a server, and stops nothing to make
+                                    room
   mc dev stop <instance_id>        Stop one live server through its manifest's
                                     own stop command, and log it. mc also stops
                                     a worktree's servers itself when mc work

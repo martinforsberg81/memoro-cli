@@ -253,6 +253,134 @@ export function listServers({ root = devServersRoot(), reap = true } = {}) {
   return { servers, reaped };
 }
 
+/** How many app servers may run at once, and the free-memory floor under which none starts. */
+export const DEFAULT_MAX_SERVERS = 2;
+export const DEFAULT_MIN_FREE_PERCENT = 15;
+
+/** How often a waiting admission looks again, and how often it says so. */
+const ADMIT_POLL_MS = 10_000;
+const ADMIT_SAY_MS = 60_000;
+
+/**
+ * May one more server start? The whole rule, pure.
+ *
+ * Measured 12–26 Sep 2026 on this 8 GB machine: 141 of 571 memoro dev-server
+ * starts died unexpectedly, and on 2026-09-26 seven registered servers sat
+ * beside 6.8–8.2 GB of swap. `resource_class` had been carried in every
+ * manifest since #561 and read by nothing; this is its reader.
+ *
+ * A server counts when it is live and not `light`. The asker's own worktree
+ * *and* service does not count, because a restart replaces itself. Memory is
+ * asked first — a machine already short is refused whatever the count — and a
+ * `freePercent` of null (no sysctl) skips it rather than guessing.
+ */
+export function admission({ servers, service, worktree, cap, minFreePercent, freePercent }) {
+  const self = worktree ? resolve(worktree) : null;
+  const holders = (servers || [])
+    .filter((server) => server.live !== false
+      && server.resource_class !== 'light'
+      && !(self && server.worktree_path && resolve(server.worktree_path) === self && server.service === service))
+    .map((server) => ({
+      instance_id: server.instance_id,
+      service: server.service,
+      worktree_path: server.worktree_path,
+      started_at: server.started_at ?? null,
+      url: server.url ?? null,
+    }));
+  const free = Number.isFinite(freePercent) ? freePercent : null;
+  if (free !== null && free < minFreePercent) {
+    return { ok: false, reason: 'memory', holders, free_percent: free, cap };
+  }
+  if (holders.length >= cap) return { ok: false, reason: 'cap', holders, free_percent: free, cap };
+  return { ok: true };
+}
+
+/** `kern.memorystatus_level` — the percentage of memory free, on macOS — or null. */
+export function freeMemoryPercent(run = spawnSync) {
+  try {
+    const asked = run('sysctl', ['-n', 'kern.memorystatus_level'], { encoding: 'utf8' });
+    if (asked?.status !== 0) return null;
+    const value = Number.parseInt(String(asked.stdout || '').trim(), 10);
+    return Number.isInteger(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ask, and wait up to `waitSeconds` for a yes.
+ *
+ * Nothing already running is stopped to make room: the wait is for a holder to
+ * leave by itself. The registry is read afresh on every turn, through
+ * `listServers`, so a holder that died is swept rather than waited for.
+ */
+export async function admit({
+  service, worktree, waitSeconds = 0, env = process.env, root, sleep, now, onWaiting,
+  freeMemory = freeMemoryPercent, logEvent = log,
+} = {}) {
+  const clock = now || (() => Date.now());
+  const pause = sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
+  const cap = Number(env.MC_DEV_MAX_SERVERS) || DEFAULT_MAX_SERVERS;
+  const minFreePercent = minFreePercentOf(env);
+  const startedAt = clock();
+  const deadline = startedAt + Math.max(0, Number(waitSeconds) || 0) * 1000;
+  let said = null;
+  for (;;) {
+    const { servers } = listServers(root ? { root } : {});
+    const verdict = admission({
+      servers, service, worktree, cap, minFreePercent, freePercent: freeMemory(),
+    });
+    if (verdict.ok) {
+      if (said !== null) {
+        logEvent('dev-server-admitted', {
+          service, worktree_path: worktree, waited_s: Math.round((clock() - startedAt) / 1000),
+        });
+      }
+      return verdict;
+    }
+    if (clock() >= deadline) {
+      logEvent('dev-server-refused', {
+        service,
+        worktree_path: worktree,
+        reason: verdict.reason,
+        holders: verdict.holders.map((holder) => holder.instance_id),
+        free_percent: verdict.free_percent,
+      });
+      return verdict;
+    }
+    if (said === null || clock() - said >= ADMIT_SAY_MS) {
+      said = clock();
+      onWaiting?.(verdict);
+    }
+    await pause(ADMIT_POLL_MS);
+  }
+}
+
+/** The free-memory floor `env` sets, as `admit` reads it. */
+export function minFreePercentOf(env = process.env) {
+  return Number(env.MC_DEV_MIN_FREE_PERCENT) || DEFAULT_MIN_FREE_PERCENT;
+}
+
+/**
+ * A refusal as the sentence a person reads — the verb's and `mc test dev`'s.
+ *
+ * The way to free a slot is `mc test dev --stop` in the holder's worktree: mc
+ * has no `mc dev stop`, and naming a verb that does not exist would send the
+ * reader to an error.
+ */
+export function refusalText(verdict, { env = process.env } = {}) {
+  if (verdict.reason === 'memory') {
+    return `only ${verdict.free_percent}% memory free (floor ${minFreePercentOf(env)}%)`;
+  }
+  return `${verdict.holders.length} of ${verdict.cap} app servers already running — ${holdersText(verdict)};`
+    + ' stop one with mc test dev --stop in its worktree';
+}
+
+/** `<id> (<worktree>), …` */
+export function holdersText(verdict) {
+  return verdict.holders.map((holder) => `${holder.instance_id} (${holder.worktree_path})`).join(', ');
+}
+
 /**
  * Stop a registered server — by asking the project, never by signalling
  * anything.

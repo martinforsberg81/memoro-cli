@@ -15,12 +15,14 @@ describing it for two days — a specification for a surface nobody could type.
 The paragraphs below are what exists. Everything else is in the history if it
 is ever wanted back.
 
-Four verbs — three the wrapper speaks, one for a person:
+Five verbs:
 
 ```sh
 mc dev list [--json]                     what is running, and where
 mc dev register <manifest> [--json]      take a copy of a wrapper's manifest
 mc dev unregister <manifest> [--json]    forget it
+mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]
+                                         may one more server start? (see Admission)
 mc dev stop <instance_id>                stop it, through its own stop command
 ```
 
@@ -180,9 +182,52 @@ without the field is reused as before. The plan identity fields (`profile`, `def
 `start_argv`, `resource_class`) and `coding_session_id` are optional and
 carried through as they come — the exact-match reuse they were added for went
 with `mc dev ensure`, and a manifest without them is a first-class citizen
-again. URLs must target loopback, and the source
+again. `resource_class` has one reader since 2026-09-26: admission, where
+`light` does not count and anything else, or nothing, does. URLs must target loopback, and the source
 manifest and log must stay inside `worktree_path`. Control commands are argv
 arrays and are run without a shell.
+
+## Admission
+
+At most two app servers run on this machine at once, and none starts while
+memory is already short. Measured 12–26 Sep 2026 on an 8 GB M1: 141 of 571
+memoro dev-server starts died unexpectedly, and on 2026-09-26 seven registered
+servers sat beside 6.8–8.2 GB of swap. The decision is mc's and is made in one
+place:
+
+```sh
+mc dev admit <service> --worktree <path> [--wait <seconds>] [--json]
+```
+
+`--worktree` defaults to the git worktree the caller stands in. Exit 0 is
+admitted; exit 75 is refused after the wait. With `--json` stdout is exactly one
+of:
+
+```json
+{ "ok": true }
+{ "ok": false, "reason": "cap" | "memory",
+  "holders": [{ "instance_id", "service", "worktree_path", "started_at", "url" }],
+  "free_percent": 31, "cap": 2 }
+```
+
+What counts is live registered servers whose `resource_class` is not
+`light` — **`light` means "does not count"** — except those whose
+`worktree_path` *and* `service` are the asker's: a restart replaces itself. The
+cap is `MC_DEV_MAX_SERVERS`, default 2. Memory is asked first:
+`sysctl -n kern.memorystatus_level` (percentage free, macOS) below
+`MC_DEV_MIN_FREE_PERCENT`, default 15, refuses with reason `memory`, and where
+the sysctl is missing the memory check is skipped (`free_percent: null`).
+
+`--wait` polls every ten seconds and says who holds the slots once a minute
+(on stderr with `--json`). Nothing already running is stopped to make room. A
+refusal that ends a wait is logged as `dev-server-refused`, an admission that
+had to wait as `dev-server-admitted` with `waited_s`.
+
+`mc test dev` asks before it starts a server — up to fifteen minutes, printing
+the waiting line — and starts the project's command with `MC_DEV_ADMITTED=1`
+in its environment, so a wrapper that asks for itself when started by hand
+knows it has already been admitted. A profile whose `resource_class` is `light`
+does not ask, since it would not count once running.
 
 ## When mc stops a server
 
@@ -210,14 +255,15 @@ however old.
 
 ## Safety contract
 
-mc does not signal a process. It holds an index and answers questions about
-it; the project's wrapper owns the process, and its stop command — the
-manifest's `control.stop.argv`, `npm run dev -- --stop` in memoro — is how a
-server ends, whether a person or mc runs it (see *When mc stops a server*).
-This is narrower than the contract this document carried until 2026-09-05,
-which specified four identity checks before mc would signal a process — pid
-alive, manifests matching, live working directory, live process group.
-Nothing signals a process now, so nothing needs them.
+mc does not signal a process — admission included: a server that is refused
+waits or gives up, and nothing running is stopped to make room. It holds an
+index and answers questions about it; the project's wrapper owns the process,
+and its stop command — the manifest's `control.stop.argv`, `npm run dev --
+--stop` in memoro — is how a server ends, whether a person or mc runs it (see
+*When mc stops a server*). This is narrower than the contract this document
+carried until 2026-09-05, which specified four identity checks before mc would
+signal a process — pid alive, manifests matching, live working directory, live
+process group. Nothing signals a process now, so nothing needs them.
 
 What remains is the refusal at the door. A manifest is refused, not repaired,
 when it fails any of: the schema version, an `instance_id` that is a name

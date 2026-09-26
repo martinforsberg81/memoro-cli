@@ -31,7 +31,9 @@ import { join, resolve } from 'node:path';
 
 import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
 import { defaultRepos } from './brief-collect.js';
-import { listServers, stopServer } from './dev-servers.js';
+import {
+  admit, holdersText, listServers, refusalText, stopServer,
+} from './dev-servers.js';
 
 /** Where a repository says what it may be measured with. */
 export const DECLARATION_FILE = join('.mc', 'test.json');
@@ -211,6 +213,7 @@ export function startArgvFor(worktree, declaration, { service: wanted = null } =
     argv,
     service: serviceName,
     profile: profileName,
+    resourceClass: profile.resource_class || null,
     registerTimeoutMs: Number.isFinite(declaredMs) && declaredMs > 0 ? declaredMs : null,
   };
 }
@@ -283,9 +286,28 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   if (!start.ok) return start;
   const registerMs = deps.registerTimeoutMs ?? start.registerTimeoutMs ?? REGISTER_TIMEOUT_MS;
 
+  // Admission before the start, never after: at most two app servers on the
+  // machine and none while memory is short (`mc dev admit`). A profile that
+  // says it is `light` does not count as a holder, so it does not ask either.
+  // The child is told it was admitted, so a wrapper that would ask for itself
+  // when started by hand does not ask a second time.
+  if (start.resourceClass !== 'light') {
+    const admitted = await (deps.admit || admit)({
+      service: start.service,
+      worktree,
+      waitSeconds: deps.admitWaitSeconds ?? 900,
+      root,
+      sleep,
+      now,
+      onWaiting: deps.onWaiting,
+      ...(deps.freeMemory ? { freeMemory: deps.freeMemory } : {}),
+    });
+    if (!admitted.ok) return { ok: false, error: refusalText(admitted) };
+  }
+
   const [command, ...args] = start.argv;
   const child = (deps.spawn || spawn)(command, args, {
-    cwd: worktree, detached: true, shell: false, stdio: 'ignore',
+    cwd: worktree, detached: true, shell: false, stdio: 'ignore', env: { ...process.env, MC_DEV_ADMITTED: '1' },
   });
   child.unref?.();
 
@@ -351,6 +373,9 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
     onRegistered: json ? null : (registered) => stdout.write(
       `mc: ${registered.instance_id} is starting on ${registered.url} — waiting for it to answer\n`,
     ),
+    // Two app servers already up is a wait, not a failure — said once a
+    // minute with who holds the slots, so the wait has a name on it.
+    onWaiting: json ? null : (verdict) => stdout.write(`mc: waiting for a slot — held by ${holdersText(verdict)}\n`),
   });
   if (!ensured.ok) return { ok: false, error: ensured.error };
   const { server } = ensured;

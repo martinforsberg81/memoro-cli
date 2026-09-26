@@ -18,7 +18,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  checkManifest, listServers, registerManifest, serversUnder, stopServersUnder, unregisterManifest,
+  admission, admit, checkManifest, freeMemoryPercent, listServers, registerManifest, serversUnder,
+  stopServersUnder, unregisterManifest,
 } from '../../src/mc/dev-servers.js';
 import { run } from '../../src/mc/commands/dev.js';
 import { setLogPath } from '../../src/mc/logger.js';
@@ -262,6 +263,166 @@ describe('the verb memoro calls', () => {
     const stderr = capture();
     assert.equal(await run(['register'], { stdout: capture(), stderr, root: scratch() }), 2);
     assert.match(stderr.text(), /needs the path of the manifest/u);
+  });
+});
+
+describe('admission — may one more server start', () => {
+  const live = (id, worktree, overrides = {}) => ({
+    instance_id: id,
+    service: 'memoro-measure',
+    worktree_path: worktree,
+    started_at: '2026-09-26T08:00:00.000Z',
+    url: 'http://127.0.0.1:8921',
+    resource_class: 'standard',
+    live: true,
+    ...overrides,
+  });
+  const ask = (servers, overrides = {}) => admission({
+    servers, service: 'memoro-measure', worktree: '/w/third', cap: 2, minFreePercent: 15, freePercent: 40, ...overrides,
+  });
+
+  it('refuses a third with both holders named', () => {
+    const verdict = ask([live('measure-a', '/w/a'), live('measure-b', '/w/b')]);
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.reason, 'cap');
+    assert.equal(verdict.cap, 2);
+    assert.equal(verdict.free_percent, 40);
+    assert.deepEqual(verdict.holders.map((holder) => holder.instance_id), ['measure-a', 'measure-b']);
+    assert.deepEqual(Object.keys(verdict.holders[0]).sort(), ['instance_id', 'service', 'started_at', 'url', 'worktree_path']);
+  });
+
+  it('a light server does not count', () => {
+    assert.deepEqual(ask([live('static-a', '/w/a', { resource_class: 'light' }), live('measure-b', '/w/b')]), { ok: true });
+  });
+
+  it('the asker\'s own worktree and service does not count — a restart replaces itself', () => {
+    assert.deepEqual(ask([live('measure-a', '/w/third'), live('measure-b', '/w/b')]), { ok: true });
+    // The same worktree with another service does count.
+    const other = ask([live('static-a', '/w/third', { service: 'memoro-static' }), live('measure-b', '/w/b')]);
+    assert.equal(other.reason, 'cap');
+  });
+
+  it('refuses on memory below the floor, before counting', () => {
+    const verdict = ask([], { freePercent: 10 });
+    assert.deepEqual(verdict, { ok: false, reason: 'memory', holders: [], free_percent: 10, cap: 2 });
+  });
+
+  it('skips the memory check when the free percentage is unknown', () => {
+    assert.deepEqual(ask([], { freePercent: null }), { ok: true });
+  });
+
+  it('reads kern.memorystatus_level, and null on any failure', () => {
+    assert.equal(freeMemoryPercent(() => ({ status: 0, stdout: '31\n' })), 31);
+    assert.equal(freeMemoryPercent(() => ({ status: 1, stdout: '' })), null);
+    assert.equal(freeMemoryPercent(() => ({ status: 0, stdout: 'nope' })), null);
+    assert.equal(freeMemoryPercent(() => { throw new Error('no sysctl'); }), null);
+  });
+});
+
+describe('admit — waiting for a slot', () => {
+  function register(root, worktree, id) {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, `${id}.json`), JSON.stringify(manifest(worktree, { instance_id: id, service: 'memoro-measure' })));
+  }
+
+  it('waits while two are live and is admitted when one leaves, saying so once', async () => {
+    const root = scratch();
+    register(root, '/w/a', 'measure-a');
+    register(root, '/w/b', 'measure-b');
+    let t = 0;
+    let polls = 0;
+    const waiting = [];
+    const events = [];
+    const verdict = await admit({
+      service: 'memoro-measure',
+      worktree: '/w/third',
+      waitSeconds: 900,
+      env: {},
+      root,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+        polls += 1;
+        if (polls === 2) rmSync(join(root, 'measure-b.json'));
+      },
+      freeMemory: () => 50,
+      onWaiting: (refused) => waiting.push(refused),
+      logEvent: (event, fields) => events.push({ event, fields }),
+    });
+    assert.deepEqual(verdict, { ok: true });
+    assert.equal(waiting.length, 1);
+    assert.deepEqual(waiting[0].holders.map((holder) => holder.instance_id), ['measure-a', 'measure-b']);
+    assert.deepEqual(events, [{
+      event: 'dev-server-admitted', fields: { service: 'memoro-measure', worktree_path: '/w/third', waited_s: 20 },
+    }]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('gives up with the last refusal when the wait runs out, and logs it', async () => {
+    const root = scratch();
+    register(root, '/w/a', 'measure-a');
+    register(root, '/w/b', 'measure-b');
+    let t = 0;
+    const events = [];
+    const waiting = [];
+    const verdict = await admit({
+      service: 'memoro-measure',
+      worktree: '/w/third',
+      waitSeconds: 130,
+      env: { MC_DEV_MAX_SERVERS: '2' },
+      root,
+      now: () => t,
+      sleep: async (ms) => { t += ms; },
+      freeMemory: () => null,
+      onWaiting: (refused) => waiting.push(refused),
+      logEvent: (event, fields) => events.push({ event, fields }),
+    });
+    assert.equal(verdict.reason, 'cap');
+    assert.equal(waiting.length, 3, 'once a minute: at 0, 60 and 120 s');
+    assert.deepEqual(events, [{
+      event: 'dev-server-refused',
+      fields: {
+        service: 'memoro-measure', worktree_path: '/w/third', reason: 'cap', holders: ['measure-a', 'measure-b'], free_percent: null,
+      },
+    }]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('mc dev admit prints JSON and exits 75 on a refusal, 0 on an admission', async () => {
+    const root = scratch();
+    register(root, '/w/a', 'measure-a');
+    register(root, '/w/b', 'measure-b');
+    const out = capture();
+    const code = await run(['admit', 'memoro-measure', '--worktree', '/w/third', '--wait', '0', '--json'], {
+      root, stdout: out, stderr: capture(), env: {}, freeMemory: () => 40,
+    });
+    assert.equal(code, 75);
+    const refused = JSON.parse(out.text());
+    assert.equal(refused.reason, 'cap');
+    assert.deepEqual(refused.holders.map((holder) => holder.worktree_path), ['/w/a', '/w/b']);
+
+    rmSync(join(root, 'measure-b.json'));
+    const text = capture();
+    assert.equal(await run(['admit', 'memoro-measure', '--worktree', '/w/third'], {
+      root, stdout: text, stderr: capture(), env: {}, freeMemory: () => 40,
+    }), 0);
+    assert.equal(text.text(), 'mc: admitted\n');
+
+    const low = capture();
+    assert.equal(await run(['admit', 'memoro-measure', '--worktree', '/w/third'], {
+      root, stdout: low, stderr: capture(), env: { MC_DEV_MIN_FREE_PERCENT: '101' }, freeMemory: () => 40,
+    }), 75);
+    assert.equal(low.text(), 'mc: only 40% memory free (floor 101%)\n');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('mc dev admit needs a service, and --wait belongs to it alone', async () => {
+    const err = capture();
+    assert.equal(await run(['admit', '--worktree', '/w/x'], { stdout: capture(), stderr: err }), 2);
+    assert.match(err.text(), /needs the service/u);
+    const other = capture();
+    assert.equal(await run(['list', '--wait', '5'], { stdout: capture(), stderr: other }), 2);
+    assert.match(other.text(), /belong to mc dev admit/u);
   });
 });
 
