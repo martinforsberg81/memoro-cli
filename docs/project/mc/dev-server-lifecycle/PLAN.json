@@ -1,0 +1,82 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A local dev server does not outlive the work that wanted it. mc stops a workarea's servers when it closes or removes the workarea, and a reaper removes what nobody owns any more, every chores pass.",
+    "Measured 12–26 Sep 2026 on this 8 GB M1: 141 of 571 local memoro dev-server starts died unexpectedly, and on 2026-09-26 the machine held seven registered servers across worktrees plus unregistered orphans — a static-server six days old, another four days old whose registration had been swept, an esbuild `--service` four days old with ppid 1 — with swap at 6.8–8.2 GB. Martin, 2026-09-26: \"se till så att de inte äter upp all datorkapacitet.\" Nothing in mc stops a server except `mc test dev --stop` and a moved `built_from` (`src/mc/test-environment.js`); `closeWorkarea` (`src/mc/run.js`) and `removeWorktree` (`src/mc/work-area.js`) never look at the dev-server registry, and `listServers` only ever sweeps registrations, never processes.",
+    "The memoro half — servers exiting by themselves after a period with no requests — is the memoro project `dev-server-idle-exit`. The admission cap is the memoro-cli project `dev-server-admission`. This project stands on its own."
+  ],
+  "contract": [
+    "**mc stops a registered server only through its manifest's `control.stop.argv`** (`stopServer`). The single exception is the reaper below, which signals a process itself, and only one that is provably orphaned by the rules written in step 2 — never a process with a live parent other than pid 1, never a registered server whose worktree still exists.",
+    "**The manifest protocol does not change**; `docs/dev-server-protocol.md` gains the stop and reap rules.",
+    "**`mc.log` holds identifiers, paths, codes and counts only.**"
+  ],
+  "out_of_scope": [
+    "Idle exit inside the servers: memoro's `dev-server-idle-exit`.",
+    "A cap on concurrent servers and admission on memory pressure: `dev-server-admission`.",
+    "Stopping a live server in a workarea that is not closing, however old."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`mc dev stop <instance_id>` stops a registered server through its own stop command.",
+      "check": "Start one with `mc test dev --here --url` in a memoro worktree; `mc dev stop <id>`; paste the output and `mc dev list` after."
+    },
+    {
+      "met": false,
+      "criterion": "`mc work remove` of a worktree with a running server stops the server and removes the worktree, where it used to refuse with `in use by node`.",
+      "check": "In a scratch workarea (`mc work add`), start a server there, run `mc work remove`, paste the output and `mc log --all --limit 5` showing `dev-server-stopped` with `reason: worktree-removed`."
+    },
+    {
+      "met": false,
+      "criterion": "`mc dev reap` removes an orphaned static-server, measure-server and esbuild service, and leaves a registered live server and a server started a minute ago alone.",
+      "check": "In a memoro worktree: (a) `sh -c 'node scripts/testing/static-server.mjs >/dev/null 2>&1 &'` (parent becomes pid 1), then `mc dev unregister .wrangler/dev-server/run/mc-static.json` so it is registered nowhere; (b) `node scripts/testing/measure-server.mjs &`, then `kill -9` that node pid, leaving its workerd and esbuild with ppid 1; (c) `mc test dev --here --url` for a registered live server. Run `mc dev reap --dry-run --min-age-seconds 0`, then `mc dev reap --min-age-seconds 0` (rule 2's 120 s floor still applies — wait it out); paste both and `ps -axo pid,ppid,command | grep -E 'static-server|workerd|esbuild'` after, showing (c) still running."
+    }
+  ],
+  "documents": [
+    {
+      "label": "The dev-server protocol",
+      "path": "../../../dev-server-protocol.md"
+    },
+    {
+      "label": "memoro half: idle exit",
+      "path": "https://github.com/martinforsberg81/memoro/tree/main/docs/project/test-architecture/dev-server-idle-exit/PLAN.json"
+    },
+    {
+      "label": "Supervision (the project before this)",
+      "path": "../dev-server-supervision/PLAN.json"
+    }
+  ],
+  "steps": [
+    {
+      "title": "Stop a workarea's servers when it closes or is removed; `mc dev stop`",
+      "status": "ready",
+      "done_when": "`mc dev stop <instance_id>` exists; `closeWorkarea` and `removeWorktree` stop every registered server whose `worktree_path` is inside the worktree before removing it and log `dev-server-stopped`; tests cover all three; the first two success criteria are in the pull request with a changelog fragment.",
+      "instruction": [
+        "**A shared helper.** In `src/mc/dev-servers.js` add `export function serversUnder(path, { root } = {})`: the live servers from `listServers({ root })` whose `resolve(worktree_path)` equals `resolve(path)` or starts with `resolve(path) + sep`. And `export function stopServersUnder(path, { reason, root, stop = stopServer } = {})`, which calls `stop(server)` for each (import `stopServer` from `./test-environment.js`; if that makes an import cycle, move `stopServer` into `dev-servers.js` and re-export it from `test-environment.js` so existing imports keep working), calls `log('dev-server-stopped', { instance_id, service, worktree_path, reason, ok })` from `./logger.js` for each, and returns `{ stopped: [ids], failed: [{ instance_id, error }] }`.",
+        "**`mc dev stop <instance_id>`.** In `src/mc/commands/dev.js`, `parseArgs` (about line 109) accepts `stop` with exactly one positional; `run` finds the live server by `instance_id` in `listServers` (unknown → exit 1, `mc dev stop: no live server <id> — mc dev list shows what is running`), calls `stopServer`, logs `dev-server-stopped` with `reason: 'asked'`, prints `mc: stopped <id> (<url>)` or the error, exit 0/1. Update `usage()`, the file's header comment (it says three verbs), and `HELP_TEXT` (`src/mc/help-text.js`; `tests/mc/help.test.js` checks verbs against the help).",
+        "**Closing a workarea.** In `src/mc/run.js` `closeWorkarea(name)` (about line 1073), before the per-repo `git worktree remove` loop, call `stopServersUnder(join(root, name), { reason: 'workarea-closed' })` through `deps` (add `stopServersUnder` to the deps the runner takes, defaulting to the real one, so `tests/mc/run.test.js` can inject it). A failed stop is logged by `say(\"close: <name> — could not stop <id>: <error>\")` and does not stop the close: `git worktree remove` decides, as today.",
+        "**Removing a worktree.** In `src/mc/work-area.js` `removeWorktree` (about line 207), before the `directoryInUse` check, call `stopServersUnder(worktree.path, { reason: 'worktree-removed' })`, then wait up to 5 s (poll every 250 ms) for `directoryInUse(worktree.path)` to clear before the existing check runs. Return `servers_stopped: [ids]` on the result and print it in `src/mc/commands/work.js` where the removal is reported (about line 208).",
+        "**Tests.** `tests/mc/dev-servers.test.js`: `serversUnder` matches the worktree itself and a path below it, not a sibling with the same prefix (`/a/memoro` vs `/a/memoro2`). `stopServersUnder` with an injected `stop` logs one line per server (point the logger at a temp file with `setLogPath`). `tests/mc/run.test.js`: `closeWorkarea` calls the injected `stopServersUnder` with the workarea path before `git worktree remove`. A test for `mc dev stop` with an unknown id.",
+        "**Docs and verification.** `docs/dev-server-protocol.md`: when mc stops a server (the list `dev-server-supervision` wrote, plus `asked`, `workarea-closed`, `worktree-removed`). `changelog.d/dev-server-lifecycle.md`. Verify the first two success criteria with this branch's `mc` on PATH through a shim (`exec node <this worktree>/src/mc-cli.js \"$@\"`) and paste the output. `npm test` green."
+      ],
+      "comments": []
+    },
+    {
+      "title": "The reaper: `mc dev reap`, every chores pass",
+      "status": "ready",
+      "done_when": "`mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]` removes processes the rules below prove orphaned and registrations whose worktree is gone, logs each as `dev-server-reaped`, and the runner's `chores()` runs it every pass; tests cover every rule both ways; the third success criterion is in the pull request.",
+      "instruction": [
+        "**The rules, as a pure function.** In a new `src/mc/dev-reap.js`, `export function reapPlan({ processes, servers, now, exists, minAgeSeconds = 600 })`. `processes` is `[{ pid, ppid, age_s, command }]` (parse `ps -axo pid=,ppid=,etime=,command=`; convert `etime` `[[dd-]hh:]mm:ss` to seconds in an exported `etimeSeconds`). `servers` is `listServers({ reap: false }).servers`. `exists(path)` is `existsSync`. It returns `[{ pid | instance_id, kind, why }]` from exactly these rules and no others:",
+        "(1) **Unregistered server, orphaned.** `ppid === 1`, `age_s >= minAgeSeconds`, command matches `/\\bnode\\b.*\\bscripts\\/(testing\\/static-server|testing\\/measure-server|dev)\\.mjs\\b/` and no registered server has this `pid`. Kind `server`. The age floor is there because mc itself starts servers detached (ppid 1 from their first second) and they have up to 180 s to register.",
+        "(2) **Runtime helper, orphaned.** `ppid === 1`, `age_s >= 120`, command matches `/\\/@esbuild\\/[^/]+\\/bin\\/esbuild --service/` or `/\\/workerd-[^/]+\\/bin\\/workerd serve\\b/`. Kind `esbuild` or `workerd`. Both only ever run as children of a node process (wrangler or Miniflare); with pid 1 as parent, that process is gone and nothing will talk to them again.",
+        "(3) **Registration whose worktree is gone.** A registered server whose `worktree_path` does not `exists()`. Kind `registration`; its stop command lives in the removed worktree, so the action is SIGTERM to its `pid` if alive, then unregister (`unregisterManifest` by `registered_file`, or `rmSync` of it).",
+        "**Acting.** `export async function reap({ dryRun, minAgeSeconds, deps })` builds the plan from live `ps` and `listServers`, and for each entry (unless `dryRun`): SIGTERM, wait up to 5 s for the pid to go (`process.kill(pid, 0)`), SIGKILL if not; log `dev-server-reaped { kind, pid, instance_id, age_s, command_head }` where `command_head` is the command's first 80 characters with the home directory replaced by `~` (identifiers and paths only, as `src/mc/logger.js` requires). Return the list with what was done.",
+        "**The verb and the runner.** `mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]` in `src/mc/commands/dev.js`: a line per entry (`reaped pid 45607 server — orphaned static-server, 6d`), or `mc: nothing to reap`. Help text as in step 1. In `src/mc/run.js` `chores()` (about line 2013), after `closeWorkareas(...)`, call `await deps.reapDevServers()` (default: `reap({ dryRun: false })`), catching and `say`ing any error — a reaper failure never stops a round. `say` one line when it reaped something: `reap: <n> orphaned dev process(es) removed`.",
+        "**Tests** in a new `tests/mc/dev-reap.test.js`, pure on `reapPlan`: each rule matches its case; each rule's near-misses do not match — a static-server with ppid 4242, a static-server with ppid 1 at 60 s, a registered static-server with ppid 1, an esbuild with a live parent, a `node scripts/other.mjs` with ppid 1, a registration whose worktree exists. `etimeSeconds` on `05:03`, `01:02:03`, `4-08:46:50`.",
+        "**Docs and verification.** `docs/dev-server-protocol.md` § *Safety contract*: the reaper's three rules and that they are the only time mc signals a process itself. Extend the changelog fragment. Verify the third success criterion and paste it. `npm test` green."
+      ],
+      "comments": []
+    }
+  ]
+}
