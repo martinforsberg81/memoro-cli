@@ -183,7 +183,9 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       staticServer = ensured.server;
       staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');
       if (!opts.json) {
-        stdout.write(ensured.restartedFrom
+        stdout.write(ensured.replacedHung
+          ? `mc: static tier — ${ensured.replacedHung} was alive but not answering — started a fresh one, ${staticBaseUrl} (${staticServer.instance_id})\n`
+          : ensured.restartedFrom
           ? `mc: static tier — the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}), started a fresh one: ${staticBaseUrl} (${staticServer.instance_id})\n`
           : ensured.started
             ? `mc: static tier — ${staticBaseUrl} (${staticServer.instance_id})\n`

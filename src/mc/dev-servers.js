@@ -236,8 +236,13 @@ function readRecords(root) {
  *
  * Sweeping is what `reap: false` turns off, and the only caller that wants it
  * off is a test asking what the directory holds before the sweep.
+ *
+ * Each swept record is a death, and is logged as `dev-server-gone`: measured
+ * 12–26 Sep 2026, 141 of 571 memoro dev-server starts died unexpectedly and
+ * no log mc keeps recorded one of them, because this sweep removed the only
+ * trace without a word.
  */
-export function listServers({ root = devServersRoot(), reap = true } = {}) {
+export function listServers({ root = devServersRoot(), reap = true, now = () => Date.now() } = {}) {
   const servers = [];
   const reaped = [];
   for (const record of readRecords(root)) {
@@ -245,6 +250,15 @@ export function listServers({ root = devServersRoot(), reap = true } = {}) {
     if (!live && reap) {
       rmSync(record.registered_file, { force: true });
       reaped.push(record.instance_id);
+      const started = Date.parse(record.started_at ?? '');
+      log('dev-server-gone', {
+        instance_id: record.instance_id,
+        service: record.service ?? null,
+        worktree_path: record.worktree_path ?? null,
+        server_pid: record.pid ?? null,
+        started_at: record.started_at ?? null,
+        age_s: Number.isFinite(started) ? Math.floor((now() - started) / 1000) : null,
+      });
       continue;
     }
     const { registered_file: _file, ...rest } = record;

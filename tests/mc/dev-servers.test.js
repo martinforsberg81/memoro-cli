@@ -210,6 +210,48 @@ describe('the sweep', () => {
     rmSync(worktree, { recursive: true, force: true });
   });
 
+  it('each swept record is logged as dev-server-gone, and a live one is not', () => {
+    const root = scratch();
+    const dead = scratch();
+    const alive = scratch();
+    registerManifest(writeSource(dead, { pid: DEAD_PID, started_at: '2026-09-26T10:00:00.000Z' }), { root });
+    registerManifest(writeSource(alive, { instance_id: 'dev-live0001' }), { root });
+    const logFile = join(scratch(), 'mc.log');
+    setLogPath(logFile);
+    try {
+      const swept = listServers({ root, now: () => Date.parse('2026-09-26T10:04:54.900Z') });
+      assert.deepEqual(swept.reaped, ['dev-0123abcd']);
+      assert.deepEqual(swept.servers.map((s) => s.instance_id), ['dev-live0001']);
+      const lines = readFileSync(logFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(lines.length, 1);
+      assert.equal(lines[0].event, 'dev-server-gone');
+      assert.equal(lines[0].instance_id, 'dev-0123abcd');
+      assert.equal(lines[0].worktree_path, dead);
+      assert.equal(lines[0].server_pid, DEAD_PID);
+      assert.equal(lines[0].age_s, 294);
+
+      listServers({ root });
+      assert.equal(readFileSync(logFile, 'utf8').trim().split('\n').length, 1, 'swept once, logged once');
+    } finally {
+      setLogPath(null);
+    }
+  });
+
+  it('a started_at that does not parse is an age of null, not a guess', () => {
+    const root = scratch();
+    registerManifest(writeSource(scratch(), { pid: DEAD_PID, started_at: 'yesterday-ish' }), { root });
+    const logFile = join(scratch(), 'mc.log');
+    setLogPath(logFile);
+    try {
+      listServers({ root });
+      const line = JSON.parse(readFileSync(logFile, 'utf8').trim());
+      assert.equal(line.event, 'dev-server-gone');
+      assert.equal(line.age_s, null);
+    } finally {
+      setLogPath(null);
+    }
+  });
+
   it('a file that is not JSON is ignored rather than thrown over', () => {
     const root = scratch();
     writeFileSync(join(root, 'broken.json'), 'not json at all\n');
