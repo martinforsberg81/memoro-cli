@@ -355,6 +355,116 @@ describe('a server that leaves in the middle', () => {
     rmSync(worktree, { recursive: true, force: true });
   });
 
+  const THREE = {
+    ...DECLARATION,
+    suites: [
+      { name: 'first', argv: ['npm', 'run', 'test:first'] },
+      { name: 'second', argv: ['npm', 'run', 'test:second'] },
+      { name: 'third', argv: ['npm', 'run', 'test:third'] },
+    ],
+  };
+
+  it('a server revived once carries the round on against the new url', async () => {
+    const worktree = worktreeWith({ declaration: THREE });
+    let url = 'http://127.0.0.1:8787';
+    const handed = [];
+    const revivals = [];
+    const { results, gone, skipped, revived } = await runSuites(
+      {
+        declaration: THREE,
+        worktree,
+        baseUrl: url,
+        // The server goes while `second` runs, and a fresh one is started.
+        stillThere: async () => url !== 'http://127.0.0.1:8787' || handed.length < 2,
+        revive: async (tier) => { revivals.push(tier); url = 'http://127.0.0.1:8799'; return { ok: true, baseUrl: url }; },
+        onRevive: (tier, result) => revivals.push(`said ${tier} ${result.baseUrl}`),
+      },
+      {
+        spawnSync: (command, args, options) => {
+          handed.push([args.at(-1), options.env.MEMORO_BASE_URL]);
+          return { status: handed.length === 2 ? 1 : 0 };
+        },
+      },
+    );
+    assert.deepEqual(handed, [
+      ['test:first', 'http://127.0.0.1:8787'],
+      ['test:second', 'http://127.0.0.1:8787'],
+      ['test:third', 'http://127.0.0.1:8799'],
+    ]);
+    assert.deepEqual(results.map((r) => [r.name, r.ok, r.unmeasured]), [
+      ['first', true, false], ['second', false, true], ['third', true, false],
+    ], 'the suite that was running when it went is still unmeasured');
+    assert.deepEqual(revived, ['app']);
+    assert.deepEqual(gone, []);
+    assert.deepEqual(skipped, []);
+    assert.deepEqual(revivals, ['app', 'said app http://127.0.0.1:8799']);
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('a server found gone before a suite is revived and that suite runs', async () => {
+    const worktree = worktreeWith({ declaration: THREE });
+    let url = 'http://127.0.0.1:8787';
+    const handed = [];
+    const { results, gone, revived } = await runSuites(
+      {
+        declaration: THREE,
+        worktree,
+        baseUrl: url,
+        stillThere: async () => url !== 'http://127.0.0.1:8787' || handed.length < 1,
+        revive: async () => { url = 'http://127.0.0.1:8799'; return { ok: true, baseUrl: url }; },
+      },
+      { spawnSync: (command, args, options) => { handed.push([args.at(-1), options.env.MEMORO_BASE_URL]); return { status: 0 }; } },
+    );
+    assert.deepEqual(handed.map(([, env]) => env), ['http://127.0.0.1:8787', 'http://127.0.0.1:8799', 'http://127.0.0.1:8799']);
+    assert.ok(results.every((r) => r.ok && !r.unmeasured));
+    assert.deepEqual(revived, ['app']);
+    assert.deepEqual(gone, []);
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('a revive that fails leaves the round as it was without one', async () => {
+    const worktree = worktreeWith({ declaration: THREE });
+    let calls = 0;
+    const { results, gone, skipped, revived } = await runSuites(
+      {
+        declaration: THREE,
+        worktree,
+        baseUrl: 'http://127.0.0.1:8787',
+        stillThere: async () => calls < 1,
+        revive: async () => ({ ok: false, error: 'could not start' }),
+      },
+      { spawnSync: () => { calls += 1; return { status: 1 }; } },
+    );
+    assert.deepEqual(results.map((r) => [r.name, r.unmeasured]), [['first', true]]);
+    assert.deepEqual(gone, ['app']);
+    assert.deepEqual(skipped, ['second', 'third']);
+    assert.deepEqual(revived, []);
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('a server that leaves twice in a round is gone the second time', async () => {
+    const worktree = worktreeWith({ declaration: THREE });
+    let asked = 0;
+    let revivals = 0;
+    const { results, gone, skipped, revived } = await runSuites(
+      {
+        declaration: THREE,
+        worktree,
+        baseUrl: 'http://127.0.0.1:8787',
+        // Every suite takes its server with it.
+        stillThere: async () => { asked += 1; return asked % 2 === 1; },
+        revive: async () => { revivals += 1; return { ok: true, baseUrl: 'http://127.0.0.1:8799' }; },
+      },
+      { spawnSync: () => ({ status: 1 }) },
+    );
+    assert.equal(revivals, 1, 'revived once, not again');
+    assert.deepEqual(results.map((r) => [r.name, r.unmeasured]), [['first', true], ['second', true]]);
+    assert.deepEqual(gone, ['app']);
+    assert.deepEqual(skipped, ['third']);
+    assert.deepEqual(revived, ['app']);
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
   it('a red suite with the server still up stays red', async () => {
     const worktree = worktreeWith();
     const { results, gone } = await runSuites(
