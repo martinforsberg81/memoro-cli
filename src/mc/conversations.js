@@ -206,7 +206,7 @@ function encodePath(path) {
  * top level and turns as `{"type":"user"}`; Codex records both inside a
  * `payload`.
  */
-function readHead(path) {
+export function readHead(path) {
   if (!path) return { cwd: null, label: null };
   let fd = null;
   let text = '';

@@ -33,7 +33,7 @@
       "check": "The tests in `tests/mc/conversations-delete.test.js` pass; paste their names and `npm test` summary."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc work tidy` on this machine prints what it would remove in three groups with byte totals, `--apply` removes exactly that, and `~/mc/runner`, `~/mc/proposals` and every `~/.claude/projects/*/memory/` are untouched.",
       "check": "Before: `df -h /System/Volumes/Data | tail -1`; `find ~/.claude/projects -path '*/memory/*' -type f | wc -l`; `ls ~/mc/runner ~/mc/proposals | wc -l`. Then paste `mc work tidy` (dry run) and `mc work tidy --apply`. After: the same three commands; the two counts are unchanged and the free space went up. `mc work tidy` again prints nothing to remove except what has aged past `--days` since."
     }

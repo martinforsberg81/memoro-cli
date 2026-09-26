@@ -14,6 +14,22 @@ section: Changed
   asks it there with unchanged behaviour; the per-worktree decision is the
   pure, tested `releaseVerdict` (`work-area.js`).
 
+- **`mc work tidy` releases every finished workarea and removes the
+  transcripts nothing will open again — dry run first.** One list in three
+  groups with byte totals: worktrees `mc work release` would remove (only in
+  areas holding nothing but git worktrees, never a role home or a register
+  project with steps left), Claude transcripts older than `--days` (default
+  14) whose directory is gone or that are not their workarea's latest, and
+  `<uuid>/` directories an earlier delete left behind. `--apply` removes
+  exactly that list and logs `work-tidy` with counts. Only `<uuid>.jsonl` and
+  `<uuid>/` are ever removed under `~/.claude/projects` — `memory/` is never
+  opened — and a question that fails keeps what it was about (2026-09-26: a
+  shell loop that read an erroring `find` as "nothing here" took every
+  transcript and every `memory/`). `mc work release`, `remove` and `discard`
+  now really see a process standing in a worktree: `directoryInUse` called
+  `processesStandingIn` without importing it, and the swallowed error read as
+  "nobody here".
+
 - **A deleted Claude conversation takes its `<uuid>/` directory with it.**
   Claude Code keeps a sibling `<session-id>/` directory (subagents, tool
   results) beside each transcript; `mc work discard ytor --apply` removed five

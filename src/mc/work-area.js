@@ -31,6 +31,7 @@ import { STOP_MARK } from './work-stop-marker.js';
 import { ensureWorkDeps } from './work-deps.js';
 import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { stopServersUnder } from './dev-servers.js';
+import { processesStandingIn } from './standing.js';
 
 /**
  * `PLAN_HOME` — `~/mc/plan/` — is skipped, because it is not a work area and
@@ -70,7 +71,7 @@ export function listWorkAreas(env = process.env, options = {}) {
  */
 
 /** mc's own marks in an area: state, never litter, and never what keeps an area alive. */
-const OWN_MARKS = new Set(['.mc-role', STOP_MARK]);
+export const OWN_MARKS = new Set(['.mc-role', STOP_MARK]);
 
 /**
  * `conversations: false` and `git: false` leave those lookups out. Both cost
