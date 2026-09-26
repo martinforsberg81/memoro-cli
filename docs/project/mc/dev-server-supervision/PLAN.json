@@ -1,0 +1,73 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "mc stops reusing dead or hung local servers, records every one it finds gone, and a `mc test dev` round survives its server leaving once. Martin, 2026-09-26: \"Det händer alldeles för ofta att dev servrar kopplar ner/låser sig vilket kostar både tid och tokens … se till så att de inte äter upp all datorkapacitet.\"",
+    "Measured 12–26 Sep 2026: 141 of 571 local memoro dev-server starts died unexpectedly (median 4.9 minutes after READY), 61 agent sessions spent about 1 100 tool calls restarting servers, and neither `~/.memoro/mc/logs/mc.log` nor the runner's logs record a single one of those deaths. On the mc side: `listServers` (`src/mc/dev-servers.js`) sweeps a dead registration without a word; `ensureDevServer` (`src/mc/test-environment.js`) reuses any server whose pid is alive (`servingWorktree`), answering or not; and when a tier leaves mid-round (`runSuites`) every later suite of that tier is reported never-run and the command exits 1, though starting it again takes under a minute.",
+    "memoro's half — the agent server supervising its own workerd, `dev.mjs` restarting a dead worker, `--restart` accepted by all three servers — is the memoro project `agent-dev-server` (`docs/project/test-architecture/agent-dev-server/PLAN.json` in memoro). Nothing here waits for it: this project uses only the manifest protocol that exists today, and stops and starts servers through `stopServer` and `ensureDevServer` as mc already does."
+  ],
+  "contract": [
+    "**The manifest protocol does not change** (`docs/dev-server-protocol.md`). mc still never kills a server's process itself: it stops one only through the manifest's `control.stop.argv` (`stopServer`), as it does today for a moved `built_from`.",
+    "**`mc.log` holds identifiers, paths, codes and counts only**, as `src/mc/logger.js` says: no URLs with query strings, no environment values, no log contents.",
+    "**A round still says what happened.** A suite that ran against a server that then left is still reported unmeasured, never red; reviving the server does not hide that it left."
+  ],
+  "out_of_scope": [
+    "Idle timeout, a cap on concurrent servers, admission on memory pressure, stopping servers when a lane or worktree closes, and reaping unregistered orphan processes. The next project.",
+    "Anything in memoro: the memoro project `agent-dev-server`.",
+    "`mc shot`'s behaviour beyond what it inherits from `ensureDevServer`."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A registered server whose process is gone produces one `dev-server-gone` event in `mc.log` when mc next lists servers.",
+      "check": "Start a server (`mc test dev --here --url`), `kill -9` its registered pid, run `mc dev list`, then `mc log --all --limit 5`; paste the event line in the pull request."
+    },
+    {
+      "met": false,
+      "criterion": "A server that is alive but does not answer is replaced, not reused.",
+      "check": "Start `mc test dev --here --url`; `kill -STOP` the registered pid; run `mc test dev --here --url` again and paste its output (the `was alive but not answering` line and a new instance id) and the `dev-server-hung` event; `kill -CONT` / clean up afterwards."
+    },
+    {
+      "met": false,
+      "criterion": "A `mc test dev` round whose app server dies once mid-round finishes every suite, reports the one that was running as unmeasured, and says the server was revived.",
+      "check": "Start `mc test dev --here`; during the second app-tier suite `kill -9` the server's registered pid; paste the round's output (one `unmeasured`, a `revived` line, the rest measured) and the `dev-server-revived` event."
+    }
+  ],
+  "documents": [
+    {
+      "label": "The memoro half: the agent server and dev.mjs supervision",
+      "path": "https://github.com/martinforsberg81/memoro/tree/main/docs/project/test-architecture/agent-dev-server/PLAN.json"
+    },
+    {
+      "label": "The dev-server protocol",
+      "path": "../../../dev-server-protocol.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "Record deaths, replace hung servers",
+      "status": "ready",
+      "done_when": "`listServers` logs `dev-server-gone` for each record it sweeps, `ensureDevServer` asks a live server whether it answers before reusing it and replaces one that does not (logging `dev-server-hung`), `docs/dev-server-protocol.md` says what mc stops and when, tests cover both, and the first two success criteria are pasted in the pull request with a changelog fragment.",
+      "instruction": [
+        "**The death record.** In `src/mc/dev-servers.js` `listServers` (about line 238), when a record is swept (`!live && reap`), call `log('dev-server-gone', { instance_id, service, worktree_path, pid, started_at, age_s })` from `src/mc/logger.js` (`export function log(event, fields)`; it never throws). `age_s` is whole seconds from `started_at` to now, or null when `started_at` does not parse. One event per swept record, nothing for live ones. Test in `tests/mc/dev-servers.test.js`: point the logger at a temp file with `setLogPath`, register a record with a pid that is not alive (the existing tests show how they pick one), call `listServers`, read the file and assert one line with `event: 'dev-server-gone'` and the instance id.",
+        "**A live pid is not an answer.** In `src/mc/test-environment.js` `ensureDevServer` (about line 259), after `const running = servingWorktree(...)` and before the `builtFromMoved` check, ask `await answers(running, { fetch: fetchImpl, sleep, attempts: 2, delayMs: 2000, timeoutMs: 5000 })`. If it does not answer: `log('dev-server-hung', { instance_id, service, worktree_path, pid })`, stop it through `(deps.stopServer || stopServer)(running)` exactly as the moved-`built_from` branch does, and fall through to start a fresh one; return with `replacedHung: running.instance_id` on the result. If the stop fails, return `{ ok: false, error: '<instance_id> is alive but does not answer <health_url>, and it could not be stopped: <error>' }`. Keep `restartedFrom` for the moved-checkout case unchanged. In `ensureAppServer` (about line 344) print `mc: <old instance_id> was alive but not answering — started a fresh one, <baseUrl> (<new instance_id>)` when `replacedHung` is set. The static tier (`src/mc/commands/test.js` about line 178) gets the same behaviour through `ensureDevServer`; print the same line there.",
+        "**Tests** in `tests/mc/test-environment.test.js`, with the injected deps the existing `ensureDevServer` tests use (`fetch`, `sleep`, `spawn`, `stopServer`, `root`): a live registered server whose fetch rejects is stopped and a new one started (`replacedHung` set, `stopServer` called once); one whose fetch answers 200 is reused (`started: false`, `stopServer` not called); one that does not answer and whose stop fails returns the error. Mind that `answers` is called with injected `sleep`, so the tests do not wait.",
+        "**The protocol document.** `docs/dev-server-protocol.md` § *Safety contract* (about line 186) says \"mc does not stop or restart anything\", which the code has contradicted since the moved-`built_from` restart. Rewrite that paragraph to say exactly when mc stops a server — through the manifest's `control.stop.argv`, never by signalling it itself — `mc test dev --stop`, a checkout that moved from `built_from`, and a live server that does not answer its health URL twice in a row within five seconds each — and that it records `dev-server-gone` and `dev-server-hung` in `mc.log`.",
+        "**Verify** the first two success criteria against a real memoro worktree (`mc test dev --here --url` from a memoro worktree, with this branch's `mc` on PATH through a shim that execs `node <this worktree>/src/mc-cli.js \"$@\"`) and paste the evidence. Add `changelog.d/dev-server-supervision.md` per `changelog.d/README.md`. `npm test` green."
+      ],
+      "comments": []
+    },
+    {
+      "title": "Revive a tier that leaves mid-round",
+      "status": "ready",
+      "done_when": "`runSuites` takes a `revive(tier)` callback and, the first time a tier is found gone in a round, calls it and carries on against the url it returns; `mc test dev` supplies it through `ensureDevServer`, prints a `revived` line and logs `dev-server-revived`; a second loss in the same round behaves as today; tests cover both; the third success criterion is pasted in the pull request.",
+      "instruction": [
+        "**runSuites.** In `src/mc/test-environment.js` `runSuites` (about line 508) add an optional parameter `revive = null`: `async (tier) => ({ ok: true, baseUrl } | { ok: false, error })`. Keep a `revived` set. Where a tier is found gone — the check before a suite (`if (!await there(suite))`) and the check after a failed suite that pushes the `unmeasured` result — do this instead of `gone.add(tier)` when `revive` is given and the tier is not already in `revived`: add it to `revived`, `await revive(tier)`; on `ok`, replace the url that tier uses (`baseUrl` for the app tier, `staticBaseUrl` for static — make both `let`), call `onRevive?.(tier, result)`, and continue the loop — for the before-check that means running this same suite now; for the after-check the unmeasured result stays as it is and the loop moves to the next suite. On `!ok`, or when the tier was already revived once this round, fall back to today's `gone.add(tier)`. Return `revived` as an array alongside `results`, `gone`, `skipped`.",
+        "**The command.** In `src/mc/commands/test.js`, where `runSuites` is called (about line 244), pass `revive` only for the dev environment (production has nothing mc can start): for the static tier call `ensureDevServer(worktree, declaration, { ...deps, service: staticService })`, for the app tier `ensureAppServer(worktree, declaration, { json: opts.json, stdout, deps })`; on success update `server` / `staticServer` so `probeFor` probes the new one, `log('dev-server-revived', { tier, instance_id, worktree_path })`, and return `{ ok: true, baseUrl }`. Pass `onRevive` that prints `mc: the <tier> server left mid-round — started a fresh one, <url>; carrying on` (not in `--json`). In the JSON report add `revived_tiers`. Exit code: a round whose suites all measured green after a revive exits 0; the unmeasured suite still appears in the report as unmeasured.",
+        "**Tests** in `tests/mc/test-environment.test.js` with injected `spawnSync` and a `stillThere` that turns false once: with a `revive` that succeeds, every later suite runs against the new url (assert the `env` the suite got), `revived` is `['app']`, `gone` is empty; with a `revive` that fails, today's behaviour (later suites in `skipped`); with a tier that goes twice, the second time is `gone` and `revive` was called once.",
+        "**Verify** the third success criterion against a real memoro worktree (shim as in step 1) and paste the output. Update the section on rounds in the technical documentation that describes `mc test dev` (search `docs/technical/` for `stillThere` or `never ran`; if no document describes it, add a *Supervision* section to `docs/dev-server-protocol.md`). Extend the changelog fragment from step 1 or add `changelog.d/mc-test-revive.md`. `npm test` green."
+      ],
+      "comments": []
+    }
+  ]
+}
