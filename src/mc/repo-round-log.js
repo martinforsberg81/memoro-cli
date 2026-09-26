@@ -114,6 +114,11 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     // rewrites them.
     red: gate?.candidate?.red?.length ?? null,
     red_names: capped(gate?.candidate?.red),
+    // The test files the round's selection named, uncapped — this is what a
+    // later red on main is checked against (`selector-miss.js`), and a capped
+    // list would call a selected test unselected. Null for a whole-suite
+    // round, which selected nothing because it ran everything.
+    selected: Array.isArray(gate?.selection?.selected) ? gate.selection.selected : null,
   };
   log('gate.round', {
     repo: line.repo, mode, ok: line.ok, stopped_at: line.stopped_at,

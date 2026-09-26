@@ -26,7 +26,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { gateRoot, runGate, selectionState, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
 
@@ -1007,6 +1007,9 @@ describe('a repository that selects by diff', () => {
     // declares a selector must declare one too, or `--full` stops — so `null`
     // here is the negative case, not an omission.
     suiteCommand = 'npm run test:full',
+    // Answers for the git calls a test cares about beyond the round's own —
+    // `checkout`, `rev-list`, `log` — consulted first; undefined falls through.
+    gitAlso = () => undefined,
   } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
     const repoPath = join(root, 'repo');
@@ -1039,6 +1042,8 @@ describe('a repository that selects by diff', () => {
 
     const runs = [];
     const git = (args, opts = {}) => {
+      const also = gitAlso(args, opts);
+      if (also !== undefined) return also;
       if (args[0] === 'worktree' && args[1] === 'add') {
         const dir = args[args.length - 2];
         mkdirSync(dir, { recursive: true });
@@ -1076,6 +1081,7 @@ describe('a repository that selects by diff', () => {
       suites,
       suiteCommands,
       marks,
+      mcHome,
       mark: (name) => (existsSync(join(marks, name)) ? readFileSync(join(marks, name), 'utf8') : null),
       report: (extra = {}) => runGate({
         repoPath, pr: full ? null : 7, full, holder: AREA, root: mcHome, git, gh, tests,
@@ -1357,6 +1363,108 @@ describe('a repository that selects by diff', () => {
         assert.equal(report.ok, false);
         assert.equal(report.stopped_at, 'base');
         assert.match(report.reason, /origin does not say which branch is its default/u);
+      } finally { fx.cleanup(); }
+    });
+  });
+
+  /**
+   * #12107 on 2026-09-25: red twice on three scanners #12106 had broken and
+   * never run. The verdict stays red — main's red is not the round's question
+   * — but the reason says whose red it is, and the round log gets the miss.
+   */
+  /**
+   * A selector that learns from its runs needs somewhere to keep what it
+   * learned, and the candidate is thrown away after every round. mc gives it a
+   * directory per repository under its own home — read by every round, written
+   * only by a whole-suite run of main as fetched.
+   */
+  it('the selector is told where its state is, and only a run of main may write it', () => {
+    const home = mkdtempSync(join(tmpdir(), 'mc-selection-state-'));
+    try {
+      const readOnly = selectionState({ MC_SELECTION_STATE_WRITE: '1' }, { root: home, repoPath: '/w/memoro', writes: false });
+      assert.ok(readOnly.MC_SELECTION_STATE.startsWith(join(home, 'selection', 'memoro-')));
+      assert.ok(existsSync(readOnly.MC_SELECTION_STATE), 'the directory is there before the selector asks for it');
+      assert.equal(readOnly.MC_SELECTION_STATE_WRITE, undefined, 'an inherited write flag must not survive a round about a change');
+      assert.equal(selectionState({}, { root: home, repoPath: '/w/memoro', writes: true }).MC_SELECTION_STATE_WRITE, '1');
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  describe('a red round says when the red is main\'s, and which landing broke it', () => {
+    const scanner = 'tests/scan.test.js';
+    const own = 'tests/own.test.js';
+    /** TAP with a located failure in each of `files`, the way node writes it. */
+    function located(files) {
+      const lines = ['TAP version 13'];
+      files.forEach((file, index) => {
+        lines.push(`not ok ${index + 1} - a test in ${file}`, '  ---', `  location: '/somewhere/candidate/${file}:3:1'`, '  ...');
+      });
+      lines.push(`1..${files.length}`, '# tests 4', `# pass ${4 - files.length}`, `# fail ${files.length}`);
+      return lines.join('\n');
+    }
+    // main's first parents, newest first: base1111 is the landing that broke
+    // the scanner, and the one before it was green.
+    const history = ['base1111full', 'good0000full'];
+    function onMain({ redAt }) {
+      let at = 'candidate';
+      const gitAlso = (args) => {
+        if (args[0] === 'checkout') { [at] = args.slice(-1); return { status: 0, stdout: '', stderr: '' }; }
+        if (args[0] === 'rev-list') return { status: 0, stdout: `${history.join('\n')}\n`, stderr: '' };
+        if (args[0] === 'cat-file') return { status: 0, stdout: '', stderr: '' };
+        if (args[0] === 'log') return { status: 0, stdout: 'suggestion-is-a-record 2: the row\'s own verbs (#12106)\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === 'origin/main') return { status: 0, stdout: 'base1111full\n', stderr: '' };
+        return undefined;
+      };
+      const tests = ({ files: ran }) => {
+        const red = (redAt[at] || []).filter((file) => ran.includes(file));
+        return Promise.resolve({ code: red.length ? 1 : 0, tap: located(red) });
+      };
+      return { gitAlso, tests };
+    }
+
+    it('red on the base too: the reason names the landing, and a selector miss is written once', async () => {
+      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner], base1111full: [scanner] } });
+      const fx = selecting({ files: [scanner], gitAlso });
+      try {
+        // The landing's own round, which selected something else.
+        writeFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), `${JSON.stringify({
+          schema: 'mc-gate-round', version: 1, phase: 'end', at: '2026-09-25T20:43:27Z', repo: 'repo',
+          merged: [12106], selected: ['tests/assistant/suggestion-button.test.js'],
+        })}\n`);
+        const report = await fx.report({ tests });
+        assert.equal(report.verdict, 'red', 'attribution must not change the verdict');
+        assert.deepEqual(report.main_red.red_on_main, [scanner]);
+        assert.equal(report.main_red.breaks[0].pr, 12106);
+        assert.equal(report.main_red.breaks[0].kind, 'not-selected');
+        assert.match(report.reason, /1 of the red files is red on main too, broken by #12106 \(its selection did not reach it: a selector miss\)/u);
+        const misses = readFileSync(join(fx.mcHome, 'selector-misses.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+        assert.equal(misses.length, 1);
+        assert.deepEqual([misses[0].file, misses[0].pr, misses[0].kind, misses[0].found_by], [scanner, 12106, 'not-selected', [7]]);
+        await fx.report({ tests });
+        assert.equal(readFileSync(join(fx.mcHome, 'selector-misses.jsonl'), 'utf8').trim().split('\n').length, 1, 'the same break is written once');
+      } finally { fx.cleanup(); }
+    });
+
+    it('green on the base: the change broke it, and nothing is written', async () => {
+      const { gitAlso, tests } = onMain({ redAt: { candidate: [own] } });
+      const fx = selecting({ files: [own], gitAlso });
+      try {
+        const report = await fx.report({ tests });
+        assert.equal(report.verdict, 'red');
+        assert.deepEqual(report.main_red.red_on_main, []);
+        assert.doesNotMatch(report.reason, /red on main/u);
+        assert.equal(existsSync(join(fx.mcHome, 'selector-misses.jsonl')), false);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a green round runs nothing more, and keeps the files it selected', async () => {
+      const { gitAlso, tests } = onMain({ redAt: {} });
+      const fx = selecting({ files: [own, scanner], gitAlso });
+      try {
+        const report = await fx.report({ tests });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.equal(report.main_red, null);
+        assert.deepEqual(report.selection.selected, [own, scanner]);
+        assert.equal(fx.runs.length, 0, 'the custom runner answered, and it was asked once');
       } finally { fx.cleanup(); }
     });
   });
