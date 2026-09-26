@@ -26,6 +26,7 @@ THE PAGE
   mc test <repo> <pr>              Measure a pull request; merge nothing
   mc test dev | prod               The app running, measured — locally or live
   mc gate                          This worktree's own gate, answered in 2 KB
+  mc shot dev | prod <target>      A PNG of the running app; prints its path
   mc publish                       Push this branch, open its pull request
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
@@ -187,6 +188,24 @@ IN FULL
                                     their locations, the file's path. A meter
                                     for a session before it pushes; mc merge
                                     measures again and decides
+  mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window]
+          [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
+          [--locale <code>] [--me] [--here] [--out <file.png>] [--open] [--json]
+                                    A PNG of the running app — a local dev
+                                    server, started as mc test dev starts one,
+                                    or production. The target is a path under
+                                    /app or a name from memoro's .mc/shot.json,
+                                    whose capture script takes the picture. The
+                                    file's path is printed first, alone; the
+                                    file goes under ~/.memoro/mc/shots/ unless
+                                    --out. dev signs in as the seeded account,
+                                    prod as the test account, or as you with
+                                    --me (prod only)
+  mc shot <dev|prod> --list        The targets and viewports memoro declares
+  mc shot login prod [--paste]     Sign in once, in a browser or by pasting the
+                                    memoro_session cookie; mc keeps it in the
+                                    keychain as MEMORO_SHOT_SESSION
+  mc shot logout prod              Forget it
   mc publish [--title …] [--body …] Push the branch you stand on (never force)
                                     and open its pull request, or find the one
                                     it has — title and body from the last

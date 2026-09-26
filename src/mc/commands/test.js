@@ -46,7 +46,7 @@ import { NIGHTLY_INTERVAL_MS, nightlyDue } from '../run-plan.js';
 import { pidAlive } from '../status-collect.js';
 import { listServers } from '../dev-servers.js';
 import {
-  accountAvailable, answers, callerWorktree, ensureDevServer, forgetToken, isLoopback, notInDev, readDeclaration,
+  accountAvailable, answers, callerWorktree, ensureAppServer, ensureDevServer, forgetToken, isLoopback, notInDev, readDeclaration,
   runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
 } from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
@@ -191,31 +191,13 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       }
     }
     if (wantsApp) {
-      if (!opts.json) stdout.write(`mc: a dev server for ${worktree}…\n`);
-      const ensured = await ensureDevServer(worktree, declaration, {
-        ...deps,
-        // A cold start is minutes — build, migrations, then wrangler — and
-        // silence for three of them reads as a hang. Say the moment the wrapper
-        // registers, which is when mc knows it is alive.
-        onRegistered: opts.json ? null : (registered) => stdout.write(
-          `mc: ${registered.instance_id} is starting on ${registered.url} — waiting for it to answer\n`,
-        ),
-      });
-      if (!ensured.ok) {
-        stderr.write(`mc: ${ensured.error}\n`);
+      const app = await ensureAppServer(worktree, declaration, { json: opts.json, stdout, deps });
+      if (!app.ok) {
+        stderr.write(`mc: ${app.error}\n`);
         return 1;
       }
-      server = ensured.server;
-      baseUrl = String(server.url).replace(/\/+$/u, '');
-      if (!opts.json) {
-        if (ensured.restartedFrom) {
-          stdout.write(`mc: the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}) — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
-        } else {
-          stdout.write(ensured.started
-            ? `mc: started one — ${baseUrl} (${server.instance_id})\n`
-            : `mc: ${baseUrl} was already serving it (${server.instance_id})\n`);
-        }
-      }
+      server = app.server;
+      baseUrl = app.baseUrl;
     }
   }
 
