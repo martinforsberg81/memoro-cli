@@ -238,8 +238,15 @@ it where it was started. The occasions, each logged to `mc.log` as
 `dev-server-stopped` with `instance_id`, `service`, `worktree_path`, `reason`
 and `ok` (except the first, which `mc test dev` reports itself):
 
+- **`mc test dev --stop`** — a person stopping the server for this worktree.
 - **built from another tree** — `mc test dev` found a live server whose
   `built_from.commit` is not the worktree's HEAD, and replaces it (above).
+- **alive but not answering** — `mc test dev` (and `mc shot`, through the same
+  reuse) found a live server whose `health_url` did not answer twice in a row,
+  five seconds allowed each. A live pid is not an answer: mc logs
+  `dev-server-hung` with `instance_id`, `service`, `worktree_path` and `server_pid`,
+  stops it, starts a fresh one and says so — `mc: <old> was alive but not
+  answering — started a fresh one, <url> (<new>)`.
 - **`asked`** — `mc dev stop <instance_id>`, a person naming one live server.
 - **`workarea-closed`** — the runner closes a finished workarea: every server
   whose `worktree_path` is the workarea or below it is stopped before `git
@@ -253,14 +260,25 @@ and `ok` (except the first, which `mc test dev` reports itself):
 `/a/memoro`. A live server in a workarea that is not closing is never stopped,
 however old.
 
+A server mc finds already gone — its registered pid no longer alive — is not
+stopped but swept: the next listing removes the registration and logs
+`dev-server-gone` with `instance_id`, `service`, `worktree_path`, `server_pid`,
+`started_at` and `age_s` (whole seconds since `started_at`, null when it does
+not parse). That line is the only record of a server that died on its own.
+
 ## Safety contract
 
 mc does not signal a process — admission included: a server that is refused
 waits or gives up, and nothing running is stopped to make room. It holds an
 index and answers questions about it; the project's wrapper owns the process,
 and its stop command — the manifest's `control.stop.argv`, `npm run dev --
---stop` in memoro — is how a server ends, whether a person or mc runs it (see
-*When mc stops a server*). This is narrower than the contract this document
+--stop` in memoro — is how a server ends, whether a person or mc runs it. mc
+runs it on exactly the occasions *When mc stops a server* lists: `mc test dev
+--stop`, `mc dev stop`, a checkout that moved from `built_from`, a live server
+that does not answer its health URL twice in a row within five seconds each,
+and a workarea or worktree being closed. Every stop mc decides on its own is in
+`mc.log` (`dev-server-stopped`, `dev-server-hung`), and so is every server it
+finds gone (`dev-server-gone`). This is narrower than the contract this document
 carried until 2026-09-05, which specified four identity checks before mc would
 signal a process — pid alive, manifests matching, live working directory, live
 process group. Nothing signals a process now, so nothing needs them.

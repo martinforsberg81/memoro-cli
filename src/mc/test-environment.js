@@ -34,6 +34,7 @@ import { defaultRepos } from './brief-collect.js';
 import {
   admit, holdersText, listServers, refusalText, stopServer,
 } from './dev-servers.js';
+import { log } from './logger.js';
 
 /** Where a repository says what it may be measured with. */
 export const DECLARATION_FILE = join('.mc', 'test.json');
@@ -270,7 +271,22 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
 
   const running = servingWorktree(worktree, { root, service });
   let restartedFrom = null;
-  if (running) {
+  let replacedHung = null;
+  if (running && !(await answers(running, { fetch: fetchImpl, sleep, attempts: 2, delayMs: 2000, timeoutMs: 5000 }))) {
+    // A live pid is not an answer. A server that is alive and does not answer
+    // its health URL twice in a row is hung, and reusing it hands every suite
+    // a connection that never comes back. Stopped through its own stop
+    // command, and started again below.
+    const stop = deps.stopServer || stopServer;
+    log('dev-server-hung', {
+      instance_id: running.instance_id, service: running.service ?? null, worktree_path: running.worktree_path ?? null, server_pid: running.pid ?? null,
+    });
+    const stopped = stop(running);
+    if (!stopped.ok) {
+      return { ok: false, error: `${running.instance_id} is alive but does not answer ${running.health_url || running.url}, and it could not be stopped: ${stopped.error}` };
+    }
+    replacedHung = running.instance_id;
+  } else if (running) {
     const stale = builtFromMoved(running, worktree, deps);
     if (!stale) return { ok: true, server: running, started: false };
     // The server is alive and it is this worktree's, and it is serving a tree
@@ -281,6 +297,11 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     restartedFrom = stale;
     deps.onRestart?.(running, stale);
   }
+  // The one just stopped may still be registered for a moment while its
+  // wrapper leaves; it is not the fresh one being waited for.
+  const replaced = replacedHung || restartedFrom ? running.instance_id : null;
+  const fresh = () => serversFor(worktree, { root })
+    .find((server) => server.service === service && server.instance_id !== replaced) || null;
 
   const start = startArgvFor(worktree, declaration, { service });
   if (!start.ok) return start;
@@ -316,7 +337,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   let server = null;
   while (!server && now() < registerBy) {
     await sleep(1000);
-    server = servingWorktree(worktree, { root, service });
+    server = fresh();
   }
   if (!server) {
     return {
@@ -334,12 +355,12 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   while (now() < readyBy) {
     if (await answers(server, { fetch: fetchImpl, attempts: 1 })) {
       return {
-        ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom,
+        ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom, replacedHung,
       };
     }
     // A wrapper that has died is not going to answer, and waiting ten minutes
     // to find that out is the wrong kind of patience.
-    const still = servingWorktree(worktree, { root, service });
+    const still = fresh();
     if (!still) {
       return {
         ok: false,
@@ -381,7 +402,9 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
   const { server } = ensured;
   const baseUrl = String(server.url).replace(/\/+$/u, '');
   if (!json) {
-    if (ensured.restartedFrom) {
+    if (ensured.replacedHung) {
+      stdout.write(`mc: ${ensured.replacedHung} was alive but not answering — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
+    } else if (ensured.restartedFrom) {
       stdout.write(`mc: the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}) — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
     } else {
       stdout.write(ensured.started

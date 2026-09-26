@@ -18,12 +18,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A registered server whose process is gone produces one `dev-server-gone` event in `mc.log` when mc next lists servers.",
       "check": "Start a server (`mc test dev --here --url`), `kill -9` its registered pid, run `mc dev list`, then `mc log --all --limit 5`; paste the event line in the pull request."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A server that is alive but does not answer is replaced, not reused.",
       "check": "Start `mc test dev --here --url`; `kill -STOP` the registered pid; run `mc test dev --here --url` again and paste its output (the `was alive but not answering` line and a new instance id) and the `dev-server-hung` event; `kill -CONT` / clean up afterwards."
     },

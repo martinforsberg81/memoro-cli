@@ -15,12 +15,13 @@
  * another — leaves no trace at all.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { registerManifest } from '../../src/mc/dev-servers.js';
+import { setLogPath } from '../../src/mc/logger.js';
 import {
   accountAvailable, answers, builtFromMoved, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
   serversFor, servingWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
@@ -592,6 +593,7 @@ describe('bringing one up', () => {
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
       freeMemory: () => null,
+      fetch: async () => ({ ok: true }),
       spawn: () => { spawned += 1; return { unref() {} }; },
     });
 
@@ -754,10 +756,112 @@ describe('a service built from a tree that is gone', () => {
     registerServer(root, worktree, { port: 8900, extra: { built_from: { commit: 'aaaaaaaaaa1111' } } });
     let spawned = 0;
     const ensured = await ensureDevServer(worktree, DECLARATION, {
-      root, freeMemory: () => null, git: git('aaaaaaaaaa1111'), spawn: () => { spawned += 1; return { unref() {} }; },
+      root,
+      freeMemory: () => null,
+      git: git('aaaaaaaaaa1111'),
+      fetch: async () => ({ ok: true }),
+      spawn: () => { spawned += 1; return { unref() {} }; },
     });
     assert.equal(ensured.started, false);
     assert.equal(spawned, 0);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+});
+
+describe('a live server that does not answer', () => {
+  const STOP = { control: { stop: { argv: ['node', 'stop.mjs', '--stop'] } } };
+
+  it('is stopped through its own stop command, logged as hung, and replaced', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const logFile = join(root, 'mc.log');
+    registerServer(root, worktree, { port: 8910, extra: STOP });
+    const stopped = [];
+    const spawned = [];
+    setLogPath(logFile);
+    try {
+      const ensured = await ensureDevServer(worktree, DECLARATION, {
+        root,
+        freeMemory: () => null,
+        stopServer: (server) => {
+          stopped.push(server.instance_id);
+          rmSync(join(worktree, '.wrangler', 'dev-server', 'run'), { recursive: true, force: true });
+          for (const name of readdirSync(root).filter((file) => file.endsWith('.json'))) rmSync(join(root, name));
+          return { ok: true, instance_id: server.instance_id };
+        },
+        sleep: async () => {},
+        now: (() => { let t = 0; return () => { t += 1000; return t; }; })(),
+        spawn: (command, args) => {
+          spawned.push([command, ...args]);
+          registerServer(root, worktree, { port: 8911 });
+          return { unref() {} };
+        },
+        fetch: async (url) => {
+          if (url.includes(':8910')) throw new Error('timed out');
+          return { ok: true };
+        },
+      });
+      assert.equal(ensured.ok, true, ensured.error);
+      assert.deepEqual(stopped, ['dev-8910'], 'the hung one was asked to leave, once');
+      assert.equal(spawned.length, 1, 'and a fresh one was started');
+      assert.equal(ensured.replacedHung, 'dev-8910');
+      assert.equal(ensured.server.instance_id, 'dev-8911');
+      assert.equal(ensured.restartedFrom, null);
+      const lines = readFileSync(logFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      const hung = lines.filter((line) => line.event === 'dev-server-hung');
+      assert.equal(hung.length, 1);
+      assert.equal(hung[0].instance_id, 'dev-8910');
+      assert.equal(hung[0].service, 'memoro-worker');
+      assert.equal(hung[0].server_pid, process.pid);
+    } finally {
+      setLogPath(null);
+      for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  it('one that answers is reused and nothing is stopped', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    registerServer(root, worktree, { port: 8912, extra: STOP });
+    let stops = 0;
+    let spawned = 0;
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      freeMemory: () => null,
+      stopServer: () => { stops += 1; return { ok: true }; },
+      sleep: async () => {},
+      spawn: () => { spawned += 1; return { unref() {} }; },
+      fetch: async () => ({ ok: true, status: 200 }),
+    });
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.equal(ensured.started, false);
+    assert.equal(ensured.server.instance_id, 'dev-8912');
+    assert.equal(stops, 0);
+    assert.equal(spawned, 0);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('one that cannot be stopped is an error that says so, and nothing is started', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    registerServer(root, worktree, { port: 8913, extra: STOP });
+    let spawned = 0;
+    let sleeps = 0;
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      freeMemory: () => null,
+      stopServer: () => ({ ok: false, error: 'exited 1' }),
+      sleep: async () => { sleeps += 1; },
+      spawn: () => { spawned += 1; return { unref() {} }; },
+      fetch: async () => { throw new Error('connection refused'); },
+    });
+    assert.equal(ensured.ok, false);
+    assert.equal(
+      ensured.error,
+      'dev-8913 is alive but does not answer http://127.0.0.1:8913/api/version, and it could not be stopped: exited 1',
+    );
+    assert.equal(spawned, 0);
+    assert.equal(sleeps, 1, 'two attempts, one injected wait between them');
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 });
