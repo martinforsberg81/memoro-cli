@@ -28,7 +28,7 @@
       "check": "In a scratch workarea (`mc work add`), start a server there, run `mc work remove`, paste the output and `mc log --all --limit 5` showing `dev-server-stopped` with `reason: worktree-removed`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc dev reap` removes an orphaned static-server, measure-server and esbuild service, and leaves a registered live server and a server started a minute ago alone.",
       "check": "In a memoro worktree: (a) `sh -c 'node scripts/testing/static-server.mjs >/dev/null 2>&1 &'` (parent becomes pid 1), then `mc dev unregister .wrangler/dev-server/run/mc-static.json` so it is registered nowhere; (b) `node scripts/testing/measure-server.mjs &`, then `kill -9` that node pid, leaving its workerd and esbuild with ppid 1; (c) `mc test dev --here --url` for a registered live server. Run `mc dev reap --dry-run --min-age-seconds 0`, then `mc dev reap --min-age-seconds 0` (rule 2's 120 s floor still applies — wait it out); paste both and `ps -axo pid,ppid,command | grep -E 'static-server|workerd|esbuild'` after, showing (c) still running."
     }

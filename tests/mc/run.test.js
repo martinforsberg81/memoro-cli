@@ -571,6 +571,30 @@ test('the chore pass removes a scratch directory older than seven days and keeps
   assert.match(f.files['/w/runner/log/runner.log'], /scratch: 1 directory older than seven days removed/u);
 });
 
+test('the chore pass runs the reaper every pass and says what it removed', async () => {
+  const f = fixture();
+  let passes = 0;
+  f.deps.reapDevServers = async () => {
+    passes += 1;
+    return [{ pid: 10, kind: 'server', done: 'reaped' }, { pid: 11, kind: 'esbuild', done: 'reaped' }];
+  };
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.equal(passes, 2);
+  assert.match(f.files['/w/runner/log/runner.log'], /reap: 2 orphaned dev process\(es\) removed/u);
+});
+
+test('a reaper that throws is said, and the chore pass goes on', async () => {
+  const f = fixture({ now: '2026-09-19T10:00:00Z' });
+  f.dirs.add('/w/runner/scratch/old-20260911T090000Z');
+  f.scratchAges['/w/runner/scratch/old-20260911T090000Z'] = Date.parse('2026-09-10T10:00:00Z');
+  f.deps.reapDevServers = async () => { throw new Error('ps exited 1'); };
+  await createRunner({ deps: f.deps }).chores();
+  assert.match(f.files['/w/runner/log/runner.log'], /reap: failed — ps exited 1/u);
+  assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/old-20260911T090000Z']);
+});
+
 test('one step: worktree made from origin/main, session through the adapter, PR merged, row logged', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
   f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'alpha', 77)(call); };

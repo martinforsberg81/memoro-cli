@@ -8,6 +8,8 @@
  *   mc dev admit <service> [--worktree <path>] [--wait <s>] [--json]
  *                                           may one more server start here?
  *   mc dev stop <instance_id>               stop it, through its own stop command
+ *   mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]
+ *                                           remove what nobody owns any more
  *
  * `admit` is the fourth, added on 2026-09-26 with the reader it was missing:
  * `resource_class` had been carried in every manifest and read by nothing
@@ -21,7 +23,11 @@
  * nothing else, and it is what a workarea's close and `mc work remove` do for
  * every server inside the worktree they take away.
  *
- * Five, and not the thirteen-verb session manager `mc-cut` removed on
+ * `reap` is the sixth, from the same project: the dev processes the three
+ * rules in `dev-reap.js` prove orphaned, and registrations whose worktree is
+ * gone. The runner's chore pass runs it every pass.
+ *
+ * Six, and not the thirteen-verb session manager `mc-cut` removed on
  * 2026-09-03. `ensure`, `plan`, `status`, `logs` and `restart` are not coming
  * back with them: the month of `mc.log` that decided this recorded ten human
  * invocations of `mc dev` in total, six of them `ensure`, and the verb that
@@ -46,11 +52,12 @@ import { devServersRoot } from '../paths.js';
 import {
   admit, holdersText, listServers, refusalText, registerManifest, stopServer, unregisterManifest,
 } from '../dev-servers.js';
+import { ageText, DEFAULT_MIN_AGE_SECONDS, reap as reapOrphans } from '../dev-reap.js';
 import { log } from '../logger.js';
 import { callerWorktree } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 
-const VERBS = ['list', 'register', 'unregister', 'admit', 'stop'];
+const VERBS = ['list', 'register', 'unregister', 'admit', 'stop', 'reap'];
 
 /** `EX_TEMPFAIL`: refused for now, try again later. */
 export const REFUSED_EXIT = 75;
@@ -71,6 +78,7 @@ export async function run(argv, deps = {}) {
   if (opts.verb === 'register') return register(opts, { stdout, stderr, root });
   if (opts.verb === 'admit') return askAdmission(opts, { stdout, root, deps });
   if (opts.verb === 'stop') return stop(opts, { stdout, stderr, root, stopServer: deps.stopServer || stopServer });
+  if (opts.verb === 'reap') return reapVerb(opts, { stdout, root, reap: deps.reap || reapOrphans });
   return unregister(opts, { stdout, stderr, root });
 }
 
@@ -182,8 +190,28 @@ function stop(opts, { stdout, stderr, root, stopServer: stopOne }) {
   return 0;
 }
 
+/**
+ * Remove what the reaper's rules prove orphaned: a line per entry, or that
+ * there was nothing. `--dry-run` says what it would do and signals nothing.
+ */
+async function reapVerb(opts, { stdout, root, reap }) {
+  const entries = await reap({ dryRun: opts.dryRun, minAgeSeconds: opts.minAgeSeconds, deps: { root } });
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({ schema_version: 1, dry_run: opts.dryRun, entries }, null, 2)}\n`);
+    return 0;
+  }
+  if (!entries.length) stdout.write('mc: nothing to reap\n');
+  for (const entry of entries) {
+    const verb = { 'would-reap': 'would reap', reaped: 'reaped', 'still-running': 'could not reap' }[entry.done] || entry.done;
+    const what = entry.pid ? `pid ${entry.pid}` : entry.instance_id;
+    const named = entry.kind === 'registration' ? ` ${entry.instance_id}` : '';
+    stdout.write(`${verb} ${what} ${entry.kind}${named} — ${entry.why}, ${ageText(entry.age_s)}\n`);
+  }
+  return entries.some((entry) => entry.done === 'still-running') ? 1 : 0;
+}
+
 export function parseArgs(argv, { cwd = process.cwd(), callerWorktree: worktreeOf = callerWorktree } = {}) {
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--worktree', '--wait'] });
+  const scanned = scanArgs(argv, { booleans: ['--json', '--dry-run'], strictValues: ['--worktree', '--wait', '--min-age-seconds'] });
   const opts = { verb: 'list', json: scanned.flags.json, manifest: null, instanceId: null };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
@@ -194,10 +222,20 @@ export function parseArgs(argv, { cwd = process.cwd(), callerWorktree: worktreeO
   if (word !== 'admit' && (scanned.flags.worktree !== null || scanned.flags.wait !== null)) {
     return { ...opts, error: `--worktree and --wait belong to mc dev admit, not mc dev ${word}` };
   }
+  if (word !== 'reap' && (scanned.flags['dry-run'] || scanned.flags['min-age-seconds'] !== null)) {
+    return { ...opts, error: `--dry-run and --min-age-seconds belong to mc dev reap, not mc dev ${word}` };
+  }
 
   if (word === 'list') {
     if (positional.length) return { ...opts, error: `mc dev list takes no argument (${positional[0]})` };
     return opts;
+  }
+  if (word === 'reap') {
+    if (positional.length) return { ...opts, error: `mc dev reap takes no argument (${positional[0]})` };
+    const raw = scanned.flags['min-age-seconds'];
+    const minAgeSeconds = raw === null ? DEFAULT_MIN_AGE_SECONDS : Number(raw);
+    if (!Number.isInteger(minAgeSeconds) || minAgeSeconds < 0) return { ...opts, error: `--min-age-seconds is a whole number of seconds, not ${raw}` };
+    return { ...opts, dryRun: scanned.flags['dry-run'], minAgeSeconds };
   }
   if (word === 'admit') return admitArgs(opts, positional, scanned.flags, { cwd, worktreeOf });
   if (word === 'stop') {
@@ -233,5 +271,7 @@ export function usage() {
     '        mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]\n',
     '                                              may one more server start? exit 0 yes, 75 no\n',
     '        mc dev stop <instance_id>             stop it through its own stop command\n',
+    '        mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]\n',
+    '                                              remove orphaned dev processes and dead-worktree registrations\n',
   ].join('');
 }
