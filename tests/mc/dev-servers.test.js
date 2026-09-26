@@ -12,15 +12,16 @@
  * rule about text.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  checkManifest, listServers, registerManifest, unregisterManifest,
+  checkManifest, listServers, registerManifest, serversUnder, stopServersUnder, unregisterManifest,
 } from '../../src/mc/dev-servers.js';
 import { run } from '../../src/mc/commands/dev.js';
+import { setLogPath } from '../../src/mc/logger.js';
 
 /** A pid that is certainly not running, and one that certainly is. */
 const DEAD_PID = 2_147_483_646;
@@ -261,5 +262,97 @@ describe('the verb memoro calls', () => {
     const stderr = capture();
     assert.equal(await run(['register'], { stdout: capture(), stderr, root: scratch() }), 2);
     assert.match(stderr.text(), /needs the path of the manifest/u);
+  });
+});
+
+describe('stopping what a worktree runs', () => {
+  /** Three registered servers: a worktree, a directory below it, and a sibling sharing its prefix. */
+  function neighbours() {
+    const root = scratch();
+    const base = scratch();
+    const here = join(base, 'memoro');
+    const below = join(here, 'nested');
+    const sibling = join(base, 'memoro2');
+    registerManifest(writeSource(here, { instance_id: 'dev-here' }), { root });
+    registerManifest(writeSource(below, { instance_id: 'dev-below' }), { root });
+    registerManifest(writeSource(sibling, { instance_id: 'dev-sibling' }), { root });
+    return { root, here, sibling };
+  }
+
+  it('serversUnder is the worktree and what is below it, never a sibling with the same prefix', () => {
+    const { root, here, sibling } = neighbours();
+    assert.deepEqual(serversUnder(here, { root }).map((s) => s.instance_id).sort(), ['dev-below', 'dev-here']);
+    assert.deepEqual(serversUnder(`${here}/`, { root }).map((s) => s.instance_id).sort(), ['dev-below', 'dev-here']);
+    assert.deepEqual(serversUnder(sibling, { root }).map((s) => s.instance_id), ['dev-sibling']);
+  });
+
+  it('stopServersUnder stops each through the injected stop and logs one line per server', () => {
+    const { root, here } = neighbours();
+    const logFile = join(scratch(), 'mc.log');
+    setLogPath(logFile);
+    try {
+      const asked = [];
+      const result = stopServersUnder(here, {
+        root,
+        reason: 'worktree-removed',
+        stop: (server) => {
+          asked.push(server.instance_id);
+          return server.instance_id === 'dev-here' ? { ok: true } : { ok: false, error: 'exited 1' };
+        },
+      });
+      assert.deepEqual(asked.sort(), ['dev-below', 'dev-here']);
+      assert.deepEqual(result.stopped, ['dev-here']);
+      assert.deepEqual(result.failed, [{ instance_id: 'dev-below', error: 'exited 1' }]);
+      const lines = readFileSync(logFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(lines.length, 2);
+      for (const line of lines) {
+        assert.equal(line.event, 'dev-server-stopped');
+        assert.equal(line.reason, 'worktree-removed');
+        assert.equal(line.service, 'memoro-worker');
+      }
+      assert.deepEqual(lines.map((l) => [l.instance_id, l.ok]).sort(), [['dev-below', false], ['dev-here', true]]);
+    } finally {
+      setLogPath(null);
+    }
+  });
+
+  it('mc dev stop with an id nothing runs under exits 1 and says where to look', async () => {
+    const stderr = capture();
+    let stopped = false;
+    const code = await run(['stop', 'dev-nobody'], {
+      stdout: capture(), stderr, root: scratch(), stopServer: () => { stopped = true; return { ok: true }; },
+    });
+    assert.equal(code, 1);
+    assert.equal(stopped, false);
+    assert.match(stderr.text(), /mc dev stop: no live server dev-nobody — mc dev list shows what is running/u);
+  });
+
+  it('mc dev stop stops a live server through its own stop command and logs it as asked', async () => {
+    const root = scratch();
+    const worktree = scratch();
+    registerManifest(writeSource(worktree), { root });
+    const logFile = join(scratch(), 'mc.log');
+    setLogPath(logFile);
+    try {
+      const stdout = capture();
+      const asked = [];
+      const code = await run(['stop', 'dev-0123abcd'], {
+        stdout, stderr: capture(), root, stopServer: (server) => { asked.push(server.control.stop.argv.at(-1)); return { ok: true }; },
+      });
+      assert.equal(code, 0);
+      assert.deepEqual(asked, ['--stop']);
+      assert.equal(stdout.text(), 'mc: stopped dev-0123abcd (http://127.0.0.1:8890)\n');
+      const line = JSON.parse(readFileSync(logFile, 'utf8').trim());
+      assert.equal(line.event, 'dev-server-stopped');
+      assert.equal(line.reason, 'asked');
+      assert.equal(line.ok, true);
+    } finally {
+      setLogPath(null);
+    }
+  });
+
+  it('mc dev stop needs exactly one instance id', async () => {
+    assert.equal(await run(['stop'], { stdout: capture(), stderr: capture(), root: scratch() }), 2);
+    assert.equal(await run(['stop', 'a', 'b'], { stdout: capture(), stderr: capture(), root: scratch() }), 2);
   });
 });

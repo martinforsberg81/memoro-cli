@@ -1,16 +1,20 @@
 /**
- * `mc dev` — the three words memoro's dev-server wrapper speaks.
+ * `mc dev` — the three words memoro's dev-server wrapper speaks, and one for
+ * a person.
  *
  *   mc dev list [--json]                    what is running, and where
  *   mc dev register <manifest> [--json]     take a copy of a wrapper's manifest
  *   mc dev unregister <manifest> [--json]   forget it
+ *   mc dev stop <instance_id>               stop it, through its own stop command
  *
- * Three, and not the thirteen-verb session manager `mc-cut` removed on
- * 2026-09-03. `ensure`, `plan`, `status`, `logs`, `stop` and `restart` are not
- * coming back with them: the month of `mc.log` that decided this recorded ten
- * human invocations of `mc dev` in total, six of them `ensure`, and the verb
- * that starts a server for a session is `mc test dev`, which is a different
- * question with a different answer. mc holds the index; the project's own
+ * Four, and not the thirteen-verb session manager `mc-cut` removed on
+ * 2026-09-03. `ensure`, `plan`, `status`, `logs` and `restart` are not coming
+ * back with them: the month of `mc.log` that decided this recorded ten human
+ * invocations of `mc dev` in total, six of them `ensure`, and the verb that
+ * starts a server for a session is `mc test dev`, which is a different
+ * question with a different answer. `stop` came back with `dev-server-lifecycle`
+ * (2026-09-26), when servers nobody stopped had the machine in 8 GB of swap:
+ * it runs the manifest's `control.stop.argv` and nothing else. mc holds the index; the project's own
  * wrapper stays authoritative for how a server starts, stops and becomes
  * healthy (`docs/dev-server-protocol.md`).
  *
@@ -25,10 +29,11 @@
  * See `dev-servers.js`, which carries that argument and the numbers behind it.
  */
 import { devServersRoot } from '../paths.js';
-import { listServers, registerManifest, unregisterManifest } from '../dev-servers.js';
+import { listServers, registerManifest, stopServer, unregisterManifest } from '../dev-servers.js';
+import { log } from '../logger.js';
 import { scanArgs } from './flags.js';
 
-const VERBS = ['list', 'register', 'unregister'];
+const VERBS = ['list', 'register', 'unregister', 'stop'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -44,6 +49,7 @@ export async function run(argv, deps = {}) {
 
   if (opts.verb === 'list') return list(opts, { stdout, root });
   if (opts.verb === 'register') return register(opts, { stdout, stderr, root });
+  if (opts.verb === 'stop') return stop(opts, { stdout, stderr, root, stopServer: deps.stopServer || stopServer });
   return unregister(opts, { stdout, stderr, root });
 }
 
@@ -106,9 +112,33 @@ function unregister(opts, { stdout, stderr, root }) {
   return 0;
 }
 
+/**
+ * Stop one server a person names.
+ *
+ * Only a live registration is stopped — the id is looked up, not trusted —
+ * and only through the manifest's own stop command (`stopServer`).
+ */
+function stop(opts, { stdout, stderr, root, stopServer: stopOne }) {
+  const server = listServers({ root }).servers.find((item) => item.live && item.instance_id === opts.instanceId);
+  if (!server) {
+    stderr.write(`mc dev stop: no live server ${opts.instanceId} — mc dev list shows what is running\n`);
+    return 1;
+  }
+  const result = stopOne(server);
+  log('dev-server-stopped', {
+    instance_id: server.instance_id, service: server.service, worktree_path: server.worktree_path, reason: 'asked', ok: Boolean(result.ok),
+  });
+  if (!result.ok) {
+    stderr.write(`mc dev stop: ${result.error}\n`);
+    return 1;
+  }
+  stdout.write(`mc: stopped ${server.instance_id} (${server.url})\n`);
+  return 0;
+}
+
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, { booleans: ['--json'] });
-  const opts = { verb: 'list', json: scanned.flags.json, manifest: null };
+  const opts = { verb: 'list', json: scanned.flags.json, manifest: null, instanceId: null };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
   // Bare `mc dev` is the question the wrapper asks: what is running.
@@ -118,6 +148,13 @@ export function parseArgs(argv) {
 
   if (word === 'list') {
     if (positional.length) return { ...opts, error: `mc dev list takes no argument (${positional[0]})` };
+    return opts;
+  }
+  if (word === 'stop') {
+    const id = positional.shift();
+    if (!id) return { ...opts, error: 'mc dev stop needs the instance_id mc dev list shows' };
+    if (positional.length) return { ...opts, error: `mc dev stop takes one instance_id (${positional[0]})` };
+    opts.instanceId = id;
     return opts;
   }
   const manifest = positional.shift();
@@ -132,5 +169,6 @@ export function usage() {
     'usage — mc dev list [--json]                  what is running, and where\n',
     '        mc dev register <manifest> [--json]   take a copy of it\n',
     '        mc dev unregister <manifest> [--json] forget it\n',
+    '        mc dev stop <instance_id>             stop it through its own stop command\n',
   ].join('');
 }

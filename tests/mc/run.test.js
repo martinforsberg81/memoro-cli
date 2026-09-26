@@ -17,7 +17,7 @@ import { machineState } from '../../src/mc/status-collect.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -54,7 +54,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   }
   const log = [];
   const aborted = new Set();
-  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [] };
+  const calls = { stopped: [], git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
   /** `/w/runner/block/<repo>` — and the one it writes a blocked step in. */
@@ -116,6 +116,12 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       dirs.delete(p);
       calls.rmdirs.push(p);
       return true;
+    },
+    // A closing workarea's dev servers: recorded with how many git calls had
+    // been made, so a test can say the stop came before `git worktree remove`.
+    stopServersUnder: (path, options) => {
+      calls.stopped.push({ path, reason: options?.reason, gitCallsBefore: calls.git.length });
+      return stopResults[path] || { stopped: [], failed: [] };
     },
     writeJson: (p, v) => { files[p] = `${JSON.stringify(v, null, 2)}\n`; },
     remove: (p) => { if (!(p in files)) return false; delete files[p]; calls.removed.push(p); return true; },
@@ -2286,6 +2292,25 @@ test('a workarea whose plan left main this round is closed: worktree handed back
   assert.deepEqual(f.calls.rmdirs, ['/w/over']);
   assert.match(f.files['/w/runner/log/runner.log'],
     /close: over removed — worktree, branch over, 1 file\(s\) moved to runner\/log\/closed\/over\//u);
+});
+
+test('closing a workarea stops its dev servers before git worktree remove, and a failed stop does not stop the close', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    runs: RUNS_HEAD + ranRow('over'),
+    session: okSession(),
+    stopResults: { '/w/over': { stopped: ['dev-a'], failed: [{ instance_id: 'dev-b', error: 'exited 1' }] } },
+  });
+  await round(createRunner({ deps: f.deps }));
+
+  assert.deepEqual(f.calls.stopped.map(({ path, reason }) => [path, reason]), [['/w/over', 'workarea-closed']]);
+  const remove = f.calls.git.findIndex((c) => c[1] === 'worktree' && c[2] === 'remove' && c[3] === '/w/over/memoro');
+  assert.ok(remove >= 0, 'the worktree is still removed');
+  assert.ok(f.calls.stopped[0].gitCallsBefore <= remove, 'servers are stopped before git worktree remove');
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over — could not stop dev-b: exited 1/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over removed — worktree, branch over/u);
 });
 
 test('a done workarea with an uncommitted change is kept, and says why', async () => {

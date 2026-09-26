@@ -15,12 +15,13 @@ describing it for two days — a specification for a surface nobody could type.
 The paragraphs below are what exists. Everything else is in the history if it
 is ever wanted back.
 
-Three verbs:
+Four verbs — three the wrapper speaks, one for a person:
 
 ```sh
 mc dev list [--json]                     what is running, and where
 mc dev register <manifest> [--json]      take a copy of a wrapper's manifest
 mc dev unregister <manifest> [--json]    forget it
+mc dev stop <instance_id>                stop it, through its own stop command
 ```
 
 `list` is a capability probe as much as a listing: memoro's wrapper runs
@@ -183,14 +184,40 @@ again. URLs must target loopback, and the source
 manifest and log must stay inside `worktree_path`. Control commands are argv
 arrays and are run without a shell.
 
+## When mc stops a server
+
+mc stops a registered server only by running the manifest's own
+`control.stop.argv` in its `worktree_path`, without a shell. A manifest with no
+stop command is never stopped by mc — the refusal names it, and a person stops
+it where it was started. The occasions, each logged to `mc.log` as
+`dev-server-stopped` with `instance_id`, `service`, `worktree_path`, `reason`
+and `ok` (except the first, which `mc test dev` reports itself):
+
+- **built from another tree** — `mc test dev` found a live server whose
+  `built_from.commit` is not the worktree's HEAD, and replaces it (above).
+- **`asked`** — `mc dev stop <instance_id>`, a person naming one live server.
+- **`workarea-closed`** — the runner closes a finished workarea: every server
+  whose `worktree_path` is the workarea or below it is stopped before `git
+  worktree remove`. A failed stop is said in the runner log and does not stop
+  the close; `git worktree remove` decides.
+- **`worktree-removed`** — `mc work remove`: every server inside the worktree
+  is stopped, mc waits up to 5 s for its processes to leave, and then the
+  usual in-use check runs. What is still standing there still refuses.
+
+"Inside" is by path segment: a server in `/a/memoro2` is not inside
+`/a/memoro`. A live server in a workarea that is not closing is never stopped,
+however old.
+
 ## Safety contract
 
-mc does not stop or restart anything. It holds an index and answers questions
-about it; the project's wrapper owns the process, and `npm run dev -- --stop`
-is how a server ends. This is narrower than the contract this document carried
-until 2026-09-05, which specified four identity checks before mc would signal a
-process — pid alive, manifests matching, live working directory, live process
-group. Nothing signals a process now, so nothing needs them.
+mc does not signal a process. It holds an index and answers questions about
+it; the project's wrapper owns the process, and its stop command — the
+manifest's `control.stop.argv`, `npm run dev -- --stop` in memoro — is how a
+server ends, whether a person or mc runs it (see *When mc stops a server*).
+This is narrower than the contract this document carried until 2026-09-05,
+which specified four identity checks before mc would signal a process — pid
+alive, manifests matching, live working directory, live process group.
+Nothing signals a process now, so nothing needs them.
 
 What remains is the refusal at the door. A manifest is refused, not repaired,
 when it fails any of: the schema version, an `instance_id` that is a name

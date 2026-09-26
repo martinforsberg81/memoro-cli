@@ -111,6 +111,7 @@ import {
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
+import { stopServersUnder } from './dev-servers.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
@@ -352,6 +353,8 @@ export function realDeps(env = process.env) {
     // The area directory itself, once everything in it has been moved out.
     // Called with an empty directory and nothing else — see `closeWorkarea`.
     rmdir: (path) => { try { rmSync(path, { recursive: true }); return true; } catch { return false; } },
+    // A closing workarea's dev servers, through each manifest's own stop.
+    stopServersUnder,
     // The two files that say a runner is here and a step is in flight. Whole
     // or not at all: `mc status` reads them while they are being written.
     writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
@@ -1072,6 +1075,11 @@ export function createRunner({
    */
   function closeWorkarea(name) {
     const area = join(root, name);
+    // Its dev servers first: a server outlives the worktree otherwise, and
+    // nothing else will ever stop it. A failed stop does not stop the close —
+    // `git worktree remove` decides, as it always has.
+    const servers = (deps.stopServersUnder || stopServersUnder)(area, { reason: 'workarea-closed' });
+    for (const { instance_id: id, error } of servers?.failed || []) say(`close: ${name} — could not stop ${id}: ${error}`);
     for (const repo of areaRepos(name)) {
       const worktree = join(area, repo.name);
       if (!deps.git(repo.path, ['worktree', 'remove', worktree]).ok) {

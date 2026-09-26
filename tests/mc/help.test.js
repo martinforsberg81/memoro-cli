@@ -76,13 +76,14 @@ describe('mc --help', () => {
       // reached it, but past its edge, where memoro's `npm run dev` called it
       // on every start. It is back as three verbs and belongs in the help, so
       // it is asserted in the list above instead of forbidden here. What is
-      // still gone are the ten sub-verbs it used to carry: `ensure`, `plan`,
-      // `status`, `logs`, `stop` and `restart` among them.
+      // still gone are the sub-verbs it used to carry: `ensure`, `plan`,
+      // `status`, `logs` and `restart` among them. `stop` came back with
+      // `dev-server-lifecycle` (2026-09-26).
       'doctor', 'migrate', 'setup', 'install-shell', 'auth', 'tool-auth',
       'connections', 'github', 'coding-profile', 'deps',
       'cloud-session', 'cloud-runtime', 'security',
     ];
-    for (const gone of ['mc dev ensure', 'mc dev plan', 'mc dev stop', 'mc dev restart', 'mc dev logs', 'mc dev status', 'mc deps', 'mc storage']) {
+    for (const gone of ['mc dev ensure', 'mc dev plan', 'mc dev restart', 'mc dev logs', 'mc dev status', 'mc deps', 'mc storage']) {
       assert.doesNotMatch(result.stdout, new RegExp(`\\b${gone}\\b`, 'u'), `${gone} went with the cut and is not coming back`);
     }
     for (const verb of gone) {

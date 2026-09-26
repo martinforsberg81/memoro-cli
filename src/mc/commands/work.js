@@ -206,6 +206,7 @@ export async function runVerb(opts, { stdout, stderr }) {
 
   if (opts.verb === 'remove') {
     const result = removeWorktree({ name: opts.name, repo: opts.repo });
+    if (result.servers_stopped?.length) stdout.write(`mc: stopped dev server${result.servers_stopped.length === 1 ? '' : 's'} ${result.servers_stopped.join(', ')}\n`);
     if (!result.ok) {
       stderr.write(`mc: kept ${opts.repo} in ${opts.name} — ${result.reason}\n`);
       return 1;
