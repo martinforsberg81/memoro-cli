@@ -30,6 +30,7 @@ import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
 import { ensureWorkDeps } from './work-deps.js';
 import { branchLanded } from './branch-landed.js';
+import { stopServersUnder } from './dev-servers.js';
 
 /**
  * `PLAN_HOME` — `~/mc/plan/` — is skipped, because it is not a work area and
@@ -208,12 +209,18 @@ export function removeWorktree({ name, repo, env = process.env } = {}) {
   const area = inspectWorkArea(name, env);
   const worktree = area.worktrees.find((item) => item.repo === repo);
   if (!worktree) return { ok: false, reason: 'no-such-worktree' };
+  // A dev server standing in the worktree is not a reason to keep it: it is
+  // stopped through its own stop command, and given a moment to leave, before
+  // the question below is asked. What is still standing there after that —
+  // a shell, a session, a server that would not stop — still refuses.
+  const servers = stopServersUnder(worktree.path, { reason: 'worktree-removed' });
+  if (servers.stopped.length) waitUntilUnused(worktree.path);
   const inUse = directoryInUse(worktree.path);
-  if (inUse) return { ok: false, reason: `in use by ${inUse.join(', ')}` };
+  if (inUse) return { ok: false, reason: `in use by ${inUse.join(', ')}`, servers_stopped: servers.stopped };
   if (worktree.uncommitted > 0) return { ok: false, reason: `${worktree.uncommitted} uncommitted` };
   if (!worktree.is_git) {
     rmSync(worktree.path, { recursive: true, force: true });
-    return { ok: true, removed: 'directory' };
+    return { ok: true, removed: 'directory', servers_stopped: servers.stopped };
   }
   run(['--git-dir', worktree.git_common_dir, 'worktree', 'remove', '--', worktree.path]);
   // Content, not commits: a landed branch is a squash artefact, not work.
@@ -225,6 +232,7 @@ export function removeWorktree({ name, repo, env = process.env } = {}) {
   return {
     ok: true,
     removed: 'worktree',
+    servers_stopped: servers.stopped,
     branch: worktree.branch,
     branch_kept: branchKept,
     branch_kept_why: branchKept
@@ -233,6 +241,13 @@ export function removeWorktree({ name, repo, env = process.env } = {}) {
         : 'mc cannot tell whether main has this content — its merge against origin/main conflicts')
       : null,
   };
+}
+
+/** Up to 5 s, every 250 ms, for a stopped server's processes to leave. */
+function waitUntilUnused(path, { totalMs = 5000, stepMs = 250 } = {}) {
+  for (let waited = 0; waited < totalMs && directoryInUse(path); waited += stepMs) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stepMs);
+  }
 }
 
 /**

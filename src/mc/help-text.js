@@ -192,6 +192,11 @@ IN FULL
                                     the holders; mc test dev asks it before it
                                     starts a server, and stops nothing to make
                                     room
+  mc dev stop <instance_id>        Stop one live server through its manifest's
+                                    own stop command, and log it. mc also stops
+                                    a worktree's servers itself when mc work
+                                    remove or the runner's close takes the
+                                    worktree away
   mc gate [--base <ref>] [--json]  The repository's own gate on the tree you
                                     stand in — npm run ci -- --base-ref
                                     origin/main where there is a ci script,

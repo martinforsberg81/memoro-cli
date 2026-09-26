@@ -380,3 +380,82 @@ export function refusalText(verdict, { env = process.env } = {}) {
 export function holdersText(verdict) {
   return verdict.holders.map((holder) => `${holder.instance_id} (${holder.worktree_path})`).join(', ');
 }
+
+/**
+ * Stop a registered server — by asking the project, never by signalling
+ * anything.
+ *
+ * The manifest carries `control.stop.argv`, which is the wrapper's own stop
+ * command (`node scripts/dev.mjs --stop` in memoro's case). mc runs that and
+ * nothing else: it holds an index and it does not own the process. A pid or an
+ * occupied port has never been authority to signal anything here, and the
+ * unregister is the wrapper's to do on the way out — which is how mc learns
+ * the server is gone without being told.
+ *
+ * A refusal rather than a guess when the manifest has no stop command: a
+ * server mc cannot stop politely is one a person stops themselves, and the
+ * message says where.
+ */
+export function stopServer(server, deps = {}) {
+  const runOne = deps.spawnSync || spawnSync;
+  const argv = server?.control?.stop?.argv;
+  if (!Array.isArray(argv) || !argv.length) {
+    return {
+      ok: false,
+      error: `${server?.instance_id || 'that server'} declares no stop command — stop it where it was started`,
+    };
+  }
+  const [command, ...args] = argv;
+  const finished = runOne(command, args, {
+    cwd: server.worktree_path,
+    encoding: 'utf8',
+    shell: false,
+    timeout: Number(server.control.stop.timeout_ms) || 30_000,
+  });
+  return finished.status === 0
+    ? { ok: true, instance_id: server.instance_id }
+    : {
+      ok: false,
+      error: `${argv.join(' ')} exited ${finished.status}${finished.stderr ? `: ${String(finished.stderr).trim().split('\n').at(-1)}` : ''}`,
+    };
+}
+
+/**
+ * The live servers serving this directory or anything below it.
+ *
+ * By path segment, not by string prefix: `/a/memoro2` is not inside
+ * `/a/memoro`, and closing one workarea must not stop its neighbour's server.
+ */
+export function serversUnder(path, { root = devServersRoot() } = {}) {
+  const base = resolve(path);
+  return listServers({ root }).servers.filter((server) => {
+    if (!server.live || !server.worktree_path) return false;
+    const where = resolve(server.worktree_path);
+    return where === base || where.startsWith(base + sep);
+  });
+}
+
+/**
+ * Stop every server under a directory that is about to go away.
+ *
+ * A server outlives the work that wanted it otherwise: `git worktree remove`
+ * never looked at the registry, and on 2026-09-26 this machine held seven
+ * registered servers and a handful of orphans with swap at 8 GB. Each stop is
+ * the manifest's own (`stopServer`) and each is logged, succeeded or not — the
+ * caller decides what a failed stop means for the removal.
+ */
+export function stopServersUnder(path, { reason, root = devServersRoot(), stop = stopServer } = {}) {
+  const stopped = [];
+  const failed = [];
+  for (const server of serversUnder(path, { root })) {
+    let result;
+    try { result = stop(server); } catch (error) { result = { ok: false, error: error?.message || String(error) }; }
+    const ok = Boolean(result?.ok);
+    log('dev-server-stopped', {
+      instance_id: server.instance_id, service: server.service, worktree_path: server.worktree_path, reason, ok,
+    });
+    if (ok) stopped.push(server.instance_id);
+    else failed.push({ instance_id: server.instance_id, error: result?.error || 'stop failed' });
+  }
+  return { stopped, failed };
+}

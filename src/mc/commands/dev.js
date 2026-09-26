@@ -1,11 +1,13 @@
 /**
- * `mc dev` — the three words memoro's dev-server wrapper speaks.
+ * `mc dev` — the words memoro's dev-server wrapper speaks, and one for a
+ * person.
  *
  *   mc dev list [--json]                    what is running, and where
  *   mc dev register <manifest> [--json]     take a copy of a wrapper's manifest
  *   mc dev unregister <manifest> [--json]   forget it
  *   mc dev admit <service> [--worktree <path>] [--wait <s>] [--json]
  *                                           may one more server start here?
+ *   mc dev stop <instance_id>               stop it, through its own stop command
  *
  * `admit` is the fourth, added on 2026-09-26 with the reader it was missing:
  * `resource_class` had been carried in every manifest and read by nothing
@@ -14,11 +16,16 @@
  * person starts one by hand — so the answer is JSON on stdout and exit 75 on a
  * refusal, which is the whole of what that caller reads.
  *
- * Three, and not the thirteen-verb session manager `mc-cut` removed on
- * 2026-09-03. `ensure`, `plan`, `status`, `logs`, `stop` and `restart` are not
- * coming back with them: the month of `mc.log` that decided this recorded ten
- * human invocations of `mc dev` in total, six of them `ensure`, and the verb
- * that starts a server for a session is `mc test dev`, which is a different
+ * `stop` is the fifth, back with `dev-server-lifecycle` on the same day and
+ * for the same machine: it runs the manifest's `control.stop.argv` and
+ * nothing else, and it is what a workarea's close and `mc work remove` do for
+ * every server inside the worktree they take away.
+ *
+ * Five, and not the thirteen-verb session manager `mc-cut` removed on
+ * 2026-09-03. `ensure`, `plan`, `status`, `logs` and `restart` are not coming
+ * back with them: the month of `mc.log` that decided this recorded ten human
+ * invocations of `mc dev` in total, six of them `ensure`, and the verb that
+ * starts a server for a session is `mc test dev`, which is a different
  * question with a different answer. mc holds the index; the project's own
  * wrapper stays authoritative for how a server starts, stops and becomes
  * healthy (`docs/dev-server-protocol.md`).
@@ -37,12 +44,13 @@ import { resolve } from 'node:path';
 
 import { devServersRoot } from '../paths.js';
 import {
-  admit, holdersText, listServers, refusalText, registerManifest, unregisterManifest,
+  admit, holdersText, listServers, refusalText, registerManifest, stopServer, unregisterManifest,
 } from '../dev-servers.js';
+import { log } from '../logger.js';
 import { callerWorktree } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 
-const VERBS = ['list', 'register', 'unregister', 'admit'];
+const VERBS = ['list', 'register', 'unregister', 'admit', 'stop'];
 
 /** `EX_TEMPFAIL`: refused for now, try again later. */
 export const REFUSED_EXIT = 75;
@@ -62,6 +70,7 @@ export async function run(argv, deps = {}) {
   if (opts.verb === 'list') return list(opts, { stdout, root });
   if (opts.verb === 'register') return register(opts, { stdout, stderr, root });
   if (opts.verb === 'admit') return askAdmission(opts, { stdout, root, deps });
+  if (opts.verb === 'stop') return stop(opts, { stdout, stderr, root, stopServer: deps.stopServer || stopServer });
   return unregister(opts, { stdout, stderr, root });
 }
 
@@ -149,9 +158,33 @@ function unregister(opts, { stdout, stderr, root }) {
   return 0;
 }
 
+/**
+ * Stop one server a person names.
+ *
+ * Only a live registration is stopped — the id is looked up, not trusted —
+ * and only through the manifest's own stop command (`stopServer`).
+ */
+function stop(opts, { stdout, stderr, root, stopServer: stopOne }) {
+  const server = listServers({ root }).servers.find((item) => item.live && item.instance_id === opts.instanceId);
+  if (!server) {
+    stderr.write(`mc dev stop: no live server ${opts.instanceId} — mc dev list shows what is running\n`);
+    return 1;
+  }
+  const result = stopOne(server);
+  log('dev-server-stopped', {
+    instance_id: server.instance_id, service: server.service, worktree_path: server.worktree_path, reason: 'asked', ok: Boolean(result.ok),
+  });
+  if (!result.ok) {
+    stderr.write(`mc dev stop: ${result.error}\n`);
+    return 1;
+  }
+  stdout.write(`mc: stopped ${server.instance_id} (${server.url})\n`);
+  return 0;
+}
+
 export function parseArgs(argv, { cwd = process.cwd(), callerWorktree: worktreeOf = callerWorktree } = {}) {
   const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--worktree', '--wait'] });
-  const opts = { verb: 'list', json: scanned.flags.json, manifest: null };
+  const opts = { verb: 'list', json: scanned.flags.json, manifest: null, instanceId: null };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
   // Bare `mc dev` is the question the wrapper asks: what is running.
@@ -167,6 +200,13 @@ export function parseArgs(argv, { cwd = process.cwd(), callerWorktree: worktreeO
     return opts;
   }
   if (word === 'admit') return admitArgs(opts, positional, scanned.flags, { cwd, worktreeOf });
+  if (word === 'stop') {
+    const id = positional.shift();
+    if (!id) return { ...opts, error: 'mc dev stop needs the instance_id mc dev list shows' };
+    if (positional.length) return { ...opts, error: `mc dev stop takes one instance_id (${positional[0]})` };
+    opts.instanceId = id;
+    return opts;
+  }
   const manifest = positional.shift();
   if (!manifest) return { ...opts, error: `mc dev ${word} needs the path of the manifest the wrapper wrote` };
   if (positional.length) return { ...opts, error: `mc dev ${word} takes one manifest (${positional[0]})` };
@@ -192,5 +232,6 @@ export function usage() {
     '        mc dev unregister <manifest> [--json] forget it\n',
     '        mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]\n',
     '                                              may one more server start? exit 0 yes, 75 no\n',
+    '        mc dev stop <instance_id>             stop it through its own stop command\n',
   ].join('');
 }

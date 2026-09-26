@@ -18,12 +18,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc dev stop <instance_id>` stops a registered server through its own stop command.",
       "check": "Start one with `mc test dev --here --url` in a memoro worktree; `mc dev stop <id>`; paste the output and `mc dev list` after."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc work remove` of a worktree with a running server stops the server and removes the worktree, where it used to refuse with `in use by node`.",
       "check": "In a scratch workarea (`mc work add`), start a server there, run `mc work remove`, paste the output and `mc log --all --limit 5` showing `dev-server-stopped` with `reason: worktree-removed`."
     },
