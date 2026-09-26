@@ -84,3 +84,6 @@ existed?
 | 2026-09-19 | mc | nightly-is-a-chore | delivered | The tick becomes a chore of the runner, and the detached scheduler is deleted | [docs/technical/mc-merge.md](../technical/mc-merge.md) | 6aa882b3 |
 | 2026-09-26 | mc | mc-shot | delivered | `mc shot dev\|prod <target>` prints the path of a PNG of the running app, taken by memoro's declared capture script; `--me` on prod from `mc shot login prod` | [docs/technical/mc-shot.md](../technical/mc-shot.md) | [#748](https://github.com/martinforsberg81/memoro-cli/pull/748) |
 | 2026-09-26 | mc | dev-server-admission | delivered | `mc dev admit` and admission in `ensureDevServer` | none | 636d9cf7 |
+| 2026-09-26 | mc | dev-server-lifecycle | delivered | The reaper: `mc dev reap`, every chores pass | none | cb38f824 |
+| 2026-09-26 | mc | dev-server-supervision | delivered | Revive a tier that leaves mid-round | none | 0de6cbc6 |
+| 2026-09-26 | mc | workarea-tidy | delivered | `mc work tidy`: every finished workarea and every transcript nothing will open again | none | 51c6a58e |
