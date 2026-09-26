@@ -20,6 +20,7 @@ import { basename, delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { nightlyReading } from './nightly-history.js';
+import { selectorMissReading } from './selector-miss.js';
 import { mcHome } from './paths.js';
 import { readLease } from './repo-lease.js';
 import { livenessForLeases } from './lease-liveness.js';
@@ -178,6 +179,7 @@ export async function repoView({
         ...repo,
         lease: readLease(repo.path, { root, now }),
         nightly: nightlyReading(repo.path, { root }),
+        selector_misses: selectorMissReading(repo.path, { root, now }),
       })),
       unknown: fromSnapshot.unknown,
     }, { env, now });
@@ -278,6 +280,10 @@ async function gatherRepo({ root, worktrees, install, offline }) {
     // "last full run 4h ago, all green" is the line that makes the red line
     // credible when it finally appears.
     nightly: nightlyReading(root),
+    // Landings that turned main red on a test their own round did not select
+    // (`selector-miss.js`). Here for the nightly's reason: a count that is
+    // visible at zero is what makes it credible when it is not.
+    selector_misses: selectorMissReading(root),
   };
 }
 

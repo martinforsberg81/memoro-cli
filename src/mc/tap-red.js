@@ -123,3 +123,47 @@ export function tapTotals(tap) {
     finished: runs > 0,
   };
 }
+
+/** A failing entry's YAML block names where it is: `location: '/abs/x.test.js:12:3'`. */
+const LOCATION = /^\s*location:\s*'?(.*?)(?::\d+:\d+)?'?\s*$/u;
+const BLOCK_END = /^\s*\.\.\.\s*$/u;
+
+/**
+ * Which of `files` had anything red in this run.
+ *
+ * Names are what a person reads; files are what a selection is made of, and
+ * the question "did the selector reach this test?" can only be asked in files.
+ * node's TAP reporter writes the answer under every failing entry, as the
+ * `location` of the test that failed — an absolute path, in whatever worktree
+ * the run happened in. So a location is matched to a file by its tail rather
+ * than by its whole path: the candidate's directory is not a fact about the
+ * test. A file that failed before any test in it ran (a syntax error, an
+ * import that did not resolve) is announced under its own path as the name,
+ * and that counts too.
+ *
+ * Only files the caller named come back. A location outside them — a helper
+ * the failing test called into — is not a test file and is not reported as one.
+ */
+export function redFiles(tap, files) {
+  const wanted = [...new Set((files || []).map(String).filter(Boolean))];
+  const owner = (path) => wanted.find((file) => path === file || path.endsWith(`/${file}`)) || null;
+  const red = new Set();
+  let failing = false;
+  for (const line of String(tap ?? '').split('\n')) {
+    const failed = RESULT.exec(line);
+    if (failed) {
+      failing = !DIRECTIVE.test(failed[2]);
+      const named = failing ? owner(failed[2].trim()) : null;
+      if (named) red.add(named);
+      continue;
+    }
+    if (SUBTEST.test(line) || /^\s*ok \d+ - /u.test(line)) { failing = false; continue; }
+    if (!failing) continue;
+    if (BLOCK_END.test(line)) { failing = false; continue; }
+    const located = LOCATION.exec(line);
+    if (!located) continue;
+    const file = owner(located[1]);
+    if (file) red.add(file);
+  }
+  return wanted.filter((file) => red.has(file));
+}

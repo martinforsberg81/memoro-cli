@@ -43,6 +43,7 @@ export function renderRepoLines(report, {
     lines.push(`  ${c(repo.name, 'bold')}  ${c(repo.path, 'grey')}`);
     lines.push(...section(c, wide, 'main', mainRows(c, repo, now)));
     lines.push(...section(c, wide, 'full run', nightlyRows(c, repo, now)));
+    lines.push(...section(c, wide, 'selection', missRows(c, repo, now)));
     lines.push(...section(c, wide, 'pull', prRows(c, repo)));
     lines.push(...section(c, wide, 'worktrees', worktreeRows(c, repo)));
     if (repo.deploy) lines.push(...section(c, wide, 'deploy', deployRows(c, repo)));
@@ -228,6 +229,28 @@ function nightlyRows(c, repo, now) {
   if (oldest) {
     const more = state.red.length > 1 ? c(`  +${state.red.length - 1} more`, 'grey') : '';
     rows.push(`${c(sinceLine(oldest, now), 'yellow')}  ${oldest.name}${more}`);
+  }
+  return rows;
+}
+
+/**
+ * Tests that landed red because the round's selection did not reach them.
+ *
+ * One row when there are none, so the absence is a reading and not a gap; one
+ * row per miss otherwise, newest first — the test file and the landing that
+ * broke it are the two things somebody fixing the selector needs.
+ */
+function missRows(c, repo, now) {
+  const state = repo.selector_misses;
+  if (!state) return [];
+  if (!state.misses) return [c(`no selector misses in ${state.days} days`, 'grey')];
+  const rows = [c(`${state.misses} selector miss${state.misses === 1 ? '' : 'es'} in ${state.days} days`, 'yellow')];
+  for (const miss of state.recent) {
+    rows.push([
+      c(ago(miss.at, now) || 'just now', 'grey'),
+      miss.pr ? c(`#${miss.pr}`, 'bold') : c(String(miss.commit).slice(0, 7), 'cyan'),
+      miss.file,
+    ].join('  '));
   }
   return rows;
 }

@@ -48,7 +48,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
-import { redNames, tapTotals } from './tap-red.js';
+import { redFiles, redNames, tapTotals } from './tap-red.js';
+import { probeMainRed } from './selector-miss.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { log } from './logger.js';
@@ -134,6 +135,18 @@ export async function runGate({
   holdLease = true,
 } = {}) {
   const startedAt = clock();
+  // Where the repository may keep what it learns about its own tests between
+  // rounds (MC_SELECTION_STATE), and whether this round may write there
+  // (MC_SELECTION_STATE_WRITE). A directory under mc's home per repository,
+  // never inside it: the candidate is thrown away after every round, so a
+  // selector that learns from its runs has nowhere else to keep it. Written
+  // only by a whole-suite run of the default branch as fetched — the nightly,
+  // or a person's `--full` — because that is the one tree that is main and not
+  // somebody's unlanded change. Every round reads it. What goes in it is the
+  // repository's business; mc only gives it a place.
+  env = selectionState(env, {
+    root, repoPath, writes: Boolean(full) && pr == null && !(Array.isArray(prs) && prs.length),
+  });
   // The narration goes two places. `onProgress` is the operator's stderr and
   // scrolls away with the pane; the log keeps it under this run's id, so a
   // round that is killed still says how far it had got and what it had decided
@@ -198,6 +211,10 @@ export async function runGate({
     // a selection ran instead.
     full_suite: null,
     extra_gates: [],
+    // When a round went red: were the red files red on the base too, and which
+    // landing broke them (`selector-miss.js`). Attribution only — the verdict
+    // is decided before it runs. Null on every round that was not red.
+    main_red: null,
     // The pull request's own tests: every `*.test.js` it adds or changes, run
     // on the candidate after the suite (D-0157). `files: []` when it touches
     // none, which is said rather than left blank.
@@ -503,6 +520,10 @@ export async function runGate({
         // The command gates the same answer named. Counted here and listed in
         // `extra_gates`, where every gate this round ran is listed.
         commands: selection.commands.length,
+        // The files themselves, so a later red on main can be checked against
+        // what this round actually ran (`selector-miss.js`). A count cannot
+        // answer "was this test selected?".
+        selected: selection.files,
       };
       say(`selection: ${selection.files.length} test file${selection.files.length === 1 ? '' : 's'} reached by this change`);
       if (selection.files.length === 0) {
@@ -545,7 +566,16 @@ export async function runGate({
     say(`${after.result.red.length} red`);
     if (after.result.red.length) {
       const red = after.result.red;
-      return finish('red', `${red.length} test${red.length === 1 ? '' : 's'} red: ${nameSome(red)}`);
+      // The verdict is already red; this only says whose red it is. Worth a
+      // few seconds on a round that failed, because the other reading is the
+      // one #12107 got: red twice on tests a landed change had broken.
+      if (facts.pr && after.result.red_files?.length) {
+        report.main_red = await timed('main red', () => probeMainRed({
+          git: askGit, tests: runTests, cwd: headDir, baseCommit: report.base.commit, files: after.result.red_files,
+          flags, say, root, repo: repoPath, foundBy: numbers,
+        }));
+      }
+      return finish('red', `${red.length} test${red.length === 1 ? '' : 's'} red: ${nameSome(red)}${mainRedClause(report.main_red)}`);
     }
 
     // A command gate the selection chose is a contract about this diff, and a
@@ -890,7 +920,9 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
   if (!totals.tests) return { ok: false, reason: 'reported no tests at all' };
   return {
     ok: true,
-    result: { commit, is, exit_code: run.code, totals, red: redNames(run.tap), selected: files.length },
+    result: {
+      commit, is, exit_code: run.code, totals, red: redNames(run.tap), red_files: redFiles(run.tap, files), selected: files.length,
+    },
   };
 }
 
@@ -1055,6 +1087,32 @@ function clearWorkspace({ git, repoPath, workspace }) {
   }
   try { git(['worktree', 'prune'], { cwd: repoPath }); } catch { /* nothing to prune */ }
   try { rmSync(workspace, { recursive: true, force: true }); } catch { /* gone */ }
+}
+
+/**
+ * The clause a red reason gains when some of its red was main's already.
+ *
+ * Said in the reason because that is the line a person reads first, and the
+ * question it answers — "is this my change?" — is the first one they ask.
+ */
+export function mainRedClause(probe) {
+  if (!probe?.red_on_main?.length) return '';
+  const count = probe.red_on_main.length;
+  const landings = [...new Set(probe.breaks.map((found) => (found.pr ? `#${found.pr}` : found.commit.slice(0, 7))))];
+  const misses = probe.breaks.filter((found) => found.kind === 'not-selected').length;
+  return ` — ${count} of the red files ${count === 1 ? 'is' : 'are'} red on main too`
+    + (landings.length ? `, broken by ${landings.join(', ')}` : '')
+    + (misses ? ` (${misses === probe.breaks.length ? 'its' : 'partly its'} selection did not reach ${misses === 1 ? 'it' : 'them'}: a selector miss)` : '');
+}
+
+/** The round's environment with the selection state directory in it. */
+export function selectionState(env, { root, repoPath, writes }) {
+  const dir = join(root, 'selection', repoFileSlug(repoPath));
+  try { mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { /* a selector without it selects as before */ }
+  const next = { ...env, MC_SELECTION_STATE: dir };
+  if (writes) next.MC_SELECTION_STATE_WRITE = '1';
+  else delete next.MC_SELECTION_STATE_WRITE;
+  return next;
 }
 
 function seconds(ms) {
