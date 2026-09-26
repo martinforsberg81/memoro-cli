@@ -1168,7 +1168,25 @@ step set ready over an open pull request would be run again on top of it.
   the *whole result* of a session of one or two turns. Session prose that
   merely mentions a quota — a PR body about quota rows, say — is not one. On
   2026-08-29 the broader test slept 30 minutes and left a finished PR
-  unmerged.
+  unmerged. The other way in is claude's own mark: a `result` with
+  `terminal_reason: "api_error"` and status 429, or a limit text, is a quota
+  answer however many turns came before it.
+- **A session the API ended is resumed, not failed.** `apiInterruption` reads
+  that same mark — the API, not the session, ended the turn — into three
+  kinds: `quota` (above), `login` (`Not logged in · Please run /login`) and
+  `server` (a 5xx, `529 Overloaded`). The lane waits it out — the quota pause,
+  the same pause for a lost login since every lane is the same login
+  (`claude is not logged in (`claude /login`) — every lane sleeping 30m`), or
+  five minutes in its own lane for a server error — and then launches
+  `claude -p --resume <session id>` in the same workarea with `resumePrompt`:
+  what the API said, and that nothing was touched in between. The two halves
+  are one row, one stream and one register entry. Not resumed: a session
+  whose step the register no longer calls `running`, one with no session id,
+  one where STOP or UPDATE came during the wait, and the fourth interruption
+  in a row (`RESUME_LIMIT`); those end as before, the step `failed` with the
+  API's words in its reason. (2026-09-13..25: ten sessions ended this way,
+  four of them past 280 turns, and every one was a failed step with its work
+  left uncommitted in the worktree.)
 
 ## What runs beside it
 

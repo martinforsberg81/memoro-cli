@@ -69,6 +69,14 @@ export const DEFAULT_STALL_MINUTES = 20;
 // `sql-w2-search-closure` sat twenty minutes after a successful result).
 export const RESULT_GRACE_MS = 2 * 60 * 1000;
 export const QUOTA_SLEEP_MS = 30 * 60 * 1000;
+// A session the API ended mid-step — a limit, a lost login, a 5xx — is
+// resumed where it stopped rather than failed (`apiInterruption`). Measured
+// 2026-09-13..25: ten such sessions, four of them over 280 turns, each written
+// off as a failed step whose work stood uncommitted in the worktree. A server
+// error is waited out this long in its own lane; three interruptions in a row
+// end the step, whatever each one was.
+export const SERVER_RETRY_MS = 5 * 60 * 1000;
+export const RESUME_LIMIT = 3;
 export const TIMEOUT_EXIT = 142; // what the shell runner's `perl alarm` left in runs.tsv
 
 /* ------------------------------------------------------------------ queue */
@@ -800,7 +808,7 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
  */
 export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
 
-export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true }) {
+export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const instr = profileArgs(toolId, instructions);
   if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...instr, prompt];
@@ -809,12 +817,29 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   const io = stream
     ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
     : ['--output-format', 'json'];
-  return ['-p', ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, '--tools', CLAUDE_TOOLS, '--strict-mcp-config', ...instr, ...io];
+  // `--resume` keeps the session's id and its whole history; the message on
+  // stdin is the next turn of that conversation.
+  const resumed = resume ? ['--resume', resume] : [];
+  return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, '--tools', CLAUDE_TOOLS, '--strict-mcp-config', ...instr, ...io];
 }
 
 /** One stream-json user message, as `deps.session` writes it on claude's stdin. */
 export function userMessageLine(text) {
   return `${JSON.stringify({ type: 'user', message: { role: 'user', content: String(text) } })}\n`;
+}
+
+/**
+ * The message a resumed session gets: the API's own words for why its last
+ * turn ended, and that nothing was done to the workarea in between.
+ */
+export function resumePrompt({ said }) {
+  return [
+    `The runner resumed this session: the API ended your last turn with "${said}".`,
+    'Nothing touched the workarea in between — the files, the branch and anything',
+    'uncommitted are exactly as you left them.',
+    '',
+    'Continue the step from where you stopped. Do not start it over.',
+  ].join('\n');
 }
 
 /**
@@ -1014,15 +1039,18 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   const pick = (v) => (v == null ? '-' : String(v));
   const fewTurns = !(Number(json.num_turns) > 2);
   const text = `${json.result ?? ''}\n${stderr}`;
-  const quota = fewTurns && quotaSeen(text);
+  const interrupted = apiInterruption(json);
+  const quota = interrupted?.kind === 'quota' || (fewTurns && quotaSeen(text));
   return {
+    // Only on a session the API ended: `run.js` resumes it (`RESUME_LIMIT`).
+    ...(quota || interrupted ? { interrupted: quota ? 'quota' : interrupted.kind, said: interrupted?.said ?? null } : {}),
     turns: pick(json.num_turns),
     session: pick(json.session_id),
     input: pick(usage.input_tokens),
     output: pick(usage.output_tokens),
     cacheRead: pick(usage.cache_read_input_tokens),
     cacheWrite: pick(usage.cache_creation_input_tokens),
-    note: quota ? 'quota' : (json.is_error ? 'failed' : pick(json.subtype ?? '-')),
+    note: quota ? 'quota' : (interrupted ? 'interrupted' : (json.is_error ? 'failed' : pick(json.subtype ?? '-'))),
     quota,
     quotaReset: quota ? quotaResetAt(text, now) : null,
   };
@@ -1047,6 +1075,26 @@ function readCodexEvents(stdout) {
 
 export function quotaSeen(text) {
   return /rate limit|usage limit|weekly limit|quota|hit your (?:weekly|daily|5-hour) limit/iu.test(String(text || ''));
+}
+
+/**
+ * Whether a claude `result` is the API ending the session rather than the
+ * session ending its step: `{ kind, said }`, or null.
+ *
+ * claude marks it `terminal_reason: "api_error"`, with the refusal as the
+ * whole `result` — and `subtype: "success"` all the same, so the subtype says
+ * nothing. The ten seen 2026-09-13..25 were `Not logged in · Please run
+ * /login` (4, the same morning), the spend and rate limits (4, status 429) and
+ * `API Error: 500` / `529 Overloaded` (2). `kind` is what waits it out:
+ * `quota` until the reset the refusal names, `login` until somebody logs in,
+ * `server` a few minutes.
+ */
+export function apiInterruption(json) {
+  if (!json || json.terminal_reason !== 'api_error') return null;
+  const said = String(json.result ?? '').trim().split('\n')[0].slice(0, 200);
+  if (json.api_error_status === 429 || quotaSeen(said)) return { kind: 'quota', said };
+  if (/not logged in|\/login/iu.test(said)) return { kind: 'login', said };
+  return { kind: 'server', said };
 }
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];

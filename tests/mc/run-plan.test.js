@@ -6,7 +6,7 @@ import {
   AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, quietPrompt, chooseKind, collectNote,
   describeSettings, describeWatch, headlessArgs, helperDue,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
-  queueFileText, quotaResetAt, quotaSeen,
+  queueFileText, quotaResetAt, quotaSeen, apiInterruption, resumePrompt,
   readSessionOutput, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow, userMessageLine,
 } from '../../src/mc/run-plan.js';
@@ -909,4 +909,53 @@ describe('quotaResetAt', () => {
     const fine = JSON.stringify({ subtype: 'success', num_turns: 9, result: logged });
     assert.equal(readSessionOutput({ toolId: 'claude', stdout: fine, exitCode: 0, now }).quotaReset, null);
   });
+});
+
+/**
+ * The four refusals the API ended step sessions with, 2026-09-13..25, as
+ * claude wrote them: `subtype: "success"`, `is_error`, and
+ * `terminal_reason: "api_error"` — after 44 to 293 turns of work.
+ */
+const apiEnded = (result, extra = {}) => ({ type: 'result', subtype: 'success', is_error: true, num_turns: 286, session_id: 'sid', terminal_reason: 'api_error', result, usage: {}, ...extra });
+
+test('apiInterruption: a limit is quota, a lost login is login, a 5xx is server, a step\'s own end is none', () => {
+  assert.deepEqual(apiInterruption(apiEnded("You've hit your monthly spend limit · raise it at claude.ai/settings/usage", { api_error_status: 429 })),
+    { kind: 'quota', said: "You've hit your monthly spend limit · raise it at claude.ai/settings/usage" });
+  assert.equal(apiInterruption(apiEnded("API Error: This request would exceed your account's rate limit. Please try again later.", { api_error_status: 429 })).kind, 'quota');
+  assert.equal(apiInterruption(apiEnded('Not logged in · Please run /login', { api_error_status: null })).kind, 'login');
+  assert.equal(apiInterruption(apiEnded('API Error: 529 Overloaded. This is a server-side issue, usually temporary', { api_error_status: 529 })).kind, 'server');
+  assert.equal(apiInterruption(apiEnded('API Error: 500 Internal server error.', { api_error_status: 500 })).kind, 'server');
+  assert.equal(apiInterruption({ type: 'result', subtype: 'success', is_error: false, result: 'Step 3 is blocked on a decision.' }), null);
+  assert.equal(apiInterruption({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in' }), null, 'no terminal_reason, no reading');
+  assert.equal(apiInterruption(null), null);
+});
+
+test('readSessionOutput: a long session the API ended is interrupted, and a limit is quota whatever the turn count', () => {
+  const login = readSessionOutput({ toolId: 'claude-code', stdout: JSON.stringify(apiEnded('Not logged in · Please run /login')), exitCode: 0 });
+  assert.equal(login.note, 'interrupted');
+  assert.equal(login.interrupted, 'login');
+  assert.equal(login.said, 'Not logged in · Please run /login');
+  assert.equal(login.quota, false);
+  const limit = readSessionOutput({ toolId: 'claude-code', stdout: JSON.stringify(apiEnded("You've hit your monthly spend limit · your weekly limit resets Sep 25 at 3pm (Europe/Stockholm)", { api_error_status: 429 })), exitCode: 0, now: new Date('2026-09-22T07:00:00Z') });
+  assert.equal(limit.note, 'quota');
+  assert.equal(limit.interrupted, 'quota');
+  assert.equal(limit.quota, true, '286 turns in, still a limit — not the session\'s own word');
+  assert.ok(limit.quotaReset instanceof Date);
+  const own = readSessionOutput({ toolId: 'claude-code', stdout: JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 40, session_id: 'sid', result: 'done', usage: {} }), exitCode: 0 });
+  assert.equal(own.interrupted, undefined);
+  assert.equal(own.note, 'success');
+});
+
+test('headlessArgs: a resumed claude session is -p --resume <id>, the rest unchanged', () => {
+  const adapter = { modelArgs: (m) => ['--model', m] };
+  const fresh = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', instructions: null, prompt: 'do it', profileArgs });
+  const resumed = headlessArgs({ toolId: 'claude-code', adapter, model: 'opus', instructions: null, prompt: 'go on', profileArgs, resume: 'sid' });
+  assert.deepEqual(resumed, ['-p', '--resume', 'sid', ...fresh.slice(1)]);
+});
+
+test('resumePrompt: names what the API said and says the workarea is untouched', () => {
+  const text = resumePrompt({ said: 'Not logged in · Please run /login' });
+  assert.match(text, /"Not logged in · Please run \/login"/u);
+  assert.match(text, /exactly as you left them/u);
+  assert.match(text, /Do not start it over/u);
 });
