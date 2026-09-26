@@ -45,6 +45,7 @@ import { runnerDir } from '../paths.js';
 import { NIGHTLY_INTERVAL_MS, nightlyDue } from '../run-plan.js';
 import { pidAlive } from '../status-collect.js';
 import { listServers } from '../dev-servers.js';
+import { log } from '../logger.js';
 import {
   accountAvailable, answers, callerWorktree, ensureAppServer, ensureDevServer, forgetToken, isLoopback, notInDev, readDeclaration,
   runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
@@ -243,7 +244,25 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
   const probeFor = (suite) => (tierOf(suite) === 'static' && staticServer
     ? staticServer
     : server || { health_url: `${baseUrl}/api/version` });
-  const { results, gone, skipped: neverRan } = await runSuites({
+  // A dev server that leaves mid-round is started again, once, through the
+  // same door that started it; production has nothing mc can start.
+  const revive = where === 'dev' ? async (tier) => {
+    if (tier === 'static' && staticServer) {
+      const ensured = await ensureDevServer(worktree, declaration, { ...deps, service: staticService });
+      if (!ensured.ok) return ensured;
+      staticServer = ensured.server;
+      staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');
+      log('dev-server-revived', { tier, instance_id: staticServer.instance_id, worktree_path: worktree });
+      return { ok: true, baseUrl: staticBaseUrl };
+    }
+    const app = await ensureAppServer(worktree, declaration, { json: opts.json, stdout, deps });
+    if (!app.ok) return app;
+    server = app.server;
+    baseUrl = app.baseUrl;
+    log('dev-server-revived', { tier, instance_id: server.instance_id, worktree_path: worktree });
+    return { ok: true, baseUrl };
+  } : null;
+  const { results, gone, skipped: neverRan, revived } = await runSuites({
     declaration,
     worktree,
     baseUrl,
@@ -256,6 +275,10 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     // asks after its own tier's server, because the other one leaving is not
     // its news.
     stillThere: (suite) => answers(probeFor(suite)),
+    revive,
+    onRevive: opts.json ? null : (tier, result) => stdout.write(
+      `mc: the ${tier} server left mid-round — started a fresh one, ${result.baseUrl}; carrying on\n`,
+    ),
     // A suite is minutes long, so a terminal says which one is running and
     // then overwrites that line with its verdict. A pipe gets the verdict
     // only: a carriage return in a log file is a line nobody can read.
@@ -278,6 +301,7 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
       static_instance_id: staticServer?.instance_id || null,
       server_gone: gone.length > 0,
       gone_tiers: gone,
+      revived_tiers: revived,
       not_in_dev: where === 'dev' ? (declaration.environments?.dev?.not_in_dev || []) : [],
       results,
       never_ran: neverRan,
@@ -307,11 +331,15 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     return 1;
   }
 
-  const green = results.length - red.length - skipped.length;
+  const green = results.length - red.length - skipped.length - unmeasured.length;
   const against = [baseUrl, staticBaseUrl && `static ${staticBaseUrl}`].filter(Boolean).join(', ');
   stdout.write(red.length
-    ? `\nmc: ${red.length} of ${results.length} red against ${against}\n`
+    ? `\nmc: ${red.length} of ${results.length - unmeasured.length} red against ${against}\n`
     : `\nmc: ${green} green against ${against}\n`);
+  // Revived is not the same as never left: the suite that was running when it
+  // went measured nothing, and the round says which tier it had to bring back.
+  if (revived.length) stdout.write(`mc: revived mid-round — ${revived.join(', ')}\n`);
+  if (unmeasured.length) stdout.write(`mc: ${unmeasured.map((r) => r.name).join(', ')} running when it went — unmeasured\n`);
   // A suite that said it did not run is not a pass, and counting it as one is
   // the quiet failure this whole verb exists to stop.
   if (skipped.length) {

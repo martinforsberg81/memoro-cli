@@ -28,7 +28,7 @@
       "check": "Start `mc test dev --here --url`; `kill -STOP` the registered pid; run `mc test dev --here --url` again and paste its output (the `was alive but not answering` line and a new instance id) and the `dev-server-hung` event; `kill -CONT` / clean up afterwards."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A `mc test dev` round whose app server dies once mid-round finishes every suite, reports the one that was running as unmeasured, and says the server was revived.",
       "check": "Start `mc test dev --here`; during the second app-tier suite `kill -9` the server's registered pid; paste the round's output (one `unmeasured`, a `revived` line, the rest measured) and the `dev-server-revived` event."
     }

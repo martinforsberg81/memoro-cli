@@ -552,11 +552,22 @@ export function accountAvailable(declaration, env = process.env) {
  * round of this verb actually produced when memoro's worker exited under it.
  * The other tier goes on: since 2026-09-06 the harness suites have a file
  * server of their own, and the Worker leaving is not their news.
+ *
+ * Unless it can be brought back. `revive(tier)` — given only where mc can start
+ * the server itself — is asked the first time a tier is found gone in a round,
+ * and on `{ ok: true, baseUrl }` the round carries on against the new url: a
+ * suite found gone before it ran runs now, and one that was running when it
+ * went stays unmeasured. Once a round, per tier: a server that leaves twice in
+ * one round has something wrong with it, and the round says so the way it
+ * always did. Measured 12–26 Sep 2026, 141 of 571 memoro dev servers died on
+ * their own, and a fresh one is up in under a minute.
  */
 export async function runSuites({
-  declaration, worktree, baseUrl, staticBaseUrl = null, only = null, env = process.env,
-  stillThere = null, onStart = null, onEnd = null,
+  declaration, worktree, baseUrl: appBaseUrl, staticBaseUrl: staticUrl = null, only = null, env = process.env,
+  stillThere = null, revive = null, onStart = null, onEnd = null, onRevive = null,
 }, deps = {}) {
+  let baseUrl = appBaseUrl;
+  let staticBaseUrl = staticUrl;
   const runOne = deps.spawnSync || spawnSync;
   const now = deps.now || (() => Date.now());
   const chosen = only
@@ -573,13 +584,32 @@ export async function runSuites({
   // which is where every suite ran before there were tiers.
   const urlFor = (suite) => (tierOf(suite) === 'static' && staticBaseUrl ? staticBaseUrl : baseUrl);
   const there = async (suite) => (stillThere ? stillThere(suite) : true);
+  const tried = new Set();
+  const revived = [];
+  // True when the tier has a new server to carry on against; otherwise the
+  // tier is gone for the rest of the round, as it always was.
+  const brought = async (tier) => {
+    if (revive && !tried.has(tier)) {
+      tried.add(tier);
+      const result = await revive(tier);
+      if (result?.ok) {
+        revived.push(tier);
+        if (tier === 'static' && staticBaseUrl) staticBaseUrl = result.baseUrl;
+        else baseUrl = result.baseUrl;
+        onRevive?.(tier, result);
+        return true;
+      }
+    }
+    gone.add(tier);
+    return false;
+  };
 
   for (const suite of chosen) {
     const tier = tierOf(suite);
     if (gone.has(tier)) { neverRan.push(suite.name); continue; }
     // Before, so a round that cannot measure anything says that instead of
     // spending six minutes proving it one suite at a time.
-    if (!await there(suite)) { gone.add(tier); neverRan.push(suite.name); continue; }
+    if (!await there(suite) && !await brought(tier)) { neverRan.push(suite.name); continue; }
 
     onStart?.(suite);
     const startedAt = now();
@@ -613,7 +643,7 @@ export async function runSuites({
         tail: tailOf(finished),
       });
       onEnd?.(results.at(-1));
-      gone.add(tier);
+      await brought(tier);
       continue;
     }
 
@@ -635,7 +665,9 @@ export async function runSuites({
     onEnd?.(result);
   }
 
-  return { results, gone: [...gone], skipped: neverRan };
+  // A tier revived and then lost again is in both: it was brought back once,
+  // and it still went.
+  return { results, gone: [...gone], skipped: neverRan, revived };
 }
 
 function tailOf(finished, lines = 12) {

@@ -266,6 +266,27 @@ stopped but swept: the next listing removes the registration and logs
 `started_at` and `age_s` (whole seconds since `started_at`, null when it does
 not parse). That line is the only record of a server that died on its own.
 
+## Supervision
+
+A `mc test dev` round asks each suite's tier whether its server still answers
+before the suite runs, and again after any suite that went red. A suite that was
+running when its server left is reported unmeasured (`GONE`), never red.
+
+The first time in a round a tier is found gone, mc starts it again through the
+same door that started it — `ensureDevServer` for the static tier, the app-tier
+start for the app — and carries on against the new url. It says `mc: the <tier>
+server left mid-round — started a fresh one, <url>; carrying on`, logs
+`dev-server-revived` with `tier`, `instance_id` and `worktree_path`, and the
+round's report adds `mc: revived mid-round — <tiers>` (`revived_tiers` in
+`--json`). The suite that was running stays unmeasured; a suite found gone
+before it ran runs against the fresh server. A round whose every measured suite
+is green exits 0.
+
+Once per tier per round. A start that fails, or the same tier leaving a second
+time, ends that tier as before: `mc: <url> (<tier>) stopped answering`, its
+remaining suites listed as never ran, exit 1. `mc test prod` revives nothing —
+there is nothing mc can start there.
+
 ## Safety contract
 
 mc does not signal a registered server — admission included: a server that is refused
