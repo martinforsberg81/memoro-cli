@@ -29,7 +29,7 @@ import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
 import { ensureWorkDeps } from './work-deps.js';
-import { branchLanded } from './branch-landed.js';
+import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { stopServersUnder } from './dev-servers.js';
 
 /**
@@ -360,34 +360,51 @@ export function directoryInUse(path) {
   return [...new Set(names)];
 }
 
-export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}) {
+/**
+ * May this one worktree go? `{ remove: true, what, landed_by }` or
+ * `{ remove: false, why }` — pure: whether something stands in it and what
+ * GitHub says are handed in, so every rule is testable without either.
+ */
+export function releaseVerdict(worktree, { inUse = null, pullAtTip = () => null } = {}) {
+  if (!worktree.is_git) return { remove: true, what: 'directory', landed_by: null };
+  if (inUse && inUse.length) return { remove: false, why: `in use by ${inUse.join(', ')}` };
+  if (worktree.uncommitted > 0) return { remove: false, why: `${worktree.uncommitted} uncommitted` };
+  // Content, not commits: a squash-merged branch has commits main lacks
+  // and nothing main lacks. Kept only for real work or a real doubt, and
+  // the why says which (2026-08-24: twelve landed areas refused cleaning).
+  // 'ahead' is never sent to GitHub: a different tree is real work here,
+  // whatever GitHub says about an earlier head.
+  if (worktree.unmerged_commits > 0 && worktree.landed === 'ahead') {
+    return { remove: false, why: `${worktree.unmerged_commits} commit${worktree.unmerged_commits === 1 ? '' : 's'} main lacks` };
+  }
+  if (worktree.unmerged_commits > 0 && worktree.landed !== 'landed') {
+    // A conflict is a doubt the content check cannot settle; GitHub can,
+    // when the tip is exactly the head of a merged pull request (2026-09-26:
+    // 29 areas kept as "cannot tell", every one merged at its tip).
+    const pull = pullAtTip(worktree);
+    if (pull) return { remove: true, what: 'worktree and branch', landed_by: { pr: pull.number } };
+    return { remove: false, why: `cannot tell whether main has this content — its merge against origin/main conflicts; left for a person` };
+  }
+  return { remove: true, what: 'worktree and branch', landed_by: null };
+}
+
+export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = null } = {}) {
   const area = inspectWorkArea(name, env);
   const removed = [];
   const kept = [];
+  const pullAtTip = (wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {});
   for (const worktree of area.worktrees) {
-    if (!worktree.is_git) {
+    const verdict = releaseVerdict(worktree, {
+      inUse: worktree.is_git ? directoryInUse(worktree.path) : null,
+      pullAtTip,
+    });
+    if (!verdict.remove) {
+      kept.push({ ...worktree, why: verdict.why });
+      continue;
+    }
+    if (verdict.what === 'directory') {
       if (!dryRun) rmSync(worktree.path, { recursive: true, force: true });
       removed.push({ ...worktree, what: 'directory' });
-      continue;
-    }
-    const inUse = directoryInUse(worktree.path);
-    if (inUse) {
-      kept.push({ ...worktree, why: `in use by ${inUse.join(', ')}` });
-      continue;
-    }
-    if (worktree.uncommitted > 0) {
-      kept.push({ ...worktree, why: `${worktree.uncommitted} uncommitted` });
-      continue;
-    }
-    // Content, not commits: a squash-merged branch has commits main lacks
-    // and nothing main lacks. Kept only for real work or a real doubt, and
-    // the why says which (2026-08-24: twelve landed areas refused cleaning).
-    if (worktree.unmerged_commits > 0 && worktree.landed === 'ahead') {
-      kept.push({ ...worktree, why: `${worktree.unmerged_commits} commit${worktree.unmerged_commits === 1 ? '' : 's'} main lacks` });
-      continue;
-    }
-    if (worktree.unmerged_commits > 0 && worktree.landed !== 'landed') {
-      kept.push({ ...worktree, why: `cannot tell whether main has this content — its merge against origin/main conflicts; left for a person` });
       continue;
     }
     if (!dryRun) {
@@ -398,7 +415,7 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
       // clean. The content check above is the safety.
       if (worktree.branch) run(['--git-dir', common, 'branch', '-D', worktree.branch]);
     }
-    removed.push({ ...worktree, what: 'worktree and branch' });
+    removed.push({ ...worktree, what: 'worktree and branch', ...(verdict.landed_by ? { landed_by: verdict.landed_by } : {}) });
   }
   // A directory removed outside mc leaves git holding a registration for it.
   // That is git's own bookkeeping and git's own broom — mc calls it rather
