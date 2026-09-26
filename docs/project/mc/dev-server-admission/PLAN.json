@@ -18,17 +18,17 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "With two app servers live, `mc dev admit` for a third worktree refuses with both holders named; with one live it admits at once.",
       "check": "Two memoro worktrees each `mc test dev --here --url`; from a third, `mc dev admit memoro-measure --worktree <third> --wait 0 --json`; stop one; ask again. Paste both."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc test dev --here` in a third worktree waits while two are live, prints who holds the slots once a minute, and starts as soon as one stops.",
       "check": "As above, run it with two live; stop one after ~70 s; paste the output with the waiting lines and the start."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Low memory refuses with reason `memory`.",
       "check": "`MC_DEV_MIN_FREE_PERCENT=101 mc dev admit memoro-measure --worktree <any> --wait 0 --json`; paste it."
     }

@@ -518,6 +518,7 @@ describe('bringing one up', () => {
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      freeMemory: () => null,
       now,
       sleep,
       spawn: () => { registerServer(root, worktree, { port: 8900 }); return { unref() {} }; },
@@ -542,6 +543,7 @@ describe('bringing one up', () => {
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      freeMemory: () => null,
       now,
       sleep,
       registerTimeoutMs: 5_000,
@@ -563,6 +565,7 @@ describe('bringing one up', () => {
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      freeMemory: () => null,
       now,
       sleep,
       spawn: () => { registerServer(root, worktree, { port: 8900 }); return { unref() {} }; },
@@ -588,6 +591,7 @@ describe('bringing one up', () => {
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      freeMemory: () => null,
       spawn: () => { spawned += 1; return { unref() {} }; },
     });
 
@@ -638,6 +642,7 @@ describe('two tiers', () => {
     const started = [];
     const ensured = await ensureDevServer(worktree, TIERED_DECLARATION, {
       root,
+      freeMemory: () => null,
       service: 'memoro-static',
       sleep: async () => {},
       now: (() => { let t = 0; return () => { t += 1000; return t; }; })(),
@@ -724,6 +729,7 @@ describe('a service built from a tree that is gone', () => {
     const spawned = [];
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      freeMemory: () => null,
       git: git('bbbbbbbbbb2222'),
       stopServer: (server) => { stopped.push(server.instance_id); return { ok: true, instance_id: server.instance_id }; },
       sleep: async () => {},
@@ -748,7 +754,7 @@ describe('a service built from a tree that is gone', () => {
     registerServer(root, worktree, { port: 8900, extra: { built_from: { commit: 'aaaaaaaaaa1111' } } });
     let spawned = 0;
     const ensured = await ensureDevServer(worktree, DECLARATION, {
-      root, git: git('aaaaaaaaaa1111'), spawn: () => { spawned += 1; return { unref() {} }; },
+      root, freeMemory: () => null, git: git('aaaaaaaaaa1111'), spawn: () => { spawned += 1; return { unref() {} }; },
     });
     assert.equal(ensured.started, false);
     assert.equal(spawned, 0);
@@ -794,5 +800,59 @@ describe('what does not work in dev', () => {
     assert.equal(read.ok, false);
     assert.match(read.error, /not_in_dev is a list of \{ name, why \}/u);
     rmSync(worktree, { recursive: true, force: true });
+  });
+});
+
+describe('admission before a start', () => {
+  // `mc dev admit` decides whether one more server may start; ensureDevServer
+  // asks it before it spawns, and tells the child it was admitted so a wrapper
+  // that asks for itself does not ask twice.
+  it('does not spawn when admission refuses', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    let spawned = 0;
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      admit: async () => ({
+        ok: false,
+        reason: 'cap',
+        holders: [
+          { instance_id: 'dev-a', service: 'memoro-worker', worktree_path: '/tmp/a', started_at: null, url: null },
+          { instance_id: 'dev-b', service: 'memoro-worker', worktree_path: '/tmp/b', started_at: null, url: null },
+        ],
+        free_percent: 40,
+        cap: 2,
+      }),
+      spawn: () => { spawned += 1; return { unref() {} }; },
+    });
+    assert.equal(ensured.ok, false);
+    assert.equal(spawned, 0);
+    assert.match(ensured.error, /2 of 2 app servers already running — dev-a \(\/tmp\/a\), dev-b \(\/tmp\/b\)/u);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('spawns with MC_DEV_ADMITTED=1 when admission says yes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    let asked = null;
+    let env = null;
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      now: () => 0,
+      sleep: async () => {},
+      admit: async (question) => { asked = question; return { ok: true }; },
+      spawn: (command, args, options) => {
+        env = options.env;
+        registerServer(root, worktree, { port: 8900 });
+        return { unref() {} };
+      },
+      fetch: async () => ({ ok: true }),
+    });
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.equal(env.MC_DEV_ADMITTED, '1');
+    assert.equal(asked.service, 'memoro-worker');
+    assert.equal(asked.worktree, worktree);
+    assert.equal(asked.waitSeconds, 900);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 });
