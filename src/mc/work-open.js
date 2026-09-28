@@ -52,12 +52,18 @@ export async function openInWorkArea({
   // outlives this launch has to (see `roleRecord`).
   roleName = null,
   roleSource = null,
+  // Whether a conversation launched in a directory below the root is one of
+  // this area's. For a work area it is: that is where its worktrees are. The
+  // brief stands in the work root, and every other session is below it — so
+  // the newest of them, whatever it was, was the one `mc brief` resumed.
+  nested = true,
   env = process.env,
   spawn = spawnSync,
   register = registerForeground,
   loadProfile: readProfile = loadProfile,
 } = {}) {
-  const before = listConversations(areaRoot, env);
+  const before = listConversations(areaRoot, env)
+    .filter((item) => nested || item.cwd === areaRoot);
 
   // A named conversation decides its own tool: asking for one by id and being
   // given a different tool's conversation would be a worse answer than either.

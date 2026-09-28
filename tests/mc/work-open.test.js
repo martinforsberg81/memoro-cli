@@ -125,6 +125,37 @@ describe('openInWorkArea and --model', () => {
   });
 });
 
+describe('openInWorkArea and conversations below the root', () => {
+  /** A Claude conversation launched in `<area>/plan/staff`, not in the area. */
+  function below() {
+    const { areaRoot, worktree, env } = fixture();
+    const cwd = join(areaRoot, 'plan', 'staff');
+    const projectDir = join(env.CLAUDE_CONFIG_DIR, 'projects', cwd.replace(/[/.]/gu, '-'));
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(
+      join(projectDir, `${CONVERSATION_ID}.jsonl`),
+      `${JSON.stringify({ cwd, type: 'user', message: { content: 'first' } })}\n`,
+    );
+    return { areaRoot, worktree, env };
+  }
+
+  it('resumes one by default — a work area\'s worktrees are below it', async () => {
+    const { areaRoot, worktree, env } = below();
+    const { calls, options } = opening();
+    const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
+    assert.equal(result.resumed, true);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID]);
+  });
+
+  it('starts a new one with nested: false, as the brief in the work root does', async () => {
+    const { areaRoot, worktree, env } = below();
+    const { calls, options } = opening();
+    const result = await openInWorkArea({ areaRoot, worktree, env, nested: false, ...options });
+    assert.equal(result.resumed, false);
+    assert.deepEqual(calls[0].args, ['--append-system-prompt', 'PROFILE']);
+  });
+});
+
 describe('openInWorkArea in a role area', () => {
   // The shared text every role session is told rides between the two: the
   // profile is the user's, the shared text is every role's, the overlay is

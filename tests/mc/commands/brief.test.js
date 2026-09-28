@@ -155,6 +155,15 @@ describe('mc brief', () => {
     assert.equal(seen.resumePrompt, undefined);
   });
 
+  // The brief stands in the work root and every other session is below it;
+  // counting those made `mc brief` resume the newest planning session.
+  it('resumes only a conversation launched in the work root itself', async () => {
+    const { stdout, stderr } = io();
+    let seen = null;
+    await run([], { stdout, stderr, open: async (o) => { seen = o; return { ok: true, code: 0 }; } });
+    assert.equal(seen.nested, false);
+  });
+
   it('prints nothing of its own before the session opens', async () => {
     const { out, stdout, stderr } = io();
     await run([], { stdout, stderr, open: async () => ({ ok: true, code: 0 }) });

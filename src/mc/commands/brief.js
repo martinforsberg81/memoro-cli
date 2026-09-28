@@ -49,6 +49,9 @@ export async function run(argv, deps = {}) {
     worktree: { repo: null, path: root, is_git: false },
     tool: flags.tool || role.tools?.[0] || 'claude',
     pick: flags.new ? 'new' : null,
+    // Every planning, intake and helper session is launched below the work
+    // root; only one launched in it is the brief's.
+    nested: false,
     // NOW says "mc brief" while this is up. It stands in the work root, which
     // is nobody's area, so there is no name to give it.
     verb: 'brief',
