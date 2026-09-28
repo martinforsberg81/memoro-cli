@@ -152,6 +152,16 @@ export function planHome(env = process.env) {
 }
 
 /**
+ * `~/mc/brief/` — where the brief session stands. Not the work root: every
+ * other session is launched somewhere below that, and a session resumes the
+ * newest conversation at or below where it stands, so from the root the brief
+ * opened whichever planning session had been used last.
+ */
+export function briefDir(env = process.env) {
+  return join(workRoot(env), 'brief');
+}
+
+/**
  * Best-effort detection of whether MC_HOME exists. Callers create it lazily
  * on first write.
  */

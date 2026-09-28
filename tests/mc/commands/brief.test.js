@@ -4,6 +4,7 @@
  * meeting.`; nothing is gathered for it.
  */
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { briefLaunch, run } from '../../../src/mc/commands/brief.js';
@@ -128,15 +129,16 @@ describe('the brief role', () => {
 });
 
 describe('mc brief', () => {
-  it('opens the conversation in the work root, foreground, with the overlay and no gathered document', async () => {
+  it('opens the conversation in ~/mc/brief, foreground, with the overlay and no gathered document', async () => {
     const { stdout, stderr } = io();
     let seen = null;
     const code = await run(['--model', 'fable'], {
       stdout, stderr, open: async (o) => { seen = o; return { ok: true, code: 0 }; },
     });
     assert.equal(code, 0);
-    assert.equal(seen.areaRoot, process.env.MC_WORK_ROOT);
-    assert.equal(seen.worktree.path, process.env.MC_WORK_ROOT);
+    // Its own room, not the work root every other session is launched below.
+    assert.equal(seen.areaRoot, join(process.env.MC_WORK_ROOT, 'brief'));
+    assert.equal(seen.worktree.path, join(process.env.MC_WORK_ROOT, 'brief'));
     assert.equal(seen.verb, 'brief');
     assert.equal(seen.roleName, 'brief');
     // The brief session there is resumed; `--new` is the only fresh start.
