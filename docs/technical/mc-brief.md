@@ -72,9 +72,12 @@ allowed through the adapter, the Coding Profile appended, then
 assembled like every other session's ([`mc-roles.md`](mc-roles.md)). NOW says
 `brief` for exactly as long as it holds the terminal. A missing role is exit 1.
 
-It stands in `~/mc`, the work root, and not in a repository. Giving it a
-worktree would only put a branch under a conversation that must never commit
-anything.
+It stands in `~/mc/brief/`, and not in a repository. Giving it a worktree
+would only put a branch under a conversation that must never commit anything.
+Not in `~/mc` either, the work root it stood in until 2026-09-28: a session
+resumes the newest conversation at or below where it stands, and every
+planning, intake and helper session is below the root — so `mc brief` opened
+whichever of them had been used last.
 
 The role tells it to take the decisions **one at a time**, each as a proposal
 Martin says GO to — never a menu of options, and never a question it has not
@@ -163,7 +166,7 @@ the proposal is waiting on rather than what it said the day it was written.
 ## How it is tested
 
 `tests/mc/commands/brief.test.js` covers the verb: that it opens the foreground
-conversation in the work root with the overlay and `Start the meeting.`, that
+conversation in `~/mc/brief/` with the overlay and `Start the meeting.`, that
 a resumed session is handed no prompt, that `--new` starts a fresh one, that
 `--collect` and `--offline` exit 2, and that the overlay asks for a proposal
 rather than a menu and says where the ground is read. It reads the overlay

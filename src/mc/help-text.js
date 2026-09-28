@@ -293,7 +293,7 @@ IN FULL
                                     with the lease each left behind. It only
                                     reads: releasing one stays your decision
   mc brief [--new]                 The evaluation session: opens (or
-                                    resumes) the brief in the work root with
+                                    resumes) the brief in ~/mc/brief/ with
                                     its role and gathers nothing — it reads
                                     the page, mc status and mc step itself
   mc helper                        The desk: a session in ~/mc/helper/ that
