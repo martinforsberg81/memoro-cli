@@ -7,8 +7,11 @@ questions pile up anyway — a failed step, a project archived with no note, a
 folder under `~/mc` no plan explains, a proposal the helper wrote — and until
 they are put to the one person who can answer them, they are invisible.
 
-This verb opens the session that puts them. That is the whole of it: **the
-foreground brief session, with the `brief` role and no gathered document.**
+This verb opens the session Martin puts them to. That is the whole of it: **the
+foreground brief session, with the `brief` role, no gathered document and no
+opening words.** Martin types the first message and says what he wants help
+with — the runner, the proposals, or something else — and the session does
+that and nothing more.
 Nothing is resident — no daemon, no watcher, no inbox — and the runner does
 not know the verb exists. The code is
 [`src/mc/commands/brief.js`](../../src/mc/commands/brief.js), which is a
@@ -43,16 +46,14 @@ still used.)
 
 ## Where the session reads the ground
 
-[`canon/roles/brief.md`](../../canon/roles/brief.md) opens by saying nothing is
-gathered for it and where each thing lives:
-
-| the ground | where |
-|---|---|
-| the runner, the queue, failed and blocked steps, the intake, the workareas | `mc --fresh`, the page — read first |
-| one project | `mc status <name>`, `mc step <project>` |
-| proposals | `ls ~/mc/proposals/` — names only; `archive/` is a directory |
-| the runner's three questions | `~/mc/runner/undocumented-closures.md`, `unplanned-workareas.md`, `unreadable-plans.md` |
-| what landed | `gh pr list --state merged` in each repository |
+[`canon/roles/brief.md`](../../canon/roles/brief.md) is a few lines: do what
+Martin asks and change nothing he has not asked for; that it may do every part
+of the work — write a plan, write or drop a proposal, get a blocked or failed
+step moving, fix and land a small problem in the code; and where to read — `mc
+--fresh`, `mc status <name>`, `mc step <project>`, `~/mc/proposals/`,
+`~/memoro-cli`. It includes `_plan-writing.md`, as `mc plan` does. Everything else a session needs comes from
+`canon/roles/_common.md`; the role was cut to that on 2026-09-28 (Martin:
+"för lång och babblig").
 
 A file the runner has never written and a file it wrote and left empty are two
 answers, and the session is to read them as two: "the runner has not written
@@ -65,7 +66,9 @@ The verb opens **an ordinary foreground terminal program** — `spawn` with
 ([`src/mc/work-open.js`](../../src/mc/work-open.js)) — not tmux. The brief
 session already there is resumed where it was (`pick: null`), with no prompt
 of its own, as `mc helper` is; a fresh one starts on `--new`, or when there is
-none, with `Start the meeting.` as its first words (Martin, 2026-09-13; the
+none, with no opening words: Martin types the first message (2026-09-28 —
+`Start the meeting.`, from 2026-09-13, sent it walking the whole page and
+unblocking steps on its own reading before he had asked for anything; the
 resume prompt went 2026-09-19). Opus by default from the role, `--codex`
 allowed through the adapter, the Coding Profile appended, then
 `canon/roles/_common.md` and the overlay from `canon/roles/brief.md` —
@@ -78,11 +81,6 @@ Not in `~/mc` either, the work root it stood in until 2026-09-28: a session
 resumes the newest conversation at or below where it stands, and every
 planning, intake and helper session is below the root — so `mc brief` opened
 whichever of them had been used last.
-
-The role tells it to take the decisions **one at a time**, each as a proposal
-Martin says GO to — never a menu of options, and never a question it has not
-read the code behind. If it cannot name one thing to do, the question is not
-ready and it says so. It ends when the lists are empty or Martin says stop.
 
 ## How an answer travels
 
@@ -102,11 +100,11 @@ the shape with it.
 ### When the brief itself is the writer
 
 One case does not wait for whoever next opens the plan. A blocked step the
-brief settles by reading is answered in the session that read it, and that
+brief settles by reading, once Martin has asked it to, is answered in the
+session that read it, and that
 makes the brief a fourth writer beside the step session, the planning session
 and the runner ([`docs/project/README.md`](../project/README.md) § *Who writes
-what*). It reaches `main` by a route the role names, because a route that is
-not written down will not be taken:
+what*). It reaches `main` by this route:
 
 - **One pull request per repository per brief**, not one per unblocked step.
   Every unblocking that brief made travels together and reads as one decision.
@@ -166,15 +164,14 @@ the proposal is waiting on rather than what it said the day it was written.
 ## How it is tested
 
 `tests/mc/commands/brief.test.js` covers the verb: that it opens the foreground
-conversation in `~/mc/brief/` with the overlay and `Start the meeting.`, that
+conversation in `~/mc/brief/` with the overlay and no opening words, that
 a resumed session is handed no prompt, that `--new` starts a fresh one, that
-`--collect` and `--offline` exit 2, and that the overlay asks for a proposal
-rather than a menu and says where the ground is read. It reads the overlay
-itself rather than a copy of it. `tests/mc/brief-collect.test.js` covers the
+`--collect` and `--offline` exit 2. The role's own text is not tested
+(Martin, 2026-09-28). `tests/mc/brief-collect.test.js` covers the
 shared readers on fixtures: the proposal listing, plan frontmatter,
 `cat-file --batch` framing on bytes rather than characters, and `runsFor`.
 
 **Not measured:** the interactive launch itself. No headless session can
 watch a program take the terminal, so what is verified is that the right
 argv is built and spawned with `stdio: 'inherit'`; that the session opens
-and reads the page first is Martin's to see, once.
+and waits for him is Martin's to see, once.

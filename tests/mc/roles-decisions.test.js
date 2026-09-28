@@ -105,17 +105,6 @@ describe('the decision shape every role writes', () => {
     assert.match(overlay, phrase('leaves a PR it will not merge'));
     assert.doesNotMatch(overlay, /set\s+your step `done`/u, 'mc merge writes done; the file is not where it goes');
   });
-
-  /**
-   * The brief is the other side of the same rule: it is the session sitting
-   * in front of Martin, and it is the one that failed on 2026-08-29.
-   */
-  it('brief refuses the menu and refuses an unread question', () => {
-    const { overlay } = readCanonRole('brief');
-    assert.match(overlay, phrase('says GO to'));
-    assert.match(overlay, phrase('Never lay out options for him to choose between'));
-    assert.match(overlay, phrase('is not his to answer'));
-  });
 });
 
 /**
