@@ -4,8 +4,8 @@
  * Opens the foreground brief session — the terminal's, never tmux — standing
  * in `~/mc/brief/`. A brief session already there is resumed where it was; with
  * none, or with `--new`, a fresh one starts with the Coding Profile and the
- * `brief` role from `canon/roles/brief.md`, and `Start the meeting.` as its
- * opening words. Nothing is gathered for it: the ground is read where it lives
+ * `brief` role from `canon/roles/brief.md`, and no opening words — Martin types
+ * the first message. Nothing is gathered for it: the ground is read where it lives
  * — the page, `mc status`, `mc step` — and the role says where. Until
  * 2026-09-19 a script (`mc brief --collect`) wrote `~/mc/brief/<date>.md` and
  * handed the text over as the first words; it was a second copy of what the
@@ -73,7 +73,11 @@ export async function run(argv, deps = {}) {
   return opened_.code ?? 0;
 }
 
-/** What the session is told: the role as written, and that the meeting starts. */
+/**
+ * What the session is told: the role as written, and no opening words. Martin
+ * says what he wants help with; `Start the meeting.` sent it walking the whole
+ * page on its own (Martin, 2026-09-28).
+ */
 export function briefLaunch({ role }) {
-  return { overlay: role.overlay, prompt: 'Start the meeting.', model: role.model || null };
+  return { overlay: role.overlay, prompt: null, model: role.model || null };
 }

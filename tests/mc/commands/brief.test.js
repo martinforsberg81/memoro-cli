@@ -1,7 +1,7 @@
 /**
  * `mc brief` — the session: the brief role ships with mc, the verb opens the
- * foreground conversation in the work root with the overlay and `Start the
- * meeting.`; nothing is gathered for it.
+ * foreground conversation in ~/mc/brief with the overlay and no opening
+ * words — Martin types the first message; nothing is gathered for it.
  */
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
@@ -15,115 +15,10 @@ function io() {
   return { out, stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } } };
 }
 
-describe('the brief role', () => {
-  /**
-   * A decision is put to Martin as one proposal he says GO to. The overlay
-   * that told the session to lay out "the options in one line each" is the
-   * reason a brief could open with six unrelated menus; it says the opposite
-   * now, and forbids a question the session has not read the code behind.
-   */
-  it('forbids the menu, and demands the code was read', () => {
-    const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /says\s+GO\s+to/u);
-    assert.match(overlay, /Never\s+lay\s+out\s+options\s+for\s+him\s+to\s+choose\s+between/u);
-    assert.match(overlay, /the\s+code\s+it\s+stands\s+on/u);
-    assert.doesNotMatch(overlay, /the\s+options\s+in\s+one\s+line\s+each/u);
-  });
-
-  /**
-   * The two lists the tidying leaves — `mc run` writes both files and reads
-   * neither, so the brief is where they are raised. The overlay has to say
-   * where they are read, and the one thing that is not obvious from a row:
-   * the session removes nothing itself.
-   */
-  it('walks what the tidying left, and removes nothing itself', () => {
-    const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /~\/mc\/runner\/undocumented-closures\.md/u);
-    assert.match(overlay, /`unplanned-workareas\.md`/u);
-    assert.match(overlay, /`unreadable-plans\.md`/u);
-    assert.match(overlay, /`branch: landed`/u);
-    assert.match(overlay, /You remove nothing\./u);
-  });
-
-  /**
-   * A pull request the runner would not land is the brief's — and the overlay
-   * has to say what an answer to one looks like, because the three of them
-   * are all the session may do.
-   */
-  it('takes the pull requests the runner would not land, one proposal each', () => {
-    const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /a\s+step\s+`mc step <project>`\s+shows\s+as\s+failed/u);
-    assert.match(overlay, /`mc merge <repo> <pr>`/u);
-    assert.match(overlay, /`gh pr close`/u);
-    assert.match(overlay, /`mc step blocked --on <decision>`/u);
-    assert.match(overlay, /One proposal per pull request, never a menu/u);
-  });
-
-  /**
-   * The other half of the same waiting: a plan that says `ready` and a machine
-   * that will not start it. A held pull request there takes the three answers
-   * above; a workarea somebody killed takes a person opening it — and the one
-   * thing the session must be told is that the person is not it.
-   */
-  it('proposes what is waiting on hands, and touches no workarea itself', () => {
-    const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /`ready`\s+step\s+the\s+runner\s+cannot\s+start/u);
-    assert.match(overlay, /you touch none of them/u);
-    assert.match(overlay, /`git\n?restore`/u);
-  });
-
-  /**
-   * The third section of that family, and the largest: 45 blocked steps on
-   * `origin/main` when this was written. Three kinds, three answers, and a
-   * session that had only ever read the role has to take the same three — a
-   * project blocker it leaves alone, a `plan-review` it hands to the
-   * programme's planning session, a named decision it works itself.
-   */
-  it('takes the blocked steps, and knows which of the three it settles', () => {
-    const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /Blocked\s+steps\s+are\s+the\s+third/u);
-    assert.match(overlay, /project\s+blocker\*{2}\s+is\s+sequencing/u);
-    assert.match(overlay, /`mc\s+plan\s+<programme>`/u);
-    assert.match(overlay, /named\s+decision\*{2}\s+is\s+the\s+list\s+you\s+actually\s+work/u);
-    // The way back is a register write with the reason beside it, never a plan edit.
-    assert.match(overlay, /`mc\s+step\s+ready\s+<project>\s+<n>\n?\s*--reason/u);
-    assert.match(overlay, /failed\s+step\*{2}\s+is\s+the\s+runner's\s+writing/u);
-  });
-
-  /**
-   * The route, which is the part no other section needs: the brief has no
-   * workarea, so where its own edit goes and how it lands has to be in the
-   * role or it will not be taken. One pull request per repository per brief,
-   * landed by the session with `--docs`, and the two names that keep the
-   * runner from mistaking it for a project's own work.
-   */
-  it('says how its own unblocking reaches main', () => {
-    const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /~\/mc\/brief\/unblock\/<repo>/u);
-    assert.match(overlay, /`brief\/unblock-<date>`/u);
-    assert.match(overlay, /`mc\s+merge\s+<repo>\s+<pr>\s+--docs`/u);
-    assert.match(overlay, /one\s+per\s+repository\s+per\s+brief/u);
-    assert.match(overlay, /Land\s+it\s+before\s+the\s+brief\n?ends/u);
-  });
-
-  /**
-   * The role opens by saying nothing is gathered and where the ground is read:
-   * the page first, then the per-project verbs, the proposals, the runner's
-   * three tables and what landed.
-   */
-  it('says where the ground is read, and that nothing is gathered', () => {
-    const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /Nothing\s+is\s+gathered\s+for\s+you/u);
-    assert.match(overlay, /`mc --fresh`/u);
-    assert.match(overlay, /`mc status <name>`/u);
-    assert.match(overlay, /`ls ~\/mc\/proposals\/`/u);
-    assert.match(overlay, /`gh pr list --state\s+merged`/u);
-    assert.doesNotMatch(overlay, /~\/mc\/brief\/<date>\.md/u);
-  });
-
-  it('opens with the meeting and the role, and nothing gathered', () => {
+describe('the brief launch', () => {
+  it('opens with the role and no words of its own', () => {
     const launch = briefLaunch({ role: readCanonRole('brief') });
-    assert.equal(launch.prompt, 'Start the meeting.');
+    assert.equal(launch.prompt, null);
     assert.equal(launch.model, 'opus');
   });
 });
@@ -147,7 +42,7 @@ describe('mc brief', () => {
     assert.equal(seen.model, 'fable');
     assert.equal(seen.defaultModel, 'opus');
     assert.match(seen.overlay, /^You are the brief session/u);
-    assert.equal(seen.prompt, 'Start the meeting.');
+    assert.equal(seen.prompt, null);
   });
 
   it('resumes with no prompt of its own — it is where it was', async () => {
