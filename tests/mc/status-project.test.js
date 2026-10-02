@@ -233,6 +233,22 @@ describe('collectProject', () => {
     assert.match(renderProject(data), /#427 is waiting for the gate \(since 09-06 18:00Z\) — another gate round is running/u);
   });
 
+  it('does not call a pull request queued when the mc merge waiting for it is gone', async () => {
+    const root = workRoot();
+    writeFileSync(join(root, 'runner', 'merges.json'), JSON.stringify([{
+      repo: 'memoro-cli', pr: 427, branch: 'mc-status-2', reason: 'another gate round is running',
+      stopped_at: 'busy', since: '2026-09-06T18:00:00Z', holder: 'martin@laptop', pid: 424242,
+    }]));
+    const data = await collectProject('mc-status', {
+      env: { MC_WORK_ROOT: root },
+      repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
+      offline: true,
+      git,
+      alive: () => false,
+    });
+    assert.deepEqual(data.queued, []);
+  });
+
   /**
    * The gate round itself, ahead of the queue: a pull request already landing
    * is not merely going to move, it is moving right now, and a check-mode

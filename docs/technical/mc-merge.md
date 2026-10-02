@@ -489,7 +489,11 @@ minutes — a session's own Bash call is capped at ten) it prints `mc: still
 waiting behind … after 8 min — run this again; the place in the queue is
 kept` and exits 3, leaving its entry in place: the next call for the same
 pull request replaces the entry's pid and keeps its `since`, so the wait
-already spent is not lost to a retry.
+already spent is not lost to a retry. A next call that finds the machine free
+does not queue at all, and takes that kept entry away as it goes. Until it
+does, the page and `mc status <name>` leave out an entry whose pid is gone:
+memoro #12353 stood at `1 waiting` for a day after it had landed
+(2026-10-02).
 
 This is `mc merge`'s own wait. Until 2026-09-12 a round that stopped on
 `red`, `pr-tests`, `extra-gate` or `merge` was also written down here for the
