@@ -52,7 +52,7 @@ import {
 import { lastAttempt, lastDeploy } from './deploys.js';
 import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
-import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
+import { dropDeadEntries, mergesPath, queueEntries, queueOrder } from './merge-queue.js';
 import { runningMerge } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { mcCheckout } from './run-control.js';
@@ -521,8 +521,10 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * one. The held rows went with `held.json` (ruling 21): a step that did not
  * land is `failed` in the register and drawn where every other plan state is.
  */
-export function mergesSection({ landing = null, queued = [], now } = {}) {
-  const queuedItems = queueOrder(queueEntries(queued));
+export function mergesSection({ landing = null, queued = [], now, alive = () => true } = {}) {
+  // A waiter whose process is gone is not waiting: nothing would ever take it
+  // off the page but another `mc merge` happening to poll (2026-10-02).
+  const queuedItems = queueOrder(dropDeadEntries(queueEntries(queued), { alive }));
   void now;
   return {
     landing,
@@ -1175,7 +1177,7 @@ export async function collectPage({
       }),
     }),
     merges: mergesSection({
-      landing: merges({ repos: present, alive }), queued: queuedForMerge, now,
+      landing: merges({ repos: present, alive }), queued: queuedForMerge, now, alive,
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({

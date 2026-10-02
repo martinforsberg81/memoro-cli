@@ -658,6 +658,19 @@ describe('MERGES', () => {
       lines.join('\n'));
   });
 
+  it('does not draw a waiter whose process is gone', () => {
+    // memoro #12353, 2026-10-02: an `mc merge` that timed out left its entry,
+    // the pull request landed later, and the page said `1 waiting` for a day.
+    const merges = mergesSection({
+      queued: [
+        { repo: 'memoro', pr: 12353, branch: 'claude/quirky-faraday-tuh0y0', reason: 'another gate round is running', stopped_at: 'busy', since: '2026-10-01T19:56:03Z', pid: 63515 },
+        { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', reason: 'memoro-cli is held by mc-run', stopped_at: 'lease', since: '2026-10-01T20:00:00Z', pid: 777 },
+      ],
+      alive: (pid) => pid === 777,
+    });
+    assert.deepEqual(merges.queued.items.map((item) => item.pr), [671]);
+  });
+
   it('has nothing queued when the file is missing or not a list', () => {
     assert.deepEqual(mergesSection({}).queued, { count: 0, items: [] });
     assert.equal(mergesSection({ queued: null }).queued.count, 0);

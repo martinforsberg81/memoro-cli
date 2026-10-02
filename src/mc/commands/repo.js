@@ -25,6 +25,7 @@ import { writeJsonAtomic } from '../atomic-write.js';
 import { describeRunning, runningRound } from '../gate-lock.js';
 import {
   MERGE_POLL_MS, MERGE_WAIT_MS, dequeue, dropDeadEntries, enqueue, mergesPath, nextWaiter, parseQueue, queueOrder,
+  queuedFor,
 } from '../merge-queue.js';
 import { planBoundary } from '../merge-boundary.js';
 import { landedPatch, redPatch, remainderOf, stepForMerge } from '../merge-step.js';
@@ -288,8 +289,9 @@ function spawnTool(tool) {
  * waiter — `pid` and all — and polls until it is the oldest live entry with
  * both free, or `MERGE_WAIT_MS` runs out.
  *
- * A free machine returns `'go'` before writing anything: criterion is that a
- * call that never had to wait leaves no trace of one.
+ * A free machine returns `'go'` without queueing: criterion is that a call
+ * that never had to wait leaves no trace of one. It does take away this pull
+ * request's own entry, left by an earlier call that timed out.
  *
  * `t0`, when given, is the start of the whole wait (shared across repeated
  * calls a busy/lease round result sends back here) rather than this call's
@@ -324,7 +326,15 @@ async function waitTurn({ repoPath, opts, root, stderr, deps, t0: sharedT0, cont
   // answers 'go' at once and the round is retried once a second (2026-09-19).
   const startRunning = readRunningRound({ alive });
   const startLease = readLeaseFn(repoPath);
-  if (!contended && !startRunning && !startLease.held) return 'go';
+  if (!contended && !startRunning && !startLease.held) {
+    // An earlier call for this same pull request that timed out kept its
+    // place, and nothing else takes that entry away: this call is its turn,
+    // so it goes with it. memoro #12353 was drawn as waiting for a day after
+    // it had landed through exactly this path (2026-10-02).
+    const entries = parseQueue(read(mergesPath(root)));
+    if (queuedFor(entries, repo, pr)) write(mergesPath(root), dequeue(entries, { repo, pr }));
+    return 'go';
+  }
 
   const branched = askGh(['pr', 'view', String(pr), '--json', 'headRefName'], { cwd: repoPath });
   let branch = null;

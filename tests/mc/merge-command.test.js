@@ -178,6 +178,27 @@ describe('mc merge waits out a busy gate or a held lease instead of refusing', (
     assert.equal(out.err, '', 'no line for a wait that never happened');
   });
 
+  it('a free machine takes away this pull request\'s own entry left by an earlier call that timed out', async () => {
+    // memoro #12353, 2026-10-02: landed through the free path, and its entry
+    // from the timed-out call before stood in the queue for a day.
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([
+      {
+        repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', reason: 'another gate round is running',
+        stopped_at: 'busy', since: '2026-09-06T17:00:00Z', holder: 'martin@host', pid: 424242,
+      },
+      {
+        repo: 'memoro-cli', pr: 900, branch: 'other', reason: 'another gate round is running',
+        stopped_at: 'busy', since: '2026-09-06T17:05:00Z', holder: 'martin@host', pid: 515151,
+      },
+    ]));
+    const { out, io } = deps(landed(), { overrides: FREE });
+    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
+    assert.equal(code, 0);
+    assert.deepEqual(queue().map((entry) => entry.pr), [900], 'its own entry is gone; somebody else\'s is not its to take');
+    assert.equal(out.err, '');
+  });
+
   it('a held gate lock waits, then runs once released — one announce line, one waited line', async () => {
     let clock = Date.parse('2026-09-06T18:00:00Z');
     let polls = 0;
