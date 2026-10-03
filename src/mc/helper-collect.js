@@ -15,13 +15,12 @@
  *   - AI-provider errors — `inspect-ai-provider-errors.mjs`, which does not
  *     use the admin token at all but shells out to `wrangler d1 execute
  *     --remote`, so it fails alone and differently;
- *   - deploys — `GET /admin/deploy/logs`, the same `deploy:index` KV key the
- *     nightly `checkDeployAge` reads, so the helper computes the age itself,
- *     beside `~/mc/runner/log/deploys.tsv`, which is what `mc deploy` wrote and
- *     depends on no webhook at all;
+ *   - deploys — `~/mc/runner/log/deploys.tsv`, which is what `mc deploy`
+ *     wrote around the deploy itself, read from this disk;
  *   - what is live — `GET /api/version`, public like the D1 probe, kept in
  *     `~/mc/runner/version.json` (`live-version.js`) so the page can say what
- *     production answers without going to the network itself;
+ *     production answers without going to the network itself, and the second
+ *     half of the deploy section;
  *   - D1 health — `GET /ping-d1`, which needs no credential at all.
  *
  * Which surface, and why it matters: `/admin/*` is the admin-token surface,
@@ -59,7 +58,11 @@ export const DEFAULT_LIMIT = 50;
 /** Hits in the window above which a *new* fingerprint is marked `!`. */
 export const DEFAULT_THRESHOLD = 20;
 
-/** `checkDeployAge`'s own threshold, so the digest agrees with the task. */
+/**
+ * Hours after which the newest deploy either source saw is called stale. It is
+ * the threshold memoro's nightly `checkDeployAge` used until that task and the
+ * GitHub deploy webhook it read were removed (2026-10-03); the digest kept it.
+ */
 export const DEPLOY_STALE_HOURS = 36;
 
 /** The name of the secret the admin surface wants. */
@@ -325,39 +328,27 @@ export function analysisRows(analysis) {
   }));
 }
 
-/** How far apart the two sources may be before the digest says they disagree. */
-export const DEPLOY_AGREE_HOURS = 2;
-
 /**
- * What is in production, from the two sources that know — the webhook's log
- * and mc's own record — and the verdict `checkDeployAge` reaches.
+ * How old production is, from the two readings that do not depend on memoro
+ * telling anybody: mc's own record and what production answers it is.
  *
- * `silent` is the case worth a proposal on its own: an empty index does not
- * mean no deploys, it means the GitHub deploy webhook is writing nothing, and
- * the nightly task has been calling that stale to an empty room ever since.
  * `row` — the last `deployed` line of `~/mc/runner/log/deploys.tsv`
- * (`deploys.js`) — is the reading that does not depend on that webhook at all:
- * `mc deploy` writes it around the deploy itself. So the age is taken from
- * whichever source saw a deploy most recently, and *stale* means neither of
- * them has seen one in `staleAfterHours` — a deploy Martin typed an hour ago is
- * not stale merely because the webhook missed it.
+ * (`deploys.js`) — is written by `mc deploy` around the deploy itself. `live`
+ * is `/api/version` (`liveVersionState`), whose `build_time` is when the build
+ * production is serving was made, however it got there. The age is the
+ * fresher of the two, so a deploy made some other way is not stale merely
+ * because mc did not run it, and *stale* needs an age: with neither reading
+ * there is nothing to call old, and the section says so instead.
  *
- * `disagree` is not a fault to fix so much as a fact to say: `mc deploy` runs
- * `npm run deploy` on this machine and no GitHub Action fires, so a deploy
- * through the verb is one `/admin/deploy/logs` will never hear about. The
- * digest says which source saw what rather than picking one and being quietly
- * wrong.
+ * Until 2026-10-03 this also read `/admin/deploy/logs`, the `deploy:index` KV
+ * key a GitHub deploy webhook was meant to fill. It never did; memoro removed
+ * the webhook, the route and the nightly `checkDeployAge` that read it.
  */
-export function deployState(payload, { now = new Date(), staleAfterHours = DEPLOY_STALE_HOURS, row = null } = {}) {
-  const logs = Array.isArray(payload?.logs) ? payload.logs : [];
-  const production = logs.filter((entry) => (entry.environment || 'production') === 'production');
-  const lastSuccess = production.find((entry) => entry.status === 'success') || null;
-  const consecutiveFailures = lastSuccess ? production.indexOf(lastSuccess) : production.length;
+export function deployState(row, { now = new Date(), live = null, staleAfterHours = DEPLOY_STALE_HOURS } = {}) {
   const hoursSince = (when) => {
     const at = Date.parse(when);
     return Number.isNaN(at) ? null : Math.round((now.getTime() - at) / 3_600_000);
   };
-  const ageHours = lastSuccess ? hoursSince(lastSuccess.timestamp) : null;
   const mc = row?.sha
     ? {
       sha: row.sha,
@@ -368,19 +359,15 @@ export function deployState(payload, { now = new Date(), staleAfterHours = DEPLO
     }
     : null;
   const mcAgeHours = mc?.at ? hoursSince(mc.at) : null;
-  const ages = [ageHours, mcAgeHours].filter((hours) => hours != null);
+  const liveAgeHours = live && !live.error && live.buildTime ? hoursSince(live.buildTime) : null;
+  const ages = [mcAgeHours, liveAgeHours].filter((hours) => hours != null);
   const age = ages.length ? Math.min(...ages) : null;
   return {
-    silent: logs.length === 0,
-    entries: logs.length,
-    lastSuccess,
-    ageHours,
     mc,
     mcAgeHours,
+    liveAgeHours,
     age,
-    stale: age === null || age > staleAfterHours,
-    disagree: ageHours != null && mcAgeHours != null && Math.abs(ageHours - mcAgeHours) > DEPLOY_AGREE_HOURS,
-    consecutiveFailures,
+    stale: age != null && age > staleAfterHours,
     staleAfterHours,
   };
 }
@@ -407,11 +394,7 @@ export function healthState(ping) {
  */
 export function failingConditions({ deploy, health, offline = false }) {
   const failing = [];
-  if (deploy && !deploy.error) {
-    if (deploy.silent) failing.push('deploy-webhook-silent');
-    else if (deploy.stale) failing.push('deploy-stale');
-    if (deploy.consecutiveFailures > 0) failing.push('deploy-failures');
-  }
+  if (deploy?.stale) failing.push('deploy-stale');
   // With nothing on the network answering, a failed `/ping-d1` measured this
   // machine, not D1 — see `networkDown`.
   if (health?.error) { if (!offline) failing.push('d1-unreachable'); } else if (health && health.d1 !== 'healthy') failing.push('d1-unhealthy');
@@ -513,33 +496,15 @@ export function renderDigest({
     + 'the secrets check are only in `/api/admin/health`, which a bearer token cannot reach.', '');
 
   out.push('## Deploy', '');
-  if (deploy.error) out.push(`_could not read: ${deploy.error}_`);
-  else if (deploy.silent) {
-    out.push('- **The deploy log is empty.** `deploy:index` holds nothing, so the GitHub deploy webhook is '
-      + 'writing nothing — and the nightly `checkDeployAge` has been returning `stale: true` to no reader '
-      + 'the whole time. Nothing here says whether the site is actually behind.');
+  // mc's own record: what `mc deploy` wrote around the deploy it ran.
+  if (deploy.mc) {
+    const verified = deploy.mc.liveCommit ? `, verified live \`${sha7(deploy.mc.liveCommit)}\`` : ', no live version verified';
+    out.push(`- mc's own last deploy: \`${sha7(deploy.mc.sha)}\`${deploy.mc.build ? ` build ${deploy.mc.build}` : ''} — `
+      + `${short(deploy.mc.at)}${deploy.mc.holder ? ` by ${deploy.mc.holder}` : ''}${verified}`
+      + `${deploy.mcAgeHours == null ? '' : ` (${deploy.mcAgeHours} h ago)`}`);
   } else {
-    out.push(`- Last successful production deploy: ${deploy.lastSuccess ? `${short(deploy.lastSuccess.timestamp)} (${deploy.lastSuccess.branch}, run ${deploy.lastSuccess.run_id})` : 'none in the last 20 entries'}`);
-    out.push(`- Age: ${deploy.ageHours == null ? 'unknown' : `${deploy.ageHours} h`}${deploy.stale ? ` — **stale**, over ${deploy.staleAfterHours} h` : ''}`);
-    if (deploy.consecutiveFailures > 0) out.push(`- ${deploy.consecutiveFailures} production deploy(s) failed since that success`);
-  }
-  // The second source, and the one that does not depend on the webhook: what
-  // `mc deploy` wrote around the deploy it ran.
-  if (!deploy.error) {
-    if (deploy.mc) {
-      const verified = deploy.mc.liveCommit ? `, verified live \`${sha7(deploy.mc.liveCommit)}\`` : ', no live version verified';
-      out.push(`- mc's own last deploy: \`${sha7(deploy.mc.sha)}\`${deploy.mc.build ? ` build ${deploy.mc.build}` : ''} — `
-        + `${short(deploy.mc.at)}${deploy.mc.holder ? ` by ${deploy.mc.holder}` : ''}${verified}`
-        + `${deploy.mcAgeHours == null ? '' : ` (${deploy.mcAgeHours} h ago)`}`);
-      if (deploy.disagree) {
-        out.push('- **The two sources disagree.** `/admin/deploy/logs` is the GitHub webhook\'s and `mc deploy` runs '
-          + '`npm run deploy` on this machine, so a deploy through the verb never reaches that log. The row above is '
-          + 'the one written around the deploy itself; the entry above it is the last one CI announced.');
-      }
-    } else {
-      out.push('- mc has deployed nothing itself — `~/mc/runner/log/deploys.tsv` holds no `deployed` row. '
-        + '`mc deploy` writes one before and after every deploy it runs.');
-    }
+    out.push('- mc has deployed nothing itself — `~/mc/runner/log/deploys.tsv` holds no `deployed` row. '
+      + '`mc deploy` writes one before and after every deploy it runs.');
   }
   if (live?.error) out.push(`- \`/api/version\`: _could not read: ${live.error}_`);
   else if (live) {
@@ -558,6 +523,9 @@ export function renderDigest({
         + 'Somebody deployed another way, or that deploy did not take.');
     }
   }
+  out.push(deploy.age == null
+    ? '- Age: unknown — neither mc\'s record nor `/api/version` gave a time'
+    : `- Age: ${deploy.age} h${deploy.stale ? ` — **stale**, over ${deploy.staleAfterHours} h` : ''}`);
   out.push(mainCommit
     ? `- origin/main in the local checkout: ${mainCommit}`
     : '- origin/main: not read from a local checkout');
@@ -590,13 +558,12 @@ export function describeDigest({ delta, errors }) {
 }
 
 /** Every section that could not be read, so a partial digest still complains. */
-export function unreadableSections({ errors, analysis, provider, health, deploy }) {
+export function unreadableSections({ errors, analysis, provider, health }) {
   return [
     ['error fingerprints', errors],
     ['analysis items', analysis],
     ['AI-provider errors', provider],
     ['D1 health', health],
-    ['deploy logs', deploy],
   ].filter(([, source]) => source?.error);
 }
 
@@ -688,7 +655,7 @@ export async function collectHelper({
   script = runScriptDefault,
   getJson = getJsonDefault,
   git = runGitDefault,
-  // Which repository's production to read. memoro's is five remote sources;
+  // Which repository's production to read. memoro's is four remote sources;
   // memoro-cli's is this machine (helper-cli-collect.js). Same delta, same
   // state block, same threshold — one notion of "new since yesterday".
   repo = 'memoro',
@@ -708,7 +675,7 @@ export async function collectHelper({
   const base = baseUrl(env);
   const missing = { ok: false, error: `no memoro checkout at ${memoro}` };
 
-  const [survey, providerRaw, analysisRaw, deployRaw, pingRaw, versionRaw, mainCommit] = await Promise.all([
+  const [survey, providerRaw, analysisRaw, pingRaw, versionRaw, mainCommit] = await Promise.all([
     haveCheckout
       ? script(memoro, ['scripts/admin/survey-errors.mjs', '--env', 'production',
         '--limit', String(limit), '--since', windowStart.toISOString()], 60_000)
@@ -717,7 +684,6 @@ export async function collectHelper({
       ? script(memoro, ['scripts/admin/inspect-ai-provider-errors.mjs', '--env', 'production', '--days', '1'], 180_000)
       : missing,
     getJson(`${base}/admin/analysis`, token),
-    getJson(`${base}/admin/deploy/logs?limit=20`, token),
     getJson(`${base}/ping-d1`, ''),
     // Public, like the D1 probe. The page cannot ask it — it is offline — so
     // this is where the answer is fetched and where its age starts counting.
@@ -739,17 +705,15 @@ export async function collectHelper({
       errorsAnalyzed: analysisRaw.json?.errorsAnalyzed ?? null,
     }
     : { rows: [], error: analysisRaw.error };
+  const health = pingRaw.ok ? healthState(pingRaw.json) : { error: pingRaw.error };
+  const live = versionRaw.ok ? liveVersionState(versionRaw.json) : { error: versionRaw.error };
   // The row is read straight from `deploys.tsv` rather than injected: `env`
   // already points the whole of mc at a throwaway work root, so a test writes
   // the file it wants read, and a faked reader would only prove the fake ran.
-  const deploy = deployRaw.ok
-    ? deployState(deployRaw.json, { now, row: lastDeploy(env) })
-    : { error: deployRaw.error };
-  const health = pingRaw.ok ? healthState(pingRaw.json) : { error: pingRaw.error };
-  const live = versionRaw.ok ? liveVersionState(versionRaw.json) : { error: versionRaw.error };
+  const deploy = deployState(lastDeploy(env), { now, live });
   if (versionRaw.ok) writeLiveVersion(versionRaw.json, { env, now });
 
-  const requests = [analysisRaw, deployRaw, pingRaw, versionRaw];
+  const requests = [analysisRaw, pingRaw, versionRaw];
   const offline = networkDown(requests);
   if (offline) {
     const asked = requests.filter((result) => result.error !== NO_TOKEN);

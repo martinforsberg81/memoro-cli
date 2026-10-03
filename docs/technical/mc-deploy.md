@@ -21,8 +21,8 @@ What the verb adds is everything around the script:
   somebody reconstructs from `/admin/deploy/logs` afterwards.
 
 Before it, mc knew about a deploy only after the fact, and only through that
-webhook log — which had been writing nothing for weeks
-([`mc-helper.md`](mc-helper.md) § *the deploy section*).
+webhook log — which had been writing nothing for weeks, and which memoro has
+since removed ([`mc-helper.md`](mc-helper.md) § *the deploy section*).
 
 ## The sequence
 
@@ -275,9 +275,9 @@ Three readers, and they agree because they read the same row.
   brief carried a *Production* section of its own.) See [`mc-brief.md`](mc-brief.md).
 - **The helper** — `deployState` in
   [`src/mc/helper-collect.js`](../../src/mc/helper-collect.js) takes the row
-  beside `/admin/deploy/logs`, and the age is the freshest of the two, so a
-  deploy Martin typed an hour ago is not called stale because the webhook never
-  heard of it. See [`mc-helper.md`](mc-helper.md).
+  beside `/api/version`'s build time, and the age is the fresher of the two.
+  (It read `/admin/deploy/logs` beside the row until memoro removed that route
+  and the GitHub webhook behind it, 2026-10-03.) See [`mc-helper.md`](mc-helper.md).
 
 ### Why `/api/version` is cached, and by whom
 

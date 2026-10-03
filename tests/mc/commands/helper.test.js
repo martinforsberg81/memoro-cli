@@ -32,7 +32,7 @@ const RESULT = (data) => ({
     analysis: { rows: [] },
     provider: { reasons: [] },
     health: {},
-    deploy: { silent: false, stale: false, consecutiveFailures: 0 },
+    deploy: { stale: false },
     delta: { first: false, fingerprints: [], failing: [] },
     ...data,
   },
@@ -280,11 +280,11 @@ describe('mc helper --intake', () => {
   it('complains on stderr about every section it could not read', async () => {
     const result = await invoke(['--collect'], {
       provider: { reasons: [], error: 'wrangler d1 execute failed (1)' },
-      deploy: { error: '/admin/deploy/logs returned 401' },
+      analysis: { rows: [], error: '/admin/analysis returned 401' },
     });
     assert.equal(result.code, 0, 'a partial digest is still a digest');
     assert.match(result.stderr, /AI-provider errors not read — wrangler d1 execute failed \(1\)/u);
-    assert.match(result.stderr, /deploy logs not read — \/admin\/deploy\/logs returned 401/u);
+    assert.match(result.stderr, /analysis items not read — \/admin\/analysis returned 401/u);
   });
 
   it('normalises --since and passes the numbers through', async () => {
