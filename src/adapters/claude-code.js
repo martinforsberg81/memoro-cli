@@ -4,8 +4,8 @@
  * Nothing here writes `CLAUDE.md` — not the project's and not the user's.
  * mc used to: a managed block in the repository's file left a dirty worktree
  * after every launch, and a managed block in `~/.claude/CLAUDE.md` was tidier
- * and still mc leaving state in a file it does not own. The Coding Profile
- * now reaches a new conversation through `--append-system-prompt` at launch,
+ * and still mc leaving state in a file it does not own. A role's
+ * instructions reach a new conversation through `--append-system-prompt` at launch,
  * which needs no file at all. See `../mc/portrait.js`.
  *
  * What remains here: launch, resume, transcripts, and the SessionStart /
@@ -142,8 +142,8 @@ export async function uninstallHooks() {
  * mc writes no slash commands into `~/.claude/commands/` any more.
  *
  * Seven of them ran `memoro-cli show <section>` to pull one slice of the
- * portrait into a session; the server stopped serving that lens and the
- * Coding Profile reaches every conversation at launch instead. Two more,
+ * portrait into a session; the server stopped serving that lens, and the
+ * Coding Profile that replaced it at launch went too (ruling 24). Two more,
  * `/memoro-coordinator` and `/memoro-coordinator-suggest`, opened a
  * coordinator role that `mc` itself is now. The last, `/memoro-update`,
  * displayed the recipe for updating memoro-cli, and was rewritten on every

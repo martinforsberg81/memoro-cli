@@ -4,8 +4,8 @@ Canonical, tool-agnostic project instructions for any coding agent
 working on this repo. Claude Code reads `CLAUDE.md`, Codex / GPT
 agents read `AGENTS.md`; both are thin wrappers around this file, edited
 by hand. mc writes neither, and no longer has any machinery that could:
-the user's Coding Profile reaches a new conversation as a launch argument
-and is never copied into an instruction file.
+a session's role instructions reach a new conversation as a launch argument
+and are never copied into an instruction file.
 
 `memoro-cli` — the terminal coordinator for Memoro. Ships the `mc`,
 `memoro-cli`, and `memoro` binaries. Node 22+, ESM, `node --test`.
@@ -136,14 +136,13 @@ a round. Two rules, both cheap:
 
 ## Work Method Updates
 
-Durable changes to how coding agents should work with the user are the
-**Coding Profile**, which is the user's and lives in Memoro. mc reads it
-(`src/mc/portrait.js`, `GET /api/mc/coding-profile`) and hands it to a new
-conversation as a launch argument — `--append-system-prompt` for Claude,
-`-c instructions=` for Codex. It has no verb of its own any more:
-`mc coding-profile read|diff|write` went with mc-cut, and the profile is
-edited in Memoro. Do not edit `AGENTS.md`, `CLAUDE.md`, or old repo roadmap
-files as a substitute for it.
+There is no Coding Profile any more: ruling 24 removed it, and mc neither
+fetches one from Memoro nor hands one to a session. What a session mc starts
+is told is its role — `canon/roles/_common.md` and the role's own file,
+handed over as a launch argument (`--append-system-prompt` for Claude,
+`-c instructions=` for Codex; `src/mc/portrait.js`). Durable changes to how
+role sessions work are edits to those files, in a pull request like any
+other. Repo conventions go in this file.
 
 A rule that should bind the next agent in a repository — a way of merging,
 a way of running subagents, a thing never to do again — is written into
@@ -356,8 +355,7 @@ One thing to keep saying out loud all the same:
   non-interactive by default
 - Keep `CLAUDE.md` / `AGENTS.md` thin. They are hand-edited wrappers
   around this file: put repo conventions here and reflect them there.
-  Durable user work-method changes go in the Coding Profile in Memoro —
-  those are the user's, not the repository's.
+  Durable changes to how role sessions work go in `canon/roles/`.
 
 ## Per-tool surface (what each tool reads natively)
 
@@ -367,9 +365,9 @@ One thing to keep saying out loud all the same:
 | Codex / GPT | `AGENTS.md` (root) | Markdown only; skills and slash commands are read manually via the prompt above |
 | Gemini CLI | none yet | no verified project-instruction convention |
 
-mc writes none of these files. The user's Coding Profile is handed to a new
+mc writes none of these files. A role's instructions are handed to a new
 conversation as a launch argument — `--append-system-prompt` for Claude,
-`-c instructions=` for Codex — and a resumed conversation already has it.
+`-c instructions=` for Codex — and a resumed conversation already has them.
 A conversation's tool is chosen when it starts — `mc work <name> new`, with
 `--codex` / `--claude` / `--model <m>` — and a running TUI cannot switch tool
 in place. There is no handover between tools mid-conversation; the machinery

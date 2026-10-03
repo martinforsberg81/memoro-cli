@@ -45,7 +45,7 @@ describe('the foreground register', () => {
   it('carries the role a session was launched with, and the digests of its text', () => {
     const env = { MC_WORK_ROOT: root() };
     const role = roleRecord({
-      name: 'brief', source: 'canon', overlay: 'OVERLAY', instructions: 'PROFILE\n\n---\n\nOVERLAY',
+      name: 'brief', source: 'canon', overlay: 'OVERLAY', instructions: 'INSTRUCTIONS\n\n---\n\nOVERLAY',
     });
     registerForeground({
       verb: 'brief', tool: 'claude', role, env, pid: 4715, now: () => NOW, onExit: () => {},
@@ -54,7 +54,7 @@ describe('the foreground register', () => {
     assert.deepEqual(written.role, {
       name: 'brief',
       source: 'canon',
-      digest: textDigest('PROFILE\n\n---\n\nOVERLAY'),
+      digest: textDigest('INSTRUCTIONS\n\n---\n\nOVERLAY'),
       text_digest: textDigest('OVERLAY'),
     });
     assert.ok(!JSON.stringify(written).includes('OVERLAY'), 'the text itself never goes in');

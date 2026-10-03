@@ -45,7 +45,7 @@ const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
 const toldTo = (name) => {
   const role = readCanonRole(name);
   assert.ok(role?.overlay, `${name} is missing from canon/roles/, or has no body`);
-  return instructionsFor('claude-code', 'PROFILE', role.overlay);
+  return instructionsFor('claude-code', role.overlay);
 };
 
 /**

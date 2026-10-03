@@ -170,7 +170,6 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
         ? { ok: false, merged: false, stopped_at: 'merge', reason: 'nope', pr: { number: options.pr } }
         : { ok: true, merged: true, merged_into: 'main', pr: { number: options.pr } };
     },
-    profile: async () => 'PROFILE',
     role: (kind) => (roles ? { name: kind, overlay: `ROLE ${kind}` } : null),
     // `modelArgs` guards on a missing model exactly as both real adapters do:
     // no model named means no flag, not `--model null`. Effort and advisor
@@ -468,7 +467,7 @@ const ready = plan();
 /**
  * What the lane records about the text its session is running on. `kind` has
  * always named the role; this names the revision — the digest is over the
- * assembled instructions, profile and `_common.md` and the overlay joined the
+ * assembled instructions, `_common.md` and the overlay joined the
  * way `instructionsFor` joins them, and `text_digest` is over the role's own
  * body alone. `mc roles check step` holds both against the files on disk, so a
  * role edited during an hour-long session is something a person can see.
@@ -476,7 +475,7 @@ const ready = plan();
 const stepRole = {
   name: 'step',
   source: 'canon',
-  digest: textDigest(`PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nROLE step`),
+  digest: textDigest(`${sharedRoleText()}\n\n---\n\nROLE step`),
   text_digest: textDigest('ROLE step'),
 };
 const okSession = (json = {}) => () => ({ status: 0, stdout: JSON.stringify({ subtype: 'success', num_turns: 4, session_id: 'sid', usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, ...json }), stderr: '', timedOut: false });
@@ -619,12 +618,12 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.match(call.prompt, /`alpha` workarea of memoro[\s\S]*----- Your step: steps\[0\] -----\ntitle: The one step/u);
   assert.doesNotMatch(call.prompt, /"schema": ?"mc-plan"/u, 'the file itself is not in the prompt');
   assert.match(call.prompt, /Your step is `steps\[0\]` — 1, "The one step"/u);
-  // Profile, then the text every role session shares, then this role's own
-  // body — assembled by `instructionsFor`, the one door all four launch paths
+  // The text every role session shares, then this role's own body, and
+  // nothing in front of them — assembled by `instructionsFor`, the one door all four launch paths
   // take.
   assert.equal(
     call.args[call.args.indexOf('--append-system-prompt') + 1],
-    `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nROLE step`,
+    `${sharedRoleText()}\n\n---\n\nROLE step`,
   );
   assert.deepEqual(f.calls.rounds, [], 'the session landed it through mc merge itself; the runner lands nothing of a step\'s');
   const rows = f.files['/w/runner/log/runs.tsv'].trim().split('\n');

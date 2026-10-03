@@ -51,27 +51,28 @@ function opening(overrides = {}) {
   const options = {
     tool: 'claude',
     spawn: (bin, args, spawnOptions) => { calls.push({ bin, args, spawnOptions }); return { status: 0 }; },
-    loadProfile: async () => 'PROFILE',
     ...overrides,
   };
   return { calls, options };
 }
 
 describe('openInWorkArea and --model', () => {
-  it('a new conversation gets the model first, then the profile', async () => {
+  // An ordinary area has no role, and a new conversation there is handed no
+  // instructions at all — there is no Coding Profile in front any more.
+  it('a new conversation gets the model and no instructions', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, options } = opening();
     const result = await openInWorkArea({ areaRoot, worktree, env, model: 'opus', ...options });
     assert.equal(result.ok, true);
-    assert.deepEqual(calls[0].args, ['--model', 'opus', '--append-system-prompt', 'PROFILE']);
+    assert.deepEqual(calls[0].args, ['--model', 'opus']);
   });
 
-  it('without the flag a new conversation launches exactly as before', async () => {
+  it('without the flag a new conversation launches with nothing', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, options } = opening();
     const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
     assert.equal(result.ok, true);
-    assert.deepEqual(calls[0].args, ['--append-system-prompt', 'PROFILE']);
+    assert.deepEqual(calls[0].args, []);
   });
 
   it('resuming puts the conversation back on the model its transcript records', async () => {
@@ -126,10 +127,9 @@ describe('openInWorkArea and --model', () => {
 });
 
 describe('openInWorkArea in a role area', () => {
-  // The shared text every role session is told rides between the two: the
-  // profile is the user's, the shared text is every role's, the overlay is
+  // The shared text every role session is told, then the overlay that is
   // this role's. An area with no role gets neither (see above).
-  it('the overlay rides behind the profile and the role model is the default', async () => {
+  it('the overlay rides behind the shared text and the role model is the default', async () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, options } = opening();
     const result = await openInWorkArea({
@@ -137,7 +137,7 @@ describe('openInWorkArea in a role area', () => {
     });
     assert.equal(result.ok, true);
     assert.deepEqual(calls[0].args, [
-      '--model', 'fable', '--append-system-prompt', `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nOVERLAY`,
+      '--model', 'fable', '--append-system-prompt', `${sharedRoleText()}\n\n---\n\nOVERLAY`,
     ]);
   });
 
@@ -186,7 +186,7 @@ describe('openInWorkArea in a role area', () => {
     await openInWorkArea({
       areaRoot, worktree, env, defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex', ...options,
     });
-    assert.deepEqual(calls[0].args, ['--append-system-prompt', 'PROFILE']);
+    assert.deepEqual(calls[0].args, []);
   });
 });
 
@@ -234,11 +234,11 @@ describe('openInWorkArea and the foreground register', () => {
       roleName: 'brief', roleSource: 'canon', register, ...options,
     });
     const handed = calls[0].args[calls[0].args.indexOf('--append-system-prompt') + 1];
-    assert.equal(handed, `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nOVERLAY`);
+    assert.equal(handed, `${sharedRoleText()}\n\n---\n\nOVERLAY`);
     assert.deepEqual(events[0].role, {
       name: 'brief',
       source: 'canon',
-      // The profile, the shared text and the overlay, joined as a launch
+      // The shared text and the overlay, joined as a launch
       // joins them — asserted against the string the tool actually got.
       digest: textDigest(handed),
       text_digest: textDigest('OVERLAY'),
@@ -301,16 +301,11 @@ describe('startInBackground and --model', () => {
     return found[found.length - 1];
   }
 
-  // The profile source is stubbed in every case: the real one reads a cache
-  // under MC_HOME, and MC_HOME is whatever the machine running the suite has
-  // — a launch assertion that depends on it passes on one machine and fails
-  // on the next.
   it('the model survives the shell, quoting and all', () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, run } = tmux();
     const started = startInBackground({
       name: 'x', areaRoot, worktree, tool: 'claude', model: "o'pus model", task: 'fix it', env, run,
-      loadProfile: () => null,
     });
     assert.equal(started.ok, true);
     // Single-quoted for the shell tmux runs the command through: an embedded
@@ -318,22 +313,22 @@ describe('startInBackground and --model', () => {
     assert.equal(creation(calls), `'claude' '--model' 'o'\\''pus model' 'fix it'`);
   });
 
-  it('the model rides in front of the profile, both quoted', () => {
+  it('the model rides in front of the instructions, both quoted', () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, run } = tmux();
     const started = startInBackground({
-      name: 'x', areaRoot, worktree, tool: 'claude', model: 'opus', env, run,
-      loadProfile: () => 'THE\nPROFILE',
+      name: 'x', areaRoot, worktree, tool: 'claude', model: 'opus', overlay: 'THE\nOVERLAY', env, run,
     });
     assert.equal(started.ok, true);
-    assert.equal(creation(calls), `'claude' '--model' 'opus' '--append-system-prompt' 'THE\nPROFILE'`);
+    const quoted = `${sharedRoleText()}\n\n---\n\nTHE\nOVERLAY`.replace(/'/gu, "'\\''");
+    assert.equal(creation(calls), `'claude' '--model' 'opus' '--append-system-prompt' '${quoted}'`);
   });
 
   it('without the flag the command is exactly what it always was', () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, run } = tmux();
     const started = startInBackground({
-      name: 'x', areaRoot, worktree, tool: 'claude', env, run, loadProfile: () => null,
+      name: 'x', areaRoot, worktree, tool: 'claude', env, run,
     });
     assert.equal(started.ok, true);
     assert.equal(creation(calls), `'claude'`);
@@ -344,7 +339,7 @@ describe('startInBackground and --model', () => {
     markStopped(areaRoot, { by: 'pm' });
     const { run } = tmux();
     const started = startInBackground({
-      name: 'x', areaRoot, worktree, tool: 'claude', env, run, loadProfile: () => null,
+      name: 'x', areaRoot, worktree, tool: 'claude', env, run,
     });
     assert.equal(started.ok, true);
     assert.equal(readStopMark(areaRoot), null, 'the background start left the mark');
@@ -359,7 +354,7 @@ describe('startInBackground and --model', () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, run } = tmux();
     const started = startInBackground({
-      name: 'x', areaRoot, worktree, tool: 'claude', env, run, loadProfile: () => null,
+      name: 'x', areaRoot, worktree, tool: 'claude', env, run,
       defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex',
     });
     assert.equal(started.ok, true);

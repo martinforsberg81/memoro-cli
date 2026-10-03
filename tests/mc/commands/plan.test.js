@@ -1,8 +1,8 @@
 /**
  * `mc plan [<programme>]` — the picker, the directory a planning session gets,
  * and the prompt and overlay it is handed, assembled without starting
- * anything; plus the launch shape through a stubbed spawn: role overlay behind
- * the profile, the first prompt as the last word, never `--resume`.
+ * anything; plus the launch shape through a stubbed spawn: the role overlay
+ * behind the shared text, the first prompt as the last word, never `--resume`.
  *
  * The one rule underneath all of it: what `mc plan` makes is never something
  * `mc run` can see. That is asserted here as a path — `plan/<programme>`, one
@@ -69,7 +69,7 @@ describe('the plan role', () => {
     const { overlay } = readCanonRole('plan');
     assert.match(overlay, /^@include _plan-writing\.md$/mu);
     assert.doesNotMatch(overlay, /readPlanText/u);
-    const told = instructionsFor('claude-code', 'PROFILE', overlay);
+    const told = instructionsFor('claude-code', overlay);
     assert.match(told, /readPlanText/u);
     assert.doesNotMatch(told, /@include/u);
   });
@@ -203,7 +203,7 @@ describe('the prompt', () => {
     const launch = planLaunch({
       programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
     });
-    const told = instructionsFor('claude-code', 'PROFILE', launch.overlay);
+    const told = instructionsFor('claude-code', launch.overlay);
     const shared = sharedRoleText();
     assert.ok(told.includes(shared), told);
     assert.equal(told.split(shared).length - 1, 1, 'the shared text should appear once');
@@ -229,7 +229,7 @@ describe('the prompt', () => {
 });
 
 describe('the launch', () => {
-  it('hands over the profile and the prompt last, with no --resume', async () => {
+  it('hands over the role instructions and the prompt last, with no --resume', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-plan-'));
     const areaRoot = join(root, 'area');
     mkdirSync(areaRoot);
@@ -246,17 +246,16 @@ describe('the launch', () => {
       defaultModelTool: 'claude',
       env: { ...process.env, CLAUDE_CONFIG_DIR: join(root, 'claude'), CODEX_HOME: join(root, 'codex') },
       spawn: (bin, args, options) => { calls.push({ bin, args, options }); return { status: 0 }; },
-      loadProfile: async () => 'PROFILE',
     });
     assert.equal(result.ok, true);
     const [call] = calls;
     assert.deepEqual(call.args.slice(0, 2), ['--model', 'opus']);
     assert.equal(call.args[2], '--append-system-prompt');
-    // The profile, then the shared text, then the role's own body — the same
+    // The shared text, then the role's own body — the same
     // assembly every other role session gets, which this one did not have
     // until `canon/roles/plan.md` grew one.
-    assert.equal(call.args[3], instructionsFor('claude-code', 'PROFILE', launch.overlay));
-    assert.match(call.args[3], /^PROFILE\n\n---\n\n/u);
+    assert.equal(call.args[3], instructionsFor('claude-code', launch.overlay));
+    assert.ok(call.args[3].startsWith(sharedRoleText()), 'nothing in front of the shared text');
     assert.match(call.args[3], /You are the planning session for one programme/u);
     assert.equal(call.args.at(-1), launch.prompt);
     assert.ok(!call.args.includes('--resume'));
@@ -268,12 +267,12 @@ describe('the launch', () => {
   // codex launch needs the codex binary and a test must not depend on one.
   it('reaches codex through `-c instructions=`', () => {
     const launch = planLaunch({ programme: 'x', repos: ['memoro'], role: readCanonRole('plan') });
-    const args = profileArgs('codex', instructionsFor('codex', 'PROFILE', launch.overlay));
+    const args = profileArgs('codex', instructionsFor('codex', launch.overlay));
     assert.equal(args[0], '-c');
     assert.match(args[1], /^instructions=/u);
     assert.equal(
       JSON.parse(args[1].slice('instructions='.length)),
-      instructionsFor('claude-code', 'PROFILE', launch.overlay),
+      instructionsFor('claude-code', launch.overlay),
     );
   });
 

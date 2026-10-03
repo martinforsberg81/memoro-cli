@@ -297,7 +297,7 @@ export function programmeLabel(row) {
  *
  * It used to go on to name what to read first and to say that a `plan-review`
  * park is this session's. Both are in `canon/roles/plan.md`, which reaches the
- * session behind the profile the way every other role's does, and a session
+ * session the way every other role's does, and a session
  * told to start by reading and reporting spent its first turn on an intro
  * Martin had not asked for (Martin, 2026-09-13). What a planning session *is*
  * — the programme as the unit, the plan-review, the projects the brief has

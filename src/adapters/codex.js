@@ -5,7 +5,7 @@
  * is between Codex and the project; mc used to manage the file and deliver
  * per-session state through it, then through the conversation's first
  * message, which is why so many transcripts open with mc's words rather than
- * the user's. The Coding Profile now reaches a new conversation through
+ * the user's. A role's instructions reach a new conversation through
  * `-c instructions=…` at launch, which needs no file. See `../mc/portrait.js`.
  */
 

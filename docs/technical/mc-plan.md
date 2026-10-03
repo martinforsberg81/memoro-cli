@@ -154,8 +154,7 @@ And nothing else, because nothing else is knowable when the session opens.
 text in memoro and memoro-cli. Naming the file rather than restating it is what
 keeps this from becoming a second copy that drifts.
 
-Behind the prompt is the Coding Profile, `canon/roles/_common.md` and
-`canon/roles/plan.md`, assembled by `instructionsFor` the way every other role
+Behind the prompt are `canon/roles/_common.md` and `canon/roles/plan.md`, assembled by `instructionsFor` the way every other role
 session's instructions are ([`mc-roles.md`](mc-roles.md)). The role file was
 frontmatter and no body until #656 — the model and the tools, and nothing about
 planning — and `planLaunch` had to read `sharedRoleText()` and fold it into the

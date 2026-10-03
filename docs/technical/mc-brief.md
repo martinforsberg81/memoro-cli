@@ -70,7 +70,7 @@ none, with no opening words: Martin types the first message (2026-09-28 —
 `Start the meeting.`, from 2026-09-13, sent it walking the whole page and
 unblocking steps on its own reading before he had asked for anything; the
 resume prompt went 2026-09-19). Opus by default from the role, `--codex`
-allowed through the adapter, the Coding Profile appended, then
+allowed through the adapter, then
 `canon/roles/_common.md` and the overlay from `canon/roles/brief.md` —
 assembled like every other session's ([`mc-roles.md`](mc-roles.md)). NOW says
 `brief` for exactly as long as it holds the terminal. A missing role is exit 1.

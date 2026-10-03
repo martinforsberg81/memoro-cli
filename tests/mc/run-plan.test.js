@@ -381,22 +381,22 @@ test('stepPrompt: a conflicted worktree is a preamble, and the step is still the
 });
 
 test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex is exec --json', () => {
-  const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs });
-  assert.deepEqual(claude, ['-p', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'PROFILE', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
+  const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs });
+  assert.deepEqual(claude, ['-p', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'INSTRUCTIONS', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
   assert.equal(claude.includes('do it'), false, 'the prompt is the first message on stdin, not an argument');
   assert.equal(AUTOCOMPACT_TOKENS, 150_000);
   // The helper and intake turns opt out: step-cost's contract leaves them be —
   // no compaction, and the positional prompt with one JSON object back.
-  const helper = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs, autocompact: null, stream: false });
+  const helper = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs, autocompact: null, stream: false });
   assert.equal(helper.includes('--autocompact'), false);
-  assert.deepEqual(helper, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
+  assert.deepEqual(helper, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'INSTRUCTIONS', '--output-format', 'json']);
   // No launch of the runner's has a tool outside the allowlist — no Agent, no
   // Skill, no MCP server — whatever the repository's instruction files say;
   // the helper included. Grep and Glob are in it: the default set omits them.
   assert.equal(CLAUDE_TOOLS, 'Bash,Read,Edit,Write,Grep,Glob');
   assert.deepEqual(helper.slice(helper.indexOf('--tools'), helper.indexOf('--tools') + 3), ['--tools', CLAUDE_TOOLS, '--strict-mcp-config']);
-  const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'PROFILE', prompt: 'do it', profileArgs });
-  assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="PROFILE"', 'do it']);
+  const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs });
+  assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="INSTRUCTIONS"', 'do it']);
   assert.equal(codex.includes('--autocompact'), false, 'codex has no such flag');
   // Never `--full-auto`: workspace-write has no network and no writes outside
   // the working directory, so the step could not push or open its PR — and a

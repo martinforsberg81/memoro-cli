@@ -752,7 +752,7 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
  * model rides through the adapter's own `modelArgs`, and for claude the
  * effort and the advisor through its `effortArgs` and `advisorArgs` — codex
  * gets neither; the instructions
- * (Coding Profile + role overlay) through the same channel `mc work` uses;
+ * (`_common.md` + role overlay) through the same channel `mc work` uses;
  * the prompt is codex's last positional. Claude runs on stream-json both
  * ways (`stream: true`, the step lanes): the prompt is not an
  * argument at all but the first user message `deps.session` writes on stdin,
