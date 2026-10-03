@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import {
+  CliWsClient,
   buildWsUrl,
   nextBackoff,
   isTerminalCloseCode,
@@ -91,5 +92,41 @@ describe('ws-client constants', () => {
 
   test('COMMAND_TIMEOUT_MS is 30s', () => {
     assert.equal(__test__.COMMAND_TIMEOUT_MS, 30_000);
+  });
+});
+
+describe('heartbeat', () => {
+  function clientWithSocket({ readyState = 1 } = {}) {
+    const sent = [];
+    const warnings = [];
+    const client = new CliWsClient({
+      apiUrl: 'https://x',
+      token: 'mem_a',
+      codingSessionId: 'sess_b',
+      handlers: {},
+      logger: { info: () => {}, warn: (m) => warnings.push(m), error: () => {} },
+    });
+    client.ws = { readyState, send: (text) => sent.push(JSON.parse(text)) };
+    return { client, sent, warnings };
+  }
+
+  test('a server ping is answered with a pong', async () => {
+    const { client, sent, warnings } = clientWithSocket();
+    await client._onMessage(JSON.stringify({ type: 'ping' }));
+    assert.deepEqual(sent, [{ type: 'pong' }]);
+    assert.deepEqual(warnings, []);
+  });
+
+  test('a ping on a socket that is not open sends nothing', async () => {
+    const { client, sent } = clientWithSocket({ readyState: 3 });
+    await client._onMessage(JSON.stringify({ type: 'ping' }));
+    assert.deepEqual(sent, []);
+  });
+
+  test('a server pong is neither answered nor warned about', async () => {
+    const { client, sent, warnings } = clientWithSocket();
+    await client._onMessage(JSON.stringify({ type: 'pong', timestamp: 'now' }));
+    assert.deepEqual(sent, []);
+    assert.deepEqual(warnings, []);
   });
 });
