@@ -22,6 +22,7 @@ import { DEPLOYS_HEADER } from '../../src/mc/deploys.js';
 import {
   analysisRows, collectHelper, computeDelta, deployState, digestName, errorRows, failingConditions,
   healthState, intakeArchiveDir, intakeDir, parseState, previousDigest, proposalsDir, readAdminToken, renderState,
+  networkDown, NO_TOKEN, scriptFailure,
 } from '../../src/mc/helper-collect.js';
 import { readLiveVersion } from '../../src/mc/live-version.js';
 
@@ -205,6 +206,27 @@ describe('mc helper --collect — the failure domains', () => {
     assert.match(result.text, /\| `aaa111` \| 34 \|/u);
   });
 
+  it('names a failed script by its exit code and first meaningful line, not its last', async () => {
+    const g = ground();
+    // The two shapes measured in the digests: `wranglerD1Json`'s three writes,
+    // the last a pretty-printed JSON dump whose final line is a lone `}`
+    // (2026-08-30), and an uncaught exception, whose last line is Node's
+    // version banner (2026-09-15). Real child processes, through the real runner.
+    writeFileSync(join(g.memoro, 'scripts', 'admin', 'inspect-ai-provider-errors.mjs'), [
+      "process.stderr.write('wrangler d1 execute failed (1)\\n');",
+      "process.stderr.write('stderr: X [ERROR] Authentication error [code: 10000]\\n');",
+      "process.stderr.write('stdout: {\\n  \"error\": {\\n    \"code\": 10000\\n  }\\n}\\n');",
+      'process.exit(1);',
+    ].join('\n'));
+    writeFileSync(join(g.memoro, 'scripts', 'admin', 'survey-errors.mjs'),
+      "\nthrow new Error('D1_ERROR: no such table: error_groups');\n");
+    const s = stubs();
+    const result = await collectHelper({ env: g.env, now: NOW, memoro: g.memoro, getJson: s.getJson, git: s.git });
+    assert.match(result.text, /## AI-provider errors\n\n_could not read: exit 1: wrangler d1 execute failed \(1\)_/u);
+    assert.match(result.text, /## Error fingerprints\n\n_could not read: exit 1: Error: D1_ERROR: no such table: error_groups_/u);
+    assert.doesNotMatch(result.text, /could not read: \}_|could not read: Node\.js/u);
+  });
+
   it('reports a missing checkout rather than digesting an empty database', async () => {
     const g = ground();
     const result = await collect({ ...g, memoro: join(g.root, 'nowhere') });
@@ -250,6 +272,43 @@ describe('mc helper --collect — the delta', () => {
     assert.deepEqual(result.data.delta.fingerprints, []);
     assert.deepEqual(result.data.delta.failing, ['deploy-failures']);
     assert.match(result.text, /- ! `deploy-failures` — failing now, and not in the last digest/u);
+  });
+
+  it('says the machine reached nothing, not that D1 is down, when every request went unanswered', async () => {
+    // 2026-09-15, 09-29 and 10-02: every fetch said `fetch failed` and the
+    // digest still opened on `! d1-unreachable`; production was healthy.
+    const g = ground();
+    mkdirSync(intakeDir(g.env), { recursive: true });
+    writeFileSync(join(intakeDir(g.env), 'errors-2026-08-28.md'), renderState({
+      fingerprints: SURVEY.topFingerprints.map((f) => ({ fingerprint: f.fingerprint, count: f.count })),
+      failing: [],
+    }));
+    const down = { ok: false, error: 'fetch failed', unreached: true };
+    const result = await collect(g, { analysis: down, deploy: down, ping: down, version: down });
+    assert.deepEqual(result.data.delta.failing, [], 'no request answered, so nothing was measured about D1');
+    assert.doesNotMatch(result.text, /! `d1-unreachable`|failing d1-unreachable/u, 'neither in the alarm list nor the state');
+    assert.match(result.text, /> This machine could not reach the network in this run: all 4 requests to production went unanswered \(fetch failed\)/u);
+  });
+
+  it('still raises d1-unreachable when anything else on the network answered', async () => {
+    const g = ground();
+    const down = { ok: false, error: 'fetch failed', unreached: true };
+    const result = await collect(g, { ping: down, version: down, analysis: down });
+    assert.deepEqual(failingConditions({ deploy: result.data.deploy, health: result.data.health }).includes('d1-unreachable'), true);
+    assert.match(result.text, /failing d1-unreachable/u);
+    assert.doesNotMatch(result.text, /could not reach the network/u);
+  });
+
+  it('does not call a refused request an unreached one', async () => {
+    const g = ground();
+    const result = await collect(g, {
+      analysis: { ok: false, error: '/admin/analysis returned 503' },
+      deploy: { ok: false, error: '/admin/deploy/logs returned 503' },
+      ping: { ok: false, error: '/ping-d1 returned 503' },
+      version: { ok: false, error: '/api/version returned 503' },
+    });
+    assert.match(result.text, /failing d1-unreachable/u, 'production answered, so the network was reached');
+    assert.doesNotMatch(result.text, /could not reach the network/u);
   });
 
   it('measures a second run on the same day against yesterday, not against itself', async () => {
@@ -400,6 +459,21 @@ describe('mc helper — the pure builders', () => {
   it('reads D1 health from the public probe', () => {
     assert.deepEqual(healthState(PING), { d1: 'healthy', totalMs: 43, slow: [] });
     assert.equal(healthState({ ok: true, d1: 'error', timings: {} }).d1, 'error');
+  });
+
+  it('says how a script ended even when its stderr says nothing', () => {
+    assert.equal(scriptFailure({ killed: true, signal: 'SIGTERM', code: null }, '', 180_000), 'timed out after 180 s, nothing on stderr');
+    assert.equal(scriptFailure({ code: 2 }, '{\n}\n'), 'exit 2, nothing on stderr');
+    assert.equal(scriptFailure({ code: 'ENOENT' }, ''), 'ENOENT, nothing on stderr');
+  });
+
+  it('counts only the requests that were asked, and only an unanswered one as down', () => {
+    const down = { ok: false, error: 'fetch failed', unreached: true };
+    const skipped = { ok: false, error: NO_TOKEN };
+    assert.equal(networkDown([skipped, skipped, down, down]), true, 'no token: the two public probes decide');
+    assert.equal(networkDown([skipped, skipped, down, { ok: true, json: {} }]), false);
+    assert.equal(networkDown([skipped, skipped]), false, 'nothing asked is nothing measured');
+    assert.deepEqual(failingConditions({ deploy: { error: 'x' }, health: { error: 'fetch failed' }, offline: true }), []);
   });
 
   it('names the conditions the delta watches', () => {

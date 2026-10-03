@@ -131,6 +131,22 @@ describe('the four sources', () => {
     } finally { g.cleanup(); }
   });
 
+  it('a successful step the runner grace-killed is not a finding', () => {
+    const g = ground();
+    try {
+      runs(g, [
+        // `streamSession` SIGTERMs a session that lingers `resultGraceMs`
+        // after answering, so a step that landed itself is written with 143:
+        // 12 of 16 step rows on 2026-10-03.
+        '2026-08-30T09:00:00Z\tdelta\tstep\t143\t100\t7\t3\t-\t-\t-\t-\t-\tsuccess,merged',
+        '2026-08-30T09:30:00Z\tepsilon\tstep\t143\t100\t-\t3\t-\t-\t-\t-\t-\tstalled,failed',
+      ]);
+      const messages = collect(g).rows.map((r) => r.message);
+      assert.equal(messages.some((m) => /delta/u.test(m)), false, 'a lingered success is still a success');
+      assert.ok(messages.some((m) => /epsilon.*stalled,failed.*exit N/u.test(m)), '143 on a failed step is still a finding');
+    } finally { g.cleanup(); }
+  });
+
   it('a source that will not read is a note, never an empty digest', () => {
     const g = ground();
     try {

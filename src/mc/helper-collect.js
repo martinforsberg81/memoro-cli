@@ -405,16 +405,30 @@ export function healthState(ping) {
  * The named conditions the delta watches — the operational half of "what is
  * new". Fingerprints are the other half and carry their own identity.
  */
-export function failingConditions({ deploy, health }) {
+export function failingConditions({ deploy, health, offline = false }) {
   const failing = [];
   if (deploy && !deploy.error) {
     if (deploy.silent) failing.push('deploy-webhook-silent');
     else if (deploy.stale) failing.push('deploy-stale');
     if (deploy.consecutiveFailures > 0) failing.push('deploy-failures');
   }
-  if (health?.error) failing.push('d1-unreachable');
-  else if (health && health.d1 !== 'healthy') failing.push('d1-unhealthy');
+  // With nothing on the network answering, a failed `/ping-d1` measured this
+  // machine, not D1 — see `networkDown`.
+  if (health?.error) { if (!offline) failing.push('d1-unreachable'); } else if (health && health.d1 !== 'healthy') failing.push('d1-unhealthy');
   return failing;
+}
+
+/**
+ * Whether every request to production went unanswered in this run — the
+ * collector had no network, which no section can tell from a real outage on
+ * its own (2026-09-15, 09-29, 10-02: all `fetch failed`, production healthy).
+ * Only a request that got no response counts: a refusal or a 5xx came from
+ * production, so the network was reached. A route skipped for want of a token
+ * was never asked and is left out; one answer anywhere is enough to say no.
+ */
+export function networkDown(results) {
+  const asked = results.filter((result) => result && result.error !== NO_TOKEN);
+  return asked.length > 0 && asked.every((result) => !result.ok && result.unreached === true);
 }
 
 /* ------------------------------------------------------------------- render */
@@ -429,7 +443,7 @@ const sha7 = (sha) => (sha ? String(sha).slice(0, 7) : null);
 
 export function renderDigest({
   now, since, previous, threshold, delta, errors, analysis, provider, health, deploy, live = null,
-  mainCommit, notes = [],
+  mainCommit, notes = [], offline = false,
 }) {
   const out = [];
   out.push(`# Errors and maintenance — ${stamp(now)}`, '');
@@ -548,7 +562,7 @@ export function renderDigest({
   out.push(OPERATIONS_UNREACHABLE);
   out.push('');
 
-  out.push(renderState({ fingerprints: errors.rows, failing: failingConditions({ deploy, health }) }), '');
+  out.push(renderState({ fingerprints: errors.rows, failing: failingConditions({ deploy, health, offline }) }), '');
   return out.join('\n');
 }
 
@@ -583,13 +597,32 @@ export function unreadableSections({ errors, analysis, provider, health, deploy 
 
 /* ------------------------------------------------------------------ collect */
 
+/**
+ * Why a script failed, in one line: how it ended, then the first line of its
+ * stderr that says anything. The last line was read until 2026-10-03 and said
+ * nothing twice over — `}` closing `wranglerD1Json`'s JSON dump, and Node's
+ * `Node.js v24.10.0` banner under an uncaught exception. An uncaught
+ * exception's own `Error: …` line is preferred over the source location and
+ * code excerpt Node prints above it.
+ */
+export function scriptFailure(error, stderr, timeout = null) {
+  const lines = String(stderr || '').split('\n').map((line) => line.trim())
+    .filter((line) => /[\p{L}\p{N}]/u.test(line) && !/^Node\.js v\d/u.test(line));
+  const line = lines.find((one) => /^[\w$.]*Error\b[^:]*:/u.test(one)) || lines[0] || null;
+  let how;
+  if (typeof error?.code === 'number') how = `exit ${error.code}`;
+  else if (error?.killed && timeout) how = `timed out after ${Math.round(timeout / 1000)} s`;
+  else if (error?.signal) how = `killed by ${error.signal}`;
+  else how = error?.code ? String(error.code) : 'failed';
+  return clip(line ? `${how}: ${line}` : `${how}, nothing on stderr`, 160);
+}
+
 /** A memoro admin script, run in the memoro checkout, its JSON stdout parsed. */
 function runScriptDefault(cwd, args, timeout) {
   return new Promise((resolve) => {
     execFile('node', args, { cwd, encoding: 'utf8', timeout, maxBuffer: 16 << 20 }, (error, stdout, stderr) => {
       if (error) {
-        const why = (stderr || '').trim().split('\n').at(-1) || error.message;
-        resolve({ ok: false, error: clip(why, 160) });
+        resolve({ ok: false, error: scriptFailure(error, stderr, timeout) });
         return;
       }
       try { resolve({ ok: true, json: JSON.parse(stdout) }); } catch { resolve({ ok: false, error: 'output was not JSON' }); }
@@ -619,7 +652,8 @@ async function getJsonDefault(url, token) {
     if (!response.ok) return { ok: false, error: `${new URL(url).pathname} returned ${response.status}` };
     try { return { ok: true, json: JSON.parse(text) }; } catch { return { ok: false, error: 'response was not JSON' }; }
   } catch (error) {
-    return { ok: false, error: clip(error?.message || String(error), 120) };
+    // No response at all — DNS, no route, a timeout. `networkDown` reads this.
+    return { ok: false, error: clip(error?.message || String(error), 120), unreached: true };
   }
 }
 
@@ -710,14 +744,23 @@ export async function collectHelper({
   const live = versionRaw.ok ? liveVersionState(versionRaw.json) : { error: versionRaw.error };
   if (versionRaw.ok) writeLiveVersion(versionRaw.json, { env, now });
 
+  const requests = [analysisRaw, deployRaw, pingRaw, versionRaw];
+  const offline = networkDown(requests);
+  if (offline) {
+    const asked = requests.filter((result) => result.error !== NO_TOKEN);
+    const said = [...new Set(asked.map((result) => result.error))].join('; ');
+    notes.push(`This machine could not reach the network in this run: all ${asked.length} requests to production `
+      + `went unanswered (${said}). Nothing here says whether production is up, so \`d1-unreachable\` is not raised.`);
+  }
+
   const previous = previousDigest(env, name, repo);
   const delta = computeDelta({
-    fingerprints: errors.rows, failing: failingConditions({ deploy, health }), previous, threshold,
+    fingerprints: errors.rows, failing: failingConditions({ deploy, health, offline }), previous, threshold,
   });
 
   const text = renderDigest({
     now, since: windowStart, previous, threshold, delta,
-    errors, analysis, provider, health, deploy, live, mainCommit, notes, repo,
+    errors, analysis, provider, health, deploy, live, mainCommit, notes, repo, offline,
   });
   mkdirSync(dir, { recursive: true });
   mkdirSync(proposalsDir(env), { recursive: true });
@@ -727,7 +770,7 @@ export async function collectHelper({
     path,
     text,
     repo,
-    data: { since: windowStart, previous, delta, errors, analysis, provider, health, deploy, live, mainCommit, notes },
+    data: { since: windowStart, previous, delta, errors, analysis, provider, health, deploy, live, mainCommit, notes, offline },
   };
 }
 
