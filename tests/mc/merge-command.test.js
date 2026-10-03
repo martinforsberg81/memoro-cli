@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { gate } from '../../src/mc/commands/repo.js';
 import { gateLockPath, takeGateLock } from '../../src/mc/gate-lock.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
+import { claimLease, leaseLogPath, leasePath, readLease } from '../../src/mc/repo-lease.js';
 import { remainderOf, stepForMerge } from '../../src/mc/merge-step.js';
 import { registerPath } from '../../src/mc/register.js';
 
@@ -315,6 +316,100 @@ describe('mc merge waits out a busy gate or a held lease instead of refusing', (
     const entries = queue();
     assert.equal(entries.length, 1, 'the place in the queue is kept, not dropped');
     assert.equal(entries[0].pr, 671);
+  });
+});
+
+describe('mc merge does not wait behind an orphaned lease (2026-09-20)', () => {
+  // The lease a round died holding: its pid is one the fake `kill` reports
+  // gone, as `kill(pid, 0)` answered ESRCH for pid 21225 that morning.
+  const DEAD = 21225;
+  const kill = (pid) => {
+    if (pid === DEAD) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+    return true;
+  };
+  const read = (repoPath) => readLease(repoPath, { kill });
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'mc-merge-orphan-'));
+    home = mkdtempSync(join(tmpdir(), 'mc-merge-orphan-home-'));
+    priorHome = process.env.MC_HOME;
+    process.env.MC_HOME = home;
+    mkdirSync(join(home, 'repo-leases'), { recursive: true });
+    writeFileSync(leasePath('/repos/memoro-cli'), JSON.stringify({
+      schema: 'mc-repo-lease', version: 1, repo: '/repos/memoro-cli', holder: 'martin@MacBookAir',
+      holder_kind: 'work-area', errand: 'merge round for #11942', since: '2026-09-06T17:05:16Z', owner_pid: DEAD,
+    }));
+  });
+
+  afterEach(() => {
+    if (priorHome === undefined) delete process.env.MC_HOME; else process.env.MC_HOME = priorHome;
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  /** The round claims as `runMergeRound` does, so the reap is the real one. */
+  const claimingRound = () => async () => {
+    const claim = claimLease({ repoPath: '/repos/memoro-cli', errand: 'merge round for #671', ownerPid: process.pid, kill });
+    assert.equal(claim.ok, true, 'the orphaned lease is taken, not refused');
+    return landed();
+  };
+
+  it('a lone waiter goes on the first poll, and its round reaps the lease', async () => {
+    let clock = Date.parse('2026-09-06T18:00:00Z');
+    let polls = 0;
+    const { out, io } = deps(landed(), {
+      overrides: {
+        runningRound: () => null,
+        readLease: read,
+        mergeRound: claimingRound(),
+        alive: () => true,
+        sleep: async (ms) => { polls += 1; clock += ms; },
+        now: () => new Date(clock),
+        gh: () => ({ status: 1, stdout: '' }),
+      },
+    });
+    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
+    assert.equal(code, 0);
+    assert.equal(polls, 0, 'it never slept behind a lease nobody holds');
+    assert.doesNotMatch(out.err, /waiting|waited/u);
+    assert.match(readFileSync(leaseLogPath(), 'utf8'), /reap {5}\/repos\/memoro-cli .*was=martin@MacBookAir {2}pid=21225 gone/u);
+  });
+
+  it('a waiter whose turn it is not yet names the lease as orphaned, then goes', async () => {
+    // The owner is alive when this call arrives and dies while it waits, the
+    // way the round of 2026-09-20 died under three waiters.
+    let reads = 0;
+    const dying = (repoPath) => {
+      reads += 1;
+      return readLease(repoPath, { kill: reads === 1 ? () => true : kill });
+    };
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{
+      repo: 'memoro-cli', pr: 900, branch: 'other', reason: 'memoro-cli is held by martin@MacBookAir',
+      stopped_at: 'lease', since: '2026-09-06T17:00:00Z', holder: 'martin@host', pid: 424242,
+    }]));
+    let clock = Date.parse('2026-09-06T18:00:00Z');
+    const { out, io } = deps(landed(), {
+      overrides: {
+        runningRound: () => null,
+        readLease: dying,
+        mergeRound: claimingRound(),
+        alive: () => true,
+        sleep: async (ms) => {
+          clock += ms;
+          // The earlier waiter takes its turn and leaves.
+          writeFileSync(mergesPath(root), JSON.stringify(queue().filter((entry) => entry.pr !== 900)));
+        },
+        now: () => new Date(clock),
+        gh: () => ({ status: 1, stdout: '' }),
+      },
+    });
+    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
+    assert.equal(code, 0);
+    assert.match(out.err, /^mc: waiting behind memoro-cli's orphaned lease \(martin@MacBookAir; pid 21225 is gone\) — 1 ahead of this one$/mu);
+    assert.doesNotMatch(out.err, /is held by/u, 'a holder that is gone is not named as holding');
+    assert.match(out.err, /^mc: waited 15s$/mu);
+    assert.deepEqual(queue(), []);
   });
 });
 

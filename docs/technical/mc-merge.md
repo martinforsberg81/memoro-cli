@@ -481,7 +481,13 @@ behind a lease it cannot get keeps its place rather than blocking a later
 arrival whose own repository is free (`nextWaiter` in
 [`src/mc/merge-queue.js`](../../src/mc/merge-queue.js)). An entry whose pid is
 no longer alive is dropped by the next call that polls, the same reasoning the
-gate lock itself uses.
+gate lock itself uses. A lease whose owner's process is gone is orphaned and
+counts as free here: the waiter whose turn it is goes, and its round's claim
+reaps the lease and logs `reap`. Until 2026-09-20 the wait counted it as held,
+so no waiter ever reached the claim that would have reaped it and three of
+them polled behind a dead round's lease for a morning; the waiting line now
+says `<repo>'s orphaned lease (<holder>; pid <n> is gone)` while it is not yet
+that waiter's turn.
 
 It prints one `mc: waiting behind …` line on stderr the first time it waits
 and one `mc: waited <n>s` line when it stops. Past `MERGE_WAIT_MS` (8

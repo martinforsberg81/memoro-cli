@@ -8,11 +8,12 @@ files and a script.
 ```
 mc log [--limit <n>]     the last invocations, oldest first
 mc log --failures        only the ones that did not end well
-mc log <run>             one invocation whole
+mc log <run>             one invocation whole, with every event it logged
 mc log --open            rounds that started and never ended
 mc log --repo <repo>     narrowed to one repository
 mc log --since <iso>     narrowed to a window
 mc log --verb <verb>     narrowed to one verb
+mc log --all             with events no invocation is behind
 mc log --where           the files this reads, and their sizes
 mc log … --json          the same, as data
 ```
@@ -60,6 +61,33 @@ one story.
 plain text file other eyes read, and a join that required every file to have
 been rewritten could not see history. It is joined on the **pid** the round
 wrote down instead.
+
+## Everything else a command logged
+
+Between its start and its end a command logs what it did —
+`dev-server-stopped`, `work.open`, `dev-server-reaped`. Until 2026-10 the
+reader kept the start, the end and the narration (`gate.say`, `merge.say`) and
+folded every other line into a count: `mc log <run> --json` said `"events": 3`
+and showed none of them, so `dev-server-lifecycle`'s criterion — paste `mc log`
+showing `dev-server-stopped` with `reason: worktree-removed` — could only be
+met by grepping the file.
+
+Now every other event is kept on its run in `logged`, as `{ at, event, fields }`
+with the envelope (`at`, `pid`, `run`, `event`) taken out of `fields`:
+
+```
+$ mc log run_f0b0cce9ef1a
+run_f0b0cce9ef1a  work remove dsl-verify memoro
+  …
+  logged
+    09-26 09:47  dev-server-stopped  instance_id=static-…  service=memoro-static  worktree_path=/Users/…/dsl-verify/memoro  reason=worktree-removed  ok=true
+```
+
+The one-line view marks a run that logged anything with the names — at most
+three, a repeat counted (`+ work.open ×2, dev-server-stopped`) — and leaves the
+fields to `mc log <run>`. The fields are printed as written: `logger.js` has
+already bounded them to identifiers, paths, codes and counts, and the reader
+adds nothing a person could not have read in the file.
 
 ## Start and end, and why the pair is the record
 

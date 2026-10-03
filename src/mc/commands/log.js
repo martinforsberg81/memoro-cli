@@ -4,7 +4,8 @@
  *   mc log [--limit <n>]            the last invocations, newest last
  *   mc log --failures               only the ones that did not end well
  *   mc log <run>                    one invocation, whole: its narration,
- *                                   its rounds, the leases it touched
+ *                                   the events it logged, its rounds, the
+ *                                   leases it touched
  *   mc log --open                   rounds that started and never ended
  *   mc log --repo <repo>            narrowed to one repository
  *   mc log --since <iso>            narrowed to a window
@@ -116,7 +117,27 @@ function runLine(c, run) {
     dim(c, (run.holder || '').padEnd(16).slice(0, 16)),
     dim(c, run.duration_ms == null ? '' : took(run.duration_ms)),
     run.threw && run.error ? dim(c, `— ${run.error}`) : '',
+    loggedMark(c, run.logged),
   ].join(' ').trimEnd();
+}
+
+/**
+ * The names of what else a run logged, on its one line: `+ dev-server-stopped`.
+ *
+ * Only the names, and at most three of them — the line is a list, and `mc log
+ * <run>` is where the fields are. Without this a run that stopped a dev server
+ * read exactly like one that did not.
+ */
+const MARKED_NAMES = 3;
+
+function loggedMark(c, logged = []) {
+  if (!logged?.length) return '';
+  const counts = new Map();
+  for (const one of logged) counts.set(one.event, (counts.get(one.event) || 0) + 1);
+  const names = [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name));
+  const shown = names.slice(0, MARKED_NAMES).join(', ');
+  const more = names.length > MARKED_NAMES ? ` and ${names.length - MARKED_NAMES} more` : '';
+  return dim(c, `+ ${shown}${more}`);
 }
 
 function storyLines(c, story) {
@@ -129,6 +150,13 @@ function storyLines(c, story) {
     out.push(`  ${dim(c, 'outcome')}  ${paint(c, run.outcome)}${run.exit_code == null ? '' : ` exit ${run.exit_code}`}${run.duration_ms == null ? '' : ` after ${took(run.duration_ms)}`}`);
     if (run.killed) out.push(`  ${dim(c, 'signal')}   ${run.killed}`);
     if (run.error) out.push(`  ${dim(c, 'error')}    ${run.error}`);
+  }
+  if (story.logged?.length) {
+    out.push(`  ${dim(c, 'logged')}`);
+    for (const one of story.logged) {
+      const fields = Object.entries(one.fields || {}).map(([key, value]) => `${key}=${fieldText(value)}`);
+      out.push(`    ${dim(c, clock(one.at))}  ${[one.event, ...fields].join('  ')}`);
+    }
   }
   for (const round of story.rounds) {
     out.push(`  ${dim(c, 'round')}    ${round.phase}  ${round.repo}  ${(round.prs || []).map((n) => `#${n}`).join(' ')}`
@@ -177,6 +205,11 @@ function paint(c, outcome) {
   if (outcome === 'ok') return green(c, word);
   if (outcome === 'running' || outcome === 'events') return dim(c, word);
   return red(c, word);
+}
+
+function fieldText(value) {
+  if (Array.isArray(value)) return value.join(',');
+  return String(value);
 }
 
 function clock(at) {
