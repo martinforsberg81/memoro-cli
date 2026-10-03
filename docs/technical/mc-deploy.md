@@ -67,8 +67,16 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    the whole deploy and released in a `finally` however it ends.
 8. **The fast-forward**, when the worktree is behind: `git merge --ff-only
    origin/main` in it, under the lease, after the yes. It is the one movement of
-   somebody else's checkout this verb makes, and it moves it to exactly the sha
-   the person just said yes to, on a tree already proved clean and not ahead.
+   somebody else's checkout this verb makes, on a tree already proved clean and
+   not ahead. `origin/main` is what ships — whatever is on `main` is meant to —
+   and it is taken as it is *now*, which may be later than the sha the question
+   showed: the runner lands and fetches all the time. So mc then reads
+   `rev-parse HEAD` in that worktree, and that is the sha the success line names,
+   the script is handed and the row records. When it is not the one the question
+   showed, one line says so — *"main moved to `<y>` since the question; deploying
+   `<y>`"* — as information, not a refusal. Until 2026-10-03 the row recorded the
+   question's sha whatever went out (2026-09-14 and 2026-09-19 were the two rows
+   where it differed).
 9. **The script.** `npm run deploy` in that worktree, the process's environment
    passed through untouched, its output echoed as it happens.
 10. **The row completed** — outcome, build, the live version the script verified,
@@ -189,7 +197,7 @@ header the file actually carries rather than the one this module knows.
 |---|---|
 | `started` | when the row was written, before the spawn |
 | `ended` | when the script exited — empty on a deploy that never came back |
-| `sha` | what was shipped: `origin/main` as the reading saw it |
+| `sha` | what was shipped: the deploy worktree's `HEAD` after the fast-forward (a refused row: `origin/main` as the reading saw it) |
 | `build` | the build number from the script's success banner |
 | `holder` | who typed it (`currentHolder()`) |
 | `outcome` | `running`, `deployed`, `failed` or `refused` |
@@ -216,6 +224,13 @@ Two properties are the point of it:
 mc stamped, the verified line is what production answered. A deploy run with
 `MEMORO_DEPLOY_SKIP_LIVE_VERSION_VERIFY` therefore gets a row with a `build`, no
 `live_commit`, and the note *the script verified no live version*.
+
+`sha` and `live_commit` can still differ on a deploy that took: `deploy.mjs`'s own
+`ensureUpToDateWithOrigin` fetches and fast-forwards to `origin/main` again
+before it builds. The digest (`helper-collect.js`) therefore compares
+`/api/version` with the row's `live_commit` when it has one, and with `sha` only
+when it does not, so such a deploy is not reported as *somebody deployed another
+way*.
 
 ### What is read out of the script's output
 

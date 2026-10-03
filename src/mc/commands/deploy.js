@@ -477,9 +477,11 @@ export async function run(argv, deps = {}) {
   }
 
   // Under the lease and before the record: the one movement of somebody else's
-  // checkout this verb may make, and it moves it to exactly the sha the person
-  // just said yes to. `--ff-only` on a tree already proved clean and not ahead,
-  // so it either fast-forwards or does nothing.
+  // checkout this verb may make. `origin/main` is what ships — whatever is on
+  // `main` is meant to — so it is fast-forwarded to `origin/main` as it is now,
+  // which may be later than the sha the question showed. `--ff-only` on a tree
+  // already proved clean and not ahead, so it either fast-forwards or does
+  // nothing.
   if (state.behind) {
     const merged = git(source.worktree, ['merge', '--ff-only', 'origin/main']);
     if (merged === null) {
@@ -488,13 +490,20 @@ export async function run(argv, deps = {}) {
       stderr.write(`mc: git merge --ff-only origin/main failed in ${source.worktree} — nothing was deployed\n`);
       return 1;
     }
-    stdout.write(`mc: fast-forwarded main in ${source.worktree} to ${plan.short}\n`);
   }
+  // What ships is what that worktree stands on now, read rather than assumed:
+  // the runner lands and fetches all the time, and `origin/main` is a ref every
+  // worktree shares, so it can have moved between the question and the yes.
+  // Twice it had (2026-09-14, 2026-09-19), and the row named the sha the
+  // question showed instead of the one that went out.
+  const shipping = git(source.worktree, ['rev-parse', '--verify', 'HEAD']) || plan.sha;
+  if (state.behind) stdout.write(`mc: fast-forwarded main in ${source.worktree} to ${short(shipping)}\n`);
+  if (shipping !== plan.sha) stdout.write(`mc: main moved to ${short(shipping)} since the question; deploying ${short(shipping)}\n`);
 
   // Before the spawn, not after it: a deploy that never comes back — the
   // terminal closed, a ^C in the middle of wrangler — leaves this row saying
   // `running` with no `ended`, which is the true thing to say about it.
-  const key = recordStart({ sha: plan.sha, holder: holder.name }, env);
+  const key = recordStart({ sha: shipping, holder: holder.name }, env);
 
   const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
   let tail = '';
@@ -502,7 +511,7 @@ export async function run(argv, deps = {}) {
     tail = (tail + chunk).slice(-OUTPUT_TAIL);
   };
   try {
-    const result = await spawnDeploy({ cwd: source.worktree, env, sha: plan.sha, onOutput, stdout, stderr });
+    const result = await spawnDeploy({ cwd: source.worktree, env, sha: shipping, onOutput, stdout, stderr });
     const said = readScriptOutput(tail);
     const ok = result.code === 0;
     recordEnd(key, {
@@ -516,7 +525,7 @@ export async function run(argv, deps = {}) {
 
     if (result.error) stderr.write(`mc: could not run npm run deploy in ${source.worktree} — ${result.error}\n`);
     if (result.signal) stderr.write(`mc: the deploy was killed by ${result.signal}\n`);
-    if (opts.json) stdout.write(`${JSON.stringify({ sha: plan.sha, exit_code: result.code, deployed: ok, ...said }, null, 2)}\n`);
+    if (opts.json) stdout.write(`${JSON.stringify({ sha: shipping, exit_code: result.code, deployed: ok, ...said }, null, 2)}\n`);
     else if (!ok) stderr.write(`mc: npm run deploy exited ${result.code}${said.stopped_at ? ` at ${said.stopped_at}` : ''} — production may be part-way\n`);
     else if (said.live_commit) stdout.write(`mc: deployed — build ${said.live_build} · ${short(said.live_commit)} verified live\n`);
     return result.code;

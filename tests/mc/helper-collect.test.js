@@ -353,6 +353,16 @@ describe('mc helper --collect — the deploy section', () => {
     assert.match(section, /\*\*Production is answering `b3e65b6`, not mc's last deploy `1a2b3c4`\.\*\*/u);
   });
 
+  it('compares production with what mc\'s deploy verified live before the sha in its row', async () => {
+    // 2026-09-19: the row said 017b4e7 and the script verified 8e431c6, and
+    // production answering 8e431c6 is that deploy, not somebody else's.
+    const g = ground();
+    deploysTsv(g.root, { live: LIVE_SHA });
+    const section = (await collect(g)).text.split('## Deploy')[1];
+    assert.doesNotMatch(section, /Production is answering/u);
+    assert.match(section, /mc's own last deploy: `1a2b3c4`.*verified live `b3e65b6`/u);
+  });
+
   it('reads one commit at two lengths as one commit', () => {
     assert.equal(sameCommit('b3e65b6', 'b3e65b6f00aa11bb22cc33dd44ee55ff66778899'), true);
     assert.equal(sameCommit('b3e65b6', '1a2b3c4'), false);
