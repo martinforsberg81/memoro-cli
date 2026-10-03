@@ -287,8 +287,9 @@ IN FULL
                                     invocation writes a start and an end; a
                                     start with no end is a command that died
   mc log <run>                     One invocation whole: what it said, the
-                                    rounds it ran, the leases it touched —
-                                    the three files joined on its run id
+                                    events it logged, the rounds it ran, the
+                                    leases it touched — the three files
+                                    joined on its run id
   mc log --open                    Gate rounds that started and never ended,
                                     with the lease each left behind. It only
                                     reads: releasing one stays your decision
