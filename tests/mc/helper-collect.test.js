@@ -22,7 +22,7 @@ import { DEPLOYS_HEADER } from '../../src/mc/deploys.js';
 import {
   analysisRows, collectHelper, computeDelta, deployState, digestName, errorRows, failingConditions,
   healthState, intakeArchiveDir, intakeDir, parseState, previousDigest, proposalsDir, readAdminToken, renderState,
-  scriptFailure,
+  networkDown, NO_TOKEN, scriptFailure,
 } from '../../src/mc/helper-collect.js';
 import { readLiveVersion } from '../../src/mc/live-version.js';
 
@@ -274,6 +274,43 @@ describe('mc helper --collect — the delta', () => {
     assert.match(result.text, /- ! `deploy-failures` — failing now, and not in the last digest/u);
   });
 
+  it('says the machine reached nothing, not that D1 is down, when every request went unanswered', async () => {
+    // 2026-09-15, 09-29 and 10-02: every fetch said `fetch failed` and the
+    // digest still opened on `! d1-unreachable`; production was healthy.
+    const g = ground();
+    mkdirSync(intakeDir(g.env), { recursive: true });
+    writeFileSync(join(intakeDir(g.env), 'errors-2026-08-28.md'), renderState({
+      fingerprints: SURVEY.topFingerprints.map((f) => ({ fingerprint: f.fingerprint, count: f.count })),
+      failing: [],
+    }));
+    const down = { ok: false, error: 'fetch failed', unreached: true };
+    const result = await collect(g, { analysis: down, deploy: down, ping: down, version: down });
+    assert.deepEqual(result.data.delta.failing, [], 'no request answered, so nothing was measured about D1');
+    assert.doesNotMatch(result.text, /! `d1-unreachable`|failing d1-unreachable/u, 'neither in the alarm list nor the state');
+    assert.match(result.text, /> This machine could not reach the network in this run: all 4 requests to production went unanswered \(fetch failed\)/u);
+  });
+
+  it('still raises d1-unreachable when anything else on the network answered', async () => {
+    const g = ground();
+    const down = { ok: false, error: 'fetch failed', unreached: true };
+    const result = await collect(g, { ping: down, version: down, analysis: down });
+    assert.deepEqual(failingConditions({ deploy: result.data.deploy, health: result.data.health }).includes('d1-unreachable'), true);
+    assert.match(result.text, /failing d1-unreachable/u);
+    assert.doesNotMatch(result.text, /could not reach the network/u);
+  });
+
+  it('does not call a refused request an unreached one', async () => {
+    const g = ground();
+    const result = await collect(g, {
+      analysis: { ok: false, error: '/admin/analysis returned 503' },
+      deploy: { ok: false, error: '/admin/deploy/logs returned 503' },
+      ping: { ok: false, error: '/ping-d1 returned 503' },
+      version: { ok: false, error: '/api/version returned 503' },
+    });
+    assert.match(result.text, /failing d1-unreachable/u, 'production answered, so the network was reached');
+    assert.doesNotMatch(result.text, /could not reach the network/u);
+  });
+
   it('measures a second run on the same day against yesterday, not against itself', async () => {
     const g = ground();
     await collect(g);
@@ -428,6 +465,15 @@ describe('mc helper — the pure builders', () => {
     assert.equal(scriptFailure({ killed: true, signal: 'SIGTERM', code: null }, '', 180_000), 'timed out after 180 s, nothing on stderr');
     assert.equal(scriptFailure({ code: 2 }, '{\n}\n'), 'exit 2, nothing on stderr');
     assert.equal(scriptFailure({ code: 'ENOENT' }, ''), 'ENOENT, nothing on stderr');
+  });
+
+  it('counts only the requests that were asked, and only an unanswered one as down', () => {
+    const down = { ok: false, error: 'fetch failed', unreached: true };
+    const skipped = { ok: false, error: NO_TOKEN };
+    assert.equal(networkDown([skipped, skipped, down, down]), true, 'no token: the two public probes decide');
+    assert.equal(networkDown([skipped, skipped, down, { ok: true, json: {} }]), false);
+    assert.equal(networkDown([skipped, skipped]), false, 'nothing asked is nothing measured');
+    assert.deepEqual(failingConditions({ deploy: { error: 'x' }, health: { error: 'fetch failed' }, offline: true }), []);
   });
 
   it('names the conditions the delta watches', () => {

@@ -13,3 +13,11 @@ section: Fixed
   AI-provider section read `_could not read: }_` from 2026-08-30 on. It now
   reads `exit 1: wrangler d1 execute failed (1)`, or an uncaught exception's
   `Error: …` line.
+
+- **A digest gathered without a network says so instead of raising
+  `d1-unreachable`.** When every request to production goes unanswered in one
+  run, the memoro digest now opens with one line saying this machine could not
+  reach the network and leaves `d1-unreachable` out of the alarm list and the
+  state block. On 2026-09-15, 09-29 and 10-02 every request said
+  `fetch failed` and the digest raised `! d1-unreachable` over a healthy
+  production. A refusal or a 5xx still counts as an answer.

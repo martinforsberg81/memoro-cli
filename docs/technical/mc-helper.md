@@ -205,6 +205,16 @@ operational conditions that were failing when it was written
 (`deploy-webhook-silent`, `deploy-stale`, `deploy-failures`,
 `d1-unreachable`, `d1-unhealthy`). The next run diffs against them.
 
+`d1-unreachable` is not raised when **no request to production got an answer
+at all** in the run: `/admin/analysis`, `/admin/deploy/logs`, `/ping-d1` and
+`/api/version` all threw rather than returned (a route skipped for want of a
+token is left out of the count). That is the collector without a network, and
+the digest says so in one line at the top instead. On 2026-09-15, 09-29 and
+10-02 every request said `fetch failed`, the digest opened on
+`! d1-unreachable`, and production was healthy. A refusal or a 5xx is an
+answer, so it does not count, and one answer anywhere is enough to raise
+`d1-unreachable` as before.
+
 The baseline is **the newest digest that is not the one being written**, so a
 second run on the same day measures against yesterday instead of comparing
 today's file with itself and reporting nothing new. A first run has no
