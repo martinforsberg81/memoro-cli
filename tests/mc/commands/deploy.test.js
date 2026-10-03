@@ -344,6 +344,65 @@ describe('mc deploy — every case of where main is', () => {
     assert.match(out.stdout, /fast-forwarded main in .* to 1a2b3c4/u);
   });
 
+  /**
+   * A repository whose `origin/main` moves: the runner lands #11913 between the
+   * reading and the yes, as it did on 2026-09-19. HEAD is tracked per worktree
+   * and `merge --ff-only origin/main` moves it to whatever `origin/main` names
+   * *now* — which is what ships, and so what the row has to say.
+   */
+  const LATER = '8e431c6aa0b1c2d3e4f5061728394a5b6c7d8e9f';
+  function movingGit({ head = SHA, behind = 3 } = {}) {
+    const base = fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, state: { [MAIN_WT]: { dirty: [], ahead: 0, behind } } });
+    let origin = SHA;
+    let at = head;
+    const git = (cwd, args) => {
+      if (args[0] === 'rev-parse') {
+        base.calls.push({ cwd, args });
+        return args.at(-1) === 'HEAD' ? at : origin;
+      }
+      if (args[0] === 'merge') {
+        base.calls.push({ cwd, args });
+        at = args.at(-1) === 'origin/main' ? origin : args.at(-1);
+        return '';
+      }
+      return base(cwd, args);
+    };
+    git.calls = base.calls;
+    git.land = () => { origin = LATER; };
+    return git;
+  }
+
+  it('origin/main moving after the question: main goes to origin/main, and the row and the terminal name what shipped', async () => {
+    const git = movingGit();
+    const { code, seen, out } = await ranIn({ git, ask: () => { git.land(); return 'y'; } });
+    assert.equal(code, 0);
+    assert.deepEqual(git.calls.find((call) => call.args[0] === 'merge').args, ['merge', '--ff-only', 'origin/main']);
+    assert.equal(seen[0].sha, LATER, 'the script is handed the sha the tree stands on');
+    assert.match(out.stdout, /fast-forwarded main in .* to 8e431c6\n/u);
+    assert.match(out.stdout, /mc: main moved to 8e431c6 since the question; deploying 8e431c6\n/u);
+    assert.equal(out.stderr, '', 'informational, not a warning');
+    const row = lastDeploy({ MC_WORK_ROOT: work });
+    assert.equal(row.sha, LATER, 'the row records the commit that went out');
+  });
+
+  it('main already moved on by somebody else: nothing to merge, and the row still names what is there', async () => {
+    const git = movingGit({ head: LATER, behind: 0 });
+    const { code, out } = await ranIn({ git, ask: () => { git.land(); return 'y'; } });
+    assert.equal(code, 0);
+    assert.equal(git.calls.some((call) => call.args[0] === 'merge'), false);
+    assert.doesNotMatch(out.stdout, /fast-forwarded/u);
+    assert.match(out.stdout, /main moved to 8e431c6 since the question; deploying 8e431c6/u);
+    assert.equal(lastDeploy({ MC_WORK_ROOT: work }).sha, LATER);
+  });
+
+  it('origin/main standing still: no line about it moving', async () => {
+    const git = movingGit();
+    const { out } = await ranIn({ git });
+    assert.match(out.stdout, /fast-forwarded main in .* to 1a2b3c4/u);
+    assert.doesNotMatch(out.stdout, /main moved/u);
+    assert.equal(lastDeploy({ MC_WORK_ROOT: work }).sha, SHA);
+  });
+
   it('main dirty: a refused row naming the path and the files, and nothing runs', async () => {
     const git = fakeGit({
       counts: { [`${LIVE}..${SHA}`]: 6 },

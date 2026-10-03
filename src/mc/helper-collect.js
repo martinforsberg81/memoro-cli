@@ -545,10 +545,15 @@ export function renderDigest({
   else if (live) {
     out.push(`- \`/api/version\`: build ${live.build ?? '?'} · \`${sha7(live.commit) || '?'}\``
       + `${live.buildTime ? `, built ${short(live.buildTime)}` : ''}`);
+    // What mc's deploy shipped is what the script verified live when it did,
+    // and the row's `sha` only when it verified nothing: `deploy.mjs` fetches
+    // and fast-forwards to `origin/main` itself, so the two can differ for a
+    // deploy that took — and that is not somebody else's deploy.
+    const mcShipped = deploy.mc?.liveCommit || deploy.mc?.sha;
     // One side may be abbreviated: the same commit at two lengths is not a mismatch.
-    if (live.commit && deploy.mc?.sha && !sameCommit(live.commit, deploy.mc.sha)) {
+    if (live.commit && mcShipped && !sameCommit(live.commit, mcShipped)) {
       // Seven characters unless those are the same seven: then the whole of both.
-      const [answers, shipped] = sha7(live.commit) === sha7(deploy.mc.sha) ? [live.commit, deploy.mc.sha] : [sha7(live.commit), sha7(deploy.mc.sha)];
+      const [answers, shipped] = sha7(live.commit) === sha7(mcShipped) ? [live.commit, mcShipped] : [sha7(live.commit), sha7(mcShipped)];
       out.push(`- **Production is answering \`${answers}\`, not mc's last deploy \`${shipped}\`.** `
         + 'Somebody deployed another way, or that deploy did not take.');
     }
