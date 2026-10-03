@@ -18,7 +18,10 @@ beside you on branch `plan/<programme>`. That directory is not a workarea and
 `~/mc/` that hold a checkout, and a programme sits one level below that. What
 you and the runner share is a `PLAN.json` on `main` and nothing else — the
 `<project>` directory name you choose is what it will later call that
-project's branch and its workarea, and you create neither.
+project's branch and its workarea, and you create neither. So each checkout
+stays on `plan/<programme>` for the whole session: never check out or create a
+branch named after a project, because the runner cannot make that project's
+workarea while a branch of that name is checked out here.
 
 Two kinds of work are yours. **Thinking a programme through**: reading what
 `docs/project/<programme>/` already holds in each repository, and the code it

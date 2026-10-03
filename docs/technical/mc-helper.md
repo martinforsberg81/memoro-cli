@@ -127,6 +127,13 @@ being unauthenticated must not cost us the other five.
 | what is live | `GET /api/version` — `{ commit, build, build_time }`, kept in `~/mc/runner/version.json` for the page | none | 30 s |
 | D1 health | `GET /ping-d1` | none | 30 s |
 
+A script that fails is named by how it ended and the first line of its stderr
+that says anything — `exit 1: wrangler d1 execute failed (1)`, or an uncaught
+exception's own `Error: …` line. The last line was read until 2026-10-03, and
+it was `}` (the close of `wranglerD1Json`'s JSON dump) or `Node.js v24.10.0`
+(Node's banner under a crash), so the AI-provider section said
+`_could not read: }_` from 2026-08-30 on without naming a cause.
+
 The deploy section has **two sources on purpose**. `/admin/deploy/logs` is the
 GitHub webhook's, and it has been writing nothing for weeks; `deploys.tsv` is
 written by `mc deploy` around the deploy itself and depends on no webhook at
@@ -198,6 +205,16 @@ operational conditions that were failing when it was written
 (`deploy-webhook-silent`, `deploy-stale`, `deploy-failures`,
 `d1-unreachable`, `d1-unhealthy`). The next run diffs against them.
 
+`d1-unreachable` is not raised when **no request to production got an answer
+at all** in the run: `/admin/analysis`, `/admin/deploy/logs`, `/ping-d1` and
+`/api/version` all threw rather than returned (a route skipped for want of a
+token is left out of the count). That is the collector without a network, and
+the digest says so in one line at the top instead. On 2026-09-15, 09-29 and
+10-02 every request said `fetch failed`, the digest opened on
+`! d1-unreachable`, and production was healthy. A refusal or a 5xx is an
+answer, so it does not count, and one answer anywhere is enough to raise
+`d1-unreachable` as before.
+
 The baseline is **the newest digest that is not the one being written**, so a
 second run on the same day measures against yesterday instead of comparing
 today's file with itself and reporting nothing new. A first run has no
@@ -234,6 +251,14 @@ disagree with the first. A fingerprint on this side is a failure *signature*
 with its variables removed — pull request numbers, pids and commits become
 `N` and `<hash>` — so two rounds that both stopped on `lease` are one
 fingerprint seen twice. Without that the digest could never say "sixteen".
+
+A `runs.tsv` row is a finding unless its note says `success` and its exit is
+`0` or `143`. 143 is the runner's own SIGTERM: a session that lingers
+`resultGraceMs` after answering is killed with its result standing, and since
+that grace came in on 2026-09-25 about three quarters of all step rows end
+that way. Counting them made every newly started project a new fingerprint and
+buried the steps that did fail. A `success` row with any other exit is still
+named, exit code and all.
 
 One turn per digest, not one over both: `repo:` is the frontmatter key
 everything downstream routes on, and a reader left to infer it would get it

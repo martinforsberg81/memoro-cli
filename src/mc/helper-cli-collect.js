@@ -177,7 +177,11 @@ export function cliRows({ root = mcHome(), work = workRoot(), since, now = new D
       if (!inWindow(cell[at])) continue;
       const outcome = cell[note] || '';
       const code = String(cell[exit] ?? '0');
-      if (/success/u.test(outcome) && code === '0') continue;
+      // 143 is the runner's own SIGTERM: `streamSession` kills a session that
+      // lingers `resultGraceMs` after it has answered, and a step that landed
+      // itself through `mc merge` often does — three quarters of all step rows
+      // since 2026-09-25. Its note is the session's verdict, so it is normal.
+      if (/success/u.test(outcome) && (code === '0' || code === '143')) continue;
       // The exit code is always named, never only the note. A row saying
       // `success` that exited 1 is a real anomaly — the session reported it
       // had finished and the process disagreed — and it is invisible if the
