@@ -4,6 +4,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { VERB_MODULES, runModule } from './mc-verbs.js';
+import { forbidCredentialPrompts } from './mc/no-prompts.js';
+
+forbidCredentialPrompts();
 
 const rawArgv = process.argv.slice(2);
 const argv = [];

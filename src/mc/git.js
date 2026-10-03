@@ -7,8 +7,29 @@
  */
 import { spawnSync } from 'node:child_process';
 
-export function git(cwd, args, { allowFailure = false } = {}) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+/**
+ * How long one git call may take before it is stopped. Five minutes is more
+ * than twice the 120 s the runner's own `sh()` gives every fetch, push and
+ * `worktree add` it makes in both repositories, so nothing that finishes
+ * today is cut off. What it is for is the call that never finishes: with the
+ * login keychain locked, `git credential-osxkeychain` waits on a modal nobody
+ * is there to answer, and without a limit the mc command under it waited too
+ * (2026-09-20). A caller that knows better passes `timeoutMs`.
+ */
+export const GIT_TIMEOUT_MS = 300_000;
+
+export function git(cwd, args, { allowFailure = false, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: timeoutMs });
+  if (r.error?.code === 'ETIMEDOUT') {
+    if (allowFailure) return null;
+    const err = new Error(
+      `git ${args.join(' ')} did not finish in ${seconds(timeoutMs)} and was stopped`
+      + ' — if it was asking for credentials, a locked keychain does not answer (security unlock-keychain)',
+    );
+    err.code = 'ETIMEDOUT';
+    err.stderr = r.stderr;
+    throw err;
+  }
   if (r.status !== 0) {
     if (allowFailure) return null;
     const err = new Error(
@@ -21,8 +42,12 @@ export function git(cwd, args, { allowFailure = false } = {}) {
   return (r.stdout || '').trim();
 }
 
-export function tryGit(cwd, args) {
-  return git(cwd, args, { allowFailure: true });
+export function tryGit(cwd, args, { timeoutMs } = {}) {
+  return git(cwd, args, { allowFailure: true, timeoutMs });
+}
+
+function seconds(ms) {
+  return ms >= 1000 ? `${Math.round(ms / 1000)} s` : `${ms} ms`;
 }
 
 export function isInsideRepo(cwd) {
