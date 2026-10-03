@@ -11,7 +11,7 @@
 
 import { findCodexSessionById, findLatestCodexSession } from '../lib/codex.js';
 import {
-  chmod, lstat, mkdir, open, readFile, rename, rm, unlink, writeFile,
+  chmod, lstat, mkdir, open, readFile, rename, rm, unlink,
 } from 'node:fs/promises';
 import { constants, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -28,7 +28,6 @@ import { writeProtectedFile, shredFile } from './_materialise.js';
 const DEFAULT_LAUNCHER = join(homedir(), '.local', 'bin', 'codex-memoro');
 const DEFAULT_SHIM = join(homedir(), '.local', 'bin', 'codex');
 const MEMORO_HOOK_ID = 'memoro-cli';
-const CODEX_SESSION_START_MATCHER = 'startup|resume';
 
 export const ID = 'codex';
 export const LABEL = 'Codex CLI';
@@ -42,33 +41,6 @@ export const POLICY_SUPPORT = Object.freeze({
     secrets: 'unsupported',
   }),
 });
-
-export async function installHooks({
-  memoroCliBin = 'memoro-cli',
-  codexHome = CODEX_HOME_DIR(),
-  configPath = codexHooksPath(codexHome),
-} = {}) {
-  const config = await readHooksConfig(configPath);
-  const hooks = config.hooks || (config.hooks = {});
-  if (!plainObject(hooks)) throw new Error('Codex hooks.json hooks must be an object');
-  const sessionStart = Array.isArray(hooks.SessionStart)
-    ? hooks.SessionStart
-    : hooks.SessionStart == null
-      ? []
-      : null;
-  if (!sessionStart) throw new Error('Codex hooks.json hooks.SessionStart must be an array');
-
-  hooks.SessionStart = sessionStart.filter((entry) => !isMemoroCodexHook(entry));
-  hooks.SessionStart.push({
-    _memoro: MEMORO_HOOK_ID,
-    matcher: CODEX_SESSION_START_MATCHER,
-    hooks: [{ type: 'command', command: `${memoroCliBin} provider-artifact capture --tool ${ID}` }],
-  });
-  await writeHooksConfig(configPath, config);
-  return {
-    configPath,
-  };
-}
 
 export async function uninstallHooks({
   launcherPath = DEFAULT_LAUNCHER,
@@ -553,27 +525,5 @@ export const ARTIFACT_OWNERSHIP = Object.freeze({
   },
   transcriptHeadSessionId(entry) {
     return entry?.type === 'session_meta' ? entry?.payload?.id || null : null;
-  },
-});
-
-/**
- * Native-custody launch lifecycle — see the claude-code adapter for the
- * contract shape. Flags declare which launcher-owned machinery applies.
- */
-export const NATIVE_LAUNCH_HOOKS = Object.freeze({
-  hookFailureReason: 'codex-provider-artifact-hook-unavailable',
-  hookFailureLabel: 'Codex',
-  // Cloud launches must prepare Codex auth (device flow) pre-spawn.
-  cloudAuthPrepare: true,
-  // Codex egress goes through the Cloudflare guard in native custody.
-  cloudflareGuard: true,
-  // Codex occasionally loses the sqlite startup race; the launcher owns
-  // the bounded retry.
-  sqliteStartupRetry: true,
-  // Right before spawn, once the spawn env (CODEX_HOME) is final.
-  async prepareSpawn({ spawnEnv, deps = {} } = {}) {
-    await (deps.installCodexArtifactHooks || installHooks)({
-      ...(spawnEnv?.CODEX_HOME ? { codexHome: spawnEnv.CODEX_HOME } : {}),
-    });
   },
 });

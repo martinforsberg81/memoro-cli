@@ -58,7 +58,7 @@ import { readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 import { getSecret as keychainGet } from '../lib/keychain.js';
-import { ACCOUNTS } from '../commands/auth.js';
+import { ACCOUNTS } from '../lib/auth-accounts.js';
 import { readConfig, getApiUrl } from '../lib/config.js';
 import { promptSecret, confirm } from '../lib/prompt.js';
 import {

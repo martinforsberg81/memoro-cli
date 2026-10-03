@@ -7,8 +7,8 @@ by hand. mc writes neither, and no longer has any machinery that could:
 a session's role instructions reach a new conversation as a launch argument
 and are never copied into an instruction file.
 
-`memoro-cli` — the terminal coordinator for Memoro. Ships the `mc`,
-`memoro-cli`, and `memoro` binaries. Node 22+, ESM, `node --test`.
+`memoro-cli` — the terminal coordinator for Memoro. Ships one binary,
+`mc`, and is private: `npm publish` refuses it. Node 22+, ESM, `node --test`.
 
 Current product boundary: `mc` runs Martin's coding work. It is one page
 (bare `mc`), a set of plans on `main`, a runner that takes their steps in
@@ -31,11 +31,8 @@ last row should read `0%`.
 
 ## Stack + commands
 
-- Three commands from one package (`package.json` `bin` field):
-  - `memoro-cli` / `memoro` → `src/bin.js` (low-level: login, legacy lens
-    compatibility, hook installation, heartbeat daemon). No mc verb reaches
-    any of it; whether it should still ship is Martin's decision, not a
-    cleanup — see [`docs/technical/mc-cut.md`](technical/mc-cut.md).
+- One command (`package.json` `bin` field). The `memoro` and `memoro-cli`
+  binaries were removed by ruling 24 (`docs/project/mc/rulings.md` § 24):
   - `mc` → `src/mc-cli.js` — the page and twelve verbs, falling through to
     `src/bin-mc.js`, whose whole table is now `mc vault`
 - Tests are the merge gate. `mc merge memoro-cli <pr>` runs the suite and
@@ -156,9 +153,8 @@ saved as a memory and nowhere else.
 ## Code conventions
 
 - `src/mc/commands/<name>.js` for new `mc` subcommands, added to the
-  `modules` map in `src/mc-cli.js` (NOT `src/commands/`, which belongs to
-  `memoro-cli` / `memoro`, and NOT `src/bin-mc.js`, whose whole table is
-  `mc vault`).
+  `modules` map in `src/mc-cli.js` (NOT `src/bin-mc.js`, whose whole table
+  is `mc vault`).
 - `src/mc/` for mc-only subsystems (`paths.js`, `run.js`, `repo-gate.js`,
   `page-collect.js`, …). `src/vault/` is the vault engine and is the one
   subsystem this repository keeps without a verb reaching all of it.
@@ -333,10 +329,9 @@ One thing to keep saying out loud all the same:
 - `src/lib/device-flow.js` + `src/lib/keychain.js` — token issuance and
   macOS keychain access. Per-device tokens are `api-tokens` with scope
   `device`.
-- `src/commands/auth.js` — Memoro keychain accounts, browser OAuth flow
-  (`memoro` / `memoro-cli`, not `mc`).
-- `src/commands/heartbeat-loop.js` — daemon with WebSocket reconnect
-  policy (4003 'Replaced' is terminal — don't reconnect)
+- `src/lib/auth-accounts.js` — the keychain account names mc reads
+  (`memoro-api-token`); they keep their names so no stored token is
+  orphaned.
 
 ## What not to do
 

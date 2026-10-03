@@ -24,17 +24,17 @@
       "check": "`grep -rn \"coding-profile\\|loadProfile\\|readCached\" src` finds nothing; `mc roles` (the assembled-instructions report in `src/mc/commands/roles.js`) shows `_common.md + overlay` with no profile part; `tests/mc/run.test.js` and `tests/mc/work-open.test.js` are green."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Only `mc` ships, and the package is private.",
       "check": "`node -e \"const p=require('./package.json');console.log(Object.keys(p.bin), p.main, p.private)\"` prints `[ 'mc' ] undefined true`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Nothing in `src/` is unreached, and nothing is kept alive only by the package seed.",
       "check": "`npm run reach` ends with `0 filer  0 rader  NOT reached — 0% of src/`, and `scripts/reach.mjs` no longer names `src/bin.js`, `src/index.js` or `lib/update-check-worker.js`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "mc still works.",
       "check": "`npm test` is green, including `tests/mc/first-run.test.js`, `tests/mc/run.test.js` and `tests/mc/work-open.test.js`; `node src/mc-cli.js --help` exits 0."
     },

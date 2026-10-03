@@ -53,7 +53,7 @@ Four sets, measured by `scripts/reach.mjs`. They partition `src/` exactly.
 | the page and its twelve verbs | 101 | 23 354 | mc |
 | `mc vault`'s own door | 13 | 4 628 | `bin-mc.js`, `cli/vault.js`, the engine behind them |
 | vault's carcass | 19 | 9 451 | kept so the two files above it can load; nothing calls it |
-| `memoro` / `memoro-cli` | 20 | 3 665 | `package.json`'s other two `bin` entries |
+| `memoro` / `memoro-cli` | 20 | 3 665 | `package.json`'s other two `bin` entries — removed 2026-10-03 by `memoro-client-cut` (ruling 24) |
 | | **153** | **41 098** | |
 
 By directory, as it stands:
@@ -67,7 +67,7 @@ By directory, as it stands:
 | `src/vault/credential-domain/` | 2 | 3 647 |
 | `src/adapters/` + `managed-runtime/` | 10 | 3 567 |
 | `src/cli/` | 2 | 1 947 |
-| `src/commands/` + `handlers/` | 9 | 1 257 |
+| `src/commands/` + `handlers/` (removed 2026-10-03) | 9 | 1 257 |
 | `src/runtime/broker/` | 6 | 883 |
 | `src/capabilities/github/` | 1 | 732 |
 | `src/` (root) | 4 | 417 |
@@ -95,16 +95,15 @@ files this project deleted — `MANAGED_GITHUB_RUNTIME_PATHS` names
 more. Read, not run: that code path throws before it does anything. The
 contract kept the files; the capability was already gone.
 
-**`memoro` and `memoro-cli` are the one decision this project left standing.**
-`package.json` maps two of its three `bin` entries to `src/bin.js` and `main`
-to `src/index.js`. Between them they reach 20 files no mc verb touches — the
-whole of `src/commands/`, five files under `src/lib/`,
-`src/mc/session-projector.js` (773 lines), `src/mc/git.js`,
-`src/mc/open-question.js`, and `runtime/broker/client.js` and `paths.js`.
-No step of this project removed a `memoro` verb, so the contract's first rule
-forbade deleting what they reach. Whether those two commands should still
-ship is a product decision, not a cleanup, and it is now the largest single
-thing standing between mc and a `src/` that is only mc.
+**`memoro` and `memoro-cli` were the one decision this project left standing,
+and ruling 24 made it.** They were `package.json`'s other two `bin` entries,
+reaching 20 files no mc verb touched, and this project's contract forbade
+deleting them because no step had removed a `memoro` verb. Ruling 24
+(`docs/project/mc/rulings.md` § 24) decided that memoro holds nothing about
+mc, so nothing here reports sessions into it; `memoro-client-cut` removed
+both binaries, `main`, `src/commands/` and the 22 files only they reached on
+2026-10-03, made the package private, and left `mc` the one command it ships.
+`src/mc/git.js` and `runtime/broker/paths.js` stayed, because mc reaches them.
 
 **The C1 custody chain is kept by a pinned hash, not an import.**
 `src/vault/engine/c1-claude-lease.js` spawns `runtime/broker/c1-child.js` by
@@ -209,9 +208,6 @@ its subject.
   `mc cd` and `mc coding-profile` — roughly forty rows, almost none of which
   route anywhere. It is the package's front door and the description of what
   mc *is*, so rewriting it is Martin's copy rather than a cleanup.
-- **`docs/onboarding.md` is worse.** Every section of it walks a verb that no
-  longer exists. It should be deleted rather than corrected; there is no
-  longer story to tell about a first-run flow that is `mc` and nothing else.
 - **`scripts/mc-release-smoke.js` is a smoke test of a product that is
   gone** — it drives `mc auth status`, `mc tool-switch`, `mc new`,
   `mc resume` and `mc fanout` — and `npm run smoke:mc` still points at it.
