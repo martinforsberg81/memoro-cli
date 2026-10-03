@@ -235,6 +235,14 @@ with its variables removed — pull request numbers, pids and commits become
 `N` and `<hash>` — so two rounds that both stopped on `lease` are one
 fingerprint seen twice. Without that the digest could never say "sixteen".
 
+A `runs.tsv` row is a finding unless its note says `success` and its exit is
+`0` or `143`. 143 is the runner's own SIGTERM: a session that lingers
+`resultGraceMs` after answering is killed with its result standing, and since
+that grace came in on 2026-09-25 about three quarters of all step rows end
+that way. Counting them made every newly started project a new fingerprint and
+buried the steps that did fail. A `success` row with any other exit is still
+named, exit code and all.
+
 One turn per digest, not one over both: `repo:` is the frontmatter key
 everything downstream routes on, and a reader left to infer it would get it
 right most days. The days it did not would be a proposal filed against the
