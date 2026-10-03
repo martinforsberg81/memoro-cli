@@ -7,6 +7,11 @@
  *
  * Reconnect on disconnect with exponential backoff (1s → 30s cap).
  *
+ * Heartbeat: the server pings, the client answers. Every 60s the server
+ * sends `{type:'ping'}` to each socket it holds and closes one that has
+ * not answered with `{type:'pong'}` for 210s. This client never pings; it
+ * replies to each ping with a pong and otherwise ignores a stray `pong`.
+ *
  * Native WebSocket (Node 22+) follows the WHATWG spec — no custom headers
  * — so the bearer token rides as ?token=... on the upgrade URL. The
  * server lifts it back into an Authorization header before auth runs.
@@ -119,6 +124,13 @@ export class CliWsClient {
       return;
     }
 
+    if (data.type === 'ping') {
+      this._sendPong();
+      return;
+    }
+
+    if (data.type === 'pong') return;
+
     if (data.type === 'command') {
       await this._handleCommand(data);
       return;
@@ -162,6 +174,15 @@ export class CliWsClient {
       this.ws.send(JSON.stringify(payload));
     } catch (err) {
       this.logger.warn(`[ws] result send failed: ${err.message}`);
+    }
+  }
+
+  _sendPong() {
+    if (!this.ws || this.ws.readyState !== 1 /* OPEN */) return;
+    try {
+      this.ws.send(JSON.stringify({ type: 'pong' }));
+    } catch (err) {
+      this.logger.warn(`[ws] pong send failed: ${err.message}`);
     }
   }
 

@@ -173,6 +173,14 @@ which it does not take. How a plan is written is the passage it shares with
 predicts this programme's deliverable, which is what the prompt is still held
 to.
 
+The role also says the checkouts stay on `plan/<programme>`, and that a
+planning session never checks out or creates a branch named after a project.
+It said only "you create neither" until 2026-09-26, when a planning session in
+`~/mc/plan/entity-detail/memoro` wrote a plan on a local branch named after the
+project and stayed on it: the runner's `addWorktree` (`src/mc/work-area.js`)
+found that branch, git refused to check it out a second time, and the step went
+`blocked` on `worktree-missing` until somebody detached the planning tree.
+
 The prompt rides as the **last positional argument**, which is how both tools
 take opening words, and only for a new conversation. It names the programme
 and where the session stands, and then waits: the reading list and the
