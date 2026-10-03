@@ -80,9 +80,17 @@ describe('docs/technical/mc-helper.md says what the code does', () => {
   it('names every failing condition the delta can carry', () => {
     const named = new Set([
       ...failingConditions({ deploy: { stale: true }, health: { error: 'x' } }),
-      ...failingConditions({ deploy: { stale: false }, health: { d1: 'error' } }),
+      ...failingConditions({
+        deploy: { stale: false },
+        health: { d1: 'error' },
+        services: { services: [{ name: '<service>', status: 'error' }] },
+        operations: {
+          nightly: { failedCount: 1, runStatus: 'partial', unfinished: [], reasons: ['latest_run_stale'] },
+          rows: [{ key: '<key>', level: 'action' }],
+        },
+      }),
     ]);
-    assert.equal(named.size, 3, 'a new condition needs a line in the doc too');
+    assert.equal(named.size, 7, 'a new condition needs a line in the doc too');
     for (const name of named) assert.ok(DOC.includes(`\`${name}\``), `the doc does not name ${name}`);
   });
 
