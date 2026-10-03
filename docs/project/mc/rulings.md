@@ -715,6 +715,62 @@ overturning it — the nightly now has nothing of its own to start.
 skip) **and [`nightly-is-a-chore/PLAN.json`](nightly-is-a-chore/PLAN.json)** (the
 process), in that queue order.
 
+## 24 · mc is the administration program for memoro me, and memoro knows nothing of it
+
+`ruling · 2026-10-03` · raised at the plan session for the mc–memoro
+integration, before any teardown was planned
+
+memoro carries two generations of mc living inside it: steering mc and Claude
+Code sessions from memoro (cloud sessions, the supervisor, broker and PTY
+attach, the Coding app, the `mc.cloud*` and `mc.supervisor` token scopes), and
+reporting them back to it (heartbeats, uploaded transcripts as `coding_session`
+items, projections). memoro-cli still ships the `memoro` binary that feeds the
+second. Nothing in mc reads any of it. The session asked what mc is to be
+measured against before deciding what goes.
+
+> "Vi byggde en hel del för att kunna köra och styra mc-/Claude Code-sessioner
+> inifrån memoro … Det är inte längre aktuellt. Nuvarande mc, som kör lokalt
+> med runner, brief, plan och helper, är en bättre modell. Den delen ska tas
+> bort, inte underhållas." (Martin, brief of 2026-10-03)
+>
+> "Det ska inte finnas någon annan användare av mc." … "mc ska fullt ut vara
+> ett administrationsprogram för memoro me. Det är åt det hållet vi bygger det.
+> Det som syns just nu är en kombination av olika rester efter andra
+> produktidéer där kodning skulle vara en specifik del." … "Det man på sikt
+> istället hade kunnat tänka sig är att låta memoro me vara tillgänglig som en
+> mcp server så att en användare kan hantera sina data och chattar direkt från
+> cli eller AI coding session." … "Ja mc blir admin-delen. Den UI bör nog
+> försvinna från appen." (Martin, 2026-10-03)
+
+So memoro me has two doors, and each has one owner:
+
+- **The product door** is every user's, with their own data and their own
+  identity: the web app, the native app, iOS Shortcuts, and — later, as a
+  product feature — memoro me as an MCP server. Someone in a coding session who
+  wants their notes uses this door, as a user, not mc. API tokens, device flow
+  and the scope mechanism belong to this door and stay; the Coding Profile is
+  data on this side too, read today through `/api/mc/coding-profile`.
+- **The admin door** is the owner's, and mc is it: building memoro me
+  (`brief`, `plan`, `run`, `merge`), shipping it (`deploy`, `test`, `shot`),
+  watching it (the helper digest over `/admin/*`), and administering it. The
+  in-app admin UI is expected to leave the app for mc; the API under it stays.
+
+Three rules follow. **The dependency runs one way**: mc reads memoro, and memoro
+holds nothing about mc — no sessions, no runner state, no record of how memoro
+is built. **mc reaches memoro only through the admin surface**, as the owner;
+it has no endpoints of its own there, so `/api/mc/` has no future. **mc's own
+state is mc's**, in `~/mc/` and its repositories.
+
+Measured against that, steering from memoro breaks the first rule and
+reporting into memoro breaks the first and the third, so both go; what remains
+open is only what becomes of the `coding_session` items already stored. The
+`memoro` binary goes with them: a user's CLI and agent access is the MCP door,
+not a binary with hooks. The MCP server, a GitHub integration and moving the
+admin UI into mc are not part of the teardown; it must only leave standing
+what they would stand on.
+
+**Carried by the `mc-memoro-integration` plans** (not yet written).
+
 ## What is still open
 
 **`mc repo` is legacy** (Martin, 2026-09-04: *"`mc repo` ska inte finnas som
