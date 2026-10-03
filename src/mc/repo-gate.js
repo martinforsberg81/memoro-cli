@@ -56,6 +56,7 @@ import { log } from './logger.js';
 import { mcHome, workGatePath } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
+import { regenerateDerived } from './repo-derived.js';
 import { ensureWorkDeps } from './work-deps.js';
 import { recordRound } from './repo-round-log.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
@@ -219,6 +220,10 @@ export async function runGate({
     // on the candidate after the suite (D-0157). `files: []` when it touches
     // none, which is said rather than left blank.
     pr_tests: null,
+    // The declared derived artifacts, regenerated after the merge: which
+    // files changed, and the commit that carries them in the candidate. Null
+    // when the repository declares none.
+    derived: null,
     candidate: null,
     // The prefix trees of a batch candidate as it was built, `T_1..T_N`:
     // what main must be, byte for byte, after each landing. Null for a
@@ -503,6 +508,32 @@ export async function runGate({
         + `(${nameSome(tree.unresolved)}) — a suite run there would count only what happens to run (D-0152)`);
     }
 
+    // Files that are a function of the whole tree, regenerated on the tree
+    // that is being measured (`repo-derived.js`). Merging the base in is what
+    // makes them stale, so the branch cannot have them right on its own; the
+    // regeneration is committed in the candidate, and `mc merge` puts the same
+    // commit on the branch before it lands so main is still the measured tree.
+    if (declared.declaration.derived.length) {
+      const fresh = await timed('derived', async () => regenerateDerived({
+        derived: declared.declaration.derived, cwd: headDir, env, git: askGit, say,
+      }));
+      report.derived = {
+        commands: declared.declaration.derived.map((item) => item.command),
+        regenerated: fresh.regenerated || [],
+        outside: fresh.outside || [],
+        commit: fresh.commit || null,
+      };
+      if (!fresh.ok) return finish(fresh.kind === 'outside' ? 'derived-outside' : 'derived', fresh.reason);
+      if (fresh.commit) {
+        say(`regenerated ${fresh.regenerated.length} derived file${fresh.regenerated.length === 1 ? '' : 's'} after the merge and committed them in the candidate`);
+        if (report.candidate_trees?.length) {
+          report.candidate_trees[report.candidate_trees.length - 1] = trim(askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir }).stdout) || null;
+        }
+      } else {
+        say('derived artifacts already current after the merge');
+      }
+    }
+
     // What this change reaches, asked of the repository rather than assumed.
     let selection = null;
     if (selects) {
@@ -691,6 +722,8 @@ export function verdictFor(report) {
   // A contract gate this change breaks is red, and the word a reader acts on
   // should not depend on whether a test or a command found it.
   if (report.stopped_at === 'selected-gate') return 'red';
+  // A generator that writes outside what it declared is the change's to fix.
+  if (report.stopped_at === 'derived-outside') return 'red';
   if (report.stopped_at !== null) return 'stopped';
   return 'green';
 }

@@ -55,7 +55,9 @@ describe('an override that shadows shipped fields is said, not silent (D-0135)',
       // `suite` joined on 2026-09-02 and is worse to lose quietly: an
       // override that drops it while keeping `select` does not cost a saving,
       // it stops every `--full` for that repository.
-      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'suite', 'suite_why', 'pr_tests_flags']);
+      // `derived` joined on 2026-10-03: an override that drops it puts the
+      // stale-snapshot race straight back.
+      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags']);
       // The shipped entry alone shadows nothing.
       const plain = declarationFor('/x/memoro-cli', { root });
       assert.deepEqual(plain.shadowed, []);
@@ -373,6 +375,7 @@ describe('a repository that declares itself in .mc/test.json', () => {
         suite: SHIPPED['memoro-cli'].suite,
         suite_why: SHIPPED['memoro-cli'].suite_why,
         extra_gates: [],
+        derived: [],
         merge_log: join(fx.root, 'work', 'runner/log/merge-memoro-cli.md'),
         pr_tests_flags: ['--import', './tests/_isolate-home.mjs'],
         affected: null,

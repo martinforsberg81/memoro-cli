@@ -190,6 +190,13 @@ export const SHIPPED = Object.freeze({
     // gate-consolidation plan says the same thing from its end — the contract
     // suite belongs inside `npm run ci`, not beside it.
     extra_gates: Object.freeze([]),
+    // The SQL snapshot is a function of the whole tree, so the candidate's
+    // copy is wrong the moment main gains a file under `scripts/` or `src/`,
+    // whatever the branch regenerated. Inventory first: coverage reads it.
+    derived: Object.freeze([
+      Object.freeze({ command: 'npm run sql:inventory -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
+      Object.freeze({ command: 'npm run sql:coverage -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
+    ]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro.md' }),
     // Measured 2026-08-23: memoro's runner (scripts/testing/runner.mjs) runs
     // `node --test --import ./tests/_helpers/browser-paths.mjs`, which
@@ -455,6 +462,14 @@ function normalise(entry, env) {
     extra_gates: (entry.extra_gates || []).map((gate) => ({
       name: gate.name || gate.command,
       command: gate.command,
+    })),
+    // Commands that regenerate files which are a function of the whole tree,
+    // and the paths they write (`repo-derived.js`). Run after the base is
+    // merged — in the gate's candidate and in the branch freshened for its
+    // landing — and committed when dirt stays inside `paths`.
+    derived: (entry.derived || []).map((item) => ({
+      command: String(item.command),
+      paths: (item.paths || []).map(String),
     })),
     merge_log: resolveLog(entry.merge_log, env),
     // The node flags the pull request's own tests run with (D-0157). Empty
