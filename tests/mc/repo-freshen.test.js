@@ -145,3 +145,45 @@ describe('freshening the branch that is landing next in a batch', () => {
     } finally { fx.cleanup(); }
   });
 });
+
+describe('the branch carries the regeneration the gate made', () => {
+  const declaration = { prepare: 'npm ci', derived: [{ command: 'npm run sql:inventory -- --write', paths: ['docs/sql/'] }] };
+  const withStatus = (fx, porcelain) => (args, opts = {}) => {
+    if (args[0] === 'status') { fx.calls.push({ args, cwd: opts.cwd }); return { status: 0, stdout: porcelain, stderr: '' }; }
+    return fx.git(args, opts);
+  };
+
+  it('prepares, regenerates after the merge, commits, then pushes', () => {
+    const fx = fixture();
+    const shelled = [];
+    try {
+      const git = (args, opts) => { fx.calls.push({ args, cwd: opts?.cwd }); return { status: 0, stdout: args[0] === 'rev-parse' ? 'abc1234def\n' : '', stderr: '' }; };
+      fx.git = git;
+      const out = fx.run({
+        declaration,
+        git: withStatus(fx, ' M docs/sql/snapshot.json\n'),
+        shell: (command) => { shelled.push(command); return { status: 0, stdout: '', stderr: '' }; },
+      });
+      assert.equal(out.ok, true, out.reason || '');
+      assert.deepEqual(shelled, ['npm ci', 'npm run sql:inventory -- --write']);
+      const order = fx.calls.map((c) => c.args[0]);
+      assert.ok(order.indexOf('merge') < order.indexOf('commit'));
+      assert.ok(order.indexOf('commit') < order.indexOf('push'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('dirt outside the declared paths pushes nothing', () => {
+    const fx = fixture();
+    try {
+      fx.git = (args, opts) => { fx.calls.push({ args, cwd: opts?.cwd }); return { status: 0, stdout: '', stderr: '' }; };
+      const out = fx.run({
+        declaration,
+        git: withStatus(fx, ' M src/app.js\n'),
+        shell: () => ({ status: 0, stdout: '', stderr: '' }),
+      });
+      assert.equal(out.ok, false);
+      assert.match(out.reason, /src\/app\.js/u);
+      assert.equal(fx.calls.some((c) => c.args[0] === 'push'), false);
+    } finally { fx.cleanup(); }
+  });
+});

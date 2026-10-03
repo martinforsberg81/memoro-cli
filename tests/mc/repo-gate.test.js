@@ -1570,3 +1570,67 @@ describe('the round measures the branch as pushed, not as GitHub remembers it', 
     assert.equal(checkout.args.at(-1), 'abc1234');
   });
 });
+
+describe('derived artifacts are regenerated after the base is merged in', () => {
+  const declared = (fx, derived) => writeJson(join(fx.mcHome, 'repo-gates.json'), {
+    repo: { prepare: null, prepare_why: 'a test', extra_gates: [], merge_log: null, derived },
+  });
+  /** The fixture's git, with `status` answering what the commands left. */
+  const withStatus = (fx, porcelain) => (args, opts = {}) => {
+    if (args[0] === 'status') {
+      fx.calls.push({ tool: 'git', args, cwd: opts.cwd });
+      return { status: 0, stdout: porcelain, stderr: '' };
+    }
+    return fx.git(args, opts);
+  };
+
+  it('runs the declared commands in the candidate after the merge, and commits dirt inside the paths', async () => {
+    const fx = fixture();
+    try {
+      declared(fx, [{ command: 'true', paths: ['docs/sql/'] }]);
+      const result = await fx.run({ git: withStatus(fx, ' M docs/sql/snapshot.json\n') });
+      assert.equal(result.stopped_at, null, JSON.stringify(result));
+      assert.deepEqual(result.derived.regenerated, ['docs/sql/snapshot.json']);
+      assert.equal(result.derived.commit, 'cand2222');
+      const order = fx.calls.map((call) => `${call.tool}:${call.args?.[0] ?? ''}`);
+      assert.ok(order.indexOf('git:merge') < order.indexOf('git:commit'), 'committed after the base was merged in');
+      assert.ok(order.indexOf('git:commit') < order.indexOf('suite:'), 'and before the suite measures');
+      const commit = fx.calls.find((call) => call.args?.[0] === 'commit');
+      assert.match(commit.cwd, /\/candidate$/u, 'in the candidate, not in the repository');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a clean tree after regenerating commits nothing', async () => {
+    const fx = fixture();
+    try {
+      declared(fx, [{ command: 'true', paths: ['docs/sql/'] }]);
+      const result = await fx.run({ git: withStatus(fx, '') });
+      assert.equal(result.stopped_at, null, JSON.stringify(result));
+      assert.equal(result.derived.commit, null);
+      assert.equal(fx.calls.some((call) => call.args?.[0] === 'commit'), false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('dirt outside the declared paths is a red verdict with the names', async () => {
+    const fx = fixture();
+    try {
+      declared(fx, [{ command: 'true', paths: ['docs/sql/'] }]);
+      const result = await fx.run({ git: withStatus(fx, ' M docs/sql/snapshot.json\n M src/app.js\n') });
+      assert.equal(result.stopped_at, 'derived-outside');
+      assert.equal(result.verdict, 'red');
+      assert.match(result.reason, /src\/app\.js/u);
+      assert.deepEqual(result.derived.outside, ['src/app.js']);
+      assert.deepEqual(fx.ran('suite'), [], 'nothing is measured on a tree nobody declared');
+      assert.equal(fx.calls.some((call) => call.args?.[0] === 'commit'), false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a repository that declares none runs none', async () => {
+    const fx = fixture();
+    try {
+      const result = await fx.run();
+      assert.equal(result.derived, null);
+      assert.equal(fx.calls.some((call) => call.args?.[0] === 'status'), false);
+    } finally { fx.cleanup(); }
+  });
+});

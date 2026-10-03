@@ -854,3 +854,42 @@ describe('one round at a time', () => {
     }
   });
 });
+
+describe('a gate that regenerated derived artifacts', () => {
+  it('freshens the branch with the declaration before its squash, so main is the measured tree', async () => {
+    const verdict = { ...green(), declaration: { prepare: 'npm ci', derived: [{ command: 'regen', paths: ['docs/sql/'] }] }, derived: { commit: 'eeee555', regenerated: ['docs/sql/x.json'] } };
+    const fx = fixture({ verdict });
+    const freshened = [];
+    try {
+      const report = await fx.run({ refresh: (args) => { freshened.push(args); fx.calls.push({ tool: 'refresh' }); return { ok: true, at: 'abc1234' }; } });
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(freshened.length, 1);
+      assert.equal(freshened[0].branch, 'feature');
+      assert.equal(freshened[0].declaration, verdict.declaration);
+      const order = fx.calls.map((call) => (call.tool === 'gh' ? `gh:${call.args[1]}` : call.tool));
+      assert.ok(order.indexOf('refresh') < order.indexOf('gh:merge'), 'freshened before the squash');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a branch that cannot carry the regeneration is not landed', async () => {
+    const verdict = { ...green(), declaration: { derived: [{ command: 'regen', paths: ['docs/sql/'] }] }, derived: { commit: 'eeee555', regenerated: ['docs/sql/x.json'] } };
+    const fx = fixture({ verdict });
+    try {
+      const report = await fx.run({ refresh: () => ({ ok: false, reason: 'regen failed' }) });
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'merge');
+      assert.match(report.reason, /#400 could not be freshened for landing \(regen failed\)/u);
+      assert.equal(fx.ran('gh').some((call) => call.args[1] === 'merge'), false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('nothing regenerated, nothing freshened — a single round lands as it always did', async () => {
+    const fx = fixture();
+    let asked = 0;
+    try {
+      const report = await fx.run({ refresh: () => { asked += 1; return { ok: true }; } });
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(asked, 0);
+    } finally { fx.cleanup(); }
+  });
+});

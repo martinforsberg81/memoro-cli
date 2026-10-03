@@ -270,12 +270,21 @@ export async function runMergeRound({
         // landed, four refused). The just-made main goes into the next
         // branch before its turn — a conflict here stops the batch, and
         // what has landed stays landed and said.
-        const head = (verdict.prs || []).find((item) => item.number === number)?.head;
+      }
+      // Freshened before its squash: every later branch of a batch, because
+      // the squash before it is a commit the branch does not have; and any
+      // branch at all when the gate had to regenerate derived artifacts after
+      // merging the base, because otherwise the squash lands the branch's
+      // stale copy and main is not the tree that was measured.
+      if (index > 0 || verdict.derived?.commit) {
+        const head = batch ? (verdict.prs || []).find((item) => item.number === number)?.head : verdict.pr.head;
         if (head) {
-          const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, env, git: askGit, say });
+          const ready = (refresh || freshenBranchForLanding)({
+            repoPath, branch: head, base: verdict.pr.base, declaration: verdict.declaration, env, git: askGit, say,
+          });
           if (!ready.ok) {
             if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: `could not be freshened for landing: ${ready.reason}` });
-            return finish('merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it, and ${verdict.pr.base} now stands at a state the batch never measured by itself`);
+            return finish('merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it${index > 0 ? `, and ${verdict.pr.base} now stands at a state the batch never measured by itself` : ''}`);
           }
         }
       }

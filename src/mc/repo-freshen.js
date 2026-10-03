@@ -41,6 +41,7 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { gateRoot } from './repo-gate.js';
+import { regenerateDerived } from './repo-derived.js';
 import { repoFileSlug } from './repo-snapshot.js';
 
 /**
@@ -63,14 +64,20 @@ import { repoFileSlug } from './repo-snapshot.js';
  * merge commit pushed plainly needs nothing from them.
  *
  * A conflict aborts and touches nothing; the caller stops the batch there.
+ *
+ * With a `declaration` carrying `derived`, the declared commands run after the
+ * merge, exactly as they did in the gate's candidate (`repo-derived.js`). That
+ * is also why a single round calls this: when the gate had to regenerate, the
+ * branch has to be given the same commit before its squash.
  */
 export function freshenBranchForLanding({
-  repoPath, branch, base, env = process.env, git = null, say = () => {},
+  repoPath, branch, base, declaration = null, env = process.env, git = null, shell = null, say = () => {},
 } = {}) {
   const run = (tool) => (args, options = {}) => spawnSync(tool, args, {
     cwd: options.cwd, env, encoding: 'utf8',
   });
   const askGit = git || run('git');
+  const askShell = shell || ((command, options = {}) => spawnSync(command, { cwd: options.cwd, env, shell: true, encoding: 'utf8' }));
   const workspace = join(gateRoot(env), `${repoFileSlug(repoPath)}-freshen`);
   askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
   rmSync(workspace, { recursive: true, force: true });
@@ -83,6 +90,20 @@ export function freshenBranchForLanding({
       const conflicted = trim(askGit(['diff', '--name-only', '--diff-filter=U'], { cwd: workspace }).stdout).split('\n').filter(Boolean);
       askGit(['merge', '--abort'], { cwd: workspace });
       return { ok: false, reason: `${branch} conflicts with ${base} in ${conflicted.slice(0, 5).join(', ') || 'unknown files'} — left exactly as it was` };
+    }
+    // The gate regenerated the declared derived artifacts after merging the
+    // base into its candidate; the branch has to carry the same regeneration,
+    // or the squash lands a stale snapshot and main is not the measured tree.
+    // Nothing is pushed when it fails.
+    const derived = declaration?.derived || [];
+    if (derived.length) {
+      if (declaration.prepare) {
+        const ready = askShell(declaration.prepare, { cwd: workspace });
+        if (ready.status !== 0) return { ok: false, reason: `${declaration.prepare} failed before regenerating derived artifacts — ${trim(ready.stderr)}` };
+      }
+      const fresh = regenerateDerived({ derived, cwd: workspace, env, git: askGit, shell: askShell, say });
+      if (!fresh.ok) return { ok: false, reason: fresh.reason };
+      if (fresh.commit) say(`regenerated ${fresh.regenerated.length} derived file${fresh.regenerated.length === 1 ? '' : 's'} on ${branch}`);
     }
     const pushed = askGit(['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: workspace });
     if (pushed.status !== 0) return { ok: false, reason: trim(pushed.stderr) || 'push refused' };
