@@ -269,3 +269,58 @@ describe('events with no invocation behind them are not dead commands', () => {
     assert.deepEqual(filterRuns([run], { failures: true }).length, 1);
   });
 });
+
+/**
+ * What else a command logged.
+ *
+ * `dev-server-lifecycle` asked for `mc log` showing `dev-server-stopped` with
+ * `reason: worktree-removed`. The line was in `mc.log` (run_f0b0cce9ef1a,
+ * 2026-09-26), and no form of `mc log` printed it: the reader kept the start,
+ * the end and the narration, and folded everything else into `events: 3`.
+ * These are the three real lines.
+ */
+describe('a run keeps the other events it logged', () => {
+  const real = [
+    { at: '2026-09-26T09:46:57.479Z', pid: 22115, run: 'run_f0b0cce9ef1a', event: 'mc.start', verb: 'work', sub: 'remove', args: ['dsl-verify', 'memoro'], flags: [], argc: 4, holder: 'dev-server-lifecycle' },
+    { at: '2026-09-26T09:47:00.129Z', pid: 22115, run: 'run_f0b0cce9ef1a', event: 'dev-server-stopped', instance_id: 'static-629e8750-80de-4eae-b201-125c8f3054da', service: 'memoro-static', worktree_path: '/Users/martinforsberg/mc/dsl-verify/memoro', reason: 'worktree-removed', ok: true },
+    { at: '2026-09-26T09:47:03.037Z', pid: 22115, run: 'run_f0b0cce9ef1a', event: 'mc.end', verb: 'work', exit_code: 0, duration_ms: 5558, threw: false },
+  ];
+
+  it('by name and fields, without the envelope every line carries', () => {
+    const [run] = runsFrom(real, { alive: DEAD });
+    assert.equal(run.events, 3);
+    assert.deepEqual(run.logged, [{
+      at: '2026-09-26T09:47:00.129Z',
+      event: 'dev-server-stopped',
+      fields: {
+        instance_id: 'static-629e8750-80de-4eae-b201-125c8f3054da',
+        service: 'memoro-static',
+        worktree_path: '/Users/martinforsberg/mc/dsl-verify/memoro',
+        reason: 'worktree-removed',
+        ok: true,
+      },
+    }]);
+  });
+
+  it('the start, the end and the narration are not repeated there', () => {
+    const [run] = runsFrom([
+      ...real,
+      { at: 'x', pid: 22115, run: 'run_f0b0cce9ef1a', event: 'merge.say', text: 'said' },
+      { at: 'x', pid: 22115, run: 'run_f0b0cce9ef1a', event: 'gate.killed', signal: 'SIGTERM' },
+    ], { alive: DEAD });
+    assert.deepEqual(run.logged.map((one) => one.event), ['dev-server-stopped']);
+  });
+
+  it('storyOf lists them for the one run asked about, and no other run\'s', () => {
+    const root = home();
+    try {
+      writeEvents(root, [
+        ...real,
+        { at: '2026-09-26T09:47:05.000Z', pid: 22200, run: 'run_other', event: 'dev-server-reaped', reason: 'pid-gone' },
+      ]);
+      const story = storyOf('run_f0b0cce9ef1a', { root, alive: DEAD });
+      assert.deepEqual(story.logged.map((one) => one.event), ['dev-server-stopped']);
+      assert.equal(story.logged[0].fields.reason, 'worktree-removed');
+    } finally { setLogPath(null); rmSync(root, { recursive: true, force: true }); }
+  });
+});

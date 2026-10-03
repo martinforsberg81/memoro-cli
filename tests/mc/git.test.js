@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { commitsAhead, resolveDefaultBranch } from '../../src/mc/git.js';
+import { commitsAhead, git as mcGit, GIT_TIMEOUT_MS, resolveDefaultBranch, tryGit } from '../../src/mc/git.js';
 
 const GIT_ENV = {
   ...process.env,
@@ -163,3 +163,45 @@ function git(cwd, args, { allowFailure = false } = {}) {
     throw error;
   }
 }
+
+// A git that does not finish — a credential helper waiting on a locked
+// keychain's modal — is stopped, and the error names what timed out. The fake
+// sleeps 3 s and then succeeds, so without the limit the call returns cleanly
+// and the assertion fails rather than hanging the suite.
+function slowGit(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-git-slow-'));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'git'), '#!/bin/sh\nsleep 3\necho late\n');
+  chmodSync(join(bin, 'git'), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  t.after(() => {
+    process.env.PATH = path;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return dir;
+}
+
+test('git() stops a call that does not finish and says what timed out', (t) => {
+  const dir = slowGit(t);
+  const started = Date.now();
+  assert.throws(
+    () => mcGit(dir, ['fetch', '-q', 'origin'], { timeoutMs: 300 }),
+    (err) => {
+      assert.equal(err.code, 'ETIMEDOUT');
+      assert.match(err.message, /^git fetch -q origin did not finish in 300 ms and was stopped/);
+      return true;
+    },
+  );
+  assert.ok(Date.now() - started < 2500, 'stopped before the fake git finished');
+});
+
+test('tryGit() answers null for a call that timed out', (t) => {
+  const dir = slowGit(t);
+  assert.equal(tryGit(dir, ['ls-remote', 'origin', 'HEAD'], { timeoutMs: 300 }), null);
+});
+
+test('git() gives a call five minutes by default', () => {
+  assert.equal(GIT_TIMEOUT_MS, 300_000);
+});

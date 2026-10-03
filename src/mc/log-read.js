@@ -102,6 +102,13 @@ export function readLeaseLog({ root = mcHome() } = {}) {
  * verb, on a machine where nothing had died. A tool that reports itself as the
  * anomaly teaches people to ignore the anomaly column, which is the one thing
  * this file cannot afford.
+ *
+ * Every other event a command logged is kept in `logged`, by name and fields.
+ * It used to raise the count in `events` and nothing else, so a criterion
+ * that said "paste `mc log` showing `dev-server-stopped`" could not be met by
+ * any form of `mc log`: the line was in the file, and the reader folded it
+ * into a number. The fields are shown as they were written — `logger.js` has
+ * already bounded them to identifiers, paths, codes and counts.
  */
 export function runsFrom(events, { alive = isAlive } = {}) {
   const runs = new Map();
@@ -111,7 +118,7 @@ export function runsFrom(events, { alive = isAlive } = {}) {
       runs.set(id, {
         run: id, pid: event.pid ?? null, at: event.at, verb: null, sub: null, args: [], flags: [],
         holder: null, cwd: null, started: false, ended: false, exit_code: null, duration_ms: null,
-        threw: false, error: null, killed: null, said: [], events: 0,
+        threw: false, error: null, killed: null, said: [], logged: [], events: 0,
       });
     }
     const run = runs.get(id);
@@ -136,6 +143,9 @@ export function runsFrom(events, { alive = isAlive } = {}) {
       run.killed = event.signal || 'signal';
     } else if (event.event === 'gate.say' || event.event === 'merge.say') {
       run.said.push({ at: event.at, text: event.text });
+    } else {
+      const { at, pid: _pid, run: _run, event: name, ...fields } = event;
+      run.logged.push({ at, event: name, fields });
     }
   }
   for (const run of runs.values()) {
@@ -154,7 +164,8 @@ export function runsFrom(events, { alive = isAlive } = {}) {
 }
 
 /**
- * Everything mc knows about one run id, from all three files.
+ * Everything mc knows about one run id, from all three files: the invocation,
+ * every other event it logged, its rounds and the leases they touched.
  *
  * This is the command's whole reason to exist: the 2026-08-30 reconstruction,
  * done by the machine that has the files.
@@ -169,6 +180,9 @@ export function storyOf(run, { root = mcHome(), alive = isAlive } = {}) {
   return {
     run,
     invocation: assembled || null,
+    // What else the command wrote down — `dev-server-stopped`, `work.open` —
+    // by name and fields, oldest first. `invocation.events` is only a count.
+    logged: assembled?.logged || [],
     rounds: myRounds,
     // The lease log has no run id; it is joined on the pid the round wrote
     // down, which is exactly the bridge that was missing.

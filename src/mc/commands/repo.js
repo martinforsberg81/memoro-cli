@@ -324,9 +324,14 @@ async function waitTurn({ repoPath, opts, root, stderr, deps, t0: sharedT0, cont
   // them (repo-gate.js) — not under the work root, which is only where the
   // queue file is. Read from the work root, neither is ever seen: every wait
   // answers 'go' at once and the round is retried once a second (2026-09-19).
+  // An orphaned lease — its owner's process is gone (lease-owner.js) — is in
+  // nobody's way: the round's own `claimLease` reaps it, and only a waiter
+  // that goes ever gets that far. Counted as held, three waiters polled behind
+  // a dead round's lease for a morning and none of them reaped it (2026-09-20).
+  const blocking = (lease) => Boolean(lease.held && !lease.orphaned);
   const startRunning = readRunningRound({ alive });
   const startLease = readLeaseFn(repoPath);
-  if (!contended && !startRunning && !startLease.held) {
+  if (!contended && !startRunning && !blocking(startLease)) {
     // An earlier call for this same pull request that timed out kept its
     // place, and nothing else takes that entry away: this call is its turn,
     // so it goes with it. memoro #12353 was drawn as waiting for a day after
@@ -342,7 +347,11 @@ async function waitTurn({ repoPath, opts, root, stderr, deps, t0: sharedT0, cont
 
   const t0 = sharedT0 ?? now().getTime();
   let announced = false;
-  const behind = (running, lease) => (running ? describeRunning(running) : `${repo} is held by ${lease.holder}`);
+  const behind = (running, lease) => {
+    if (running) return describeRunning(running);
+    if (lease.orphaned) return `${repo}'s orphaned lease (${lease.holder}; pid ${lease.owner_pid} is gone)`;
+    return `${repo} is held by ${lease.holder}`;
+  };
 
   for (;;) {
     const running = readRunningRound({ alive });
@@ -361,8 +370,8 @@ async function waitTurn({ repoPath, opts, root, stderr, deps, t0: sharedT0, cont
     });
     write(mergesPath(root), entries);
 
-    const turn = nextWaiter(entries, { leaseHeld: (candidate) => (candidate === repo ? Boolean(lease.held) : false) });
-    if (turn && turn.repo === repo && turn.pr === pr && turn.pid === process.pid && !running && !lease.held) {
+    const turn = nextWaiter(entries, { leaseHeld: (candidate) => (candidate === repo ? blocking(lease) : false) });
+    if (turn && turn.repo === repo && turn.pr === pr && turn.pid === process.pid && !running && !blocking(lease)) {
       write(mergesPath(root), dequeue(entries, { repo, pr }));
       if (announced) stderr.write(`mc: waited ${Math.round((now().getTime() - t0) / 1000)}s\n`);
       return 'go';
