@@ -21,15 +21,23 @@
  *     `~/mc/runner/version.json` (`live-version.js`) so the page can say what
  *     production answers without going to the network itself, and the second
  *     half of the deploy section;
- *   - D1 health — `GET /ping-d1`, which needs no credential at all.
+ *   - service health — `GET /admin/health`: secrets, D1, R2, KV, both
+ *     Vectorize indexes and queues, each with its own verdict;
+ *   - D1 health — `GET /ping-d1`, which needs no credential at all, and is
+ *     kept as the reading that does not depend on the token;
+ *   - the operations projection — `GET /admin/operations/status`: the nightly
+ *     scheduler and its tasks, the claims resolver, the AI batches, each with
+ *     the server's own conclusion, and the incident summary.
  *
  * Which surface, and why it matters: `/admin/*` is the admin-token surface,
  * `/api/admin/*` is session-admin. Measured against production 2026-08-29,
  * `/api/admin/health`, `/api/admin/operations/status` and
- * `/api/admin/analysis` all answer 401 to a bearer token — "Not logged in or
- * session has expired." Only a browser session reaches them. So the
- * operations projection is not in this digest; it is the first thing the
- * helper will propose exposing.
+ * `/api/admin/analysis` all answered 401 to a bearer token — "Not logged in
+ * or session has expired." — and the digest carried a standing "Not readable"
+ * section for the first two. memoro #12461 (production build 24645,
+ * 2026-10-03) put `GET /admin/health` and `GET /admin/operations/status` on
+ * the token surface, and both answered 200 to the token this file reads the
+ * same day. The `/api/admin/*` paths are still session-only and are not used.
  *
  * The delta is the point of the file. Neither the scripts nor the routes know
  * what a previous run saw, so the previous digest is the only baseline there
@@ -37,8 +45,9 @@
  * machine-readable block at the end.
  *
  * The helper reads production and never writes to it. That is the Contract,
- * and it is why `/ping-kv` is not called even though it would report KV
- * health: it writes a probe key and deletes it again.
+ * and it is why `/ping-kv` is not called: it writes a probe key and deletes it
+ * again. `/admin/health` reads KV with a `get` of a key that does not exist,
+ * so KV is reported from there.
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -197,17 +206,6 @@ export function readAdminToken(root, env = process.env) {
 
 /** What to say when there is no token, without naming a value. */
 export const NO_TOKEN = `no ${TOKEN_KEY} in the environment or in the memoro checkout`;
-
-/**
- * Why the operations projection is absent, in the digest's own words. It is a
- * standing fact about the routes, not a transient failure, so the collect
- * step does not spend a request on it every day to rediscover the 401.
- */
-export const OPERATIONS_UNREACHABLE = 'The nightly and morning task outcomes are not in this digest. '
-  + '`/api/admin/operations/status` and `/api/admin/health` are session-admin routes: measured against '
-  + 'production on 2026-08-29 both answer 401 — "Not logged in or session has expired." — to a bearer '
-  + 'admin token, and there is no token-surface equivalent under `/admin/`. Exposing them to the token '
-  + 'is the helper\'s first candidate proposal.';
 
 /* -------------------------------------------------------------------- state */
 
@@ -388,16 +386,125 @@ export function healthState(ping) {
   return { d1: ping?.d1 || (ping?.ok ? 'healthy' : 'unknown'), totalMs: timings.total ?? null, slow };
 }
 
+/** The services `/admin/health` reports, in the order the digest names them. */
+export const HEALTH_SERVICES = Object.freeze(['secrets', 'd1', 'r2', 'kv', 'knowledgeBaseVectors', 'universeVectors', 'queues']);
+
+/**
+ * `/admin/health` → the overall verdict and one row per service. memoro's own
+ * vocabulary is `healthy`, `degraded`, `error` and `not_configured`; a service
+ * the body carries that is not in `HEALTH_SERVICES` is kept, after the known
+ * ones, rather than dropped.
+ */
+export function serviceHealthState(body) {
+  const services = body?.services && typeof body.services === 'object' ? body.services : {};
+  const names = [...HEALTH_SERVICES.filter((name) => name in services),
+    ...Object.keys(services).filter((name) => !HEALTH_SERVICES.includes(name))];
+  return {
+    status: body?.status || 'unknown',
+    checkedAt: body?.checkedAt || null,
+    services: names.map((name) => {
+      const s = services[name] || {};
+      return {
+        name,
+        status: s.status || 'unknown',
+        latency: typeof s.latency === 'number' ? s.latency : null,
+        present: typeof s.present === 'number' ? s.present : null,
+        total: typeof s.total === 'number' ? s.total : null,
+        missing: Array.isArray(s.missing) ? s.missing.map(String) : [],
+        note: s.note || null,
+        error: s.error || null,
+      };
+    }),
+  };
+}
+
+/** memoro's own reading of a run or task status (`isFailureStatus` / `isSuccessStatus`). */
+const FAILED = new Set(['failure', 'failed', 'error', 'partial']);
+const DONE = new Set(['success', 'completed', 'processed']);
+
+/** When an operation last finished, by whichever time its shape carries. */
+function operationFinished(op) {
+  const run = op?.latestRun || {};
+  const event = op?.latestEvent || {};
+  return run.finishedAt || run.processedAt || run.providerTerminalAt || event.occurredAt || run.startedAt || run.submittedAt || null;
+}
+
+/**
+ * `/admin/operations/status` → one row per operation, the nightly tasks that
+ * did not complete, and the incident summary. The server's `conclusion` is
+ * taken as given — `ok`, `watch` or `action` with its reason codes — because
+ * it is memoro's judgement of its own processes, not one to re-derive here.
+ */
+export function operationsState(body) {
+  const ops = Array.isArray(body?.operations) ? body.operations : [];
+  const rows = ops.map((op) => ({
+    key: String(op.key || ''),
+    label: op.label || op.key || '?',
+    state: op.state || 'unknown',
+    level: op.conclusion?.level || 'unknown',
+    reasons: Array.isArray(op.conclusion?.reasonCodes) ? op.conclusion.reasonCodes.map(String) : [],
+    runStatus: op.latestRun?.status || op.latestEvent?.status || null,
+    finished: operationFinished(op),
+    counts: op.counts && typeof op.counts === 'object' ? op.counts : {},
+  })).filter((row) => row.key);
+  const nightlyOp = ops.find((op) => op.key === 'scheduler.nightly') || null;
+  const nightly = nightlyOp
+    ? {
+      runStatus: nightlyOp.latestRun?.status || null,
+      finished: nightlyOp.latestRun?.finishedAt || null,
+      total: Number(nightlyOp.counts?.tasksTotal) || 0,
+      failedCount: Number(nightlyOp.counts?.tasksFailed) || 0,
+      reasons: Array.isArray(nightlyOp.conclusion?.reasonCodes) ? nightlyOp.conclusion.reasonCodes.map(String) : [],
+      unfinished: (Array.isArray(nightlyOp.tasks) ? nightlyOp.tasks : [])
+        .filter((task) => !DONE.has(task?.status))
+        .map((task) => ({ name: String(task.name || '?'), status: task.status || 'unknown', errorCode: task.errorCode || null })),
+    }
+    : null;
+  const summary = body?.incidents?.summary && typeof body.incidents.summary === 'object' ? body.incidents.summary : {};
+  return {
+    generatedAt: body?.generatedAt || null,
+    rows,
+    nightly,
+    incidents: {
+      source: body?.incidents?.source || null,
+      groups: Object.entries(summary).map(([status, g]) => ({
+        status, count: Number(g?.count) || 0, occurrences: Number(g?.occurrences) || 0, latestSeenAt: g?.latestSeenAt || null,
+      })),
+      totalGroups: body?.incidents?.totalGroups ?? null,
+      totalOccurrences: body?.incidents?.totalOccurrences ?? null,
+    },
+    warnings: Array.isArray(body?.warnings) ? body.warnings.map(String) : [],
+  };
+}
+
 /**
  * The named conditions the delta watches — the operational half of "what is
  * new". Fingerprints are the other half and carry their own identity.
+ *
+ * Each is a name that stays the same for as long as the thing is true, so the
+ * delta raises it once, the day it starts. That is why an operation memoro
+ * concludes needs `action` is one name per operation and not one per reason
+ * code: the claims resolver's backlog has been `action` for months, and a
+ * name that changed with its counts would be "new" every day.
  */
-export function failingConditions({ deploy, health, offline = false }) {
+export function failingConditions({ deploy, health, services = null, operations = null, offline = false }) {
   const failing = [];
   if (deploy?.stale) failing.push('deploy-stale');
   // With nothing on the network answering, a failed `/ping-d1` measured this
-  // machine, not D1 — see `networkDown`.
+  // machine, not D1 — see `networkDown`. Nothing below is raised either: an
+  // offline run read no service and no operation.
   if (health?.error) { if (!offline) failing.push('d1-unreachable'); } else if (health && health.d1 !== 'healthy') failing.push('d1-unhealthy');
+  if (offline) return failing;
+  if (services && !services.error) {
+    for (const s of services.services || []) if (s.status !== 'healthy') failing.push(`health-${s.name}`);
+  }
+  if (operations && !operations.error) {
+    const nightly = operations.nightly;
+    if (nightly && (nightly.failedCount > 0 || FAILED.has(nightly.runStatus)
+      || nightly.unfinished.some((task) => FAILED.has(task.status)))) failing.push('nightly-tasks-failed');
+    if (nightly && nightly.reasons.some((code) => code === 'latest_run_stale' || code === 'no_run_data')) failing.push('nightly-stale');
+    for (const row of operations.rows || []) if (row.level === 'action') failing.push(`operations-action-${row.key}`);
+  }
   return failing;
 }
 
@@ -426,6 +533,7 @@ const sha7 = (sha) => (sha ? String(sha).slice(0, 7) : null);
 
 export function renderDigest({
   now, since, previous, threshold, delta, errors, analysis, provider, health, deploy, live = null,
+  services = { error: 'not read' }, operations = { error: 'not read' },
   mainCommit, notes = [], offline = false,
 }) {
   const out = [];
@@ -487,13 +595,22 @@ export function renderDigest({
   out.push('');
 
   out.push('## Health', '');
-  if (health.error) out.push(`_could not read: ${health.error}_`);
+  if (services.error) out.push(`\`/admin/health\`: _could not read: ${services.error}_`);
   else {
-    out.push(`D1: **${health.d1}**${health.totalMs != null ? ` (${health.totalMs} ms)` : ''}${health.slow.length ? ` — slow: ${health.slow.join(', ')}` : ''}`);
+    out.push(`\`/admin/health\`: **${services.status}**${services.checkedAt ? ` (checked ${short(services.checkedAt)})` : ''}`, '');
+    if (!services.services.length) out.push('_no services in the answer_');
+    else {
+      out.push('| service | status | detail |', '|---|---|---|');
+      for (const s of services.services) out.push(`| ${s.name} | ${s.status} | ${serviceDetail(s)} |`);
+    }
   }
-  out.push('', 'D1 is the only service in this section. KV health is behind `/ping-kv`, which writes a probe '
-    + 'key and deletes it — a write, so the Contract keeps the helper out of it. R2, Vectorize, queues and '
-    + 'the secrets check are only in `/api/admin/health`, which a bearer token cannot reach.', '');
+  out.push('');
+  if (health.error) out.push(`\`/ping-d1\`: _could not read: ${health.error}_`);
+  else {
+    out.push(`\`/ping-d1\`, which needs no credential — D1: **${health.d1}**${health.totalMs != null ? ` (${health.totalMs} ms)` : ''}${health.slow.length ? ` — slow: ${health.slow.join(', ')}` : ''}`);
+  }
+  out.push('', 'KV is read from `/admin/health`, which only `get`s a key. `/ping-kv` is not called: it writes a '
+    + 'probe key and deletes it — a write, so the Contract keeps the helper out of it.', '');
 
   out.push('## Deploy', '');
   // mc's own record: what `mc deploy` wrote around the deploy it ran.
@@ -531,12 +648,64 @@ export function renderDigest({
     : '- origin/main: not read from a local checkout');
   out.push('');
 
-  out.push('## Not readable', '');
-  out.push(OPERATIONS_UNREACHABLE);
+  out.push('## Operations', '');
+  if (operations.error) out.push(`_could not read: ${operations.error}_`);
+  else {
+    if (operations.generatedAt) out.push(`\`/admin/operations/status\`, generated ${short(operations.generatedAt)}.`, '');
+    for (const warning of operations.warnings) out.push(`> ${clip(warning)}`);
+    if (operations.warnings.length) out.push('');
+    if (!operations.rows.length) out.push('_no operations in the answer_');
+    else {
+      out.push('| operation | conclusion | reasons | latest run | counts |', '|---|---|---|---|---|');
+      for (const row of operations.rows) {
+        out.push(`| ${clip(row.label, 40)} | ${row.level} | ${clip(row.reasons.join(', ') || '—', 100)} `
+          + `| ${row.runStatus || '—'} ${short(row.finished)} | ${clip(countsText(row.counts) || '—', 100)} |`);
+      }
+    }
+    out.push('');
+    const nightly = operations.nightly;
+    if (!nightly) out.push('Nightly: _not in the answer_');
+    else if (!nightly.unfinished.length) out.push(`Nightly: all ${nightly.total} tasks completed.`);
+    else {
+      out.push(`Nightly: ${nightly.unfinished.length} of ${nightly.total} tasks did not complete:`);
+      for (const task of nightly.unfinished) out.push(`- \`${task.name}\` — ${task.status}${task.errorCode ? ` (${task.errorCode})` : ''}`);
+    }
+    out.push('');
+    const inc = operations.incidents;
+    if (inc.groups.length || inc.totalGroups != null) {
+      const groups = inc.groups.map((g) => `${g.status} ${g.count} groups / ${g.occurrences} occurrences, latest ${short(g.latestSeenAt)}`);
+      const total = inc.totalGroups != null ? `${inc.totalGroups} groups / ${inc.totalOccurrences ?? '?'} occurrences in all` : null;
+      out.push(`Incidents${inc.source ? ` (${inc.source})` : ''}: ${[...groups, total].filter(Boolean).join(' · ')}`);
+    } else out.push('Incidents: _none in the answer_');
+  }
   out.push('');
 
-  out.push(renderState({ fingerprints: errors.rows, failing: failingConditions({ deploy, health, offline }) }), '');
+  out.push(renderState({
+    fingerprints: errors.rows, failing: failingConditions({ deploy, health, services, operations, offline }),
+  }), '');
   return out.join('\n');
+}
+
+/** One service's detail cell: latency, present-of-total, note, error — whatever it carries. */
+function serviceDetail(s) {
+  const parts = [];
+  if (s.latency != null) parts.push(`${s.latency} ms`);
+  if (s.present != null && s.total != null) parts.push(`${s.present}/${s.total} present`);
+  if (s.missing.length) parts.push(`missing ${s.missing.join(', ')}`);
+  if (s.note) parts.push(clip(s.note, 50));
+  if (s.error) parts.push(clip(s.error, 60));
+  return parts.join(', ') || '—';
+}
+
+/**
+ * An operation's counts, compact: the numbers that are not zero, and the
+ * failure counts even when they are, because "0 failed" is the reading.
+ */
+function countsText(counts) {
+  return Object.entries(counts)
+    .filter(([key, value]) => typeof value === 'number' && (value !== 0 || /fail/iu.test(key)))
+    .map(([key, value]) => `${key} ${value}`)
+    .join(', ');
 }
 
 /* ------------------------------------------------------------------ words */
@@ -558,12 +727,14 @@ export function describeDigest({ delta, errors }) {
 }
 
 /** Every section that could not be read, so a partial digest still complains. */
-export function unreadableSections({ errors, analysis, provider, health }) {
+export function unreadableSections({ errors, analysis, provider, health, services, operations }) {
   return [
     ['error fingerprints', errors],
     ['analysis items', analysis],
     ['AI-provider errors', provider],
+    ['service health', services],
     ['D1 health', health],
+    ['operations', operations],
   ].filter(([, source]) => source?.error);
 }
 
@@ -675,7 +846,7 @@ export async function collectHelper({
   const base = baseUrl(env);
   const missing = { ok: false, error: `no memoro checkout at ${memoro}` };
 
-  const [survey, providerRaw, analysisRaw, pingRaw, versionRaw, mainCommit] = await Promise.all([
+  const [survey, providerRaw, analysisRaw, servicesRaw, operationsRaw, pingRaw, versionRaw, mainCommit] = await Promise.all([
     haveCheckout
       ? script(memoro, ['scripts/admin/survey-errors.mjs', '--env', 'production',
         '--limit', String(limit), '--since', windowStart.toISOString()], 60_000)
@@ -684,6 +855,11 @@ export async function collectHelper({
       ? script(memoro, ['scripts/admin/inspect-ai-provider-errors.mjs', '--env', 'production', '--days', '1'], 180_000)
       : missing,
     getJson(`${base}/admin/analysis`, token),
+    // On the token surface since memoro #12461 (2026-10-03). Both are GETs
+    // that read: `/admin/health` heads an R2 key and gets a KV key, it puts
+    // nothing.
+    getJson(`${base}/admin/health`, token),
+    getJson(`${base}/admin/operations/status`, token),
     getJson(`${base}/ping-d1`, ''),
     // Public, like the D1 probe. The page cannot ask it — it is offline — so
     // this is where the answer is fetched and where its age starts counting.
@@ -706,6 +882,8 @@ export async function collectHelper({
     }
     : { rows: [], error: analysisRaw.error };
   const health = pingRaw.ok ? healthState(pingRaw.json) : { error: pingRaw.error };
+  const services = servicesRaw.ok ? serviceHealthState(servicesRaw.json) : { error: servicesRaw.error };
+  const operations = operationsRaw.ok ? operationsState(operationsRaw.json) : { error: operationsRaw.error };
   const live = versionRaw.ok ? liveVersionState(versionRaw.json) : { error: versionRaw.error };
   // The row is read straight from `deploys.tsv` rather than injected: `env`
   // already points the whole of mc at a throwaway work root, so a test writes
@@ -713,23 +891,24 @@ export async function collectHelper({
   const deploy = deployState(lastDeploy(env), { now, live });
   if (versionRaw.ok) writeLiveVersion(versionRaw.json, { env, now });
 
-  const requests = [analysisRaw, pingRaw, versionRaw];
+  const requests = [analysisRaw, servicesRaw, operationsRaw, pingRaw, versionRaw];
   const offline = networkDown(requests);
   if (offline) {
     const asked = requests.filter((result) => result.error !== NO_TOKEN);
     const said = [...new Set(asked.map((result) => result.error))].join('; ');
     notes.push(`This machine could not reach the network in this run: all ${asked.length} requests to production `
-      + `went unanswered (${said}). Nothing here says whether production is up, so \`d1-unreachable\` is not raised.`);
+      + `went unanswered (${said}). Nothing here says whether production is up, so \`d1-unreachable\` is not raised, `
+      + 'and no service or operation condition either.');
   }
 
   const previous = previousDigest(env, name, repo);
   const delta = computeDelta({
-    fingerprints: errors.rows, failing: failingConditions({ deploy, health, offline }), previous, threshold,
+    fingerprints: errors.rows, failing: failingConditions({ deploy, health, services, operations, offline }), previous, threshold,
   });
 
   const text = renderDigest({
     now, since: windowStart, previous, threshold, delta,
-    errors, analysis, provider, health, deploy, live, mainCommit, notes, repo, offline,
+    errors, analysis, provider, health, services, operations, deploy, live, mainCommit, notes, repo, offline,
   });
   mkdirSync(dir, { recursive: true });
   mkdirSync(proposalsDir(env), { recursive: true });
@@ -739,7 +918,10 @@ export async function collectHelper({
     path,
     text,
     repo,
-    data: { since: windowStart, previous, delta, errors, analysis, provider, health, deploy, live, mainCommit, notes, offline },
+    data: {
+      since: windowStart, previous, delta, errors, analysis, provider, health, services, operations,
+      deploy, live, mainCommit, notes, offline,
+    },
   };
 }
 

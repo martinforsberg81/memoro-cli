@@ -312,8 +312,9 @@ describe('mc helper --intake', () => {
   it('lists the unreadable sections by name', () => {
     const found = unreadableSections({
       errors: { error: 'a' }, analysis: {}, provider: { error: 'b' }, health: {}, deploy: {},
+      services: { error: 'c' }, operations: { error: 'd' },
     });
-    assert.deepEqual(found.map(([name]) => name), ['error fingerprints', 'AI-provider errors']);
+    assert.deepEqual(found.map(([name]) => name), ['error fingerprints', 'AI-provider errors', 'service health', 'operations']);
   });
 
   it('describes a quiet day as nothing new', () => {

@@ -114,9 +114,9 @@ did, and nothing alerted: surveyed 2026-08-29, there was no uptime check, no
 notifier and no Logpush. The eye does not add a monitoring system. It adds a
 reader.
 
-Six sources, and they do not share one failure domain. Each section of the
+Eight sources, and they do not share one failure domain. Each section of the
 digest says what it could not read, and the run still succeeds: wrangler
-being unauthenticated must not cost us the other five.
+being unauthenticated must not cost us the other seven.
 
 | section | how it is read | credential | timeout |
 |---|---|---|---|
@@ -125,7 +125,9 @@ being unauthenticated must not cost us the other five.
 | AI-provider errors | `scripts/admin/inspect-ai-provider-errors.mjs --env production --days 1` | **none** — it shells out to `wrangler d1 execute memoro-db --remote` | 180 s |
 | deploys | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, which `mc deploy` wrote — read from disk | none | — |
 | what is live | `GET /api/version` — `{ commit, build, build_time }`, kept in `~/mc/runner/version.json` for the page | none | 30 s |
-| D1 health | `GET /ping-d1` | none | 30 s |
+| service health | `GET /admin/health` — secrets, D1, R2, KV, both Vectorize indexes, queues | bearer `ADMIN_TOKEN` | 30 s |
+| D1 health | `GET /ping-d1` — the reading that does not depend on the token | none | 30 s |
+| operations | `GET /admin/operations/status` — the nightly scheduler and its tasks, the claims resolver, the AI batches, the incident summary | bearer `ADMIN_TOKEN` | 30 s |
 
 A script that fails is named by how it ended and the first line of its stderr
 that says anything — `exit 1: wrangler d1 execute failed (1)`, or an uncaught
@@ -154,9 +156,12 @@ assumed:
 
 - **`/admin/*` is the admin-token surface; `/api/admin/*` is session-admin.**
   Measured against production on 2026-08-29, `/api/admin/health`,
-  `/api/admin/operations/status` and `/api/admin/analysis` all answer 401 to
-  a bearer token — "Not logged in or session has expired." Only a browser
-  session opens them.
+  `/api/admin/operations/status` and `/api/admin/analysis` all answered 401
+  to a bearer token — "Not logged in or session has expired." Only a browser
+  session opens them. memoro #12461 (production build 24645, 2026-10-03)
+  added `GET /admin/health` and `GET /admin/operations/status` to the token
+  surface; both answered 200 to the digest's token that day, and the digest
+  reads those two paths. The `/api/admin/*` ones are still not used.
 - **`--env` defaults to `local` on both admin scripts.** Collect passes
   `--env production` explicitly, or it would silently digest an empty local
   database.
@@ -169,19 +174,30 @@ The digest also carries `origin/main`'s sha and date from the local memoro
 checkout, next to the deploy age, so "the site is behind main" is one line
 rather than two windows.
 
-### What it cannot reach, and says so
+### Health and operations
 
-- **The nightly and morning task outcomes** are behind
-  `/api/admin/operations/status`, and full service health behind
-  `/api/admin/health` — both session-admin. The digest carries a standing
-  "Not readable" section saying this in its own words rather than spending a
-  request every day to rediscover the 401. Exposing them to the admin token
-  is the helper's first candidate proposal.
+- **Service health** is `/admin/health`'s overall `status` and one row per
+  service — `secrets`, `d1`, `r2`, `kv`, `knowledgeBaseVectors`,
+  `universeVectors`, `queues` — with its status and whatever detail it
+  carries: latency, present-of-total, a note, an error. `/ping-d1` stays
+  beside it, because it needs no credential: with the token gone, D1 is
+  still read.
+- **Operations** is `/admin/operations/status` rendered compactly: one row
+  per operation with the server's own conclusion (`ok`, `watch`, `action`)
+  and reason codes, the latest run's status and finish time, and its
+  non-zero counts (failure counts always); then every nightly task that did
+  not complete, and the incident summary. The conclusion is taken as given —
+  it is memoro's judgement of its own processes. Until 2026-10-03 the digest
+  had a standing "Not readable" section here instead.
+
+### What it does not read
+
 - **Deploy age is in no route.** The digest computes it itself, from mc's
   record and `/api/version`'s `build_time`, and calls it stale past its
   own 36-hour threshold — the one memoro's removed `checkDeployAge` used.
-- **KV health is not read.** `/ping-kv` writes a probe key and deletes it
-  again. That is a write, and the Contract keeps the helper out of it.
+- **`/ping-kv` is not called.** It writes a probe key and deletes it again.
+  That is a write, and the Contract keeps the helper out of it. KV is
+  reported from `/admin/health`, which only `get`s a key.
 
 ## The delta, and why the digest is its own state
 
@@ -201,13 +217,31 @@ block:
 
 Two lists: the fingerprints this digest saw with their counts, and the named
 operational conditions that were failing when it was written
-(`deploy-stale`, `d1-unreachable`, `d1-unhealthy`). The next run diffs against them.
+(`deploy-stale`, `d1-unreachable`, `d1-unhealthy`, `health-<service>`,
+`nightly-tasks-failed`, `nightly-stale`, `operations-action-<key>`). The next
+run diffs against them.
+
+- `health-<service>` — a service `/admin/health` reports as anything but
+  `healthy`, e.g. `health-r2`. `not_configured` counts: a binding missing in
+  production is worth one line.
+- `nightly-tasks-failed` — the nightly scheduler's latest run is `partial`
+  or failed, or it counts a failed task.
+- `nightly-stale` — the server concludes the nightly run is stale or has no
+  run data.
+- `operations-action-<key>` — an operation the server concludes needs
+  `action`, e.g. `operations-action-claims.resolver`. One name per operation,
+  not per reason code or count, so a standing backlog is new once, the day it
+  starts, and not every day after.
+
+An unread route raises none of these: a 401 on `/admin/health` is the
+section's *could not read*, not an unhealthy service.
 
 `d1-unreachable` is not raised when **no request to production got an answer
-at all** in the run: `/admin/analysis`, `/ping-d1` and `/api/version` all
-threw rather than returned (a route skipped for want of a
-token is left out of the count). That is the collector without a network, and
-the digest says so in one line at the top instead. On 2026-09-15, 09-29 and
+at all** in the run: `/admin/analysis`, `/admin/health`,
+`/admin/operations/status`, `/ping-d1` and `/api/version` all threw rather
+than returned (a route skipped for want of a token is left out of the count).
+That is the collector without a network, and the digest says so in one line at
+the top instead; no service or operation condition is raised either. On 2026-09-15, 09-29 and
 10-02 every request said `fetch failed`, the digest opened on
 `! d1-unreachable`, and production was healthy. A refusal or a 5xx is an
 answer, so it does not count, and one answer anywhere is enough to raise
@@ -227,7 +261,7 @@ delta.
 
 ## Two repositories, one eye
 
-memoro's production is the deployed service — five remote sources, an admin
+memoro's production is the deployed service — seven remote sources, an admin
 token, wrangler. memoro-cli has no server, and for a week that was read as
 "nothing to collect", so every failure in mc itself was found by a person
 noticing it. On 2026-08-30 sixteen gate rounds stopped on a held lease in one
@@ -276,10 +310,12 @@ wrong system.
   directly. The helper never fires the `POST` that *runs* that pass; it runs
   on the server's own cadence.
 - **AI-provider errors** — provider, model, refusal reason, calls.
-- **Health** — D1's verdict and the calls it timed.
+- **Health** — `/admin/health`'s verdict and one row per service, then
+  `/ping-d1`'s D1 verdict and the calls it timed.
 - **Deploy** — last success, age, consecutive failures, or the silent index;
   and `origin/main` locally.
-- **Not readable** — the standing 401s, in prose.
+- **Operations** — one row per operation with the server's conclusion, the
+  nightly tasks that did not complete, the incident summary.
 - the state block.
 
 ## The turn
@@ -475,7 +511,7 @@ Nobody automatic. That is the point.
 |---|---|
 | `src/mc/commands/helper.js` | the verb: the desk, and behind `--intake` the collect and the same drain the runner uses |
 | `canon/roles/helper.md` | the desk: what it takes, what it writes, what it never touches |
-| `src/mc/helper-collect.js` | the six sources, the delta, the state block, the rendered digest, `helperDir`, `intakeDir`, `intakeArchiveDir` |
+| `src/mc/helper-collect.js` | the eight sources, the delta, the state block, the rendered digest, `helperDir`, `intakeDir`, `intakeArchiveDir` |
 | `src/mc/helper-turn.js` | the prompt over one named file, `repoOfFile`, the ground read from `origin/main`, the headless session, the measured `wrote` — and `drainIntake`, the loop that archives every file the moment its turn ends |
 | `canon/roles/intake.md` | what the turn is, what it may write, how it judges |
 | `src/mc/run-plan.js` | `helperDue` and `collectNote` for the day; `intakeQueue`, `intakeNote`, `INTAKE_KIND` and `INTAKE_PER_ROUND` for the drain |

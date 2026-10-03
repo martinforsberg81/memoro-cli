@@ -7,8 +7,11 @@
  * The surface these fixtures imitate was measured against production on
  * 2026-08-29: `/admin/analysis` answers a bearer token, `/ping-d1` and
  * `/api/version` answer anyone, and `/api/admin/*` answers 401 to everything
- * but a browser session. `/admin/deploy/logs` was read here too until memoro
- * removed it with the GitHub deploy webhook behind it (2026-10-03).
+ * but a browser session. `/admin/health` and `/admin/operations/status`
+ * joined the token surface with memoro #12461 and were measured answering it
+ * on 2026-10-03; the two fixtures below are cut down from those answers.
+ * `/admin/deploy/logs` was read here too until memoro removed it with the
+ * GitHub deploy webhook behind it (2026-10-03).
  *
  * No network, no model, no memoro checkout: every source is injected.
  */
@@ -23,7 +26,7 @@ import { DEPLOYS_HEADER } from '../../src/mc/deploys.js';
 import {
   analysisRows, collectHelper, computeDelta, deployState, digestName, errorRows, failingConditions,
   healthState, intakeArchiveDir, intakeDir, parseState, previousDigest, proposalsDir, readAdminToken, renderState,
-  networkDown, NO_TOKEN, scriptFailure,
+  networkDown, NO_TOKEN, operationsState, scriptFailure, serviceHealthState,
 } from '../../src/mc/helper-collect.js';
 import { readLiveVersion } from '../../src/mc/live-version.js';
 
@@ -59,6 +62,79 @@ const ANALYSIS = {
 };
 
 const PING = { ok: true, d1: 'healthy', timings: { select1: 11, total: 43 }, slow: [] };
+
+/** `/admin/health` as production answered it on 2026-10-03. */
+const HEALTH = {
+  ok: true,
+  status: 'healthy',
+  services: {
+    secrets: { status: 'healthy', total: 6, present: 6 },
+    d1: { status: 'healthy', latency: 11 },
+    r2: { status: 'healthy', latency: 65 },
+    kv: { status: 'healthy', latency: 36 },
+    knowledgeBaseVectors: { status: 'healthy', latency: 178, vectorCount: 0 },
+    universeVectors: { status: 'healthy', latency: 172, vectorCount: 0 },
+    queues: { status: 'healthy', note: 'Binding available' },
+  },
+  checkedAt: '2026-08-29T05:59:00.000Z',
+};
+
+/** The nightly scheduler as `/admin/operations/status` carries it. */
+function nightlyOp({ tasks = [{ name: 'anonymiseOldAudit', status: 'completed', errorCode: null }, { name: 'computeOrgPulse', status: 'completed', errorCode: null }], status = 'success', reasonCodes = [] } = {}) {
+  const failed = tasks.filter((t) => t.status === 'error').length;
+  return {
+    key: 'scheduler.nightly',
+    label: 'Nightly scheduler',
+    state: failed ? 'error' : 'success',
+    latestRun: { source: 'operational_events', status, startedAt: '2026-08-29T02:00:40.388Z', finishedAt: '2026-08-29T02:09:08.721Z', durationMs: 508333 },
+    counts: { tasksTotal: tasks.length, tasksCompleted: tasks.length - failed, tasksFailed: failed, tasksRunning: 0 },
+    tasks,
+    warnings: [],
+    conclusion: { level: failed ? 'action' : 'ok', reasonCodes, evidence: {} },
+  };
+}
+
+/** `/admin/operations/status`, shaped like the 2026-10-03 answer and cut down. */
+function opsBody(nightly = nightlyOp()) {
+  return {
+    ok: true,
+    generatedAt: '2026-08-29T05:59:30.000Z',
+    version: 2,
+    taxonomy: {},
+    operations: [
+      nightly,
+      {
+        key: 'claims.resolver',
+        label: 'Claims resolver',
+        state: 'warning',
+        latestRun: { status: 'success', startedAt: '2026-08-29T02:00:48.029Z', finishedAt: '2026-08-29T02:00:53.495Z', durationMs: 5466 },
+        counts: { unresolved: 1789, pending: 1663, deferred: 126, resolvedLast7d: 0, oldestPendingAgeHours: 3234 },
+        warnings: ['no_run_data', 'old_backlog'],
+        conclusion: { level: 'action', reasonCodes: ['backlog_present', 'guardrails_present', 'no_run_data', 'old_backlog'], evidence: {} },
+      },
+      {
+        key: 'ai.batch.mosaic_compose',
+        label: 'AI batch: mosaic_compose',
+        state: 'success',
+        latestRun: { status: 'processed', submittedAt: '2026-08-19T02:02:58.520Z', processedAt: '2026-08-19T02:15:20.529Z' },
+        counts: { jobs: 1, requests: 1, completedRequests: 1, failedRequests: 0, statuses: { processed: 1 }, providers: ['openai'] },
+        warnings: [],
+        conclusion: { level: 'watch', reasonCodes: ['latest_run_stale'], evidence: {} },
+      },
+    ],
+    incidents: {
+      source: 'worker_errors',
+      summary: {
+        new: { count: 35836, occurrences: 279791, latestSeenAt: '2026-08-29T05:08:42.000Z' },
+        regressed: { count: 13, occurrences: 87617, latestSeenAt: '2026-08-29T02:09:09.000Z' },
+      },
+      totalGroups: 35849,
+      totalOccurrences: 367408,
+    },
+    warnings: [],
+  };
+}
+const OPS = opsBody();
 
 /** `/api/version` — public, three fields, and what the page reads afterwards. */
 const LIVE_SHA = 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00';
@@ -100,6 +176,8 @@ function stubs(overrides = {}) {
     calls.urls.push(url);
     calls.auth.set(path, token);
     if (path === '/admin/analysis') return overrides.analysis ?? { ok: true, json: ANALYSIS };
+    if (path === '/admin/health') return overrides.services ?? { ok: true, json: HEALTH };
+    if (path === '/admin/operations/status') return overrides.operations ?? { ok: true, json: OPS };
     if (path === '/api/version') return overrides.version ?? { ok: true, json: VERSION };
     return overrides.ping ?? { ok: true, json: PING };
   };
@@ -129,7 +207,7 @@ describe('mc helper --collect — the sources', () => {
     const g = ground();
     const { calls } = await collect(g);
     const paths = calls.urls.map((u) => new URL(u).pathname).sort();
-    assert.deepEqual(paths, ['/admin/analysis', '/api/version', '/ping-d1']);
+    assert.deepEqual(paths, ['/admin/analysis', '/admin/health', '/admin/operations/status', '/api/version', '/ping-d1']);
     assert.ok(!paths.some((p) => p.startsWith('/api/admin/')), '/api/admin/* answers 401 to a bearer token');
   });
 
@@ -137,6 +215,8 @@ describe('mc helper --collect — the sources', () => {
     const g = ground();
     const { calls } = await collect(g);
     assert.equal(calls.auth.get('/admin/analysis'), 'test-token');
+    assert.equal(calls.auth.get('/admin/health'), 'test-token');
+    assert.equal(calls.auth.get('/admin/operations/status'), 'test-token');
     assert.equal(calls.auth.get('/ping-d1'), '', 'the D1 probe needs no credential');
     assert.equal(calls.auth.get('/api/version'), '', 'what production says it is, is public');
   });
@@ -145,7 +225,7 @@ describe('mc helper --collect — the sources', () => {
     const g = ground();
     const { calls } = await collect(g);
     assert.ok(!calls.urls.some((u) => u.includes('/ping-kv')), '/ping-kv writes a probe key');
-    assert.match((await collect(g)).text, /KV health is behind `\/ping-kv`, which writes a probe key/u);
+    assert.match((await collect(g)).text, /`\/ping-kv` is not called: it writes a probe key/u);
   });
 
   it('passes --since through to the error survey', async () => {
@@ -166,12 +246,81 @@ describe('mc helper --collect — the sources', () => {
     assert.notEqual(proposalsDir(g.env), join(intakeDir(g.env), 'proposals'));
   });
 
-  it('says in the file itself why the operations projection is absent', async () => {
+  it('no longer carries the standing "Not readable" section', async () => {
     const g = ground();
     const result = await collect(g);
-    assert.match(result.text, /## Not readable/u);
-    assert.match(result.text, /operations\/status.*session-admin/su);
-    assert.match(result.text, /401/u);
+    assert.doesNotMatch(result.text, /## Not readable|session-admin|401/u);
+  });
+});
+
+describe('mc helper --collect — health and operations', () => {
+  it('renders every service /admin/health reports, and keeps /ping-d1 beside it', async () => {
+    const g = ground();
+    const section = (await collect(g)).text.split('## Health')[1].split('## Deploy')[0];
+    assert.match(section, /`\/admin\/health`: \*\*healthy\*\* \(checked 2026-08-29 05:59\)/u);
+    assert.match(section, /\| secrets \| healthy \| 6\/6 present \|/u);
+    assert.match(section, /\| d1 \| healthy \| 11 ms \|/u);
+    assert.match(section, /\| kv \| healthy \| 36 ms \|/u);
+    assert.match(section, /\| queues \| healthy \| Binding available \|/u);
+    const order = [...section.matchAll(/^\| (\w+) \| healthy/gmu)].map((m) => m[1]);
+    assert.deepEqual(order, ['secrets', 'd1', 'r2', 'kv', 'knowledgeBaseVectors', 'universeVectors', 'queues']);
+    assert.match(section, /`\/ping-d1`, which needs no credential — D1: \*\*healthy\*\* \(43 ms\)/u);
+    assert.doesNotMatch(section, /cannot reach|only service/u);
+  });
+
+  it('says it could not read /admin/health and still reports /ping-d1', async () => {
+    const g = ground();
+    const result = await collect(g, { services: { ok: false, error: '/admin/health returned 401' } });
+    assert.match(result.text, /## Health\n\n`\/admin\/health`: _could not read: \/admin\/health returned 401_/u);
+    assert.match(result.text, /D1: \*\*healthy\*\* \(43 ms\)/u);
+    assert.doesNotMatch(result.text, /failing health-/u, 'an unread route is not an unhealthy service');
+  });
+
+  it('says it could not read /ping-d1 under the service table', async () => {
+    const g = ground();
+    const result = await collect(g, { ping: { ok: false, error: '/ping-d1 returned 503' } });
+    assert.match(result.text, /`\/ping-d1`: _could not read: \/ping-d1 returned 503_/u);
+    assert.match(result.text, /\| d1 \| healthy \| 11 ms \|/u);
+  });
+
+  it('renders one row per operation, the nightly tasks and the incident summary', async () => {
+    const g = ground();
+    const section = (await collect(g)).text.split('## Operations')[1].split('<!-- mc-helper:state')[0];
+    assert.match(section, /`\/admin\/operations\/status`, generated 2026-08-29 05:59\./u);
+    assert.match(section, /\| Nightly scheduler \| ok \| — \| success 2026-08-29 02:09 \| tasksTotal 2, tasksCompleted 2, tasksFailed 0 \|/u);
+    assert.match(section, /\| Claims resolver \| action \| backlog_present, guardrails_present, no_run_data, old_backlog \| success 2026-08-29 02:00 \| unresolved 1789,/u);
+    assert.match(section, /\| AI batch: mosaic_compose \| watch \| latest_run_stale \| processed 2026-08-19 02:15 \| jobs 1, requests 1, completedRequests 1, failedRequests 0 \|/u);
+    assert.match(section, /Nightly: all 2 tasks completed\./u);
+    assert.match(section, /Incidents \(worker_errors\): new 35836 groups \/ 279791 occurrences, latest 2026-08-29 05:08 · regressed 13 groups \/ 87617 occurrences, latest 2026-08-29 02:09 · 35849 groups \/ 367408 occurrences in all/u);
+  });
+
+  it('lists the nightly tasks that did not complete', async () => {
+    const g = ground();
+    const nightly = nightlyOp({
+      status: 'partial',
+      tasks: [
+        { name: 'anonymiseOldAudit', status: 'completed', errorCode: null },
+        { name: 'communicationRetention', status: 'error', errorCode: 'task_failed' },
+        { name: 'dailyServiceRollup', status: 'running', errorCode: null },
+      ],
+    });
+    const result = await collect(g, { operations: { ok: true, json: opsBody(nightly) } });
+    assert.match(result.text, /Nightly: 2 of 3 tasks did not complete:\n- `communicationRetention` — error \(task_failed\)\n- `dailyServiceRollup` — running/u);
+    assert.match(result.text, /failing nightly-tasks-failed/u);
+  });
+
+  it('says it could not read /admin/operations/status, like every other section', async () => {
+    const g = ground();
+    const result = await collect(g, { operations: { ok: false, error: '/admin/operations/status returned 500' } });
+    assert.match(result.text, /## Operations\n\n_could not read: \/admin\/operations\/status returned 500_/u);
+    assert.doesNotMatch(result.text, /failing (nightly|operations)-/u);
+    assert.match(result.text, /\| `aaa111` \| 34 \|/u, 'the other sections still render');
+  });
+
+  it('raises the claims backlog as one stable name, and nothing for a quiet day', async () => {
+    const g = ground();
+    const result = await collect(g);
+    assert.deepEqual([...parseState(result.text).failing], ['operations-action-claims.resolver']);
   });
 });
 
@@ -235,7 +384,7 @@ describe('mc helper --collect — the delta', () => {
     mkdirSync(intakeDir(g.env), { recursive: true });
     writeFileSync(join(intakeDir(g.env), 'errors-2026-08-28.md'), [
       '# Errors and maintenance — 2026-08-28T06:00:00Z', '',
-      renderState({ fingerprints: [{ fingerprint: 'ccc333', count: 2 }], failing: ['deploy-stale'] }),
+      renderState({ fingerprints: [{ fingerprint: 'ccc333', count: 2 }], failing: ['deploy-stale', 'operations-action-claims.resolver'] }),
     ].join('\n'));
 
     const result = await collect(g, { version: OLD_VERSION });
@@ -252,7 +401,8 @@ describe('mc helper --collect — the delta', () => {
     mkdirSync(intakeDir(g.env), { recursive: true });
     writeFileSync(join(intakeDir(g.env), 'errors-2026-08-28.md'), renderState({
       fingerprints: SURVEY.topFingerprints.map((f) => ({ fingerprint: f.fingerprint, count: f.count })),
-      failing: [],
+      // The claims backlog is a standing `action`: yesterday had it too.
+      failing: ['operations-action-claims.resolver'],
     }));
     const result = await collect(g, { version: OLD_VERSION });
     assert.deepEqual(result.data.delta.fingerprints, []);
@@ -270,10 +420,13 @@ describe('mc helper --collect — the delta', () => {
       failing: [],
     }));
     const down = { ok: false, error: 'fetch failed', unreached: true };
-    const result = await collect(g, { analysis: down, ping: down, version: down });
+    const result = await collect(g, { analysis: down, services: down, operations: down, ping: down, version: down });
     assert.deepEqual(result.data.delta.failing, [], 'no request answered, so nothing was measured about D1');
     assert.doesNotMatch(result.text, /! `d1-unreachable`|failing d1-unreachable/u, 'neither in the alarm list nor the state');
-    assert.match(result.text, /> This machine could not reach the network in this run: all 3 requests to production went unanswered \(fetch failed\)/u);
+    assert.doesNotMatch(result.text, /failing /u, 'no service or operation condition either');
+    assert.match(result.text, /> This machine could not reach the network in this run: all 5 requests to production went unanswered \(fetch failed\)/u);
+    assert.match(result.text, /`\/admin\/health`: _could not read: fetch failed_/u);
+    assert.match(result.text, /## Operations\n\n_could not read: fetch failed_/u);
   });
 
   it('still raises d1-unreachable when anything else on the network answered', async () => {
@@ -289,6 +442,8 @@ describe('mc helper --collect — the delta', () => {
     const g = ground();
     const result = await collect(g, {
       analysis: { ok: false, error: '/admin/analysis returned 503' },
+      services: { ok: false, error: '/admin/health returned 503' },
+      operations: { ok: false, error: '/admin/operations/status returned 503' },
       ping: { ok: false, error: '/ping-d1 returned 503' },
       version: { ok: false, error: '/api/version returned 503' },
     });
@@ -310,7 +465,7 @@ describe('mc helper --collect — the delta', () => {
     const state = parseState(result.text);
     assert.deepEqual([...state.fingerprints.keys()], ['aaa111', 'bbb222', 'ccc333']);
     assert.equal(state.fingerprints.get('aaa111'), 34);
-    assert.deepEqual([...state.failing], ['deploy-stale']);
+    assert.deepEqual([...state.failing], ['deploy-stale', 'operations-action-claims.resolver']);
   });
 });
 
@@ -454,6 +609,43 @@ describe('mc helper — the pure builders', () => {
     assert.equal(networkDown([skipped, skipped, down, { ok: true, json: {} }]), false);
     assert.equal(networkDown([skipped, skipped]), false, 'nothing asked is nothing measured');
     assert.deepEqual(failingConditions({ deploy: { error: 'x' }, health: { error: 'fetch failed' }, offline: true }), []);
+  });
+
+  it('reads /admin/health into one row per service, known ones first', () => {
+    const state = serviceHealthState({
+      status: 'degraded',
+      services: { extra: { status: 'healthy' }, kv: { status: 'error', error: 'KV timeout' }, secrets: { status: 'degraded', total: 6, present: 5, missing: ['RESEND_API_KEY'] } },
+    });
+    assert.equal(state.status, 'degraded');
+    assert.deepEqual(state.services.map((s) => s.name), ['secrets', 'kv', 'extra']);
+    assert.deepEqual(state.services[0].missing, ['RESEND_API_KEY']);
+    assert.equal(state.services[1].error, 'KV timeout');
+  });
+
+  it('reads the operations projection the server concluded', () => {
+    const state = operationsState(OPS);
+    assert.deepEqual(state.rows.map((r) => [r.key, r.level]), [
+      ['scheduler.nightly', 'ok'], ['claims.resolver', 'action'], ['ai.batch.mosaic_compose', 'watch'],
+    ]);
+    assert.equal(state.nightly.total, 2);
+    assert.deepEqual(state.nightly.unfinished, []);
+    assert.equal(state.incidents.totalGroups, 35849);
+  });
+
+  it('raises service, nightly and action conditions, and none of them offline', () => {
+    const services = serviceHealthState({ ...HEALTH, services: { ...HEALTH.services, r2: { status: 'error', error: 'x' }, queues: { status: 'not_configured' } } });
+    const broken = nightlyOp({ status: 'partial', tasks: [{ name: 'a', status: 'error', errorCode: 'task_failed' }] });
+    const stale = nightlyOp({ reasonCodes: ['latest_run_stale'] });
+    const ok = { deploy: { stale: false }, health: { d1: 'healthy' } };
+    assert.deepEqual(failingConditions({ ...ok, services }), ['health-r2', 'health-queues']);
+    assert.deepEqual(failingConditions({ ...ok, operations: operationsState(opsBody(broken)) }),
+      ['nightly-tasks-failed', 'operations-action-scheduler.nightly', 'operations-action-claims.resolver']);
+    assert.deepEqual(failingConditions({ ...ok, operations: operationsState(opsBody(stale)) }),
+      ['nightly-stale', 'operations-action-claims.resolver']);
+    assert.deepEqual(failingConditions({ ...ok, services, operations: operationsState(opsBody(broken)), offline: true }), [],
+      'an offline run measured nothing about production');
+    assert.deepEqual(failingConditions({ ...ok, services: { error: 'x' }, operations: { error: 'y' } }), [],
+      'an unread route is not a failing service');
   });
 
   it('names the conditions the delta watches', () => {
