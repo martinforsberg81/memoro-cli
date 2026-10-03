@@ -2,15 +2,15 @@
  * First-run friendliness (§11d).
  *
  * Trigger: `${MC_HOME}/.setup-done-v1` is missing AND no Memoro token
- * is stored in the keychain. Both signals must miss — migrants who
- * already ran `memoro-cli login` before mc setup existed get a quiet
- * sentinel-write on first successful `mc new`, never the hint.
+ * is stored in the keychain. Both signals must miss — a machine that
+ * has signed in once, or that an earlier mc already marked, never sees
+ * the hint.
  *
  * The hint is a friendly wrapper over the otherwise-cryptic
- * "token missing" failure path that hits new users in `mc new` /
- * `mc list`. It is NEVER an auto-trigger: we print and exit (or
- * print and continue, depending on the caller), we don't spawn
- * `mc setup` for the user.
+ * "token missing" failure a new user would otherwise meet first. The
+ * page prints it before it draws. It is NEVER an auto-trigger: we print
+ * and the caller decides whether to continue; sign-in happens when the
+ * user runs `mc`.
  *
  * Token check is keychain-existence-only — no network validation in
  * the hot path. A token that exists but is revoked still counts as
@@ -21,10 +21,10 @@ import { join } from 'node:path';
 
 import { mcHome } from './paths.js';
 import { getSecret } from '../lib/keychain.js';
-import { ACCOUNTS } from '../commands/auth.js';
+import { ACCOUNTS } from '../lib/auth-accounts.js';
 
 const SENTINEL_NAME = '.setup-done-v1';
-const HINT_TEXT = 'New to mc? Run `mc` to sign in, then `mc setup` to finish local setup.';
+const HINT_TEXT = 'New to mc? Run `mc` to sign in.';
 
 export function sentinelPath() {
   return join(mcHome(), SENTINEL_NAME);

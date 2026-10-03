@@ -21,20 +21,21 @@
  * called 379 working lines dead. The table is read where it lives now, and the
  * seed list is only what no import edge can reach.
  *
- * Two seeds are not imported by anyone: `lib/update-check-worker.js` and
- * `mc/repo-watch-run.js` are spawned as child processes by a path literal, so no import graph can see them. They were
+ * One seed is not imported by anyone: `mc/repo-watch-run.js` is spawned as a
+ * child process by a path literal, so no import graph can see it. It was
  * found by grepping every `.js` path literal in the surviving files against
  * the deletion list, and that grep is the check this script cannot do for
  * itself: a static graph is necessary evidence for a cut, never sufficient.
- * `runtime/broker/c1-child.js` is a third, seeded with vault below. (The
- * nightly's `mc/nightly-run.js` was a fourth until 2026-09-19, when the tick
- * became a chore of the runner and the detached scheduler was deleted.)
+ * `runtime/broker/c1-child.js` is a second, seeded with vault below. (The
+ * nightly's `mc/nightly-run.js` was another until 2026-09-19, when the tick
+ * became a chore of the runner and the detached scheduler was deleted, and
+ * the update-check worker went with the `memoro` binary on 2026-10-03.)
  *
- * The last two rows are the two costs the contract accepts. `src/vault/`
- * stays whole (Martin, 2026-08-29), and `src/bin.js` + `src/index.js` are
- * `package.json`'s other two installed commands — `memoro` and `memoro-cli` —
- * which no step of this project has removed a verb from, so the contract's
- * *the verb goes first* rule forbids deleting what they reach.
+ * The rows are the page and its verbs, then `mc vault`, then the rest of
+ * `src/vault/` — the one cost the contract accepts: it stays whole (Martin,
+ * 2026-08-29). `mc` is the only command `package.json` installs; the
+ * `memoro` and `memoro-cli` binaries were removed by ruling 24
+ * (`docs/project/mc/rulings.md` § 24).
  *
  *   npm run reach              # per-directory totals for whatever is unreached
  *   npm run reach -- --list    # every unreached file, largest first
@@ -53,18 +54,17 @@ const SRC = join(ROOT, 'src');
 const LIST = args.includes('--list');
 
 /**
- * The surface as it stands: the router, and the three files nothing imports.
+ * The surface as it stands: the router, and the file nothing imports.
  *
  * Every verb used to be listed here by hand beside `src/mc-cli.js`, one entry
  * per value of its `modules` table. That is now read out of the table itself
  * (see SPECIFIER), because the hand-kept copy had already drifted: `mc deploy`
  * was routed and never added, so this sweep called a working verb dead. The
  * only seeds left are the ones no import edge can reach — a router that is the
- * root of the graph, and two files started as child processes by path.
+ * root of the graph, and a file started as a child process by path.
  */
 const LIVE = [
   'mc-cli.js',                      // the router: the page's flags, `moved()`
-  'lib/update-check-worker.js',     // spawned by path from lib/update-check.js
   'mc/repo-watch-run.js',           // spawned by path from mc/repo-watch.js
 ];
 
@@ -75,16 +75,6 @@ const LIVE = [
  * seeded with it: it is the only thing that still reaches it.
  */
 const KEPT = ['bin-mc.js', 'cli/vault.js'];
-
-/**
- * `package.json`'s other two `bin` entries and its `main`. Everything they
- * reach was out of mc-cut's reach by its contract's first rule: no step
- * removed a `memoro` verb, so no `memoro` code could be deleted under it.
- * Whether those two commands should exist at all is a decision, not a
- * cleanup, and it belongs to Martin — 20 files and 3 665 lines of it, which
- * is now the largest single thing between mc and a `src/` that is only mc.
- */
-const PACKAGE = ['bin.js', 'index.js'];
 
 const walk = (dir, out = []) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -159,7 +149,7 @@ const vault = all.filter((f) => rel(f).startsWith('src/vault/'));
 // `src/vault/engine/c1-claude-lease.js` spawns the C1 child by path and pins
 // its SHA-256, so the child belongs to vault's cost. No import graph can see
 // that edge.
-const kept = reach(seed(LIVE).concat(seed(KEPT)).concat(seed(PACKAGE))
+const kept = reach(seed(LIVE).concat(seed(KEPT))
   .concat(vault).concat(seed(['runtime/broker/c1-child.js'])));
 const dead = all.filter((f) => !kept.has(f));
 
@@ -167,7 +157,7 @@ const row = (label, files) => `${String(files.length).padStart(4)} filer ${Strin
 console.log(row('src/', all));
 console.log(row('reached by the page and its verbs', [...page]));
 console.log(row(`…plus ${KEPT.join(', ')} (kept by contract)`, [...live]));
-console.log(row('…plus src/vault/ and the memoro / memoro-cli bins', [...kept]));
+console.log(row('…plus src/vault/', [...kept]));
 console.log(row(`NOT reached — ${Math.round((100 * sum(dead)) / sum(all))}% of src/`, dead));
 
 if (LIST) {

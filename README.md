@@ -4,25 +4,19 @@ Command-line glue between external coding tools (Claude Code, Cursor, Codex, Win
 
 ## What it does
 
-Two directions, one binary:
+One binary, `mc`. Nothing on this machine reports sessions into Memoro any more (ruling 24).
 
-- **Sessions → Memoro.** At the end of a coding session, the CLI cleans the transcript locally into a tool-agnostic conversation payload, attaches deterministic metadata (`coding_context`, `repo_manifest`), and POSTs it to Memoro. Server-side AI processing happens inside Memoro. Raw tool outputs and code bodies are still stripped client-side before upload.
 - **Roles → tools.** A session mc starts in a role is handed that role's instructions (`canon/roles/`) through the selected adapter at launch, and nothing else — the Coding Profile it once fetched from Memoro was removed by ruling 24. Repo-owned instruction files such as `CLAUDE.md` and `AGENTS.md` remain static contracts.
 
 The result: every coding tool you use feels like it remembers you.
 
 ## Install
 
-```sh
-npm install -g memoro-cli
-```
-
-Node 22 or later. macOS or Linux. The `mc` coordinator (below) uses `node-pty` for transparent terminal wrapping — no extra system dep beyond a normal `npm install`.
+Node 22 or later. macOS or Linux.
 
 ## Quick start
 
 ```sh
-npm install -g memoro-cli
 mc
 mc setup
 ```
@@ -36,8 +30,6 @@ mc new my-experiment      # branch + worktree + your default coding tool launche
 # ... work, /exit when done ...
 mc end my-experiment      # review status, then permanently delete the local session
 ```
-
-See [`docs/onboarding.md`](docs/onboarding.md) for the long story — per-tool install details, multi-machine notes, and shell-wrapper specifics.
 
 ## `mc` — the terminal coordinator
 
@@ -103,20 +95,6 @@ and the role's own file, as a launch argument (`docs/technical/mc-roles.md`).
 There is no Coding Profile — ruling 24 removed it, and the one rule in it
 nothing else said, what is written in English, is a sentence in `_common.md`.
 
-### `memoro-cli` — low-level surface
-
-| Command | Purpose |
-|---|---|
-| `memoro-cli login` | Save a Memoro API token to the OS keychain |
-| `memoro-cli logout` | Remove the stored token |
-| `memoro-cli status` | Show token info, last session uploaded, last legacy lens pull |
-| `memoro-cli config set <key> <value>` | Store non-secret CLI config such as `api-url` |
-| `memoro-cli session upload <transcript>` | Clean + POST a session transcript |
-| `memoro-cli lens pull [--tool <id>] [--repo <name>]` | Legacy: refresh the old portrait-coding lens block |
-| `memoro-cli codex run [-- <codex args...>]` | Legacy manual wrapper; prefer `mc new --codex` |
-| `memoro-cli hook install [--tool ...]` | Legacy raw-tool integration; not required for `mc` |
-| `memoro-cli hook uninstall [--tool ...]` | Remove legacy raw-tool hooks/shims |
-
 Most users only ever see `mc`, `mc setup`, and `mc new` / `mc resume`.
 
 `mc end` is permanent. It shows session/worktree/branch state and the exact
@@ -139,8 +117,6 @@ Cursor, Windsurf, and Gemini CLI remain planned. `mc auth status` shows a row fo
 ## Security
 
 - Tokens stored in OS keychain by default. File fallback (`~/.memoro/config.json` mode 0600) is used only when no keyring is available, with a loud warning.
-- Transcript cleanup and metadata extraction happen on your machine. The uploaded payload contains cleaned user/assistant messages plus deterministic metadata; Memoro performs the AI extraction server-side.
-- You can inspect every uploaded session in the Memoro library and delete any that feel too revealing — deletion cascades through the observation pipeline.
 
 ## Development
 
@@ -149,7 +125,6 @@ git clone https://github.com/martinforsberg81/memoro-cli.git
 cd memoro-cli
 npm test
 npm link
-memoro-cli --help
 ```
 
 ## License

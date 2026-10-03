@@ -1,9 +1,9 @@
 /**
  * Tool adapter registry.
  *
- * Each adapter exports: ID, LABEL, launchSpec, resumeArgs, installHooks,
- * uninstallHooks, detect. None of them writes an instruction file — the
- * Coding Profile reaches a new conversation as a launch argument instead.
+ * Each adapter exports: ID, LABEL, launchSpec, resumeArgs, detect. None of
+ * them writes an instruction file — a role's instructions reach a new
+ * conversation as a launch argument instead.
  *
  * Available adapters are fully implemented. Planned adapters remain stubbed
  * with explicit notes so the CLI can explain the current support boundary.

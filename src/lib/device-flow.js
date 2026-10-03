@@ -46,7 +46,7 @@ import {
   getSecret as defaultGetSecret,
 } from './keychain.js';
 import { memoroFetchAnon as defaultMemoroFetchAnon } from './api.js';
-import { ACCOUNTS } from '../commands/auth.js';
+import { ACCOUNTS } from './auth-accounts.js';
 
 const DEFAULT_API_URL = 'https://meetmemoro.app';
 
