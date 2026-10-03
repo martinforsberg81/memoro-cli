@@ -1,0 +1,96 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "memoro-cli reads nothing from memoro but the admin surface, and ships one command, `mc`. The Coding Profile is no longer fetched or handed to sessions; the one rule in it that nothing else says — what is written in English — is a sentence in `canon/roles/_common.md`. The `memoro` and `memoro-cli` binaries, the package `main`, and everything only they reach — heartbeat loop, session upload, hook install, provider-artifact, the transcript distiller, the session projector — are gone, and the package can no longer be published to npm by accident.",
+    "This is the client half of ruling 24 (`docs/project/mc/rulings.md` § 24): memoro holds nothing about mc, so nothing on this machine reports sessions into it or reads a profile from it. The server half is `mc-in-memoro-cut` and `mc-in-memoro-decommission` in memoro, under `docs/project/mc/`."
+  ],
+  "contract": [
+    "`mc` behaves as before apart from the profile: the page, every verb, sign-in through device flow, `mc test prod`, `mc shot`, `mc vault`, and the role instructions each session is launched with (`instructionsFor` in `src/mc/roles.js`, `profileArgs` in `src/mc/portrait.js`, `headlessArgs` in `src/mc/run-plan.js`). The keychain accounts mc reads (`memoro-api-token`) keep their names, so no stored token is orphaned.",
+    "`~/.memoro/config.json`, `~/.memoro/secrets.json` and `~/.memoro/mc/` stay — mc reads them. The `--emit-shell-directives` stripping in `src/mc-cli.js` and `src/bin-mc.js` stays: Martin's zsh `mc` function still passes the flag, and without the strip every verb would receive it as an argument.",
+    "Done on 2026-10-03, by the planning session on Martin's word: the memoro-cli hooks are gone from `~/.claude/settings.json` and `~/.codex/hooks.json` (backups `*.bak-20261003-memoro-hooks`), the heartbeat daemons are stopped, `~/.memoro/{heartbeat.log,hook.log,sessions.json,last-session-preview.json}` and the keychain item `memoro-mc-supervisor-token` are deleted. Still outside any step: after step 2 lands, removing the `/opt/homebrew/bin/memoro` and `/opt/homebrew/bin/memoro-cli` links (they point at the deleted `src/bin.js`) and `~/.memoro/mc/coding-profile.md`, and `npm unpublish memoro-cli --force`."
+  ],
+  "out_of_scope": [
+    "Renaming the package or the repository away from `memoro-cli`.",
+    "`dependencies` (`node-pty`, `@xterm/headless`, `@xterm/addon-serialize`), `postinstall` and `scripts/fix-pty-helper.js`: no file in `src/` uses them, but `scripts/mc-live-page-check.mjs` does, and they are not the binary.",
+    "Vault and its carcass, including the stale path literal `'src/runtime/broker/client.js'` in `src/vault/credential-domain/local-codex.js:122` — the vault contract of mc-cut (`docs/technical/mc-cut.md` § *The three things nothing reaches*) still holds.",
+    "Rewriting `README.md` as a description of mc. Only the parts that describe the binary go.",
+    "Anything in memoro."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "No session is handed a Coding Profile, and nothing in mc calls memoro for one.",
+      "check": "`grep -rn \"coding-profile\\|loadProfile\\|readCached\" src` finds nothing; `mc roles` (the assembled-instructions report in `src/mc/commands/roles.js`) shows `_common.md + overlay` with no profile part; `tests/mc/run.test.js` and `tests/mc/work-open.test.js` are green."
+    },
+    {
+      "met": false,
+      "criterion": "Only `mc` ships, and the package is private.",
+      "check": "`node -e \"const p=require('./package.json');console.log(Object.keys(p.bin), p.main, p.private)\"` prints `[ 'mc' ] undefined true`."
+    },
+    {
+      "met": false,
+      "criterion": "Nothing in `src/` is unreached, and nothing is kept alive only by the package seed.",
+      "check": "`npm run reach` ends with `0 filer  0 rader  NOT reached — 0% of src/`, and `scripts/reach.mjs` no longer names `src/bin.js`, `src/index.js` or `lib/update-check-worker.js`."
+    },
+    {
+      "met": false,
+      "criterion": "mc still works.",
+      "check": "`npm test` is green, including `tests/mc/first-run.test.js`, `tests/mc/run.test.js` and `tests/mc/work-open.test.js`; `node src/mc-cli.js --help` exits 0."
+    },
+    {
+      "met": true,
+      "criterion": "Nothing on Martin's machine calls the binary.",
+      "check": "`grep -c memoro-cli ~/.claude/settings.json` prints 0 and `pgrep -f heartbeat-loop` prints nothing — checked 2026-10-03 after the hooks were removed."
+    }
+  ],
+  "documents": [
+    {
+      "label": "Ruling 24 — the model",
+      "path": "../rulings.md"
+    },
+    {
+      "label": "mc-cut — the decision it left open",
+      "path": "../../../technical/mc-cut.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "The Coding Profile leaves mc's launches",
+      "status": "ready",
+      "done_when": "`src/mc/portrait.js` no longer fetches, caches or returns a profile; every launch path assembles role instructions without one; `canon/roles/_common.md` carries the English sentence and no longer says the runner lands what a session pushes; `npm test` is green.",
+      "instruction": [
+        "Why: ruling 24 in `docs/project/mc/rulings.md`. The profile was a ~3 100-character letter fetched from memoro's `GET /api/mc/coding-profile` and joined in front of every role's instructions. Read against `canon/roles/_common.md`, memoro's `AGENTS.md` and the tool's own system prompt, everything in it was said elsewhere or contradicted ruling 21 (its *merge is always mine* and *leave the PR open*), except one rule: what is written in English. Martin, 2026-10-03, on removing it: *\"Bra. Enligt din rekommendation.\"* memoro removes the endpoint once this project has landed (`mc-in-memoro-cut` step 4), so mc must stop reading it first.",
+        "`src/mc/portrait.js`: delete `loadProfile`, `readCached`, `cachePath`, `writeCache`, `cacheExists`, `PROFILE_PATH`, `DEFAULT_API_URL`, `FETCH_TIMEOUT_MS` and the imports they need, including the dynamic `import('../commands/auth.js')` at :77. Keep `profileArgs(toolId, markdown)` — it is the launch-argument channel the role instructions ride on (`--append-system-prompt` / `-c instructions=`), not the profile. Rewrite the file's header comment to say that: it hands a body of instructions to a tool at launch, and why a launch argument rather than a file (the history in today's comment stays true and is worth keeping in two sentences). If the module ends up holding only `profileArgs`, leave it in place under its name rather than renaming it across the launch paths.",
+        "`src/mc/roles.js`: `instructionsFor(toolId, profile, overlay)` (:251) becomes `instructionsFor(toolId, overlay)` joining `sharedRoleText()` and the expanded overlay; update its doc comment (:225-250) and the ones at :20 and :286-293 that explain digests in terms of the profile. Callers: `src/mc/run.js` (:132 import, :378 the `profile` dep, :1673), `src/mc/helper-turn.js` (:42, :255-256), `src/mc/work-open.js` (:29, :58, :80-104, :120, :296, :308, :346, :353, :363, :370, :415, :430 — the `readProfile`/`loadProfile` parameters go; the `profile` flag in its result at :120 goes or becomes whether instructions were handed over, whichever its readers need — grep them), `src/mc/commands/roles.js` (:11, :24, :142-153, :191-212, :221, :235, :251 — the `profile` drift verdict goes from `NAMED` and its explanation, because nothing outside the repository can move the digest any more), `src/mc/run-plan.js:755` (comment). A plain `mc work` with no role overlay is then launched with no instructions at all — that is intended.",
+        "`canon/roles/_common.md`: add, as its own short paragraph after the one on reading the code (:13-18): `Talk to Martin in Swedish. Everything written into a repository — code, comments, commit messages, pull request texts, plans — is in English.` And replace the paragraph at :70-73 (*If you are running under `mc run` … The runner lands what you push, in its own round … Push, and stop.*), which predates ruling 21: a step session lands its own pull request with `mc merge` as `canon/roles/step.md` says, so the paragraph becomes one sentence pointing there, or goes if `step.md` already says it in full. Check `src/mc/roles.js`'s role digests and any test that pins `_common.md`'s text or hash, and update them.",
+        "Tests: `tests/mc/run.test.js`, `run-plan.test.js`, `work-open.test.js`, `work-resume.test.js`, `tmux-ux.test.js`, `help.test.js`, `commands/plan.test.js` reference the profile — make them assert instructions without a profile; delete cases that only tested fetching, caching or the `profile` verdict.",
+        "Docs: grep `Coding Profile`, `coding-profile`, `portrait` in `README.md`, `CLAUDE.md`, `docs/coding-agent-protocol.md`, `docs/mc-command-matrix.md`, `docs/technical/` (`mc-roles.md`, `mc-run.md`, `mc-plan.md`, `mc-brief.md`, `mc-helper.md`, `mc-cut.md`) and rewrite each mention to the present: mc hands a session its role, nothing else, and the profile was removed by ruling 24. `CLAUDE.md`'s last paragraph (*It is not a Coding Profile mirror … live in Memoro, and reach a new conversation as a launch argument*) becomes one sentence saying there is no Coding Profile. Leave `docs/project/` history (the utredning, project_log rows) as written."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The memoro binary goes",
+      "status": "ready",
+      "done_when": "`package.json` has only the `mc` bin, no `main`, and `\"private\": true`; the 22 files below and their tests are deleted; `npm test` is green and `npm run reach` reports 0 % unreached.",
+      "instruction": [
+        "Why: ruling 24 in `docs/project/mc/rulings.md`. The binary existed to report Claude Code and Codex sessions into memoro (heartbeats every 60 s, transcript upload at session end, a WebSocket command channel). memoro is removing every endpoint it talked to. The hooks that started it were removed on 2026-10-03, so nothing on this machine runs it any more.",
+        "First, cut the edges from mc into the binary. `src/commands/auth.js:15` only re-exports `ACCOUNTS` from `src/lib/auth-accounts.js`, so point these importers at `../lib/auth-accounts.js` (or `./auth-accounts.js` from `src/lib/`) — the object is the same, nothing changes at runtime: `src/mc/first-run.js:24`, `src/cli/vault.js:61`, `src/lib/device-flow.js:49`. (`src/mc/portrait.js` imported it too; step 1 removed that.) In `src/lib/auth-accounts.js`, remove `SUPERVISOR_TOKEN_ACCOUNT` and the `SUPERVISOR_TOKEN` key of `ACCOUNTS`: nothing in `src/` or `tests/` reads them (the scope it stood for, `mc.supervisor`, is being removed from memoro, and the keychain item is already deleted).",
+        "Then delete these files (wc -l in brackets). Reachable only from `src/bin.js`/`src/index.js` today: `src/bin.js` (116), `src/index.js` (8), `src/commands/config.js` (54), `src/commands/handlers/fetch-transcript.js` (55), `src/commands/heartbeat-loop.js` (347), `src/commands/heartbeat-stop.js` (40), `src/commands/hook.js` (114), `src/commands/provider-artifact.js` (41), `src/commands/session.js` (258), `src/commands/ws-client.js` (251), `src/lib/annotate.js` (563), `src/lib/coding-session.js` (98), `src/lib/distill.js` (281), `src/lib/git-context.js` (157), `src/lib/hook-event.js` (23), `src/mc/open-question.js` (67), `src/mc/session-projector.js` (772), `src/runtime/broker/client.js` (58). Unreached once the four imports above are moved: `src/commands/auth.js` (111), `src/lib/staleness.js` (84), `src/lib/update-check.js` (106), `src/lib/update-check-worker.js` (55). `src/commands/` is then empty; remove the directory.",
+        "Keep: `src/adapters/index.js` (mc reaches it through `mc/work-open.js`, `mc/run.js`, `mc/helper-turn.js`, `vault/engine/tool-auth.js`), `src/lib/{claude,codex,auth-accounts,device-flow,api,config,keychain,prompt,version}.js`, `src/mc/git.js`, `src/runtime/broker/paths.js`. `npm run reach` is the judge: if it reports anything unreached after the deletion, that file was reached only through the binary too — read it, and delete it only if no path literal or sibling repository names it (mc-cut.md § *Edges no import graph can see*).",
+        "Dead exports the graph cannot see, because their module stays: in `src/adapters/claude-code.js`, `installHooks` (:60), `readInstalledHookVersion` (:111), `uninstallHooks` (:126) and their private helpers, `MEMORO_HOOK_ID` and the hook-matching pattern near :454-456; in `src/adapters/claude-code.js` and `src/adapters/codex.js`, `NATIVE_LAUNCH_HOOKS` (:588 in claude-code) and codex's `installHooks` (:46-71). Grep each name across `src/` before deleting it. `uninstallCommands` (claude-code.js:158) stays — its own comment at :154 says it runs at every launch.",
+        "Delete the tests of deleted code: `tests/commands/` (heartbeat-loop, ws-client, provider-artifact, handlers/fetch-transcript, session-projection, session-coding-signal-retirement, hook-version-stamp), `tests/distill.test.js`, `tests/hook-event.test.js`, `tests/lib/annotate.test.js`, `tests/lib/coding-session.test.js`, `tests/lib/git-context.test.js`, `tests/lib/staleness.test.js`, `tests/update-check.test.js`, `tests/mc/session-projector.test.js`, `tests/cli/lifecycle/open-question.test.js`, and the `NATIVE_LAUNCH_HOOKS` cases in `tests/adapters/tool-names.test.js:114-120`. Any fixture only those tests read goes too. Adjust tests that mocked `../commands/auth.js` for first-run to the new module.",
+        "`package.json`: `bin` becomes `{ \"mc\": \"src/mc-cli.js\" }`; delete `main`; add `\"private\": true` so `npm publish` refuses. Leave `files`, `dependencies` and `scripts` as they are.",
+        "`scripts/reach.mjs`: remove the `PACKAGE` seed (`src/bin.js`, `src/index.js`, :79-87 and its use at :162) and its row in the report (:170), remove `lib/update-check-worker.js` from `LIVE` (:67) together with the comment that explains it, and update the header comment (:33-37) that describes three bins. After this the rows are the page and its verbs, plus vault; the last row must still read 0 %.",
+        "`src/mc/first-run.js`: `HINT_TEXT` (:27) tells a new user to run `mc setup`, which mc-cut removed. Make it `New to mc? Run \\`mc\\` to sign in.` and rewrite the doc comment (:4-13) so it names no removed verb (`mc setup`, `mc new`, `mc list`, `memoro-cli login`); update `tests/mc/first-run.test.js` to the new text. (`src/mc/help-text.js:277` says `memoro-cli is installed, not deployed` — that is the package, which stays; leave it.)",
+        "Docs. `README.md`: remove `npm install -g memoro-cli` (:17, :25), the node-pty sentence (:20), the `memoro-cli` low-level command table (:108-120), and the dev lines about `memoro-cli --help` (:150-154); replace the link to `docs/onboarding.md` (:40) with nothing. Delete `docs/onboarding.md` — mc-cut.md § *What is still untrue* already said it should be deleted, and its migration section (:144-149) is about `memoro-cli login`. `docs/coding-agent-protocol.md`: the three-binaries sentence (:10-11), the `src/bin.js` description (:35-36), `src/commands/` ownership (:160-161), and `auth.js`/`heartbeat-loop.js` (:337-339) — say there is one binary, `mc`. `docs/technical/mc-cut.md`: rewrite § *`memoro` and `memoro-cli` are the one decision this project left standing* (:98-107) as one paragraph saying ruling 24 decided it and this project removed them, update the `memoro / memoro-cli` row in *What is left* (:56) and the `src/commands/ + handlers/` row (:70), and drop `docs/onboarding.md` from *What is still untrue*.",
+        "Close-out is this step: add the `project_log.md` row (`docs/project/project_log.md`, programme `mc`, project `memoro-client-cut`, doc `docs/technical/mc-cut.md`), covering both steps. Run `npm test` and `npm run reach` before `mc merge memoro-cli <pr>`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
