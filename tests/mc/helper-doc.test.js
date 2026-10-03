@@ -49,7 +49,7 @@ describe('docs/technical/mc-helper.md says what the code does', () => {
     assert.equal(number(/marked `!`; default (\d+)/u), DEFAULT_THRESHOLD);
   });
 
-  it('states the deploy threshold `checkDeployAge` uses', () => {
+  it('states the deploy threshold the digest calls stale', () => {
     assert.equal(number(/own (\d+)-hour threshold/u), DEPLOY_STALE_HOURS);
   });
 
@@ -79,18 +79,17 @@ describe('docs/technical/mc-helper.md says what the code does', () => {
 
   it('names every failing condition the delta can carry', () => {
     const named = new Set([
-      ...failingConditions({ deploy: { silent: true }, health: { d1: 'healthy' } }),
-      ...failingConditions({ deploy: { stale: true, consecutiveFailures: 1 }, health: { error: 'x' } }),
-      ...failingConditions({ deploy: { stale: false, consecutiveFailures: 0 }, health: { d1: 'error' } }),
+      ...failingConditions({ deploy: { stale: true }, health: { error: 'x' } }),
+      ...failingConditions({ deploy: { stale: false }, health: { d1: 'error' } }),
     ]);
-    assert.equal(named.size, 5, 'a new condition needs a line in the doc too');
+    assert.equal(named.size, 3, 'a new condition needs a line in the doc too');
     for (const name of named) assert.ok(DOC.includes(`\`${name}\``), `the doc does not name ${name}`);
   });
 
   it('shows the state block the next digest actually parses', () => {
     const shown = /(<!-- mc-helper:state v1\n(?:.*\n)*?    -->)/u.exec(DOC);
     assert.ok(shown, 'the doc no longer shows the state block');
-    const real = renderState({ fingerprints: [{ fingerprint: 'a1b2c3', count: 41 }], failing: ['deploy-webhook-silent'] });
+    const real = renderState({ fingerprints: [{ fingerprint: 'a1b2c3', count: 41 }], failing: ['deploy-stale'] });
     assert.equal(shown[1].replace(/^ {4}/gmu, ''), real);
   });
 });

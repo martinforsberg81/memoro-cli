@@ -108,8 +108,8 @@ has one avoidable way to fail.
 ## What the eye reads
 
 memoro already records what matters — grouped worker errors in D1, the
-server's own analysis pass, AI-provider refusals, the deploy log in
-`deploy:index`. Before this verb, nothing read any of it unless a person
+server's own analysis pass, AI-provider refusals, what production says it
+is. Before this verb, nothing read any of it unless a person
 did, and nothing alerted: surveyed 2026-08-29, there was no uptime check, no
 notifier and no Logpush. The eye does not add a monitoring system. It adds a
 reader.
@@ -123,7 +123,7 @@ being unauthenticated must not cost us the other five.
 | error fingerprints | `scripts/admin/survey-errors.mjs --env production --limit <n> --since <iso>`, JSON on stdout | the script resolves `ADMIN_TOKEN` itself | 60 s |
 | analysis items | `GET /admin/analysis` — the server's own LLM pass over errors and feedback | bearer `ADMIN_TOKEN` | 30 s |
 | AI-provider errors | `scripts/admin/inspect-ai-provider-errors.mjs --env production --days 1` | **none** — it shells out to `wrangler d1 execute memoro-db --remote` | 180 s |
-| deploys | `GET /admin/deploy/logs?limit=20` — the `deploy:index` KV key itself, beside the last `deployed` row of `~/mc/runner/log/deploys.tsv`, which `mc deploy` wrote | bearer `ADMIN_TOKEN` | 30 s |
+| deploys | the last `deployed` row of `~/mc/runner/log/deploys.tsv`, which `mc deploy` wrote — read from disk | none | — |
 | what is live | `GET /api/version` — `{ commit, build, build_time }`, kept in `~/mc/runner/version.json` for the page | none | 30 s |
 | D1 health | `GET /ping-d1` | none | 30 s |
 
@@ -134,14 +134,20 @@ it was `}` (the close of `wranglerD1Json`'s JSON dump) or `Node.js v24.10.0`
 (Node's banner under a crash), so the AI-provider section said
 `_could not read: }_` from 2026-08-30 on without naming a cause.
 
-The deploy section has **two sources on purpose**. `/admin/deploy/logs` is the
-GitHub webhook's, and it has been writing nothing for weeks; `deploys.tsv` is
-written by `mc deploy` around the deploy itself and depends on no webhook at
-all. The age is taken from whichever of them saw a deploy most recently — a
-deploy Martin typed an hour ago is not stale because CI never heard of it — and
-the digest says so plainly when the two are not describing the same deploy.
-`mc deploy` runs `npm run deploy` on this machine and fires no Action, so that
-is the ordinary case rather than a fault.
+The deploy section reads **mc's own record and what production answers**.
+`deploys.tsv` is written by `mc deploy` around the deploy itself; `/api/version`
+says which commit and build production is serving and when that build was
+made. The age is the fresher of the two — a deploy made some other way is not
+stale merely because mc did not run it — and the digest says plainly when
+production is answering a commit other than the one mc last shipped. With
+neither reading, the age is *unknown*, not stale.
+
+Until 2026-10-03 it also read `GET /admin/deploy/logs`, the `deploy:index` KV
+key a GitHub deploy webhook was meant to fill. The index never held anything,
+the digest reported that every day as `deploy-webhook-silent`, and memoro
+removed the webhook, the route and the nightly `checkDeployAge` that read it
+(memoro #12452). The flag went with them, and so did `deploy-failures`, which
+only that log could see.
 
 Three facts about that table are easy to get wrong and were measured, not
 assumed:
@@ -171,16 +177,9 @@ rather than two windows.
   "Not readable" section saying this in its own words rather than spending a
   request every day to rediscover the 401. Exposing them to the admin token
   is the helper's first candidate proposal.
-- **Deploy age is in no route.** The nightly `checkDeployAge` computes
-  `{ lastDeploy, ageHours, stale, consecutiveFailures }` and keeps them:
-  `buildAdminOperationsStatus` passes every task result through
-  `normalizeCountObject`, whose `SAFE_COUNT_KEYS` contains none of the four.
-  So the digest computes the same verdict itself from the deploy index, with
-  `checkDeployAge`'s own 36-hour threshold, so the two agree.
-- **An empty deploy index is a silent webhook, not a healthy deploy.** That
-  is what production showed on 2026-08-29, and it is reported as
-  `deploy-webhook-silent` — the nightly task had been returning
-  `stale: true` to no reader the whole time.
+- **Deploy age is in no route.** The digest computes it itself, from mc's
+  record and `/api/version`'s `build_time`, and calls it stale past its
+  own 36-hour threshold — the one memoro's removed `checkDeployAge` used.
 - **KV health is not read.** `/ping-kv` writes a probe key and deletes it
   again. That is a write, and the Contract keeps the helper out of it.
 
@@ -197,17 +196,16 @@ block:
 
     <!-- mc-helper:state v1
     fingerprint a1b2c3 41
-    failing deploy-webhook-silent
+    failing deploy-stale
     -->
 
 Two lists: the fingerprints this digest saw with their counts, and the named
 operational conditions that were failing when it was written
-(`deploy-webhook-silent`, `deploy-stale`, `deploy-failures`,
-`d1-unreachable`, `d1-unhealthy`). The next run diffs against them.
+(`deploy-stale`, `d1-unreachable`, `d1-unhealthy`). The next run diffs against them.
 
 `d1-unreachable` is not raised when **no request to production got an answer
-at all** in the run: `/admin/analysis`, `/admin/deploy/logs`, `/ping-d1` and
-`/api/version` all threw rather than returned (a route skipped for want of a
+at all** in the run: `/admin/analysis`, `/ping-d1` and `/api/version` all
+threw rather than returned (a route skipped for want of a
 token is left out of the count). That is the collector without a network, and
 the digest says so in one line at the top instead. On 2026-09-15, 09-29 and
 10-02 every request said `fetch failed`, the digest opened on

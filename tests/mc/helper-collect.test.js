@@ -5,9 +5,10 @@
  * section and nothing else.
  *
  * The surface these fixtures imitate was measured against production on
- * 2026-08-29: `/admin/analysis` and `/admin/deploy/logs` answer a bearer
- * token, `/ping-d1` answers anyone, and `/api/admin/*` answers 401 to
- * everything but a browser session.
+ * 2026-08-29: `/admin/analysis` answers a bearer token, `/ping-d1` and
+ * `/api/version` answer anyone, and `/api/admin/*` answers 401 to everything
+ * but a browser session. `/admin/deploy/logs` was read here too until memoro
+ * removed it with the GitHub deploy webhook behind it (2026-10-03).
  *
  * No network, no model, no memoro checkout: every source is injected.
  */
@@ -57,26 +58,13 @@ const ANALYSIS = {
   ],
 };
 
-/**
- * The shape `deploy:index` has when the webhook is actually writing: newest
- * first, so the failure at the head is one that landed *after* the last
- * success — which is what `checkDeployAge` counts.
- */
-const DEPLOY = {
-  ok: true,
-  logs: [
-    { run_id: '32', status: 'failure', branch: 'main', timestamp: '2026-08-29T05:00:00.000Z', environment: 'production' },
-    { run_id: '31', status: 'success', branch: 'main', timestamp: '2026-08-29T04:00:00.000Z', environment: 'production' },
-    { run_id: '30', status: 'failure', branch: 'main', timestamp: '2026-08-28T20:00:00.000Z', environment: 'production' },
-  ],
-  total: 3,
-};
-
 const PING = { ok: true, d1: 'healthy', timings: { select1: 11, total: 43 }, slow: [] };
 
 /** `/api/version` — public, three fields, and what the page reads afterwards. */
 const LIVE_SHA = 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00';
 const VERSION = { commit: LIVE_SHA, build: 23533, build_time: '2026-08-29T04:05:00.000Z' };
+/** The same answer from a build four days old: past the stale threshold. */
+const OLD_VERSION = { ok: true, json: { ...VERSION, build_time: '2026-08-25T00:00:00.000Z' } };
 
 /** A row of `deploys.tsv` as `mc deploy` writes one. */
 const DEPLOYED_SHA = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012';
@@ -112,7 +100,6 @@ function stubs(overrides = {}) {
     calls.urls.push(url);
     calls.auth.set(path, token);
     if (path === '/admin/analysis') return overrides.analysis ?? { ok: true, json: ANALYSIS };
-    if (path === '/admin/deploy/logs') return overrides.deploy ?? { ok: true, json: DEPLOY };
     if (path === '/api/version') return overrides.version ?? { ok: true, json: VERSION };
     return overrides.ping ?? { ok: true, json: PING };
   };
@@ -142,7 +129,7 @@ describe('mc helper --collect — the sources', () => {
     const g = ground();
     const { calls } = await collect(g);
     const paths = calls.urls.map((u) => new URL(u).pathname).sort();
-    assert.deepEqual(paths, ['/admin/analysis', '/admin/deploy/logs', '/api/version', '/ping-d1']);
+    assert.deepEqual(paths, ['/admin/analysis', '/api/version', '/ping-d1']);
     assert.ok(!paths.some((p) => p.startsWith('/api/admin/')), '/api/admin/* answers 401 to a bearer token');
   });
 
@@ -150,7 +137,6 @@ describe('mc helper --collect — the sources', () => {
     const g = ground();
     const { calls } = await collect(g);
     assert.equal(calls.auth.get('/admin/analysis'), 'test-token');
-    assert.equal(calls.auth.get('/admin/deploy/logs'), 'test-token');
     assert.equal(calls.auth.get('/ping-d1'), '', 'the D1 probe needs no credential');
     assert.equal(calls.auth.get('/api/version'), '', 'what production says it is, is public');
   });
@@ -201,8 +187,8 @@ describe('mc helper --collect — the failure domains', () => {
 
   it('says so per section when a route refuses, and still writes the file', async () => {
     const g = ground();
-    const result = await collect(g, { deploy: { ok: false, error: '/admin/deploy/logs returned 401' } });
-    assert.match(result.text, /## Deploy\n\n_could not read: \/admin\/deploy\/logs returned 401_/u);
+    const result = await collect(g, { analysis: { ok: false, error: '/admin/analysis returned 401' } });
+    assert.match(result.text, /## Analysis items\n\n_could not read: \/admin\/analysis returned 401_/u);
     assert.match(result.text, /\| `aaa111` \| 34 \|/u);
   });
 
@@ -249,12 +235,12 @@ describe('mc helper --collect — the delta', () => {
     mkdirSync(intakeDir(g.env), { recursive: true });
     writeFileSync(join(intakeDir(g.env), 'errors-2026-08-28.md'), [
       '# Errors and maintenance — 2026-08-28T06:00:00Z', '',
-      renderState({ fingerprints: [{ fingerprint: 'ccc333', count: 2 }], failing: ['deploy-failures'] }),
+      renderState({ fingerprints: [{ fingerprint: 'ccc333', count: 2 }], failing: ['deploy-stale'] }),
     ].join('\n'));
 
-    const result = await collect(g);
+    const result = await collect(g, { version: OLD_VERSION });
     assert.deepEqual(result.data.delta.fingerprints.map((f) => f.fingerprint), ['aaa111', 'bbb222']);
-    assert.deepEqual(result.data.delta.failing, [], 'deploy-failures was already there yesterday');
+    assert.deepEqual(result.data.delta.failing, [], 'deploy-stale was already there yesterday');
     assert.match(result.text, /Baseline: `errors-2026-08-28\.md`/u);
     assert.match(result.text, /- ! `aaa111` — 34× new/u);
     assert.match(result.text, /- · `bbb222` — 7× new/u);
@@ -268,10 +254,10 @@ describe('mc helper --collect — the delta', () => {
       fingerprints: SURVEY.topFingerprints.map((f) => ({ fingerprint: f.fingerprint, count: f.count })),
       failing: [],
     }));
-    const result = await collect(g);
+    const result = await collect(g, { version: OLD_VERSION });
     assert.deepEqual(result.data.delta.fingerprints, []);
-    assert.deepEqual(result.data.delta.failing, ['deploy-failures']);
-    assert.match(result.text, /- ! `deploy-failures` — failing now, and not in the last digest/u);
+    assert.deepEqual(result.data.delta.failing, ['deploy-stale']);
+    assert.match(result.text, /- ! `deploy-stale` — failing now, and not in the last digest/u);
   });
 
   it('says the machine reached nothing, not that D1 is down, when every request went unanswered', async () => {
@@ -284,16 +270,16 @@ describe('mc helper --collect — the delta', () => {
       failing: [],
     }));
     const down = { ok: false, error: 'fetch failed', unreached: true };
-    const result = await collect(g, { analysis: down, deploy: down, ping: down, version: down });
+    const result = await collect(g, { analysis: down, ping: down, version: down });
     assert.deepEqual(result.data.delta.failing, [], 'no request answered, so nothing was measured about D1');
     assert.doesNotMatch(result.text, /! `d1-unreachable`|failing d1-unreachable/u, 'neither in the alarm list nor the state');
-    assert.match(result.text, /> This machine could not reach the network in this run: all 4 requests to production went unanswered \(fetch failed\)/u);
+    assert.match(result.text, /> This machine could not reach the network in this run: all 3 requests to production went unanswered \(fetch failed\)/u);
   });
 
   it('still raises d1-unreachable when anything else on the network answered', async () => {
     const g = ground();
     const down = { ok: false, error: 'fetch failed', unreached: true };
-    const result = await collect(g, { ping: down, version: down, analysis: down });
+    const result = await collect(g, { ping: down, version: down });
     assert.deepEqual(failingConditions({ deploy: result.data.deploy, health: result.data.health }).includes('d1-unreachable'), true);
     assert.match(result.text, /failing d1-unreachable/u);
     assert.doesNotMatch(result.text, /could not reach the network/u);
@@ -303,7 +289,6 @@ describe('mc helper --collect — the delta', () => {
     const g = ground();
     const result = await collect(g, {
       analysis: { ok: false, error: '/admin/analysis returned 503' },
-      deploy: { ok: false, error: '/admin/deploy/logs returned 503' },
       ping: { ok: false, error: '/ping-d1 returned 503' },
       version: { ok: false, error: '/api/version returned 503' },
     });
@@ -321,50 +306,56 @@ describe('mc helper --collect — the delta', () => {
 
   it('writes a state block the next digest can read back', async () => {
     const g = ground();
-    const result = await collect(g);
+    const result = await collect(g, { version: OLD_VERSION });
     const state = parseState(result.text);
     assert.deepEqual([...state.fingerprints.keys()], ['aaa111', 'bbb222', 'ccc333']);
     assert.equal(state.fingerprints.get('aaa111'), 34);
-    assert.deepEqual([...state.failing], ['deploy-failures']);
+    assert.deepEqual([...state.failing], ['deploy-stale']);
   });
 });
 
 describe('mc helper --collect — the deploy section', () => {
-  it('computes the age itself and names the last success', async () => {
+  it('reads no deploy log from production, only mc\'s record and /api/version', async () => {
     const g = ground();
-    const section = (await collect(g)).text.split('## Deploy')[1];
-    assert.match(section, /Last successful production deploy: 2026-08-29 04:00 \(main, run 31\)/u);
-    assert.match(section, /Age: 2 h/u);
-    assert.match(section, /1 production deploy\(s\) failed since that success/u);
+    const { calls, text } = await collect(g);
+    assert.ok(!calls.urls.some((u) => u.includes('/admin/deploy')), 'memoro removed /admin/deploy/logs');
+    assert.doesNotMatch(text, /deploy log is empty|webhook|deploy:index/u);
+    assert.doesNotMatch(text, /deploy-webhook-silent|deploy-failures/u);
+  });
+
+  it('takes the age from /api/version when mc has deployed nothing', async () => {
+    const g = ground();
+    const result = await collect(g);
+    assert.equal(result.data.deploy.mc, null);
+    assert.equal(result.data.deploy.age, 2, 'built 04:05, read 06:00');
+    assert.equal(result.data.deploy.stale, false);
+    const section = result.text.split('## Deploy')[1];
+    assert.match(section, /- Age: 2 h\n/u);
     assert.match(section, /origin\/main in the local checkout: abc1234/u);
   });
 
-  it('calls an empty index a silent webhook, not a healthy deploy', async () => {
-    const g = ground();
-    const result = await collect(g, { deploy: { ok: true, json: { ok: true, logs: [], message: 'No deployment logs yet' } } });
-    assert.match(result.text, /\*\*The deploy log is empty\.\*\*/u);
-    assert.match(result.text, /webhook is writing nothing/u);
-    assert.deepEqual(parseState(result.text).failing, new Set(['deploy-webhook-silent']));
-  });
-
-  it('agrees with checkDeployAge about what stale means', () => {
-    const old = { logs: [{ run_id: '9', status: 'success', branch: 'main', timestamp: '2026-08-25T00:00:00.000Z', environment: 'production' }] };
-    const state = deployState(old, { now: NOW });
-    assert.equal(state.ageHours, 102);
+  it('calls a deploy stale past the threshold, by the fresher of the two readings', () => {
+    const live = { commit: LIVE_SHA, build: 1, buildTime: '2026-08-25T00:00:00.000Z' };
+    const state = deployState(null, { now: NOW, live });
+    assert.equal(state.age, 102);
     assert.equal(state.stale, true);
     assert.equal(state.staleAfterHours, 36);
-    assert.equal(deployState({ logs: DEPLOY.logs }, { now: NOW }).stale, false);
+    const row = { sha: DEPLOYED_SHA, ended: '2026-08-29T05:00:00.000Z', outcome: 'deployed' };
+    const fresh = deployState(row, { now: NOW, live });
+    assert.equal(fresh.age, 1, 'mc deployed an hour ago, whatever the build time says');
+    assert.equal(fresh.stale, false);
   });
 
-  it('treats an entry without an environment as production', () => {
-    const state = deployState({ logs: [{ run_id: '1', status: 'success', timestamp: '2026-08-29T05:00:00.000Z' }] }, { now: NOW });
-    assert.equal(state.lastSuccess.run_id, '1');
-    assert.equal(state.stale, false);
+  it('says the age is unknown rather than stale when neither reading has a time', async () => {
+    const g = ground();
+    const result = await collect(g, { version: { ok: false, error: '/api/version returned 503' } });
+    assert.equal(result.data.deploy.age, null);
+    assert.equal(result.data.deploy.stale, false);
+    assert.match(result.text, /- Age: unknown — neither mc's record nor `\/api\/version` gave a time/u);
+    assert.doesNotMatch(result.text, /failing deploy-stale/u);
   });
 
-  // The row `mc deploy` wrote is the second source, and the one that does not
-  // depend on a webhook that has been writing nothing for weeks.
-  it('reads mc\'s own row beside the webhook\'s log', async () => {
+  it('reads mc\'s own row', async () => {
     const g = ground();
     deploysTsv(g.root);
     const result = await collect(g);
@@ -373,29 +364,8 @@ describe('mc helper --collect — the deploy section', () => {
     assert.equal(state.mc.build, '813');
     assert.equal(state.mcAgeHours, 1);
     assert.equal(state.age, 1, 'the freshest of the two is what production is');
-    assert.equal(state.disagree, false, 'an hour apart is the same deploy seen twice');
     const section = result.text.split('## Deploy')[1];
     assert.match(section, /mc's own last deploy: `1a2b3c4` build 813 — 2026-08-29 05:00 by martin@laptop, verified live `1a2b3c4` \(1 h ago\)/u);
-  });
-
-  it('says so when the two sources are not describing the same deploy', async () => {
-    const g = ground();
-    deploysTsv(g.root);
-    const result = await collect(g, {
-      deploy: { ok: true, json: { logs: [{ run_id: '9', status: 'success', branch: 'main', timestamp: '2026-08-25T00:00:00.000Z', environment: 'production' }] } },
-    });
-    assert.equal(result.data.deploy.disagree, true);
-    assert.match(result.text, /\*\*The two sources disagree\.\*\*/u);
-    // Ninety-six hours by the webhook, one by the row: not stale.
-    assert.equal(result.data.deploy.stale, false);
-  });
-
-  it('a silent webhook is not a stale deploy when mc deployed an hour ago', () => {
-    const row = { sha: DEPLOYED_SHA, ended: '2026-08-29T05:00:00.000Z', outcome: 'deployed' };
-    const state = deployState({ logs: [] }, { now: NOW, row });
-    assert.equal(state.silent, true, 'the webhook is still writing nothing');
-    assert.equal(state.stale, false);
-    assert.equal(state.age, 1);
   });
 
   it('says mc has deployed nothing rather than nothing at all', async () => {
@@ -487,11 +457,9 @@ describe('mc helper — the pure builders', () => {
   });
 
   it('names the conditions the delta watches', () => {
-    assert.deepEqual(failingConditions({ deploy: { silent: true }, health: { d1: 'healthy' } }), ['deploy-webhook-silent']);
-    assert.deepEqual(failingConditions({ deploy: { stale: true, consecutiveFailures: 2 }, health: { d1: 'healthy' } }),
-      ['deploy-stale', 'deploy-failures']);
-    assert.deepEqual(failingConditions({ deploy: { error: 'timed out' }, health: { error: 'timed out' } }), ['d1-unreachable']);
-    assert.deepEqual(failingConditions({ deploy: { stale: false, consecutiveFailures: 0 }, health: { d1: 'error' } }), ['d1-unhealthy']);
+    assert.deepEqual(failingConditions({ deploy: { stale: true }, health: { d1: 'healthy' } }), ['deploy-stale']);
+    assert.deepEqual(failingConditions({ deploy: { stale: false }, health: { error: 'timed out' } }), ['d1-unreachable']);
+    assert.deepEqual(failingConditions({ deploy: { stale: false }, health: { d1: 'error' } }), ['d1-unhealthy']);
   });
 
   it('takes the threshold as the bar for `!`', () => {
