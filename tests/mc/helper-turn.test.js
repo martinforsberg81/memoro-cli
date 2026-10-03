@@ -63,7 +63,7 @@ async function turn(overrides = {}, options = {}) {
   const result = await runHelperTurn({
     env: e, now: NOW, file: options.file || join(intakeDir(e), FILE),
     deps: {
-      role: () => ROLE, launch: () => LAUNCH, profile: async () => 'PROFILE',
+      role: () => ROLE, launch: () => LAUNCH,
       ground: GROUND, session: fakeSession(seen, options.session), ...overrides,
     },
   });
@@ -84,13 +84,13 @@ describe('the helper turn', () => {
     assert.equal(result.ok, true);
   });
 
-  // Assembled by `instructionsFor` like every other launch: the profile, the
-  // text every role session shares, then this role's own body.
-  it('carries the Coding Profile, the shared text and the role overlay in one instruction body', async () => {
+  // Assembled by `instructionsFor` like every other launch: the text every
+  // role session shares, then this role's own body, and nothing before them.
+  it('carries the shared text and the role overlay in one instruction body', async () => {
     const { seen } = await turn();
     const at = seen.args.indexOf('--append-system-prompt');
     assert.ok(at > 0, 'claude takes instructions on --append-system-prompt');
-    assert.equal(seen.args[at + 1], `PROFILE\n\n---\n\n${sharedRoleText()}\n\n---\n\nYou are the helper turn.`);
+    assert.equal(seen.args[at + 1], `${sharedRoleText()}\n\n---\n\nYou are the helper turn.`);
   });
 
   it('names the one file and leaves the reading to the turn', async () => {
@@ -165,7 +165,7 @@ describe('the helper turn', () => {
     const seen = {};
     await runHelperTurn({
       env: e, now: NOW, file: FILE, model: 'opus',
-      deps: { role: () => ROLE, launch: () => LAUNCH, profile: async () => '', ground: GROUND, session: fakeSession(seen, { write: null }) },
+      deps: { role: () => ROLE, launch: () => LAUNCH, ground: GROUND, session: fakeSession(seen, { write: null }) },
     });
     assert.equal(seen.args[seen.args.indexOf('--model') + 1], 'opus');
   });
@@ -328,7 +328,7 @@ describe('draining the inbox', () => {
         turn: (options) => runHelperTurn({
           ...options,
           deps: {
-            role: () => ROLE, launch: () => LAUNCH, profile: async () => 'PROFILE', ground: GROUND,
+            role: () => ROLE, launch: () => LAUNCH, ground: GROUND,
             session: async () => ({ status: 1, stdout: 'not json', stderr: 'claude: fatal', timedOut: false }),
           },
         }),

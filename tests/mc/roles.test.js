@@ -149,38 +149,29 @@ describe('the mark on an area', () => {
 describe('what a conversation is told', () => {
   const SHARED = sharedRoleText();
 
-  it('claude gets the shared text and then the overlay, behind the profile', () => {
-    assert.equal(
-      instructionsFor('claude-code', 'PROFILE', 'OVERLAY'),
-      `PROFILE\n\n---\n\n${SHARED}\n\n---\n\nOVERLAY`,
-    );
-    assert.equal(instructionsFor('claude-code', null, 'OVERLAY'), `${SHARED}\n\n---\n\nOVERLAY`);
+  it('claude gets the shared text and then the overlay, and nothing in front', () => {
+    assert.equal(instructionsFor('claude-code', 'OVERLAY'), `${SHARED}\n\n---\n\nOVERLAY`);
   });
 
   it('codex gets the same body, on its own instruction channel', () => {
     assert.equal(
-      instructionsFor('codex', 'PROFILE', 'OVERLAY'),
-      `PROFILE\n\n---\n\n${SHARED}\n\n---\n\nOVERLAY`,
+      instructionsFor('codex', 'OVERLAY'),
+      `${SHARED}\n\n---\n\nOVERLAY`,
     );
   });
 
   it('is one body of text, whichever tool is asked', () => {
     assert.equal(
-      instructionsFor('codex', 'PROFILE', 'OVERLAY'),
-      instructionsFor('claude-code', 'PROFILE', 'OVERLAY'),
+      instructionsFor('codex', 'OVERLAY'),
+      instructionsFor('claude-code', 'OVERLAY'),
     );
   });
 
   // The parallel-operation guarantee: an ordinary area has no role, and a
-  // conversation there is told the profile and nothing mc added.
-  it('no overlay is no role, and no role is no shared text', () => {
-    assert.equal(instructionsFor('claude-code', 'PROFILE', null), 'PROFILE');
-    assert.equal(instructionsFor('codex', 'PROFILE', null), 'PROFILE');
-  });
-
-  it('nothing to say is nothing, for both', () => {
-    assert.equal(instructionsFor('claude-code', null, null), null);
-    assert.equal(instructionsFor('codex', null, null), null);
+  // conversation there is told nothing mc added — no instructions at all.
+  it('no overlay is no role, and no role is no instructions', () => {
+    assert.equal(instructionsFor('claude-code', null), null);
+    assert.equal(instructionsFor('codex', null), null);
   });
 });
 
@@ -206,7 +197,7 @@ describe('the text every role session shares', () => {
     for (const name of ['brief', 'helper', 'intake', 'step', 'worker']) {
       const role = readCanonRole(name);
       assert.ok(role?.overlay, `${name} has no overlay`);
-      assert.match(instructionsFor('claude-code', 'PROFILE', role.overlay), TURN_COST, name);
+      assert.match(instructionsFor('claude-code', role.overlay), TURN_COST, name);
     }
   });
 
@@ -270,7 +261,7 @@ describe('a passage two roles share', () => {
     for (const name of ['plan', 'brief']) {
       const { overlay } = readCanonRole(name);
       assert.match(overlay, /@include/u, `${name} should carry the marker in its own words`);
-      const told = instructionsFor('claude-code', 'PROFILE', overlay);
+      const told = instructionsFor('claude-code', overlay);
       assert.doesNotMatch(told, /@include/u, `${name} was told an unexpanded marker`);
       assert.match(told, DEFINING[0], name);
     }

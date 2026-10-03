@@ -129,7 +129,7 @@ import { runDocsMerge } from './docs-merge.js';
 import { runMergeRound } from './repo-merge.js';
 import { pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
-import { loadProfile, profileArgs } from './portrait.js';
+import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
@@ -375,7 +375,6 @@ export function realDeps(env = process.env) {
     rmTree: (path) => { try { rmSync(path, { recursive: true, force: true }); return true; } catch { return false; } },
     pid: process.pid,
     addWorktree,
-    profile: () => loadProfile({ env }),
     role: readCanonRole,
     launch: resolveLaunch,
     // The two halves of `mc helper --intake`, so a round can be driven in a test with
@@ -1670,7 +1669,7 @@ export function createRunner({
     }
     const now = deps.now();
     const prompt = stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, now });
-    const instructions = instructionsFor(launch.id, await deps.profile(), role.overlay);
+    const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
 
     const ts = stamp().replace(/[-:]/gu, '');

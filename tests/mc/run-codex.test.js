@@ -13,9 +13,8 @@ import { realDeps, runLoop } from '../../src/mc/run.js';
  * Every other runner test drives `deps` on fakes: nothing is spawned and the
  * launch is a table. This one is the opposite — real `realDeps`, a real git
  * repository with a real origin, a real worktree whose `.git` is a file
- * pointing outside it, and a real process spawned for the session. Only two
- * things are not real: the Coding Profile (a string, so no keychain and no
- * network) and the three binaries on PATH.
+ * pointing outside it, and a real process spawned for the session. Only the
+ * three binaries on PATH are not real.
  *
  * `codex` is a stub because codex is not installed on this machine, which is
  * the whole reason step 3 of `docs/project/mc/mc-run/PLAN.md` could not be
@@ -127,7 +126,7 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   process.env.PATH = env.PATH;
   t.after(() => { process.env.PATH = realPath; });
 
-  const deps = { ...realDeps(env), profile: async () => 'PROFILE', log: () => {} };
+  const deps = { ...realDeps(env), log: () => {} };
   const code = await runLoop({ once: true, merge: false, deps });
   assert.equal(code, 0);
 
@@ -153,11 +152,11 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   // No model: the plan names none, and `opus` is claude's word.
   assert.equal(argv.includes('-m'), false);
   assert.equal(argv.includes('opus'), false);
-  // The profile and the role overlay ride on codex's own instructions
+  // The shared text and the role overlay ride on codex's own instructions
   // channel, and the prompt is the last positional.
   const instructions = argv[argv.indexOf('-c') + 1];
   assert.match(instructions, /^instructions="/u);
-  assert.match(instructions, /PROFILE/u);
+  assert.match(instructions, /A turn is the unit of cost/u);
   assert.match(argv.at(-1), /You are working in the `cx` workarea of memoro-cli/u);
   // The prompt names the step by index and repeats its done_when: that
   // sentence is what the session verifies before it stops.

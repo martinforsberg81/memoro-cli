@@ -7,7 +7,7 @@ Command-line glue between external coding tools (Claude Code, Cursor, Codex, Win
 Two directions, one binary:
 
 - **Sessions → Memoro.** At the end of a coding session, the CLI cleans the transcript locally into a tool-agnostic conversation payload, attaches deterministic metadata (`coding_context`, `repo_manifest`), and POSTs it to Memoro. Server-side AI processing happens inside Memoro. Raw tool outputs and code bodies are still stripped client-side before upload.
-- **Memoro → tools.** Before a coding session starts, the CLI pulls compact User Profile and Coding Profile context from Memoro and injects it through the selected adapter at launch. Repo-owned instruction files such as `CLAUDE.md` and `AGENTS.md` remain static contracts, not copies of the user's profile.
+- **Roles → tools.** A session mc starts in a role is handed that role's instructions (`canon/roles/`) through the selected adapter at launch, and nothing else — the Coding Profile it once fetched from Memoro was removed by ruling 24. Repo-owned instruction files such as `CLAUDE.md` and `AGENTS.md` remain static contracts.
 
 The result: every coding tool you use feels like it remembers you.
 
@@ -96,14 +96,12 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `mc sessions send <id\|label> <msg>` | Dispatch a message into another session |
 | `mc sessions read <id\|label>` | Fetch a peer session's recent transcript |
 
-### Coding Profile
+### Role instructions
 
-Work-method changes are yours and live in Memoro. mc reads the profile and
-hands it to a new conversation as a launch argument; it has no verb for
-editing one (`mc coding-profile` went with mc-cut), so it is edited in Memoro.
-
-When the profile does not exist yet, `read --json` returns `base_revision: 0`
-and a compact `template_markdown` for revision 1.
+mc hands a new conversation its role and nothing else: `canon/roles/_common.md`
+and the role's own file, as a launch argument (`docs/technical/mc-roles.md`).
+There is no Coding Profile — ruling 24 removed it, and the one rule in it
+nothing else said, what is written in English, is a sentence in `_common.md`.
 
 ### `memoro-cli` — low-level surface
 

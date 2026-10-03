@@ -16,8 +16,9 @@
  *
  * The overlay reaches both tools, through whichever channel each one takes
  * instructions on at launch (`--append-system-prompt` for Claude, `-c
- * instructions=` for codex; see `portrait.js`). It is one body of text with
- * the profile, not a second mechanism.
+ * instructions=` for codex; see `portrait.js`). It is the only thing that
+ * channel carries: there is no Coding Profile in front of it any more
+ * (ruling 24).
  *
  * A role file:
  *
@@ -222,9 +223,10 @@ export function areaRole(areaPath, env = process.env) {
 }
 
 /**
- * What a new conversation is told: the profile, the text every role session
- * shares, then this role's own overlay — separated so each still reads as
- * itself.
+ * What a new conversation is told: the text every role session shares, then
+ * this role's own overlay — separated so each still reads as itself. Nothing
+ * comes before them: the Coding Profile that once did was removed by ruling 24,
+ * and the one rule in it nothing else said is a sentence in `_common.md`.
  *
  * This is the single door. Four paths launch a session with instructions —
  * `work-open.js` twice (a conversation in a work area, and the argv a handoff
@@ -235,7 +237,8 @@ export function areaRole(areaPath, env = process.env) {
  * is.
  *
  * No overlay is no role, and no role is no shared text: an ordinary work area
- * inherits nothing, which is the whole parallel-operation guarantee.
+ * inherits nothing — it is launched with no instructions at all — which is the
+ * whole parallel-operation guarantee.
  *
  * The same text for every tool, because the channel is the same shape for
  * every tool — `profileArgs` already carries a body of markdown to each one
@@ -248,10 +251,10 @@ export function areaRole(areaPath, env = process.env) {
  * expanded — see `expandRoleIncludes`. It is the same door because a second
  * one is how a kind of session quietly stops being told something.
  */
-export function instructionsFor(toolId, profile, overlay) {
+export function instructionsFor(toolId, overlay) {
   const shared = overlay ? sharedRoleText() : null;
   const body = expandRoleIncludes(overlay);
-  const combined = [profile, shared, body].filter(Boolean).join('\n\n---\n\n');
+  const combined = [shared, body].filter(Boolean).join('\n\n---\n\n');
   return combined || null;
 }
 
@@ -282,15 +285,14 @@ export function roleSourceOf(role) {
  * it was, which catalogue that role came from, and a digest of each of the two
  * things that can change under it.
  *
- * Two digests, because the two answers are different questions and only one of
- * them is a fault. `digest` is over the assembled instructions — profile,
- * `_common.md` and the overlay, joined the way `instructionsFor` joins them —
- * and is the honest answer to *is this session running what a launch would
- * produce now*. `text_digest` is over the role's own body alone, expanded, and
- * is the answer to *is this session running the role file on disk today*. A
- * Coding Profile edited at lunchtime moves the first and not the second, and a
- * verb that could not tell those apart would report every live session as
- * drifted every time Martin touched his profile.
+ * Two digests, because they answer two questions. `digest` is over the
+ * assembled instructions — `_common.md` and the overlay, joined the way
+ * `instructionsFor` joins them — and is the honest answer to *is this session
+ * running what a launch would produce now*. `text_digest` is over the role's
+ * own body alone, expanded, and is the answer to *is this session running the
+ * role file on disk today*. An edit to `_common.md` moves the first and not the
+ * second. Both are in the repository now: the Coding Profile, the one input
+ * that could move a digest from outside it, was removed by ruling 24.
  *
  * A launch that assembled nothing — a resumed conversation, which carries its
  * instructions in its own history — records the role and no digests: what that

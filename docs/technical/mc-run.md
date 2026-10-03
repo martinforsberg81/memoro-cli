@@ -642,8 +642,7 @@ step session re-reads its context ~90 times. The six include `Grep` and
 `grep` and `sed -n` through Bash, 2 866 such calls against 466 native reads
 over 2026-09-15..25, each a screen of file kept in the context.
 
-Next to that body go the Coding Profile, `canon/roles/_common.md` and
-`canon/roles/step.md` — assembled by `instructionsFor` and passed through the
+Next to that body go `canon/roles/_common.md` and `canon/roles/step.md` — assembled by `instructionsFor` and passed through the
 channel each tool already has, with nothing written into the worktree to carry
 them. How that is found and joined, for every session and not only this one, is
 [`mc-roles.md`](mc-roles.md).

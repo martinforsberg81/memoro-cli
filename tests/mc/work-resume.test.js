@@ -84,7 +84,6 @@ function start(fx, options) {
     tool: 'claude',
     env: fx.env,
     run: (args) => { calls.push(args); return args[0] === 'has-session' ? { status: 1 } : { status: 0 }; },
-    loadProfile: () => 'PROFILE',
     ...options,
   });
   const created = calls.find((args) => args[0] === 'new-session');
@@ -135,7 +134,7 @@ describe('what the background actually launches', () => {
       assert.equal(result.ok, true);
       assert.match(launch, /--resume/u);
       assert.match(launch, new RegExp(ID, 'u'));
-      // A resumed conversation already carries the profile in its own history.
+      // A resumed conversation already carries its instructions in its own history.
       assert.doesNotMatch(launch, /--append-system-prompt/u);
     } finally { fx.cleanup(); }
   });
@@ -152,7 +151,7 @@ describe('what the background actually launches', () => {
   it('without a conversation it starts a new one, exactly as before', () => {
     const fx = fixture();
     try {
-      const { launch } = start(fx, { task: 'do the thing' });
+      const { launch } = start(fx, { task: 'do the thing', overlay: 'OVERLAY' });
       assert.doesNotMatch(launch, /--resume/u);
       assert.match(launch, /--append-system-prompt/u);
       assert.match(launch, /do the thing/u);

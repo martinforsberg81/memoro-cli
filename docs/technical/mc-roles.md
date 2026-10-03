@@ -1,9 +1,11 @@
 # Roles — how a session is instructed
 
-Every session mc starts is told three things, in this order: the user's
-**Coding Profile**, the text **every role session shares**, and **that role's
-own words**. This document is the one account of how those three are found and
-joined. `mc run`, `mc plan`, `mc helper` and `mc brief` each described a corner
+Every session mc starts in a role is told two things, in this order: the text
+**every role session shares**, and **that role's own words**. Nothing else —
+the user's Coding Profile, which once came first, was removed by ruling 24, and
+the one rule in it nothing else said (what is written in English) is a sentence
+in `_common.md`. This document is the one account of how those two are found
+and joined. `mc run`, `mc plan`, `mc helper` and `mc brief` each described a corner
 of it from their own angle; they now point here, because four parallel accounts
 of one mechanism is four things to keep true.
 
@@ -109,15 +111,16 @@ with no instructions for what it is doing.
 ## The assembler
 
 ```js
-export function instructionsFor(toolId, profile, overlay) {
+export function instructionsFor(toolId, overlay) {
   const shared = overlay ? sharedRoleText() : null;
-  return [profile, shared, overlay].filter(Boolean).join('\n\n---\n\n') || null;
+  return [shared, expandRoleIncludes(overlay)].filter(Boolean).join('\n\n---\n\n') || null;
 }
 ```
 
 That is the single door. **No overlay is no role, and no role is no shared
-text** — a conversation in an ordinary work area inherits nothing, which is the
-whole parallel-operation guarantee. The same text goes to every tool, because
+text** — a conversation in an ordinary work area inherits nothing and is
+launched with no instructions at all, which is the whole parallel-operation
+guarantee. The same text goes to every tool, because
 the channel is the same shape for every tool; codex's `-c instructions=` was
 verified to layer over the base instructions rather than replace them (see
 [`portrait.js`](../../src/mc/portrait.js)), and a tool mc has no channel for
@@ -202,15 +205,14 @@ Four fields and no text. The registers are `~/mc/runner/foreground/<pid>.json`
 page parses both on every draw: a kilobyte of overlay in there would be a cost
 for nothing.
 
-**Two digests, because two different things can move.** `digest` is over the
-assembled instructions — profile, `_common.md`, overlay, joined as
+**Two digests, because they answer two questions.** `digest` is over the
+assembled instructions — `_common.md` and the overlay, joined as
 `instructionsFor` joins them — and answers *is this session running what a
 launch would produce now*. `text_digest` is over the role's own body with its
 includes expanded, and answers *is this session running the role file on disk
-today*. Only the second is the fault: a Coding Profile edited at lunchtime
-moves the first and not the second, and one digest could not have told those
-apart — it would have reported every live session as drifted every time Martin
-touched his profile.
+today*. An edit to `_common.md` moves the first and not the second. Both inputs
+are files in the repository; the Coding Profile, which could move the first
+from outside it, was removed by ruling 24.
 
 `source` is there because `areaRole` prefers the user's catalogue over canon on
 purpose. A session running the catalogue's `worker` is not running a stale copy
@@ -228,7 +230,7 @@ today's file would be a claim about it nobody checked.
 $ mc roles check step
 step  (canon)  …/canon/roles/step.md
   role text     sha256:43046c402ec7
-  instructions  sha256:345f6ea5956c   profile + _common.md + overlay, as a launch joins them
+  instructions  sha256:345f6ea5956c   _common.md + overlay, as a launch joins them
 
 2 live sessions: 1 ok, 1 drift
   55012  step the-page-remade     2026-09-06T10:06:46Z  step   ok
@@ -242,8 +244,7 @@ Named, it prints the whole assembled text — the same object the digests are
 taken from, so the two halves of the comparison cannot be different things —
 and checks the sessions running that role. Bare, it checks every live session
 against the role each one names. `--json` for both. The verdicts are `ok`,
-`drift` (the role file has moved under it), `profile` (the role text matches,
-the Coding Profile has changed), `resumed`, `no-role-file`, and `unrecorded` —
+`drift` (the role file or `_common.md` has moved under it), `resumed`, `no-role-file`, and `unrecorded` —
 an ordinary session with no role, or one started before this existed.
 
 **Two launches write no register and so cannot be checked:** a tmux session
@@ -275,8 +276,7 @@ tomorrow, which is what the brief above needed and did not have.
 [`tests/mc/roles.test.js`](../../tests/mc/roles.test.js) — `parseRole` on text
 (frontmatter, no frontmatter, CRLF, the filename fallback), the catalogue and
 the missing catalogue, the `.mc-role` mark, and the assembly: the join for both
-tools, the profile alone when there is no overlay, `null` when there is
-neither. Its *text every role session shares* block asserts the turn-cost rule
+tools, and `null` when there is no overlay. Its *text every role session shares* block asserts the turn-cost rule
 is in exactly one file in `canon/roles/`, reaches every canon role that has a
 body, is **not** listed as a role with the file sitting in the catalogue
 directory under test, and is not in `step`'s own overlay.

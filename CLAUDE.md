@@ -16,8 +16,6 @@ write it, read it, or check it for drift — that machinery is gone. To update
 project conventions, edit `docs/coding-agent-protocol.md` and reflect the
 change here by hand.
 
-It is not a Coding Profile mirror. Work-method changes are the user's, live in
-Memoro, and reach a new conversation as a launch argument. mc reads the
-profile and hands it over; it has no verb for editing one (`mc coding-profile`
-went with mc-cut), so it is edited in Memoro.
+There is no Coding Profile: mc hands a session its role and nothing else
+(ruling 24, `docs/project/mc/rulings.md` § 24).
 

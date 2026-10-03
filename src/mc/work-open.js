@@ -26,7 +26,7 @@ import { conversationModel, listConversations } from './conversations.js';
 import { log } from './logger.js';
 import { workAreaPath } from './paths.js';
 import { instructionsFor, roleRecord, textDigest } from './roles.js';
-import { loadProfile, profileArgs, readCached as loadProfileSync } from './portrait.js';
+import { profileArgs } from './portrait.js';
 import { askToolToLeave } from './work-stop.js';
 import { registerForeground } from './foreground.js';
 import { clearStopMark } from './work-stop-marker.js';
@@ -55,7 +55,6 @@ export async function openInWorkArea({
   env = process.env,
   spawn = spawnSync,
   register = registerForeground,
-  loadProfile: readProfile = loadProfile,
 } = {}) {
   const before = listConversations(areaRoot, env);
 
@@ -77,10 +76,9 @@ export async function openInWorkArea({
     chosen = before.find((item) => item.tool === toolId) || null;
   }
 
-  // A new conversation is handed the user's Coding Profile as it starts. A
-  // resumed one already has it in its own history, so asking again would be
-  // saying the same thing twice — and would be the only reason opening
-  // something existing had to touch the network at all.
+  // A new conversation in a role's area is handed that role's instructions as
+  // it starts. A resumed one already has them in its own history, so handing
+  // them over again would be saying the same thing twice.
   //
   // The model rides along at both moments. New: whatever `--model` said,
   // else the area's role default — but only for the tool the role's defaults
@@ -89,19 +87,19 @@ export async function openInWorkArea({
   // otherwise what the transcript says the conversation was already running
   // on, and nothing else — a resume should land where the conversation was,
   // and the role default is a start-of-life setting, not a resume setting.
-  // In a role's area the overlay rides behind the profile, on whichever
-  // instruction channel the chosen tool takes at launch; an ordinary area has
-  // neither overlay nor default, and launches exactly as it always has.
+  // In a role's area the overlay rides on whichever instruction channel the
+  // chosen tool takes at launch; an ordinary area has neither overlay nor
+  // default, and launches with no instructions at all.
   const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
     ? defaultModel
     : null;
   const chosenModel = chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
-  const instructions = resuming ? null : instructionsFor(toolId, await readProfile({ env }), overlay);
-  const profile = resuming ? [] : profileArgs(toolId, instructions);
+  const instructions = resuming ? null : instructionsFor(toolId, overlay);
+  const handed = resuming ? [] : profileArgs(toolId, instructions);
   const args = resuming
     ? [...(launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || []), ...(resumePrompt ? [resumePrompt] : [])]
-    : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...profile, ...(prompt ? [prompt] : [])];
+    : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...handed, ...(prompt ? [prompt] : [])];
 
   log('work.open', {
     area: areaRoot,
@@ -117,7 +115,7 @@ export async function openInWorkArea({
     role: roleName || null,
     role_digest: textDigest(instructions),
     prompt: resuming ? Boolean(resumePrompt) : Boolean(prompt),
-    profile: profile.length > 0,
+    instructions: handed.length > 0,
     known_here: before.length,
   });
 
@@ -293,7 +291,6 @@ export function startInBackground({
   conversation = null,
   env = process.env,
   run = null,
-  loadProfile: readProfile = loadProfileSync,
 } = {}) {
   const launch = resolveLaunch(tool);
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
@@ -305,7 +302,7 @@ export function startInBackground({
   }
 
   const command = launchCommand(launch, {
-    task, model, overlay, defaultModel, defaultModelTool, conversation, env, readProfile,
+    task, model, overlay, defaultModel, defaultModelTool, conversation,
   });
 
   const created = tmux(['new-session', '-d', '-s', target, '-c', worktree.path, command]);
@@ -333,7 +330,7 @@ export function startInBackground({
  *
  * Creating a session and replacing what runs in one are the same launch seen
  * twice, and the day they disagree is the day a replaced conversation quietly
- * loses its profile or its model. So the argv is built here, once.
+ * loses its instructions or its model. So the argv is built here, once.
  */
 function launchCommand(launch, {
   task = null,
@@ -342,15 +339,13 @@ function launchCommand(launch, {
   defaultModel = null,
   defaultModelTool = null,
   conversation = null,
-  env = process.env,
-  readProfile = loadProfileSync,
 } = {}) {
   // The role default follows the role's tool here too (see openInWorkArea).
   const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
     ? defaultModel
     : null;
   // A conversation to resume changes everything about the argv: its history
-  // already holds the profile and any overlay, and the model — resolved by
+  // already holds any overlay, and the model — resolved by
   // the caller, flag over transcript — rides on the resume flags.
   const args = conversation
     ? [
@@ -360,15 +355,15 @@ function launchCommand(launch, {
     : [
       launch.spec.bin,
       ...(launch.adapter?.modelArgs?.(model || roleDefault) ?? []),
-      ...profileArgs(launch.id, instructionsFor(launch.id, readProfile(env), overlay)),
+      ...profileArgs(launch.id, instructionsFor(launch.id, overlay)),
     ];
   // A task goes in either way. On a new conversation it is the opening words;
   // on a resumed one it lands as a reply to wherever that conversation
   // stopped — which is what somebody asking for both at once is asking for.
   // Nothing combined them before this, so no existing launch changes shape.
   if (task) args.push(task);
-  // tmux runs its command through a shell, so the profile — a few kilobytes of
-  // the user's own prose, with quotes and newlines in it — has to survive
+  // tmux runs its command through a shell, so the instructions — kilobytes of
+  // prose, with quotes and newlines in it — has to survive
   // quoting, and so does everything beside it on the line. Claude has no
   // --append-system-prompt-file to point at instead.
   return args.map(shellQuote).join(' ');
@@ -412,7 +407,6 @@ export function respawnInBackground({
   env = process.env,
   run = null,
   wait = null,
-  loadProfile: readProfile = loadProfileSync,
 } = {}) {
   const launch = resolveLaunch(tool);
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
@@ -427,7 +421,7 @@ export function respawnInBackground({
   }
   const window = `${target}:${index}`;
   const command = launchCommand(launch, {
-    task, model, overlay, defaultModel, defaultModelTool, conversation, env, readProfile,
+    task, model, overlay, defaultModel, defaultModelTool, conversation,
   });
 
   // Written before the respawn, not after: the abrupt path is mc replacing the

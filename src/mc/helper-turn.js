@@ -39,7 +39,7 @@ import { basename, dirname, join } from 'node:path';
 import { resolveLaunch } from '../adapters/index.js';
 import { defaultRepos, listProposals, planFields } from './brief-collect.js';
 import { intakeArchiveDir, intakeDir, proposalsDir } from './helper-collect.js';
-import { loadProfile, profileArgs } from './portrait.js';
+import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
 
@@ -252,8 +252,7 @@ export async function runHelperTurn({
     file, proposalsPath: proposals, projectLog: ground.projectLog, plans: ground.plans,
     proposals: [...before].map((name) => ({ file: name, title: '' })), repo, now,
   });
-  const profile = await (deps.profile || (() => loadProfile({ env })))();
-  const instructions = instructionsFor(launch.id, profile, role.overlay);
+  const instructions = instructionsFor(launch.id, role.overlay);
   const args = headlessArgs({
     // `stream: false`: a helper turn is one short answer on its own
     // wall-clock cap, with no check-ins, so its prompt stays the positional

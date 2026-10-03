@@ -8,7 +8,7 @@
  *
  * `check` is the third window and the only one that looks at what is running.
  * `show` prints a role's own words as they are on disk; `check` prints the
- * whole of what a launch would hand a session today — profile, `_common.md`,
+ * whole of what a launch would hand a session today — `_common.md` and
  * the overlay with its includes expanded, joined by `instructionsFor` — and
  * holds it against the digests the live sessions recorded when they started.
  * A session whose text is not that one is named. That question had no answer
@@ -21,7 +21,6 @@ import { join } from 'node:path';
 import { foregroundDir } from '../foreground.js';
 import { readForeground } from '../page-collect.js';
 import { workRoot } from '../paths.js';
-import { loadProfile } from '../portrait.js';
 import {
   canonRolesDir, expandRoleIncludes, instructionsFor, listRoles, readCanonRole, readRole,
   rolesDir, textDigest,
@@ -142,15 +141,15 @@ function roleFromSource(name, source, env) {
  * every tool, and only `profileArgs` after it differs — but passing the wrong
  * one would still be describing a launch nobody makes.
  */
-function assembleFor(role, profile) {
-  const instructions = instructionsFor(role.tools?.[0] || 'claude', profile, role.overlay);
+function assembleFor(role) {
+  const instructions = instructionsFor(role.tools?.[0] || 'claude', role.overlay);
   return {
     name: role.name,
     source: role.source,
     path: role.path,
     digest: textDigest(instructions),
     // The role's own body, includes expanded — the same text `roleRecord`
-    // hashes at launch, and the half of the comparison the profile cannot move.
+    // hashes at launch, and the half of the comparison `_common.md` cannot move.
     text_digest: textDigest(expandRoleIncludes(role.overlay)),
     instructions,
   };
@@ -184,14 +183,14 @@ function liveSessions(env = process.env) {
 }
 
 /**
- * Which of the two things that can move has moved under this session.
+ * Whether what this session was launched on has moved under it.
  *
- * `drift` is the fault the verb exists for: the role file has been edited
- * since the session was launched, so it is running instructions nobody can
- * read off disk any more. `profile` is not that fault — the Coding Profile is
- * assembled into the same body of text and changes it without the role file
- * moving at all — and saying so separately is the difference between a verb
- * worth running and one that cries drift every time Martin edits his profile.
+ * `drift` is the fault the verb exists for: the instructions have been edited
+ * since the session was launched — its role file or `_common.md` — so it is
+ * running text nobody can read off disk any more. There used to be a second
+ * verdict, `profile`, for the Coding Profile moving the assembled text from
+ * outside the repository; ruling 24 removed the profile, so every change to
+ * the digest is now a change to a file mc reads.
  */
 export function verdictFor(record, today) {
   if (!record) return { verdict: 'unrecorded', detail: 'an ordinary session, or one started before mc kept this' };
@@ -201,15 +200,14 @@ export function verdictFor(record, today) {
   if (record.text_digest && record.text_digest !== today.text_digest) {
     return { verdict: 'drift', detail: `started on ${record.text_digest}, ${record.name}.md is ${today.text_digest} now` };
   }
-  return { verdict: 'profile', detail: `the role text matches; the Coding Profile has changed since (${record.digest} → ${today.digest})` };
+  return { verdict: 'drift', detail: `the role text matches; _common.md has changed since (${record.digest} → ${today.digest})` };
 }
 
 /** Named in the report as running something other than what a launch produces now. */
-const NAMED = new Set(['drift', 'profile', 'no-role-file']);
+const NAMED = new Set(['drift', 'no-role-file']);
 
 async function check(opts, { stdout, stderr, deps }) {
   const env = deps.env || process.env;
-  const profile = await (deps.profile || loadProfile)({ env });
 
   let asked = null;
   if (opts.name) {
@@ -218,7 +216,7 @@ async function check(opts, { stdout, stderr, deps }) {
       stderr.write(`mc: no role "${opts.name}" — looked in ${rolesDir(env)} and ${canonRolesDir()}\n`);
       return 1;
     }
-    asked = assembleFor(role, profile);
+    asked = assembleFor(role);
   }
 
   const today = new Map();
@@ -232,7 +230,7 @@ async function check(opts, { stdout, stderr, deps }) {
       const key = `${record.source}:${record.name}`;
       if (!today.has(key)) {
         const role = roleFromSource(record.name, record.source, env);
-        today.set(key, role ? assembleFor(role, profile) : null);
+        today.set(key, role ? assembleFor(role) : null);
       }
       now = today.get(key);
     }
@@ -248,7 +246,7 @@ async function check(opts, { stdout, stderr, deps }) {
   if (asked) {
     stdout.write(`${asked.name}  (${asked.source})  ${asked.path}\n`);
     stdout.write(`  role text     ${asked.text_digest || '(no overlay)'}\n`);
-    stdout.write(`  instructions  ${asked.digest || '(nothing to hand over)'}   profile + _common.md + overlay, as a launch joins them\n\n`);
+    stdout.write(`  instructions  ${asked.digest || '(nothing to hand over)'}   _common.md + overlay, as a launch joins them\n\n`);
   }
 
   if (sessions.length === 0) {

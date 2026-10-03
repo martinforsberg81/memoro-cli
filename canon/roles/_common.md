@@ -17,6 +17,9 @@ selects the affected tests: run them once, when you are done, in the foreground
 rather than backgrounded and polled — a session that loses the output it was
 sent to read has nothing to decide from.
 
+Talk to Martin in Swedish. Everything written into a repository — code,
+comments, commit messages, pull request texts, plans — is in English.
+
 A question for Martin is one thing to do: what you found, what it costs, and
 the one you would do, defended from the code and answerable in a word. Never a
 menu of options for him to choose between; alternatives only where a real
@@ -67,10 +70,8 @@ Still Martin's, in one line with what you would do: a merge that needed a
 judgement of yours to go green, anything the gate refused, and anything that
 changes what is deployed.
 
-If you are running under `mc run`, none of this is about you. The runner lands
-what you push, in its own round, through the same gate — and an open pull
-request ends your project's round, so a session that lands its own work takes
-that landing out of the record it is kept in. Push, and stop.
+If you are running under `mc run`, your step's own instructions below say how
+its pull request lands, through `mc merge`, and they are the route.
 
 A probe, a measuring script, a slice of output, or any other file that is not
 part of the change goes in `$MC_SCRATCH` — a directory outside the repository,

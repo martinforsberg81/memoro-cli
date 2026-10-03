@@ -56,7 +56,7 @@ describe('a session mc creates is born terminal-like', () => {
       const { calls, run } = tmux();
       const started = startInBackground({
         name: 'x', areaRoot: fx.areaRoot, worktree: fx.worktree, tool: 'claude',
-        env: fx.env, run, loadProfile: () => null,
+        env: fx.env, run,
       });
       assert.equal(started.ok, true);
 
@@ -77,7 +77,7 @@ describe('a session mc creates is born terminal-like', () => {
       const { calls, run } = tmux();
       startInBackground({
         name: 'x', areaRoot: fx.areaRoot, worktree: fx.worktree, tool: 'claude',
-        env: fx.env, run, loadProfile: () => null,
+        env: fx.env, run,
       });
       // `-g` is the whole danger: it would rewrite the tmux of every session on
       // the machine, including ones mc did not make and has no business in.
@@ -96,7 +96,7 @@ describe('a session mc creates is born terminal-like', () => {
       const { calls, run } = tmux({ refuse: 'mouse' });
       const started = startInBackground({
         name: 'x', areaRoot: fx.areaRoot, worktree: fx.worktree, tool: 'claude',
-        env: fx.env, run, loadProfile: () => null,
+        env: fx.env, run,
       });
       // An old tmux without one of these must not cost somebody their worker.
       assert.equal(started.ok, true);
