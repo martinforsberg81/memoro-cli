@@ -30,6 +30,9 @@ export async function setSecret(account, value) {
     if (p === 'linux')   return await linuxSet(account, value);
     if (p === 'win32')   return await winSet(account, value);
   } catch (err) {
+    // A keychain that did not answer is there and locked, not missing: writing
+    // the secret to the file instead would be a downgrade nobody chose.
+    if (err.code === 'ETIMEDOUT') throw err;
     warnFallback(err);
   }
   return fileSet(account, value);
@@ -194,15 +197,40 @@ async function fileDelete(account) {
 // Helpers
 // ─────────────────────────────────────────────────────────────
 
-function run(cmd, args, stdinData = null) {
+/**
+ * How long one keychain tool may take. A person at the machine answers the
+ * keychain's password modal well inside it; nobody at the machine means the
+ * tool waits for ever, and every unattended retry stacked one more modal
+ * (2026-09-20). Stopping the tool withdraws its modal.
+ */
+export const KEYCHAIN_TIMEOUT_MS = 30_000;
+
+export function run(cmd, args, stdinData = null, { timeoutMs = KEYCHAIN_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      child.kill('SIGKILL');
+      const err = new Error(
+        `${cmd} ${args[0] || ''} did not answer in ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`} and was stopped`
+        + ' — a locked keychain waits for its password (security unlock-keychain)',
+      );
+      err.code = 'ETIMEDOUT';
+      reject(err);
+    }, timeoutMs);
     child.stdout.on('data', d => { stdout += d.toString(); });
     child.stderr.on('data', d => { stderr += d.toString(); });
-    child.on('error', reject);
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      if (!settled) { settled = true; reject(err); }
+    });
     child.on('close', code => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
       if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(`${cmd} exited with ${code}: ${stderr.trim() || stdout.trim()}`));
     });
