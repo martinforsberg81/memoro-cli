@@ -752,8 +752,31 @@ So memoro me has two doors, and each has one owner:
   data on this side too, read today through `/api/mc/coding-profile`.
 - **The admin door** is the owner's, and mc is it: building memoro me
   (`brief`, `plan`, `run`, `merge`), shipping it (`deploy`, `test`, `shot`),
-  watching it (the helper digest over `/admin/*`), and administering it. The
-  in-app admin UI is expected to leave the app for mc; the API under it stays.
+  watching it (the helper digest over `/admin/*`), and administering it.
+
+Where the admin tools are seen was answered in two turns. First:
+
+> "Ja mc blir admin-delen. Den UI bör nog försvinna från appen." (Martin,
+> 2026-10-03)
+
+and then, asked whether the GitHub App core should be kept:
+
+> "Det som hade varit värdefullt för mig är att inifrån appen kunna ha
+> admin-verkyg (som kan laddas och är synliga för admin). Jag kan med dem.
+> Skriv proposals. Jag kan läsa data och statistik över trafik och volym på
+> appen. Detta kräver dock inte github integration utan endast att jag har min
+> lokala mc igång. Eventuellt kan man tänka sig att jag har en hostad mc som
+> hela tiden kan anropas så att proposals kan skrivas utan att jag har min
+> lokala dator igång." (Martin, 2026-10-03)
+
+So the admin tools may live inside the app, loaded and shown only to the
+admin, as one face of the admin door: reading memoro's own traffic and volume
+through its admin API, and writing proposals into mc. A proposal lands where
+mc keeps them, `~/mc/proposals/`, so the tool reaches mc — the local one, or
+later a hosted one — and memoro's server does not hold proposals for mc to
+collect. The in-app admin that exists today stays; what goes is only what
+reports mc into it. None of this needs GitHub, so the GitHub App code goes
+whole, core included.
 
 Three rules follow. **The dependency runs one way**: mc reads memoro, and memoro
 holds nothing about mc — no sessions, no runner state, no record of how memoro
@@ -762,14 +785,32 @@ it has no endpoints of its own there, so `/api/mc/` has no future. **mc's own
 state is mc's**, in `~/mc/` and its repositories.
 
 Measured against that, steering from memoro breaks the first rule and
-reporting into memoro breaks the first and the third, so both go; what remains
-open is only what becomes of the `coding_session` items already stored. The
-`memoro` binary goes with them: a user's CLI and agent access is the MCP door,
-not a binary with hooks. The MCP server, a GitHub integration and moving the
-admin UI into mc are not part of the teardown; it must only leave standing
-what they would stand on.
+reporting into memoro breaks the first and the third, so both go. The
+`coding_session` items already stored were offered frozen, read-only in the
+library, or deleted:
 
-**Carried by the `mc-memoro-integration` plans** (not yet written).
+> "Vi kan ta bort coding-sessions från mitt konto. Saknar riktigt värde."
+> (Martin, 2026-10-03)
+
+So the content type goes with them, and the items are deleted without an
+export. The `memoro` binary goes too: a user's CLI and agent access is the MCP
+door, not a binary with hooks. And the package leaves the registry:
+
+> "Vi måste också ta bort (tror jag) memoro-cli från npm." (Martin, 2026-10-03)
+
+Nothing installs it from there — mc is linked from a checkout, and memoro's
+sandbox image cloned the repository by ref — so the unpublish is Martin's act
+whenever he chooses, and the package is marked private so it cannot return by
+accident. The MCP server, the in-app admin tools that write proposals, a
+hosted mc and any GitHub integration are not part of the teardown; it must
+only leave standing what they would stand on — API tokens, device flow, the
+admin gate and the admin API.
+
+**Carried by [`memoro-binary-cut/PLAN.json`](memoro-binary-cut/PLAN.json)** here,
+**and by memoro's `docs/project/mc/mc-in-memoro-cut/PLAN.json` and
+`docs/project/mc/mc-in-memoro-decommission/PLAN.json`**, in that order: the
+client first, then the code in memoro, then — each step on Martin's word —
+what cannot be undone.
 
 ## What is still open
 
