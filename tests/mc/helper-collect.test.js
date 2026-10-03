@@ -22,6 +22,7 @@ import { DEPLOYS_HEADER } from '../../src/mc/deploys.js';
 import {
   analysisRows, collectHelper, computeDelta, deployState, digestName, errorRows, failingConditions,
   healthState, intakeArchiveDir, intakeDir, parseState, previousDigest, proposalsDir, readAdminToken, renderState,
+  scriptFailure,
 } from '../../src/mc/helper-collect.js';
 import { readLiveVersion } from '../../src/mc/live-version.js';
 
@@ -203,6 +204,27 @@ describe('mc helper --collect — the failure domains', () => {
     const result = await collect(g, { deploy: { ok: false, error: '/admin/deploy/logs returned 401' } });
     assert.match(result.text, /## Deploy\n\n_could not read: \/admin\/deploy\/logs returned 401_/u);
     assert.match(result.text, /\| `aaa111` \| 34 \|/u);
+  });
+
+  it('names a failed script by its exit code and first meaningful line, not its last', async () => {
+    const g = ground();
+    // The two shapes measured in the digests: `wranglerD1Json`'s three writes,
+    // the last a pretty-printed JSON dump whose final line is a lone `}`
+    // (2026-08-30), and an uncaught exception, whose last line is Node's
+    // version banner (2026-09-15). Real child processes, through the real runner.
+    writeFileSync(join(g.memoro, 'scripts', 'admin', 'inspect-ai-provider-errors.mjs'), [
+      "process.stderr.write('wrangler d1 execute failed (1)\\n');",
+      "process.stderr.write('stderr: X [ERROR] Authentication error [code: 10000]\\n');",
+      "process.stderr.write('stdout: {\\n  \"error\": {\\n    \"code\": 10000\\n  }\\n}\\n');",
+      'process.exit(1);',
+    ].join('\n'));
+    writeFileSync(join(g.memoro, 'scripts', 'admin', 'survey-errors.mjs'),
+      "\nthrow new Error('D1_ERROR: no such table: error_groups');\n");
+    const s = stubs();
+    const result = await collectHelper({ env: g.env, now: NOW, memoro: g.memoro, getJson: s.getJson, git: s.git });
+    assert.match(result.text, /## AI-provider errors\n\n_could not read: exit 1: wrangler d1 execute failed \(1\)_/u);
+    assert.match(result.text, /## Error fingerprints\n\n_could not read: exit 1: Error: D1_ERROR: no such table: error_groups_/u);
+    assert.doesNotMatch(result.text, /could not read: \}_|could not read: Node\.js/u);
   });
 
   it('reports a missing checkout rather than digesting an empty database', async () => {
@@ -400,6 +422,12 @@ describe('mc helper — the pure builders', () => {
   it('reads D1 health from the public probe', () => {
     assert.deepEqual(healthState(PING), { d1: 'healthy', totalMs: 43, slow: [] });
     assert.equal(healthState({ ok: true, d1: 'error', timings: {} }).d1, 'error');
+  });
+
+  it('says how a script ended even when its stderr says nothing', () => {
+    assert.equal(scriptFailure({ killed: true, signal: 'SIGTERM', code: null }, '', 180_000), 'timed out after 180 s, nothing on stderr');
+    assert.equal(scriptFailure({ code: 2 }, '{\n}\n'), 'exit 2, nothing on stderr');
+    assert.equal(scriptFailure({ code: 'ENOENT' }, ''), 'ENOENT, nothing on stderr');
   });
 
   it('names the conditions the delta watches', () => {

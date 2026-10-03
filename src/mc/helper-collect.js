@@ -583,13 +583,32 @@ export function unreadableSections({ errors, analysis, provider, health, deploy 
 
 /* ------------------------------------------------------------------ collect */
 
+/**
+ * Why a script failed, in one line: how it ended, then the first line of its
+ * stderr that says anything. The last line was read until 2026-10-03 and said
+ * nothing twice over — `}` closing `wranglerD1Json`'s JSON dump, and Node's
+ * `Node.js v24.10.0` banner under an uncaught exception. An uncaught
+ * exception's own `Error: …` line is preferred over the source location and
+ * code excerpt Node prints above it.
+ */
+export function scriptFailure(error, stderr, timeout = null) {
+  const lines = String(stderr || '').split('\n').map((line) => line.trim())
+    .filter((line) => /[\p{L}\p{N}]/u.test(line) && !/^Node\.js v\d/u.test(line));
+  const line = lines.find((one) => /^[\w$.]*Error\b[^:]*:/u.test(one)) || lines[0] || null;
+  let how;
+  if (typeof error?.code === 'number') how = `exit ${error.code}`;
+  else if (error?.killed && timeout) how = `timed out after ${Math.round(timeout / 1000)} s`;
+  else if (error?.signal) how = `killed by ${error.signal}`;
+  else how = error?.code ? String(error.code) : 'failed';
+  return clip(line ? `${how}: ${line}` : `${how}, nothing on stderr`, 160);
+}
+
 /** A memoro admin script, run in the memoro checkout, its JSON stdout parsed. */
 function runScriptDefault(cwd, args, timeout) {
   return new Promise((resolve) => {
     execFile('node', args, { cwd, encoding: 'utf8', timeout, maxBuffer: 16 << 20 }, (error, stdout, stderr) => {
       if (error) {
-        const why = (stderr || '').trim().split('\n').at(-1) || error.message;
-        resolve({ ok: false, error: clip(why, 160) });
+        resolve({ ok: false, error: scriptFailure(error, stderr, timeout) });
         return;
       }
       try { resolve({ ok: true, json: JSON.parse(stdout) }); } catch { resolve({ ok: false, error: 'output was not JSON' }); }

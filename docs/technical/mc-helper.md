@@ -127,6 +127,13 @@ being unauthenticated must not cost us the other five.
 | what is live | `GET /api/version` — `{ commit, build, build_time }`, kept in `~/mc/runner/version.json` for the page | none | 30 s |
 | D1 health | `GET /ping-d1` | none | 30 s |
 
+A script that fails is named by how it ended and the first line of its stderr
+that says anything — `exit 1: wrangler d1 execute failed (1)`, or an uncaught
+exception's own `Error: …` line. The last line was read until 2026-10-03, and
+it was `}` (the close of `wranglerD1Json`'s JSON dump) or `Node.js v24.10.0`
+(Node's banner under a crash), so the AI-provider section said
+`_could not read: }_` from 2026-08-30 on without naming a cause.
+
 The deploy section has **two sources on purpose**. `/admin/deploy/logs` is the
 GitHub webhook's, and it has been writing nothing for weeks; `deploys.tsv` is
 written by `mc deploy` around the deploy itself and depends on no webhook at
