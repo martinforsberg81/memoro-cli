@@ -748,8 +748,7 @@ So memoro me has two doors, and each has one owner:
   identity: the web app, the native app, iOS Shortcuts, and — later, as a
   product feature — memoro me as an MCP server. Someone in a coding session who
   wants their notes uses this door, as a user, not mc. API tokens, device flow
-  and the scope mechanism belong to this door and stay; the Coding Profile is
-  data on this side too, read today through `/api/mc/coding-profile`.
+  and the scope mechanism belong to this door and stay.
 - **The admin door** is the owner's, and mc is it: building memoro me
   (`brief`, `plan`, `run`, `merge`), shipping it (`deploy`, `test`, `shot`),
   watching it (the helper digest over `/admin/*`), and administering it.
@@ -801,12 +800,30 @@ door, not a binary with hooks. And the package leaves the registry:
 Nothing installs it from there — mc is linked from a checkout, and memoro's
 sandbox image cloned the repository by ref — so the unpublish is Martin's act
 whenever he chooses, and the package is marked private so it cannot return by
-accident. The MCP server, the in-app admin tools that write proposals, a
+accident.
+
+The Coding Profile — a letter of working rules mc fetched from
+`/api/mc/coding-profile` and joined in front of every role's instructions,
+about a thousand tokens a launch — was first proposed to move into mc, then:
+
+> "coding profile ska bort ur memoro me. Kosinstruktioner och min profil får
+> hamna i mc och agents.md." … "Kanske ska all text i coding profile bara tas
+> bort men ev viss test kan sparas i en profile.md. Hela texten måste ses över.
+> Vi ska inte öka token-kostnad utan tydligt värde." (Martin, 2026-10-03)
+
+Read paragraph by paragraph against `canon/roles/_common.md`, memoro's
+`AGENTS.md` and the tool's own system prompt, every part was said elsewhere or
+contradicted ruling 21 — except that what is written into a repository is in
+English. So there is no `profile.md`: that rule is one sentence in
+`_common.md`, the fetch goes from mc, and the endpoint and its tables go from
+memoro (*"Bra. Enligt din rekommendation."*, Martin, 2026-10-03).
+
+The MCP server, the in-app admin tools that write proposals, a
 hosted mc and any GitHub integration are not part of the teardown; it must
 only leave standing what they would stand on — API tokens, device flow, the
 admin gate and the admin API.
 
-**Carried by [`memoro-binary-cut/PLAN.json`](memoro-binary-cut/PLAN.json)** here,
+**Carried by [`memoro-client-cut/PLAN.json`](memoro-client-cut/PLAN.json)** here,
 **and by memoro's `docs/project/mc/mc-in-memoro-cut/PLAN.json` and
 `docs/project/mc/mc-in-memoro-decommission/PLAN.json`**, in that order: the
 client first, then the code in memoro, then — each step on Martin's word —
