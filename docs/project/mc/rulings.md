@@ -773,9 +773,25 @@ admin, as one face of the admin door: reading memoro's own traffic and volume
 through its admin API, and writing proposals into mc. A proposal lands where
 mc keeps them, `~/mc/proposals/`, so the tool reaches mc — the local one, or
 later a hosted one — and memoro's server does not hold proposals for mc to
-collect. The in-app admin that exists today stays; what goes is only what
-reports mc into it. None of this needs GitHub, so the GitHub App code goes
-whole, core included.
+collect. None of this needs GitHub, so the GitHub App code goes whole, core
+included.
+
+**Amended 2026-10-05.** This ruling first let the in-app admin that exists
+today stay. It does not stay:
+
+> "mc byggs till att helt vara admin-programmet (kan vara flera program) för
+> memoro me. Jag skulle kunna tänka mig att ha ett admin-verktyg inne i den
+> vanliga chatten som kan användas för att skriva proposal. I övrigt tänker jag
+> inte att det behövs något annat." (Martin, 2026-10-05)
+
+So all of `/admin` moves into mc. There it is terminal commands, not a web
+page, and it may be more than one program. The web UI goes from memoro me:
+`admin.html`, the admin shell, the MSR admin cards and their pages. The only
+admin tool left inside the app is one tool in the ordinary chat. It is shown
+only to the admin and writes a proposal into mc, by the route above. The admin
+API stays, because it is how mc reaches memoro. What only the web UI used goes
+with the UI, and what mc needs moves to the token surface. This also settles
+memoro's `msr-core-admin-moves-to-mc` (2026-10-04, F22 on the msr-core map).
 
 Three rules follow. **The dependency runs one way**: mc reads memoro, and memoro
 holds nothing about mc — no sessions, no runner state, no record of how memoro
@@ -818,10 +834,11 @@ English. So there is no `profile.md`: that rule is one sentence in
 `_common.md`, the fetch goes from mc, and the endpoint and its tables go from
 memoro (*"Bra. Enligt din rekommendation."*, Martin, 2026-10-03).
 
-The MCP server, the in-app admin tools that write proposals, a
+The MCP server, the chat tool that writes proposals, a
 hosted mc and any GitHub integration are not part of the teardown; it must
 only leave standing what they would stand on — API tokens, device flow, the
-admin gate and the admin API.
+admin gate and the admin API. Moving `/admin` into mc is its own project, not
+yet planned (brief of 2026-10-05).
 
 **Carried by [`memoro-client-cut/PLAN.json`](memoro-client-cut/PLAN.json)** here,
 **and by memoro's `docs/project/mc/mc-in-memoro-cut/PLAN.json` and
