@@ -138,6 +138,15 @@ const OUTPUT_TAIL = 256 * 1024;
  *   `✓ Deploy complete build <n> · <sha>`           — the success banner
  *   `✗ Deploy failed` + the message beneath it      — the catch at the end
  *
+ * And, from 2026-10-05, the summary the script prints under `✗ Deploy failed`
+ * and the retries it made on the way:
+ *   `Production <what production runs now>`        — e.g. `unchanged — …`
+ *   `Cause <why, and whether a rerun helps>`
+ *   `↻ <wrangler call> failed after …`             — one per retry
+ * Only the summary's lines count, the ones after `✗ Deploy failed`: a retry
+ * prints `Production meanwhile: …` too, and a deploy that then went through is
+ * not described by it.
+ *
  * Tolerant on purpose: every one of them is a line that may not be there —
  * `MEMORO_DEPLOY_SKIP_LIVE_VERSION_VERIFY` removes the verified line, a
  * script that changes its wording removes any of them — and a missing line is
@@ -150,6 +159,10 @@ export function readScriptOutput(text) {
   let verified = null;
   let banner = null;
   let failure = '';
+  let failed = false;
+  let production = '';
+  let cause = '';
+  let retries = 0;
   lines.forEach((line, index) => {
     const step = /^▸\s+(.+)$/u.exec(line);
     if (step) { stoppedAt = step[1].trim(); return; }
@@ -157,9 +170,17 @@ export function readScriptOutput(text) {
     if (live) { verified = { build: live[1], commit: live[2] }; return; }
     const complete = /^✓ Deploy complete build (\d+) · (\S+)$/u.exec(line);
     if (complete) { banner = { build: complete[1], commit: complete[2] }; return; }
+    if (/^↻ /u.test(line)) { retries += 1; return; }
     if (/^✗ Deploy failed$/u.test(line)) {
+      failed = true;
       failure = lines.slice(index + 1).find((next) => next) || '';
+      return;
     }
+    if (!failed) return;
+    const prod = /^Production\s+(?!meanwhile:)(.+)$/u.exec(line);
+    if (prod) { production = prod[1].trim(); return; }
+    const why = /^Cause\s+(.+)$/u.exec(line);
+    if (why) cause = why[1].trim();
   });
   return {
     stopped_at: stoppedAt,
@@ -172,6 +193,9 @@ export function readScriptOutput(text) {
     live_build: verified?.build || '',
     verified: Boolean(verified),
     failure,
+    production,
+    cause,
+    retries,
   };
 }
 
@@ -352,10 +376,29 @@ export function planLines(plan) {
 function endNote({ result, said, ok }) {
   if (result.error) return `mc could not run npm run deploy — ${result.error}`;
   if (result.signal) return `killed by ${result.signal}`;
-  if (!ok) return said.failure ? `exit ${result.code} — ${said.failure}` : `exit ${result.code}`;
+  if (!ok) {
+    const why = said.failure ? `exit ${result.code} — ${said.failure}` : `exit ${result.code}`;
+    return said.production ? `${why} — production ${said.production}` : why;
+  }
   // A green deploy whose live version nobody checked is worth saying: the
   // script skips its own verification on MEMORO_DEPLOY_SKIP_LIVE_VERSION_VERIFY.
-  return said.verified ? '' : 'the script verified no live version';
+  // So is one that needed retries: the count is how flaky the network was.
+  const notes = [];
+  if (!said.verified) notes.push('the script verified no live version');
+  if (said.retries) notes.push(`went through after ${retryCount(said.retries)}`);
+  return notes.join('; ');
+}
+
+function retryCount(n) {
+  return `${n} retr${n === 1 ? 'y' : 'ies'} on network faults`;
+}
+
+/** The closing line of a failed deploy: where it stopped and what production
+ * runs now, when the script said — and the old warning when it did not. */
+function failureLine(code, said) {
+  const where = said.stopped_at ? ` at ${said.stopped_at}` : '';
+  const production = said.production ? `production ${said.production}` : 'production may be part-way';
+  return `mc: npm run deploy exited ${code}${where} — ${production}\n`;
 }
 
 export async function run(argv, deps = {}) {
@@ -526,8 +569,11 @@ export async function run(argv, deps = {}) {
     if (result.error) stderr.write(`mc: could not run npm run deploy in ${source.worktree} — ${result.error}\n`);
     if (result.signal) stderr.write(`mc: the deploy was killed by ${result.signal}\n`);
     if (opts.json) stdout.write(`${JSON.stringify({ sha: shipping, exit_code: result.code, deployed: ok, ...said }, null, 2)}\n`);
-    else if (!ok) stderr.write(`mc: npm run deploy exited ${result.code}${said.stopped_at ? ` at ${said.stopped_at}` : ''} — production may be part-way\n`);
-    else if (said.live_commit) stdout.write(`mc: deployed — build ${said.live_build} · ${short(said.live_commit)} verified live\n`);
+    else if (!ok) stderr.write(failureLine(result.code, said));
+    else if (said.live_commit) {
+      const retried = said.retries ? ` (after ${retryCount(said.retries)})` : '';
+      stdout.write(`mc: deployed — build ${said.live_build} · ${short(said.live_commit)} verified live${retried}\n`);
+    }
     return result.code;
   } catch (error) {
     // A throw is not a deploy that finished: the row would otherwise stay

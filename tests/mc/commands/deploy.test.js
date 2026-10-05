@@ -31,19 +31,23 @@ const REPOS = [{ name: 'memoro', path: PATH }, { name: 'memoro-cli', path: '/tmp
 /** The colours `deploy.mjs` prints its landmarks in, so the parsing is tested
  * against the bytes rather than against a cleaned-up version of them. */
 const CYAN = '\u001B[36m'; const RESET = '\u001B[0m'; const DIM = '\u001B[2m';
-const GREEN = '\u001B[32m'; const BOLD = '\u001B[1m'; const RED = '\u001B[31m';
+const GREEN = '\u001B[32m'; const BOLD = '\u001B[1m'; const RED = '\u001B[31m'; const YELLOW = '\u001B[33m';
 const stepLine = (label) => `\n${CYAN}▸ ${label}${RESET}\n`;
 
 /** A `deploy.mjs` that gets as far as `stopAt` and then either finishes or
  * falls over, printing what the real one prints on the way. */
-function fakeScript({ steps = [], build = '23533', commit = SHA, verify = true, code = 0, failure = '' } = {}) {
+function fakeScript({
+  steps = [], build = '23533', commit = SHA, verify = true, code = 0, failure = '', production = '', retries = 0,
+} = {}) {
   return async ({ onOutput }) => {
     for (const label of steps) onOutput(stepLine(label));
+    for (let i = 0; i < retries; i += 1) onOutput(`${YELLOW}  ↻ wrangler deploy failed after 0s: fetch failed.${RESET}\n`);
     if (code === 0) {
       if (verify) onOutput(`${DIM}  Live /api/version verified: build ${build} · ${commit}${RESET}\n`);
       onOutput(`\n${GREEN}${BOLD}✓ Deploy complete${RESET} ${DIM}build ${build} · ${commit}${RESET}\n`);
     } else {
       onOutput(`\n${RED}✗ Deploy failed${RESET}\n${DIM}${failure}${RESET}\n`);
+      if (production) onOutput(`\n  ${BOLD}Production ${RESET}${production}\n`);
     }
     return { code };
   };
@@ -665,6 +669,37 @@ describe('mc deploy — the record', () => {
     assert.match(out.stderr, /exited 1 at wrangler deploy/u);
   });
 
+  it('names what production runs when the script said, instead of "may be part-way"', async () => {
+    const { out, stdout, stderr } = io();
+    const code = await run([], {
+      ...deps({
+        spawnDeploy: fakeScript({
+          steps: ['Deploy source preflight', 'wrangler deploy'],
+          code: 1,
+          failure: 'wrangler deploy failed after 3 attempts: DNS could not resolve api.cloudflare.com',
+          production: 'unchanged — no new Worker version was uploaded',
+          retries: 2,
+        }),
+      }),
+      stdout,
+      stderr,
+    });
+    assert.equal(code, 1);
+    const row = lastAttempt({ MC_WORK_ROOT: work });
+    assert.match(row.note, /DNS could not resolve api\.cloudflare\.com — production unchanged — no new Worker version was uploaded$/u);
+    assert.match(out.stderr, /exited 1 at wrangler deploy — production unchanged — no new Worker version was uploaded/u);
+    assert.doesNotMatch(out.stderr, /may be part-way/u);
+  });
+
+  it('records a green deploy that needed retries', async () => {
+    const { out, stdout, stderr } = io();
+    await run([], { ...deps({ spawnDeploy: fakeScript({ steps: FULL_RUN, retries: 1 }) }), stdout, stderr });
+    const row = lastDeploy({ MC_WORK_ROOT: work });
+    assert.equal(row.outcome, 'deployed');
+    assert.equal(row.note, 'went through after 1 retry on network faults');
+    assert.match(out.stdout, /verified live \(after 1 retry on network faults\)/u);
+  });
+
   it('says so when a green deploy verified no live version', async () => {
     const { stdout, stderr } = io();
     await run([], { ...deps({ spawnDeploy: fakeScript({ steps: FULL_RUN, verify: false }) }), stdout, stderr });
@@ -769,9 +804,40 @@ describe('what the script said', () => {
     assert.equal(said.verified, false);
   });
 
+  it('reads what production runs from the failure summary, not from a retry on the way', () => {
+    const said = readScriptOutput([
+      stepLine('wrangler deploy'),
+      `${YELLOW}  ↻ wrangler deploy --containers-rollout=none failed after 0s: DNS could not resolve api.cloudflare.com.${RESET}\n`,
+      `${DIM}    Production meanwhile: unchanged — no new Worker version was uploaded.${RESET}\n`,
+      `\n${RED}${BOLD}✗ Deploy failed${RESET}\n`,
+      `${DIM}wrangler deploy --containers-rollout=none failed after 3 attempts: DNS could not resolve api.cloudflare.com${RESET}\n\n`,
+      `  ${BOLD}Failed at  ${RESET}wrangler deploy (attempt 3 of 3)\n`,
+      `  ${BOLD}Cause      ${RESET}DNS could not resolve api.cloudflare.com — a network fault, not the build; a rerun usually goes through\n`,
+      `  ${BOLD}Production ${RESET}unchanged — no new Worker version was uploaded\n`,
+    ].join(''));
+    assert.equal(said.stopped_at, 'wrangler deploy');
+    assert.equal(said.failure, 'wrangler deploy --containers-rollout=none failed after 3 attempts: DNS could not resolve api.cloudflare.com');
+    assert.equal(said.production, 'unchanged — no new Worker version was uploaded');
+    assert.match(said.cause, /^DNS could not resolve api\.cloudflare\.com — a network fault/u);
+    assert.equal(said.retries, 1);
+  });
+
+  it('counts the retries of a deploy that went through, and takes no production from them', () => {
+    const said = readScriptOutput([
+      stepLine('wrangler deploy'),
+      `${YELLOW}  ↻ wrangler deploy failed after 0s: a request to Cloudflare failed (fetch failed).${RESET}\n`,
+      `${DIM}    Production meanwhile: unchanged — no new Worker version was uploaded.${RESET}\n`,
+      `\n${GREEN}${BOLD}✓ Deploy complete${RESET} ${DIM}build 23533 · ${SHA}${RESET}\n`,
+    ].join(''));
+    assert.equal(said.retries, 1);
+    assert.equal(said.production, '');
+    assert.equal(said.build, '23533');
+  });
+
   it('is empty cells and not a crash when the script says none of it', () => {
     assert.deepEqual(readScriptOutput('some other tool wrote this\n'), {
       stopped_at: '', build: '', live_commit: '', live_build: '', verified: false, failure: '',
+      production: '', cause: '', retries: 0,
     });
     assert.equal(readScriptOutput('').stopped_at, '');
     assert.equal(readScriptOutput(null).build, '');
