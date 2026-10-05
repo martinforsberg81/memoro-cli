@@ -777,21 +777,33 @@ collect. None of this needs GitHub, so the GitHub App code goes whole, core
 included.
 
 **Amended 2026-10-05.** This ruling first let the in-app admin that exists
-today stay. It does not stay:
+today stay, as it is. That is not where it is going:
 
 > "mc byggs till att helt vara admin-programmet (kan vara flera program) för
 > memoro me. Jag skulle kunna tänka mig att ha ett admin-verktyg inne i den
 > vanliga chatten som kan användas för att skriva proposal. I övrigt tänker jag
 > inte att det behövs något annat." (Martin, 2026-10-05)
 
-So all of `/admin` moves into mc. There it is terminal commands, not a web
-page, and it may be more than one program. The web UI goes from memoro me:
-`admin.html`, the admin shell, the MSR admin cards and their pages. The only
-admin tool left inside the app is one tool in the ordinary chat. It is shown
-only to the admin and writes a proposal into mc, by the route above. The admin
-API stays, because it is how mc reaches memoro. What only the web UI used goes
-with the UI, and what mc needs moves to the token surface. This also settles
-memoro's `msr-core-admin-moves-to-mc` (2026-10-04, F22 on the msr-core map).
+and then, on how far that reaches now:
+
+> "Det kräver dock med eftertanke kring vissa delar. Det du skrivit ihop
+> hittills tar inte hänsyn till delar som att hantera assets eller network
+> eller assistent. Det det här projektet ska göra är att flytta
+> statistik-delarna till mc." (Martin, 2026-10-05)
+
+So the direction is that `/admin` moves into mc. There it becomes terminal
+commands, not a web page, and mc may be more than one program. The proposal
+tool in the ordinary chat is the in-app admin this direction foresees. It is
+shown only to the admin and writes a proposal into mc, by the route above. The
+move goes part by part, and only the statistics are decided: what `/admin`
+shows about traffic, volume, usage, cost and operations becomes mc commands,
+read through the admin API. The parts that act on memoro rather than read it
+stay in the app until each has been thought through on its own. That covers
+asset handling, the network, the assistant, the writing admin commands and
+the debugging tools. The admin API stays in any case, because it is how mc
+reaches memoro. This answers memoro's `msr-core-admin-moves-to-mc` (2026-10-04,
+F22 on the msr-core map) for the statistics only, and F22 stays open for the
+rest.
 
 Three rules follow. **The dependency runs one way**: mc reads memoro, and memoro
 holds nothing about mc — no sessions, no runner state, no record of how memoro
@@ -837,8 +849,8 @@ memoro (*"Bra. Enligt din rekommendation."*, Martin, 2026-10-03).
 The MCP server, the chat tool that writes proposals, a
 hosted mc and any GitHub integration are not part of the teardown; it must
 only leave standing what they would stand on — API tokens, device flow, the
-admin gate and the admin API. Moving `/admin` into mc is its own project, not
-yet planned (brief of 2026-10-05).
+admin gate and the admin API. Moving the statistics of `/admin` into mc is its
+own project, not yet planned (brief of 2026-10-05).
 
 **Carried by [`memoro-client-cut/PLAN.json`](memoro-client-cut/PLAN.json)** here,
 **and by memoro's `docs/project/mc/mc-in-memoro-cut/PLAN.json` and
