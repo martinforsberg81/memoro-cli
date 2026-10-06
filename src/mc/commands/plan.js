@@ -36,12 +36,19 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 
 import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
-import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea } from '../work-area.js';
+import { archiveProgramme } from '../archive-programme.js';
+import { runDocsMerge } from '../docs-merge.js';
+import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea, releaseWorkArea } from '../work-area.js';
 import { openInWorkArea } from '../work-open.js';
 import { PLAN_HOME, planHome } from '../paths.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
 import { scanArgs } from './flags.js';
+
+function sh(cmd, args, { cwd } = {}) {
+  const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20 });
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
 
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
@@ -51,7 +58,8 @@ export const planArea = (programme) => `${PLAN_HOME}/${programme}`;
 /** The branch a planning session commits on, in every repository it holds. */
 export const planBranch = (programme) => `${PLAN_HOME}/${programme}`;
 
-const USAGE = 'usage — mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]\n';
+const USAGE = 'usage — mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]\n'
+  + '        mc plan <programme> --archive\n';
 
 /** What `chooseProgramme` returns for "not one of these" — never a real name. */
 const NEW_PROGRAMME = Symbol('new programme');
@@ -93,6 +101,25 @@ export async function run(argv, deps = {}) {
   if (reservedRoleName(programme)) {
     stderr.write(`mc: ${reservedRoleHint(programme)}\n`);
     return 1;
+  }
+
+  // A programme that is over: off main in both repositories, and its planning
+  // session released. Never triggered — only typed (archive-programme.js).
+  if (opts.archive) {
+    return archiveProgramme(programme, {
+      repos,
+      env,
+      areaName: planArea(programme),
+      areaPath: `${planHome(env)}/${programme}`,
+      stdout,
+      stderr,
+      deps: {
+        git: deps.git || ((cwd, args) => sh('git', ['-C', cwd, ...args])),
+        gh: deps.gh || ((cwd, args) => sh('gh', args, { cwd })),
+        docsMerge: deps.docsMerge || runDocsMerge,
+        release: deps.release || releaseWorkArea,
+      },
+    });
   }
 
   // The role is the model and the tools this session defaults to, and — since
@@ -333,14 +360,23 @@ function parseArgs(argv) {
   if (argv.includes('--repo')) {
     return { error: 'a programme spans both repositories — mc plan takes no --repo' };
   }
-  const scanned = scanArgs(argv, { booleans: ['--new'], strictValues: ['--model'], toolSugar: true });
+  const scanned = scanArgs(argv, { booleans: ['--new', '--archive'], strictValues: ['--model'], toolSugar: true });
   if (scanned.error) return { error: scanned.error };
   const words = scanned.positional;
   if (words.length > 1) return { error: `unexpected argument ${words[1]}` };
+  // Archiving starts no session, so the session's flags have nothing to do —
+  // and a picker is no way to choose what to remove.
+  if (scanned.flags.archive) {
+    if (!words[0]) return { error: 'archive which programme? mc plan <programme> --archive' };
+    if (scanned.flags.new || scanned.flags.model || scanned.flags.tool) {
+      return { error: '--archive starts no session — it takes no --new, --model, --codex or --claude' };
+    }
+  }
   return {
     name: words[0] || null,
     model: scanned.flags.model || null,
     tool: scanned.flags.tool || null,
     fresh: Boolean(scanned.flags.new),
+    archive: Boolean(scanned.flags.archive),
   };
 }

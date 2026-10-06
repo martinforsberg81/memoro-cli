@@ -1,13 +1,16 @@
 # mc plan — a session in a directory, told which programme it is for
 
 ```
-mc plan [<programme>] [--codex|--claude] [--model <m>]
+mc plan [<programme>] [--new] [--codex|--claude] [--model <m>]
+mc plan <programme> --archive
 ```
 
 That is the whole verb. It opens a foreground session in
 `~/mc/plan/<programme>/` with both repositories checked out, and hands it one
-prompt naming the programme, where it stands, and what to read. Martin is at
-the terminal for all of it.
+prompt naming the programme and where it stands; what a planning session is
+for is the `plan` role's to say. Martin is at the terminal for all of it.
+`--archive` is the one other thing it does: it ends a programme
+([below](#archiving-a-programme)).
 
 **It predicts nothing beyond that**, and that is the point rather than an
 omission. How many projects the programme needs, what they are called, whether
@@ -187,6 +190,46 @@ and where the session stands, and then waits: the reading list and the
 and a session told to start by reading and reporting spent its first turn on
 an intro nobody asked for.
 
+## Archiving a programme
+
+`mc plan <programme> --archive` is how a programme ends, and the only way:
+`mc run` archives a project the round its plan says done, but nothing removes
+the programme above it — `docs/project/<programme>/` keeps its own document and
+rulings, and `~/mc/plan/<programme>/` keeps two worktrees on `plan/<programme>`.
+No machine can tell that a programme is over, since one whose projects are all
+done is also where the next piece of that work belongs, so it is typed and
+never triggered.
+[`src/mc/archive-programme.js`](../../src/mc/archive-programme.js):
+
+1. **Everything is checked before anything is touched.** It fetches, then
+   refuses — listing every reason — while any plan under the programme is on
+   `origin/main` in either repository (a `done` one is `mc run`'s to archive
+   first), or while `releaseWorkArea`'s dry run would keep anything in
+   `~/mc/plan/<programme>/`: uncommitted work, commits main lacks, a process
+   standing in it (the session itself, if run from inside), a file somebody
+   put there. A name that is neither on main nor being planned is refused too.
+2. **Main first.** In each repository whose `docs/project/` holds the
+   programme: a throwaway worktree from `origin/main` on
+   `mc-programme-archive-<programme>-<stamp>` (never `mc-archive-`, which the
+   runner waits on), `git rm -r docs/project/<programme>/`, one
+   `project_log.md` row for the programme itself — project `-`, outcome
+   `closed`, doc `none`, pointer the last commit that touched the directory —
+   and a docs-only PR landed through `runDocsMerge`, `mc merge --docs`'s own
+   function. An archive PR for the programme still open from an earlier
+   attempt is landed instead of opening a second.
+3. **Then the planning session**, only once every PR has merged:
+   `releaseWorkArea('plan/<programme>')`, as `mc work release` — each worktree
+   handed back, `plan/<programme>` deleted, the conversations and the
+   directory gone with them.
+
+Main goes first because it is the half that fails on the network. A PR that
+does not merge stops the command with the planning session untouched — the
+state it started from — and running it again carries on.
+
+The session's flags have nothing to do here: `--archive` with `--new`,
+`--model`, `--codex` or `--claude` is refused, and so is `--archive` with no
+name — a picker is no way to choose what to remove.
+
 ## Questions
 
 A planning session is the one session Martin is sitting in front of, so a
@@ -230,6 +273,15 @@ of which starts a session:
   the codex binary, and a test must not depend on one;
 - no name without a terminal, a reserved name, and the retired `--repo` are
   each refused;
+- `--archive`, in
+  [`tests/mc/archive-programme.test.js`](../../tests/mc/archive-programme.test.js),
+  against a real repository and a bare origin with GitHub, the docs merge and
+  the release stubbed: the pushed branch has `docs/project/<programme>/` gone
+  and one `closed` row with project `-`; nothing is opened while a plan is on
+  main; the planning session is not released when the PR does not merge; an
+  archive PR left open is landed rather than doubled; the throwaway worktree
+  and its branch are gone afterwards; and the verdict's refusals — a plan on
+  main, what release would keep, a programme that is nowhere — each say why;
 - `mc --help` lists the verb.
 
 **Not measured, and honestly so.** No headless session can watch a program take

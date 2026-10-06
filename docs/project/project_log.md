@@ -24,7 +24,9 @@ existed?
   the one-line summary here isn't enough.
 - **outcome** — `delivered`, `abandoned`, or `superseded`. A closed project
   is not always a finished one, and "what happened to it" is usually the
-  first question, before "what did it do".
+  first question, before "what did it do". A row whose project is `-` is a
+  programme, not a project: `mc plan <programme> --archive` writes it, with
+  outcome `closed`, when it removes `docs/project/<programme>/` itself.
 - **summary** — one line: what it built, or why it stopped. Enough to decide
   whether to dig further, not a report.
 - **doc** — the path under `docs/technical/` that now describes the resulting
