@@ -170,3 +170,28 @@ export function recordRefusal({ sha = '', holder = '', note = '', at = new Date(
     live_commit: '', live_build: '', stopped_at: '', note,
   }, env);
 }
+
+/**
+ * The rows still saying `running` when a new deploy has just taken the lease.
+ * The lease is held for the whole of a deploy, so whoever wrote them is gone:
+ * the terminal closed, the laptop slept, the process was killed before it
+ * could complete its row. They are marked `failed`, `ended` left empty — when
+ * it stopped is not known — and the note says how it was found out, so the
+ * page stops calling a deploy from yesterday the one that is running.
+ *
+ * Returns the rows it closed, as they were.
+ */
+export function closeAbandoned({ at = new Date().toISOString() } = {}, env = process.env) {
+  const text = readFile(env);
+  const header = fileHeader(text);
+  const rows = parseDeploys(text);
+  const abandoned = rows.filter((row) => row.outcome === RUNNING && !row.ended);
+  if (!abandoned.length) return [];
+  const note = `never came back — still running when the next deploy took the lease at ${at}`;
+  const body = rows
+    .map((row) => (abandoned.includes(row) ? { ...row, outcome: FAILED, note: row.note ? `${row.note}; ${note}` : note } : row))
+    .map((row) => tsvRow(row, header))
+    .join('\n');
+  writeFileAtomic(deploysPath(env), `${header.join('\t')}\n${body}\n`);
+  return abandoned;
+}
