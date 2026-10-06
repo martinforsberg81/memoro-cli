@@ -1,59 +1,36 @@
-How a plan is written, and it is one shape wherever it is written. Two roles
-write plans — the planning session for a programme it has thought through, the
-brief for a proposal Martin has said GO to — and this is the half they share.
+## Writing a PLAN.json
 
 A plan is instructions for a headless session that has read nothing else, with
-nobody watching. That is the whole test of one: can that session do this step,
-and know when it is finished? It is one file, `PLAN.json`, under
-`docs/project/<programme>/<project>/` in the repository the work is in. The
-programme is a directory that already exists, or one you make; the `<project>`
-directory name is what the runner will call that project's branch and its
-workarea, and you create neither. Every field and what it must hold is in
-`src/mc/plan-schema.js`, and what each is for is in `docs/project/README.md`
-§ *What a PLAN.json is* and § *Who writes what*, in the repository you are
-writing in. Read them rather than working from this paragraph.
+nobody watching. Every step must pass one test: can that session build it
+start to finish, and know when it is done? If not, it is not a step
+(ruling 19).
 
-A step is work the runner can take from start to finish, and nothing else
-(ruling 19, `docs/project/mc/rulings.md` in memoro-cli). Investigation,
-measurement, design exploration, a test run to see what happens, "find out
-whether": none of that is a step. Do it yourself, now, before the plan is
-written — read the code, run the measurement, try the thing — so every step
-stands on an answer the plan already carries. And never write a step whose
-content depends on what an earlier step will find: if step 3 cannot be
-written until step 2 has run, the plan ends at step 2, and the next steps are
-written when the code is there to read. A step that has to stop and ask costs
-a session, a failed step and a person reading a transcript.
-
-Write each step for the session that will be handed it and nothing else. Its
-`instruction` is as long as the work is — three pages of interface, order and
-edge cases where the work has them, because the under-specified step is the
-expensive one — and its `done_when` is the sentence that session's pull
-request is measured against. Name the file that carries every claim you make,
-and only if you opened it: a plan is acted on without being checked, so a
-plausible-sounding claim from a grep becomes the next session's premise.
-
-What a step session may not touch is the other half of the same thought.
-`goal`, `contract`, `out_of_scope` and the criteria are frozen, and it writes
-only its own step's `status`, `pr` and `comments`, plus `met` on the criteria
-it met — checked by the runner on the way back in. A step that finds the plan
-wrong stops and asks rather than repairing it, which costs a round. So
-whatever the work will need has to be in the plan before it starts.
-
-A plan that does not validate is refused at the runner's door rather than
-run, and a plan nobody can read is a project that logs a skip line every round
-until somebody notices. Validate before you push: `readPlanText` prints every
-problem at once, and `mc status <project>` prints them for a plan already on
-`main`.
-
-A proposal that becomes a project is moved to `~/mc/proposals/archive/` in the
-same move that creates it (ruling 22), and named in the pull request body — `~/mc/proposals/` is in neither
-repository, so that body is the only place the record can live. Whatever the
-proposal held that the plan needs — the measurement, the file and the line,
-the reason the fix is that one — has to be in the plan first, because
-no session reads the archive.
-
-A decision the plan leans on is cited by name and never by path, and a ruling
-belongs to its programme: `docs/project/<programme>/rulings.md`, with the
-question, Martin's answer quoted, and the plan that carries it.
-`docs/project/README.md` § *Citing a decision* is the rule, and a path out of
-the repository is a citation no reader with a checkout can follow.
+- **Where:** `docs/project/<programme>/<project>/PLAN.json` in the repository
+  the work is in. `<project>` becomes the runner's branch and workarea; create
+  neither. A plan on `main` whose first unfinished step is `ready` is run —
+  landing it is the handover.
+- **Shape:** `src/mc/plan-schema.js`; what each field is for:
+  `docs/project/README.md` § *What a PLAN.json is*. Read them; do not guess.
+- **Before writing:** do every investigation yourself — read the code,
+  measure, try it — so each step stands on an answer. No step whose content
+  depends on what an earlier step finds: the plan ends at that earlier step.
+- **No review in a plan:** no "show Martin", "decide whether", "evaluate",
+  "propose". Anything he must see is done in session first.
+- **Each step:** `instruction` as long as the work needs — interface, order,
+  edge cases, the trap. `done_when`: one checkable sentence. Name the file
+  behind every claim, and only files you opened.
+- **Overall:** `goal`; `contract` (what may not change without Martin);
+  `out_of_scope`, named; `success_criteria` with a `check` — for anything
+  with a surface, measured in the running app. All frozen: a step session
+  writes only `met`.
+- **Leave out:** the case for the plan, history, what the code already shows.
+- **Validate before pushing:**
+  `node --input-type=module -e "import {readPlanText} from '$HOME/memoro-cli/src/mc/plan-schema.js'; import {readFileSync} from 'node:fs'; console.log(readPlanText(readFileSync(process.argv[1],'utf8')).problems)" <PLAN.json>`
+  must print `[]`. Land with `mc merge <repo> <pr> --docs`; `mc status
+  <project>` shows it from `main`.
+- **Proposals consumed:** move them to `~/mc/proposals/archive/` in the same
+  move, name them in the PR body, and carry into the plan everything it needs
+  from them — nobody reads the archive (ruling 22).
+- **Decisions:** cite by name, never by path. Record the ruling in
+  `docs/project/<programme>/rulings.md`: the question, Martin's answer quoted,
+  the plan that carries it.

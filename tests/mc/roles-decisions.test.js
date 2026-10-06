@@ -81,14 +81,17 @@ describe('the decision shape every role writes', () => {
    * What Martin decides goes into the plan it is about — there is nowhere
    * else for it to live now that mc keeps no decision file.
    */
-  it('step writes the answer into the plan, and nothing else carries it', () => {
-    const { overlay } = readCanonRole('step');
-    assert.match(overlay, phrase('the answer is written'));
-    assert.match(overlay, phrase('into the plan'));
-    assert.match(overlay, phrase('so the plan carries it on its own'));
-    assert.match(overlay, phrase('a plan comes back by its first unfinished step being `ready`'));
-    assert.doesNotMatch(overlay, /decision file/u);
-  });
+  // The sessions that unblock a step — the brief and the planning session —
+  // carry it, through `_session-work.md`; a step session never answers.
+  for (const name of ['brief', 'plan']) {
+    it(`${name} writes the answer into the plan, and nothing else carries it`, () => {
+      const told = toldTo(name);
+      assert.match(told, phrase('the answer is written into the plan'));
+      assert.match(told, phrase('so the plan carries it on its own'));
+      assert.match(told, phrase('a plan comes back by its first unfinished step being `ready`'));
+      assert.doesNotMatch(told, /decision file/u);
+    });
+  }
 
   /**
    * The boundary the runner checks on the way back in. It is in the overlay as
@@ -96,13 +99,12 @@ describe('the decision shape every role writes', () => {
    */
   it('step is told the one thing in the file that is its to edit, that state goes through mc step, and that it is checked', () => {
     const { overlay } = readCanonRole('step');
-    assert.match(overlay, phrase('You never write the plan\'s steps'));
-    assert.match(overlay, phrase('`mc step` writes it'));
+    assert.match(overlay, phrase('You never change the plan'));
+    assert.match(overlay, phrase('written by `mc step`'));
     assert.match(overlay, phrase('`mc step note "…"`'));
     assert.match(overlay, phrase('`mc step blocked --on <decision-name>`'));
-    assert.match(overlay, phrase('`met` on the criteria you actually met'));
-    assert.match(overlay, phrase('The file is checked, not asked'));
-    assert.match(overlay, phrase('leaves a PR it will not merge'));
+    assert.match(overlay, phrase('`met` on criteria you actually met'));
+    assert.match(overlay, phrase('`mc merge` compares your plan file with main\'s and refuses any other change'));
     assert.doesNotMatch(overlay, /set\s+your step `done`/u, 'mc merge writes done; the file is not where it goes');
   });
 });

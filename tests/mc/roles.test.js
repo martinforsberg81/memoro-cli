@@ -227,23 +227,32 @@ describe('the text every role session shares', () => {
  */
 describe('a passage two roles share', () => {
   const PLAN_WRITING = '_plan-writing.md';
-  // Three sentences that define it — one from each half of the passage.
+  const SESSION_WORK = '_session-work.md';
+  // Sentences that define each passage, from different parts of it.
   const DEFINING = [
     /A plan is instructions for a headless session that has read nothing else/u,
-    /`readPlanText` prints every\nproblem at once/u,
-    /A proposal that becomes a project is moved to/u,
+    /readPlanText/u,
+    /Proposals consumed:/u,
+  ];
+  const SESSION_DEFINING = [
+    /Never put work in the runner to get a review between steps/u,
+    /## Driving work in this session/u,
   ];
   const read = (file) => readFileSync(join(canonRolesDir(), file), 'utf8');
 
   it('is written in exactly one file, and neither role file holds a copy', () => {
+    const carriers = (sentence) => readdirSync(canonRolesDir())
+      .filter((file) => file.endsWith('.md'))
+      .filter((file) => sentence.test(read(file)));
     for (const sentence of DEFINING) {
-      const carriers = readdirSync(canonRolesDir())
-        .filter((file) => file.endsWith('.md'))
-        .filter((file) => sentence.test(read(file)));
-      assert.deepEqual(carriers, [PLAN_WRITING], `${sentence} is not in exactly ${PLAN_WRITING}`);
+      assert.deepEqual(carriers(sentence), [PLAN_WRITING], `${sentence} is not in exactly ${PLAN_WRITING}`);
+    }
+    for (const sentence of SESSION_DEFINING) {
+      assert.deepEqual(carriers(sentence), [SESSION_WORK], `${sentence} is not in exactly ${SESSION_WORK}`);
     }
     for (const file of ['plan.md', 'brief.md']) {
       assert.match(read(file), /^@include _plan-writing\.md$/mu, `${file} does not include the passage`);
+      assert.match(read(file), /^@include _session-work\.md$/mu, `${file} does not include the session passage`);
     }
   });
 
@@ -264,6 +273,7 @@ describe('a passage two roles share', () => {
       const told = instructionsFor('claude-code', overlay);
       assert.doesNotMatch(told, /@include/u, `${name} was told an unexpanded marker`);
       assert.match(told, DEFINING[0], name);
+      assert.match(told, SESSION_DEFINING[0], name);
     }
   });
 
@@ -336,7 +346,7 @@ describe('the role catalogue', () => {
   // had it stayed.
   it('is exactly the roles mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      '_common.md', '_plan-writing.md', 'brief.md', 'helper.md', 'intake.md', 'plan.md', 'step.md', 'worker.md',
+      '_common.md', '_plan-writing.md', '_session-work.md', 'brief.md', 'helper.md', 'intake.md', 'plan.md', 'step.md', 'worker.md',
     ]);
   });
 });

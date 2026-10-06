@@ -1,81 +1,38 @@
-A turn is the unit of cost, not a tool call: every turn re-reads the whole
-context, 80–170k tokens in a step session. Measured over 22 step sessions
-(2026-09-09..12): 2 500 messages carrying a tool call, 2 499 of them carrying
-exactly one, and on sonnet 37 of 137 turns per session were prose between
-calls. Search with `Grep` and find files with `Glob`: a match list is a few
-lines, where `grep -n`/`sed -n` through Bash is a screen of file that stays
-in the context for the rest of the session. Put every Bash command that does
-not depend on another's result in one call, labelled, and every independent
-`Read` and `Edit` in the same message. Write no prose between calls: say what
-you did once, when you are done. There is no `Agent` tool in a session of
-mc's, and no MCP server: the tools are Bash, Read, Edit, Write, Grep, Glob.
+Tools: Bash, Read, Edit, Write, Grep, Glob. No Agent, no MCP.
+A turn is the unit of cost: every turn re-reads the whole context. So:
 
-Read the code before you decide, and where the answer is in the code go and
-read it rather than asking. Say what you actually ran and what it said, never
-that something is verified when it was not. Where you changed code, `npm test`
-selects the affected tests: run them once, when you are done, in the foreground
-rather than backgrounded and polled — a session that loses the output it was
-sent to read has nothing to decide from.
+- Search with `Grep`, find files with `Glob` — not `grep`/`sed` through Bash.
+- Independent Bash commands in one call; independent `Read`s and `Edit`s in
+  one message.
+- No prose between calls. Report once, at the end.
 
-Talk to Martin in Swedish. Everything written into a repository — code,
-comments, commit messages, pull request texts, plans — is in English.
+Read the code before you decide or ask. Report what you ran and what it said;
+never call something verified that was not. Tests: once, at the end, in the
+foreground (`npm test` picks the affected ones).
 
-A question for Martin is one thing to do: what you found, what it costs, and
-the one you would do, defended from the code and answerable in a word. Never a
-menu of options for him to choose between; alternatives only where a real
-trade-off survived your reading. And nothing while the question is unclear or
-while reading further would settle it — then the work is to read, not to ask.
-An unclear question costs him more than it costs you, and he cannot see what
-you have not understood.
+Martin: Swedish. Everything in a repository — code, comments, commits, PRs,
+plans: English.
 
-What you found that is not your job is a proposal, not a paragraph in your
-answer. One file per thing, `~/mc/proposals/<date>-<slug>.md`, prose, saying
-which system it belongs to — `memoro` is the deployed service, `memoro-cli`
-is mc itself on this machine — and what you actually read to stand behind it.
-Three things in one breath are three files. Then say in one line that you
-wrote it, and carry on with the work you were given.
+A question for Martin is one thing: what you found, what it costs, what you
+would do — answerable in a word. Never a menu of options. Never ask while the
+question is unclear or reading would settle it: then read.
 
-Not `~/mc/intake/`, and the difference is who has done the judging.
-`~/mc/intake/` is the inbox for raw material nobody has read yet — an error
-log, a screenshot, whatever Martin dropped there — and it is drained one file
-per turn by a session whose whole job is to decide what is in it. You have
-already understood the thing you are writing about; putting it there asks a
-second session to work it out again from less than you had.
+What you found that is not your job is a proposal: one file per finding,
+`~/mc/proposals/<date>-<slug>.md` — prose, which system (`memoro` = the
+deployed service, `memoro-cli` = mc), what you read. Say so in one line and
+carry on. Not `~/mc/intake/`: that is raw material, drained one file per turn
+by a session that judges it; writing there asks a second session to work it
+out again from less than you had.
 
-A merge that stopped is resolved, not worked around. Keep both intents — this
-branch's and main's — and never resolve by taking a side because it is
-quicker. A generated file (SDK artifacts, corpora, manifests, inventories) is
-regenerated with the repository's own script, named in `package.json` or the
-docs, and not hand-edited. After a keep-both resolution, read the result and
-check that no hunk was kept twice; a duplicated row or a doubled function is
-what a keep-both leaves behind, and nobody notices it later.
+The practical route to `main` is yours to settle: one branch, one PR, `mc merge <repo> <pr>` (`--docs` for a
+PR inside `docs/` only). `mc merge` decides green and lands nothing red. Never
+`gh pr merge`. Tell Martin the outcome, not the bookkeeping. His, in one line
+with your recommendation: a merge that needed your judgement to go green,
+anything the gate refused, anything that changes what is deployed.
 
-The practical route to `main` is yours to settle, not to ask about. It is
-written down — the branch the worktree stands on, one pull request from it, the
-runner's gate, `mc merge`; `docs/technical/mc-run.md` and `mc-merge.md` have
-it. What he gets is the outcome: what is true now, what changed, what you
-actually ran and what it said, and what is still open or broken. Not the
-bookkeeping that got you there.
+Merge conflicts: keep both intents, never take a side because it is quicker.
+Regenerate generated files with the repository's own script. Then reread the
+result for hunks kept twice.
 
-An uncomplicated merge is yours to make, and `mc merge` is what decides it is
-uncomplicated — not you. `mc merge <repo> <pr>` measures and lands, and lands
-nothing red. `mc merge <repo> <pr> --docs` lands a pull request that touches
-nothing outside `docs/` with no suite at all, and refuses naming the file if one
-does. Green gate, a base that has not moved, and nothing outside the door you
-used: those are the criteria, and every one of them is checked rather than
-judged. Never `gh pr merge` — it skips the measurement, which is the whole
-reason the door exists.
-
-Still Martin's, in one line with what you would do: a merge that needed a
-judgement of yours to go green, anything the gate refused, and anything that
-changes what is deployed.
-
-If you are running under `mc run`, your step's own instructions below say how
-its pull request lands, through `mc merge`, and they are the route.
-
-A probe, a measuring script, a slice of output, or any other file that is not
-part of the change goes in `$MC_SCRATCH` — a directory outside the repository,
-yours for this session, removed after a week — never in the worktree: an
-untracked file left there by a session that dies stops the project until a
-person deletes it. In a session with no `MC_SCRATCH` (a foreground one) use the
-system temp directory.
+Files that are not the change (probes, output, scripts) go in `$MC_SCRATCH`,
+or the system temp directory when it is unset — never the worktree.
