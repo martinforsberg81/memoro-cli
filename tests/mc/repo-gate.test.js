@@ -1010,6 +1010,8 @@ describe('a repository that selects by diff', () => {
     // Answers for the git calls a test cares about beyond the round's own —
     // `checkout`, `rev-list`, `log` — consulted first; undefined falls through.
     gitAlso = () => undefined,
+    // The selector command itself, for a selection too large to `echo`.
+    select = null,
   } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
     const repoPath = join(root, 'repo');
@@ -1031,7 +1033,7 @@ describe('a repository that selects by diff', () => {
       repo: {
         prepare: null,
         prepare_why: 'the fixture installs nothing',
-        select: `echo '${JSON.stringify(commands === undefined ? { files } : { files, commands })}'`,
+        select: select ?? `echo '${JSON.stringify(commands === undefined ? { files } : { files, commands })}'`,
         select_why: 'the fixture says so',
         ...(suiteCommand === null ? {} : { suite: suiteCommand, suite_why: 'the fixture says so' }),
         extra_gates: [],
@@ -1115,6 +1117,25 @@ describe('a repository that selects by diff', () => {
       assert.ok(fx.runs[0].cwd.endsWith('candidate'));
       // And with the repository's own declared flags, not a guess at them.
       assert.deepEqual(fx.runs[0].flags, ['--import', './x.mjs']);
+    } finally { fx.cleanup(); }
+  });
+
+  /**
+   * memoro's selector printed 1.3 MB for #12720 — a `selectedBy` list per file,
+   * 1502 files — and Node's 1 MiB default buffer killed it: "exit null", and a
+   * green change that could not be measured.
+   */
+  it('reads a selection larger than a megabyte', async () => {
+    const files = ['tests/a.test.js'];
+    const fx = selecting({
+      files,
+      select: `node -e "process.stdout.write(JSON.stringify({ files: ['tests/a.test.js'], selectedBy: 'x'.repeat(3 << 20) }))"`,
+    });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.selection.files, 1);
+      assert.deepEqual(fx.runs[0].files, files);
     } finally { fx.cleanup(); }
   });
 

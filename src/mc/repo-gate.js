@@ -827,7 +827,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
 async function selectFiles({ command, cwd, env, say }) {
   const run = shell(command, { cwd, env });
   if (run.status !== 0) {
-    return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || `exit ${run.status}`}` };
+    return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || run.error?.code || `exit ${run.status}`}` };
   }
   let parsed = null;
   try { parsed = JSON.parse(run.stdout); } catch {
@@ -1324,8 +1324,13 @@ function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.en
   });
 }
 
+/**
+ * `maxBuffer` is stated because Node's default is 1 MiB and a child that
+ * prints more is killed for it (`ENOBUFS`, status null): memoro's selector
+ * printed 1.3 MB for #12720 and the round stopped with nothing measured.
+ */
 function shell(command, { cwd, env }) {
-  return spawnSync(command, { cwd, env, shell: true, encoding: 'utf8' });
+  return spawnSync(command, { cwd, env, shell: true, encoding: 'utf8', maxBuffer: 256 << 20 });
 }
 
 /**
