@@ -259,5 +259,19 @@ and on the page, for Martin.
 
 None of that reaches a planning session. `~/mc/plan/<programme>/` holds no
 top-level checkout, so neither `mc run`'s `workareas()` nor `mc status`'s
-`areasWithCheckout()` can see what is under it: a planning session is never
-archived, never closed, and never listed as a workarea without a plan.
+`areasWithCheckout()` can see what is under it: no machine archives or closes
+a planning session, and none lists it as a workarea without a plan.
+
+**A programme is archived by hand, with `mc plan <programme> --archive`.**
+Nothing can tell that a programme is over — one whose projects are all done is
+also where the next piece of that work belongs — so this is typed, never
+triggered. It refuses, touching nothing, while any plan under the programme is
+still on main in either repository, or while releasing `~/mc/plan/<programme>/`
+would keep something (uncommitted work, commits main lacks, a shell standing
+in it, a file somebody put there). Otherwise, in every repository whose
+`docs/project/` holds the programme, it removes `docs/project/<programme>/` and
+adds one `project_log.md` row for the programme itself (project `-`, outcome
+`closed`) in a docs-only PR landed through `mc merge --docs`; only once that
+has merged is the planning session released — worktrees handed back,
+`plan/<programme>` deleted, its conversations and directory gone
+(`src/mc/archive-programme.js`).

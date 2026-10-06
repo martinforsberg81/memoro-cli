@@ -18,6 +18,7 @@ THE PAGE
 
   mc brief                         Decide what to work on next
   mc plan [<programme>]            Plan a programme; no name asks which
+  mc plan <programme> --archive    End a programme: off main and off disk
   mc run                           The runner: headless steps, a lane per repository
   mc run start | stop [--force]    Turn it on, or off — after the round, or now
   mc run --update                  After the round: new code, new process
@@ -334,6 +335,11 @@ IN FULL
                                     main, the ones being planned, or a new
                                     one you name. --codex|--claude, --model
                                     <m> as usual
+  mc plan <programme> --archive    End a programme: refused while any plan
+                                    under it is on main or its session holds
+                                    work; else docs/project/<programme>/ off
+                                    main (docs PR, one 'closed' log row) and
+                                    ~/mc/plan/<programme>/ released
   mc run                           The runner: one fresh headless session per
                                     step of the next project, merged direct;
                                     queue = ~/mc/queue.md then every ready
