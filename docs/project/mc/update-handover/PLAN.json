@@ -16,7 +16,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc run --update` on a runner already running origin/main's commit writes nothing and says so; on a draining runner it prints the drain — since when, which lanes are done and which are in a step with the project, step and elapsed time — instead of rewriting UPDATE; the page's MC line and `mc run start`'s refusal carry the same drain line.",
       "check": "`tests/mc/run-control.test.js`: the three answers of `requestUpdate` (nothing to update; UPDATE written; already draining, with the lanes listed from `current-*.json` fixtures); `tests/mc/page.test.js`: the MC line with a drain in progress names the lane it waits on and its elapsed time."
     },
