@@ -396,6 +396,23 @@ describe('DEPLOY', () => {
     assert.match(strip(line({ attempt: old })), /^ {2}DEPLOY {2}deploying b3e65b6 since 4 h — no end recorded/u);
   });
 
+  it('reads a running deploy\'s pid from the record: alive is running however long, gone is late at once', () => {
+    const started = new Date(NOW.getTime() - 5 * 60 * 1000).toISOString();
+    const row = { ...DEPLOYED, started: '2026-08-29T08:00:00Z', ended: '', sha: OTHER, outcome: 'running', pid: '4242' };
+    const alive = (pid) => pid === 4242;
+    assert.equal(section({ attempt: row, alive }).running.late, false);
+    assert.match(strip(line({ attempt: row, alive })), /^ {2}DEPLOY {2}deploying b3e65b6 since 4 h · production 1a2b3c4/u);
+    assert.equal(section({ attempt: { ...row, started }, alive: () => false }).running.late, true);
+
+    // The first deploy there ever was, with nothing collected: still drawn.
+    const first = section({ deploy: null, live: null, attempt: { ...row, started }, alive });
+    assert.equal(first.running.short, 'b3e65b6');
+    const drawn = paintedPage(pageData({
+      runner: runnerSection({ rows: [], now: NOW, deploy: null, attempt: { ...row, started }, live: null, alive }),
+    }));
+    assert.match(strip(rowWith(drawn, 'deploying')), /^ {2}DEPLOY {2}deploying b3e65b6 since 5 min/u);
+  });
+
   /**
    * The width goes to what is wrong. `Deploy source preflight` — the one word
    * on the row that says where to look — was being clipped off the end at 100

@@ -31,6 +31,7 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
+import { processAlive } from './lease-owner.js';
 import { workRoot } from './paths.js';
 
 /**
@@ -39,8 +40,17 @@ import { workRoot } from './paths.js';
  * middle moves `note` for every reader that has the old header memorised.
  */
 export const DEPLOYS_HEADER = [
-  'started', 'ended', 'sha', 'build', 'holder', 'outcome', 'live_commit', 'live_build', 'stopped_at', 'note',
+  'started', 'ended', 'sha', 'build', 'holder', 'outcome', 'live_commit', 'live_build', 'stopped_at', 'note', 'pid',
 ];
+
+/**
+ * The header before `pid` (2026-10-07), the one every machine's file carries.
+ * A file with exactly this header is given the new one the next time a row is
+ * written, its rows with an empty `pid`: without it, a deploy in progress
+ * could never be told from one that died, which is the one thing the column
+ * is for. Any other header is kept as it is, and drops what it has no room for.
+ */
+const PREVIOUS_HEADER = DEPLOYS_HEADER.slice(0, -1);
 
 export const RUNNING = 'running';
 export const DEPLOYED = 'deployed';
@@ -80,10 +90,18 @@ function readFile(env) {
   try { return readFileSync(deploysPath(env), 'utf8'); } catch { return ''; }
 }
 
-/** The header this file has, or the one it would be made with. */
+/** The header this file has — the current one for the version just before
+ * it — or the one it would be made with. */
 function fileHeader(text) {
   const first = String(text || '').split('\n').find((line) => line.trim());
-  return first ? first.split('\t') : DEPLOYS_HEADER;
+  if (!first) return DEPLOYS_HEADER;
+  const header = first.split('\t');
+  return header.join('\t') === PREVIOUS_HEADER.join('\t') ? DEPLOYS_HEADER : header;
+}
+
+function rewrite(env, header, rows) {
+  const body = rows.map((row) => tsvRow(row, header)).join('\n');
+  writeFileAtomic(deploysPath(env), `${header.join('\t')}\n${body ? `${body}\n` : ''}`);
 }
 
 export function readDeploys(env = process.env) {
@@ -104,12 +122,40 @@ export function lastAttempt(env = process.env) {
   return readDeploys(env).at(-1) || null;
 }
 
+/**
+ * Is the deploy this row records still going? `running` with no `ended`, and
+ * the process that wrote it still there — asked of the kernel the way a
+ * lease's owner is (`processAlive`, lease-owner.js). A row with no pid was
+ * written by an mc before the column, or into a file with no room for it, and
+ * nothing can say it is alive: it is what `closeAbandoned` closes.
+ */
+export function deployAlive(row, { alive = processAlive } = {}) {
+  if (row?.outcome !== RUNNING || row.ended) return false;
+  const pid = Number(row.pid);
+  return Number.isInteger(pid) && pid > 0 && alive(pid) === true;
+}
+
+/**
+ * The deploy in progress on this machine, or null: the last row `deployAlive`
+ * says is. Since 2026-10-07 the lease no longer says a deploy is running — it
+ * covers the fast-forward and the read of the sha, not the build — so this is
+ * the fact two deploys are kept apart by.
+ */
+export function runningDeploy(env = process.env, { alive = processAlive } = {}) {
+  return readDeploys(env).filter((row) => deployAlive(row, { alive })).at(-1) || null;
+}
+
 function append(row, env) {
   const path = deploysPath(env);
   mkdirSync(dirname(path), { recursive: true });
   const text = readFile(env);
   const header = text.trim() ? fileHeader(text) : null;
   if (!header) appendFileSync(path, `${tsvHeader()}\n`);
+  else if (header.join('\t') !== text.split('\n').find((line) => line.trim())) {
+    // The file carries the header before `pid`: written once with the new
+    // one, and appended to from then on.
+    rewrite(env, header, parseDeploys(text));
+  }
   appendFileSync(path, `${tsvRow(row, header || DEPLOYS_HEADER)}\n`);
   return row;
 }
@@ -117,15 +163,17 @@ function append(row, env) {
 /**
  * The row that says a deploy has begun. Returns the key `recordEnd` completes
  * it by — `started` and `sha`, which no second deploy of the same tree in the
- * same millisecond could share, and two deploys at once cannot happen anyway
- * because the lease is held for the length of one.
+ * same millisecond could share, and two deploys at once cannot happen anyway:
+ * the row is written under the lease, and the next deploy reads it under the
+ * lease before it writes its own (`runningDeploy`). `pid` is the process the
+ * deploy runs in, so that reader can tell a deploy going on from one that died.
  */
 export function recordStart({
-  sha, build = '', holder = '', started = new Date().toISOString(), note = '',
+  sha, build = '', holder = '', started = new Date().toISOString(), note = '', pid = '',
 }, env = process.env) {
   const row = {
     started, ended: '', sha, build, holder, outcome: RUNNING,
-    live_commit: '', live_build: '', stopped_at: '', note,
+    live_commit: '', live_build: '', stopped_at: '', note, pid,
   };
   append(row, env);
   return { started, sha };
@@ -154,8 +202,7 @@ export function recordEnd(key, patch = {}, env = process.env) {
     return append({ started: key?.started || done.ended, sha: key?.sha || '', ...done }, env);
   }
   rows[index] = { ...rows[index], ...done };
-  const body = rows.map((row) => tsvRow(row, header)).join('\n');
-  writeFileAtomic(deploysPath(env), `${header.join('\t')}\n${body}\n`);
+  rewrite(env, header, rows);
   return rows[index];
 }
 
@@ -172,26 +219,25 @@ export function recordRefusal({ sha = '', holder = '', note = '', at = new Date(
 }
 
 /**
- * The rows still saying `running` when a new deploy has just taken the lease.
- * The lease is held for the whole of a deploy, so whoever wrote them is gone:
- * the terminal closed, the laptop slept, the process was killed before it
- * could complete its row. They are marked `failed`, `ended` left empty — when
- * it stopped is not known — and the note says how it was found out, so the
- * page stops calling a deploy from yesterday the one that is running.
+ * The rows still saying `running` whose process is gone, when a new deploy has
+ * just taken the lease: the terminal closed, the laptop slept, the process was
+ * killed before it could complete its row. A row whose process is alive is a
+ * deploy in progress and is left alone — the caller has refused by then
+ * (`runningDeploy`). They are marked `failed`, `ended` left empty — when it
+ * stopped is not known — and the note says how it was found out, so the page
+ * stops calling a deploy from yesterday the one that is running.
  *
  * Returns the rows it closed, as they were.
  */
-export function closeAbandoned({ at = new Date().toISOString() } = {}, env = process.env) {
+export function closeAbandoned({ at = new Date().toISOString(), alive = processAlive } = {}, env = process.env) {
   const text = readFile(env);
   const header = fileHeader(text);
   const rows = parseDeploys(text);
-  const abandoned = rows.filter((row) => row.outcome === RUNNING && !row.ended);
+  const abandoned = rows.filter((row) => row.outcome === RUNNING && !row.ended && !deployAlive(row, { alive }));
   if (!abandoned.length) return [];
-  const note = `never came back — still running when the next deploy took the lease at ${at}`;
-  const body = rows
-    .map((row) => (abandoned.includes(row) ? { ...row, outcome: FAILED, note: row.note ? `${row.note}; ${note}` : note } : row))
-    .map((row) => tsvRow(row, header))
-    .join('\n');
-  writeFileAtomic(deploysPath(env), `${header.join('\t')}\n${body}\n`);
+  const note = `never came back — its process was gone when the next deploy began at ${at}`;
+  rewrite(env, header, rows.map((row) => (
+    abandoned.includes(row) ? { ...row, outcome: FAILED, note: row.note ? `${row.note}; ${note}` : note } : row
+  )));
   return abandoned;
 }
