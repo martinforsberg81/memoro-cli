@@ -12,6 +12,12 @@ import { spawnSync } from 'node:child_process';
 
 export const DOCS_PREFIX = 'docs/';
 /**
+ * A script under docs/ is not a document: a tree-wide lint or pin check in the
+ * repository's gate reads it, and this door runs no gate (memoro #12534 turned
+ * main red this way, 2026-10-04). Exported because the doc names them.
+ */
+export const SCRIPT_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts'];
+/**
  * How long to wait for GitHub to make up its mind about mergeability, as
  * tries and the pause between them. Exported because the note that describes
  * this form states the wait in words, and a doc that names a number goes
@@ -38,6 +44,11 @@ export function firstNonDoc(files) {
   return (files || []).map((f) => (typeof f === 'string' ? f : f.path)).find((p) => !String(p).startsWith(DOCS_PREFIX)) || null;
 }
 
+/** The first path that is a script, in any directory, or null. */
+export function firstScript(files) {
+  return (files || []).map((f) => (typeof f === 'string' ? f : f.path)).find((p) => SCRIPT_EXTENSIONS.some((ext) => String(p).endsWith(ext))) || null;
+}
+
 export async function runDocsMerge({
   repoPath, pr, gh = ghRunner(repoPath), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {}, now = () => new Date(),
 } = {}) {
@@ -53,6 +64,8 @@ export async function runDocsMerge({
   if (info.isDraft) return finish('draft', `#${pr} is a draft`);
   const outside = firstNonDoc(report.files);
   if (outside) return finish('not-docs', `#${pr} touches ${outside} — outside ${DOCS_PREFIX}, so this is the gate's, not --docs'`);
+  const script = firstScript(report.files);
+  if (script) return finish('script', `#${pr} carries ${script} — a script is not a document; land it through the gate: mc merge <repo> ${pr}`);
   if (!report.files.length) return finish('empty', `#${pr} changes no files`);
 
   // GitHub reports UNKNOWN for a few seconds after a push; merging then

@@ -17,7 +17,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc merge <repo> <pr> --docs` refuses a pull request whose files include a `.js`, `.mjs`, `.cjs` or `.ts` file anywhere, naming the file, and lands one that does not.",
       "check": "`tests/mc/docs-merge.test.js` cases: a PR with `docs/project/x/instruments/probe.mjs` is refused with `stopped_at: 'script'` and the path; a PR with only `.md` and `.json` under `docs/` lands."
     },

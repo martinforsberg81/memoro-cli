@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import { DOCS_PREFIX, MERGEABILITY_TRIES, MERGEABILITY_WAIT_MS, runDocsMerge } from '../../src/mc/docs-merge.js';
+import { DOCS_PREFIX, SCRIPT_EXTENSIONS, MERGEABILITY_TRIES, MERGEABILITY_WAIT_MS, runDocsMerge } from '../../src/mc/docs-merge.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 
 const DOC = readFileSync(fileURLToPath(new URL('../../docs/technical/mc-merge.md', import.meta.url)), 'utf8');
@@ -34,6 +34,12 @@ describe('docs/technical/mc-merge.md says what the code does', () => {
   it('states the prefix the docs form refuses outside of', () => {
     assert.match(DOC, /every file is under `docs\/`/u);
     assert.equal(DOCS_PREFIX, 'docs/');
+  });
+
+  it('states the script extensions the docs form refuses', () => {
+    const match = /any path ending ((?:`\.\w+`,? (?:or )?)+)in any directory/u.exec(DOC.replace(/\s+/gu, ' '));
+    assert.ok(match, 'the doc no longer states which files are scripts');
+    assert.deepEqual(match[1].match(/\.\w+/gu), SCRIPT_EXTENSIONS);
   });
 
   it('states the round-log mode a docs round is written under', async () => {

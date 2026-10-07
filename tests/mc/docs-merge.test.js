@@ -1,13 +1,13 @@
 /**
  * `mc merge <repo> <pr> --docs` — landing a documentation-only pull request
  * on a stubbed gh: docs-only merges; one file outside docs/ refuses with its
- * name; a draft refuses; a batch or --check with --docs is refused before
+ * name; a script under docs/ refuses with its name; a draft refuses; a batch or --check with --docs is refused before
  * gh is asked; the old spelling points at the new verb.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { docsMergeLines, firstNonDoc, runDocsMerge } from '../../src/mc/docs-merge.js';
+import { docsMergeLines, firstNonDoc, firstScript, runDocsMerge } from '../../src/mc/docs-merge.js';
 import { run } from '../../src/mc/commands/merge.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 
@@ -51,6 +51,27 @@ describe('runDocsMerge', () => {
     assert.match(report.reason, /touches src\/mc\/paths\.js — outside docs\//u);
     assert.ok(!calls.some((c) => c[1] === 'merge'));
     assert.equal(firstNonDoc(['docs/a.md']), null);
+  });
+
+  it('refuses a script under docs/, by name, pointing at the gate, before touching merge', async () => {
+    const { gh, calls } = stubGh({ files: ['docs/project/x/PLAN.json', 'docs/project/x/instruments/probe.mjs'] });
+    const report = await runDocsMerge(opts(gh));
+    assert.equal(report.ok, false);
+    assert.equal(report.merged, false);
+    assert.equal(report.stopped_at, 'script');
+    assert.match(report.reason, /#12 carries docs\/project\/x\/instruments\/probe\.mjs — a script is not a document; land it through the gate: mc merge <repo> 12$/u);
+    assert.deepEqual(docsMergeLines(report), [`mc: NOT merged — ${report.reason}`]);
+    assert.ok(!calls.some((c) => c[1] === 'merge'));
+    for (const path of ['docs/a.js', 'docs/a.cjs', 'docs/b/a.ts']) assert.equal(firstScript([path]), path);
+  });
+
+  it('lands an all-documents pull request of .md and .json under docs/', async () => {
+    const { gh, calls } = stubGh({ files: ['docs/project/x/PLAN.json', 'docs/project/x/README.md'] });
+    const report = await runDocsMerge(opts(gh));
+    assert.equal(report.ok, true);
+    assert.equal(report.stopped_at, null);
+    assert.ok(calls.some((c) => c[1] === 'merge'));
+    assert.equal(firstScript(['docs/a.md', 'docs/b.json']), null);
   });
 
   it('refuses a draft, a closed one, and a conflicting one', async () => {
