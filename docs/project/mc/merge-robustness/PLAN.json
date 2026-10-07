@@ -37,7 +37,7 @@
       "check": "`tests/mc/publish.test.js` (or the nearest publish test) with a fake git whose first push answers `! [remote rejected] … (Internal Server Error)` and whose second succeeds asserts the two calls and the line; a fake that rejects both asserts the original error."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A step session that ends `success` with an open pull request on the step's branch is followed by the runner running `mc merge` on that pull request; green lands and the step is `done`, red records `failed` with the gate's reason; the register's reason distinguishes \"the gate was still running when the session ended\" from a refusal.",
       "check": "A runner test with a fake session that ends `success` leaving an open PR and a fake merge that answers green asserts the merge call and `done`; one answering red asserts `failed` with the gate's reason."
     }
