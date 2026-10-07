@@ -13,7 +13,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { classify, probeMainRed, readSelectorMisses, selectorMissReading } from '../../src/mc/selector-miss.js';
+import { mainRedClause } from '../../src/mc/repo-gate.js';
+import { classify, docsOnly, probeMainRed, readSelectorMisses, selectorMissReading } from '../../src/mc/selector-miss.js';
 import { redFiles } from '../../src/mc/tap-red.js';
 
 function located(files) {
@@ -29,7 +30,7 @@ function located(files) {
  * main, newest first, and which files are red at each commit. A file missing
  * from `present` did not exist at that commit.
  */
-function repo({ history, redAt, present = {}, subjects = {} }) {
+function repo({ history, redAt, present = {}, subjects = {}, changed = {} }) {
   let at = null;
   const runs = [];
   const git = (args) => {
@@ -40,6 +41,7 @@ function repo({ history, redAt, present = {}, subjects = {} }) {
       return { status: (present[commit] || [file]).includes(file) ? 0 : 128 };
     }
     if (args[0] === 'log') return { status: 0, stdout: `${subjects[args.at(-1)] || 'a landing'}\n` };
+    if (args[0] === 'diff-tree') return { status: 0, stdout: `${(changed[args.at(-1)] || ['src/x.js']).join('\n')}\n` };
     return { status: 0, stdout: '' };
   };
   const tests = ({ files }) => {
@@ -120,6 +122,62 @@ describe('the walk finds the landing that broke each file', () => {
       assert.deepEqual(probe.breaks, []);
       assert.deepEqual(readSelectorMisses({ root: h.root }), []);
     } finally { h.cleanup(); }
+  });
+});
+
+describe('a landing that changed only docs/ is not blamed', () => {
+  // 2026-10-06, `mc merge memoro 12720`: a wall-clock budget test, red under
+  // load at both commits, was blamed on #12727 — six files under docs/.
+  async function walk(changed) {
+    const h = home();
+    const fx = repo({
+      history: ['c1', 'c0'],
+      redAt: { c1: ['t/budget.test.js'] },
+      subjects: { c1: 'staff notes (#12727)' },
+      changed: { c1: changed },
+    });
+    try {
+      rounds(h.root, [{ merged: [12727], selected: [] }]);
+      const probe = await probeMainRed({ ...fx, cwd: '/x', baseCommit: 'c1', files: ['t/budget.test.js'], root: h.root, repo: '/r/memoro' });
+      return { probe, kept: readSelectorMisses({ root: h.root }) };
+    } finally { h.cleanup(); }
+  }
+
+  it('keeps the landing, with its paths and kind docs-only, and the clause names no pull request', async () => {
+    const { probe, kept } = await walk(['docs/project/staff/a.md', 'docs/project/staff/b.md']);
+    assert.deepEqual(probe.breaks[0].paths, ['docs/project/staff/a.md', 'docs/project/staff/b.md']);
+    assert.equal(probe.breaks[0].kind, 'docs-only');
+    assert.equal(kept[0].kind, 'docs-only');
+    assert.equal(mainRedClause(probe),
+      ' — 1 of the red files is red on main too — no landing explains it (the walk reached #12727, which changed only docs/)');
+    assert.doesNotMatch(mainRedClause(probe), /broken by/u);
+  });
+
+  it('a landing with one path outside docs/ is named as before', async () => {
+    const { probe } = await walk(['docs/project/staff/a.md', 'src/budget.js']);
+    assert.deepEqual(probe.breaks[0].paths, ['docs/project/staff/a.md', 'src/budget.js']);
+    assert.equal(probe.breaks[0].kind, 'not-selected');
+    assert.equal(mainRedClause(probe),
+      ' — 1 of the red files is red on main too, broken by #12727 (its selection did not reach it: a selector miss)');
+  });
+
+  it('names the landing that could have broken one file, and says the walk reached a docs-only one for the other', () => {
+    const probe = {
+      red_on_main: ['t/a.test.js', 't/b.test.js'],
+      breaks: [
+        { file: 't/a.test.js', commit: 'c2', pr: 20, kind: 'selected', paths: ['src/a.js'] },
+        { file: 't/b.test.js', commit: 'c1', pr: 10, kind: 'docs-only', paths: ['docs/x.md'] },
+      ],
+    };
+    assert.equal(mainRedClause(probe),
+      ' — 2 of the red files are red on main too, broken by #20 — no landing explains the rest (the walk reached #10, which changed only docs/)');
+  });
+
+  it('paths that could not be read are not called docs-only', () => {
+    assert.equal(docsOnly([]), false);
+    assert.equal(docsOnly(undefined), false);
+    assert.equal(docsOnly(['docs/a.md']), true);
+    assert.equal(docsOnly(['docs/a.md', 'package.json']), false);
   });
 });
 

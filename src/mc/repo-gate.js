@@ -1131,11 +1131,19 @@ function clearWorkspace({ git, repoPath, workspace }) {
 export function mainRedClause(probe) {
   if (!probe?.red_on_main?.length) return '';
   const count = probe.red_on_main.length;
-  const landings = [...new Set(probe.breaks.map((found) => (found.pr ? `#${found.pr}` : found.commit.slice(0, 7))))];
-  const misses = probe.breaks.filter((found) => found.kind === 'not-selected').length;
+  const name = (found) => (found.pr ? `#${found.pr}` : found.commit.slice(0, 7));
+  // A landing that changed only docs/ cannot have broken a test, and is not
+  // named as if it had (2026-10-06, #12727); the walk reaching it is said.
+  const blamed = probe.breaks.filter((found) => found.kind !== 'docs-only');
+  const reached = [...new Set(probe.breaks.filter((found) => found.kind === 'docs-only').map(name))];
+  const landings = [...new Set(blamed.map(name))];
+  const misses = blamed.filter((found) => found.kind === 'not-selected').length;
   return ` — ${count} of the red files ${count === 1 ? 'is' : 'are'} red on main too`
     + (landings.length ? `, broken by ${landings.join(', ')}` : '')
-    + (misses ? ` (${misses === probe.breaks.length ? 'its' : 'partly its'} selection did not reach ${misses === 1 ? 'it' : 'them'}: a selector miss)` : '');
+    + (misses ? ` (${misses === blamed.length ? 'its' : 'partly its'} selection did not reach ${misses === 1 ? 'it' : 'them'}: a selector miss)` : '')
+    + (reached.length
+      ? ` — no landing explains ${landings.length ? 'the rest' : 'it'} (the walk reached ${reached.join(', ')}, which changed only docs/)`
+      : '');
 }
 
 /** The round's environment with the selection state directory in it. */
