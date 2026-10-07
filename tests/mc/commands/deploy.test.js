@@ -583,8 +583,8 @@ describe('mc deploy — the question', () => {
   });
 });
 
-describe('mc deploy — the script under the lease', () => {
-  it('runs npm run deploy in the worktree that is main, with the environment, lease held on ~/memoro, then released', async () => {
+describe('mc deploy — the script beside the lease', () => {
+  it('runs npm run deploy in the worktree that is main, with the environment, the lease already free and the row written', async () => {
     const { stdout, stderr } = io();
     const seen = [];
     const env = { ...process.env, MC_WORK_ROOT: work, MEMORO_DEPLOY_CONTAINERS: 'always' };
@@ -593,7 +593,7 @@ describe('mc deploy — the script under the lease', () => {
       stdout,
       stderr,
       spawnDeploy: async (options) => {
-        seen.push({ ...options, lease: readLease(PATH) });
+        seen.push({ ...options, lease: readLease(PATH), row: lastAttempt({ MC_WORK_ROOT: work }) });
         return { code: 0 };
       },
     });
@@ -601,8 +601,42 @@ describe('mc deploy — the script under the lease', () => {
     assert.equal(seen.length, 1);
     assert.equal(seen[0].cwd, MAIN_WT, 'the spawn runs where main is, not where the reads and the lease are');
     assert.equal(seen[0].env.MEMORO_DEPLOY_CONTAINERS, 'always');
-    assert.equal(seen[0].lease.held, true);
-    assert.equal(seen[0].lease.errand, `deploy ${SHA}`);
+    assert.equal(seen[0].lease.held, false, 'the lease covers the read of the sha, not the build');
+    assert.equal(seen[0].row.outcome, 'running');
+    assert.equal(seen[0].row.sha, SHA);
+    assert.equal(readLease(PATH).held, false);
+  });
+
+  it('a throw after the release does not release a lease a merge round took in between', async () => {
+    const { stdout, stderr } = io();
+    const releases = [];
+    await assert.rejects(run([], {
+      ...deps({
+        releaseLease: (args) => { releases.push(args); return releaseLease(args); },
+        spawnDeploy: async () => {
+          claimLease({ repoPath: PATH, errand: 'merge memoro #812', holder: { name: 'runner', kind: 'work-area' } });
+          throw new Error('spawn blew up');
+        },
+      }),
+      stdout,
+      stderr,
+    }), /spawn blew up/u);
+    assert.equal(releases.length, 1, 'released once, before the spawn, and not again in the finally');
+    const lease = readLease(PATH);
+    assert.equal(lease.held, true);
+    assert.equal(lease.holder, 'runner');
+    assert.equal(lease.errand, 'merge memoro #812');
+    assert.equal(readDeploys({ MC_WORK_ROOT: work })[0].outcome, 'failed');
+  });
+
+  it('releases the lease when something under it throws', async () => {
+    const { stdout, stderr } = io();
+    const git = fakeGit({ state: { [MAIN_WT]: { dirty: [], ahead: 0, behind: 2 } } });
+    const throwing = (cwd, args) => {
+      if (args[0] === 'merge') throw new Error('git blew up');
+      return git(cwd, args);
+    };
+    await assert.rejects(run([], { ...deps({ git: throwing }), stdout, stderr }), /git blew up/u);
     assert.equal(readLease(PATH).held, false);
   });
 
