@@ -951,5 +951,24 @@ logs what it waits on every ten minutes; a handover that cannot respawn keeps
 the runner running instead of exiting behind a live `runner.json`; and the
 quota pause ends the moment a draining runner is quiet. Carried by
 `update-handover/PLAN.json` steps 1–2. Whether the successor may start at
-once and overlap the old runner on the lanes it does not hold is the open
-decision `update-handover-overlap` (step 3).
+once and overlap the old runner on the lanes it does not hold was the open
+decision `update-handover-overlap` (step 3) — answered in ruling 28.
+
+## 28 · The successor starts at once; the old runner only finishes what it holds
+
+`ruling · 2026-10-07` · decision `update-handover-overlap`, raised by
+`update-handover/PLAN.json` step 3
+
+On 2026-09-04 Martin chose the drain (A) over an immediate handover with two
+runners (B), when B meant two runners taking work side by side. The overlap
+proposed here is narrower: the successor starts on the new code the moment
+UPDATE is read and takes every lane the old runner is not in a step on; the
+old runner takes nothing new, is only the parent of the sessions it already
+holds, lands them and exits.
+
+> "Ja på frågan!" (Martin, 2026-10-07, at the brief, to: får efterträdaren
+> starta direkt och överlappa den gamla runnern på de lanes den inte håller?)
+
+So: the handover is immediate; the old runner's in-flight steps stay its own
+to land; the two never hold one project or one lane; the page shows both
+while they overlap. Carried by `update-handover/PLAN.json` step 3.
