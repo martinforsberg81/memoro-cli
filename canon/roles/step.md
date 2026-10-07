@@ -47,7 +47,10 @@ land. Stay on the branch you were given. A worktree handed over mid
 the same branch and PR.
 
 Nothing in the background: no `run_in_background`, no `&`. `mc merge` ends the
-session the moment it lands.
+session the moment it lands. If the harness moves `mc merge` to the background
+at its ten-minute ceiling, do not end your turn: wait for its notification, or
+run `mc step` until the step is no longer `running` — a session that ends
+with its PR open is measured by the runner, and its red is then nobody's to fix.
 
 Verify what `done_when` names and stop. Screenshots, dev servers and proof
 scripts only when `done_when` asks for them.

@@ -1346,17 +1346,77 @@ test('a stalled session is logged as stalled with exit 142', async () => {
  * #11250 into the branch of #11249 and logged `success,merged` while `main`
  * received nothing.
  */
-test('a step\'s pull request the session did not land is failed in the register, and the runner lands nothing', async () => {
+/**
+ * The one landing the runner does (Martin, 2026-10-07): a session that ended
+ * `success` with its pull request open on the step's branch had its own
+ * `mc merge` cut off with it — link-facts, 2026-10-05, put in the background
+ * at the tool's ceiling and killed with the session. The runner runs that
+ * merge through the same door, and the verdict is the step's.
+ */
+test('a session that ended success with its pull request open is merged by the runner — green is done', async () => {
   const f = fixture({ plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession() });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
-  assert.equal(f.calls.rounds.length, 0, 'no round of the runner\'s: the landing is the session\'s (ruling 21)');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,failed\t-\t\w+\n/u);
+  assert.equal(f.calls.rounds.length, 1, 'one round, the one the session did not finish');
+  assert.equal(f.calls.rounds[0].pr, 9);
+  assert.equal(f.calls.rounds[0].repoPath, '/w/m/memoro');
+  assert.equal(f.calls.rounds[0].holder.name, 'm', 'the round runs as the step\'s workarea');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\t9\t.*\tsuccess,merged-by-runner\t-\t\w+\n/u);
+  const step = registerOf(f, 'm').steps[0];
+  assert.equal(step.status, 'done');
+  assert.equal(step.pr, 9);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 landed by the runner's merge into main — step 1 is done/u);
+});
+
+test('a session that ended success with its pull request open and a red gate is failed with the gate\'s reason', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    rounds: { 9: { ok: false, merged: false, stopped_at: 'gate', reason: 'tests/a.test.js is red' } },
+  });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.rounds.length, 1);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,red\t-\t\w+\n/u);
   const step = registerOf(f, 'm').steps[0];
   assert.equal(step.status, 'failed');
   assert.equal(step.pr, 9);
-  assert.equal(step.reason, '#9 is open and the session ended success (rc 0) without landing it');
-  assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 failed — #9 is open and the session ended success/u);
+  assert.equal(step.attempts, 1);
+  assert.equal(step.reason, 'the gate was still running when the session ended; measured by the runner: stopped at gate — tests/a.test.js is red');
+});
+
+test('the runner\'s merge waits out another gate\'s lock as mc merge does, then measures', async () => {
+  let asked = 0;
+  const f = fixture({ plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession() });
+  const slept = [];
+  f.deps.sleep = async (ms) => { slept.push(ms); };
+  const green = f.deps.mergeRound;
+  f.deps.mergeRound = async (options) => {
+    asked += 1;
+    if (asked === 1) { f.calls.rounds.push(options); return { ok: false, merged: false, stopped_at: 'busy', reason: 'a gate is running' }; }
+    return green(options);
+  };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.rounds.length, 2);
+  assert.ok(slept.includes(30 * 1000));
+  assert.equal(registerOf(f, 'm').steps[0].status, 'done');
+});
+
+test('a plan trespass found at the runner\'s door is the step\'s red, and no round runs', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession() });
+  f.deps.planBoundary = async () => ({ checked: true, ok: false, problems: ['steps[1] changed'] });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.rounds.length, 0);
+  const step = registerOf(f, 'm').steps[0];
+  assert.equal(step.status, 'failed');
+  assert.equal(step.reason, 'the gate was still running when the session ended; measured by the runner: stopped at plan-trespass — steps[1] changed');
+});
+
+test('a session that ended success with no pull request is failed as before, and nothing is merged', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, session: okSession() });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.rounds.length, 0);
+  const step = registerOf(f, 'm').steps[0];
+  assert.equal(step.status, 'failed');
+  assert.equal(step.reason, 'the session ended success (rc 0) with no pull request');
 });
 
 test('a step session that ended with its pull request open is failed with that reason — nothing is held', async () => {
@@ -1366,6 +1426,7 @@ test('a step session that ended with its pull request open is failed with that r
   });
   await createRunner({ deps: f.deps }).pass();
   assert.equal('/w/runner/held.json' in f.files, false, 'there is no held file any more (ruling 21)');
+  assert.equal(f.calls.rounds.length, 0, 'a session that did not end success is not merged for it');
   const step = registerOf(f, 't').steps[0];
   assert.equal(step.status, 'failed');
   assert.equal(step.reason, '#5 is open and the session ended stalled (rc 142) without landing it');

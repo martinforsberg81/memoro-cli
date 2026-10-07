@@ -62,8 +62,11 @@
  * Where a step stands is the register's word (`register.js`, ruling 21):
  * `running` with the session's pid before the session, and after it `done`
  * when the session's own `mc merge` landed the pull request, `failed` when it
- * did not — the runner lands nothing of a session's and retries nothing. A
- * step the runner could not start is `blocked` there too.
+ * did not — the runner retries nothing. The one landing it does is the one the
+ * session would have done: a session that ended `success` with its pull request
+ * still open on the step's branch is measured through `mc merge`'s door, and
+ * that verdict is the step's (Martin, 2026-10-07). A step the runner could not
+ * start is `blocked` there too.
  *
  * `~/mc/queue.md` is Martin's "these first" and nothing else: names of
  * projects that still have a step to run, one per line. The chores rewrite it
@@ -129,8 +132,12 @@ import { runDocsMerge } from './docs-merge.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
+import { planBoundary } from './merge-boundary.js';
+import { landedPatch, redPatch, shouldWait } from './merge-step.js';
 import { runMergeRound } from './repo-merge.js';
+import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { pidAlive } from './status-collect.js';
+import { currentHolder } from './work-identity.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
@@ -163,6 +170,13 @@ export const WAIT_REFUSALS = new Set(['skipped', 'skipped:prs-unknown', 'skipped
 export const UPDATE_POLL_MS = 30 * 1000;
 /** How often a lane held back by the total cap looks for a free slot again. */
 export const TOTAL_POLL_MS = 15 * 1000;
+/**
+ * The runner's merge of a session's pull request waits behind another gate as
+ * `mc merge` does — this often, and for as long as `mc merge`'s own eight
+ * minutes — before the lock or lease it lost becomes the verdict.
+ */
+export const SESSION_MERGE_POLL_MS = 30 * 1000;
+export const SESSION_MERGE_WAITS = 16;
 
 /* ------------------------------------------------------------ real deps */
 
@@ -399,7 +413,15 @@ export function realDeps(env = process.env) {
     // to, and not replaced by a `gh pr merge` that skips the gate. A
     // dependency so a round can be driven in a test without a real suite, a
     // real lease and a real remote behind it.
-    mergeRound: (options) => runMergeRound({ env, ...options }),
+    // Every round leaves its line in the round log, as `mc merge`'s do; the
+    // plan boundary is the check `mc merge` makes before its gate.
+    mergeRound: async (options) => {
+      recordRoundStart({ repo: options.repoPath, mode: 'merge', holder: options.holder?.name || null, prs: [options.pr] });
+      const report = await runMergeRound({ env, ...options });
+      recordRound(report, { mode: 'merge' });
+      return report;
+    },
+    planBoundary: (options) => planBoundary(options),
     docsMerge: (options) => runDocsMerge(options),
     // The session — `streamSession` below. The session's Bash tool gets a
     // ten-minute ceiling instead of claude's two-minute default. Measured
@@ -1841,10 +1863,14 @@ export function createRunner({
     // ended the session, so the process under this lane came back with a
     // signal and no JSON, and that is the ordinary end of a landed step. A
     // session that gave up wrote `failed` with its reason. Anything still
-    // `running` when the process is gone is failed here: a pull request
-    // left open the session did not land, or no pull request at all. A
-    // quota answer is no session and the step goes back to `ready`. The
-    // runner lands nothing of a session's and never retries a failed step;
+    // `running` when the process is gone is failed here — no pull request at
+    // all, or one left open by a session that did not end `success` — except
+    // the one the session finished and did not see measured: it ended
+    // `success` with its pull request open on the step's branch, which is a
+    // `mc merge` cut off with the session (link-facts, 2026-10-05). That one
+    // the runner measures through the same door, and the verdict is the
+    // step's (Martin, 2026-10-07). A quota answer is no session and the step
+    // goes back to `ready`. The runner never retries a failed step;
     // `mc step ready` is the way back.
     const landSeconds = null;
     const after = readEntry(root, name, { read: deps.read })?.steps?.[choice.index] || null;
@@ -1863,6 +1889,8 @@ export function createRunner({
       say(`${name}: step ${choice.index + 1} is blocked by the session on ${after.blocked_by?.kind} ${after.blocked_by?.name}`);
     } else if (read.quota) {
       recordStep(name, choice.index, { status: 'ready', session: null });
+    } else if (note === 'success' && pr !== '-') {
+      note = await landForSession({ worktree, name, index: choice.index, pr, branch, rc: result.status });
     } else {
       const said = read.said ? ` — the API said "${read.said}"` : '';
       const reason = pr !== '-'
@@ -1882,7 +1910,52 @@ export function createRunner({
     // project ready for its next one — which the order now takes care of:
     // the project is still at the head of it (2026-09-08, replacing the
     // eight-step stay a lane used to make after a merge).
-    return note === 'success,merged' ? 'merged' : 'ran';
+    return note === 'success,merged' || note === 'success,merged-by-runner' ? 'merged' : 'ran';
+  }
+
+  /**
+   * The merge a step session would have run, run for it: the session ended
+   * `success` with `#pr` open on the step's branch and the register still
+   * `running`, so its own `mc merge` never came back — the harness put it in
+   * the background at the tool's ceiling and it died with the session. The
+   * door is `mc merge`'s: the plan boundary, then the round as the step's
+   * workarea, waiting out another gate's lock as `mc merge` does. Green is
+   * `done` with the pull request; anything else is `failed` with the round's
+   * own reason, said to be the runner's measurement and not the session's.
+   * Returns the row's note.
+   */
+  async function landForSession({ worktree, name, index, pr, branch, rc }) {
+    say(`${name}: #${pr} is open and the session ended success (rc ${rc}) without landing it — the runner runs the merge`);
+    const number = Number(pr);
+    const boundary = deps.planBoundary ? await deps.planBoundary({ repoPath: worktree, pr: number }) : { checked: false };
+    let report;
+    if (boundary.checked && !boundary.ok) {
+      report = { ok: false, merged: false, stopped_at: 'plan-trespass', reason: boundary.problems.join('; ') };
+    } else {
+      const holder = currentHolder({ cwd: worktree, env: deps.env });
+      for (let waits = 0; ; waits += 1) {
+        report = await deps.mergeRound({ repoPath: worktree, pr: number, holder, mode: 'merge', onProgress: (message) => say(`${name}: ${message}`) });
+        if (!shouldWait(report) || waits >= SESSION_MERGE_WAITS) break;
+        await deps.sleep(SESSION_MERGE_POLL_MS);
+      }
+    }
+    if (landingNote(report) === 'merged') {
+      let body = null;
+      const seen = deps.gh(worktree, ['pr', 'view', String(number), '--json', 'body']);
+      try { body = seen.ok ? JSON.parse(seen.stdout || '{}')?.body || null : null; } catch { body = null; }
+      recordStep(name, index, { ...landedPatch({ pr: number, report, now: stamp(), body }), branch });
+      deps.git(worktree, ['fetch', '-q', 'origin']);
+      say(`${name}: #${pr} landed by the runner's merge into ${report.merged_into || 'main'} — step ${index + 1} is done`);
+      return 'success,merged-by-runner';
+    }
+    const verdict = report?.merged
+      ? `#${pr} was merged into ${report.merged_into}, not ${report.default_branch || 'main'}`
+      : `stopped at ${report?.stopped_at || 'unknown'} — ${report?.reason || 'the round said nothing'}`;
+    const reason = `the gate was still running when the session ended; measured by the runner: ${verdict}`;
+    const standing = readEntry(root, name, { read: deps.read })?.steps?.[index];
+    recordStep(name, index, { status: 'failed', pr: number, branch, attempts: redPatch({ step: standing, report }).attempts, reason });
+    say(`${name}: step ${index + 1} failed — ${reason}`);
+    return 'success,red';
   }
 
   /**

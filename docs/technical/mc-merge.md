@@ -555,6 +555,28 @@ lines the verb prints are that session's next instruction. A red is the
 caller's to fix, in the session that wrote the code; nothing is queued for
 anybody else (until 2026-09-12 a merge lane and one repair session took it).
 
+**The runner lands what the session published and did not finish** (Martin,
+2026-10-07, `merge-robustness-runner-lands-session-pr`). On 2026-10-05
+link-facts step 2 (memoro #12638) ran `mc merge` as a foreground Bash call;
+at the tool's 600 s ceiling the harness backgrounded it, the session ended its
+turn, the merge died with it (rc 143), and the runner wrote `failed` on a
+complete, unmeasured step. Now, when a step session's process is gone, the
+register still says `running`, the session ended `success`, and a pull
+request is open on the step's branch, the runner runs that merge itself
+(`landForSession` in [`src/mc/run.js`](../../src/mc/run.js)) through the
+same door: the plan boundary, then `runMergeRound` as the step's workarea,
+waiting out another round's lock or lease as `mc merge` does, with a line in
+the round log either way. Green writes `done` with the pull request and the
+row's note `success,merged-by-runner`; anything else writes `failed` with the
+attempt counted and the reason `the gate was still running when the session
+ended; measured by the runner: stopped at <stop> — <the round's reason>`, note
+`success,red` — so the register tells this apart from a red the session saw
+itself. A session that ended with no pull request, or `timeout`, `stalled` or
+`failed`, is classified as before, and the runner still retries nothing and
+lands no pull request but the step's own. The step role asks the session to
+wait for a backgrounded `mc merge` rather than end its turn, so the common
+case stays the session's own landing.
+
 ## The full run nobody asks for
 
 The runner runs `mc test <repo> --full` for every repository mc knows, once a
