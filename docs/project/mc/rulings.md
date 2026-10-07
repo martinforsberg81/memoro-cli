@@ -906,3 +906,27 @@ step is done, red is `failed` with the gate's reason. The runner still
 retries nothing. Carried by `merge-robustness/PLAN.json` step 5. The
 `--insecure-storage` login is Martin's own command; mc checks it in step 3
 of the same plan.
+
+## 26 · A deploy and the merge rounds run beside each other
+
+`ruling · 2026-10-07` · raised at the brief, the evening the merge queue sat
+behind the runner's gate rounds for hours and a deploy was refused at 17:58
+because a round held the lease
+
+`mc deploy` claims the repository lease for the whole deploy (errand
+`deploy <sha>`), so a merge round meeting it waits and a deploy meeting a
+round is refused. The lease's purpose for a deploy is one read: that `main`
+in `~/memoro` does not move between the question and the sha that ships. The
+build and `npm run deploy` run on that sha in the worktree, which nothing but
+the deploy itself fast-forwards; a merge landing on `origin/main` after the
+read changes nothing the build sees.
+
+> "Går det att göra så att mc deploy kan köra samtidigt som vi gör merges?"
+> (Martin, 2026-10-07, at the brief.)
+
+So: the deploy holds the lease from its claim to the read of the shipping
+sha and the record's first row, and releases it before the spawn; a second
+deploy is refused by the record (a `running` row with a live pid), not by
+the lease; and a deploy that meets a held lease waits for the window the way
+`mc merge` waits for the gate, rather than refusing. Carried by
+`deploy-beside-merges/PLAN.json`.
