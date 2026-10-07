@@ -148,7 +148,13 @@ below is about.
   session runs carries it. The pid is not there either — every lane file
   carries the runner's own. A runner that is not running has no lanes and one
   line that says so. Then a pending `~/mc/runner/STOP`, the lane files whose
-  process is gone, and one line of the day behind it: steps, merged, open,
+  process is gone, one yellow line per repository the round cannot ask GitHub
+  about — `GitHub unreachable for memoro since 08:20Z (keychain locked) — run:
+  security unlock-keychain`, or `(gh token invalid) — run: gh auth login -h
+  github.com`, or the error itself when neither diagnosis holds — read from
+  `~/mc/runner/github.json` and gone once the round has asked again and been
+  answered (`runner.github` in `mc --json`; the backoff is in
+  [mc-run.md](mc-run.md)), and one line of the day behind it: steps, merged, open,
   failed, timed out, and an estimated **list-price** cost — `failed` red and
   `timed out` yellow only while the count is not zero.
 - **MERGES** — the gate round landing right now, and the two queues behind it
@@ -438,6 +444,7 @@ person set it to.
 | RUNNER | the check-ins beside the clock, the tool, the advisor | grey |
 | RUNNER | the day's `failed`, `timed out` while not zero | red, yellow |
 | RUNNER | `■ STOP requested` | bold red |
+| RUNNER | `GitHub unreachable for <repo> …` | yellow |
 | RUNNER | a stale runner file | red |
 | RUNNER | a quota answer under 6 h old, older | yellow, grey |
 | RUNNER | the production sha, the rest of that line | plain, grey |

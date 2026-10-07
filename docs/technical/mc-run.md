@@ -152,7 +152,16 @@ repository. What it does, for as long as the runner runs:
    - whose plan on `origin/main` says its first unfinished step is `ready`
      (`kindFor`, the same call the page makes),
    - whose repository GitHub answered for (`prs-unknown` otherwise — a lane
-     that cannot see what is open starts nothing),
+     that cannot see what is open starts nothing). A failed `gh pr list` is
+     not asked again at once: the repository is left alone for 1, 2, 5 and
+     then 15 minutes per failure in a row, starting nothing meanwhile, and the
+     first answer clears it ([`github-backoff.js`](../../src/mc/github-backoff.js),
+     state in `~/mc/runner/github.json`). Every ask at a locked keychain left
+     a modal and a process behind (2026-09-20). Each failure is diagnosed in
+     two calls of two seconds at most — `security show-keychain-info` (hangs
+     or fails on a locked keychain), then `gh auth status` (fails on a bad
+     token) — and the page's RUNNER line names the cause and its command,
+     `security unlock-keychain` or `gh auth login -h github.com`,
    - that has no open pull request (`inFlight`),
    - that no other lane has claimed (`claims`),
    - and that this pass has not already been refused on (`passed`).

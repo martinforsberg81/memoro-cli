@@ -278,6 +278,37 @@ describe('RUNNER', () => {
     assert.ok(off.some((line) => /the runner is not running — mc run starts it/u.test(strip(line))));
     assert.match(strip(rowWith(off, 'RUNNER')), /RUNNER {2}not running/u);
   });
+
+  /**
+   * On 2026-09-20 a locked keychain made every `gh pr list` hang and the page
+   * showed nothing of it. The round's `github.json` names each repository it
+   * cannot ask; the section draws one line per repository while it does, with
+   * the command that fixes it, and none once the round has asked again.
+   */
+  it('says which repository GitHub cannot be asked about, since when, and what fixes it', () => {
+    const failing = (cause) => ({
+      memoro: { since: '2026-08-29T08:20:00Z', last: '2026-08-29T11:50:00Z', attempts: 6, error: 'gh: timed out', cause },
+    });
+    const keychain = runnerSection({ runner: RUNNER, now: NOW, alive: live, github: failing('keychain') });
+    assert.deepEqual(keychain.github.map((g) => [g.repo, g.since, g.cause, g.fix, g.next_ask]),
+      [['memoro', '2026-08-29T08:20:00Z', 'keychain', 'security unlock-keychain', '2026-08-29T12:05:00Z']]);
+    assert.ok(paintedPage(pageData({ runner: keychain })).some((line) => strip(line)
+      === '  GitHub unreachable for memoro since 08:20Z (keychain locked) — run: security unlock-keychain'));
+
+    const token = runnerSection({ runner: RUNNER, now: NOW, alive: live, github: failing('token') });
+    assert.ok(paintedPage(pageData({ runner: token })).some((line) => strip(line)
+      === '  GitHub unreachable for memoro since 08:20Z (gh token invalid) — run: gh auth login -h github.com'));
+
+    // No diagnosis: the error is the reason, and no command is guessed at.
+    const unknown = runnerSection({ runner: RUNNER, now: NOW, alive: live, github: failing(null) });
+    assert.ok(paintedPage(pageData({ runner: unknown })).some((line) => strip(line)
+      === '  GitHub unreachable for memoro since 08:20Z (gh: timed out)'));
+
+    // Asked again and answered: the file is gone, and so is the line.
+    const answered = runnerSection({ runner: RUNNER, now: NOW, alive: live, github: null });
+    assert.deepEqual(answered.github, []);
+    assert.ok(!paintedPage(pageData({ runner: answered })).some((line) => /GitHub unreachable/u.test(strip(line))));
+  });
 });
 
 /**

@@ -50,6 +50,7 @@ import {
   DAY_MS, defaultRepos, listProgrammes, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { lastAttempt, lastDeploy } from './deploys.js';
+import { GITHUB_STATE, githubFailures } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import { dropDeadEntries, mergesPath, queueEntries, queueOrder } from './merge-queue.js';
@@ -198,6 +199,9 @@ export function runnerSection({
   // The plans, for the one thing a lane file does not carry: which step of its
   // plan the session is on.
   plans = [],
+  // `~/mc/runner/github.json` as the round left it: the repositories whose
+  // last `gh pr list` failed, why, and since when (github-backoff.js).
+  github = null,
   now = new Date(), alive = pidAlive,
 } = {}) {
   const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, now, alive });
@@ -218,6 +222,9 @@ export function runnerSection({
     lanes: lanesOfRunner(base.steps, repos, setting),
     setting: { per_repo: setting.per_repo ?? 1, total: setting.total ?? null },
     process,
+    // One entry per repository the round could not ask GitHub about, while
+    // that lasts: the round's `prsFailed`, carried between rounds.
+    github: githubFailures(github, { now }),
     // What is in production, under the day it took to get there.
     production: productionSection({ deploy, attempt, live, now }),
     day: {
@@ -1142,6 +1149,7 @@ export async function collectPage({
     repos: present.map((repo) => repo.name),
     lanes: laneSetting,
     plans,
+    github: readJson(join(root, 'runner', GITHUB_STATE)),
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
     deploy: lastDeploy(env),
