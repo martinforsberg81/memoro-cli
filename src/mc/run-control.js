@@ -369,11 +369,20 @@ export function drainLine(state) {
     ? `since ${clock(state.requested)}${state.since_seconds == null ? '' : ` (${ageWords(state.since_seconds)})`}`
     : 'since an unknown time';
   const steps = state.inFlight || [];
-  const waiting = steps.length
+  const done = state.lanes == null ? '' : `; ${Math.max(0, state.lanes - steps.length)} lane${state.lanes - steps.length === 1 ? '' : 's'} done`;
+  return `draining ${since} — ${drainWaiting(state)}${done}`;
+}
+
+/**
+ * The in-flight half of `drainLine`, alone: what a draining runner writes to
+ * runner.log every ten minutes (run.js, `update: still waiting on …`), in the
+ * same words `mc run --update` prints.
+ */
+export function drainWaiting(state) {
+  const steps = state?.inFlight || [];
+  return steps.length
     ? `waiting on ${steps.map((s) => `${s.name}${s.step == null ? '' : ` step ${s.step}`} (${s.lane}${s.elapsed_seconds == null ? '' : `, ${ageWords(s.elapsed_seconds)}`})`).join(', ')}`
     : 'nothing in flight, the handover comes at the next pick';
-  const done = state.lanes == null ? '' : `; ${Math.max(0, state.lanes - steps.length)} lane${state.lanes - steps.length === 1 ? '' : 's'} done`;
-  return `draining ${since} — ${waiting}${done}`;
 }
 
 /**
