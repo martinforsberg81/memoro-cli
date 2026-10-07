@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  childEnv, controlPaths, endNow, handOver, readRunner, requestUpdate, startRunner, stopRunner,
+  childEnv, controlPaths, drainLine, drainState, endNow, handOver, readRunner, requestUpdate, startRunner, stopRunner,
 } from '../../src/mc/run-control.js';
 
 const ROOT = '/w';
@@ -230,6 +230,97 @@ describe('mc run --update', () => {
     assert.equal(out.ok, true);
     assert.equal(fx.store[paths.update], '2026-08-30T18:00:00.000Z\n');
     assert.match(out.lines[0], /pid 100 finishes the round it is in, then restarts itself/u);
+  });
+
+  // Two steps in flight, the way `runStep` writes them: a repository's first
+  // lane is `current-<repo>.json`, lane n+1 is `current-<repo>-<n>.json`.
+  const CURRENTS = {
+    [`${paths.dir}/current-memoro-4.json`]: JSON.stringify({ name: 'gmail-ready', step: 1, repo: 'memoro', lane: 4, started: '2026-08-30T17:46:00Z' }),
+    [`${paths.dir}/current-memoro-1.json`]: JSON.stringify({ name: 'claims-entity', step: 2, repo: 'memoro', lane: 1, started: '2026-08-30T17:30:00Z' }),
+  };
+  /** The mc checkout, with `origin/main` at `main` and a fetch that `fetches`. */
+  function withGit(fx, { main = 'abc1234', fetches = true } = {}) {
+    const asked = [];
+    fx.deps.git = (cwd, args) => {
+      asked.push(`${cwd} ${args.join(' ')}`);
+      if (args[0] === 'fetch') return { ok: fetches, stdout: '' };
+      return { ok: true, stdout: `${main}\n` };
+    };
+    fx.deps.laneCount = () => 8;
+    return asked;
+  }
+
+  it('on a runner already on origin/main writes nothing, after a fetch', () => {
+    const fx = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100] });
+    const asked = withGit(fx, { main: 'abc12345' });
+    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.ok(!(paths.update in fx.store));
+    assert.deepEqual(asked, ['/code/mc fetch -q origin', '/code/mc rev-parse --short origin/main']);
+    assert.equal(out.lines[0], 'runner pid 100 is already on abc1234 — nothing to update');
+    assert.match(out.lines[1], /--force/u);
+  });
+
+  it('--force writes UPDATE on a current runner anyway', () => {
+    const fx = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100] });
+    withGit(fx);
+    const out = requestUpdate({ root: ROOT, force: true, checkout: '/code/mc', deps: fx.deps });
+    assert.equal(fx.store[paths.update], '2026-08-30T18:00:00.000Z\n');
+    assert.match(out.lines[0], /^UPDATE written/u);
+  });
+
+  it('writes UPDATE when origin/main has moved, and prints the drain it starts', () => {
+    const fx = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100], files: CURRENTS });
+    withGit(fx, { main: 'def5678' });
+    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    assert.equal(fx.store[paths.update], '2026-08-30T18:00:00.000Z\n');
+    assert.match(out.lines[0], /pid 100 finishes the round it is in/u);
+    assert.match(out.lines[1], /fast-forwards \/code\/mc/u);
+    assert.match(out.lines.at(-1), /^draining since \d\d:\d\d \(0s\) — waiting on claims-entity step 2 \(memoro#2, 30 min\), gmail-ready step 1 \(memoro#5, 14 min\); 6 lanes done$/u);
+  });
+
+  it('writes UPDATE when the fetch fails, and says it could not tell', () => {
+    const fx = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100] });
+    withGit(fx, { fetches: false });
+    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    assert.equal(paths.update in fx.store, true);
+    assert.match(out.lines.join('\n'), /could not fetch origin/u);
+  });
+
+  it('on a runner already draining prints the drain and writes nothing', () => {
+    const fx = fixture({
+      runner: { pid: 100, commit: 'abc1234' }, live: [100],
+      files: { ...CURRENTS, [paths.update]: '2026-08-30T17:46:00.000Z\n' },
+    });
+    const asked = withGit(fx, { main: 'def5678' });
+    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.equal(fx.store[paths.update], '2026-08-30T17:46:00.000Z\n', 'the drain keeps its clock');
+    assert.deepEqual(asked, [], 'nothing to fetch for an order already given');
+    assert.equal(out.lines[0], 'UPDATE is already written — pid 100 is draining');
+    assert.match(out.lines[1], /^draining since \d\d:\d\d \(14 min\) — waiting on claims-entity step 2 \(memoro#2, 30 min\), gmail-ready step 1 \(memoro#5, 14 min\); 6 lanes done$/u);
+  });
+
+  it('mc run start refuses a draining runner with the same drain line', async () => {
+    const fx = fixture({
+      runner: { pid: 100 }, live: [100],
+      files: { ...CURRENTS, [paths.update]: '2026-08-30T17:46:00.000Z\n' },
+    });
+    fx.deps.laneCount = () => 8;
+    const out = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, false);
+    assert.equal(out.lines[1], requestUpdate({ root: ROOT, deps: fx.deps }).lines[1]);
+    assert.match(out.lines[1], /^draining since/u);
+  });
+
+  it('drainLine: nothing in flight, a first lane, and no UPDATE at all', () => {
+    const fx = fixture({ files: { [paths.update]: '2026-08-30T17:50:00Z\n', [`${paths.dir}/current-memoro-cli.json`]: JSON.stringify({ name: 'mc-ui', started: '2026-08-30T17:58:00Z' }) } });
+    const state = drainState({ paths, read: fx.deps.read, list: fx.deps.list, now: fx.deps.now(), lanes: 2 });
+    assert.equal(state.requested, '2026-08-30T17:50:00.000Z');
+    assert.deepEqual(state.inFlight, [{ name: 'mc-ui', step: null, lane: 'memoro-cli#1', started: '2026-08-30T17:58:00.000Z', elapsed_seconds: 120 }]);
+    assert.match(drainLine(state), /— waiting on mc-ui \(memoro-cli#1, 2 min\); 1 lane done$/u);
+    assert.match(drainLine({ ...state, inFlight: [] }), /— nothing in flight, the handover comes at the next pick; 2 lanes done$/u);
+    assert.equal(drainLine({ ...state, draining: false }), null);
   });
 
   it('refuses with no runner up — a runner started now reads the new code anyway', () => {

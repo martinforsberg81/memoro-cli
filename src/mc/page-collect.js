@@ -56,7 +56,7 @@ import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-col
 import { dropDeadEntries, mergesPath, queueEntries, queueOrder } from './merge-queue.js';
 import { runningMerge } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
-import { mcCheckout } from './run-control.js';
+import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
 import { overlayPlans } from './register.js';
@@ -678,7 +678,7 @@ function proposalSummary(files, named = PROPOSALS_NAMED) {
  * the best reading there is.
  */
 export function mcSection({
-  process = null, commit = null, head = null, main = null, behind = null, updateText = null, now = new Date(),
+  process = null, commit = null, head = null, main = null, behind = null, updateText = null, drain = null, now = new Date(),
 } = {}) {
   const asked = Date.parse(String(updateText || '').trim());
   return {
@@ -692,6 +692,10 @@ export function mcSection({
     update_requested: updateText == null ? null : {
       at: Number.isNaN(asked) ? null : new Date(asked).toISOString(),
       age_seconds: Number.isNaN(asked) ? null : Math.max(0, Math.round((now.getTime() - asked) / 1000)),
+      // What the drain still waits on (run-control.js `drainState`), so the
+      // line says it in the words `mc run --update` uses.
+      in_flight: drain?.inFlight ?? [],
+      lanes: drain?.lanes ?? null,
     },
   };
 }
@@ -1199,6 +1203,13 @@ export async function collectPage({
       commit: runnerFile?.commit ?? null,
       ...mcReading(checkout, runnerFile?.commit ?? null, git),
       updateText: readText(join(root, 'runner', 'UPDATE')),
+      drain: drainState({
+        paths: controlPaths(root),
+        read: readText,
+        list: (dir) => { try { return readdirSync(dir); } catch { return []; } },
+        now,
+        lanes: laneSlots(laneSetting, present.length),
+      }),
       now,
     }),
     caches: {
