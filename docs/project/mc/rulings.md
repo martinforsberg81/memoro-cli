@@ -884,3 +884,25 @@ branch copy of a plan at all — and ruling 17 is the picker, the claim and
 `blockStep` in `src/mc/run.js`; `mc-run.md` carries both, with Martin's words
 for 17 quoted under *Blocked by the runner* and the measurements behind 10 in
 its history section, and the row is in `project_log.md`.
+
+## 25 · The runner lands a pull request a step session published and could not finish
+
+`ruling · 2026-10-07` · raised at the brief, from proposal
+`step-session-ends-while-mc-merge-is-backgrounded` (2026-10-06)
+
+A step session that has published its pull request and started `mc merge`
+can end before the gate answers — the harness backgrounds a foreground call
+at 600 s and the session ends its turn — and the runner then records the
+step `failed` with an open PR, by ruling 21's rule that it lands nothing of
+a session's. The work was done and unmeasured.
+
+> "F. Ja." (Martin, 2026-10-07, at the brief, to: the runner measures and
+> lands a PR the session published but did not land; and `gh auth login
+> --insecure-storage` on his machine.)
+
+So: when a session ends `success` with its pull request open on the step's
+branch, the runner runs the merge measurement itself; green lands and the
+step is done, red is `failed` with the gate's reason. The runner still
+retries nothing. Carried by `merge-robustness/PLAN.json` step 5. The
+`--insecure-storage` login is Martin's own command; mc checks it in step 3
+of the same plan.
