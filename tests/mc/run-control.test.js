@@ -403,3 +403,17 @@ describe('handOver', () => {
     assert.deepEqual(removed, [paths.update]);
   });
 });
+
+describe('mc run stop on a runner seconds old', () => {
+  it('says the STOP lands on the successor, not the runner it replaced', async () => {
+    const fx = fixture({ runner: { pid: 100, started: '2026-08-30T17:59:57.000Z' }, live: [100] });
+    const out = await stopRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.ok(out.lines.some((line) => /started 3s ago — if you meant the runner it replaced/u.test(line)), out.lines.join('\n'));
+  });
+  it('says nothing of the kind about a runner that has been up', async () => {
+    const fx = fixture({ runner: { pid: 100, started: '2026-08-30T16:00:00.000Z' }, live: [100] });
+    const out = await stopRunner({ root: ROOT, deps: fx.deps });
+    assert.ok(!out.lines.some((line) => /if you meant the runner it replaced/u.test(line)));
+  });
+});

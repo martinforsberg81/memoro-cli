@@ -566,7 +566,15 @@ export function createRunner({
       return out;
     });
   }
-  const stopRequested = () => deps.exists(paths.stop);
+  // Sticky: a STOP read once is a STOP for the rest of this run, whether or
+  // not the file is still there. 2026-10-07 a STOP written three seconds
+  // after a handover was read by eleven lanes and the chore loop, which exited
+  // without a word, and removed ten minutes later — before the one lane that
+  // had passed its check read it. That runner then ran twenty minutes on one
+  // lane with 31 projects ready, looking busy. STOP ends the runner, not the
+  // lanes that happened to look.
+  let stopSeen = false;
+  const stopRequested = () => stopSeen || (stopSeen = deps.exists(paths.stop));
   const updateRequested = () => deps.exists(paths.update);
 
   /**
@@ -2346,7 +2354,10 @@ export async function runLoop({
             continue;
           }
           const r = await runner.pass({ repo: repo.name, lane: index, tag, last });
-          if (r.stop) return { stop: true };
+          // A lane that leaves says so: eleven silent exits are what made a
+          // one-lane runner look like a busy one (2026-10-07). `pass` has
+          // already said it when a step ran first.
+          if (r.stop) { if (!r.ran) runner.say(`${tag}: STOP — taking no step, exiting`); return { stop: true }; }
           // A step ran: the world it was picked from is stale now, so the next
           // pick is made at once against a fresh reading rather than after a
           // sleep nobody is waiting for.
@@ -2360,12 +2371,13 @@ export async function runLoop({
           if (line !== quietLine) { runner.say(line); quietLine = line; }
           if (runner.updateRequested()) continue;
           await deps.sleep(idleSleepMs);
-          if (runner.stopRequested()) return { stop: true };
+          if (runner.stopRequested()) { runner.say(`${tag}: STOP — exiting`); return { stop: true }; }
         }
       };
       const choreLoop = async () => {
         for (;;) {
-          if (runner.stopRequested() || runner.updateRequested()) return {};
+          if (runner.stopRequested()) { runner.say('chores: STOP — exiting'); return {}; }
+          if (runner.updateRequested()) return {};
           await runner.chores();
           await deps.sleep(idleSleepMs);
         }
