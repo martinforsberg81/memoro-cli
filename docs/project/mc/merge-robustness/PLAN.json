@@ -22,7 +22,7 @@
       "check": "`tests/mc/docs-merge.test.js` cases: a PR with `docs/project/x/instruments/probe.mjs` is refused with `stopped_at: 'script'` and the path; a PR with only `.md` and `.json` under `docs/` lands."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "When the red files are red on the base and the landing the walk found changed no file under the repository's source, test or configuration roots (only `docs/`), the verdict says the files are red on the base and that no landing explains it, and names no pull request.",
       "check": "A test on `selector-miss.js`'s report and `mainRedClause` with a fixture landing whose `git diff-tree --name-only` lists only `docs/` paths asserts the clause reads `… red on main too — no landing explains it (the walk reached #N, which changed only docs/)`."
     },

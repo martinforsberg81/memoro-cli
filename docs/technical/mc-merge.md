@@ -391,6 +391,26 @@ headline still never says approved), and *"this run was asked to check only"*,
 which was true of `mc test`, whose name says it. A merge round still says
 plainly that nothing was merged.
 
+### The base probe: whose red it is
+
+A red round runs its red files once more on the base
+([`src/mc/selector-miss.js`](../../src/mc/selector-miss.js)). Green there, and
+the change broke them. Red there too, and the files are walked back along
+`main`'s first parents to the first commit where they pass; the landing after it
+is recorded, with the paths it changed (`git diff-tree --name-only`), and the red
+reason says `— N of the red files are red on main too, broken by #M`. The
+verdict is red either way; only that sentence depends on the walk.
+
+A landing whose every path is under `docs/` cannot have broken a test, and is
+not named. On 2026-10-06 (`mc merge memoro 12720`) the walk blamed memoro
+#12727, six files under `docs/project/staff/`, for a wall-clock budget test that
+was red under load at both commits and green alone — the walk had found where a
+flaky test happened to pass, not what broke it. Such a landing is kept in the
+probe's JSON and in `selector-misses.jsonl` with `kind: 'docs-only'`, and the
+reason (and with it the register and the gate lines) says `— N of the red files
+are red on main too — no landing explains it (the walk reached #M, which changed
+only docs/)`. A landing whose paths could not be read is named as before.
+
 `gateLines` in [`src/mc/commands/repo.js`](../../src/mc/commands/repo.js) builds
 them; [`tests/mc/commands/gate-verdict.test.js`](../../tests/mc/commands/gate-verdict.test.js)
 asserts the length as a number, so the prose cannot grow back quietly.

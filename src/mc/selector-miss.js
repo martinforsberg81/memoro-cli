@@ -33,8 +33,10 @@
  * file, the landing that broke it, and whether that landing's selection named
  * it. `not-selected` is the selector miss; `selected` is a test that was run
  * and landed red anyway (a flake, or a tree that differed from the measured
- * one); `no-round` is a landing mc never gated. The same break found by a
- * second round is written once.
+ * one); `no-round` is a landing mc never gated; `docs-only` is a landing that
+ * changed nothing outside `docs/`, kept so a reader sees where the walk
+ * stopped, and never named as the one that broke the file. The same break
+ * found by a second round is written once.
  */
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -109,8 +111,11 @@ export async function probeMainRed({
 
   const rounds = readRounds({ root }).rounds;
   for (const found of probe.breaks) {
-    Object.assign(found, classify(found, rounds));
-    say(`${found.file} broke in ${found.pr ? `#${found.pr}` : found.commit.slice(0, 7)} — ${KIND_PHRASE[found.kind]}`);
+    Object.assign(found, docsOnly(found.paths) ? { kind: 'docs-only' } : classify(found, rounds));
+    const where = found.pr ? `#${found.pr}` : found.commit.slice(0, 7);
+    say(found.kind === 'docs-only'
+      ? `${found.file} passes before ${where} — ${KIND_PHRASE[found.kind]}`
+      : `${found.file} broke in ${where} — ${KIND_PHRASE[found.kind]}`);
     recordSelectorMiss({ repo, ...found, found_by: foundBy }, { root });
   }
   if (still.length) say(`${still.length} file${still.length === 1 ? ' has' : 's have'} been red on main for more than ${limit} landings — the nightly dates ${still.length === 1 ? 'it' : 'them'}`);
@@ -122,7 +127,21 @@ const KIND_PHRASE = {
   selected: 'its round ran it green, and it landed red anyway',
   'no-selection': 'its round kept no selection to check against',
   'no-round': 'mc never gated that landing',
+  'docs-only': 'it changed only docs/, so it cannot have broken it: no landing explains this red',
 };
+
+/**
+ * A landing that changed nothing outside `docs/` cannot have broken a test.
+ *
+ * 2026-10-06, `mc merge memoro 12720`: the walk named #12727 — six files under
+ * `docs/project/staff/` — as the landing that broke a wall-clock budget test
+ * that was red under load at both commits and green alone. The walk found
+ * where a flaky test happened to pass, not what broke it. An empty list is a
+ * landing whose paths could not be read, and is not called docs-only.
+ */
+export function docsOnly(paths) {
+  return Array.isArray(paths) && paths.length > 0 && paths.every((path) => path.startsWith('docs/'));
+}
 
 /** Check out one commit and run `files` there; which of them came back red. */
 async function redAt({ git, tests, cwd, commit, files, flags }) {
@@ -139,11 +158,19 @@ function exists(git, cwd, commit, file) {
   return git(['cat-file', '-e', `${commit}:${file}`], { cwd })?.status === 0;
 }
 
-/** The landing a commit is: its subject, and the pull request a squash names. */
+/**
+ * The landing a commit is: its subject, the pull request a squash names, and
+ * the paths it changed — so a landing that could not have broken the file is
+ * not blamed for it.
+ */
 function landing({ git, cwd, commit, file }) {
   const subject = String(git(['log', '-1', '--format=%s', commit], { cwd })?.stdout || '').trim();
   const number = /\(#(\d+)\)\s*$/u.exec(subject);
-  return { file, commit, pr: number ? Number(number[1]) : null, subject: subject.slice(0, 200) };
+  const changed = git(['diff-tree', '--no-commit-id', '--name-only', '-r', commit], { cwd });
+  const paths = changed?.status === 0
+    ? String(changed.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean)
+    : [];
+  return { file, commit, pr: number ? Number(number[1]) : null, subject: subject.slice(0, 200), paths };
 }
 
 /**
