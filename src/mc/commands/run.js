@@ -12,7 +12,11 @@
  *   mc run stop            it finishes the step it is in, then exits
  *   mc run stop --force    it ends now, and the session it is holding with it
  *   mc run --update        it finishes the step, fast-forwards mc's own
- *                          checkout, and restarts itself on the new code
+ *                          checkout, and restarts itself on the new code.
+ *                          On a runner already on origin/main it writes
+ *                          nothing and says so (`--force` writes anyway).
+ *                          On a runner already draining it prints the drain
+ *                          — since when, and the steps it waits on.
  *   mc run lanes [<n>] [--total <n>|none]
  *                          how many steps may be in flight — the positional
  *                          per repository, `--total` on this machine across
@@ -43,7 +47,9 @@ const USAGE = [
   'usage — mc run [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]',
   '        mc run start [same flags]   the runner, in the background',
   '        mc run stop [--force]       after the step it is in, or now',
-  '        mc run --update             after the step: new code, new process',
+  '        mc run --update [--force]   after the step: new code, new process',
+  '                                    already on origin/main: nothing written (--force writes anyway)',
+  '                                    already draining: the drain, and the steps it waits on',
   `        mc run lanes [<n>] [--total <n>|none]`,
   `                                    steps in flight: <n> per repository, --total across every`,
   `                                    repository at once, both 1–${LANES_MAX}; no argument prints both`,
@@ -80,7 +86,7 @@ function order(opts, deps) {
   if (opts.verb === 'start') return (deps.start || startRunner)({ argv: opts.pass, deps: deps.control });
   if (opts.verb === 'stop') return (deps.stop || stopRunner)({ force: opts.force, deps: deps.control });
   if (opts.verb === 'lanes') return lanes(opts, deps);
-  return (deps.update || requestUpdate)({ deps: deps.control });
+  return (deps.update || requestUpdate)({ force: opts.force, deps: deps.control });
 }
 
 /**
@@ -215,11 +221,14 @@ export function parseRunArgs(argv) {
 
   // An order, not a run: it takes nothing else, because everything else it
   // could take is a property of the runner that is already running.
+  // `--force` is the one thing it takes: UPDATE written to a runner that is
+  // already on origin/main, for a restart wanted for another reason.
   if (argv.includes('--update')) {
-    if (argv.length > 1) {
-      return { error: '--update is one order on its own — the running runner keeps the flags it was started with' };
+    const rest = argv.filter((arg) => arg !== '--update' && arg !== '--force');
+    if (rest.length || argv.length > 2) {
+      return { error: '--update is one order on its own (--force aside) — the running runner keeps the flags it was started with' };
     }
-    return { verb: 'update' };
+    return { verb: 'update', force: argv.includes('--force') };
   }
 
   const opts = parseLoopArgs(argv);

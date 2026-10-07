@@ -4,7 +4,7 @@
  * made of real files with no git, no gh and no tmux.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -17,6 +17,7 @@ import {
 import { planSummary } from '../../src/mc/plan-schema.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
+import { controlPaths, drainLine, drainState } from '../../src/mc/run-control.js';
 import { width } from '../../src/mc/status-render.js';
 import { pageKey, run as page } from '../../src/mc/commands/home.js';
 
@@ -1684,7 +1685,7 @@ describe('MC', () => {
     assert.ok(asked.includes('rev-list --count abc1234..origin/main'), asked.join(' | '));
     assert.deepEqual(data.mc, {
       up_seconds: 7200, commit: 'abc1234', head: 'fff0000', main: 'def5678', behind: 3,
-      update_requested: { at: '2026-08-29T11:48:00.000Z', age_seconds: 720 },
+      update_requested: { at: '2026-08-29T11:48:00.000Z', age_seconds: 720, in_flight: [], lanes: 0 },
     });
   });
 
@@ -1693,8 +1694,8 @@ describe('MC', () => {
       /^ {2}MC {2}0\.7\.11 · update available — origin\/main def5678 is 1 commit ahead · mc run --update · runner up 120 min/u);
     // Asked for wins over available: the second is true until the handover, and
     // the first is the news.
-    assert.match(draw(mcSection({ process: UP, commit: 'abc1234', behind: 1, updateText: '2026-08-29T11:48:00Z\n', now: NOW })),
-      /^ {2}MC {2}0\.7\.11 · update requested 12 min ago — the runner hands over after this round · runner up 120 min · on abc1234$/u);
+    assert.match(draw(mcSection({ process: UP, commit: 'abc1234', behind: 1, updateText: '2026-08-29T11:48:00Z\n', now: NOW }), 200),
+      /^ {2}MC {2}0\.7\.11 · draining since \d\d:\d\d \(12 min\) — nothing in flight, the handover comes at the next pick · runner up 120 min · on abc1234$/u);
     assert.match(draw(mcSection({ process: UP, commit: 'abc1234', behind: 0, now: NOW })),
       /^ {2}MC {2}0\.7\.11 · up to date · runner up 120 min · on abc1234$/u);
     // Nothing known is nothing said: an install with no checkout has no
@@ -1702,6 +1703,20 @@ describe('MC', () => {
     assert.match(draw(mcSection({ process: null, now: NOW })), /^ {2}MC {2}0\.7\.11 · runner not running$/u);
     // A narrow terminal keeps the state and loses the sentence.
     assert.match(draw(mcSection({ process: UP, behind: 4, main: 'def5678', now: NOW }), 60), /^ {2}MC {2}0\.7\.11 · update available · runner up 120 min$/u);
+  });
+
+  // The same line `mc run --update` prints (run-control.js `drainLine`), from
+  // the same files: the lane a drain waits on, and for how long.
+  it('says what a drain waits on, by lane and elapsed time', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-drain-'));
+    const dir = join(root, 'runner');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'UPDATE'), '2026-08-29T11:48:00.000Z\n');
+    writeFileSync(join(dir, 'current-memoro-4.json'), JSON.stringify({ name: 'gmail-ready', step: 1, started: '2026-08-29T11:46:00Z' }));
+    const drain = drainState({ paths: controlPaths(root), read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } }, list: readdirSync, now: NOW, lanes: 6 });
+    const line = draw(mcSection({ process: UP, commit: 'abc1234', behind: 1, updateText: '2026-08-29T11:48:00Z\n', drain, now: NOW }), 200);
+    assert.match(line, /^ {2}MC {2}0\.7\.11 · draining since \d\d:\d\d \(12 min\) — waiting on gmail-ready step 1 \(memoro#5, 14 min\); 5 lanes done · runner up 120 min · on abc1234$/u);
+    assert.ok(line.includes(drainLine(drain)), 'the page draws the verb\'s own line');
   });
 
   it('gives the live loop a key that moves with a project and not with a clock', () => {

@@ -42,6 +42,9 @@ import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, wri
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { defaultRepos } from './brief-collect.js';
+import { readLaneCount } from './lane-count.js';
+import { ageWords } from './page-cache.js';
 import { workRoot } from './paths.js';
 import { pidAlive } from './status-collect.js';
 
@@ -101,9 +104,22 @@ export function realControlDeps(env = process.env) {
       child.unref();
       return child.pid ?? null;
     },
+    git: (cwd, args) => {
+      const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+      return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+    },
+    // How many lanes the runner has in all: `per_repo` on every repository,
+    // and never more than `total` (run.js `runLoop`).
+    laneCount: () => laneSlots(readLaneCount(), defaultRepos(env).length),
     execPath: process.execPath,
     entry: process.argv[1],
   };
+}
+
+/** The lanes a runner starts: `per_repo` per repository, capped by `total`. */
+export function laneSlots({ per_repo: perRepo = 1, total = null } = {}, repos = 1) {
+  const all = perRepo * repos;
+  return total == null ? all : Math.min(all, total);
 }
 
 /**
@@ -117,7 +133,7 @@ export function readRunner({ paths, read, alive }) {
   try { value = JSON.parse(read(paths.runner) ?? ''); } catch { return null; }
   const pid = Number(value?.pid);
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  return { pid, started: value.started || null, alive: alive(pid) };
+  return { pid, started: value.started || null, ...(value.commit ? { commit: value.commit } : {}), alive: alive(pid) };
 }
 
 /** The `current-<repo>.json` files a killed runner leaves behind, removed. */
@@ -142,11 +158,13 @@ export async function startRunner({ argv = [], root = null, deps = realControlDe
   const paths = controlPaths(root ?? workRoot(deps.env));
   const held = readRunner({ paths, read: deps.read, alive: deps.alive });
   if (held?.alive) {
+    const drain = drainLine(drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null }));
     return {
       ok: false,
       code: 2,
       lines: [
         `a runner is already running — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`,
+        ...(drain ? [drain] : []),
         'mc run stop ends it · mc run --update restarts it on the newest code',
       ],
     };
@@ -287,9 +305,89 @@ function descendants(pid, ps) {
 
 /* ------------------------------------------------------------------- update */
 
-/** `mc run --update` — the order, left where the runner reads it. */
-export function requestUpdate({ root = null, deps = realControlDeps() } = {}) {
+/**
+ * Where a drain stands: when UPDATE was written, the commit the runner runs,
+ * and the steps it is still waiting on — one per `current-*.json`, which
+ * exists exactly as long as that lane's session does (run.js `runStep`).
+ *
+ * `lanes` is how many lanes the runner has in all (`laneSlots`), so the lanes
+ * done are the ones not in flight. Measured 2026-10-07: UPDATE written with
+ * six lanes busy, four said so as their steps landed, and nothing said what
+ * the other two were doing — so the person force-stopped the runner.
+ */
+export function drainState({ paths, read, list, now, lanes = null }) {
+  const at = (iso) => { const t = Date.parse(String(iso ?? '').trim()); return Number.isNaN(t) ? null : t; };
+  const since = (t) => (t == null ? null : Math.max(0, Math.round((now.getTime() - t) / 1000)));
+  const text = read(paths.update);
+  const asked = at(text);
+  let runner = null;
+  try { runner = JSON.parse(read(paths.runner) ?? ''); } catch { runner = null; }
+  const inFlight = list(paths.dir)
+    .filter((name) => /^current-.+\.json$/u.test(name))
+    .sort()
+    .map((file) => {
+      let current = null;
+      try { current = JSON.parse(read(join(paths.dir, file)) ?? ''); } catch { current = null; }
+      // `current-<repo>.json` is a repository's first lane and
+      // `current-<repo>-<n>.json` its lane n+1, the way run.js names them.
+      const base = file.replace(/^current-/u, '').replace(/\.json$/u, '');
+      const numbered = /^(.+)-(\d+)$/u.exec(base);
+      const lane = numbered ? `${numbered[1]}#${Number(numbered[2]) + 1}` : `${base}#1`;
+      const started = at(current?.started);
+      return {
+        name: current?.name || base,
+        step: Number.isInteger(current?.step) ? current.step : null,
+        lane,
+        started: started == null ? null : new Date(started).toISOString(),
+        elapsed_seconds: since(started),
+      };
+    });
+  return {
+    draining: text != null,
+    requested: asked == null ? null : new Date(asked).toISOString(),
+    since_seconds: since(asked),
+    commit: runner?.commit || null,
+    inFlight,
+    lanes: Number.isInteger(lanes) ? lanes : null,
+  };
+}
+
+/**
+ * The one line that says where a drain stands — `mc run --update`, the
+ * refusal `mc run start` gives a live runner, and the page's MC line all print
+ * this, so the three cannot disagree. Null when no UPDATE is waiting.
+ *
+ *   draining since 18:56 (14 min) — waiting on gmail-ready step 1 (memoro#5, 14 min); 6 lanes done
+ */
+export function drainLine(state) {
+  if (!state?.draining) return null;
+  const clock = (iso) => {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  const since = state.requested
+    ? `since ${clock(state.requested)}${state.since_seconds == null ? '' : ` (${ageWords(state.since_seconds)})`}`
+    : 'since an unknown time';
+  const steps = state.inFlight || [];
+  const waiting = steps.length
+    ? `waiting on ${steps.map((s) => `${s.name}${s.step == null ? '' : ` step ${s.step}`} (${s.lane}${s.elapsed_seconds == null ? '' : `, ${ageWords(s.elapsed_seconds)}`})`).join(', ')}`
+    : 'nothing in flight, the handover comes at the next pick';
+  const done = state.lanes == null ? '' : `; ${Math.max(0, state.lanes - steps.length)} lane${state.lanes - steps.length === 1 ? '' : 's'} done`;
+  return `draining ${since} — ${waiting}${done}`;
+}
+
+/**
+ * `mc run --update` — the order, left where the runner reads it. Three
+ * answers: nothing to update (the runner already runs origin/main), already
+ * draining (the drain, not a second UPDATE), or UPDATE written. A second
+ * UPDATE is not harmless: measured 2026-10-07, one written to a runner that
+ * had just started on origin/main drained all six lanes for nothing.
+ * `force` writes it on a current runner, for a restart wanted for another
+ * reason — a new `lanes.json`, say.
+ */
+export function requestUpdate({ root = null, force = false, checkout = null, deps = realControlDeps() } = {}) {
   const paths = controlPaths(root ?? workRoot(deps.env));
+  const state = () => drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null });
   const held = readRunner({ paths, read: deps.read, alive: deps.alive });
   if (!held?.alive) {
     return {
@@ -313,18 +411,35 @@ export function requestUpdate({ root = null, deps = realControlDeps() } = {}) {
       ],
     };
   }
+  if (deps.exists(paths.update)) {
+    return { ok: true, code: 0, lines: [`UPDATE is already written — pid ${held.pid} is draining`, drainLine(state())] };
+  }
+  const dir = checkout ?? mcCheckout({ exists: deps.exists });
+  const lines = [];
+  if (dir && held.commit && !force) {
+    const fetched = deps.git(dir, ['fetch', '-q', 'origin']);
+    const main = deps.git(dir, ['rev-parse', '--short', 'origin/main']);
+    const sha = main.ok ? String(main.stdout ?? '').trim() : '';
+    // Short shas of two lengths name one commit when one starts the other.
+    if (fetched.ok && sha && (sha.startsWith(held.commit) || held.commit.startsWith(sha))) {
+      return {
+        ok: true,
+        code: 0,
+        lines: [
+          `runner pid ${held.pid} is already on ${held.commit} — nothing to update`,
+          'mc run --update --force restarts it anyway',
+        ],
+      };
+    }
+    if (!fetched.ok) lines.push(`could not fetch origin in ${dir} — writing UPDATE without knowing whether there is anything new`);
+  }
   deps.write(paths.update, `${deps.now().toISOString()}\n`);
-  const checkout = mcCheckout();
-  return {
-    ok: true,
-    code: 0,
-    lines: [
-      `UPDATE written — pid ${held.pid} finishes the round it is in, then restarts itself`,
-      checkout
-        ? `it fast-forwards ${checkout} first, so the new runner is the newest code`
-        : 'mc is not running from a git checkout, so there is nothing to fast-forward — it restarts on what it holds',
-    ],
-  };
+  lines.unshift(`UPDATE written — pid ${held.pid} finishes the round it is in, then restarts itself`);
+  lines.push(dir
+    ? `it fast-forwards ${dir} first, so the new runner is the newest code`
+    : 'mc is not running from a git checkout, so there is nothing to fast-forward — it restarts on what it holds');
+  lines.push(drainLine(state()));
+  return { ok: true, code: 0, lines };
 }
 
 /**

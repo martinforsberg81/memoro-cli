@@ -46,6 +46,7 @@
  * at a row without splitting a page apart again.
  */
 import { ageWords } from './page-cache.js';
+import { drainLine } from './run-control.js';
 import { clip, pad, painter, width } from './status-render.js';
 
 /** Same glyphs as the old board, so nothing new has to be learnt. */
@@ -1013,9 +1014,11 @@ function programmesLines(lines, c, wide, programmes, expand) {
  * Three states, and only one of them asks for anything. *Update available* is
  * yellow and names the verb, because `origin/main` has moved past the commit
  * the runner started on and nothing will change that but `mc run --update`.
- * *Update requested* is green: somebody has asked, the runner hands over at its
- * next round boundary, and the line says since when so a handover that is not
- * happening can be seen not happening. Otherwise it is up to date, and grey.
+ * *Draining* is green: somebody has asked, the runner hands over when its last
+ * step in flight is done, and the line is `mc run --update`'s own drain line
+ * (run-control.js `drainLine`) — since when, and which lanes it waits on and
+ * for how long — so a handover that is not happening can be seen not
+ * happening, and why. Otherwise it is up to date, and grey.
  *
  * It replaced the line about how old the PR cache is, which was the last thing
  * on the page every time and never the thing anybody came for.
@@ -1025,7 +1028,9 @@ function mcLine(lines, c, wide, mc, caches, version) {
   const asked = info.update_requested;
   const state = asked
     ? {
-      text: `update requested${asked.age_seconds == null ? '' : ` ${ageWords(asked.age_seconds)} ago`} — the runner hands over after this round`,
+      text: drainLine({
+        draining: true, requested: asked.at, since_seconds: asked.age_seconds, inFlight: asked.in_flight || [], lanes: asked.lanes ?? null,
+      }),
       styles: ['green'],
     }
     : info.behind
@@ -1037,7 +1042,7 @@ function mcLine(lines, c, wide, mc, caches, version) {
   const room = Math.max(12, wide - 2 - 'MC'.length - 2);
   // The state before the bookkeeping, and in a short form when the long one
   // does not fit: it is the only part of the line that can ask for anything.
-  const short = asked ? 'update requested' : (info.behind ? 'update available' : state.text);
+  const short = asked ? 'draining' :(info.behind ? 'update available' : state.text);
   const lead = [{ text: version || '', styles: ['grey'] }];
   const rest = [
     { text: info.up_seconds == null ? 'runner not running' : `runner up ${duration(info.up_seconds)}`, styles: ['grey'] },

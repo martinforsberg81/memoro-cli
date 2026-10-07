@@ -1719,7 +1719,10 @@ export function createRunner({
     // promise settles, so no check-in writes it after the `finally` below.
     const currentPath = paths.currentFor(repo.name, lane);
     const current = {
-      name, kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
+      // The step as `mc step` numbers it, for the drain line (run-control.js
+      // `drainLine`): a lane waited on is named by project and step.
+      name, step: choice.index == null ? null : choice.index + 1,
+      kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
       effort: settings.effort, advisor: settings.advisor,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
