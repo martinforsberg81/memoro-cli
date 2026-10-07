@@ -126,6 +126,9 @@ import {
   UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, workRoot,
 } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
+import {
+  DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
+} from './github-backoff.js';
 import { runMergeRound } from './repo-merge.js';
 import { pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
@@ -330,6 +333,9 @@ export function realDeps(env = process.env) {
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
     git: (cwd, args) => sh('git', ['-C', cwd, ...args]),
     gh: (cwd, args) => sh('gh', args, { cwd }),
+    // Why a `gh pr list` failed: a locked keychain or a bad token, two calls
+    // of two seconds at most (github-backoff.js).
+    diagnoseGithub: () => diagnoseGithub({ run: (cmd, args) => sh(cmd, args, { timeout: DIAGNOSE_TIMEOUT_MS }) }),
     tmuxHas: (name) => sh('tmux', ['has-session', '-t', name]).ok,
     exists: existsSync,
     // The one liveness test the page, `mc run start` and the loop's own
@@ -471,6 +477,9 @@ export function createRunner({
     undocumented: runnerTablePath(UNDOCUMENTED_CLOSURES, deps.env),
     unplanned: runnerTablePath(UNPLANNED_WORKAREAS, deps.env),
     unreadable: runnerTablePath(UNREADABLE_PLANS, deps.env),
+    // The repositories GitHub could not be asked about, and when to ask
+    // again (github-backoff.js). The page draws its RUNNER line from it.
+    github: join(root, 'runner', GITHUB_STATE),
   };
   const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
   const remove = deps.remove || (() => {});
@@ -1890,11 +1899,25 @@ export function createRunner({
    * open is what bought a 120-minute session to rebuild work that was already
    * open as #11241, and an idle round costs ten minutes of sleep.
    */
+  /** `github.json`: the repositories whose last ask failed, by name. Absent is none. */
+  function readGithub() {
+    try {
+      const state = JSON.parse(deps.read(paths.github) || '{}');
+      return state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+    } catch { return {}; }
+  }
+
+  function writeGithub(state) {
+    if (Object.keys(state).length) writeJson(paths.github, state);
+    else remove(paths.github);
+  }
+
   function queue({ only = null } = {}) {
     const plans = [];
     const prs = [];
     const prsFailed = [];
     const askedRepos = [];
+    const github = readGithub();
     for (const repo of repos) {
       if (only && repo.name !== only) continue;
       if (!deps.exists(join(repo.path, '.git'))) continue;
@@ -1906,13 +1929,32 @@ export function createRunner({
       // a runner killed under it, a machine that slept — is failed here,
       // because a `running` step with no process is one nothing will finish.
       plans.push(...sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register)));
+      // A repository whose last ask failed is not asked again until its
+      // backoff has run out (github-backoff.js): every ask at a locked keychain
+      // left a modal and a process behind (2026-09-20). It starts nothing
+      // meanwhile, exactly as a failed ask does.
+      const held = github[repo.name];
+      if (held && !mayAsk(held, deps.now())) {
+        prsFailed.push(repo.name);
+        say(`${repo.name}: GitHub not asked — ${held.attempts} failure(s) since ${held.since}, next ask at ${nextAskAt(held)}; no step starts in this repository this round`);
+        continue;
+      }
       const asked = deps.gh(repo.path, PR_LIST_ARGS);
       try {
         if (!asked.ok) throw new Error(asked.stderr.trim().split('\n').at(-1) || 'gh pr list failed');
         prs.push(...JSON.parse(asked.stdout || '[]').map((pr) => ({ repo: repo.name, ...pr })));
+        if (held) {
+          delete github[repo.name];
+          writeGithub(github);
+          say(`${repo.name}: GitHub answers again after ${held.attempts} failure(s) since ${held.since}`);
+        }
       } catch (error) {
         prsFailed.push(repo.name);
-        say(`${repo.name}: GitHub could not be asked what is open (${error?.message || error}) — no step starts in this repository this round`);
+        const diagnosis = deps.diagnoseGithub ? deps.diagnoseGithub() : null;
+        github[repo.name] = failedAsk(held, { at: stamp(), error: error?.message || error, diagnosis });
+        writeGithub(github);
+        const cause = GITHUB_CAUSES[diagnosis?.cause];
+        say(`${repo.name}: GitHub could not be asked what is open (${error?.message || error})${cause ? ` — ${cause.label}, run: ${cause.fix}` : ''} — no step starts in this repository this round, next ask at ${github[repo.name].next_ask}`);
       }
     }
     return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans, prs, prsFailed };

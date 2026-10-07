@@ -27,7 +27,7 @@
       "check": "A test on `selector-miss.js`'s report and `mainRedClause` with a fixture landing whose `git diff-tree --name-only` lists only `docs/` paths asserts the clause reads `… red on main too — no landing explains it (the walk reached #N, which changed only docs/)`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "After `gh pr list` fails for a repository, the runner does not ask GitHub for that repository again for 1, 2, 5 and then 15 minutes, resets on the first success, and the page shows one line naming the failure, its start and the command that fixes it.",
       "check": "A test on `run.js`'s round with a fake `gh` failing N times asserts the schedule; a page test asserts the RUNNER section carries the line while `prsFailed` is non-empty and drops it after; the line distinguishes a locked keychain (`security show-keychain-info` hangs or fails within two seconds) from a bad token (`gh auth status` says so)."
     },

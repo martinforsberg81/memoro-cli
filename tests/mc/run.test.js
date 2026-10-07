@@ -823,6 +823,61 @@ test('a repository GitHub could not be asked starts nothing, and says so', async
   assert.equal(await runner.runStep('alpha', world), 'skipped:prs-unknown');
 });
 
+/**
+ * A locked keychain made every ask hang and leave a modal behind, one more
+ * each round (2026-09-20). A repository whose ask failed is left alone for
+ * 1, 2, 5 and then 15 minutes, starts nothing meanwhile, and is asked on the
+ * first round after; the first answer clears it.
+ */
+test('a repository GitHub could not be asked is asked again after 1, 2, 5, 15 and 15 minutes, and a success clears it', () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } } });
+  let clock = Date.parse('2026-08-29T10:00:00Z');
+  f.deps.now = () => new Date(clock);
+  let failures = 5;
+  const gh = f.deps.gh;
+  f.deps.gh = (cwd, args) => {
+    if (cwd === '/home/memoro' && args.includes('--limit') && failures > 0) {
+      failures -= 1;
+      gh(cwd, args);
+      return { ok: false, stdout: '', stderr: 'error connecting to api.github.com' };
+    }
+    return gh(cwd, args);
+  };
+  f.deps.diagnoseGithub = () => ({ cause: 'keychain' });
+  const runner = createRunner({ deps: f.deps });
+  const asks = [];
+  // One round a minute for forty minutes.
+  for (let minute = 0; minute <= 40; minute += 1) {
+    const before = f.calls.gh.filter((c) => c[0] === '/home/memoro' && c.includes('--limit')).length;
+    const world = runner.queue();
+    const after = f.calls.gh.filter((c) => c[0] === '/home/memoro' && c.includes('--limit')).length;
+    if (after > before) asks.push(minute);
+    // Skipped or failed, the repository starts nothing; answered, it does.
+    assert.equal(world.prsFailed.includes('memoro'), minute < 38, `minute ${minute}`);
+    clock += 60_000;
+  }
+  // Failures at 0, 1, 3, 8, 23; the fifth set a 15-minute wait, the sixth ask
+  // answers at 38 — then every round asks again.
+  assert.deepEqual(asks, [0, 1, 3, 8, 23, 38, 39, 40]);
+  assert.equal(f.files['/w/runner/github.json'], undefined, 'the first answer clears the record');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /memoro: GitHub could not be asked what is open \(error connecting to api\.github\.com\) — keychain locked, run: security unlock-keychain/u);
+  assert.match(log, /10:02:00Z {2}memoro: GitHub not asked — 2 failure\(s\) since 2026-08-29T10:00:00Z, next ask at 2026-08-29T10:03:00Z/u);
+  assert.match(log, /memoro: GitHub answers again after 5 failure\(s\) since 2026-08-29T10:00:00Z/u);
+});
+
+test('the record a failed ask leaves is what the page reads', () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, prsFail: ['memoro'] });
+  f.deps.diagnoseGithub = () => ({ cause: 'token' });
+  createRunner({ deps: f.deps }).queue();
+  assert.deepEqual(JSON.parse(f.files['/w/runner/github.json']), {
+    memoro: {
+      since: '2026-08-29T10:00:00Z', last: '2026-08-29T10:00:00Z', attempts: 1,
+      error: 'gh: not logged in', cause: 'token', next_ask: '2026-08-29T10:01:00Z',
+    },
+  });
+});
+
 test('the round asks GitHub once per repository, beside the fetch it already pays for', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready }, 'memoro-cli': { 'mc-run': ready } } });
   const runner = createRunner({ deps: f.deps });

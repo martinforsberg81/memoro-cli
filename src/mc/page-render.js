@@ -258,6 +258,7 @@ function runnerLines(lines, c, wide, runner) {
     ], wide - 2)}`);
   }
   for (const line of now.stale) say(lines, c, wide, 2, `${MARK.quiet} stale: ${line}`, 'red');
+  for (const failure of now.github || []) say(lines, c, wide, 2, githubLine(failure), 'yellow');
   dayLine(lines, c, wide, now.day);
   if (now.quota.count) {
     // Yellow while a refusal is recent enough to still be the reason the
@@ -267,6 +268,21 @@ function runnerLines(lines, c, wide, runner) {
     say(lines, c, wide, 2, `quota: ${now.quota.count} answer(s) in the last 24 h, last ${when(now.quota.last)}`,
       recent ? 'yellow' : 'grey');
   }
+}
+
+/**
+ * One repository the round cannot ask GitHub about: since when, why, and the
+ * command that fixes it — `security unlock-keychain` for a locked keychain,
+ * `gh auth login` for a bad token (github-backoff.js). Yellow, because a
+ * person has to act: until then nothing starts in that repository. The
+ * clock alone inside a day, the date with it past one.
+ */
+export function githubLine(failure) {
+  const since = failure.since_seconds != null && failure.since_seconds < 86_400
+    ? when(failure.since).replace(/^\d{2}-\d{2} /u, '')
+    : when(failure.since);
+  const why = failure.label || failure.error || 'gh pr list failed';
+  return `GitHub unreachable for ${failure.repo} since ${since} (${why})${failure.fix ? ` — run: ${failure.fix}` : ''}`;
 }
 
 /**
