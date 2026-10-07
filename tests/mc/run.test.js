@@ -3662,3 +3662,37 @@ test('register: a running step whose session is gone is failed on the next readi
   assert.match(registerOf(f, 'alpha').steps[0].reason, /pid 99999\) is gone/u);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: step 1 was running under pid 99999, which is gone — failed/u);
 });
+
+/**
+ * 2026-10-07: a STOP written three seconds after a handover was read by every
+ * lane but the one already in a step, and removed before that lane looked.
+ * Eleven lanes and the chore loop had exited without a word; the runner ran
+ * on for twenty minutes on one lane. STOP ends the runner: once a lane has
+ * read it the run is stopping, whether or not the file is still there — and
+ * every lane that leaves says so.
+ */
+test('runLoop: a STOP read by one lane and then removed still ends the runner, and each lane says it left', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  // Two lanes on memoro: the first takes the only step; the second finds
+  // nothing, sleeps, and reads STOP when it looks again.
+  f.deps.laneCount = () => ({ per_repo: 2, total: null });
+  const inner = f.deps.session;
+  f.deps.session = async (call) => {
+    if (call.cwd.endsWith('/memoro')) {
+      // While memoro#1's step runs: STOP appears, memoro#2 and the chore
+      // loop read it, and it is removed again before this step ends.
+      f.files['/w/runner/STOP'] = '';
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+      delete f.files['/w/runner/STOP'];
+    }
+    return inner(call);
+  };
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /memoro#2: STOP — exiting/u, 'the lane that read STOP says so');
+  assert.match(log, /memoro-cli#1: STOP — exiting/u);
+  assert.match(log, /chores: STOP — exiting/u);
+  assert.match(log, /runner exit on STOP/u, 'the runner exits although STOP is gone');
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(f.files['/w/runner/runner.json'], undefined);
+});

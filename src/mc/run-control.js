@@ -50,6 +50,8 @@ import { pidAlive } from './status-collect.js';
 
 /** How long a forced stop waits for a signal to be obeyed before the next one. */
 export const FORCE_WAIT_MS = 2000;
+/** A runner younger than this is a successor the stop was probably not aimed at. */
+export const YOUNG_RUNNER_SECONDS = 30;
 const FORCE_POLL_MS = 100;
 
 /**
@@ -228,6 +230,12 @@ export async function stopRunner({ force = false, root = null, deps = realContro
     lines.push(`no runner is running — runner.json named pid ${held.pid}, which is gone`);
     lines.push(`cleared runner.json${ghosts.length ? ` and ${ghosts.length} current-*.json the page would have drawn as a running step` : ''}`);
     return { ok: true, code: 0, lines };
+  }
+  // A runner seconds old is a successor: the stop was most likely aimed at
+  // the one it replaced (2026-10-07, three seconds after a handover).
+  const age = held.started ? (deps.now().getTime() - Date.parse(held.started)) / 1000 : null;
+  if (age != null && age >= 0 && age < YOUNG_RUNNER_SECONDS) {
+    lines.push(`note: pid ${held.pid} started ${Math.round(age)}s ago — if you meant the runner it replaced, that one is already gone; this STOP ends the new one`);
   }
   if (!force) {
     lines.push(`STOP written — pid ${held.pid} finishes the round it is in, then exits`);
