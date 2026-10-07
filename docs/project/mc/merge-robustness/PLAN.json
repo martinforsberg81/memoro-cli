@@ -32,7 +32,7 @@
       "check": "A test on `run.js`'s round with a fake `gh` failing N times asserts the schedule; a page test asserts the RUNNER section carries the line while `prsFailed` is non-empty and drops it after; the line distinguishes a locked keychain (`security show-keychain-info` hangs or fails within two seconds) from a bad token (`gh auth status` says so)."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc publish` retries once with `git push --no-thin` when the first push is rejected with `Internal Server Error`, prints that it did, and fails as before when the retry is rejected too.",
       "check": "`tests/mc/publish.test.js` (or the nearest publish test) with a fake git whose first push answers `! [remote rejected] … (Internal Server Error)` and whose second succeeds asserts the two calls and the line; a fake that rejects both asserts the original error."
     }

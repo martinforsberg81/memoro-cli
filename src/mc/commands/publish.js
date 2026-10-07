@@ -47,7 +47,7 @@ export async function run(argv, deps = {}) {
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
   const pushed = remoteHead !== localHead;
   if (pushed) {
-    const push = (deps.push || ((name) => pushBranch(cwd, name)))(branch);
+    const push = (deps.push || ((name) => pushBranch(cwd, name, { stderr })))(branch);
     if (!push.ok) { stderr.write(`mc: git push -u origin ${branch} failed:\n${push.text}\n`); return 1; }
   }
 
@@ -110,8 +110,18 @@ export function repoName(url, root) {
   return last.replace(/\.git$/u, '') || basename(root);
 }
 
-function pushBranch(cwd, branch) {
-  const r = spawnSync('git', ['push', '-u', 'origin', branch], { cwd, encoding: 'utf8', timeout: 120_000 });
+/**
+ * Non-force `git push -u`. GitHub has refused a thin pack with `Internal
+ * Server Error` while taking the same commit with `--no-thin` (2026-10-07),
+ * so that rejection — and only that one — is pushed once more without it.
+ */
+export function pushBranch(cwd, branch, { spawn = spawnSync, stderr = process.stderr } = {}) {
+  const push = (extra) => spawn('git', ['push', ...extra, '-u', 'origin', branch], { cwd, encoding: 'utf8', timeout: 120_000 });
+  let r = push([]);
+  if (r.status !== 0 && /Internal Server Error/u.test(r.stderr || '')) {
+    stderr.write('mc: GitHub rejected the thin pack; pushed again with --no-thin\n');
+    r = push(['--no-thin']);
+  }
   return { ok: r.status === 0, text: `${r.stdout || ''}${r.stderr || ''}`.trim() };
 }
 

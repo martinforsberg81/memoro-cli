@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { messageParts, publishLines, refusal } from '../../src/mc/publish.js';
-import { repoName, run } from '../../src/mc/commands/publish.js';
+import { pushBranch, repoName, run } from '../../src/mc/commands/publish.js';
 
 describe('refusal', () => {
   it('refuses main, a dirty tree, and a remote branch that moved — and nothing else', () => {
@@ -112,5 +112,31 @@ describe('mc publish', () => {
     const parsed = JSON.parse(json.out.stdout);
     assert.deepEqual([parsed.number, parsed.created, parsed.pushed, parsed.next], [9, true, true, 'mc merge memoro 9']);
     assert.equal(await run(['extra'], fixture().deps), 2);
+  });
+});
+
+describe('pushBranch', () => {
+  const thin = { status: 1, stdout: '', stderr: ' ! [remote rejected] step-x -> step-x (Internal Server Error)\nerror: failed to push some refs' };
+  function fake(answers) {
+    const out = { calls: [], stderr: '' };
+    const spawn = (cmd, args) => { out.calls.push([cmd, ...args]); return answers[out.calls.length - 1]; };
+    return { out, opts: { spawn, stderr: { write: (s) => { out.stderr += s; } } } };
+  }
+
+  it('pushes again once with --no-thin when GitHub rejects the thin pack, and says so', () => {
+    const { out, opts } = fake([thin, { status: 0, stdout: '', stderr: 'To github.com:m/memoro.git' }]);
+    assert.deepEqual(pushBranch('/w/x', 'step-x', opts), { ok: true, text: 'To github.com:m/memoro.git' });
+    assert.deepEqual(out.calls, [['git', 'push', '-u', 'origin', 'step-x'], ['git', 'push', '--no-thin', '-u', 'origin', 'step-x']]);
+    assert.equal(out.stderr, 'mc: GitHub rejected the thin pack; pushed again with --no-thin\n');
+  });
+
+  it('fails as before when the retry is rejected too, and retries no other failure', () => {
+    const both = fake([thin, thin]);
+    assert.deepEqual(pushBranch('/w/x', 'step-x', both.opts), { ok: false, text: thin.stderr.trim() });
+    assert.equal(both.out.calls.length, 2);
+    const other = fake([{ status: 128, stdout: '', stderr: 'fatal: could not read from remote repository' }]);
+    assert.deepEqual(pushBranch('/w/x', 'step-x', other.opts), { ok: false, text: 'fatal: could not read from remote repository' });
+    assert.equal(other.out.calls.length, 1);
+    assert.equal(other.out.stderr, '');
   });
 });
