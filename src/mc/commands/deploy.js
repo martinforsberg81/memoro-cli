@@ -31,6 +31,15 @@
  * so a gate or merge round can land the next pull request while production is
  * being built (ruling 26, 2026-10-07).
  *
+ * A held lease is a window to wait for, not a refusal: a merge round holds it
+ * for the length of its gate, and the deploy re-claims on `mc merge`'s cadence
+ * and bound (`MERGE_POLL_MS`, `MERGE_WAIT_MS` in merge-queue.js), saying once
+ * who holds it and for what. Eight minutes on, it gives up with exit 3, as the
+ * merge does, and a refused row. What keeps two deploys apart is no longer the
+ * lease but the record: a `running` row whose process is alive
+ * (`runningDeploy`, deploys.js) is a deploy in progress, and a second one is
+ * refused with its sha and start time.
+ *
  * The record (`deploys.js`) is written around the spawn rather than after it:
  * the row exists, saying `running`, before `npm run deploy` is started, and is
  * completed however it ends. A deploy that never came back is then a row that
@@ -46,8 +55,8 @@
  * writer would only prove that the fake was called.
  *
  * Exit codes: the script's own when it ran; 0 for `--dry-run`; 1 for a `no`,
- * a held lease or a repository this machine has no checkout of; 2 for a bad
- * argument or no terminal.
+ * a deploy already running or a repository this machine has no checkout of; 2
+ * for a bad argument or no terminal; 3 for a lease still held after the wait.
  */
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -56,15 +65,17 @@ import { stripAnsi } from '../../lib/prompt.js';
 import { defaultRepos } from '../brief-collect.js';
 import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, recordEnd, recordRefusal, recordStart,
+  runningDeploy,
 } from '../deploys.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
+import { processAlive } from '../lease-owner.js';
+import { MERGE_POLL_MS, MERGE_WAIT_MS } from '../merge-queue.js';
 import { nightlyReading } from '../nightly-history.js';
 import { mcHome } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { claimLease as realClaim, currentHolder, releaseLease as realRelease } from '../repo-lease.js';
-import { leaseRow } from '../repo-render.js';
-import { painter } from '../status-render.js';
+import { tilde } from '../status-project.js';
 import { scanArgs } from './flags.js';
 
 /** The repository this verb is about. It takes no argument and never will:
@@ -542,6 +553,20 @@ export async function run(argv, deps = {}) {
   const holder = deps.holder || currentHolder();
   const refuse = (note) => recordRefusal({ sha: plan.sha, holder: holder.name, note }, env);
 
+  // Another deploy going on is read from the record, not the lease: the lease
+  // is free for most of a deploy now. Asked here so nobody answers a question
+  // for nothing, and again under the lease, where the answer is final.
+  const alive = deps.alive || processAlive;
+  const refuseRunning = () => {
+    const other = runningDeploy(env, { alive });
+    if (!other) return false;
+    const when = String(other.started).slice(0, 16).replace('T', ' ');
+    refuse(`a deploy of ${short(other.sha)} is running — started ${other.started} by ${other.holder || 'somebody'}`);
+    stderr.write(`mc: a deploy of ${short(other.sha)} has been running since ${when} (${other.holder || 'holder unknown'}, pid ${other.pid}) — one deploy at a time; nothing was deployed\n`);
+    return true;
+  };
+  if (refuseRunning()) return 1;
+
   // Nothing here stashes, resets or discards anything: the worktree that has
   // `main` may well be somebody's, and a `main` that is not exactly
   // `origin/main` plus nothing is a refusal with the path in the row.
@@ -580,16 +605,33 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
+  // A held lease is somebody's window — a merge round's gate, as a rule — and
+  // the deploy's own is seconds long, so it waits for it the way `mc merge`
+  // waits for the gate: re-claimed on the same cadence, up to the same bound.
   const claim = deps.claimLease || realClaim;
   const release = deps.releaseLease || realRelease;
-  const claimed = claim({ repoPath: path, errand: `deploy ${plan.sha}`, holder, ownerPid: process.pid });
-  if (!claimed.ok) {
-    refuse(`held by ${claimed.lease.holder} — ${claimed.lease.errand}`);
-    const c = painter(Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined);
-    stderr.write(`mc: ${path} is held by ${claimed.lease.holder} — ${leaseRow(c, claimed.lease)}\n`);
-    stderr.write('mc: a deploy takes the lease while it fast-forwards main and reads the sha that ships — nothing was deployed\n');
-    return 1;
+  const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
+  const now = deps.now || (() => new Date());
+  const t0 = now().getTime();
+  const take = () => claim({ repoPath: path, errand: `deploy ${plan.sha}`, holder, ownerPid: process.pid });
+  let claimed = take();
+  let said = null;
+  while (!claimed.ok) {
+    const held = claimed.lease;
+    const by = `${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`;
+    if (by !== said) {
+      stderr.write(`mc: ${tilde(path)} is held by ${by} — waiting for the window\n`);
+      said = by;
+    }
+    if (now().getTime() - t0 >= MERGE_WAIT_MS) {
+      refuse(`held by ${held.holder} — ${held.errand}`);
+      stderr.write(`mc: still waiting for ${tilde(path)}, held by ${by}, after 8 min — run this again; nothing was deployed\n`);
+      return 3;
+    }
+    await sleep(MERGE_POLL_MS);
+    claimed = take();
   }
+  if (said) stderr.write(`mc: waited ${Math.round((now().getTime() - t0) / 1000)}s — the window is ours\n`);
 
   // From here until the early release the lease is ours; the `finally`
   // releases it only while that is still true, so a throw under the lease does
@@ -600,9 +642,12 @@ export async function run(argv, deps = {}) {
   let key = null;
   let tail = '';
   try {
-    // Under the lease, so nothing else is deploying: a row still `running` is a
-    // deploy that died without completing it.
-    for (const row of closeAbandoned({}, env)) {
+    // Under the lease, the record is final: a deploy that started while this
+    // one waited wrote its row under the lease too, so it is read here.
+    if (refuseRunning()) return 1;
+    // A row still `running` whose process is gone is a deploy that died
+    // without completing it.
+    for (const row of closeAbandoned({ alive }, env)) {
       const when = String(row.started).slice(0, 16).replace('T', ' ');
       stdout.write(`mc: the deploy of ${short(row.sha)} started ${when} never came back — its row now says failed\n`);
     }
@@ -633,7 +678,7 @@ export async function run(argv, deps = {}) {
     // Before the spawn, not after it: a deploy that never comes back — the
     // terminal closed, a ^C in the middle of wrangler — leaves this row saying
     // `running` with no `ended`, which is the true thing to say about it.
-    key = recordStart({ sha: shipping, holder: holder.name }, env);
+    key = recordStart({ sha: shipping, holder: holder.name, pid: process.pid }, env);
 
     // The sha is read and written down, so the lease has done its one job: the
     // build runs on that sha in a worktree nothing but this verb and the person

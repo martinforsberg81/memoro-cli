@@ -49,7 +49,7 @@ import { join } from 'node:path';
 import {
   DAY_MS, defaultRepos, listProgrammes, runsSince, summariseRuns,
 } from './brief-collect.js';
-import { lastAttempt, lastDeploy } from './deploys.js';
+import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
 import { GITHUB_STATE, githubFailures } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
@@ -147,8 +147,12 @@ function sameCommit(a, b) {
  * a machine that has never deployed and never collected has nothing to say
  * about production, and a line saying "unknown" is worse than no line.
  */
-export function productionSection({ deploy = null, attempt = null, live = null, now = new Date() } = {}) {
-  if (!deploy?.sha && !live) return null;
+export function productionSection({
+  deploy = null, attempt = null, live = null, now = new Date(), alive = pidAlive,
+} = {}) {
+  // A first deploy, running before anything was ever deployed or collected, is
+  // still a deploy the page shows.
+  if (!deploy?.sha && !live && attempt?.outcome !== 'running') return null;
   const at = now.getTime();
   const age = (iso) => {
     const t = Date.parse(iso);
@@ -169,7 +173,14 @@ export function productionSection({ deploy = null, attempt = null, live = null, 
     stopped_at: row.stopped_at || null,
   });
   const running = since?.outcome === 'running' ? attemptState(since) : null;
-  if (running) running.late = running.age_seconds != null && running.age_seconds >= DEPLOY_LATE_S;
+  // From the record: a row with a pid is late exactly when that process is
+  // gone (`deployAlive`), however long it has run; a row from before the pid
+  // column has only its age to go on.
+  if (running) {
+    running.late = since.pid
+      ? !deployAlive(since, { alive })
+      : running.age_seconds != null && running.age_seconds >= DEPLOY_LATE_S;
+  }
 
   return {
     sha: deploy?.sha || null,
@@ -226,7 +237,7 @@ export function runnerSection({
     // that lasts: the round's `prsFailed`, carried between rounds.
     github: githubFailures(github, { now }),
     // What is in production, under the day it took to get there.
-    production: productionSection({ deploy, attempt, live, now }),
+    production: productionSection({ deploy, attempt, live, now, alive }),
     day: {
       ...summariseRuns(rows),
       tokens,

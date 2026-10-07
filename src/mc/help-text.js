@@ -271,7 +271,10 @@ IN FULL
                                     and the read of the sha that ships, not
                                     the build: that runs on the sha with the
                                     lease free, so merges land beside it.
-                                    No flag skips
+                                    A held lease is waited for, up to 8 min,
+                                    as mc merge waits for the gate; a second
+                                    deploy while one runs is refused with its
+                                    sha and start time. No flag skips
                                     the question and without a terminal it
                                     refuses; --dry-run is the reading and
                                     stops there. Every deploy, and every

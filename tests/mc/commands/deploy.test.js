@@ -83,6 +83,21 @@ const STAMP_DIFF = [
 
 let work = null;
 
+/**
+ * The clock `mc merge`'s wait tests use: `sleep` moves `now` on by what it
+ * was asked to sleep, so eight minutes of polling run in no time. `onSleep`
+ * is what happens in the world while the deploy sleeps, given the count.
+ */
+function fakeClock({ onSleep = () => {} } = {}) {
+  let at = Date.parse('2026-10-07T12:00:00Z');
+  let count = 0;
+  return {
+    now: () => new Date(at),
+    sleep: async (ms) => { at += ms; count += 1; onSleep(count); },
+    slept: () => count,
+  };
+}
+
 function io() {
   const out = { stdout: '', stderr: '' };
   return { out, stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } } };
@@ -658,19 +673,20 @@ describe('mc deploy — the script beside the lease', () => {
     assert.equal(readLease(PATH).held, false);
   });
 
-  it('refuses when somebody else holds the repository, and runs nothing', async () => {
+  it('waits eight minutes for a lease that stays held, then refuses with exit 3 and runs nothing', async () => {
     claimLease({ repoPath: PATH, errand: 'gate round #591', holder: { name: 'runner', kind: 'work-area' } });
     const { out, stdout, stderr } = io();
     let ran = 0;
     const code = await run([], {
-      ...deps({ spawnDeploy: async () => { ran += 1; return { code: 0 }; } }),
+      ...deps({ spawnDeploy: async () => { ran += 1; return { code: 0 }; }, ...fakeClock() }),
       stdout,
       stderr,
     });
-    assert.equal(code, 1);
+    assert.equal(code, 3);
     assert.equal(ran, 0);
-    assert.match(out.stderr, /is held by runner/u);
-    assert.match(out.stderr, /nothing was deployed/u);
+    assert.match(out.stderr, /is held by runner for “gate round #591” — waiting for the window/u);
+    assert.equal(out.stderr.match(/waiting for the window/gu).length, 1, 'said once, not every poll');
+    assert.match(out.stderr, /still waiting for .*, held by runner for “gate round #591”, after 8 min — run this again; nothing was deployed/u);
     assert.equal(readLease(PATH).holder, 'runner');
   });
 
@@ -679,6 +695,114 @@ describe('mc deploy — the script beside the lease', () => {
     const code = await run([], { ...deps({ git: fakeGit({ sha: null }) }), stdout, stderr });
     assert.equal(code, 1);
     assert.match(out.stderr, /has no origin\/main/u);
+  });
+});
+
+/**
+ * The window and the other deploy. Since step 1 the lease covers seconds of a
+ * deploy, so a held one is a merge round's gate to wait out, and what keeps two
+ * deploys apart is the record: a `running` row whose process is alive.
+ */
+describe('mc deploy — waiting for the window, and one deploy at a time', () => {
+  it('waits for a held lease, takes it when released, and ships the sha read after the fast-forward', async () => {
+    claimLease({ repoPath: PATH, errand: 'merge round for memoro #812', holder: { name: 'runner', kind: 'work-area' } });
+    // The merge round lands #812 while it holds the lease: origin/main moves,
+    // and the deploy fast-forwards to it once its turn comes.
+    const LANDED = '8e431c6aa0b1c2d3e4f5061728394a5b6c7d8e9f';
+    const base = fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, state: { [MAIN_WT]: { dirty: [], ahead: 0, behind: 1 } } });
+    let origin = SHA;
+    let head = SHA;
+    const git = (cwd, args) => {
+      if (args[0] === 'rev-parse') return args.at(-1) === 'HEAD' ? head : origin;
+      if (args[0] === 'merge') { base.calls.push({ cwd, args, lease: readLease(PATH) }); head = origin; return ''; }
+      return base(cwd, args);
+    };
+    const clock = fakeClock({
+      onSleep: (slept) => {
+        if (slept === 2) {
+          origin = LANDED;
+          releaseLease({ repoPath: PATH, holder: { name: 'runner', kind: 'work-area' } });
+        }
+      },
+    });
+    const { out, stdout, stderr } = io();
+    const seen = [];
+    const code = await run([], {
+      ...deps({ git, ...clock, spawnDeploy: async (options) => { seen.push({ ...options, lease: readLease(PATH) }); return { code: 0 }; } }),
+      stdout,
+      stderr,
+    });
+    assert.equal(code, 0);
+    assert.equal(clock.slept(), 2, 'two polls, on merge\'s cadence');
+    assert.match(out.stderr, /is held by runner for “merge round for memoro #812” — waiting for the window/u);
+    assert.match(out.stderr, /waited 30s — the window is ours/u);
+    const ff = base.calls.find((call) => call.args[0] === 'merge');
+    assert.equal(ff.lease.errand, `deploy ${SHA}`, 'the fast-forward runs under the deploy\'s own lease');
+    assert.equal(seen[0].sha, LANDED);
+    assert.equal(seen[0].lease.held, false);
+    const row = lastAttempt({ MC_WORK_ROOT: work });
+    assert.equal(row.sha, LANDED, 'the row names the sha main stood on when the deploy got its turn');
+    assert.equal(row.outcome, 'deployed');
+  });
+
+  it('refuses a second deploy while one is running, with its sha and start time from deploys.tsv', async () => {
+    const env = { MC_WORK_ROOT: work };
+    recordStart({ sha: LIVE, holder: 'martin@laptop', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, env);
+    const { out, stdout, stderr } = io();
+    let ran = 0;
+    let asked = 0;
+    const code = await run([], {
+      ...deps({
+        alive: (pid) => pid === 4242,
+        ask: () => { asked += 1; return 'y'; },
+        spawnDeploy: async () => { ran += 1; return { code: 0 }; },
+      }),
+      stdout,
+      stderr,
+    });
+    assert.equal(code, 1);
+    assert.equal(ran, 0);
+    assert.equal(asked, 0, 'nobody is asked a question that has no yes');
+    assert.match(out.stderr, /a deploy of 9f8e7d6 has been running since 2026-10-07 19:14 \(martin@laptop, pid 4242\) — one deploy at a time; nothing was deployed/u);
+    assert.equal(readLease(PATH).held, false, 'the lease was never taken');
+    const [running, refused] = readDeploys(env);
+    assert.equal(running.outcome, 'running', 'the running deploy\'s row is left alone');
+    assert.equal(refused.outcome, 'refused');
+    assert.match(refused.note, /a deploy of 9f8e7d6 is running — started 2026-10-07T19:14:22.167Z by martin@laptop/u);
+  });
+
+  it('a deploy that started while this one waited is refused under the lease', async () => {
+    const env = { MC_WORK_ROOT: work };
+    claimLease({ repoPath: PATH, errand: `deploy ${LIVE}`, holder: { name: 'other', kind: 'shell' } });
+    const clock = fakeClock({
+      onSleep: () => {
+        recordStart({ sha: LIVE, holder: 'other', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, env);
+        releaseLease({ repoPath: PATH, holder: { name: 'other', kind: 'shell' } });
+      },
+    });
+    const { out, stdout, stderr } = io();
+    let ran = 0;
+    const code = await run([], {
+      ...deps({ alive: (pid) => pid === 4242, ...clock, spawnDeploy: async () => { ran += 1; return { code: 0 }; } }),
+      stdout,
+      stderr,
+    });
+    assert.equal(code, 1);
+    assert.equal(ran, 0);
+    assert.match(out.stderr, /a deploy of 9f8e7d6 has been running since 2026-10-07 19:14/u);
+    assert.equal(readLease(PATH).held, false, 'its own lease is given back');
+  });
+
+  it('a running row whose process is gone is closed as failed, not a deploy in progress', async () => {
+    const env = { MC_WORK_ROOT: work };
+    recordStart({ sha: LIVE, holder: 'martin@laptop', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, env);
+    const { stdout, stderr } = io();
+    const code = await run([], { ...deps({ alive: () => false }), stdout, stderr });
+    assert.equal(code, 0);
+    const [old, now] = readDeploys(env);
+    assert.equal(old.outcome, 'failed');
+    assert.equal(now.outcome, 'deployed');
+    assert.equal(now.pid, String(process.pid), 'the row carries the pid it runs in');
   });
 });
 
@@ -801,10 +925,10 @@ describe('mc deploy — the record', () => {
     assert.match(lastAttempt({ MC_WORK_ROOT: work }).note, /no terminal/u);
   });
 
-  it('a held repository is a refused row naming who holds it', async () => {
+  it('a repository held past the wait is a refused row naming who holds it', async () => {
     claimLease({ repoPath: PATH, errand: 'gate round #591', holder: { name: 'runner', kind: 'work-area' } });
     const { stdout, stderr } = io();
-    await run([], { ...deps(), stdout, stderr });
+    await run([], { ...deps(fakeClock()), stdout, stderr });
     const row = lastAttempt({ MC_WORK_ROOT: work });
     assert.equal(row.outcome, 'refused');
     assert.match(row.note, /held by runner — gate round #591/u);
@@ -969,7 +1093,7 @@ describe('a deploy that was stopped', () => {
     const [old, now] = readDeploys(env);
     assert.equal(old.outcome, 'failed');
     assert.equal(old.ended, '', 'when it stopped is not known');
-    assert.match(old.note, /never came back — still running when the next deploy took the lease/u);
+    assert.match(old.note, /never came back — its process was gone when the next deploy began/u);
     assert.equal(now.outcome, 'deployed');
     assert.match(out.stdout, /the deploy of 9f8e7d6 started 2026-10-05 20:04 never came back/u);
   });

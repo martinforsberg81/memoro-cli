@@ -425,7 +425,7 @@ function deployLines(lines, c, wide, production) {
   }
   if (production.sha && !production.differs) {
     parts.push({ text: `${sep()}production ${production.short}` });
-  } else if (!production.sha) {
+  } else if (!production.sha && live) {
     // Nothing mc deployed, but production answers something: say what it
     // answers and where that came from, rather than nothing at all.
     parts.push({ text: `${sep()}production ${live.short}` });
