@@ -121,7 +121,7 @@ import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from '.
 import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
-import { handOver, mcCheckout, readRunner } from './run-control.js';
+import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick } from './nightly-loop.js';
@@ -168,6 +168,12 @@ const SCRATCH_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 export const WAIT_REFUSALS = new Set(['skipped', 'skipped:prs-unknown', 'skipped:sync']);
 /** How often an idle lane looks again while an UPDATE waits for the quiet moment. */
 export const UPDATE_POLL_MS = 30 * 1000;
+/**
+ * How often a draining runner says what it still waits on. Measured
+ * 2026-10-05: a drain said one line when it began and nothing more for 42
+ * minutes, and a silent drain is one a person force-stops.
+ */
+export const DRAIN_TICK_MS = 10 * 60 * 1000;
 /** How often a lane held back by the total cap looks for a free slot again. */
 export const TOTAL_POLL_MS = 15 * 1000;
 /**
@@ -583,6 +589,12 @@ export function createRunner({
    * minutes when it named none. A pause of days goes in slices, and between
    * two of them STOP and UPDATE end it — the runner is not deaf for a week.
    *
+   * The slices are `UPDATE_POLL_MS` long, not thirty minutes: measured
+   * 2026-10-07, every lane went to sleep at 18:30:58 and the UPDATE written
+   * at 18:41 waited for the slice to end. An UPDATE already present ends the
+   * pause before any sleep — a runner told to update has nothing to wait for
+   * a quota for, and when it is quiet the handover is the next thing it does.
+   *
    * A lost login is the same budget in another word: every lane's claude is
    * the same login, so every lane sleeps on it, and `why` is the line that
    * says so instead of the quota's.
@@ -598,14 +610,14 @@ export function createRunner({
     quotaSleep = (async () => {
       let slept = 0;
       for (;;) {
+        if (stopRequested() || updateRequested()) return;
         // The clock and the sum of the slices: the clock is right when the
         // machine slept through some of it, the sum ends a clock that stands.
         const remaining = Math.min(start + total - deps.now().getTime(), total - slept);
         if (remaining <= 0) return;
-        const slice = Math.min(remaining, QUOTA_SLEEP_MS);
+        const slice = Math.min(remaining, UPDATE_POLL_MS);
         await deps.sleep(slice);
         slept += slice;
-        if (stopRequested() || updateRequested()) return;
       }
     })();
     try { await quotaSleep; } finally { quotaSleep = null; }
@@ -2326,6 +2338,23 @@ export async function runLoop({
       // (A) over an immediate handover with two runners (B).
       // Nothing in flight anywhere: no step lane in a session.
       const quiet = () => runner.paths.currents().length === 0;
+      // While it drains, the runner says every ten minutes what it still
+      // waits on — once for the runner, from whichever loop looks first, not
+      // once per lane: six lanes would write six lines. The words are
+      // `drainWaiting`'s, the ones `mc run --update` prints. The first line
+      // comes ten minutes after the UPDATE was written, or after it was first
+      // seen when the file carries no time.
+      const drainPaths = { dir: dirname(runner.paths.update), update: runner.paths.update, runner: runner.paths.runner };
+      let drainMark = null;
+      const drainTick = () => {
+        const state = drainState({ paths: drainPaths, read: deps.read, list: deps.list, now: deps.now() });
+        if (!state.draining || state.inFlight.length === 0) return;
+        const now = deps.now().getTime();
+        if (drainMark === null) drainMark = state.requested ? Date.parse(state.requested) : now;
+        if (now - drainMark < DRAIN_TICK_MS) return;
+        drainMark = now;
+        runner.say(`update: still ${drainWaiting(state)}`);
+      };
       const lane = async (repo, index) => {
         const tag = count > 1 ? `${repo.name}#${index + 1}` : repo.name;
         let draining = false;
@@ -2341,6 +2370,7 @@ export async function runLoop({
           if (runner.updateRequested()) {
             if (!draining) { draining = true; runner.say(`${tag}: UPDATE — taking no new step; handing over when every lane is done`); }
             if (quiet()) return { update: true };
+            drainTick();
             await deps.sleep(UPDATE_POLL_MS);
             if (runner.stopRequested()) return { stop: true };
             continue;
@@ -2363,19 +2393,37 @@ export async function runLoop({
           if (runner.stopRequested()) return { stop: true };
         }
       };
+      // The chore loop is the one that is never in a step, so under an UPDATE
+      // it is the ticker when every lane is busy and none is polling.
       const choreLoop = async () => {
         for (;;) {
-          if (runner.stopRequested() || runner.updateRequested()) return {};
+          if (runner.stopRequested()) return {};
+          if (runner.updateRequested()) {
+            while (runner.updateRequested() && !quiet() && !runner.stopRequested()) {
+              drainTick();
+              await deps.sleep(UPDATE_POLL_MS);
+            }
+            return {};
+          }
           await runner.chores();
           await deps.sleep(idleSleepMs);
         }
       };
-      const lanes = runner.repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)));
-      const results = await Promise.all([...lanes, choreLoop()]);
-      if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
-      if (results.some((r) => r.update) && await update()) return 0;
-      runner.say('runner exit — the update did not hand over');
-      return 0;
+      // Until STOP or a handover that took. A handover that could not start
+      // its successor (`handOver`'s `{ ok: false }`) used to end this process
+      // with runner.json just re-marked by `update()` — the page said a
+      // runner was running while none was. Now the UPDATE is taken away, it
+      // is said, and the lanes start again on the code this runner holds.
+      for (;;) {
+        const lanes = runner.repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)));
+        const results = await Promise.all([...lanes, choreLoop()]);
+        if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
+        if (await update()) return 0;
+        deps.remove(runner.paths.update);
+        drainMark = null;
+        const commit = readRunner({ paths: runner.paths, read: deps.read, alive: () => true })?.commit;
+        runner.say(`update: could not hand over — this runner keeps going on ${commit || 'the code it holds'}; mc run --update to try again`);
+      }
     }
     // `--once`: one pick over the whole queue, in Martin's order, and out.
     // One lane, both repositories, no chores — a person watching one step,
