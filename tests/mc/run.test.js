@@ -1550,57 +1550,102 @@ test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', 
 });
 
 /**
- * `mc run --update` from the runner's side: the file is read where STOP is
- * read — between two picks — and the step in flight is never cut short for it.
+ * `mc run --update` from the runner's side, after ruling 28: the successor is
+ * started at once, while the step is still in flight, and this runner only
+ * finishes the step it is in — it is never cut short for the update.
  */
-test('UPDATE file: the loop finishes the step it is in, then hands over to a new process', async () => {
-  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+test('UPDATE file: the handover happens while the step is in flight, and the old runner exits after it', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [9001] });
   const inner = f.deps.session;
-  f.deps.session = (call) => { f.files['/w/runner/UPDATE'] = ''; return inner(call); };
+  const events = [];
+  f.deps.session = async (call) => {
+    f.files['/w/runner/UPDATE'] = '';
+    // Hold the step open until the handover has happened beside it.
+    for (let i = 0; i < 50 && events.length === 0; i += 1) await new Promise((resolve) => { setImmediate(resolve); });
+    events.push('step ends');
+    return inner(call);
+  };
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
   const handovers = [];
-  f.deps.handOver = async ({ paths, say }) => {
-    handovers.push(paths.update);
-    say('update: handed over to pid 9001 — this runner is done');
+  f.deps.handOver = async ({ paths, say, predecessor, finishing }) => {
+    handovers.push({ update: paths.update, predecessor, finishing });
+    events.push('handed over');
+    // The successor writes its own files the moment it starts.
+    f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 9001, started: '2026-08-29T10:00:00Z', predecessor: { pid: 4242 } })}\n`;
+    f.files['/w/runner/current-memoro-cli.json'] = `${JSON.stringify({ name: 'z', pid: 9001, lane: 0 })}\n`;
+    say(`update: handed over to pid 9001 — finishing ${finishing} step(s) in flight, taking nothing new`);
     return { ok: true, pid: 9001 };
   };
   assert.equal(await runLoop({ deps: f.deps }), 0);
-  // One step ran, it finished, and only then was the handover made.
   assert.equal(f.calls.sessions.length, 1);
-  assert.deepEqual(handovers, ['/w/runner/UPDATE']);
-  assert.match(f.files['/w/runner/log/runner.log'], /a: step done[\s\S]*handed over to pid 9001/u);
-  // The runner it handed to has written its own runner.json by now: this one
-  // must not remove it on the way out.
-  assert.equal('/w/runner/runner.json' in f.files, false);
-  assert.equal(f.calls.removed.includes('/w/runner/runner.json'), true);
-  const after = f.calls.removed.lastIndexOf('/w/runner/runner.json');
-  assert.equal(f.calls.removed.slice(after + 1).includes('/w/runner/runner.json'), false,
-    'runner.json was cleared a second time, after the new runner had written it');
+  assert.deepEqual(handovers, [{ update: '/w/runner/UPDATE', predecessor: 4242, finishing: 1 }], 'one handover for the runner, not one per loop');
+  assert.deepEqual(events, ['handed over', 'step ends'], 'the handover waited for the step to end');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /handed over to pid 9001 — finishing 1 step\(s\) in flight, taking nothing new[\s\S]*a: step done[\s\S]*update: every step pid 4242 held has ended — exiting/u);
+  // The successor's files are its own: this runner leaves without touching them.
+  assert.equal(f.calls.removed.includes('/w/runner/runner.json'), false, 'the old runner removed runner.json on its way out');
+  assert.equal(f.calls.removed.includes('/w/runner/current-memoro-cli.json'), false, "the old runner removed the successor's lane file");
+  assert.match(f.files['/w/runner/runner.json'], /"pid":9001/u);
 });
 
-test('UPDATE file: the successor starts with no refusal — runner.json is cleared before it', async () => {
-  // The failure this guard could plausibly introduce: the handover starts a
-  // second `mc run` while the first is still alive, on purpose. It works only
-  // because `runLoop` clears runner.json *before* calling handOver, so the
-  // successor reads no holder. This drives the real `handOver` and starts a
-  // real successor loop from `respawn`.
-  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [4242] });
+test('UPDATE file: the successor starts beside its live predecessor, and runner.json names both', async () => {
+  // The handover starts a second `mc run` while the first is still alive, on
+  // purpose. The successor's start accepts that one live holder because the
+  // environment it was spawned with names it. This drives the real `handOver`
+  // and starts a real successor loop from `respawn`.
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [4242, 9001] });
   const inner = f.deps.session;
   f.deps.session = (call) => { f.files['/w/runner/UPDATE'] = ''; return inner(call); };
   let successor = null;
-  let holderAtRespawn = null;
-  f.deps.respawn = () => {
-    holderAtRespawn = f.files['/w/runner/runner.json'] ?? null;
-    successor = runLoop({ once: true, deps: { ...f.deps, pid: 9001, session: inner } });
+  let spawnedWith = null;
+  let successorFile = null;
+  f.deps.respawn = (opts) => {
+    spawnedWith = opts;
+    const writeJson = (p, v) => { if (p === '/w/runner/runner.json' && successorFile === null) successorFile = v; f.deps.writeJson(p, v); };
+    successor = runLoop({ once: true, deps: { ...f.deps, pid: 9001, session: inner, writeJson, env: { ...f.deps.env, ...opts.env } } });
     return 9001;
   };
   assert.equal(await runLoop({ deps: f.deps }), 0);
-  assert.equal(holderAtRespawn, null, 'the successor was started while runner.json still named the runner handing over');
+  assert.deepEqual(spawnedWith, { env: { MC_RUN_SUCCESSOR_OF: '4242' } });
   assert.equal(await successor, 0, 'the successor refused to start');
   const log = f.files['/w/runner/log/runner.log'];
   assert.equal(/a runner is already running/u.test(log), false, 'the handover tripped the holder refusal');
-  // `respawn` starts the successor before `handOver` gets to say it handed
-  // over, so the successor's own start line is the earlier of the two.
-  assert.match(log, /runner start \(mc run, merge=1 once=1\)[\s\S]*handed over to pid 9001/u);
+  assert.match(log, /update: taking over from pid 4242/u);
+  assert.equal(successorFile.pid, 9001);
+  assert.equal(successorFile.predecessor.pid, 4242, 'runner.json did not name the runner still finishing');
+  // The predecessor's step in flight is claimed: the successor did not start it again.
+  assert.equal(f.calls.sessions.length, 1, 'the successor started the project its predecessor holds');
+});
+
+test('a successor lane waits while its predecessor holds the lane file, skips that project, then starts it', async () => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession(), livePids: [4242, 7000] });
+  f.deps.laneCount = () => ({ per_repo: 2, total: null });
+  f.deps.env = { ...f.deps.env, MC_RUN_SUCCESSOR_OF: '7000' };
+  f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7000, started: '2026-08-29T09:00:00Z' })}\n`;
+  f.files['/w/runner/current-memoro-1.json'] = `${JSON.stringify({ name: 'a', step: 1, pid: 7000, lane: 1 })}\n`;
+  const started = [];
+  const inner = f.deps.session;
+  let polls = 0;
+  f.deps.session = async (call) => {
+    started.push(call.cwd.split('/')[2]);
+    return inner(call);
+  };
+  let sleeps = 0;
+  f.deps.sleep = async (ms) => {
+    sleeps += 1;
+    if (started.length >= 2 || sleeps > 500) f.files['/w/runner/STOP'] = '';
+    if (ms !== UPDATE_POLL_MS) return;
+    polls += 1;
+    // Lane 2 has waited a few polls; the predecessor's step ends.
+    if (polls === 3) delete f.files['/w/runner/current-memoro-1.json'];
+  };
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.equal(log.split('\n').filter((line) => line.includes('memoro#2: waiting for pid 7000 to finish a')).length, 1, `said once:\n${log}`);
+  // Lane 0 took b, not the a its predecessor held; once the file was gone,
+  // lane 1 took a.
+  assert.equal(started[0], 'b', `the predecessor's project was not claimed: ${started.join(', ')}`);
+  assert.ok(started.includes('a'), `lane 1 never started once the file was gone: ${started.join(', ')}`);
 });
 
 /**
@@ -3027,13 +3072,12 @@ test('a lane waiting for a slot gives the wait up on UPDATE, and starts no step'
 });
 
 /**
- * UPDATE is honoured at the quiet moment, not at the first idle round. A lane
- * that read UPDATE after an idle round used to leave its loop and wait for the
- * busy lane's whole step, taking no work — memoro-cli sat half an hour with a
- * ready plan on main (2026-09-04). It keeps taking rounds until nothing is in
- * flight anywhere.
+ * UPDATE hands over at once (ruling 28), and the old runner takes no new step
+ * from that moment: a plan that lands on main while it finishes is the
+ * successor's. Before, the update drained — the handover waited for the quiet
+ * moment, and every idle lane sat for the busy lane's whole step.
  */
-test('runLoop: an UPDATE drains — no lane starts a step, the ones in flight finish, then the handover', async () => {
+test('runLoop: an UPDATE hands over at once — the old runner starts no step, finishes the one in flight, then exits', async () => {
   const plans = { memoro: { a: ready }, 'memoro-cli': {} };
   const f = fixture({ plans, session: okSession() });
   const inner = f.deps.session;
@@ -3044,35 +3088,36 @@ test('runLoop: an UPDATE drains — no lane starts a step, the ones in flight fi
     events.push(`${name}: start`);
     if (call.cwd.endsWith('/memoro')) {
       // Mid-step: an update is asked for, and a memoro-cli plan lands on main.
-      // The idle memoro-cli lanes see both, and start nothing.
+      // The idle memoro-cli lane sees both, and starts nothing.
       f.files['/w/runner/UPDATE'] = '';
       plans['memoro-cli'].x = ready;
-      // Let the other lanes poll a few times against the pending UPDATE.
+      // Let the other loops poll a few times.
       while (ticks < 6) await new Promise((resolve) => { setImmediate(resolve); });
     }
     events.push(`${name}: end`);
     return inner(call);
   };
-  // A sleep that yields a macrotask, not a resolved promise: the draining
-  // lanes poll in a loop, and a no-op sleep would spin them in microtasks
-  // and starve the `setImmediate` the memoro session is waiting on.
+  // A sleep that yields a macrotask, not a resolved promise: the polling
+  // loops would otherwise spin in microtasks and starve the `setImmediate` the
+  // memoro session is waiting on.
   f.deps.sleep = () => new Promise((resolve) => { setImmediate(() => { ticks += 1; resolve(); }); });
   const handovers = [];
-  f.deps.handOver = async ({ say }) => { handovers.push(events.slice()); say('update: handed over to pid 9001 — this runner is done'); return { ok: true, pid: 9001 }; };
+  f.deps.handOver = async ({ say }) => { handovers.push(events.slice()); say('update: handed over to pid 9001 — finishing 1 step(s) in flight, taking nothing new'); return { ok: true, pid: 9001 }; };
   assert.equal(await runLoop({ deps: f.deps }), 0);
-  assert.equal(events.indexOf('x: start'), -1, `a lane started a step under a pending UPDATE: ${events.join(', ')}`);
-  assert.equal(handovers.length, 1, 'the update handed over');
-  assert.deepEqual(handovers[0], ['a: start', 'a: end'], 'the handover came after the step in flight had ended');
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /memoro-cli: UPDATE — taking no new step; handing over when every lane is done/u);
+  assert.equal(events.indexOf('x: start'), -1, `the old runner started a step after the update: ${events.join(', ')}`);
+  assert.equal(handovers.length, 1, 'the update handed over once');
+  assert.deepEqual(handovers[0], ['a: start'], 'the handover waited for the step in flight');
+  assert.deepEqual(events, ['a: start', 'a: end']);
+  assert.match(f.files['/w/runner/log/runner.log'], /handed over to pid 9001[\s\S]*a: step done[\s\S]*every step pid 4242 held has ended — exiting/u);
 });
 
 /**
  * 2026-10-05: a drain said one line when it began and nothing again until the
- * handover 42 minutes later. Every ten minutes it now says what it waits on —
- * one line for the runner, however many loops are polling.
+ * handover 42 minutes later. After the handover the old runner says every ten
+ * minutes what it still holds — one line for the runner, however many loops
+ * are polling.
  */
-test('runLoop: a drain across a long step says what it waits on every ten minutes, once for the runner', async () => {
+test('runLoop: an old runner finishing a long step says what it holds every ten minutes, once for the runner', async () => {
   const f = fixture({ plans: { memoro: { a: ready }, 'memoro-cli': {} }, session: okSession() });
   const t0 = new Date('2026-08-26T12:00:00Z').getTime();
   let clock = t0;
@@ -3090,10 +3135,10 @@ test('runLoop: a drain across a long step says what it waits on every ten minute
   f.deps.handOver = async ({ say }) => { say('update: handed over to pid 9001 — this runner is done'); return { ok: true, pid: 9001 }; };
   assert.equal(await runLoop({ deps: f.deps }), 0);
   const log = f.files['/w/runner/log/runner.log'];
-  const ticks = log.split('\n').filter((line) => line.includes('update: still'));
+  const ticks = log.split('\n').filter((line) => line.includes(' still waiting on'));
   assert.equal(ticks.length, 1, `one line per ten minutes for the runner, not per loop:\n${ticks.join('\n')}`);
-  assert.match(ticks[0], /update: still waiting on a step 1 \(memoro#1, [^)]+\)$/u);
-  assert.match(log, /update: still waiting on a step 1[\s\S]*handed over to pid 9001/u);
+  assert.match(ticks[0], /update: pid 4242 still waiting on a step 1 \(memoro#1, [^)]+\)$/u);
+  assert.match(log, /handed over to pid 9001[\s\S]*update: pid 4242 still waiting on a step 1/u);
 });
 
 /**

@@ -72,6 +72,17 @@ describe('readRunner', () => {
       assert.equal(readRunner({ paths, read: fx.deps.read, alive: fx.deps.alive }), null);
     }
   });
+
+  // After `mc run --update` two runners overlap: the successor's runner.json
+  // names the one it replaced, which is finishing the steps it held.
+  it('returns the predecessor a successor names, and whether it is still alive', () => {
+    const fx = fixture({ runner: { pid: 200, started: 'T2', predecessor: { pid: 100, started: 'T1' } }, live: [100, 200] });
+    assert.deepEqual(readRunner({ paths, read: fx.deps.read, alive: fx.deps.alive }), {
+      pid: 200, started: 'T2', alive: true, predecessor: { pid: 100, started: 'T1', alive: true },
+    });
+    fx.alive.delete(100);
+    assert.equal(readRunner({ paths, read: fx.deps.read, alive: fx.deps.alive }).predecessor.alive, false);
+  });
 });
 
 describe('mc run start', () => {
@@ -103,6 +114,22 @@ describe('mc run start', () => {
     assert.deepEqual(fx.calls.spawned, []);
     assert.match(out.lines[0], /already running — pid 100/u);
     assert.match(out.lines[1], /mc run stop/u);
+  });
+
+  it('refuses while either runner of a handover is alive', async () => {
+    const both = fixture({ runner: { pid: 200, predecessor: { pid: 100 } }, live: [100, 200] });
+    const out = await startRunner({ root: ROOT, deps: both.deps });
+    assert.equal(out.code, 2);
+    assert.match(out.lines[0], /already running — pid 200/u);
+
+    // The successor died; the runner it replaced is still finishing.
+    const old = fixture({ runner: { pid: 200, predecessor: { pid: 100 } }, live: [100] });
+    const left = await startRunner({ root: ROOT, deps: old.deps });
+    assert.equal(left.ok, false);
+    assert.equal(left.code, 2);
+    assert.deepEqual(old.calls.spawned, []);
+    assert.match(left.lines.join('\n'), /pid 100/u);
+    assert.equal(paths.runner in old.store, true, 'runner.json was cleared while its predecessor was alive');
   });
 
   // start and stop are one switch: a switch that will not turn back on
@@ -190,6 +217,20 @@ describe('mc run stop', () => {
     assert.ok(!(`${paths.dir}/current-memoro.json` in fx.store));
     assert.ok(!(`${paths.dir}/current-memoro-cli.json` in fx.store));
     assert.match(out.lines[1], /and 2 current-\*\.json/u);
+  });
+
+  it('--force ends both runners of a handover', async () => {
+    const fx = fixture({
+      runner: { pid: 200, predecessor: { pid: 100 } }, live: [100, 200],
+      files: { [`${paths.dir}/current-memoro.json`]: '{"pid":100}' },
+    });
+    const out = await stopRunner({ force: true, root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.deepEqual(fx.calls.killed.map(([pid]) => pid).sort(), [100, 200]);
+    assert.equal(fx.alive.size, 0, 'a runner outlived --force');
+    assert.match(out.lines.join('\n'), /pid 200 is gone[\s\S]*pid 100 is gone/u);
+    assert.ok(!(paths.runner in fx.store));
+    assert.ok(!(`${paths.dir}/current-memoro.json` in fx.store));
   });
 
   it('says a dead runner.json is a dead one, and clears it', async () => {

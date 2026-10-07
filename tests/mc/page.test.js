@@ -1325,6 +1325,13 @@ describe('the page', () => {
     // The commit the runner is on is the first thing the width takes, and the last it gives back.
     assert.match(renderPage({ ...DATA, mc: mcSection({ process: DATA.runner.process, commit: 'abc1234', behind: 0, now: NOW }) },
       { columns: 120, version: '0.7.11', now: NOW }), /^ {2}MC {2}0\.7\.11 · up to date · runner up 120 min · on abc1234$/mu);
+    // For a step's length after an update two runners are alive, and the line names both.
+    const overlap = mcSection({
+      process: DATA.runner.process, commit: 'abc1234', behind: 0, now: NOW, pid: 9001,
+      predecessor: { pid: 4242, steps: ['gmail-ready', 'claims-entity'] },
+    });
+    assert.match(renderPage({ ...DATA, mc: overlap }, { columns: 160, version: '0.7.11', now: NOW }),
+      /^ {2}MC {2}0\.7\.11 · up to date · runner up 120 min · pid 9001 on abc1234 · pid 4242 finishing 2 steps \(gmail-ready, claims-entity\)$/mu);
     assert.doesNotMatch(text, /--fresh asks GitHub/u);
     assert.match(text, /note: no queue\.md/u);
     assert.ok(!/note: PRs from cache/u.test(text), 'the cache line already says it');

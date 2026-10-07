@@ -13,9 +13,9 @@
  *   start      spawn `mc run` detached, its output appended to runner.log
  *   stop       write STOP; the round in flight finishes, then the runner exits
  *   stop --force  end it now — the runner and the session it is holding
- *   --update   write UPDATE; the round in flight finishes, mc's own checkout
- *              is fast-forwarded, and the runner restarts itself on the new
- *              code
+ *   --update   write UPDATE; mc's own checkout is fast-forwarded, a new
+ *              runner starts on the new code at once, and the old one only
+ *              finishes the steps it holds
  *
  * **Why `--update` has to exist.** Node reads its whole module graph at
  * process start and never looks at the disk again. The runner merges pull
@@ -135,7 +135,16 @@ export function readRunner({ paths, read, alive }) {
   try { value = JSON.parse(read(paths.runner) ?? ''); } catch { return null; }
   const pid = Number(value?.pid);
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  return { pid, started: value.started || null, ...(value.commit ? { commit: value.commit } : {}), alive: alive(pid) };
+  // A successor names the runner it took over from while that one still
+  // finishes the steps it held (run.js `runLoop`, ruling 28).
+  const before = Number(value.predecessor?.pid);
+  const predecessor = Number.isInteger(before) && before > 0
+    ? { pid: before, started: value.predecessor.started || null, alive: alive(before) }
+    : null;
+  return {
+    pid, started: value.started || null, ...(value.commit ? { commit: value.commit } : {}),
+    ...(predecessor ? { predecessor } : {}), alive: alive(pid),
+  };
 }
 
 /** The `current-<repo>.json` files a killed runner leaves behind, removed. */
@@ -159,14 +168,18 @@ function clearCurrents(paths, deps) {
 export async function startRunner({ argv = [], root = null, deps = realControlDeps() } = {}) {
   const paths = controlPaths(root ?? workRoot(deps.env));
   const held = readRunner({ paths, read: deps.read, alive: deps.alive });
-  if (held?.alive) {
+  const finishing = held?.predecessor?.alive ? held.predecessor : null;
+  if (held?.alive || finishing) {
     const drain = drainLine(drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null }));
     return {
       ok: false,
       code: 2,
       lines: [
-        `a runner is already running — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`,
+        held.alive
+          ? `a runner is already running — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`
+          : `a runner is still finishing its steps — pid ${finishing.pid}`,
         ...(drain ? [drain] : []),
+        ...(held.alive && finishing ? [`pid ${finishing.pid}, the runner it replaced, is still finishing the steps it held`] : []),
         'mc run stop ends it · mc run --update restarts it on the newest code',
       ],
     };
@@ -224,7 +237,10 @@ export async function stopRunner({ force = false, root = null, deps = realContro
     lines.push('mc run start removes it again');
     return { ok: true, code: 0, lines };
   }
-  if (!held.alive) {
+  // The runner a handover replaced, while it finishes what it held: STOP
+  // reaches it as it reaches any runner, and `--force` ends it too.
+  const finishing = held.predecessor?.alive ? held.predecessor : null;
+  if (!held.alive && !finishing) {
     deps.remove(paths.runner);
     const ghosts = clearCurrents(paths, deps);
     lines.push(`no runner is running — runner.json named pid ${held.pid}, which is gone`);
@@ -234,24 +250,28 @@ export async function stopRunner({ force = false, root = null, deps = realContro
   // A runner seconds old is a successor: the stop was most likely aimed at
   // the one it replaced (2026-10-07, three seconds after a handover).
   const age = held.started ? (deps.now().getTime() - Date.parse(held.started)) / 1000 : null;
-  if (age != null && age >= 0 && age < YOUNG_RUNNER_SECONDS) {
+  if (held.alive && !finishing && age != null && age >= 0 && age < YOUNG_RUNNER_SECONDS) {
     lines.push(`note: pid ${held.pid} started ${Math.round(age)}s ago — if you meant the runner it replaced, that one is already gone; this STOP ends the new one`);
   }
+  const live = [held.alive ? held : null, finishing].filter(Boolean);
   if (!force) {
-    lines.push(`STOP written — pid ${held.pid} finishes the round it is in, then exits`);
-    lines.push('the session it is holding is not abandoned; mc run stop --force ends both now');
+    if (held.alive) lines.push(`STOP written — pid ${held.pid} finishes the round it is in, then exits`);
+    if (finishing) lines.push(`STOP written — pid ${finishing.pid}, the runner ${held.alive ? 'it replaced' : 'a handover replaced'}, finishes the steps it holds, then exits`);
+    lines.push(`the session${live.length > 1 ? 's they are' : ' it is'} holding ${live.length > 1 ? 'are' : 'is'} not abandoned; mc run stop --force ends ${live.length > 1 ? 'all of it' : 'both'} now`);
     return { ok: true, code: 0, lines };
   }
 
-  const ended = await endNow(held.pid, deps);
+  const ended = [];
+  for (const runner of live) ended.push({ pid: runner.pid, ...(await endNow(runner.pid, deps)) });
   deps.remove(paths.runner);
   const ghosts = clearCurrents(paths, deps);
-  if (!ended.ok) {
-    lines.push(`pid ${held.pid} is still alive after SIGKILL to ${ended.what} — end it by hand`);
+  const failed = ended.filter((end) => !end.ok);
+  if (failed.length) {
+    for (const end of failed) lines.push(`pid ${end.pid} is still alive after SIGKILL to ${end.what} — end it by hand`);
     lines.push(`STOP is written, so it exits at its next round boundary either way: ${paths.stop}`);
     return { ok: false, code: 1, lines };
   }
-  lines.push(`runner ended now — ${ended.signal} to ${ended.what}, pid ${held.pid} is gone`);
+  for (const end of ended) lines.push(`runner ended now — ${end.signal} to ${end.what}, pid ${end.pid} is gone`);
   lines.push(`cleared runner.json${ghosts.length ? ` and ${ghosts.length} current-*.json` : ''} — a killed runner never removes its own`);
   return { ok: true, code: 0, lines };
 }
@@ -346,6 +366,9 @@ export function drainState({ paths, read, list, now, lanes = null }) {
         name: current?.name || base,
         step: Number.isInteger(current?.step) ? current.step : null,
         lane,
+        // The runner holding the lane: after a handover the old runner's steps
+        // and its successor's are told apart by it (run.js `runLoop`).
+        ...(Number.isInteger(current?.pid) ? { pid: current.pid } : {}),
         started: started == null ? null : new Date(started).toISOString(),
         elapsed_seconds: since(started),
       };
@@ -470,9 +493,11 @@ export function mcCheckout({ exists = existsSync } = {}) {
 }
 
 /**
- * The runner's half of `--update`, run at a round boundary: fast-forward the
- * checkout mc is running from, then start a fresh `mc run` and let this one
- * go.
+ * The runner's half of `--update`, run the moment a lane reads UPDATE:
+ * fast-forward the checkout mc is running from, then start a fresh `mc run`
+ * beside this one. `predecessor` is this runner's pid, handed to the
+ * successor as `MC_RUN_SUCCESSOR_OF`; `finishing` is how many steps this one
+ * still holds, for the line that says so (ruling 28).
  *
  * Fast-forward only, never a merge and never a reset — a checkout with local
  * work in it is left exactly as it is, and the handover still happens, because
@@ -480,7 +505,7 @@ export function mcCheckout({ exists = existsSync } = {}) {
  * tree. Whatever the git half did, the say() line states what was actually
  * measured: the sha before and the sha after.
  */
-export async function handOver({ paths, deps, say, checkout = null }) {
+export async function handOver({ paths, deps, say, checkout = null, predecessor = null, finishing = null }) {
   deps.remove(paths.update);
   const dir = checkout ?? mcCheckout({ exists: deps.exists });
   if (!dir) {
@@ -494,12 +519,16 @@ export async function handOver({ paths, deps, say, checkout = null }) {
     else if (before && before === after) say(`update: ${dir} is already at ${after}`);
     else say(`update: ${dir} ${before || '?'} -> ${after || '?'}`);
   }
-  const pid = deps.respawn();
+  // The successor is told whose runner.json it will find: the one start
+  // that does not refuse on a live holder (run.js `runLoop`).
+  const pid = deps.respawn(predecessor ? { env: { MC_RUN_SUCCESSOR_OF: String(predecessor) } } : {});
   if (!pid) {
     say('update: the new runner did not start — this one stays up and keeps going');
     return { ok: false, why: 'respawn failed' };
   }
-  say(`update: handed over to pid ${pid} — this runner is done`);
+  say(finishing == null
+    ? `update: handed over to pid ${pid} — this runner is done`
+    : `update: handed over to pid ${pid} — finishing ${finishing} step(s) in flight, taking nothing new`);
   return { ok: true, pid };
 }
 
