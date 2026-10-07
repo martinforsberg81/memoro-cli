@@ -15,7 +15,8 @@ touches:
   command gates the same selection named run beside them, squash. This is what
   `mc repo merge` was; only the name moved.
 - **`--docs`** — a pull request whose every file is under `docs/`, squash-merged
-  without a suite, because there is nothing to run.
+  without a suite, because there is nothing to run. A script is not a document,
+  under `docs/` or not: one is refused here and goes through the gate.
 
 `mc repo merge` is gone rather than aliased: it prints *mc repo merge is now
 mc merge* and exits 2, and it is in neither `mc repo`'s usage nor `mc --help`
@@ -116,6 +117,12 @@ whole of it. It takes a repository path and a number and:
 2. refuses a pull request that is not `OPEN`, a draft, one that changes no
    files, and one whose file list holds **any** path outside `docs/` — naming
    that first path, so the reader knows what to do instead;
+   and one whose file list holds a script — any path ending `.js`, `.mjs`,
+   `.cjs` or `.ts`, in any directory — naming that first script and saying to
+   land it through the gate (`mc merge <repo> <pr>`): a script under `docs/` is
+   not a document, because a tree-wide check in the repository's gate reads it
+   and this form runs no gate (memoro #12534 landed an instrument `.mjs` this
+   way on 2026-10-04 and turned `main` red);
 3. waits for GitHub's mergeability, up to twelve five-second turns, because
    `UNKNOWN` for a few seconds after a push is normal and merging then fails for
    no real reason; `CONFLICTING` is a refusal that says which base to merge in;
