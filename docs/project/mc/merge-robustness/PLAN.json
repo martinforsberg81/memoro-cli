@@ -1,0 +1,77 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "Three ways `mc merge` and the runner mislead a person are closed: the docs door refuses a `.js`/`.mjs` file that a tree-wide lint of the repository would fail, so a plan's instrument cannot turn `main` red through the door that runs no gate; a red on the base is blamed on a landing only when that landing could have broken the test, and otherwise reported as red on the base with no landing explaining it; and when GitHub cannot be asked, the runner backs off per repository instead of retrying every round, and the page carries one line saying what failed, since when, and the command that fixes it."
+  ],
+  "contract": [
+    "The docs door stays a door for documents: a pull request under `docs/` that carries no script lands without the suite. What changes is that a script under `docs/` is not a document.",
+    "`mc merge`'s verdict does not change: red is red. What changes is the sentence after it, which must not name a pull request it cannot show broke the test.",
+    "The runner retries nothing of a session's (ruling 21). Whether it lands a pull request a session published and did not land is decision `merge-robustness-runner-lands-session-pr`, Martin's, and not this plan's.",
+    "The keychain: `GIT_TERMINAL_PROMPT=0`, `GH_PROMPT_DISABLED=1` and the timeouts landed in #771. Moving gh's token out of the keychain (`gh auth login --insecure-storage`) is decision `merge-robustness-gh-insecure-storage`, Martin's."
+  ],
+  "out_of_scope": [
+    "memoro's half of the JSC fault (the budget as a command gate that runs alone): `test-estate-fixes` in memoro.",
+    "Why the login keychain locked on 2026-09-20.",
+    "`mc merge`'s wait loop: the spin on a lease the wait believed free (proposal of 2026-09-19) is closed on main (`src/mc/commands/repo.js:449–468`, the `contended` flag)."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`mc merge <repo> <pr> --docs` refuses a pull request whose files include a `.js`, `.mjs`, `.cjs` or `.ts` file anywhere, naming the file, and lands one that does not.",
+      "check": "`tests/mc/docs-merge.test.js` cases: a PR with `docs/project/x/instruments/probe.mjs` is refused with `stopped_at: 'script'` and the path; a PR with only `.md` and `.json` under `docs/` lands."
+    },
+    {
+      "met": false,
+      "criterion": "When the red files are red on the base and the landing the walk found changed no file under the repository's source, test or configuration roots (only `docs/`), the verdict says the files are red on the base and that no landing explains it, and names no pull request.",
+      "check": "A test on `selector-miss.js`'s report and `mainRedClause` with a fixture landing whose `git diff-tree --name-only` lists only `docs/` paths asserts the clause reads `… red on main too — no landing explains it (the walk reached #N, which changed only docs/)`."
+    },
+    {
+      "met": false,
+      "criterion": "After `gh pr list` fails for a repository, the runner does not ask GitHub for that repository again for 1, 2, 5 and then 15 minutes, resets on the first success, and the page shows one line naming the failure, its start and the command that fixes it.",
+      "check": "A test on `run.js`'s round with a fake `gh` failing N times asserts the schedule; a page test asserts the RUNNER section carries the line while `prsFailed` is non-empty and drops it after; the line distinguishes a locked keychain (`security show-keychain-info` hangs or fails within two seconds) from a bad token (`gh auth status` says so)."
+    }
+  ],
+  "documents": [
+    { "label": "mc merge", "path": "../../../technical/mc-merge.md" },
+    { "label": "Programme rulings", "path": "../rulings.md" },
+    { "label": "The docs door", "path": "../../../../src/mc/docs-merge.js" }
+  ],
+  "steps": [
+    {
+      "title": "The docs door refuses a script",
+      "status": "ready",
+      "done_when": "`runDocsMerge` stops at `script` naming the first `.js`/`.mjs`/`.cjs`/`.ts` file in the pull request's file list, `docsMergeLines` says what to do instead (land it through the gate), and `tests/mc/docs-merge.test.js` covers both the refusal and an all-documents landing.",
+      "instruction": [
+        "`src/mc/docs-merge.js` lands a pull request whose every file is under `docs/` (`firstNonDoc`, :37; `runDocsMerge`, :41) with no suite and no command gate — a plan is a document. On 2026-10-04 memoro #12534 landed `docs/project/msr-core/boot-reads-and-redraws/instruments/boot-reads.mjs` through it; memoro's `check:bsqlite-pin` scans the whole tree, so `main` went red and every later `mc merge` whose selection reached that gate was refused on a red the candidate had not caused (#12538, with `main_red: null`).",
+        "After the `outside` check, find the first file whose extension is `.js`, `.mjs`, `.cjs` or `.ts` (any directory) and `finish('script', \\`#${pr} carries ${file} — a script is not a document; land it through the gate: mc merge <repo> ${pr}\\`)`. `docsMergeLines` (:80) prints the reason as it prints the others. Document the rule in `docs/technical/mc-merge.md` where the docs door is described, and in `tests/mc/merge-doc.test.js` if it states the door's form in words.",
+        "Tests in `tests/mc/docs-merge.test.js`: the refusal with the path in the reason; an all-documents PR (`.md`, `.json`) landing as before."
+      ],
+      "comments": [], "pr": null, "blocked_by": null
+    },
+    {
+      "title": "A red on the base is blamed only on a landing that could have broken it",
+      "status": "ready",
+      "done_when": "`selector-miss.js` records, for each landing it finds, the paths that landing changed, and `mainRedClause` names the landing only when at least one of those paths is outside `docs/`; otherwise the clause says the files are red on the base and no landing explains it; tests cover both.",
+      "instruction": [
+        "`src/mc/selector-miss.js` walks `main`'s first parents from the base, running the red files at each commit until they pass, and records the newer commit as the landing that broke them (`landing(...)`, the `breaks` list; :63–130). `mainRedClause` (`src/mc/repo-gate.js:1131`) then writes `broken by #N`. On 2026-10-06 (`mc merge memoro 12720`) the walk named memoro #12727, six files under `docs/project/staff/`, as the landing that broke `tests/architecture/core-bundle-jsc.test.js` — a wall-clock budget test that was red under load at both commits and green alone. The register recorded a reason pointing at an innocent pull request.",
+        "In `landing(...)`, read the landing's changed paths (`git diff-tree --no-commit-id --name-only -r <commit>`) and keep them on the record (`paths`). In `mainRedClause`, a landing whose every path starts with `docs/` (or matches nothing under the repository's `src/`, `tests/`, `scripts/`, `public/`, `package.json`, the lockfile and the testing registry — take the simple rule, `docs/` only, unless the repository's registry exposes its roots cheaply) is not named: the clause becomes `— N of the red files are red on main too; no landing explains it (the walk reached #M, which changed only docs/)`. The register's reason and `gateLines` carry the same sentence. The probe's JSON keeps the landing with `kind: 'docs-only'` so a reader can still see what the walk found.",
+        "Tests: `tests/mc/` has the merge tests; add a case for `mainRedClause` with a fixture probe whose landing has only `docs/` paths and one with a `src/` path. Document in `docs/technical/mc-merge.md` § the base probe."
+      ],
+      "comments": [], "pr": null, "blocked_by": null
+    },
+    {
+      "title": "When GitHub cannot be asked, the runner backs off and the page says why",
+      "status": "ready",
+      "done_when": "After a failed `gh pr list` the runner skips that repository's GitHub call for 1, 2, 5 and then 15 minutes (reset on success), the page's RUNNER section shows one line with what failed, since when, and the fixing command — `security unlock-keychain` when the keychain does not answer, `gh auth login` when gh says the token is bad — and tests pin the schedule and the line.",
+      "instruction": [
+        "`src/mc/run.js:1915` says `GitHub could not be asked what is open … — no step starts in this repository this round` to `runner.log` and the round goes on; the next round asks again. On 2026-09-20 a locked login keychain made every ask hang on a `security` call and leave a macOS modal behind, 30 then 44 processes, and the page showed nothing of it (proposal of 2026-09-20; #771 added the timeouts and the no-prompt environment). `src/mc/page-collect.js:1088–1100` collects `prsFailed` and a note per repository; `page-render.js:1097` prints notes.",
+        "Backoff: keep, per repository, the time of the last failure and the attempt count in the runner's state (where it keeps the lane state; read `run.js` for the file the round writes), and skip the `gh` call while the backoff has not elapsed: 1, 2, 5, 15, 15… minutes; a success clears it. The skipped repository's steps do not start that round, as today.",
+        "Diagnosis, one call with a two-second timeout: `security show-keychain-info` (hangs or fails on a locked keychain, answers at once on an open one — `src/lib/keychain.js` has the runner with a timeout since #771); then `gh auth status` for a bad token. The runner writes the diagnosis next to the failure in its state.",
+        "The page: in `page-collect.js`, read that state and put one line under RUNNER — `GitHub unreachable for memoro since 08:20 (keychain locked) — run: security unlock-keychain` or `… (gh token invalid) — run: gh auth login -h github.com` — rendered by `page-render.js` while `prsFailed` is non-empty, gone after. `--json` carries the same fields.",
+        "Tests: `run.js`'s round with a fake `gh` that fails five times asserts the ask times; `page.test.js` asserts the line with each diagnosis. Document in `docs/technical/mc-ui.md` (the page) and the runner's technical note."
+      ],
+      "comments": [], "pr": null, "blocked_by": null
+    }
+  ]
+}
