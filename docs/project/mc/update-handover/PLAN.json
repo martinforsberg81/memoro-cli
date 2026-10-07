@@ -1,0 +1,73 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`mc run --update` is something a person can trust: it says at once whether there is anything to update, what the runner is waiting on and for how long while it drains, and the same on the page and in the refusal `mc run start` gives; a drain is never silent for an hour; and a handover that fails leaves a runner running, never a dead process behind a live `runner.json`."
+  ],
+  "contract": [
+    "Martin, 2026-10-07 (ruling 27): `--update` has to be robust enough that he stops force-stopping and restarting the runner by hand.",
+    "The drain stays as Martin chose it on 2026-09-04 (run.js `UPDATE drains the runner`, the comment at :2313): from the moment UPDATE is read no lane starts a step, the steps in flight finish and land, and the handover comes when nothing is in flight. Step 3 is the one that may change that, and it waits on his decision.",
+    "A step in flight is never killed by an update. Work the runner started lands or fails on its own terms."
+  ],
+  "out_of_scope": [
+    "`mc run stop` and `stop --force` (run-control.js:194–231): they do what they say.",
+    "The lane counts and `mc run lanes` (lane-count.js).",
+    "What a step session does with a STOP that arrives during its wait (run.js:1807)."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`mc run --update` on a runner already running origin/main's commit writes nothing and says so; on a draining runner it prints the drain — since when, which lanes are done and which are in a step with the project, step and elapsed time — instead of rewriting UPDATE; the page's MC line and `mc run start`'s refusal carry the same drain line.",
+      "check": "`tests/mc/run-control.test.js`: the three answers of `requestUpdate` (nothing to update; UPDATE written; already draining, with the lanes listed from `current-*.json` fixtures); `tests/mc/page.test.js`: the MC line with a drain in progress names the lane it waits on and its elapsed time."
+    },
+    {
+      "met": false,
+      "criterion": "A draining runner writes a line to runner.log every ten minutes naming what it still waits on, a handover that cannot respawn keeps the runner running, and the quota pause ends the moment the runner is quiet under an UPDATE.",
+      "check": "`tests/mc/run.test.js`: a drain across a step longer than ten minutes (fake clock) logs the waiting line with the step's name; a `handOver` that returns `{ ok: false }` leaves the loop running and the next pick happens; `quotaPause` with UPDATE and no current files returns before its sleep is over."
+    }
+  ],
+  "documents": [
+    { "label": "Programme rulings (27 is this plan's; the drain decision of 2026-09-04 is quoted in run.js:2313–2323)", "path": "../rulings.md" },
+    { "label": "merge-robustness, the sibling plan on the runner's merge side", "path": "../merge-robustness/PLAN.json" }
+  ],
+  "steps": [
+    {
+      "title": "`mc run --update` answers with the state, and writes nothing twice",
+      "status": "ready",
+      "done_when": "`requestUpdate` in `src/mc/run-control.js` has three answers — nothing to update (the runner's `commit` equals `origin/main` after a fetch), UPDATE written, already draining with the lanes listed — the drain line is one function shared by `requestUpdate`, `startRunner`'s refusal and the page's MC line, and `tests/mc/run-control.test.js` and `tests/mc/page.test.js` pin all of it.",
+      "instruction": [
+        "What happened on 2026-10-07 evening (runner.log 72140–72200): UPDATE written 18:41 with six lanes busy; four lanes announced the drain as their steps landed (18:41, 18:42, 18:46, 18:48); nothing said what the other lanes were doing; at 18:56:24 Martin force-stopped and started a new runner (it started on `ad056b39`, which was origin/main), and at 18:56:41 wrote `--update` again — on a runner already current — which drained all six lanes once more. The two earlier drains took 29 min (2026-10-03 21:02→21:31) and 42 min (2026-10-05 20:06→20:48). `requestUpdate` (run-control.js:291–328) writes the file and prints two lines; it does not read `runner.json`'s `commit` (written by `markRunner`, run.js:2189–2192) and does not look at `current-*.json`; `startRunner` (:141–153) refuses a live runner with two lines; the page says `update requested N ago — the runner hands over after this round` (page-render.js:1013–1040).",
+        "Add to `run-control.js` a `drainState({ paths, read, list, now })` that returns: `requested` (the UPDATE file's timestamp, or null), `commit` (runner.json's), `inFlight` (one entry per `current-*.json`: `name`, the step number if the file carries it — read what `runStep` writes there, run.js:489 and the writer — `lane` from the file name, `started`, elapsed seconds) and `lanes` (the count from `lanes.json`, so done = lanes − inFlight). Add `drainLine(state)`: `draining since 18:56 (14 min) — waiting on gmail-ready step 1 (memoro#5, 14 min), claims-entity step 1 (memoro#2, 14 min); 6 lanes done`. `requestUpdate`: fetch origin in the mc checkout (`mcCheckout()`, :335; `deps.git` as `handOver` uses it) and compare `origin/main`'s short sha with `runner.json`'s `commit` — equal: print `runner pid N is already on <sha> — nothing to update` and write nothing (a `--force` flag writes anyway, for a restart that is wanted for another reason); UPDATE already present: print the drain line and write nothing; otherwise write and print as today plus the drain line. `startRunner`'s refusal and the page's MC line (page-render.js:1025–1040; the collector that feeds `info.update_requested` — find it by that name under `src/mc/`) use the same `drainLine`. `mc run --update` is parsed in `src/mc/commands/run.js:218–222`; add `--force` there.",
+        "Tests: `tests/mc/run-control.test.js` § 'mc run --update' (:226) gains the three answers with fixture files for runner.json (with `commit`), UPDATE and two `current-*.json`; `tests/mc/page.test.js` the MC line with a drain. `help-text.js` (the `mc run --update` lines, :14–21 of commands/run.js and the help block) say the three answers in one sentence each."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The drain is never silent, a failed handover never exits, and the quota pause ends when quiet",
+      "status": "ready",
+      "done_when": "A draining lane loop writes `update: still waiting on …` every ten minutes with the in-flight steps (one line for the runner, not one per lane); `runLoop` keeps running when `update()` returns false and says why; `quotaPause` returns as soon as UPDATE is present and no `current-*.json` exists; `tests/mc/run.test.js` pins the three.",
+      "instruction": [
+        "`run.js:2337–2344`: a draining lane polls `quiet()` every `UPDATE_POLL_MS` and says one line when it starts draining; nothing is said again until the handover, which on 2026-10-05 was 42 minutes later. Add a runner-level ticker (not per lane: six lanes would write six lines) that, while `updateRequested()` and not quiet, writes `update: still waiting on <drainLine's in-flight part>` every ten minutes, using `drainState` from step 1 so the words are the same ones `mc run --update` prints.",
+        "`run.js:2373–2375`: when `update()` returns false (`handOver` could not respawn, run-control.js:365–369), the loop falls through to `runner.say('runner exit — the update did not hand over'); return 0;` — the process ends with `runner.json` re-marked by `update()`'s `markRunner()`, so the page says a runner is running while none is, and the next `mc run --update` answers 'runner.json names pid N, which is gone'. Instead: remove the UPDATE file, say `update: could not hand over — this runner keeps going on <commit>; mc run --update to try again`, and re-enter the lane loops (restructure so the lanes are started by a function the loop can call again, or wrap the `Promise.all` in a `for (;;)` that breaks only on stop or a successful handover).",
+        "`quotaPause` (run.js:590–610) sleeps in `QUOTA_SLEEP_MS` slices and returns on STOP or UPDATE only at a slice boundary — 30 minutes. On 2026-10-07 18:30:58 'every lane sleeping 30m' and the UPDATE of 18:41 waited for the slice. Make the slice shorter under an update (poll `UPDATE_POLL_MS` while `updateRequested()`), and return at once when `updateRequested()` and the runner is quiet (`paths.currents().length === 0`): a quiet runner under an UPDATE has nothing to wait for. Tests in `tests/mc/run.test.js` next to 'UPDATE file: the loop finishes the step it is in' (:1554): the ticker line after ten fake minutes, the failed handover keeping the loop, the quota pause returning early."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The successor starts at once and the old runner only finishes what it holds",
+      "status": "blocked",
+      "done_when": "On UPDATE the runner respawns its successor immediately; the successor runs every lane the old runner is not holding a step in (the claims file keeps them apart); the old runner takes no new step, lands what it has in flight and exits; the page shows both while they overlap; `tests/mc/run.test.js` pins the overlap and the exit.",
+      "instruction": [
+        "Martin chose the drain (A) over an immediate handover with two runners (B) on 2026-09-04 (run.js:2313–2323), when the alternative was two runners taking work side by side. What this step proposes is narrower: the successor starts at once on the new code and takes every lane the old runner is not in a step on; the old runner is only the parent of its in-flight sessions, takes nothing new, lands them and exits. The lanes' `claims` (run.js: 'They take from one ordered list and claim what they pick') already keep two lanes off one project; the successor would respect the old runner's claims the same way. `runner.json` would need to name both pids for the overlap (`readRunner` in run-control.js:115–121 and `markRunner` run.js:2189).",
+        "Waits on decision `update-handover-overlap`. When Martin answers, write the answer into this step's `instruction` and set the step `ready`, or remove the step."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": { "kind": "decision", "name": "update-handover-overlap" }
+    }
+  ]
+}

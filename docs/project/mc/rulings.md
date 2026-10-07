@@ -930,3 +930,26 @@ deploy is refused by the record (a `running` row with a live pid), not by
 the lease; and a deploy that meets a held lease waits for the window the way
 `mc merge` waits for the gate, rather than refusing. Carried by
 `deploy-beside-merges/PLAN.json`.
+
+## 27 · `mc run --update` says what it is doing, and never leaves a dead runner behind
+
+`ruling · 2026-10-07` · raised at the brief, after the evening's update: UPDATE
+written 18:41 with six lanes busy, four announced the drain as they landed,
+the rest said nothing, and at 18:56 the runner was force-stopped and started
+by hand — then `--update` was written again on a runner already current, and
+every lane drained once more.
+
+> "mc run --update är som att den inte riktigt tar; jag får emellanåt göra
+> manuellt stop start av run ett par gånger innan det fungerar. Låt oss gör
+> den mer robust." (Martin, 2026-10-07, at the brief.)
+
+The drain itself is what Martin chose on 2026-09-04 and stays. What was
+missing is the answer: `--update` on a runner already on origin/main says so
+and writes nothing; on a draining runner it prints what the runner waits on
+and for how long, and the page and `mc run start` say the same; the drain
+logs what it waits on every ten minutes; a handover that cannot respawn keeps
+the runner running instead of exiting behind a live `runner.json`; and the
+quota pause ends the moment a draining runner is quiet. Carried by
+`update-handover/PLAN.json` steps 1–2. Whether the successor may start at
+once and overlap the old runner on the lanes it does not hold is the open
+decision `update-handover-overlap` (step 3).
