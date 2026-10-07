@@ -7,7 +7,7 @@ import {
   describeSettings, describeWatch, headlessArgs, helperDue,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen, apiInterruption, resumePrompt,
-  readSessionOutput, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
+  readSessionOutput, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow, userMessageLine,
 } from '../../src/mc/run-plan.js';
 import { NAME_RE } from '../../src/mc/plan-schema.js';
@@ -525,6 +525,24 @@ describe('readSessionOutput on a stream-json run', () => {
   it('keeps the quota rule: a short limit answer is quota', () => {
     const limit = result({ num_turns: 1, result: "You've hit your weekly limit · resets Aug 28 at 3pm" });
     assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: [init, limit].join('\n'), exitCode: 1 }).note, 'quota');
+  });
+
+  // 2026-10-07: six 30-minute pauses in a day, each a killed session (rc=143,
+  // no result line) whose own work said "rate limiting" while every
+  // rate_limit_event in its stream said allowed.
+  it('a killed session is quota only when its stream says the API refused', () => {
+    const rate = (status, resetsAt = 1791409800) => event({ type: 'rate_limit_event', rate_limit_info: { status, resetsAt, rateLimitType: 'five_hour' } });
+    const prose = event({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'Rate limiting and abuse controls — quota rows, usage limit text' }] } });
+    const allowed = readSessionOutput({ toolId: 'claude-code', stdout: [init, rate('allowed'), assistant, prose].join('\n'), exitCode: 143 });
+    assert.equal(allowed.note, 'no-json');
+    assert.equal(allowed.quota, false);
+    const refused = readSessionOutput({ toolId: 'claude-code', stdout: [init, rate('allowed'), assistant, rate('rejected')].join('\n'), exitCode: 1 });
+    assert.equal(refused.note, 'quota');
+    assert.equal(refused.quota, true);
+    assert.equal(refused.quotaReset.toISOString(), '2026-10-07T21:50:00.000Z');
+    // A refusal answered by a later allowed event is over.
+    assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: [init, rate('rejected'), rate('allowed_warning')].join('\n'), exitCode: 143 }).quota, false);
+    assert.equal(streamRateLimit('garbage'), null);
   });
 });
 

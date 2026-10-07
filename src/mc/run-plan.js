@@ -1020,10 +1020,17 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   }
   const json = sessionResult(stdout);
   if (!json) {
-    const text = `${stdout}\n${stderr}`;
-    const quota = quotaSeen(text);
-    // No answer, but the turns it took are in the stream: a session `mc
-    // merge` ended keeps its row's turns, usage and session id.
+    // No answer: the runner killed the session (a landing through `mc merge`,
+    // rc=143), or the API ended it without a result line. Whether the quota
+    // did it is what the stream's own `rate_limit_event` says, or what claude
+    // itself wrote on stderr — never the words in the session's work, which
+    // is stdout. 2026-10-07: six 30-minute pauses in one day, every one a
+    // step whose *work* mentioned rate limiting (the legal register,
+    // merge-robustness) while every rate_limit_event said allowed.
+    const refused = streamRateLimit(stdout);
+    const quota = refused != null || quotaSeen(stderr);
+    // The turns it took are in the stream: a session `mc merge` ended keeps
+    // its row's turns, usage and session id.
     const stream = streamSummary(stdout);
     const counts = stream ? {
       turns: String(stream.num_turns),
@@ -1033,7 +1040,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
       cacheRead: String(stream.usage.cache_read_input_tokens),
       cacheWrite: String(stream.usage.cache_creation_input_tokens),
     } : {};
-    return { ...dash, ...counts, note: quota ? 'quota' : 'no-json', quota, quotaReset: quota ? quotaResetAt(text, now) : null };
+    return { ...dash, ...counts, note: quota ? 'quota' : 'no-json', quota, quotaReset: quota ? (refused?.resetsAt ?? quotaResetAt(stderr, now)) : null };
   }
   const usage = json.usage || {};
   const pick = (v) => (v == null ? '-' : String(v));
@@ -1071,6 +1078,30 @@ function readCodexEvents(stdout) {
     if (id) out.session = String(id);
   }
   return out;
+}
+
+/**
+ * The last `rate_limit_event` in a stream-json run that was a refusal:
+ * `{ status, resetsAt }` with `resetsAt` a Date (or null), or null when every
+ * event said `allowed` (or there was none). claude writes one of these on
+ * every turn with `rate_limit_info.status` — `allowed`, `allowed_warning`
+ * near the limit, `rejected` past it — and `resetsAt` in epoch seconds. This
+ * is the answer the stream carries; prose is not.
+ */
+export function streamRateLimit(stdout) {
+  let refused = null;
+  for (const line of String(stdout || '').split('\n')) {
+    if (!line.includes('"rate_limit_event"')) continue;
+    let event = null;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type !== 'rate_limit_event') continue;
+    const info = event.rate_limit_info || {};
+    const status = String(info.status || '');
+    if (status === '' || status.startsWith('allowed')) { refused = null; continue; }
+    const at = Number(info.resetsAt);
+    refused = { status, resetsAt: Number.isFinite(at) && at > 0 ? new Date(at * 1000) : null };
+  }
+  return refused;
 }
 
 export function quotaSeen(text) {
