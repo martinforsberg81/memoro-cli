@@ -451,9 +451,10 @@ export function realDeps(env = process.env) {
     // disk now. Node read its whole module graph at process start, so the only
     // way to run new code is to be a new process — the same argument list,
     // detached so it outlives this one, and the same stdio, which for a runner
-    // `mc run start` spawned is the append handle on runner.log.
-    respawn: () => {
-      const child = spawn(process.execPath, process.argv.slice(1), { detached: true, stdio: 'inherit', env });
+    // `mc run start` spawned is the append handle on runner.log. `extra` is
+    // `MC_RUN_SUCCESSOR_OF`, which lets it start beside this one (`runLoop`).
+    respawn: ({ env: extra = {} } = {}) => {
+      const child = spawn(process.execPath, process.argv.slice(1), { detached: true, stdio: 'inherit', env: { ...env, ...extra } });
       child.unref();
       return child.pid ?? null;
     },
@@ -581,7 +582,13 @@ export function createRunner({
   // lanes that happened to look.
   let stopSeen = false;
   const stopRequested = () => stopSeen || (stopSeen = deps.exists(paths.stop));
-  const updateRequested = () => deps.exists(paths.update);
+  // Held from the moment a handover begins: `handOver` removes UPDATE as its
+  // first act, and a runner that has handed over takes nothing new for the
+  // rest of its life (`runLoop`, ruling 28). Let go only when the handover
+  // failed and this runner goes on.
+  let updateHeld = false;
+  const updateRequested = () => updateHeld || deps.exists(paths.update);
+  const holdUpdate = (on) => { updateHeld = Boolean(on); };
 
   /**
    * The 5-hour Claude quota is one budget for every lane. The first lane to
@@ -2066,7 +2073,34 @@ export function createRunner({
    * already been refused on.
    */
   function nextStep({ repo = null, world = {}, passed = new Set() } = {}) {
-    return nextFor({ repo, world, claimed: claims, passed });
+    // The projects another runner is in a step on are claimed here as well:
+    // after a handover the old runner is still landing what it holds, and a
+    // fresh pick of the same name would start that step a second time
+    // (ruling 28).
+    const others = stepsHeld().filter((held) => held.other).map((held) => held.name).filter(Boolean);
+    return nextFor({ repo, world, claimed: others.length ? new Set([...claims, ...others]) : claims, passed });
+  }
+
+  /**
+   * The steps in flight on this machine, one per `current-*.json`: its
+   * `name`, the `pid` of the runner holding it, and `other` when that is a
+   * live runner that is not this one — the runner a handover replaced,
+   * finishing what it held. A file naming a dead pid is nobody's.
+   */
+  function stepsHeld() {
+    return paths.currents().map((path) => {
+      let held = null;
+      try { held = JSON.parse(deps.read(path) ?? ''); } catch { held = null; }
+      const owner = Number(held?.pid);
+      const known = Number.isInteger(owner) && owner > 0;
+      return { path, name: held?.name || null, pid: known ? owner : null, other: known && owner !== pid && alive(owner) };
+    });
+  }
+
+  /** The other runner holding this lane's file, or null when nothing does. */
+  function laneHolder(repo, lane) {
+    const path = paths.currentFor(repo, lane);
+    return stepsHeld().find((held) => held.path === path && held.other) || null;
   }
 
   /**
@@ -2108,6 +2142,9 @@ export function createRunner({
     const stepOf = (name) => known.plans.find((item) => item.project === name)?.step ?? null;
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
+      // A runner that has handed over finishes the pass it is in and picks
+      // nothing more (`runLoop`).
+      if (updateRequested()) return { ran: 0 };
       const pick = nextStep({ repo, world: known, passed });
       if (!pick) return { ran: 0 };
       if (last && pick.name === last.name && stepOf(pick.name) === last.step) {
@@ -2155,6 +2192,7 @@ export function createRunner({
    */
   async function chores() {
     if (stopRequested()) return;
+    dropPredecessor();
     await runHelperDay();
     await runIntakeDrain();
     const { plans } = queue();
@@ -2209,21 +2247,37 @@ export function createRunner({
    * the page can only say *an update is available* if the runner said what it
    * is (the page's MC line). Absent from an install with no checkout.
    */
-  const markRunner = () => {
+  //
+  // A successor names its `predecessor` — the runner it took over from, which
+  // is still finishing what it held — until that pid is gone
+  // (`dropPredecessor`), so `mc run stop` and the page find both.
+  let marked = null;
+  const markRunner = ({ predecessor = null } = {}) => {
     const dir = mcCheckout({ exists: deps.exists });
     const commit = dir ? gitOut(dir, ['rev-parse', '--short', 'HEAD']) : null;
-    writeJson(paths.runner, { pid, started: stamp(), ...(commit ? { commit } : {}) });
+    marked = { pid, started: stamp(), ...(commit ? { commit } : {}), ...(predecessor ? { predecessor } : {}) };
+    writeJson(paths.runner, marked);
   };
+  const dropPredecessor = () => {
+    const before = marked?.predecessor;
+    if (!before || alive(before.pid)) return;
+    const { predecessor: _gone, ...rest } = marked;
+    marked = rest;
+    writeJson(paths.runner, marked);
+    say(`update: pid ${before.pid} has finished what it held and exited`);
+  };
+  // A lane file another live runner holds is not a leftover: it is the
+  // runner a handover replaced, still in that step.
   const clearRunner = () => {
     remove(paths.runner);
-    for (const file of paths.currents()) remove(file);
+    for (const held of stepsHeld()) if (!held.other) remove(held.path);
   };
 
   return {
     paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runNightly, archiveDone, queue, stopRequested,
     writeUnreadable,
     blockStep,
-    updateRequested, syncMain, freshBranch, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
+    updateRequested, holdUpdate, stepsHeld, laneHolder, pid, syncMain, freshBranch, landDocsPr, planOf, repoOf, markRunner, dropPredecessor, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
   };
 }
@@ -2262,7 +2316,13 @@ export async function runLoop({
   // worktree, one `git add -A`, and a second session that can only stand
   // down. There is nothing about being watched that makes that safe.
   const held = readRunner({ paths: runner.paths, read: deps.read, alive: deps.alive || pidAlive });
-  if (held?.alive) {
+  // The one live holder that is no refusal: the runner that has just handed
+  // over to this one, which says so in the environment it spawned this
+  // process with (`handOver`). It keeps finishing the steps it holds; this
+  // one starts at once beside it (ruling 28).
+  const successorOf = Number(deps.env?.MC_RUN_SUCCESSOR_OF);
+  const replacing = held?.alive && Number.isInteger(successorOf) && successorOf === held.pid ? held : null;
+  if (held?.alive && !replacing) {
     runner.say(`a runner is already running — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`);
     runner.say('mc run stop ends it · mc run --update restarts it on the newest code');
     return 2;
@@ -2272,11 +2332,12 @@ export async function runLoop({
   // clears it. `clearRunner()` takes the `current-<repo>.json` files with it,
   // which are the same runner's other leftovers and would otherwise draw a
   // step that has not been running for hours.
-  if (held) {
+  if (held && !replacing) {
     runner.clearRunner();
     runner.say(`cleared runner.json — the pid it named (${held.pid}) is gone`);
   }
   runner.say(`runner start (mc run, merge=${merge ? 1 : 0} once=${once ? 1 : 0})`);
+  if (replacing) runner.say(`update: taking over from pid ${replacing.pid} — it finishes the steps it holds, this runner starts every lane it does not`);
   // Before the first round, so a run that is going to be unattended is already
   // holding the assertion by the time anybody walks away from it. `--once` is
   // a person watching one step and does not need it.
@@ -2291,29 +2352,42 @@ export async function runLoop({
       ? `staying awake (caffeinate ${held.flags.join(' ')} pid ${held.pid}) — ${held.note}`
       : `NOT staying awake (${held.reason}) — this machine may sleep mid-run: ${held.note}`);
   }
-  runner.markRunner();
+  runner.markRunner(replacing ? { predecessor: { pid: replacing.pid, started: replacing.started } } : {});
   // A handover is the one exit that must not clear runner.json: the runner it
   // handed to has already written its own, and removing it on the way out
   // would leave the page saying nothing is running while something is.
   let handedOver = false;
-  // `mc run --update`, read where STOP is read: at a round boundary, with no
-  // session in flight and nothing half-done. runner.json is cleared before
-  // the new runner is started rather than after, so the two never race for
-  // the same file.
-  const update = async () => {
-    runner.clearRunner();
-    const handed = await (deps.handOver || handOver)({ paths: runner.paths, deps, say: runner.say });
-    if (handed.ok) { handedOver = true; return true; }
-    runner.markRunner();
+  // When the handover happened, for the ten-minute line that follows it.
+  let drainMark = null;
+  // The steps this runner holds: its own lane files, not its successor's.
+  const ownInFlight = () => runner.stepsHeld().filter((held) => held.pid === runner.pid);
+  // `mc run --update`, once per runner however many lanes read it: the first
+  // loop to see UPDATE starts the handover and every other one awaits the
+  // same answer. From that moment the UPDATE is held (`holdUpdate`), so no
+  // loop of this runner takes a step again even though `handOver` has removed
+  // the file. A handover that could not start its successor (`handOver`'s
+  // `{ ok: false }`) releases it: the UPDATE is taken away, it is said, and
+  // the lanes go on with the code this runner holds.
+  let handing = null;
+  const update = () => handing || (handing = (async () => {
+    runner.holdUpdate(true);
+    const handed = await (deps.handOver || handOver)({
+      paths: runner.paths, deps, say: runner.say, predecessor: runner.pid, finishing: ownInFlight().length,
+    });
+    if (handed.ok) { handedOver = true; drainMark = deps.now().getTime(); return true; }
+    runner.holdUpdate(false);
+    deps.remove(runner.paths.update);
+    handing = null;
+    const commit = readRunner({ paths: runner.paths, read: deps.read, alive: () => true })?.commit;
+    runner.say(`update: could not hand over — this runner keeps going on ${commit || 'the code it holds'}; mc run --update to try again`);
     return false;
-  };
+  })());
   try {
     if (!once) {
       // The unattended run: one loop per repository, each on its own clock,
       // each taking the next step of the next project (`pass`). The chores a
       // round used to do around its lanes run in their own loop beside them.
-      // STOP and UPDATE are read between picks, and the handover waits for
-      // every lane to reach one.
+      // STOP and UPDATE are read between picks.
       //
       // `mc run lanes <n>` puts n of these loops on each repository. They take
       // from one ordered list and claim what they pick (`claims`), so two
@@ -2333,39 +2407,44 @@ export async function runLoop({
         runner.say(`lanes: ${count} per repository, ${total === null ? 'no total cap' : `${total} in total`}`);
       }
       //
-      // UPDATE drains the runner: from the moment it is read no lane starts
-      // a step, the steps in flight finish and land, and the handover comes
-      // when nothing is in flight anywhere — within one step's length. Two
-      // wrong versions preceded this on 2026-09-04. In the morning a lane
+      // UPDATE hands over at once (ruling 28): the checkout is fast-forwarded,
+      // the successor is started on the new code, and this runner takes no
+      // new step — it finishes the passes it is in and exits, leaving
+      // runner.json and the lane files to the successor. The successor starts
+      // every lane whose file this runner does not hold, waits on the ones it
+      // does, and counts this runner's projects as claimed (`laneHolder`,
+      // `nextStep`). For a step's length two runners overlap, and runner.json
+      // says so (`predecessor`).
+      //
+      // Three versions preceded this. On 2026-09-04, in the morning, a lane
       // that read UPDATE after an idle round left its loop and *sat*, so the
-      // idle lanes took no work for the whole of a busy lane's step. Then
-      // idle lanes were let to keep taking work until a quiet moment — and
-      // with four lanes in steady work the quiet moment never came: an
-      // UPDATE the runner wrote for itself at 09:30 was still pending two
-      // hours later, running old code the whole time. Martin chose the drain
-      // (A) over an immediate handover with two runners (B).
-      // Nothing in flight anywhere: no step lane in a session.
-      const quiet = () => runner.paths.currents().length === 0;
-      // While it drains, the runner says every ten minutes what it still
-      // waits on — once for the runner, from whichever loop looks first, not
-      // once per lane: six lanes would write six lines. The words are
-      // `drainWaiting`'s, the ones `mc run --update` prints. The first line
-      // comes ten minutes after the UPDATE was written, or after it was first
-      // seen when the file carries no time.
+      // idle lanes took no work for the whole of a busy lane's step. Then idle
+      // lanes were let to keep taking work until a quiet moment — and with
+      // four lanes in steady work the quiet moment never came: an UPDATE the
+      // runner wrote for itself at 09:30 was still pending two hours later,
+      // running old code the whole time. Martin then chose the drain (A) over
+      // an immediate handover with two runners (B): no lane started a step
+      // and the handover came when nothing was in flight anywhere — which
+      // left every idle lane idle for up to a step's length on every update.
+      // Ruling 28 took B.
+      //
+      // After the handover this runner says every ten minutes what it still
+      // holds — once for the runner, from whichever loop looks first, not
+      // once per lane. The words are `drainWaiting`'s, the ones
+      // `mc run --update` prints.
       const drainPaths = { dir: dirname(runner.paths.update), update: runner.paths.update, runner: runner.paths.runner };
-      let drainMark = null;
       const drainTick = () => {
+        if (!handedOver) return;
         const state = drainState({ paths: drainPaths, read: deps.read, list: deps.list, now: deps.now() });
-        if (!state.draining || state.inFlight.length === 0) return;
+        const own = state.inFlight.filter((held) => held.pid === runner.pid);
+        if (own.length === 0) return;
         const now = deps.now().getTime();
-        if (drainMark === null) drainMark = state.requested ? Date.parse(state.requested) : now;
         if (now - drainMark < DRAIN_TICK_MS) return;
         drainMark = now;
-        runner.say(`update: still ${drainWaiting(state)}`);
+        runner.say(`update: pid ${runner.pid} still ${drainWaiting({ ...state, inFlight: own })}`);
       };
       const lane = async (repo, index) => {
         const tag = count > 1 ? `${repo.name}#${index + 1}` : repo.name;
-        let draining = false;
         // The last line this lane said about having taken nothing. An idle
         // lane looks every ten minutes and would otherwise write the same
         // sentence 144 times a day; it says it once and then goes quiet until
@@ -2376,11 +2455,17 @@ export async function runLoop({
         let last = null;
         for (;;) {
           if (runner.updateRequested()) {
-            if (!draining) { draining = true; runner.say(`${tag}: UPDATE — taking no new step; handing over when every lane is done`); }
-            if (quiet()) return { update: true };
-            drainTick();
+            if (await update()) return { update: true };
+            continue;
+          }
+          // A successor's lane whose file the runner it replaced still holds:
+          // that runner is in a step here, and this lane starts when it ends.
+          const holder = runner.laneHolder(repo.name, index);
+          if (holder) {
+            const line = `${tag}: waiting for pid ${holder.pid} to finish ${holder.name || 'its step'}`;
+            if (line !== quietLine) { runner.say(line); quietLine = line; }
             await deps.sleep(UPDATE_POLL_MS);
-            if (runner.stopRequested()) return { stop: true };
+            if (runner.stopRequested()) { runner.say(`${tag}: STOP — exiting`); return { stop: true }; }
             continue;
           }
           const r = await runner.pass({ repo: repo.name, lane: index, tag, last });
@@ -2404,13 +2489,14 @@ export async function runLoop({
           if (runner.stopRequested()) { runner.say(`${tag}: STOP — exiting`); return { stop: true }; }
         }
       };
-      // The chore loop is the one that is never in a step, so under an UPDATE
-      // it is the ticker when every lane is busy and none is polling.
+      // The chore loop is the one that is never in a step, so after a
+      // handover it is the ticker while the lanes sit in their sessions.
       const choreLoop = async () => {
         for (;;) {
           if (runner.stopRequested()) { runner.say('chores: STOP — exiting'); return {}; }
           if (runner.updateRequested()) {
-            while (runner.updateRequested() && !quiet() && !runner.stopRequested()) {
+            if (!(await update())) continue;
+            while (ownInFlight().length > 0 && !runner.stopRequested()) {
               drainTick();
               await deps.sleep(UPDATE_POLL_MS);
             }
@@ -2420,21 +2506,13 @@ export async function runLoop({
           await deps.sleep(idleSleepMs);
         }
       };
-      // Until STOP or a handover that took. A handover that could not start
-      // its successor (`handOver`'s `{ ok: false }`) used to end this process
-      // with runner.json just re-marked by `update()` — the page said a
-      // runner was running while none was. Now the UPDATE is taken away, it
-      // is said, and the lanes start again on the code this runner holds.
-      for (;;) {
-        const lanes = runner.repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)));
-        const results = await Promise.all([...lanes, choreLoop()]);
-        if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
-        if (await update()) return 0;
-        deps.remove(runner.paths.update);
-        drainMark = null;
-        const commit = readRunner({ paths: runner.paths, read: deps.read, alive: () => true })?.commit;
-        runner.say(`update: could not hand over — this runner keeps going on ${commit || 'the code it holds'}; mc run --update to try again`);
-      }
+      // Until STOP, or until a handover that took and the steps this runner
+      // held have all ended.
+      const lanes = runner.repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)));
+      const results = await Promise.all([...lanes, choreLoop()]);
+      if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
+      runner.say(`update: every step pid ${runner.pid} held has ended — exiting`);
+      return 0;
     }
     // `--once`: one pick over the whole queue, in Martin's order, and out.
     // One lane, both repositories, no chores — a person watching one step,

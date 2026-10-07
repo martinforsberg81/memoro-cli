@@ -687,9 +687,14 @@ function proposalSummary(files, named = PROPOSALS_NAMED) {
  * still the old code until it hands over. A runner that never said — one
  * started before it wrote its commit — is measured by the checkout, which is
  * the best reading there is.
+ *
+ * `predecessor` is the runner an update replaced while it is still alive and
+ * finishing the steps it held (ruling 28): its pid and those steps' names, so
+ * the line can say two runners are running and why.
  */
 export function mcSection({
   process = null, commit = null, head = null, main = null, behind = null, updateText = null, drain = null, now = new Date(),
+  pid = null, predecessor = null,
 } = {}) {
   const asked = Date.parse(String(updateText || '').trim());
   return {
@@ -700,6 +705,8 @@ export function mcSection({
     head: head || null,
     main: main || null,
     behind: Number.isInteger(behind) ? behind : null,
+    // Only while two runners overlap; otherwise the line is what it was.
+    ...(predecessor ? { pid: Number.isInteger(pid) ? pid : null, predecessor: { pid: predecessor.pid, steps: predecessor.steps || [] } } : {}),
     update_requested: updateText == null ? null : {
       at: Number.isNaN(asked) ? null : new Date(asked).toISOString(),
       age_seconds: Number.isNaN(asked) ? null : Math.max(0, Math.round((now.getTime() - asked) / 1000)),
@@ -1212,6 +1219,13 @@ export async function collectPage({
     mc: mcSection({
       process: runner.process,
       commit: runnerFile?.commit ?? null,
+      pid: runnerFile?.pid ?? null,
+      predecessor: runnerFile?.predecessor?.pid && alive(runnerFile.predecessor.pid)
+        ? {
+          pid: runnerFile.predecessor.pid,
+          steps: runner.steps.filter((step) => step.pid === runnerFile.predecessor.pid).map((step) => step.name).filter(Boolean),
+        }
+        : null,
       ...mcReading(checkout, runnerFile?.commit ?? null, git),
       updateText: readText(join(root, 'runner', 'UPDATE')),
       drain: drainState({

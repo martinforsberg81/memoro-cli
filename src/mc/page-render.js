@@ -1020,6 +1020,10 @@ function programmesLines(lines, c, wide, programmes, expand) {
  * for how long — so a handover that is not happening can be seen not
  * happening, and why. Otherwise it is up to date, and grey.
  *
+ * For the step's length after an update two runners are alive: the new one,
+ * and the one it replaced finishing what it held. The line names both —
+ * `pid N on <commit> · pid M finishing 2 steps (a, b)`.
+ *
  * It replaced the line about how old the PR cache is, which was the last thing
  * on the page every time and never the thing anybody came for.
  */
@@ -1046,7 +1050,13 @@ function mcLine(lines, c, wide, mc, caches, version) {
   const lead = [{ text: version || '', styles: ['grey'] }];
   const rest = [
     { text: info.up_seconds == null ? 'runner not running' : `runner up ${duration(info.up_seconds)}`, styles: ['grey'] },
-    { text: info.commit ? `on ${info.commit}` : '', styles: ['grey'] },
+    { text: info.commit ? `${info.predecessor && info.pid ? `pid ${info.pid} ` : ''}on ${info.commit}` : '', styles: ['grey'] },
+    {
+      text: info.predecessor
+        ? `pid ${info.predecessor.pid} finishing ${info.predecessor.steps.length} step${info.predecessor.steps.length === 1 ? '' : 's'}${info.predecessor.steps.length ? ` (${info.predecessor.steps.join(', ')})` : ''}`
+        : '',
+      styles: ['grey'],
+    },
     { text: caches?.offline ? 'offline — plans as last fetched' : '', styles: ['grey'] },
   ];
   const long = trailing([...lead, state]);
