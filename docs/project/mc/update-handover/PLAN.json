@@ -21,7 +21,7 @@
       "check": "`tests/mc/run-control.test.js`: the three answers of `requestUpdate` (nothing to update; UPDATE written; already draining, with the lanes listed from `current-*.json` fixtures); `tests/mc/page.test.js`: the MC line with a drain in progress names the lane it waits on and its elapsed time."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A draining runner writes a line to runner.log every ten minutes naming what it still waits on, a handover that cannot respawn keeps the runner running, and the quota pause ends the moment the runner is quiet under an UPDATE.",
       "check": "`tests/mc/run.test.js`: a drain across a step longer than ten minutes (fake clock) logs the waiting line with the step's name; a `handOver` that returns `{ ok: false }` leaves the loop running and the next pick happens; `quotaPause` with UPDATE and no current files returns before its sleep is over."
     }

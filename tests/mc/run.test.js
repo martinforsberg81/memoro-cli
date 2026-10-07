@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { createRunner, runLoop } from '../../src/mc/run.js';
+import { createRunner, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { RUN_REFUSALS, WORKAREA_BLOCKS } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
@@ -1231,7 +1231,9 @@ test('a quota answer is logged as quota, not merged, and the runner sleeps 30 mi
   await runner.pass();
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\topus\n/u);
   assert.equal(f.calls.rounds.length, 0);
-  assert.ok(slept.includes(30 * 60 * 1000));
+  // Thirty minutes, polled in `UPDATE_POLL_MS` slices so an UPDATE is seen.
+  assert.equal(slept.reduce((a, b) => a + b, 0), 30 * 60 * 1000, `slept ${slept.join(',')}`);
+  assert.ok(slept.every((ms) => ms === UPDATE_POLL_MS));
 });
 
 /**
@@ -1256,7 +1258,7 @@ test('a session the API logged out is resumed after the login pause, and lands',
   assert.deepEqual(second.args.slice(0, 3), ['-p', '--resume', 'sid-1']);
   assert.match(second.prompt, /the API ended your last turn with "Not logged in · Please run \/login"/u);
   assert.equal(second.cwd, first.cwd);
-  assert.ok(slept.includes(30 * 60 * 1000), 'every lane sleeps on a lost login');
+  assert.equal(slept.reduce((a, b) => a + b, 0), 30 * 60 * 1000, 'every lane sleeps thirty minutes on a lost login');
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /claude is not logged in \(`claude \/login`\) — every lane sleeping 30m/u);
   assert.match(log, /r: the API ended the session \(Not logged in · Please run \/login\) — sid-1 is resumed once it answers/u);
@@ -1601,12 +1603,30 @@ test('UPDATE file: the successor starts with no refusal — runner.json is clear
   assert.match(log, /runner start \(mc run, merge=1 once=1\)[\s\S]*handed over to pid 9001/u);
 });
 
-test('UPDATE file: a handover that does not start keeps this runner going', async () => {
+/**
+ * A handover that cannot start its successor used to end the process with
+ * runner.json just re-marked — the page said a runner was running while none
+ * was. The loop keeps going instead, and the next pick happens.
+ */
+test('UPDATE file: a handover that does not start keeps this runner going, and the next pick happens', async () => {
   const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), runs: null });
   f.files['/w/runner/UPDATE'] = '';
-  f.deps.handOver = async ({ say }) => { say('update: the new runner did not start'); return { ok: false }; };
+  const handovers = [];
+  f.deps.handOver = async ({ say }) => { handovers.push('try'); say('update: the new runner did not start'); return { ok: false }; };
+  const inner = f.deps.session;
+  let held = null;
+  f.deps.session = (call) => {
+    held = { runner: '/w/runner/runner.json' in f.files, update: '/w/runner/UPDATE' in f.files };
+    f.files['/w/runner/STOP'] = '';
+    return inner(call);
+  };
   assert.equal(await runLoop({ deps: f.deps }), 0);
-  assert.match(f.files['/w/runner/log/runner.log'], /runner exit — the update did not hand over/u);
+  assert.deepEqual(handovers, ['try'], 'the drain did not reach the handover, or tried it twice');
+  assert.equal(f.calls.sessions.length, 1, 'no pick happened after the failed handover');
+  assert.deepEqual(held, { runner: true, update: false }, 'the step ran with no runner.json, or under the UPDATE that failed');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /update: could not hand over — this runner keeps going on [^;]+; mc run --update to try again[\s\S]*a: step done[\s\S]*runner exit on STOP/u);
+  assert.equal(/runner exit — the update did not hand over/u.test(log), false);
 });
 
 /**
@@ -1909,18 +1929,22 @@ test('a quota answer in one lane pauses the other, and there is one sleep, not t
       return name === 'q' ? quota : okSession()();
     },
   });
+  // The pause is thirty minutes in `UPDATE_POLL_MS` slices; one pause is
+  // sixty of them, and a second lane sleeping on its own would be more.
+  const perPause = (30 * 60 * 1000) / UPDATE_POLL_MS;
+  let slices = 0;
   f.deps.sleep = async (ms) => {
-    if (ms !== 30 * 60 * 1000) return;
-    events.push('sleep');
-    releaseA();
+    if (ms !== UPDATE_POLL_MS) return;
+    slices += 1;
+    if (slices === 1) { events.push('sleep'); releaseA(); }
     // Long enough for the other lane to finish its step and want the next
     // one; it must not get one until this sleep is over.
-    await new Promise((resolve) => { setTimeout(resolve, 5); });
-    events.push('woke');
+    await new Promise((resolve) => { setTimeout(resolve, 1); });
+    if (slices === perPause) events.push('woke');
   };
   await round(createRunner({ deps: f.deps }));
 
-  assert.equal(events.filter((event) => event === 'sleep').length, 1, 'one sleep for both lanes');
+  assert.equal(slices, perPause, 'one sleep for both lanes');
   assert.ok(events.indexOf('start b') > events.indexOf('woke'),
     `the other lane waited out the quota sleep: ${events.join(', ')}`);
   assert.match(f.files['/w/runner/log/runner.log'], /quota\/rate limit seen — every lane sleeping 30m/u);
@@ -1962,6 +1986,35 @@ test('a STOP file appearing after the first slice ends the quota pause', async (
   f.deps.sleep = async (ms) => { slept.push(ms); clock += ms; f.files['/w/runner/STOP'] = ''; };
   await createRunner({ deps: f.deps }).pass();
   assert.equal(slept.length, 1, `one slice, then STOP: ${slept.join(',')}`);
+});
+
+/**
+ * 2026-10-07: every lane slept 30 minutes from 18:30:58, and the UPDATE of
+ * 18:41 waited for the slice. A quiet runner under an UPDATE has nothing to
+ * wait for, and an UPDATE written mid-pause is seen at the next poll.
+ */
+test('the quota pause returns at once under an UPDATE with nothing in flight', async () => {
+  const slept = [];
+  const refused = { status: 1, stdout: JSON.stringify({ subtype: 'success', num_turns: 1, result: "You've hit your weekly limit · resets Sep 11 at 3pm (Europe/Stockholm)" }), stderr: '', timedOut: false };
+  const f = fixture({ now: '2026-09-08T09:05:00Z', plans: { memoro: { q: ready } }, gh: { q: { number: 5 } }, session: () => { f.files['/w/runner/UPDATE'] = ''; return refused; } });
+  let clock = new Date('2026-09-08T09:05:00Z').getTime();
+  f.deps.now = () => new Date(clock);
+  f.deps.sleep = async (ms) => { slept.push(ms); clock += ms; };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.deps.list('/w/runner').some((file) => file.startsWith('current-')), false);
+  assert.deepEqual(slept, [], `slept under an UPDATE with nothing in flight: ${slept.join(',')}`);
+  assert.match(f.files['/w/runner/log/runner.log'], /quota seen — every lane sleeping until/u);
+});
+
+test('an UPDATE written during the quota pause ends it at the next poll, not the next half hour', async () => {
+  const slept = [];
+  const refused = { status: 1, stdout: JSON.stringify({ subtype: 'success', num_turns: 1, result: "You've hit your weekly limit · resets Sep 11 at 3pm (Europe/Stockholm)" }), stderr: '', timedOut: false };
+  const f = fixture({ now: '2026-09-08T09:05:00Z', plans: { memoro: { q: ready } }, gh: { q: { number: 5 } }, session: () => refused });
+  let clock = new Date('2026-09-08T09:05:00Z').getTime();
+  f.deps.now = () => new Date(clock);
+  f.deps.sleep = async (ms) => { slept.push(ms); clock += ms; if (slept.length === 3) f.files['/w/runner/UPDATE'] = ''; };
+  await createRunner({ deps: f.deps }).pass();
+  assert.deepEqual(slept, [UPDATE_POLL_MS, UPDATE_POLL_MS, UPDATE_POLL_MS]);
 });
 
 test('STOP ends both lanes after the step each is in', async () => {
@@ -3012,6 +3065,35 @@ test('runLoop: an UPDATE drains — no lane starts a step, the ones in flight fi
   assert.deepEqual(handovers[0], ['a: start', 'a: end'], 'the handover came after the step in flight had ended');
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /memoro-cli: UPDATE — taking no new step; handing over when every lane is done/u);
+});
+
+/**
+ * 2026-10-05: a drain said one line when it began and nothing again until the
+ * handover 42 minutes later. Every ten minutes it now says what it waits on —
+ * one line for the runner, however many loops are polling.
+ */
+test('runLoop: a drain across a long step says what it waits on every ten minutes, once for the runner', async () => {
+  const f = fixture({ plans: { memoro: { a: ready }, 'memoro-cli': {} }, session: okSession() });
+  const t0 = new Date('2026-08-26T12:00:00Z').getTime();
+  let clock = t0;
+  f.deps.now = () => new Date(clock);
+  // Each poll is half a minute on the clock, and a macrotask so the step's
+  // session below gets its turn.
+  f.deps.sleep = (ms) => new Promise((resolve) => { setImmediate(() => { clock += Math.min(ms, UPDATE_POLL_MS); resolve(); }); });
+  const inner = f.deps.session;
+  f.deps.session = async (call) => {
+    f.files['/w/runner/UPDATE'] = `${new Date(clock).toISOString()}\n`;
+    const asked = clock;
+    while (clock - asked < 15 * 60 * 1000) await new Promise((resolve) => { setImmediate(resolve); });
+    return inner(call);
+  };
+  f.deps.handOver = async ({ say }) => { say('update: handed over to pid 9001 — this runner is done'); return { ok: true, pid: 9001 }; };
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  const log = f.files['/w/runner/log/runner.log'];
+  const ticks = log.split('\n').filter((line) => line.includes('update: still'));
+  assert.equal(ticks.length, 1, `one line per ten minutes for the runner, not per loop:\n${ticks.join('\n')}`);
+  assert.match(ticks[0], /update: still waiting on a step 1 \(memoro#1, [^)]+\)$/u);
+  assert.match(log, /update: still waiting on a step 1[\s\S]*handed over to pid 9001/u);
 });
 
 /**
