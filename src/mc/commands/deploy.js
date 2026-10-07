@@ -23,11 +23,13 @@
  * preflight* because the verb spawned the script in whatever branch `~/memoro`
  * happened to be on).
  *
- * The lease (`repo-lease.js`) is claimed for the length of the deploy with
- * errand `deploy <sha>`, so a gate round or a landing that meets it waits or
- * refuses, exactly as they do for a merge round: what is being shipped must
- * not be `main` as it was two commits ago. It is released however the deploy
- * ends.
+ * The lease (`repo-lease.js`) is claimed with errand `deploy <sha>` for the
+ * fast-forward and the read of the sha that ships, and nothing after: `main`
+ * must not move between the question and that read. The build then runs on
+ * that sha with the lease released — a merge landing on `origin/main` does not
+ * move the worktree, nothing but this verb and the person fast-forwards it —
+ * so a gate or merge round can land the next pull request while production is
+ * being built (ruling 26, 2026-10-07).
  *
  * The record (`deploys.js`) is written around the spawn rather than after it:
  * the row exists, saying `running`, before `npm run deploy` is started, and is
@@ -585,52 +587,64 @@ export async function run(argv, deps = {}) {
     refuse(`held by ${claimed.lease.holder} — ${claimed.lease.errand}`);
     const c = painter(Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined);
     stderr.write(`mc: ${path} is held by ${claimed.lease.holder} — ${leaseRow(c, claimed.lease)}\n`);
-    stderr.write('mc: a deploy takes the lease for its whole length, so main cannot move under the build — nothing was deployed\n');
+    stderr.write('mc: a deploy takes the lease while it fast-forwards main and reads the sha that ships — nothing was deployed\n');
     return 1;
   }
 
-  // Under the lease, so nothing else is deploying: a row still `running` is a
-  // deploy that died without completing it.
-  for (const row of closeAbandoned({}, env)) {
-    const when = String(row.started).slice(0, 16).replace('T', ' ');
-    stdout.write(`mc: the deploy of ${short(row.sha)} started ${when} never came back — its row now says failed\n`);
-  }
-
-  // Under the lease and before the record: the one movement of somebody else's
-  // checkout this verb may make. `origin/main` is what ships — whatever is on
-  // `main` is meant to — so it is fast-forwarded to `origin/main` as it is now,
-  // which may be later than the sha the question showed. `--ff-only` on a tree
-  // already proved clean and not ahead, so it either fast-forwards or does
-  // nothing.
-  if (state.behind) {
-    const merged = git(source.worktree, ['merge', '--ff-only', 'origin/main']);
-    if (merged === null) {
-      release({ repoPath: path, holder });
-      refuse(`could not fast-forward main in ${source.worktree}`);
-      stderr.write(`mc: git merge --ff-only origin/main failed in ${source.worktree} — nothing was deployed\n`);
-      return 1;
-    }
-  }
-  // What ships is what that worktree stands on now, read rather than assumed:
-  // the runner lands and fetches all the time, and `origin/main` is a ref every
-  // worktree shares, so it can have moved between the question and the yes.
-  // Twice it had (2026-09-14, 2026-09-19), and the row named the sha the
-  // question showed instead of the one that went out.
-  const shipping = git(source.worktree, ['rev-parse', '--verify', 'HEAD']) || plan.sha;
-  if (state.behind) stdout.write(`mc: fast-forwarded main in ${source.worktree} to ${short(shipping)}\n`);
-  if (shipping !== plan.sha) stdout.write(`mc: main moved to ${short(shipping)} since the question; deploying ${short(shipping)}\n`);
-
-  // Before the spawn, not after it: a deploy that never comes back — the
-  // terminal closed, a ^C in the middle of wrangler — leaves this row saying
-  // `running` with no `ended`, which is the true thing to say about it.
-  const key = recordStart({ sha: shipping, holder: holder.name }, env);
-
-  const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
+  // From here until the early release the lease is ours; the `finally`
+  // releases it only while that is still true, so a throw under the lease does
+  // not leave it behind and a throw after it does not hand away a lease a merge
+  // round has taken since — `releaseLease` refuses another holder's, but not
+  // one under the same name.
+  let stillHeld = true;
+  let key = null;
   let tail = '';
-  const onOutput = (chunk) => {
-    tail = (tail + chunk).slice(-OUTPUT_TAIL);
-  };
   try {
+    // Under the lease, so nothing else is deploying: a row still `running` is a
+    // deploy that died without completing it.
+    for (const row of closeAbandoned({}, env)) {
+      const when = String(row.started).slice(0, 16).replace('T', ' ');
+      stdout.write(`mc: the deploy of ${short(row.sha)} started ${when} never came back — its row now says failed\n`);
+    }
+
+    // Under the lease and before the record: the one movement of somebody else's
+    // checkout this verb may make. `origin/main` is what ships — whatever is on
+    // `main` is meant to — so it is fast-forwarded to `origin/main` as it is now,
+    // which may be later than the sha the question showed. `--ff-only` on a tree
+    // already proved clean and not ahead, so it either fast-forwards or does
+    // nothing.
+    if (state.behind) {
+      const merged = git(source.worktree, ['merge', '--ff-only', 'origin/main']);
+      if (merged === null) {
+        refuse(`could not fast-forward main in ${source.worktree}`);
+        stderr.write(`mc: git merge --ff-only origin/main failed in ${source.worktree} — nothing was deployed\n`);
+        return 1;
+      }
+    }
+    // What ships is what that worktree stands on now, read rather than assumed:
+    // the runner lands and fetches all the time, and `origin/main` is a ref every
+    // worktree shares, so it can have moved between the question and the yes.
+    // Twice it had (2026-09-14, 2026-09-19), and the row named the sha the
+    // question showed instead of the one that went out.
+    const shipping = git(source.worktree, ['rev-parse', '--verify', 'HEAD']) || plan.sha;
+    if (state.behind) stdout.write(`mc: fast-forwarded main in ${source.worktree} to ${short(shipping)}\n`);
+    if (shipping !== plan.sha) stdout.write(`mc: main moved to ${short(shipping)} since the question; deploying ${short(shipping)}\n`);
+
+    // Before the spawn, not after it: a deploy that never comes back — the
+    // terminal closed, a ^C in the middle of wrangler — leaves this row saying
+    // `running` with no `ended`, which is the true thing to say about it.
+    key = recordStart({ sha: shipping, holder: holder.name }, env);
+
+    // The sha is read and written down, so the lease has done its one job: the
+    // build runs on that sha in a worktree nothing but this verb and the person
+    // moves, and a merge round may land on origin/main beside it.
+    stillHeld = false;
+    release({ repoPath: path, holder });
+
+    const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
+    const onOutput = (chunk) => {
+      tail = (tail + chunk).slice(-OUTPUT_TAIL);
+    };
     const result = await spawnDeploy({ cwd: source.worktree, env, sha: shipping, onOutput, stdout, stderr });
     const said = readScriptOutput(tail);
     const ok = result.code === 0;
@@ -655,11 +669,9 @@ export async function run(argv, deps = {}) {
   } catch (error) {
     // A throw is not a deploy that finished: the row would otherwise stay
     // `running` for a failure mc itself caused, and the throw goes on up.
-    recordEnd(key, { outcome: FAILED, stopped_at: readScriptOutput(tail).stopped_at, note: `mc: ${error?.message || error}` }, env);
+    if (key) recordEnd(key, { outcome: FAILED, stopped_at: readScriptOutput(tail).stopped_at, note: `mc: ${error?.message || error}` }, env);
     throw error;
   } finally {
-    // However it ended, including a throw: a lease left behind by a deploy
-    // stops the next gate round for a reason that is over.
-    release({ repoPath: path, holder });
+    if (stillHeld) release({ repoPath: path, holder });
   }
 }

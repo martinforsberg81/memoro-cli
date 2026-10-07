@@ -264,9 +264,12 @@ IN FULL
                                     would ship, what is live now and the gap
                                     between them, what the nightly said about
                                     that tree — then one question, and on a
-                                    yes the repository's own npm run deploy,
-                                    under mc's lease so nothing moves main
-                                    while the build reads it. No flag skips
+                                    yes the repository's own npm run deploy.
+                                    mc's lease covers the fast-forward of main
+                                    and the read of the sha that ships, not
+                                    the build: that runs on the sha with the
+                                    lease free, so merges land beside it.
+                                    No flag skips
                                     the question and without a terminal it
                                     refuses; --dry-run is the reading and
                                     stops there. Every deploy, and every
