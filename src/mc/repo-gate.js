@@ -586,9 +586,19 @@ export async function runGate({
     // order the selector gave, and before any verdict is reached — a round that
     // stopped at a red test and skipped them would report a contract as
     // unchecked exactly when it is least safe to assume it holds.
+    //
+    // The base a command gate is handed is the commit the round measured
+    // against, not the ref. Every worktree shares one git directory, so
+    // another session's `git fetch` moves `origin/main` under a round that is
+    // minutes into its suite; a differential gate that resolved the ref at
+    // its own moment then measured a main the candidate never merged.
+    // Measured 2026-10-08: memoro #13032 went red three rounds running on
+    // `sql:pr-ci`'s "head does not include moving base … merge current main"
+    // with nothing wrong in the change — the same red memoro's own `ci.mjs`
+    // closed on 2026-09-06 by handing its gates the merge base as a commit.
     const selectedGates = selection?.commands?.length
       ? await runSelectedCommands({
-        commands: selection.commands, cwd: headDir, env, baseRef, say, timed, clock,
+        commands: selection.commands, cwd: headDir, env, baseRef: report.base.commit || baseRef, say, timed, clock,
       })
       : [];
     report.extra_gates.push(...selectedGates);

@@ -1180,9 +1180,13 @@ describe('a repository that selects by diff', () => {
       assert.ok(gates.every((gate) => typeof gate.duration_ms === 'number'));
       // `--base-ref` where the selection said so, and nowhere else: a gate that
       // is differential in itself would otherwise measure the wrong two trees.
+      // And it is the base *commit* the round resolved after its fetch, not
+      // the ref: `origin/main` is shared with every other worktree's fetch
+      // and moves under a round minutes into its suite (memoro #13032,
+      // 2026-10-08: three rounds red on "does not include moving base").
       assert.equal(fx.mark('css-lint'), '');
-      assert.equal(fx.mark('css-tokens'), '--base-ref origin/main');
-      assert.equal(gates[1].command, 'npm run css:tokens -- --base-ref origin/main');
+      assert.equal(fx.mark('css-tokens'), '--base-ref base1111');
+      assert.equal(gates[1].command, 'npm run css:tokens -- --base-ref base1111');
       // And the verdict counts them. What each one cost is `--json`'s since
       // 2026-08-31 — a green round says what ran, not how each part of it did.
       const lines = gateLines(report).join('\n');
