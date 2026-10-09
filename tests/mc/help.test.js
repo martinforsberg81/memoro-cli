@@ -78,12 +78,14 @@ describe('mc --help', () => {
       // it is asserted in the list above instead of forbidden here. What is
       // still gone are the sub-verbs it used to carry: `ensure`, `plan`,
       // `status`, `logs` and `restart` among them. `stop` came back with
-      // `dev-server-lifecycle` (2026-09-26).
+      // `dev-server-lifecycle` (2026-09-26). `deps` came back on 2026-10-09
+      // (ruling 29) as a different verb — the lockfile reading — and is
+      // asserted above too.
       'doctor', 'migrate', 'setup', 'install-shell', 'auth', 'tool-auth',
-      'connections', 'github', 'coding-profile', 'deps',
+      'connections', 'github', 'coding-profile',
       'cloud-session', 'cloud-runtime', 'security',
     ];
-    for (const gone of ['mc dev ensure', 'mc dev plan', 'mc dev restart', 'mc dev logs', 'mc dev status', 'mc deps', 'mc storage']) {
+    for (const gone of ['mc dev ensure', 'mc dev plan', 'mc dev restart', 'mc dev logs', 'mc dev status', 'mc storage']) {
       assert.doesNotMatch(result.stdout, new RegExp(`\\b${gone}\\b`, 'u'), `${gone} went with the cut and is not coming back`);
     }
     for (const verb of gone) {

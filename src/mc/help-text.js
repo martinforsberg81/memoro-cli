@@ -34,6 +34,7 @@ THE PAGE
   mc publish                       Push this branch, open its pull request
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
+  mc deps [<repo>]                 Which dependencies need updating, and how urgently
   mc dev list                      Which dev server runs in which worktree
   mc dev admit <service>           May one more dev server start here?
   mc status <name>                 One project, whole
@@ -285,6 +286,19 @@ IN FULL
                                     and read back by the page and
                                     mc helper. It takes no repository:
                                     memoro-cli is installed, not deployed
+  mc deps [<repo>] [--json] [--refresh]
+                                   What origin/main's lockfile is behind on:
+                                    npm audit and npm view of it, read in a
+                                    scratch directory, never a checkout — in
+                                    three groups, security within the major,
+                                    patch/minor and major, each row runtime or
+                                    tool by its section of package.json, then
+                                    the repository's declared notes (memoro:
+                                    the wrangler tally). Saved in
+                                    ~/.memoro/mc/deps/<repo>.json; the same
+                                    sha read under 6 h ago is reused unless
+                                    --refresh. No repo reads every one that
+                                    has a package-lock.json
   mc repo guard [repo]             Install the pre-push guard: a push to a
                                     branch whose pull request is already merged
                                     is refused with the number and date, and

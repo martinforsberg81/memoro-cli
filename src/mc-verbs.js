@@ -18,6 +18,7 @@ export const VERB_MODULES = {
   publish: './mc/commands/publish.js',
   dev: './mc/commands/dev.js',
   deploy: './mc/commands/deploy.js',
+  deps: './mc/commands/deps.js',
   worker: './mc/commands/worker.js',
   brief: './mc/commands/brief.js',
   helper: './mc/commands/helper.js',
