@@ -35,6 +35,7 @@ THE PAGE
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc deps [<repo>]                 Which dependencies need updating, and how urgently
+  mc deps bump <repo> <what>       Opens a pull request for one group and lands it through the gate
   mc dev list                      Which dev server runs in which worktree
   mc dev admit <service>           May one more dev server start here?
   mc status <name>                 One project, whole
@@ -301,6 +302,17 @@ IN FULL
                                     sha read under 6 h ago is reused unless
                                     --refresh. No repo reads every one that
                                     has a package-lock.json
+  mc deps bump <repo> <what> [--dry-run] [--json]
+                                   Opens a pull request and lands it through
+                                    the gate: <what> is security, minor or
+                                    <package>[@<version>]; a fresh reading,
+                                    a workarea deps-<repo>-<what>-<yyyymmdd>
+                                    on origin/main, npm with
+                                    --package-lock-only on package.json and
+                                    package-lock.json only, one commit, mc
+                                    publish, mc merge <repo> <pr>. A group
+                                    never crosses a major. --dry-run prints
+                                    the change and makes nothing
   mc repo guard [repo]             Install the pre-push guard: a push to a
                                     branch whose pull request is already merged
                                     is refused with the number and date, and

@@ -9,11 +9,13 @@
  * is unless `--refresh` asks for a new one.
  *
  * No repository means every one of `defaultRepos` whose `origin/main` has a
- * `package-lock.json`. `mc deps bump` is reserved for the step that builds it.
+ * `package-lock.json`. `mc deps bump` turns a group into a pull request
+ * through the gate — `src/mc/deps-bump.js`.
  */
 import { basename } from 'node:path';
 
 import { defaultRepos } from '../brief-collect.js';
+import { bump } from '../deps-bump.js';
 import { formatReading, hasLockfile, readDeps } from '../deps.js';
 import { scanArgs } from './flags.js';
 import { resolveRepoPath } from './repo.js';
@@ -23,10 +25,7 @@ export async function run(argv, deps = {}) {
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
 
-  if (argv[0] === 'bump') {
-    stderr.write('mc: mc deps bump is not built yet\n');
-    return 2;
-  }
+  if (argv[0] === 'bump') return runBump(argv.slice(1), { ...deps, stdout, stderr, env });
   const scanned = scanArgs(argv, { booleans: ['--json', '--refresh'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
@@ -81,6 +80,39 @@ export async function run(argv, deps = {}) {
   return code;
 }
 
+async function runBump(argv, deps) {
+  const { stdout, stderr, env } = deps;
+  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json'] });
+  if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
+  const { flags, positional } = scanned;
+  if (positional.length !== 2) {
+    stderr.write(`mc: mc deps bump takes a repository and what to bump\n${usage()}`);
+    return 2;
+  }
+  const repoPath = await (deps.resolveRepo || resolveRepoPath)(positional[0]);
+  if (!repoPath) {
+    stderr.write(`mc: no repository called "${positional[0]}" — mc repo status lists the ones mc can see\n`);
+    return 1;
+  }
+  return bump({
+    repo: basename(repoPath),
+    repoPath,
+    what: positional[1],
+    dryRun: flags['dry-run'],
+    json: flags.json,
+    env,
+    stdout,
+    stderr,
+    ...(deps.now ? { now: deps.now } : {}),
+    ...(deps.git ? { git: deps.git } : {}),
+    ...(deps.npm ? { npm: deps.npm } : {}),
+    ...(deps.reading ? { reading: deps.reading } : {}),
+    ...(deps.addWorktree ? { addWorktree: deps.addWorktree } : {}),
+    ...(deps.publish ? { publish: deps.publish } : {}),
+    ...(deps.merge ? { merge: deps.merge } : {}),
+  });
+}
+
 export function usage() {
   return [
     'usage — mc deps [<repo>] [--json] [--refresh]\n',
@@ -89,5 +121,11 @@ export function usage() {
     '  each row runtime or tool, with the repository\'s declared notes. No repo reads\n',
     '  every one with a package-lock.json. A saved reading of the same sha younger than\n',
     '  6 h is reused; --refresh reads anew. Saved in ~/.memoro/mc/deps/<repo>.json.\n',
+    '\n',
+    'usage — mc deps bump <repo> security|minor|<package>[@<version>] [--dry-run] [--json]\n',
+    '  A fresh reading, then a workarea deps-<repo>-<what>-<yyyymmdd> on origin/main where\n',
+    '  npm changes package.json and package-lock.json with --package-lock-only only; one\n',
+    '  commit, mc publish, mc merge <repo> <pr>. A group never crosses a major; only a\n',
+    '  named <package>@<version> may. --dry-run prints the change and makes nothing.\n',
   ].join('');
 }
