@@ -256,13 +256,14 @@ describe('mc deploy — what it says before it asks', () => {
     assert.equal(lines.at(-1), 'mc: deps — 2 critical, 24 high; wrangler 4.116.0 → 4.149.0 (33 minor behind; D=2 S=1) — read 3h ago');
   });
 
-  it('names the sha a reading of another tree was taken at, and its age in days', async () => {
+  it('shows no counts from a reading of another tree, and names both', async () => {
     const other = 'abc1234000000000000000000000000000000000';
     const plan = await planWith(() => savedDeps(other, { read_at: '2026-10-06T08:00:00Z' }));
     assert.equal(plan.deps.this_tree, false);
+    assert.equal(plan.deps.counts, undefined);
     assert.equal(
       planLines(plan, { now: NOW }).at(-1),
-      'mc: deps — 2 critical, 24 high; wrangler 4.116.0 → 4.149.0 (33 minor behind; D=2 S=1) — read 3d ago at abc1234',
+      'mc: deps of 1a2b3c4 not read — the reading is of abc1234; mc deps memoro',
     );
   });
 
@@ -285,15 +286,13 @@ describe('mc deploy — what it says before it asks', () => {
     assert.equal(odd.deps, null);
   });
 
-  it('reads the saved file under MC_HOME, and --dry-run prints it last', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'mc-deploy-deps-'));
-    mkdirSync(join(home, 'deps'));
-    writeFileSync(join(home, 'deps', 'memoro.json'), JSON.stringify(savedDeps(SHA, { read_at: new Date().toISOString() })));
+  it('reads the deps of the checkout that ships, and --dry-run prints them last', async () => {
+    const asked = [];
+    const depsReading = async (repo, opts) => { asked.push(opts.path); return savedDeps(SHA, { read_at: new Date().toISOString() }); };
     const { out, stdout, stderr } = io();
-    const { depsReading, ...rest } = deps();
-    assert.equal(typeof depsReading, 'function');
-    const code = await run(['--dry-run'], { ...rest, env: { ...rest.env, MC_HOME: home }, stdout, stderr });
+    const code = await run(['--dry-run'], { ...deps({ depsReading }), stdout, stderr });
     assert.equal(code, 0);
+    assert.deepEqual(asked, [REPOS.find((repo) => repo.name === 'memoro').path]);
     assert.match(out.stdout, /^mc: deps — 2 critical, 24 high; wrangler 4\.116\.0 → 4\.149\.0 .* — read 0h ago\nmc: --dry-run — nothing was deployed\n$/mu);
   });
 

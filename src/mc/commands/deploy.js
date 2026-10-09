@@ -70,7 +70,7 @@ import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
   runningDeploy,
 } from '../deploys.js';
-import { readSavedReading as readSavedDeps } from '../deps.js';
+import { readDeps } from '../deps.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
@@ -383,7 +383,7 @@ export function leftoverStamps({ worktree, dirty, git = tryGit }) {
  */
 export async function deployPlan({
   path, env = process.env, git = tryGit, fetchVersion = fetchVersionDefault,
-  lastDeploy = lastDeployRow, nightly = nightlyReading, offline = false, depsReading = readSavedDeps,
+  lastDeploy = lastDeployRow, nightly = nightlyReading, offline = false, depsReading = readTreeDeps,
 }) {
   const fetched = offline ? false : git(path, ['fetch', 'origin', 'main', '--quiet']) !== null;
   const sha = git(path, ['rev-parse', '--verify', 'origin/main']);
@@ -430,19 +430,30 @@ export async function deployPlan({
     last,
     gap: last ? count(last.sha, sha) : null,
     nightly: nightlyState,
-    deps: depsState(depsReading, env, sha),
+    deps: await depsState(depsReading, { env, path, sha }),
   };
 }
 
 /**
- * What `mc deps` last saved, as the deploy's last line: a file read and
- * nothing else — no npm, no fetch, no git. The line is information only, so a
- * reader that throws or a reading of the wrong shape is no reading.
+ * `mc deps` of `origin/main` — the tree that would ship — reused when a
+ * reading of that sha is fresh, read anew when it is not.
  */
-function depsState(depsReading, env, sha) {
+async function readTreeDeps(repo, { env, path }) {
+  return (await readDeps({ repoPath: path, repo, env })).reading;
+}
+
+/**
+ * The deps of the tree that would ship, as the deploy's last line. Counts of
+ * another tree are not shown: a deploy that has just bumped its dependencies
+ * would otherwise say the advisories it fixed are still there (2026-10-09).
+ * The line is information only, so a reader that throws or a reading of the
+ * wrong shape is no reading.
+ */
+async function depsState(depsReading, { env, path, sha }) {
   try {
-    const reading = depsReading(REPO, { env });
+    const reading = await depsReading(REPO, { env, path });
     if (!reading) return null;
+    if (reading.sha !== sha) return { sha: reading.sha, short: short(reading.sha), tree: short(sha), this_tree: false };
     return {
       sha: reading.sha,
       short: short(reading.sha),
@@ -467,6 +478,7 @@ function readAge(readAt, now) {
 
 function depsLine(deps, now) {
   if (!deps) return `mc: deps not read — mc deps ${REPO}`;
+  if (!deps.this_tree) return `mc: deps of ${deps.tree} not read — the reading is of ${deps.short}; mc deps ${REPO}`;
   const critical = deps.counts?.critical || 0;
   const high = deps.counts?.high || 0;
   const notes = deps.notes || [];
@@ -474,7 +486,7 @@ function depsLine(deps, now) {
     ? 'mc: deps — nothing critical or high'
     : `mc: deps — ${critical} critical, ${high} high${notes.map((text) => `; ${text}`).join('')}`;
   const age = readAge(deps.read_at, now);
-  return `${head} — read ${age}${deps.this_tree ? '' : ` at ${deps.short}`}`;
+  return `${head} — read ${age}`;
 }
 
 /**
@@ -589,7 +601,7 @@ export async function run(argv, deps = {}) {
     fetchVersion: deps.fetchVersion || fetchVersionDefault,
     lastDeploy: deps.lastDeploy || lastDeployRow,
     nightly: deps.nightly || nightlyReading,
-    depsReading: deps.depsReading || readSavedDeps,
+    depsReading: deps.depsReading || readTreeDeps,
   });
   if (!base.sha) {
     stderr.write(`mc: ${path} has no origin/main — mc deploy needs ${REPO}'s main checkout\n`);

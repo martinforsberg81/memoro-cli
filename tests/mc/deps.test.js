@@ -8,7 +8,7 @@
  * through the tool.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -79,6 +79,7 @@ function fakeGit({ fetchFails = false, sha = 'abc1234def' } = {}) {
     if (args[0] === 'cat-file') return { status: 0, stdout: '', stderr: '' };
     if (args[1] === 'origin/main:package.json') return { status: 0, stdout: JSON.stringify(MANIFEST), stderr: '' };
     if (args[1] === 'origin/main:package-lock.json') return { status: 0, stdout: JSON.stringify(LOCK), stderr: '' };
+    if (args[1] === 'origin/main:check.mjs') return { status: 0, stdout: '// the script on origin/main\n', stderr: '' };
     return { status: 1, stdout: '', stderr: 'unexpected' };
   };
   return { git, calls };
@@ -208,6 +209,38 @@ describe('mc deps: the reading', () => {
       now: () => new Date('2026-10-09T12:00:00Z'),
     });
     assert.ok(other.calls.length > 0);
+  });
+
+  it('runs a note on origin/main: its script beside its lockfile, not in the primary checkout', async () => {
+    const seen = [];
+    const spy = async (argv, { cwd }) => {
+      seen.push({
+        cwd,
+        script: readFileSync(join(cwd, 'check.mjs'), 'utf8'),
+        lock: JSON.parse(readFileSync(join(cwd, 'package-lock.json'), 'utf8')),
+      });
+      return runNote();
+    };
+    const { reading } = await read({ overrides: { runNote: spy } });
+    assert.equal(seen.length, 1);
+    assert.notEqual(seen[0].cwd, join(root, 'fixture'));
+    assert.equal(seen[0].script, '// the script on origin/main\n');
+    assert.deepEqual(seen[0].lock, LOCK);
+    assert.equal(reading.notes_from, 'origin/main');
+  });
+
+  it('reads anew a saved reading whose notes ran in the primary checkout', async () => {
+    await read();
+    const saved = JSON.parse(readFileSync(join(root, 'deps', 'fixture.json'), 'utf8'));
+    delete saved.notes_from;
+    writeFileSync(join(root, 'deps', 'fixture.json'), JSON.stringify(saved));
+    const { npm, calls } = fakeNpm();
+    const { reused } = await readDeps({
+      repoPath: join(root, 'fixture'), env, root, git: fakeGit().git, npm, runNote, declaration,
+      now: () => new Date('2026-10-09T10:30:00Z'),
+    });
+    assert.equal(reused, false);
+    assert.ok(calls.length > 0);
   });
 
   it('a declaration that is not ok gives no notes, and a failing note is kept with its error', async () => {

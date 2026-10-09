@@ -5,8 +5,8 @@
  * What is read is never a working tree: `package.json` and
  * `package-lock.json` come out of `git show origin/main:<file>` into a fresh
  * directory under the runner's scratch, and npm reads them there. The primary
- * checkout is only where the refs live — and where a declared note runs,
- * because the repository's own script lives there.
+ * checkout is only where the refs live. A declared note runs in that same
+ * directory, its script taken from `origin/main` too.
  *
  * `npm outdated` is not used: against memoro's manifest and lockfile with no
  * `node_modules` it listed 32 of 63 direct dependencies, no devDependencies
@@ -22,7 +22,7 @@
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { ageWords } from './page-cache.js';
@@ -46,12 +46,6 @@ export function savedPath(repo, root = mcHome()) {
 
 export function loadSaved(repo, root = mcHome()) {
   try { return JSON.parse(readFileSync(savedPath(repo, root), 'utf8')); } catch { return null; }
-}
-
-/** The last saved reading of `<repo>` under `env`'s mc home, or null on any
- * read or parse failure — what `mc deploy` says its deps line from. */
-export function readSavedReading(repo, { env = process.env } = {}) {
-  return loadSaved(repo, env.MC_HOME || mcHome());
 }
 
 /* ----------------------------------------------------------------- versions */
@@ -256,15 +250,40 @@ function firstLine(text) {
   return String(text || '').split('\n').map((line) => line.trim()).find(Boolean) || null;
 }
 
-/** The repository's declared one-line notes, each run in the primary checkout. */
-export async function readNotes(repoPath, { runNote = defaultRunNote, declaration = declarationFor } = {}) {
+/**
+ * The files of `argv` that are paths on `origin/main`, written under `dir`
+ * at the same paths — so a note run in `dir` is the script of the tree that
+ * was read, beside that tree's lockfile. The manifest and lockfile are
+ * already there; an argument that is no file on `origin/main` is left alone.
+ */
+async function materializeArgv(argv, { git, repoPath, dir }) {
+  for (const arg of argv) {
+    if (!/^[\w.][\w./-]*$/u.test(arg) || arg.split('/').includes('..')) continue;
+    if (arg === 'package.json' || arg === 'package-lock.json') continue;
+    const shown = await git(['show', `origin/main:${arg}`], { cwd: repoPath });
+    if (shown.status !== 0) continue;
+    mkdirSync(dirname(join(dir, arg)), { recursive: true });
+    writeFileSync(join(dir, arg), shown.stdout);
+  }
+}
+
+/**
+ * The repository's declared one-line notes, each run in `cwd`. `readDeps`
+ * runs them in its scratch copy of `origin/main`: in the primary checkout
+ * they read whatever lockfile that checkout has, which is not the tree the
+ * numbers beside them are of (a wrangler bump read as unbumped, 2026-10-09).
+ */
+export async function readNotes(repoPath, {
+  runNote = defaultRunNote, declaration = declarationFor, cwd = repoPath, materialize = null,
+} = {}) {
   let declared = null;
   try { declared = declaration(repoPath); } catch { return []; }
   if (!declared?.ok) return [];
   const notes = declared.declaration?.deps_notes || [];
   return Promise.all(notes.map(async ({ name, argv }) => {
     try {
-      const result = await runNote(argv, { cwd: repoPath, timeout: NOTE_TIMEOUT_MS });
+      if (materialize) await materialize(argv);
+      const result = await runNote(argv, { cwd, timeout: NOTE_TIMEOUT_MS });
       const text = firstLine(result.stdout);
       if (result.status !== 0 || !text) {
         return { name, text: null, error: firstLine(result.stderr) || result.error || `exited ${result.status} with nothing on stdout` };
@@ -303,7 +322,9 @@ export async function readDeps({
   if (!refresh) {
     const saved = loadSaved(repo, root);
     const age = saved ? now().getTime() - Date.parse(saved.read_at) : Infinity;
-    if (saved && saved.sha === sha && age >= 0 && age < FRESH_MS) return { reading: saved, reused: true };
+    // A reading from before its notes ran on `origin/main` is read anew.
+    const current = saved?.notes_from === 'origin/main';
+    if (current && saved.sha === sha && age >= 0 && age < FRESH_MS) return { reading: saved, reused: true };
   }
 
   const manifestText = await git(['show', 'origin/main:package.json'], { cwd: repoPath });
@@ -324,7 +345,10 @@ export async function readDeps({
     const [packages, auditRun, notes] = await Promise.all([
       pool([...direct.values()], VIEW_CONCURRENCY, (pkg) => viewPackage(pkg, lock, npm, scratch)),
       npm(['audit', '--json', '--package-lock-only'], { cwd: scratch }),
-      readNotes(repoPath, { runNote, declaration }),
+      readNotes(repoPath, {
+        runNote, declaration, cwd: scratch,
+        materialize: (argv) => materializeArgv(argv, { git, repoPath, dir: scratch }),
+      }),
     ]);
 
     // npm audit exits non-zero whenever it finds anything; only output that
@@ -344,6 +368,7 @@ export async function readDeps({
       groups,
       unread,
       notes,
+      notes_from: 'origin/main',
       failed: packages.filter((pkg) => pkg.error).length,
     };
     writeJsonAtomic(savedPath(repo, root), reading);
