@@ -20,6 +20,9 @@
  * intake     — the helper's newest digest per repository, what is new in it,
  *              the `!` lines split into message, fingerprint and count, and
  *              how many proposals nobody has queued or dropped.
+ * checks     — per repository, the nightly's last full test and the last
+ *              daily `mc deps` reading: when, of which commit, and what each
+ *              found. Two file reads each; nothing is run.
  * programmes — one heading per programme with its own counts and its planning
  *              session, and under it one numbered row per project on
  *              `origin/main`: the plan's status, how many of its steps are
@@ -56,6 +59,8 @@ import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-col
 import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
 import { runningMerge } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
+import { loadSaved } from './deps.js';
+import { nightlyReading } from './nightly-history.js';
 import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
@@ -549,6 +554,42 @@ export function mergesSection({ landing = null, queued = [], now } = {}) {
     landing,
     queued: { count: queuedItems.length, items: queuedItems },
     count: (landing ? 1 : 0) + queuedItems.length,
+  };
+}
+
+/**
+ * CHECKS — the two daily readings of each repository, side by side: the
+ * nightly's last full test (`nightly-history.js`) and the runner's last
+ * `mc deps` (`deps.js`). Each is null when it has never run.
+ *
+ * Only what the reading says, with its age and its commit: the page is where
+ * a person sees how old each answer is, and `mc deploy` no longer prints
+ * either (2026-10-09).
+ */
+export function checksSection({ repos = [], now = new Date() } = {}) {
+  const age = (at) => {
+    const ms = now.getTime() - Date.parse(at);
+    return Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000)) : null;
+  };
+  return {
+    repos: repos.map(({ name, nightly, deps }) => {
+      const measured = nightly?.measured || null;
+      return {
+        repo: name,
+        test: measured
+          ? { at: measured.at, age_seconds: age(measured.at), short: measured.commit ? String(measured.commit).slice(0, 7) : null, red: measured.red }
+          : null,
+        deps: deps?.read_at
+          ? {
+            at: deps.read_at,
+            age_seconds: age(deps.read_at),
+            short: deps.sha ? String(deps.sha).slice(0, 7) : null,
+            critical: deps.audit?.counts?.critical || 0,
+            high: deps.audit?.counts?.high || 0,
+          }
+          : null,
+      };
+    }),
   };
 }
 
@@ -1209,6 +1250,14 @@ export async function collectPage({
     }),
     merges: mergesSection({
       landing: merges({ repos: present, alive }), queued: queuedForMerge, now,
+    }),
+    checks: checksSection({
+      repos: present.map((repo) => {
+        let nightly = null;
+        try { nightly = nightlyReading(repo.path); } catch { notes.push(`${repo.name}: nightly history unreadable`); }
+        return { name: repo.name, nightly, deps: loadSaved(repo.name) };
+      }),
+      now,
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({

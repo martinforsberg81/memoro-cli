@@ -2279,6 +2279,51 @@ test('a STOP file stops the collect and the drain as well as the steps', async (
   assert.equal(f.calls.turns.length, 0);
 });
 
+/* --------------------------------------------------- the daily deps reading */
+
+/**
+ * `mc deps` of every repository, once a day, on the nightly's cadence and by
+ * its own row — before the tick, so a tick a STOP ends does not leave it
+ * unread. A fixture without `readDeps` reads nothing.
+ */
+const depsRowAt = (ts) => `${ts}\tdeps\tdeps\t0\t60\t-\t-\t-\t-\t-\t-\t-\tsuccess,2-read\n`;
+const DEPS_HEADER = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n';
+
+test('the deps are read once a day, every repository, before the nightly tick', async () => {
+  const f = fixture({ now: '2026-08-29T10:00:00Z', runs: DEPS_HEADER + depsRowAt('2026-08-28T09:00:00Z') });
+  const read = [];
+  f.deps.readDeps = async ({ repoPath, repo }) => {
+    read.push({ repo, repoPath, ticks: f.calls.ticks.length });
+    return { reading: { sha: 'abc1234def', audit: { counts: { critical: 0, high: 12 } } } };
+  };
+  await createRunner({ deps: f.deps }).chores();
+  assert.deepEqual(read, [
+    { repo: 'memoro', repoPath: '/home/memoro', ticks: 0 },
+    { repo: 'memoro-cli', repoPath: '/home/memoro-cli', ticks: 0 },
+  ]);
+  const rows = runRows(f.files).filter((r) => r.kind === 'deps');
+  assert.equal(rows.length, 2, 'the old row and the new one');
+  assert.deepEqual({ exit: rows[1].exit, note: rows[1].note }, { exit: '0', note: 'success,2-read' });
+  assert.match(f.files['/w/runner/log/runner.log'], /deps: memoro at abc1234 — 0 critical, 12 high/u);
+
+  const recent = fixture({ now: '2026-08-29T10:00:00Z', runs: DEPS_HEADER + depsRowAt('2026-08-29T08:00:00Z') });
+  recent.deps.readDeps = async () => { throw new Error('read 2 h after the last'); };
+  await createRunner({ deps: recent.deps }).chores();
+  assert.equal(runRows(recent.files).filter((r) => r.kind === 'deps').length, 1, 'no second row');
+});
+
+test('a repository whose deps cannot be read is named in the row, and the others are read', async () => {
+  const f = fixture({});
+  f.deps.readDeps = async ({ repo }) => {
+    if (repo === 'memoro') throw new Error('npm audit printed no JSON');
+    return { reading: { sha: 'abc1234def', audit: { counts: {} } } };
+  };
+  await createRunner({ deps: f.deps }).chores();
+  const [row] = runRows(f.files).filter((r) => r.kind === 'deps');
+  assert.deepEqual({ exit: row.exit, note: row.note }, { exit: '1', note: 'failed,memoro' });
+  assert.match(f.files['/w/runner/log/runner.log'], /deps: memoro not read — npm audit printed no JSON/u);
+});
+
 /* ------------------------------------------------------ the nightly's tick */
 
 /**

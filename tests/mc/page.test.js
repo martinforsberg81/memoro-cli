@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 
 import { parseRuns } from '../../src/mc/brief-collect.js';
 import {
-  collectPage, countNewErrors, intakeSection, mergesSection, newErrorLines, nextSection,
+  checksSection, collectPage, countNewErrors, intakeSection, mergesSection, newErrorLines, nextSection,
   programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
 } from '../../src/mc/page-collect.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
@@ -1801,6 +1801,8 @@ describe('the palette', () => {
     '',
     'bold+cyan grey grey', //                          DEPLOY  nothing deployed yet               mc deploy
     '',
+    'bold+cyan grey grey', //                          CHECKS  full test and deps, once a day
+    '',
     'bold+cyan grey grey', //                          MC  0.7.11 · runner up 120 min
     'grey', //                                         note: no queue.md
   ];
@@ -2032,3 +2034,30 @@ describe('the palette', () => {
   });
 });
 
+describe('CHECKS — the daily full test and deps, per repository', () => {
+  const checks = checksSection({
+    now: NOW,
+    repos: [
+      {
+        name: 'memoro',
+        nightly: { measured: { at: new Date(NOW.getTime() - 4 * 3600_000).toISOString(), commit: 'bc82e81aaaa', red: 2 } },
+        deps: { read_at: new Date(NOW.getTime() - 40 * 3600_000).toISOString(), sha: '03d63ddbbbb', audit: { counts: { critical: 0, high: 12 } } },
+      },
+      { name: 'memoro-cli', nightly: { measured: null }, deps: null },
+    ],
+  });
+
+  it('keeps when, of which commit, and what each reading found — null when it never ran', () => {
+    assert.deepEqual(checks.repos[0].test, { at: checks.repos[0].test.at, age_seconds: 4 * 3600, short: 'bc82e81', red: 2 });
+    assert.deepEqual({ ...checks.repos[0].deps, at: null }, { at: null, age_seconds: 40 * 3600, short: '03d63dd', critical: 0, high: 12 });
+    assert.deepEqual(checks.repos[1], { repo: 'memoro-cli', test: null, deps: null });
+  });
+
+  it('draws one row per repository, above the MC line', () => {
+    const lines = renderPageLines(pageData({ checks }), { columns: 120 }).map(strip);
+    const at = lines.findIndex((line) => line.startsWith('  CHECKS'));
+    assert.ok(at > 0);
+    assert.match(lines[at + 1], /memoro\s+full test 4 h · bc82e81 · 2 red\s+deps 40 h · 03d63dd · 0 critical, 12 high/u);
+    assert.match(lines[at + 2], /memoro-cli\s+full test never run\s+deps never read/u);
+  });
+});

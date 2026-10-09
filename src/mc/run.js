@@ -125,6 +125,7 @@ import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './ru
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick } from './nightly-loop.js';
+import { readDeps } from './deps.js';
 import {
   UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, workRoot,
 } from './paths.js';
@@ -145,7 +146,7 @@ import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './role
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
-  HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
+  DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
   queueFileText, readSessionOutput, resumePrompt, sessionResult, sessionSettings, streamSummary, describeSettings, describeWatch,
@@ -407,6 +408,9 @@ export function realDeps(env = process.env) {
     // narration in `~/.memoro/mc/nightly/nightly.log`. A dependency so a test
     // can drive the chore without a suite behind it.
     nightlyTick: (options) => loggedTick({ env, ...options }),
+    // `mc deps <repo>`'s reading, saved where `mc deps` and the page read it.
+    // A dependency so a test drives the chore without npm or a remote.
+    readDeps: (options) => readDeps({ env, refresh: true, ...options }),
     // The one door work lands through: the merger's queue (ruling 30), the
     // same call `mc merge` makes, in process because the runner is mc — and
     // `mc merge --docs`' round for the archive pull request. The plan
@@ -1406,6 +1410,46 @@ export function createRunner({
   }
 
   /**
+   * The deps of every repository mc knows, read once a day: `mc deps <repo>`
+   * with no reuse, saved where `mc deps` and the page find it. Returns 'ran',
+   * 'failed' (a repository could not be read; the others were) or null when
+   * it was not due.
+   *
+   * Shaped like `runNightly` below: `nightlyDue` with its own kind is the
+   * whole gate and the row is the whole state, written however it went, so a
+   * repository that cannot be read is not retried until tomorrow. About a
+   * minute a repository, most of it `npm view`.
+   */
+  async function runDepsDaily() {
+    const due = nightlyDue({ tsv: deps.read(paths.runs) || '', now: deps.now(), kind: DEPS_KIND });
+    if (!due.due || !deps.readDeps) return null;
+    const t0 = deps.now().getTime();
+    const took = () => Math.round((deps.now().getTime() - t0) / 1000);
+    say(`deps: reading every repository${due.why ? ` — ${due.why}` : ''}`);
+    const read = [];
+    const failed = [];
+    for (const repo of repos) {
+      if (stopRequested() || updateRequested()) break;
+      try {
+        const { reading } = await deps.readDeps({ repoPath: repo.path, repo: repo.name });
+        const counts = reading.audit?.counts || {};
+        say(`deps: ${repo.name} at ${String(reading.sha).slice(0, 7)} — ${counts.critical || 0} critical, ${counts.high || 0} high`);
+        read.push(repo.name);
+      } catch (error) {
+        say(`deps: ${repo.name} not read — ${error?.message || error}`);
+        failed.push(repo.name);
+      }
+    }
+    logRun({
+      ts: stamp(), name: DEPS_NAME, kind: DEPS_KIND, exit: failed.length ? 1 : 0, seconds: took(), pr: '-',
+      ...dashes,
+      note: `${failed.length ? `failed,${failed.join('+')}` : `success,${read.length}-read`}`
+        + `${read.length + failed.length < repos.length ? ',stopped' : ''}`,
+    });
+    return failed.length ? 'failed' : 'ran';
+  }
+
+  /**
    * The nightly's tick: a full run of every repository mc knows, once a day.
    * Returns 'ran', 'stopped', 'failed' or null when it was not due.
    *
@@ -2287,7 +2331,10 @@ export function createRunner({
     await reapOrphans();
     sweepScratch();
     // Last, and not beside the two chores above: it is the long one, and the
-    // archive and the tidying should not wait twenty minutes behind it.
+    // archive and the tidying should not wait twenty minutes behind it. The
+    // deps reading goes first: a minute a repository, and not to be left a
+    // day behind by a tick that a STOP ends.
+    await runDepsDaily();
     await runNightly();
   }
 
@@ -2357,7 +2404,7 @@ export function createRunner({
   };
 
   return {
-    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runNightly, archiveDone, queue, stopRequested,
+    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runNightly, archiveDone, queue, stopRequested,
     writeUnreadable,
     blockStep,
     updateRequested, holdUpdate, stepsHeld, laneHolder, pid, syncMain, freshBranch, landDocsPr, planOf, repoOf, markRunner, dropPredecessor, clearRunner, closeWorkareas,

@@ -73,7 +73,7 @@ describe('bare mc', () => {
       const result = runMcCli(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'mc', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'sessions', 'next', 'merges', 'checks', 'intake', 'programmes', 'mc', 'caches', 'notes']);
       // No plan on main here, so there are no projects and both folders are
       // under the heading for the ones nothing explains — numbered from 1,
       // because the projects above them are none.
