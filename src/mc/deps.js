@@ -80,7 +80,7 @@ export function compareVersions(a, b) {
 }
 
 /** The line `^` stays on: the major, or `0.<minor>` for a 0.x version. */
-function majorLine(version) {
+export function majorLine(version) {
   const parsed = parseVersion(version);
   if (!parsed) return null;
   const [major, minor] = parsed.parts;
@@ -168,6 +168,7 @@ export function groupRows(packages, entries) {
       spec: pkg.spec,
       installed: pkg.installed,
       target: newer(pkg.in_major, pkg.installed) ? pkg.in_major : pkg.installed,
+      in_major: pkg.in_major,
       latest: pkg.latest,
       severity: null,
       via,
@@ -425,11 +426,11 @@ function capture(command, args, { cwd, timeout = 0 } = {}) {
   });
 }
 
-function defaultGit(args, { cwd } = {}) {
+export function defaultGit(args, { cwd } = {}) {
   return capture('git', args, { cwd });
 }
 
-function defaultNpm(args, { cwd } = {}) {
+export function defaultNpm(args, { cwd } = {}) {
   return capture('npm', args, { cwd });
 }
 

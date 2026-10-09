@@ -255,12 +255,6 @@ describe('mc deps: the verb', () => {
     };
   }
 
-  it('answers bump with "not built yet" and exit 2', async () => {
-    const streams = io();
-    assert.equal(await run(['bump', 'memoro', 'minor'], streams), 2);
-    assert.equal(streams.out.stderr, 'mc: mc deps bump is not built yet\n');
-  });
-
   it('prints the reading as JSON for a named repository', async () => {
     const streams = io();
     const code = await run(['fixture', '--json', '--refresh'], {
