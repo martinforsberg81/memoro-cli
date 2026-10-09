@@ -193,9 +193,18 @@ export const SHIPPED = Object.freeze({
     // The SQL snapshot is a function of the whole tree, so the candidate's
     // copy is wrong the moment main gains a file under `scripts/` or `src/`,
     // whatever the branch regenerated. Inventory first: coverage reads it.
+    // The 3D avatar runtime bundle is committed and is a function of the
+    // lockfile (three, @pixiv/three-vrm, esbuild): #13177 bumped three-vrm
+    // without rebuilding it, and every deploy stopped at its post-build git
+    // preflight until #13232. Rebuilt after `npm ci`, main never carries a
+    // stale copy.
     derived: Object.freeze([
       Object.freeze({ command: 'npm run sql:inventory -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
       Object.freeze({ command: 'npm run sql:coverage -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
+      Object.freeze({
+        command: 'npm run build:assistant-3d-avatar',
+        paths: Object.freeze(['public/js/ui/avatars/assistant-3d-avatar-runtime.bundle.js']),
+      }),
     ]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro.md' }),
     // Measured 2026-08-23: memoro's runner (scripts/testing/runner.mjs) runs
