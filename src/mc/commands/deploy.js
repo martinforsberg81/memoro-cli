@@ -4,8 +4,8 @@
  * The deploy itself is memoro's: `npm run deploy` (`scripts/deploy.mjs`, its
  * seventeen steps ending in *Verify live version*) is the whole of it, and
  * nothing here reimplements a step of it, passes it a flag or edits it. What
- * this verb adds is what is around it — the reading before, the lease during,
- * and the one question that makes it a thing a person did.
+ * this verb adds is what is around it — the reading before, the one question
+ * that makes it a thing a person did, and the process it runs in after.
  *
  * The question is not a formality and no flag skips it. Deploying to
  * production is Martin's word every time, so `mc deploy` refuses outright
@@ -16,57 +16,58 @@
  * Where the script runs is mc's to decide, and it is always a worktree that is
  * `main`: the one where `main` is checked out — git allows one — or one mc
  * makes and keeps under `~/.memoro/mc/deploy/memoro` when nobody has `main`
- * out. It is fast-forwarded to `origin/main` under the lease before the spawn;
- * a dirty or diverged `main` is a refused row naming the path — except that in
- * mc's own worktree, where nobody works, files git does not know are removed
- * rather than refused (`strayPaths`). `~/memoro`
- * stays what it always was for the reads and for the lease — only the spawn's
- * cwd moved (ruling 16, 2026-09-06: two deploys had failed at *Deploy source
- * preflight* because the verb spawned the script in whatever branch `~/memoro`
- * happened to be on).
+ * out. It is fast-forwarded to `origin/main` by the deployer before the
+ * script runs, and the row names the sha that shipped; a dirty or diverged `main` is a refused row naming the path — except
+ * that in mc's own worktree, where nobody works, files git does not know are
+ * removed rather than refused (`strayPaths`). `~/memoro` stays what it always
+ * was for the reads — only the spawn's cwd moved (ruling 16, 2026-09-06: two
+ * deploys had failed at *Deploy source preflight* because the verb spawned the
+ * script in whatever branch `~/memoro` happened to be on).
  *
- * The lease (`repo-lease.js`) is claimed with errand `deploy <sha>` for the
- * fast-forward and the read of the sha that ships, and nothing after: `main`
- * must not move between the question and that read. The build then runs on
- * that sha with the lease released — a merge landing on `origin/main` does not
- * move the worktree, nothing but this verb and the person fast-forwards it —
- * so a gate or merge round can land the next pull request while production is
- * being built (ruling 26, 2026-10-07).
- *
- * A held lease is a window to wait for, not a refusal: a merge round holds it
- * for the length of its gate, and the deploy re-claims on `mc merge`'s cadence
- * and bound (`MERGE_POLL_MS`, `MERGE_WAIT_MS` below), saying once
- * who holds it and for what. Eight minutes on, it gives up with exit 3, as the
- * merge does, and a refused row. What keeps two deploys apart is no longer the
- * lease but the record: a `running` row whose process is alive
- * (`runningDeploy`, deploys.js) is a deploy in progress, and a second one is
- * refused with its sha and start time.
+ * After the yes the deploy is its own process — the deployer, `ship` in
+ * `deploy-run.js`, detached, its output in `~/mc/runner/log/deploy.log` — and
+ * the terminal that asked only watches it (`followDeploy`): ^C stops the
+ * watching, not the deploy, and `mc deploy --follow` watches again (ruling 30,
+ * 2026-10-09). It takes no repository lease. A merge round holds the lease for
+ * its whole gate, and until then a deploy waited up to eight minutes for that
+ * window and gave up with exit 3; but the worktree is moved by nothing but
+ * this verb, and a merge landing on `origin/main` changes nothing the build
+ * sees (ruling 26). There is no queue: what keeps two deploys apart is the
+ * record — a `running` row whose process is alive (`runningDeploy`,
+ * deploys.js) is a deploy in progress, and a second one is refused with its
+ * sha and start time. The check and the new row are one step under the
+ * register's lock, which is held for milliseconds and by no merge round.
  *
  * The record (`deploys.js`) is written around the spawn rather than after it:
  * the row exists, saying `running`, before `npm run deploy` is started, and is
  * completed however it ends. A deploy that never came back is then a row that
  * says so instead of a silence somebody has to reconstruct from
- * `/admin/deploy/logs`. A refusal — no terminal, a `no`, a held repository —
- * is a row too: it is a deploy somebody meant to make.
+ * `/admin/deploy/logs`. A refusal — no terminal, a `no`, a deploy already
+ * running — is a row too: it is a deploy somebody meant to make.
  *
  * Every process boundary is on `deps` — git, the spawn, the prompt, the
- * lease, the version fetch — so the whole verb runs in a test with nothing
- * real behind it. The lease and the record are the two exceptions, and
- * deliberately so: they are what this verb exists to leave behind, `env` is
- * already the seam that points both at a throwaway directory, and a faked
- * writer would only prove that the fake was called.
+ * deployer, the version fetch — so the whole verb runs in a test with nothing
+ * real behind it (`startDeployer` running `ship` in the test's own process).
+ * The record is the exception, and deliberately so: it is what this verb
+ * exists to leave behind, `env` is already the seam that points it at a
+ * throwaway directory, and a faked writer would only prove that the fake was
+ * called.
  *
- * Exit codes: the script's own when it ran; 0 for `--dry-run`; 1 for a `no`,
- * a deploy already running or a repository this machine has no checkout of; 2
- * for a bad argument or no terminal; 3 for a lease still held after the wait.
+ * Exit codes: 0 for a deploy verified, `--dry-run`, or `--follow` with none
+ * running; 1 for a deploy that failed, a `no`, a deploy already running or a
+ * repository this machine has no checkout of; 2 for a bad argument or no
+ * terminal; 130 when the watching was stopped and the deploy goes on. Run in
+ * this process (a test), the script's own exit code.
  */
 import { spawn } from 'node:child_process';
-import { join, resolve } from 'node:path';
+import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { stripAnsi } from '../../lib/prompt.js';
 import { defaultRepos } from '../brief-collect.js';
 import {
-  closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, recordEnd, recordRefusal, recordStart,
+  closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
   runningDeploy,
 } from '../deploys.js';
 import { readSavedReading as readSavedDeps } from '../deps.js';
@@ -74,15 +75,11 @@ import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
 import { nightlyReading } from '../nightly-history.js';
-import { mcHome } from '../paths.js';
+import { mcHome, workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
-import { claimLease as realClaim, currentHolder, releaseLease as realRelease } from '../repo-lease.js';
-import { tilde } from '../status-project.js';
+import { realLock } from '../register.js';
+import { currentHolder } from '../repo-lease.js';
 import { scanArgs } from './flags.js';
-
-/** How long, and how often, a deploy waits for a held lease (once `mc merge`'s own wait). */
-const MERGE_WAIT_MS = 8 * 60 * 1000;
-const MERGE_POLL_MS = 15 * 1000;
 
 /** The repository this verb is about. It takes no argument and never will:
  * memoro-cli is not deployed, it is installed. */
@@ -91,17 +88,20 @@ export const REPO = 'memoro';
 const short = (sha) => (sha ? String(sha).slice(0, 7) : null);
 
 export function parseDeployArgs(argv) {
-  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json'] });
-  const opts = { dryRun: false, json: false };
+  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json', '--follow'] });
+  const opts = { dryRun: false, json: false, follow: false };
   if (scanned.error) return { ...opts, error: scanned.error };
   if (scanned.positional.length) {
     return { ...opts, error: `mc deploy takes no arguments (${scanned.positional[0]}) — it deploys memoro's main, and nothing else` };
   }
-  return { dryRun: scanned.flags['dry-run'], json: scanned.flags.json };
+  return { dryRun: scanned.flags['dry-run'], json: scanned.flags.json, follow: scanned.flags.follow };
 }
 
 export function usage() {
-  return 'usage — mc deploy [--dry-run] [--json]   memoro\'s main to production, under the lease, after one question\n';
+  return [
+    'usage — mc deploy [--dry-run] [--json]   memoro\'s main to production, after one question, in its own process\n',
+    '        mc deploy --follow                 watch the deploy that is running\n',
+  ].join('');
 }
 
 /** `GET /api/version` — what production says it is, public and uncached. */
@@ -569,6 +569,7 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
+  if (opts.follow) return follow({ env, stdout, deps });
 
   const repos = deps.repos || defaultRepos(env);
   const path = repos.find((repo) => repo.name === REPO)?.path;
@@ -579,8 +580,7 @@ export async function run(argv, deps = {}) {
 
   // `path` is used for three things that must be told apart. The git reads
   // below are refs, and refs are shared by every worktree of the repository,
-  // so they stay here; the lease stays here too, because this is the path the
-  // runner's merge rounds claim against. Only the spawn's cwd moves.
+  // so they stay here. Only the spawn's cwd moves.
   const git = deps.git || tryGit;
   const base = await deployPlan({
     path,
@@ -620,21 +620,21 @@ export async function run(argv, deps = {}) {
   if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: opts.dryRun }, null, 2)}\n`);
   else for (const line of planLines(plan)) stdout.write(`${line}\n`);
 
-  // `--dry-run` is the question answered with the plan: it takes no lease and
+  // `--dry-run` is the question answered with the plan: it starts nothing and
   // runs nothing, so it is the safe thing to type when you are not sure.
   if (opts.dryRun) {
     if (!opts.json) stdout.write('mc: --dry-run — nothing was deployed\n');
     return 0;
   }
 
-  // The holder is who the record and the lease both name, and it is needed
-  // before either: a refusal is written by somebody too.
+  // The holder is who the record names, and it is needed before it: a
+  // refusal is written by somebody too.
   const holder = deps.holder || currentHolder();
   const refuse = (note) => recordRefusal({ sha: plan.sha, holder: holder.name, note }, env);
 
-  // Another deploy going on is read from the record, not the lease: the lease
-  // is free for most of a deploy now. Asked here so nobody answers a question
-  // for nothing, and again under the lease, where the answer is final.
+  // Another deploy going on is read from the record. Asked here so nobody
+  // answers a question for nothing, and again under the lock, where the
+  // answer is final.
   const alive = deps.alive || processAlive;
   const refuseRunning = () => {
     const other = runningDeploy(env, { alive });
@@ -649,8 +649,8 @@ export async function run(argv, deps = {}) {
   // Nothing here stashes, resets or discards anything: the worktree that has
   // `main` may well be somebody's, and a `main` that is not exactly
   // `origin/main` plus nothing is a refusal with the path in the row. The one
-  // exception is untracked files in mc's own worktree, removed under the lease
-  // below (`strayPaths`).
+  // exception is untracked files in mc's own worktree, removed by the deployer
+  // (`strayPaths`, `ship`).
   if (source.failed) {
     refuse(`could not make mc's own main worktree at ${source.worktree}`);
     stderr.write(`mc: git worktree add ${source.worktree} main failed in ${path} — mc deploy needs a checkout of main to run the script in\n`);
@@ -686,120 +686,121 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
-  // A held lease is somebody's window — a merge round's gate, as a rule — and
-  // the deploy's own is seconds long, so it waits for it the way `mc merge`
-  // waits for the gate: re-claimed on the same cadence, up to the same bound.
-  const claim = deps.claimLease || realClaim;
-  const release = deps.releaseLease || realRelease;
-  const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
-  const now = deps.now || (() => new Date());
-  const t0 = now().getTime();
-  const take = () => claim({ repoPath: path, errand: `deploy ${plan.sha}`, holder, ownerPid: process.pid });
-  let claimed = take();
-  let said = null;
-  while (!claimed.ok) {
-    const held = claimed.lease;
-    const by = `${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`;
-    if (by !== said) {
-      stderr.write(`mc: ${tilde(path)} is held by ${by} — waiting for the window\n`);
-      said = by;
-    }
-    if (now().getTime() - t0 >= MERGE_WAIT_MS) {
-      refuse(`held by ${held.holder} — ${held.errand}`);
-      stderr.write(`mc: still waiting for ${tilde(path)}, held by ${by}, after 8 min — run this again; nothing was deployed\n`);
-      return 3;
-    }
-    await sleep(MERGE_POLL_MS);
-    claimed = take();
-  }
-  if (said) stderr.write(`mc: waited ${Math.round((now().getTime() - t0) / 1000)}s — the window is ours\n`);
-
-  // From here until the early release the lease is ours; the `finally`
-  // releases it only while that is still true, so a throw under the lease does
-  // not leave it behind and a throw after it does not hand away a lease a merge
-  // round has taken since — `releaseLease` refuses another holder's, but not
-  // one under the same name.
-  let stillHeld = true;
-  let key = null;
-  let tail = '';
-  try {
-    // Under the lease, the record is final: a deploy that started while this
-    // one waited wrote its row under the lease too, so it is read here.
-    if (refuseRunning()) return 1;
+  // One deploy at a time, decided under the register's lock — milliseconds,
+  // and nothing a merge round ever holds — rather than under the
+  // repository's lease, which a merge round holds for its whole gate
+  // (ruling 30: the deploy is its own process, beside the merger). Under the
+  // lock the record is final: the check for a running deploy, the closing of
+  // an abandoned row, the deployer's start and its row are one step.
+  const lock = deps.lock || realLock;
+  const root = deps.root || workRoot(env);
+  const startDeployer = deps.startDeployer || startDeployerDefault;
+  const started = lock(root, () => {
+    if (refuseRunning()) return null;
     // A row still `running` whose process is gone is a deploy that died
     // without completing it.
     for (const row of closeAbandoned({ alive }, env)) {
       const when = String(row.started).slice(0, 16).replace('T', ' ');
       stdout.write(`mc: the deploy of ${short(row.sha)} started ${when} never came back — its row now says failed\n`);
     }
+    // Before the deployer can write anything: the row exists, saying
+    // `running`, before `npm run deploy` is started, and names the process the
+    // deploy runs in so the next reader can tell it from one that died.
+    const key = { started: new Date().toISOString(), sha: plan.sha };
+    const job = {
+      key, sha: plan.sha, worktree: source.worktree, own, holder: holder.name, json: opts.json, root,
+    };
+    const deployer = startDeployer(job, { ...deps, stdout, stderr, env });
+    recordStart({ sha: plan.sha, holder: holder.name, pid: deployer.pid ?? '', started: key.started }, env);
+    return { key, deployer };
+  });
+  if (!started) return 1;
+  const { key, deployer } = started;
+  // A deployer run in this process — a test's — is run now, after its row is
+  // written, and its exit code is the answer.
+  if (deployer.inline) return deployer.inline();
+  if (!deployer.pid) {
+    recordEnd(key, { outcome: FAILED, stopped_at: 'start', note: `mc: the deployer could not be started (${deployer.error || 'no pid'})` }, env);
+    stderr.write(`mc: the deployer could not be started (${deployer.error || 'no pid'}) — nothing was deployed\n`);
+    return 1;
+  }
+  stdout.write(`mc: deploying ${plan.short} in its own process (pid ${deployer.pid}) — merges go on beside it\n`);
+  stdout.write(`mc: ^C stops watching, not the deploy; mc deploy --follow watches again\n`);
+  return followDeploy({ log: deployer.log, pid: deployer.pid, key, env, stdout, deps });
+}
 
-    // Under the lease and before the record: the one movement of somebody else's
-    // checkout this verb may make. `origin/main` is what ships — whatever is on
-    // `main` is meant to — so it is fast-forwarded to `origin/main` as it is now,
-    // which may be later than the sha the question showed. `--ff-only` on a tree
-    // already proved clean and not ahead, so it either fast-forwards or does
-    // nothing.
-    if (state.behind) {
-      const merged = git(source.worktree, ['merge', '--ff-only', 'origin/main']);
-      if (merged === null) {
-        refuse(`could not fast-forward main in ${source.worktree}`);
-        stderr.write(`mc: git merge --ff-only origin/main failed in ${source.worktree} — nothing was deployed\n`);
+/**
+ * Everything after the yes, in the deployer's own process: the worktree
+ * fast-forwarded to `origin/main`, the script run there, the row completed
+ * with the sha that shipped. Nothing here holds a lease or waits for a merge
+ * round — the worktree is moved by nothing but this, and a merge landing on
+ * `origin/main` after the fast-forward changes nothing the build sees
+ * (rulings 26, 30).
+ */
+export async function ship(job, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
+  const env = deps.env || process.env;
+  const git = deps.git || tryGit;
+  const { key, sha, worktree, own } = job;
+  let tail = '';
+  try {
+    // The one movement of somebody else's checkout this verb may make.
+    // `origin/main` is what ships — whatever is on `main` is meant to — so it
+    // is fast-forwarded to `origin/main` as it is now, which may be later than
+    // the sha the question showed. `--ff-only` on a tree already proved clean
+    // and not ahead, so it either fast-forwards or does nothing.
+    const behind = worktreeState({ worktree, git }).behind;
+    if (behind) {
+      if (git(worktree, ['merge', '--ff-only', 'origin/main']) === null) {
+        recordEnd(key, { outcome: FAILED, stopped_at: 'fast-forward', note: `mc: could not fast-forward main in ${worktree}` }, env);
+        stderr.write(`mc: git merge --ff-only origin/main failed in ${worktree} — nothing was deployed\n`);
         return 1;
       }
     }
-    // The tree is read again after the fast-forward, because the fast-forward
-    // can dirty it: a commit that drops lines from `.gitignore` turns files
-    // that were ignored a moment ago into untracked ones (2026-10-09). In mc's
-    // own worktree they go; anywhere else they are somebody's to look at, and
-    // mc says so instead of letting the script's preflight say it later.
-    const after = state.behind ? worktreeState({ worktree: source.worktree, git }).dirty : state.dirty;
-    const strays = strayPaths(after);
+    // Read again after the fast-forward, because the fast-forward can dirty
+    // it: a commit that drops lines from `.gitignore` turns files that were
+    // ignored a moment ago into untracked ones (2026-10-09). In mc's own
+    // worktree they go; anywhere else they are somebody's to look at, and mc
+    // says so instead of letting the script's preflight say it later.
+    const strays = strayPaths(worktreeState({ worktree, git }).dirty);
     if (strays && own) {
-      if (git(source.worktree, ['clean', '-fd']) === null) {
-        refuse(`could not remove untracked files in ${source.worktree}`);
-        stderr.write(`mc: git clean -fd failed in ${source.worktree} — nothing was deployed\n`);
+      if (git(worktree, ['clean', '-fd']) === null) {
+        recordEnd(key, { outcome: FAILED, stopped_at: 'clean', note: `mc: could not remove untracked files in ${worktree}` }, env);
+        stderr.write(`mc: git clean -fd failed in ${worktree} — nothing was deployed\n`);
         return 1;
       }
       stdout.write(`mc: removed ${strays.length} untracked path${strays.length === 1 ? '' : 's'} from mc's own main worktree:\n`);
       for (const file of strays.slice(0, 5)) stdout.write(`mc:   ${file}\n`);
       if (strays.length > 5) stdout.write(`mc:   … and ${strays.length - 5} more\n`);
-    } else if (strays && state.behind) {
-      refuse(`main is dirty in ${source.worktree} after the fast-forward — ${strays.length} untracked file(s)`);
-      stderr.write(`mc: the fast-forward left ${strays.length} untracked file${strays.length === 1 ? '' : 's'} in ${source.worktree} — likely ignored until the commit that came in:\n`);
+    } else if (strays && behind) {
+      recordEnd(key, { outcome: FAILED, stopped_at: 'dirty', note: `mc: main is dirty in ${worktree} after the fast-forward — ${strays.length} untracked file(s)` }, env);
+      stderr.write(`mc: the fast-forward left ${strays.length} untracked file${strays.length === 1 ? '' : 's'} in ${worktree} — likely ignored until the commit that came in:\n`);
       for (const file of strays.slice(0, 5)) stderr.write(`mc:   ${file}\n`);
       if (strays.length > 5) stderr.write(`mc:   … and ${strays.length - 5} more\n`);
       stderr.write('mc: remove them there and run this again — nothing was deployed\n');
       return 1;
     }
 
-    // What ships is what that worktree stands on now, read rather than assumed:
-    // the runner lands and fetches all the time, and `origin/main` is a ref every
-    // worktree shares, so it can have moved between the question and the yes.
-    // Twice it had (2026-09-14, 2026-09-19), and the row named the sha the
-    // question showed instead of the one that went out.
-    const shipping = git(source.worktree, ['rev-parse', '--verify', 'HEAD']) || plan.sha;
-    if (state.behind) stdout.write(`mc: fast-forwarded main in ${source.worktree} to ${short(shipping)}\n`);
-    if (shipping !== plan.sha) stdout.write(`mc: main moved to ${short(shipping)} since the question; deploying ${short(shipping)}\n`);
-
-    // Before the spawn, not after it: a deploy that never comes back — the
-    // terminal closed, a ^C in the middle of wrangler — leaves this row saying
-    // `running` with no `ended`, which is the true thing to say about it.
-    key = recordStart({ sha: shipping, holder: holder.name, pid: process.pid }, env);
-
-    // The sha is read and written down, so the lease has done its one job: the
-    // build runs on that sha in a worktree nothing but this verb and the person
-    // moves, and a merge round may land on origin/main beside it.
-    stillHeld = false;
-    release({ repoPath: path, holder });
+    // What ships is what that worktree stands on now, read rather than
+    // assumed: the merger lands and fetches all the time, and `origin/main` is
+    // a ref every worktree shares, so it can have moved between the question
+    // and the yes. Twice it had (2026-09-14, 2026-09-19), and the row named
+    // the sha the question showed instead of the one that went out — so the
+    // row is completed with the sha that shipped.
+    const shipping = git(worktree, ['rev-parse', '--verify', 'HEAD']) || sha;
+    if (behind) stdout.write(`mc: fast-forwarded main in ${worktree} to ${short(shipping)}\n`);
+    if (shipping !== sha) stdout.write(`mc: main moved to ${short(shipping)} since the question; deploying ${short(shipping)}\n`);
 
     const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
     const onOutput = (chunk) => {
       tail = (tail + chunk).slice(-OUTPUT_TAIL);
     };
-    const result = await spawnDeploy({ cwd: source.worktree, env, sha: shipping, onOutput, stdout, stderr });
+    const result = await spawnDeploy({ cwd: worktree, env, sha: shipping, onOutput, stdout, stderr });
     const said = readScriptOutput(tail);
     const ok = result.code === 0;
     recordEnd(key, {
+      sha: shipping,
       outcome: ok ? DEPLOYED : FAILED,
       build: said.build,
       live_commit: said.live_commit,
@@ -808,9 +809,9 @@ export async function run(argv, deps = {}) {
       note: endNote({ result, said, ok }),
     }, env);
 
-    if (result.error) stderr.write(`mc: could not run npm run deploy in ${source.worktree} — ${result.error}\n`);
+    if (result.error) stderr.write(`mc: could not run npm run deploy in ${worktree} — ${result.error}\n`);
     if (result.signal) stderr.write(`mc: the deploy was killed by ${result.signal}\n`);
-    if (opts.json) stdout.write(`${JSON.stringify({ sha: shipping, exit_code: result.code, deployed: ok, ...said }, null, 2)}\n`);
+    if (job.json) stdout.write(`${JSON.stringify({ sha: shipping, exit_code: result.code, deployed: ok, ...said }, null, 2)}\n`);
     else if (!ok) stderr.write(failureLine(result.code, said, result.interrupted));
     else if (said.live_commit) {
       const retried = said.retries ? ` (after ${retryCount(said.retries)})` : '';
@@ -820,9 +821,101 @@ export async function run(argv, deps = {}) {
   } catch (error) {
     // A throw is not a deploy that finished: the row would otherwise stay
     // `running` for a failure mc itself caused, and the throw goes on up.
-    if (key) recordEnd(key, { outcome: FAILED, stopped_at: readScriptOutput(tail).stopped_at, note: `mc: ${error?.message || error}` }, env);
+    recordEnd(key, { outcome: FAILED, stopped_at: readScriptOutput(tail).stopped_at, note: `mc: ${error?.message || error}` }, env);
     throw error;
-  } finally {
-    if (stillHeld) release({ repoPath: path, holder });
   }
+}
+
+/* --------------------------------------------------------------- deployer */
+
+const DEPLOYER_RUN = fileURLToPath(new URL('../deploy-run.js', import.meta.url));
+
+/** Where the deployer writes what the script says: one deploy at a time, so one file. */
+export function deployLogPath(root) {
+  return join(root, 'runner', 'log', 'deploy.log');
+}
+
+/**
+ * The deployer, started detached: `deploy-run.js` with the job as its one
+ * argument, its output in `deploy.log` (emptied for each deploy). Its own
+ * process group, so a ^C at the terminal that asked reaches only the
+ * watcher. `{ pid, log }`, or `{ pid: null, error }`.
+ *
+ * stdin is closed: the script asks nothing, and a wrangler that wants a
+ * login stops with its own message in the log — `wrangler login` at a
+ * terminal, then `mc deploy` again.
+ */
+export function startDeployerDefault(job, { env = process.env, spawnProcess = spawn } = {}) {
+  const log = deployLogPath(job.root);
+  let fd = null;
+  try {
+    mkdirSync(dirname(log), { recursive: true });
+    fd = openSync(log, 'w', 0o644);
+    const child = spawnProcess(process.execPath, [DEPLOYER_RUN, JSON.stringify(job)], {
+      cwd: job.worktree, detached: true, stdio: ['ignore', fd, fd], env,
+    });
+    child.unref();
+    return { pid: child.pid ?? null, log };
+  } catch (error) {
+    return { pid: null, log, error: error?.message || String(error) };
+  } finally {
+    if (fd != null) try { closeSync(fd); } catch { /* closed */ }
+  }
+}
+
+/** How often the watcher reads the log again. */
+const FOLLOW_POLL_MS = 500;
+
+/**
+ * Watch a deploy in its own process: the log as it grows, until the process
+ * is gone, then the row's word on how it ended. ^C ends the watching and
+ * nothing else. Exit 0 for `deployed`, 1 otherwise, 130 when stopped.
+ */
+export async function followDeploy({ log, pid, key = null, env = process.env, stdout = process.stdout, deps = {} }) {
+  const alive = deps.alive || processAlive;
+  const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
+  const signals = deps.signals || process;
+  let stopped = false;
+  const onStop = () => { stopped = true; };
+  for (const signal of STOP_SIGNALS) signals.on(signal, onStop);
+  let offset = 0;
+  const drain = () => {
+    let text = '';
+    try { text = readFileSync(log, 'utf8'); } catch { return; }
+    if (text.length > offset) { stdout.write(text.slice(offset)); offset = text.length; }
+  };
+  try {
+    for (;;) {
+      drain();
+      if (stopped) {
+        stdout.write(`\nmc: stopped watching — the deploy goes on (pid ${pid}); mc deploy --follow watches again\n`);
+        return 130;
+      }
+      if (!alive(pid)) break;
+      await sleep(FOLLOW_POLL_MS);
+    }
+    drain();
+  } finally {
+    for (const signal of STOP_SIGNALS) signals.off(signal, onStop);
+  }
+  // By its start alone: the deployer completes the row with the sha that
+  // shipped, which is not the key's when `main` moved after the question.
+  const rows = readDeploys(env);
+  const row = key
+    ? rows.findLast((r) => r.started === key.started)
+    : rows.findLast((r) => String(r.pid) === String(pid));
+  return row?.outcome === DEPLOYED ? 0 : 1;
+}
+
+/** `mc deploy --follow`: the deploy going on now, watched; or a line saying none is. */
+async function follow({ env, stdout, deps }) {
+  const alive = deps.alive || processAlive;
+  const running = runningDeploy(env, { alive });
+  if (!running) {
+    stdout.write('mc: no deploy is running\n');
+    return 0;
+  }
+  stdout.write(`mc: following the deploy of ${short(running.sha)} (pid ${running.pid}, started ${String(running.started).slice(0, 16).replace('T', ' ')})\n`);
+  const root = deps.root || workRoot(env);
+  return followDeploy({ log: deployLogPath(root), pid: Number(running.pid), key: { started: running.started, sha: running.sha }, env, stdout, deps });
 }
