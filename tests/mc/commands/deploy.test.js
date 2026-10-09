@@ -162,6 +162,7 @@ function deps(extra = {}) {
     fetchVersion: async () => ({ commit: LIVE, build: 812, build_time: '2026-09-01T10:00:00Z' }),
     lastDeploy: () => null,
     nightly: nightlyOn(SHA),
+    depsReading: () => null,
     interactive: () => true,
     ask: () => 'y',
     spawnDeploy: async () => ({ code: 0 }),
@@ -221,6 +222,90 @@ describe('mc deploy — what it says before it asks', () => {
     });
     assert.equal(plan.last.source, 'deploys.tsv');
     assert.equal(plan.gap, 2);
+  });
+
+  /** A reading as `mc deps memoro` saves it, of `sha`, read at `read_at`. */
+  const savedDeps = (sha, { critical = 2, high = 24, read_at = '2026-10-09T09:00:00Z' } = {}) => ({
+    repo: 'memoro',
+    sha,
+    read_at,
+    audit: { counts: { info: 0, low: 1, moderate: 3, high, critical, total: critical + high + 4 } },
+    groups: { security: [{ name: 'wrangler' }], minor: [], major: [] },
+    notes: [
+      { name: 'wrangler', text: 'wrangler 4.116.0 → 4.149.0 (33 minor behind; D=2 S=1)' },
+      { name: 'broken', error: 'exit 1' },
+    ],
+  });
+  const NOW = new Date('2026-10-09T12:30:00Z');
+
+  /** A git that fails the test on any call the deps line might make. */
+  const planWith = (depsReading, git = fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 } })) => deployPlan({
+    path: PATH,
+    env: {},
+    git,
+    fetchVersion: async () => ({ commit: LIVE, build: 812, build_time: '2026-09-01T10:00:00Z' }),
+    lastDeploy: () => null,
+    nightly: nightlyOn(SHA),
+    depsReading,
+  });
+
+  it('ends with the deps line of a reading of this tree: counts and notes, no "at"', async () => {
+    const asked = [];
+    const git = fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 } });
+    const plan = await planWith((repo, opts) => { asked.push({ repo, opts }); return savedDeps(SHA); }, git);
+    assert.deepEqual(asked.map(({ repo }) => repo), ['memoro']);
+    assert.deepEqual(plan.deps, {
+      sha: SHA, short: '1a2b3c4', read_at: '2026-10-09T09:00:00Z',
+      counts: { info: 0, low: 1, moderate: 3, high: 24, critical: 2, total: 30 },
+      security: 1,
+      notes: ['wrangler 4.116.0 → 4.149.0 (33 minor behind; D=2 S=1)'],
+      this_tree: true,
+    });
+    // The deps line asked git for nothing: the calls are the plan's own.
+    assert.ok(git.calls.every(({ args }) => ['fetch', 'rev-parse', 'log', 'rev-list'].includes(args[0])));
+    const lines = planLines(plan, { now: NOW });
+    assert.equal(lines.at(-1), 'mc: deps — 2 critical, 24 high; wrangler 4.116.0 → 4.149.0 (33 minor behind; D=2 S=1) — read 3h ago');
+  });
+
+  it('names the sha a reading of another tree was taken at, and its age in days', async () => {
+    const other = 'abc1234000000000000000000000000000000000';
+    const plan = await planWith(() => savedDeps(other, { read_at: '2026-10-06T08:00:00Z' }));
+    assert.equal(plan.deps.this_tree, false);
+    assert.equal(
+      planLines(plan, { now: NOW }).at(-1),
+      'mc: deps — 2 critical, 24 high; wrangler 4.116.0 → 4.149.0 (33 minor behind; D=2 S=1) — read 3d ago at abc1234',
+    );
+  });
+
+  it('says nothing critical or high when the counts are 0 and there are no notes', async () => {
+    const plan = await planWith(() => ({ ...savedDeps(SHA, { critical: 0, high: 0 }), notes: [] }));
+    assert.equal(planLines(plan, { now: NOW }).at(-1), 'mc: deps — nothing critical or high — read 3h ago');
+  });
+
+  it('says the deps were not read when there is no reading', async () => {
+    const plan = await planWith(() => null);
+    assert.equal(plan.deps, null);
+    assert.equal(planLines(plan, { now: NOW }).at(-1), 'mc: deps not read — mc deps memoro');
+  });
+
+  it('treats a reader that throws, or a reading of the wrong shape, as no reading', async () => {
+    const thrown = await planWith(() => { throw new Error('disk on fire'); });
+    assert.equal(thrown.deps, null);
+    assert.equal(planLines(thrown).at(-1), 'mc: deps not read — mc deps memoro');
+    const odd = await planWith(() => ({ sha: SHA }));
+    assert.equal(odd.deps, null);
+  });
+
+  it('reads the saved file under MC_HOME, and --dry-run prints it last', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'mc-deploy-deps-'));
+    mkdirSync(join(home, 'deps'));
+    writeFileSync(join(home, 'deps', 'memoro.json'), JSON.stringify(savedDeps(SHA, { read_at: new Date().toISOString() })));
+    const { out, stdout, stderr } = io();
+    const { depsReading, ...rest } = deps();
+    assert.equal(typeof depsReading, 'function');
+    const code = await run(['--dry-run'], { ...rest, env: { ...rest.env, MC_HOME: home }, stdout, stderr });
+    assert.equal(code, 0);
+    assert.match(out.stdout, /^mc: deps — 2 critical, 24 high; wrangler 4\.116\.0 → 4\.149\.0 .* — read 0h ago\nmc: --dry-run — nothing was deployed\n$/mu);
   });
 
   it('says plainly when the nightly measured another tree, and still asks', async () => {

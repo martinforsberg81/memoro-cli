@@ -36,7 +36,7 @@
       "check": "`mc deps bump memoro minor --dry-run` prints each `<name> <from> → <to>` it would write and the workarea and branch it would make, and creates neither (`ls ~/mc` and `git -C ~/memoro branch --list 'deps-*'` unchanged). `tests/mc/commands/deps.test.js`: with injected git/npm/publish/merge, a bump calls npm only with `--package-lock-only`, commits only `package.json` and `package-lock.json`, and hands `mc merge` the number `mc publish` returned."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc deploy` shows the deps line from the saved reading, with its age, and says so when there is none.",
       "check": "`mc deploy --dry-run` after `mc deps memoro` prints a line starting `mc: deps — ` with the critical and high counts and the wrangler note; with `~/.memoro/mc/deps/memoro.json` moved away it prints `mc: deps not read — mc deps memoro`. `tests/mc/commands/deploy.test.js` green, including a test that `deployPlan` makes no npm or network call for it."
     }

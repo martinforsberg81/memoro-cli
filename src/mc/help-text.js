@@ -267,7 +267,9 @@ IN FULL
   mc deploy [--dry-run] [--json]   memoro's main to production: the sha it
                                     would ship, what is live now and the gap
                                     between them, what the nightly said about
-                                    that tree — then one question, and on a
+                                    that tree, and last what mc deps memoro
+                                    last saved, with its age (a file read,
+                                    no npm) — then one question, and on a
                                     yes the repository's own npm run deploy.
                                     mc's lease covers the fast-forward of main
                                     and the read of the sha that ships, not
