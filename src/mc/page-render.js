@@ -52,6 +52,12 @@ import { clip, pad, painter, width } from './status-render.js';
 /** Same glyphs as the old board, so nothing new has to be learnt. */
 const MARK = { running: '●', waiting: '◆', stopped: '■', quiet: '·' };
 
+/** An open pull request's number, wherever the page draws one. */
+const PR_TONE = ['cyan', 'bold'];
+
+/** Past this long without anything happening on it, an open pull request waits on a person. */
+export const PR_QUIET_S = 24 * 60 * 60;
+
 /** Where a plan stands, one colour each, wherever a status is printed. */
 const STATUS_TONE = {
   ready: ['green'],
@@ -347,12 +353,18 @@ function laneLine(c, wide, lane) {
   const at = s.step && s.steps ? `${s.kind || 'step'} ${s.step}/${s.steps}` : (s.kind || '');
   const checkIns = s.check_ins == null ? null : `${s.check_ins} check-in${s.check_ins === 1 ? '' : 's'}`;
   const named = nameWidth(wide);
+  // The project's open pull requests ride right after the clock, in the colour
+  // a pull request has everywhere on the page: a lane working on a project
+  // whose step is already open as #N is the row that says why (Martin,
+  // 2026-10-09).
+  const open = (s.prs || []).map((pr) => `#${pr.number}`).join(' ');
   const left = `  ${c(MARK.running, 'green')} ${where} ${pad(clip(s.name, named - 1), named)} `
     // Padded outside the paint, so the spaces after a cell are plain ones and
     // a row that ends on a cell ends where its text does.
     + `${cell(c, clip(at, LANE_STEP - 1), LANE_STEP, kindTone(s.kind))} `
     // The clock carries its own colour: `elapsedTone` says when it has turned.
-    + `${cell(c, duration(s.elapsed_seconds), LANE_CLOCK, elapsedTone(s))} `;
+    + `${cell(c, duration(s.elapsed_seconds), LANE_CLOCK, elapsedTone(s))} `
+    + (open ? `${c(open, ...PR_TONE)}  ` : '');
   const room = Math.max(0, wide - width(left));
   const meta = paint(c, fitting(trailing([
     { text: [s.tool, s.model].filter(Boolean).join(' '), styles: ['grey'] },
@@ -683,51 +695,73 @@ function nextLines(lines, c, wide, next) {
 export const QUEUED_DRAWN = 6;
 
 /**
- * One row per pull request in the merger's queue: the repository, the
- * number, the step it is (or its branch), and since when. Green, because a
- * queued pull request waits on nobody — the merger takes it in turn. The
- * repository is drawn rather than a project: a waiting pull request need not
- * belong to one, and the number is only a number until the repository is
- * beside it.
+ * The merger's queue as one line: the numbers in the order they will land, and
+ * how long the one that has waited longest has waited. It was a row each,
+ * indented under the landing row, with each one's branch and since-when — and
+ * the row anybody reads first is the one landing; the rest are a count and an
+ * order (Martin, 2026-10-09: `pr pr pr pr (longest wait)`).
+ *
+ * Green, because a queued pull request waits on nobody — the merger takes it
+ * in turn. A number is only `#N` while the whole queue is one repository; with
+ * two it carries its repository's name. Numbers that do not fit become
+ * `… N more`, never a clipped half.
  */
-function queuedLines(lines, c, wide, queued) {
-  if (!queued?.count) return;
-  for (const item of queued.items.slice(0, QUEUED_DRAWN)) {
-    const left = `· ${item.repo || 'unknown'}  #${item.pr}  `;
-    const since = item.since ? `  (since ${when(item.since)})` : '';
-    const what = item.step ? `${item.step.project} step ${item.step.index + 1}` : (item.branch || 'no step');
-    const said = item.state === 'landing' ? `${what} — the merger has it` : (item.parent ? `${what} — after #${item.parent.pr}` : what);
-    const reason = clip(one(said), Math.max(8, wide - 7 - left.length - since.length));
-    lines.push(`       ${paint(c, [
-      { text: left, styles: ['green', 'bold'] },
-      { text: reason, styles: ['green'] },
-      { text: since, styles: ['grey'] },
-    ], wide - 7)}`);
+function queuedLine(c, wide, queued) {
+  const items = queued.items || [];
+  const repos = new Set(items.map((item) => item.repo));
+  const label = (item) => `${repos.size > 1 ? `${item.repo}` : ''}#${item.pr}${item.parent ? `→#${item.parent.pr}` : ''}`;
+  const waits = items.map((item) => item.wait_seconds).filter((n) => n != null);
+  const longest = waits.length ? `  (longest ${ageWords(Math.max(...waits))})` : '';
+  const lead = `  ${MARK.quiet} ${pad('waiting', LANE_REPO)} `;
+  const room = Math.max(8, wide - lead.length - longest.length);
+  const shown = [];
+  for (const [index, item] of items.entries()) {
+    const text = `${shown.length ? ' ' : ''}${label(item)}`;
+    const rest = items.length - index - 1;
+    const reserve = rest ? ` … ${rest} more`.length : 0;
+    if (shown.reduce((n, s) => n + s.length, 0) + text.length + reserve > room) break;
+    shown.push(text);
   }
-  const more = queued.count - Math.min(queued.count, QUEUED_DRAWN);
-  if (more) lines.push(`       ${paint(c, [{ text: `· … ${more} more`, styles: ['green'] }], wide - 7)}`);
+  const more = items.length - shown.length;
+  return paint(c, [
+    { text: lead, styles: ['grey'] },
+    { text: shown.join(''), styles: ['green'] },
+    { text: more ? ` … ${more} more` : '', styles: ['green'] },
+    { text: longest, styles: ['grey'] },
+  ]);
 }
 
 /**
- * The one round running now, as a row: green like a running RUNNER lane,
- * because it is the same fact — something is in flight and nobody has to do
- * anything for it to move. `mode: 'check'` is `mc test`, not `mc merge`, so it
- * says so rather than reading as a landing that is not one: *measuring, not
- * landing*.
+ * The one round running now, as a row laid out like a running RUNNER lane —
+ * the mark in the gutter, the repository, then what is landing — because it is
+ * the same fact: something is in flight and nobody has to do anything for it
+ * to move (Martin, 2026-10-09). Green from the mark through the title: the
+ * repository, the number, the project (or the branch) and the pull request's
+ * own title. Then where the round stands — `landing`, or *measuring, not
+ * landing* for `mc test`'s check mode — its phase, and how long it has run.
+ *
+ * The title is what gives way on a narrow terminal, and after it the tail from
+ * the end; the number and the name never do.
  */
 function landingLine(c, wide, landing) {
-  if (!landing) return paint(c, [{ text: '· nothing landing', styles: ['grey'] }], wide - 7);
-  const label = `${MARK.running} ${landing.repo}${landing.pr != null ? ` #${landing.pr}` : ''}`;
-  const tail = [];
-  if (landing.mode === 'check') tail.push({ text: 'measuring, not landing' });
-  if (landing.phase) tail.push({ text: landing.phase });
-  tail.push({ text: ageWords(landing.age_seconds), styles: ['grey'] });
+  const where = pad(clip(landing.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
+  const number = landing.pr != null ? `#${landing.pr}  ` : '';
+  const name = landing.name ? `${clip(landing.name, nameWidth(wide) - 1)}${landing.step ? ` step ${landing.step}` : ''}  ` : '';
+  const head = `  ${MARK.running} ${where} ${number}${name}`;
+  const tail = trailing([
+    { text: landing.mode === 'check' ? 'measuring, not landing' : 'landing' },
+    landing.phase ? { text: landing.phase } : null,
+    { text: ageWords(landing.age_seconds), styles: ['grey'] },
+  ]);
+  const tailText = tail.map((part) => part.text).join('');
+  const room = wide - head.length - tailText.length - 2;
+  const title = landing.title && room >= 12 ? `${clip(one(landing.title), room)}  ` : '';
+  const fitted = fitting(tail, Math.max(0, wide - head.length - title.length));
   return paint(c, [
-    { text: label, styles: ['green', 'bold'] },
-    landing.holder ? { text: `  ${landing.holder}` } : null,
-    { text: '  ' },
-    ...between(tail, ' · '),
-  ], wide - 7);
+    { text: head, styles: ['green'] },
+    { text: title, styles: ['green'] },
+    ...fitted,
+  ]).replace(/[ ]+$/u, '');
 }
 
 /**
@@ -739,7 +773,7 @@ function landingLine(c, wide, landing) {
  * pull request is doing once a step has become a round — landing, or waiting
  * for its turn. The held rows went with `held.json` (ruling 21, 2026-09-12).
  */
-function mergesLines(lines, c, wide, merges, at) {
+function mergesLines(lines, c, wide, merges) {
   const parts = [];
   if (merges.landing) parts.push({ text: '1 landing', styles: ['grey'] });
   if (merges.queued.count) parts.push({ text: `${merges.queued.count} waiting`, styles: ['grey'] });
@@ -749,8 +783,113 @@ function mergesLines(lines, c, wide, merges, at) {
   heading(lines, c, wide, 'MERGES', counts, 'mc merge <repo> <pr>');
   // The heading has already said *nothing landing*; a row that says it again
   // is a row.
-  if (merges.landing) lines.push(`       ${landingLine(c, wide, merges.landing)}`);
-  queuedLines(lines, c, wide, merges.queued);
+  if (merges.landing) lines.push(landingLine(c, wide, merges.landing));
+  if (merges.queued.count) lines.push(queuedLine(c, wide, merges.queued));
+}
+
+/** The words for whose a pull request is, on a PULL REQUESTS row. */
+function ownerWords(owner) {
+  if (owner.kind === 'plan') return owner.name ? `plan ${owner.name}` : 'a plan branch';
+  if (owner.kind === 'workarea') return `workarea ${owner.name}`;
+  if (owner.kind === 'worktree') return `checked out in ${String(owner.path).replace(/^\/Users\/[^/]+/u, '~')}`;
+  return 'nobody\'s';
+}
+
+/**
+ * PULL REQUESTS — every open pull request no project row already draws.
+ *
+ * A project's pull requests are under its row in PROGRAMMES, with the step they
+ * are, and the merger's are in MERGES. What is left is what the page could not
+ * see at all before: a plan session's, one opened from a terminal, and one
+ * nobody holds any more — the last with the waiting mark in yellow, because it
+ * is a person's and nobody knows it (Martin, 2026-10-09). The heading counts
+ * them all, so the answer to *how many are open* is one place.
+ */
+function prsLines(lines, c, wide, prs) {
+  if (!prs) return;
+  const counts = prs.counts || {};
+  const words = [
+    counts.project ? `${counts.project} on a step` : '',
+    counts.plan ? `${counts.plan} plan` : '',
+    counts.workarea ? `${counts.workarea} in a workarea` : '',
+    counts.worktree ? `${counts.worktree} checked out elsewhere` : '',
+  ].filter(Boolean);
+  const parts = [
+    { text: `${prs.count} open`, styles: ['grey'] },
+    ...words.map((text) => ({ text, styles: ['grey'] })),
+    counts.none ? { text: `${counts.none} nobody's`, styles: ['yellow', 'bold'] } : null,
+    prs.age_seconds != null && prs.age_seconds >= 15 * 60
+      ? { text: `as of ${ageWords(prs.age_seconds)} ago`, styles: ['yellow'] }
+      : null,
+  ].filter(Boolean);
+  heading(lines, c, wide, 'PULL REQUESTS', prs.fetched ? between(parts, ' · ') : 'not asked yet — mc prs asks GitHub', 'mc prs');
+  for (const pr of prs.items || []) {
+    if (pr.owner.kind === 'project' || pr.merging) continue;
+    lines.push(prRow(c, wide, pr, ownerWords(pr.owner)));
+  }
+}
+
+/**
+ * A pull request as a row of its own: the mark, the repository, the number,
+ * the title, and on the right whose it is and how long nothing has happened.
+ * The waiting mark and yellow are for the one that is nobody's.
+ */
+function prRow(c, wide, pr, whose) {
+  const nobody = pr.owner?.kind === 'none';
+  const mark = pr.merging ? c(MARK.running, 'green') : c(nobody ? MARK.waiting : MARK.quiet, nobody ? 'yellow' : 'grey');
+  const where = pad(clip(pr.repo || '—', LANE_REPO - 1), LANE_REPO);
+  const left = `  ${mark} ${c(where, 'grey')} ${cell(c, `#${pr.number}`, PR_NUMBER, PR_TONE)} `;
+  const quiet = pr.merging
+    ? { text: ` · ${pr.merging === 'landing' ? 'landing now' : 'queued for merge'}`, styles: ['green'] }
+    : { text: pr.quiet_seconds == null ? '' : ` · quiet ${ageWords(pr.quiet_seconds)}`, styles: pr.quiet_seconds >= PR_QUIET_S ? ['yellow'] : ['grey'] };
+  const right = paint(c, [{ text: whose, styles: nobody ? ['yellow'] : ['grey'] }, quiet]);
+  return row(c, wide, left, `${pr.draft ? 'draft: ' : ''}${pr.title || pr.branch || ''}`, right);
+}
+
+/**
+ * `mc prs` — every open pull request, grouped by whose it is: a project's
+ * step, a plan session's, a workarea's, a folder elsewhere, or nobody's. The
+ * page draws only what PROGRAMMES and MERGES do not; this draws all of them,
+ * the project ones with the step they are.
+ */
+export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
+  const c = painter(colour);
+  const wide = Math.max(60, Math.min(columns, 160));
+  const lines = [''];
+  const items = prs?.items || [];
+  const groups = [
+    ['ON A STEP', (pr) => pr.owner.kind === 'project', (pr) => `${pr.owner.name}${pr.step ? ` step ${pr.step}${pr.steps ? `/${pr.steps}` : ''}` : ''}${pr.status ? ` · ${pr.status}` : ''}`],
+    ['PLAN SESSIONS', (pr) => pr.owner.kind === 'plan', (pr) => ownerWords(pr.owner)],
+    ['WORKAREAS', (pr) => pr.owner.kind === 'workarea', (pr) => ownerWords(pr.owner)],
+    ['ELSEWHERE', (pr) => pr.owner.kind === 'worktree', (pr) => ownerWords(pr.owner)],
+    ['NOBODY\'S', (pr) => pr.owner.kind === 'none', () => 'no worktree holds it'],
+  ];
+  const age = prs?.age_seconds;
+  heading(lines, c, wide, 'PULL REQUESTS', prs?.fetched
+    ? `${items.length} open${age != null && age >= 15 * 60 ? ` · as of ${ageWords(age)} ago` : ''}`
+    : 'not asked yet', null);
+  for (const [title, mine, whose] of groups) {
+    const own = items.filter(mine);
+    if (!own.length) continue;
+    lines.push('');
+    heading(lines, c, wide, title, `${own.length}`, null);
+    // Whose it is leads here — it is what the list is sorted by — and the
+    // title is what gives way; the page's own rows put the title first.
+    const width = Math.min(40, Math.max(...own.map((pr) => whose(pr).length)));
+    for (const pr of own) {
+      const nobody = pr.owner.kind === 'none';
+      const mark = pr.merging ? c(MARK.running, 'green') : c(nobody ? MARK.waiting : MARK.quiet, nobody ? 'yellow' : 'grey');
+      const where = pad(clip(pr.repo || '—', LANE_REPO - 1), LANE_REPO);
+      const left = `  ${mark} ${c(where, 'grey')} ${cell(c, `#${pr.number}`, PR_NUMBER, PR_TONE)} `
+        + `${cell(c, clip(whose(pr), width), width, nobody ? ['yellow'] : [])}  `;
+      const right = pr.merging
+        ? paint(c, [{ text: pr.merging === 'landing' ? 'landing now' : 'queued for merge', styles: ['green'] }])
+        : paint(c, [{ text: pr.quiet_seconds == null ? '' : `quiet ${ageWords(pr.quiet_seconds)}`, styles: pr.quiet_seconds >= PR_QUIET_S ? ['yellow'] : ['grey'] }]);
+      lines.push(row(c, wide, left, `${pr.draft ? 'draft: ' : ''}${pr.title || pr.branch || ''}`, right || null));
+    }
+  }
+  lines.push('');
+  return lines;
 }
 
 /**
@@ -816,7 +955,9 @@ function projectColumns(wide) {
   const status = roomy ? 9 : 8;
   const steps = roomy ? 8 : 6;
   const repo = roomy ? 12 : 0;
-  return { status, steps, repo, name: Math.max(16, Math.min(34, wide - 10 - status - steps - repo - 8)) };
+  // The name gives way before `next` drops under ~28 columns: `next` is the
+  // sentence that says what the row is waiting on.
+  return { status, steps, repo, name: Math.max(roomy ? 22 : 16, Math.min(34, wide - 10 - status - steps - repo - PR_CELL - 9 - 28)) };
 }
 
 /**
@@ -854,16 +995,43 @@ function projectLine(c, wide, project) {
     + repo
     + `${c(pad(clip(project.status || '—', column.status), column.status), ...statusTone(project.status))} `
     + `${c(pad(steps, column.steps), 'grey')}`;
-  // The open PR is the actionable half and wins the right-hand column; with
-  // none, the last runner step is what says whether anything has happened.
-  const right = project.pr
-    ? paint(c, [{ text: `#${project.pr}`, styles: ['cyan'] }])
-    : paint(c, [
-      { text: project.last ? `${when(project.last.ts)} ` : '', styles: ['grey'] },
-      { text: project.last ? project.last.kind : '', styles: kindTone(project.last?.kind) },
-    ]);
-  return row(c, wide, left, project.next || '', right);
+  // The right-hand column is the last runner step, which is what says whether
+  // anything has happened; the pull request has a column of its own.
+  const right = paint(c, [
+    { text: project.last ? `${when(project.last.ts)} ` : '', styles: ['grey'] },
+    { text: project.last ? project.last.kind : '', styles: kindTone(project.last?.kind) },
+  ]);
+  return row(c, wide, `${left} ${prCell(c, project)} `, project.next || '', right);
 }
+
+/** `#13242+1` — the widest a project's pull request cell gets. */
+const PR_CELL = 8;
+
+/**
+ * The project's open pull request, in a column of its own after the steps:
+ * one row per project (Martin, 2026-10-09), and the number where a narrow
+ * terminal cannot drop it. It was a cyan `#12314` at the right margin — the
+ * first thing to go, and only ever the first of a project's pull requests.
+ * More than one is `+N`; `mc prs` names them all, with the step each is.
+ *
+ * Green while the merger has it — it waits on nobody. Yellow once a day has
+ * passed with nothing on it — then it waits on a person, which is how #12314
+ * sat ten days behind a blocked step. Bold cyan otherwise, the colour a pull
+ * request has everywhere on the page. Empty, it is spaces.
+ */
+function prCell(c, project) {
+  const prs = Array.isArray(project.prs) ? project.prs : (project.pr ? [{ number: project.pr }] : []);
+  if (!prs.length) return ' '.repeat(PR_CELL);
+  const [first] = prs;
+  const text = clip(`#${first.number}${prs.length > 1 ? `+${prs.length - 1}` : ''}`, PR_CELL);
+  const tone = prs.some((pr) => pr.merging)
+    ? ['green', 'bold']
+    : (prs.some((pr) => pr.quiet_seconds >= PR_QUIET_S) ? ['yellow', 'bold'] : PR_TONE);
+  return cell(c, text, PR_CELL, tone);
+}
+
+/** `#13265` and one space: the column a pull request's number is drawn in. */
+const PR_NUMBER = 7;
 
 /**
  * The three columns of a programme heading. The name shortens on a narrow
@@ -1031,10 +1199,13 @@ function programmesLines(lines, c, wide, programmes, expand) {
     // the programme's own heading and nothing more — a row under it said the
     // same thing twice (Martin, 2026-09-19). The numbers still open them, BRIEF
     // says what holds them, and `a` at the menu draws every one of them again.
+    // A blocked project with an open pull request keeps its row: the pull
+    // request is work that exists, and collapsing it is how one was lost.
     const collapsed = expand ? null : group.blocked;
     const held = new Set(collapsed ? collapsed.names : []);
     for (const project of group.projects) {
-      if (!held.has(project.name)) lines.push(projectLine(c, wide, project));
+      if (held.has(project.name) && !project.prs?.length) continue;
+      lines.push(projectLine(c, wide, project));
     }
   }
   if (programmes.no_workarea) {
@@ -1157,8 +1328,12 @@ export function renderPageLines(data, {
   lines.push('');
   runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
   lines.push('');
-  mergesLines(lines, c, wide, data.merges, at);
+  mergesLines(lines, c, wide, data.merges);
   lines.push('');
+  if (data.prs) {
+    prsLines(lines, c, wide, data.prs);
+    lines.push('');
+  }
   deployLines(lines, c, wide, data.runner?.production);
   lines.push('');
   checksLines(lines, c, wide, data.checks);

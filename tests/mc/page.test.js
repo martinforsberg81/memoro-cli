@@ -11,8 +11,8 @@ import { describe, it } from 'node:test';
 
 import { parseRuns } from '../../src/mc/brief-collect.js';
 import {
-  checksSection, collectPage, countNewErrors, intakeSection, mergesSection, newErrorLines, nextSection,
-  programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
+  attachPrs, checksSection, collectPage, countNewErrors, intakeSection, mergesSection, newErrorLines, nextSection,
+  prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
 } from '../../src/mc/page-collect.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
@@ -696,15 +696,29 @@ describe('MERGES', () => {
         { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', since: '2026-08-29T11:00:00Z', state: 'queued' },
         { repo: 'memoro', pr: 11541, branch: 'docx-editor', step: { project: 'docx-editor', index: 1 }, since: '2026-08-29T09:30:00Z', state: 'landing' },
       ],
+      now: new Date('2026-08-29T12:00:00Z'),
     });
     assert.equal(merges.queued.count, 2);
     assert.deepEqual(merges.queued.items.map((item) => [item.repo, item.pr]), [['memoro', 11541], ['memoro-cli', 671]]);
+    assert.deepEqual(merges.queued.items.map((item) => item.wait_seconds), [9000, 3600]);
     const lines = renderPageLines(pageData({ merges }), { columns: 120 });
     assert.ok(lines.some((line) => /MERGES.*2 waiting/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {7}· memoro {2}#11541 {2}docx-editor step 2 — the merger has it {2}\(since 08-29 09:30Z\)$/u.test(line)),
+    // One line for the queue, in landing order, with the longest wait — and the
+    // repository on each number because the queue spans two.
+    assert.ok(lines.some((line) => /^ {2}· waiting {5}memoro#11541 memoro-cli#671 {2}\(longest 3 h\)$/u.test(line)),
       lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {7}· memoro-cli {2}#671 {2}total-lane-cap {2}\(since 08-29 11:00Z\)$/u.test(line)),
-      lines.join('\n'));
+  });
+
+  it('names a one-repository queue by number alone, and counts what does not fit', () => {
+    const queued = Array.from({ length: 30 }, (_, n) => ({
+      repo: 'memoro', pr: 13200 + n, branch: `b${n}`, since: '2026-10-09T19:00:00Z', state: 'queued',
+    }));
+    const merges = mergesSection({ queued, now: new Date('2026-10-09T19:04:00Z') });
+    const lines = renderPageLines(pageData({ merges }), { columns: 100 });
+    const line = lines.find((l) => /· waiting/u.test(l));
+    assert.match(line, /^ {2}· waiting {5}#13200 #13201 /u);
+    assert.match(line, / … \d+ more {2}\(longest 4 min\)$/u);
+    assert.ok(line.length <= 100, line);
   });
 
   it('does not draw the job the running round is landing twice', () => {
@@ -730,17 +744,47 @@ describe('MERGES', () => {
    */
   it('draws the round running now ahead of the queue', () => {
     const merges = mergesSection({ landing: LANDING });
-    assert.equal(merges.landing, LANDING);
+    assert.equal(merges.landing.pr, LANDING.pr);
     const lines = renderPageLines(pageData({ merges }), { columns: 120 });
     assert.ok(lines.some((line) => /MERGES.*1 landing/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /● memoro #11651 {2}sql-w5-relationship-closure {2}running 17 test files · 4 min$/u.test(line)),
+    // The mark in the gutter, as a running lane has it; no holder on the row.
+    assert.ok(lines.some((line) => /^ {2}● memoro {6}#11651 {2}landing · running 17 test files · 4 min$/u.test(line)),
       lines.join('\n'));
+  });
+
+  /**
+   * What is landing, named: the queue entry has its step and branch, the open
+   * pull requests its title — the row was a number and a holder's hostname
+   * (Martin, 2026-10-09).
+   */
+  it('names what is landing: repository, number, project and step, title, then phase and time', () => {
+    const merges = mergesSection({
+      landing: { ...LANDING, pr: 13265 },
+      queued: [
+        { repo: 'memoro', pr: 13265, branch: 'email-inbox-fixes-2', step: { project: 'email-inbox-fixes', index: 1 }, since: '2026-08-29T11:55:00Z', state: 'landing' },
+        { repo: 'memoro', pr: 13255, branch: 'plan-staff', since: '2026-08-29T11:56:00Z', state: 'queued' },
+      ],
+      prs: [{ repo: 'memoro', number: 13265, headRefName: 'email-inbox-fixes-2', title: 'email-inbox-fixes 2: the inbox reads' }],
+      now: new Date('2026-08-29T12:00:00Z'),
+    });
+    assert.equal(merges.landing.title, 'email-inbox-fixes 2: the inbox reads');
+    assert.equal(merges.landing.name, 'email-inbox-fixes');
+    assert.equal(merges.landing.step, 2);
+    const lines = renderPageLines(pageData({ merges }), { columns: 140 });
+    assert.ok(lines.some((line) => /^ {2}● memoro {6}#13265 {2}email-inbox-fixes step 2 {2}email-inbox-fixes 2: the inbox reads {2}landing · running 17 test files · 4 min$/u.test(line)),
+      lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}· waiting {5}#13255 {2}\(longest 4 min\)$/u.test(line)), lines.join('\n'));
+    // Narrow, the title gives way and the number, the name and the phase stay.
+    const narrow = renderPageLines(pageData({ merges }), { columns: 80 });
+    const row = narrow.find((line) => /#13265/u.test(line));
+    assert.ok(row.length <= 80, row);
+    assert.match(row, /#13265 {2}email-inbox-fixes step 2/u);
   });
 
   it('says measuring, not landing, for a check-mode round', () => {
     const merges = mergesSection({ landing: { ...LANDING, mode: 'check', holder: 'martin@laptop' } });
     const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /● memoro #11651 {2}martin@laptop {2}measuring, not landing · running 17 test files · 4 min$/u.test(line)),
+    assert.ok(lines.some((line) => /● memoro {6}#11651 {2}measuring, not landing · running 17 test files · 4 min$/u.test(line)),
       lines.join('\n'));
   });
 
@@ -1296,7 +1340,7 @@ describe('the page', () => {
     // project is. The lanes run at the same time: both heads start now.
     assert.match(text, /^ {5}memoro-cli {2}mc-ui\s+step 1\/1\s+The page\n {5}memoro {6}docx-editor\s+step 2\/2\s+Measure paste and IME$/mu);
     assert.doesNotMatch(text, /skipped \d/u, 'NEXT is the order and nothing else');
-    assert.match(text, /· memoro {2}#10958 {2}docx-editor step 2 {2}\(since/u);
+    assert.match(text, /· waiting {5}#10958 {2}\(longest/u);
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /^ {7}memoro {6}1 new error, 1 loud · 60 min old {3}! /mu);
     assert.match(text, /^ {7}1 proposal$/mu);
@@ -1310,7 +1354,7 @@ describe('the page', () => {
     assert.doesNotMatch(text, /avatar-self-serve/u, 'a blocked project is collapsed, not listed');
     assert.match(text, /^ {7}1 blocked · 1 on a decision · held most by assistant-avatar-1 1$/mu);
     assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
-    assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+Step 1, The page — done when the step[^|]*#440/u);
+    assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+#440\s+Step 1, The page/u);
     assert.match(text, /3 of them have no workarea yet/u);
     // The workareas no project explains are one line: the numbers that still
     // open them, and the file that has them all.
@@ -1578,7 +1622,7 @@ describe('collectPage', () => {
     assert.deepEqual(asked.sort(), ['gh pr', 'git fetch']);
     // The base and the draft flag ride along with the number: the round asks
     // the same question, and a stack is ordered by what each PR is based on.
-    assert.equal(fields, 'number,headRefName,baseRefName,isDraft,title');
+    assert.equal(fields, 'number,headRefName,baseRefName,isDraft,title,updatedAt');
     assert.deepEqual(saved, [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui', baseRefName: 'main', isDraft: false, title: 'The page' }]);
     assert.equal(data.caches.fresh, true);
     assert.equal(data.programmes.programmes.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
@@ -1772,7 +1816,7 @@ describe('the palette', () => {
     'grey grey grey green grey grey green', //       2 · docx-editor  memoro  ready  1/2  Step 2, …  08-29 09:00Z step
     'bold+cyan green grey grey grey', //               mc  1 ready · 0 blocked   ·  no plan session
     'grey grey grey grey grey', //                   3 · mc-run  memoro-cli  done  1/1  every step is done
-    'grey grey grey green grey cyan', //             4 · mc-ui  memoro-cli  ready  0/1  Step 1, …  #440
+    'grey grey grey green grey cyan+bold grey green', // 4 · mc-ui  memoro-cli  ready  0/1  #440  Step 1, …  08-29 10:00Z step
     'grey', //                                           3 of them have no workarea yet
     '',
     'bold+cyan grey grey', //                          WORK  1 session · 1 workarea with no project
@@ -1797,7 +1841,7 @@ describe('the palette', () => {
     'grey grey green grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
     '',
     'bold+cyan grey grey', //                          MERGES  1 waiting        mc merge <repo> <pr>
-    'green+bold green grey', //                          · memoro  #10958  docx-editor step 2  (since …)
+    'grey green grey', //                                · waiting  #10958  (longest …)
     '',
     'bold+cyan grey grey', //                          DEPLOY  nothing deployed yet               mc deploy
     '',
@@ -2059,5 +2103,105 @@ describe('CHECKS — the daily full test and deps, per repository', () => {
     assert.ok(at > 0);
     assert.match(lines[at + 1], /memoro\s+full test 4 h · bc82e81 · 2 red\s+deps 40 h · 03d63dd · 0 critical, 12 high/u);
     assert.match(lines[at + 2], /memoro-cli\s+full test never run\s+deps never read/u);
+  });
+});
+
+describe('PULL REQUESTS', () => {
+  const plan = (project, status, step, steps, programme = 'p') => ({
+    project, repo: 'memoro', programme, status, step, steps, next: `step ${step} is ${status}`,
+    plan: { steps: Array.from({ length: steps }, (_, n) => ({ title: `S${n + 1}`, status: n + 1 < step ? 'done' : status, pr: null })) },
+  });
+  const PLANS = [plan('docx-simple-toolbar', 'blocked', 4, 4), plan('one-operation', 'ready', 7, 7)];
+  const PRS = [
+    { repo: 'memoro', number: 12314, headRefName: 'docx-simple-toolbar-6', title: 'docx-simple-toolbar 4: G4 walk', updatedAt: '2026-09-29T12:00:00Z' },
+    { repo: 'memoro', number: 13048, headRefName: 'one-operation-8', title: 'one-operation step 7: close-out', updatedAt: '2026-10-09T11:00:00Z' },
+    { repo: 'memoro', number: 13167, headRefName: 'plan/trip-project-detail', title: 'Plan: trip-project-detail', updatedAt: '2026-10-09T04:00:00Z' },
+    { repo: 'memoro', number: 12900, headRefName: 'remove-bookshop-recipes', title: 'Remove the Adlibris and Bokus site recipes', updatedAt: '2026-10-07T19:00:00Z' },
+  ];
+  const AT = new Date('2026-10-09T19:00:00Z');
+  const worktrees = { memoro: [{ path: '/Users/m/mc/plan/entity-detail/memoro', branch: 'plan/trip-project-detail' }] };
+  const build = () => {
+    const pulls = prsSection({
+      prs: PRS, plans: PLANS, worktrees, root: '/Users/m/mc', fetched: AT.toISOString(), ageSeconds: 60, now: AT,
+    });
+    const programmes = programmesSection({ plans: PLANS, openPrs: PRS });
+    const runner = runnerSection({ rows: [], now: AT, alive: () => false });
+    runner.steps = [{ name: 'one-operation', repo: 'memoro', kind: 'step', step: 7, steps: 7, elapsed_seconds: 300, tool: 'claude', model: 'opus' }];
+    runner.lanes = [{ number: 1, repo: 'memoro', step: runner.steps[0] }];
+    attachPrs({ programmes, runner, pulls });
+    return { pulls, programmes, runner };
+  };
+
+  it('says whose each pull request is, which step it is, and how long it has been quiet', () => {
+    const { pulls } = build();
+    assert.equal(pulls.count, 4);
+    assert.deepEqual(pulls.counts, { project: 2, plan: 1, none: 1 });
+    const by = Object.fromEntries(pulls.items.map((item) => [item.number, item]));
+    assert.equal(by[12314].owner.name, 'docx-simple-toolbar');
+    assert.equal(by[12314].step, 4);
+    assert.equal(by[12314].steps, 4);
+    assert.equal(by[12314].quiet_seconds, 10 * 86400 + 7 * 3600);
+    assert.deepEqual(by[13167].owner, { kind: 'plan', name: 'entity-detail', path: '/Users/m/mc/plan/entity-detail/memoro' });
+    assert.equal(by[12900].owner.kind, 'none');
+  });
+
+  it('marks the one the merger is landing and the ones it has queued', () => {
+    const pulls = prsSection({
+      prs: PRS,
+      plans: PLANS,
+      merges: { landing: { repo: 'memoro', pr: 13048 }, queued: { items: [{ repo: 'memoro', pr: 12900 }] } },
+      now: AT,
+    });
+    const by = Object.fromEntries(pulls.items.map((item) => [item.number, item.merging]));
+    assert.deepEqual(by, { 13167: null, 13048: 'landing', 12900: 'queued', 12314: null });
+  });
+
+  /**
+   * A project's pull request is a row under the project, with its step — and
+   * a blocked project holding one is not collapsed away, which is how #12314
+   * sat ten days behind a blocked step (Martin, 2026-10-09).
+   */
+  it('puts each project pull request on the project row itself, and keeps a blocked one in sight', () => {
+    const { pulls, programmes, runner } = build();
+    const lines = renderPageLines(pageData({ programmes, runner, prs: pulls }), { columns: 120, now: AT });
+    // One row per project (Martin, 2026-10-09): the number in its own column
+    // after the steps, and no row under it.
+    const at = lines.findIndex((line) => / docx-simple-toolbar /u.test(line));
+    assert.ok(at > 0, lines.join('\n'));
+    assert.match(lines[at], /blocked +3\/4 +#12314 +step 4 is blocked$/u);
+    assert.doesNotMatch(lines[at + 1], /#12314|↳/u);
+    assert.ok(lines.some((line) => /one-operation +memoro +ready +6\/7 +#13048 +step 7 is ready$/u.test(line)), lines.join('\n'));
+    // Quiet for a day it waits on a person, and says so in yellow.
+    const painted = renderPageLines(pageData({ programmes, runner, prs: pulls }), { columns: 120, colour: true, now: AT });
+    assert.ok(painted.some((line) => line.includes('\u001b[33m\u001b[1m#12314') || line.includes('\u001b[1m\u001b[33m#12314')), painted.join('\n'));
+    // The running lane says which pull request its project has open.
+    assert.ok(lines.some((line) => /^ {2}● memoro {6}one-operation +step 7\/7 +5 min +#13048 {2}claude opus$/u.test(line)), lines.join('\n'));
+  });
+
+  it('lists what no project row draws, the one nobody holds in yellow with the waiting mark', () => {
+    const { pulls, programmes, runner } = build();
+    const lines = renderPageLines(pageData({ programmes, runner, prs: pulls }), { columns: 140, now: AT });
+    assert.ok(lines.some((line) => /PULL REQUESTS {2}4 open · 2 on a step · 1 plan · 1 nobody's +mc prs$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}· memoro {6}#13167 {2}Plan: trip-project-detail +plan entity-detail · quiet 15 h$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}◆ memoro {6}#12900 {2}Remove the Adlibris and Bokus site recipes +nobody's · quiet 2 d$/u.test(line)), lines.join('\n'));
+    assert.ok(!lines.some((line) => /^ {2}[·◆] memoro {6}#12314/u.test(line)), 'a project pull request is under its project, not here');
+    const painted = renderPageLines(pageData({ programmes, runner, prs: pulls }), { columns: 140, colour: true, now: AT });
+    const nobody = painted.find((line) => line.includes('#12900'));
+    assert.ok(nobody.includes('\u001b[33m◆'), nobody);
+  });
+
+  it('mc prs: every one of them, grouped by whose it is', async () => {
+    const { pulls } = build();
+    let out = '';
+    const { run } = await import('../../src/mc/commands/prs.js');
+    const code = await run(['--offline'], {
+      stdout: { write: (text) => { out += text; }, columns: 120 },
+      env: { NO_COLOR: '1' },
+      collect: async () => ({ prs: pulls, notes: [] }),
+    });
+    assert.equal(code, 0);
+    const order = ['ON A STEP  2', 'PLAN SESSIONS  1', "NOBODY'S  1"].map((head) => out.indexOf(head));
+    assert.ok(order.every((n, i) => n > 0 && (i === 0 || n > order[i - 1])), out);
+    assert.match(out, /#12314 {2}docx-simple-toolbar step 4\/4 · blocked {2}docx-simple-toolbar 4: G4 walk/u);
   });
 });

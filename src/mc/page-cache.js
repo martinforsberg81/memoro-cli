@@ -15,8 +15,9 @@
  * the reader gained a field is not what a fresh read would return either.
  *
  * **prs.json** has no such key — an open PR closes without moving any sha —
- * so it is stamped instead, written only by `--fresh`, and the page says how
- * old it is. That is the whole difference between the two files.
+ * so it is stamped instead, written by `--fresh` and by every runner round
+ * that asked GitHub (`mergePrs`), and the page says how old it is. That is the
+ * whole difference between the two files.
  *
  * These are the page's only writes. They are a read-through cache of things
  * the page already reads, not state anything else depends on: delete both
@@ -109,6 +110,23 @@ export function savePrs({ root, prs, now = new Date(), write = writeJsonAtomic }
   const fetched = now.toISOString();
   try { write(cachePath(root, PRS_FILE), { fetched, prs }); } catch { /* see loadPlans */ }
   return { prs, fetched, age_seconds: 0 };
+}
+
+/**
+ * What a runner round has just been told, put into the cache for the page: the
+ * repositories it asked replace their own entries and every other one stays as
+ * it was. The round asks GitHub anyway, a lane at a time and sometimes one
+ * repository only, so the page's pull requests were hours old while the
+ * runner held answers seconds old (2026-10-09: 2.5 h, with four pull requests
+ * missing from it).
+ */
+export function mergePrs({
+  root, repos = [], prs = [], now = new Date(), read = readFileSync, write = writeJsonAtomic,
+} = {}) {
+  if (!repos.length) return null;
+  const cache = readJson(cachePath(root, PRS_FILE), read);
+  const kept = Array.isArray(cache?.prs) ? cache.prs.filter((pr) => !repos.includes(pr.repo)) : [];
+  return savePrs({ root, prs: [...kept, ...prs], now, write });
 }
 
 /** "3 min", "2 h", "4 d" — how old a cache is, in the page's own voice. */

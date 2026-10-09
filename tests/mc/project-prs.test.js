@@ -5,7 +5,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { describePr, openPrsFor, PR_LIST_ARGS, projectForBranch } from '../../src/mc/project-prs.js';
+import {
+  describePr, openPrsFor, parseWorktrees, PR_LIST_ARGS, prOwner, projectForBranch, stepForPr,
+} from '../../src/mc/project-prs.js';
 
 const NAMES = ['mc', 'mc-cut', 'mc-log', 'mc-test', 'action-window', 'runner-open-prs'];
 
@@ -56,5 +58,55 @@ test('describePr: the line a person reads, and a draft says so', () => {
 });
 
 test('PR_LIST_ARGS: one question, with the fields the round and the page both need', () => {
-  assert.deepEqual(PR_LIST_ARGS, ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,headRefName,baseRefName,isDraft,title']);
+  assert.deepEqual(PR_LIST_ARGS, ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,headRefName,baseRefName,isDraft,title,updatedAt']);
+});
+
+/**
+ * The step a pull request is: the one that names it, else the one the plan
+ * stands at. On 2026-10-09 all four open project pull requests were the
+ * second kind — the register writes `pr` when the merger answers.
+ */
+test('stepForPr: the step that names it, else the step the plan stands at', () => {
+  const plan = { step: 4, plan: { steps: [{ pr: 12283 }, { pr: 12288 }, { pr: 12310 }, { pr: null }] } };
+  assert.equal(stepForPr({ number: 12314 }, plan), 4);
+  assert.equal(stepForPr({ number: 12288 }, plan), 2);
+  assert.equal(stepForPr({ number: 1 }, {}), null);
+});
+
+test('parseWorktrees: path and branch, and a detached tree has none', () => {
+  const text = [
+    'worktree /Users/m/memoro', 'HEAD abc', 'branch refs/heads/main', '',
+    'worktree /Users/m/mc/plan/email/memoro', 'HEAD def', 'branch refs/heads/plan/email', '',
+    'worktree /Users/m/mc/plan/docx/memoro', 'HEAD 123', 'detached', '',
+  ].join('\n');
+  assert.deepEqual(parseWorktrees(text), [
+    { path: '/Users/m/memoro', branch: 'main' },
+    { path: '/Users/m/mc/plan/email/memoro', branch: 'plan/email' },
+    { path: '/Users/m/mc/plan/docx/memoro', branch: null },
+  ]);
+  assert.deepEqual(parseWorktrees(null), []);
+});
+
+/**
+ * The pull requests open on 2026-10-09, and whose each one was: four of eight
+ * were not on the page at all, and #12900 was nobody's.
+ */
+test('prOwner: a project, a plan session, a workarea, a folder elsewhere, or nobody', () => {
+  const root = '/Users/m/mc';
+  const worktrees = [
+    { path: '/Users/m/mc/plan/entity-detail/memoro', branch: 'plan/trip-project-detail' },
+    { path: '/Users/m/mc/plan/staff/memoro', branch: 'plan-staff-chat-chain' },
+    { path: '/Users/m/mc/deps-memoro-minor/memoro', branch: 'deps-memoro-minor' },
+    { path: '/Users/m/memoro-cli', branch: 'deps-read-for-the-tree' },
+    { path: '/Users/m/mc/sql-size-trim/memoro', branch: 'sql-size-trim-2' },
+  ];
+  const names = ['sql-size-trim', 'mosaic-sessions'];
+  const owner = (headRefName) => prOwner({ headRefName }, { names, worktrees, root });
+  assert.deepEqual(owner('sql-size-trim-2'), { kind: 'project', name: 'sql-size-trim', path: null });
+  assert.deepEqual(owner('plan/trip-project-detail'), { kind: 'plan', name: 'entity-detail', path: '/Users/m/mc/plan/entity-detail/memoro' });
+  assert.equal(owner('plan-staff-chat-chain').name, 'staff');
+  assert.deepEqual(owner('deps-memoro-minor'), { kind: 'workarea', name: 'deps-memoro-minor', path: '/Users/m/mc/deps-memoro-minor/memoro' });
+  assert.deepEqual(owner('deps-read-for-the-tree'), { kind: 'worktree', name: null, path: '/Users/m/memoro-cli' });
+  assert.deepEqual(owner('plan/email'), { kind: 'plan', name: null, path: null });
+  assert.deepEqual(owner('remove-bookshop-recipes'), { kind: 'none', name: null, path: null });
 });

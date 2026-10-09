@@ -67,7 +67,9 @@ import { PLAN_HOME, workRoot } from './paths.js';
 import { overlayPlans } from './register.js';
 import { planState } from './plan-schema.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
-import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
+import {
+  PR_LIST_ARGS, openPrsFor, parseWorktrees, prOwner, stepForPr,
+} from './project-prs.js';
 import { assembleQueue, nextFor, queueFileNames } from './run-plan.js';
 import { staleBlockers } from './stale-blockers.js';
 import {
@@ -545,13 +547,41 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * one. The held rows went with `held.json` (ruling 21): a step that did not
  * land is `failed` in the register and drawn where every other plan state is.
  */
-export function mergesSection({ landing = null, queued = [], now } = {}) {
-  // The one the round is landing is drawn as the round, not twice.
-  const queuedItems = queueOrder(queueEntries(queued))
-    .filter((item) => !(landing && Number(landing.pr) === item.pr && item.state === 'landing'));
-  void now;
+export function mergesSection({
+  landing = null, queued = [], prs = [], now = new Date(),
+} = {}) {
+  const entries = queueOrder(queueEntries(queued));
+  const isLanding = (item) => landing && Number(landing.pr) === item.pr && item.state === 'landing';
+  // The one the round is landing is drawn as the round, not twice — but its
+  // queue entry is where its branch and its step are, and the open pull
+  // requests are where its title is: the row names what is landing, not only
+  // its number (Martin, 2026-10-09).
+  const own = entries.find(isLanding) || null;
+  const titled = (repo, number) => prs.find((pr) => pr.repo === repo && Number(pr.number) === Number(number)) || null;
+  const named = landing
+    ? (() => {
+      const pr = titled(landing.repo, landing.pr);
+      const branch = own?.branch || pr?.headRefName || null;
+      return {
+        ...landing,
+        branch,
+        name: own?.step ? own.step.project : branch,
+        step: own?.step ? own.step.index + 1 : null,
+        title: pr?.title || null,
+      };
+    })()
+    : null;
+  const at = now instanceof Date ? now.getTime() : Number(now);
+  const queuedItems = entries.filter((item) => !isLanding(item)).map((item) => {
+    const since = Date.parse(item.since || '');
+    return {
+      ...item,
+      title: titled(item.repo, item.pr)?.title || null,
+      wait_seconds: Number.isFinite(since) ? Math.max(0, Math.round((at - since) / 1000)) : null,
+    };
+  });
   return {
-    landing,
+    landing: named,
     queued: { count: queuedItems.length, items: queuedItems },
     count: (landing ? 1 : 0) + queuedItems.length,
   };
@@ -591,6 +621,74 @@ export function checksSection({ repos = [], now = new Date() } = {}) {
       };
     }),
   };
+}
+
+/* ------------------------------------------------------------- PULL REQUESTS */
+
+/**
+ * Every open pull request, and whose it is (`prOwner`, project-prs.js).
+ *
+ * The page used to know a pull request only through a project's branch, so a
+ * plan session's, a terminal session's and one nobody had checked out any
+ * more were not on it at all: four of eight on 2026-10-09, one of them a week
+ * old with no worktree anywhere. Each item says which step of which project it
+ * is, when it is a project's; whether the merger has it; and how long since
+ * anything happened on it.
+ *
+ * `worktrees` is `{ <repo>: [{ path, branch }] }`, one `git worktree list` per
+ * repository — local, and the only way to know which folder holds a branch.
+ */
+export function prsSection({
+  prs = [], plans = [], worktrees = {}, root = '', merges = null, fetched = null, ageSeconds = null, now = new Date(),
+} = {}) {
+  const at = now instanceof Date ? now.getTime() : Number(now);
+  const landing = merges?.landing || null;
+  const queued = merges?.queued?.items || [];
+  const items = prs.map((pr) => {
+    const names = plans.filter((plan) => plan.repo === pr.repo).map((plan) => plan.project);
+    const owner = prOwner(pr, { names, worktrees: worktrees[pr.repo] || [], root });
+    const plan = owner.kind === 'project'
+      ? plans.find((candidate) => candidate.repo === pr.repo && candidate.project === owner.name) || null
+      : null;
+    const updated = Date.parse(pr.updatedAt || '');
+    const number = Number(pr.number);
+    return {
+      repo: pr.repo || null,
+      number,
+      title: pr.title || null,
+      branch: pr.headRefName || null,
+      draft: Boolean(pr.isDraft),
+      owner,
+      step: plan ? stepForPr(pr, plan) : null,
+      steps: plan ? (Array.isArray(plan.plan?.steps) ? plan.plan.steps.length : plan.steps ?? null) : null,
+      status: plan?.status || null,
+      merging: landing && landing.repo === pr.repo && Number(landing.pr) === number
+        ? 'landing'
+        : (queued.some((item) => item.repo === pr.repo && item.pr === number) ? 'queued' : null),
+      updated: pr.updatedAt || null,
+      quiet_seconds: Number.isFinite(updated) ? Math.max(0, Math.round((at - updated) / 1000)) : null,
+    };
+  }).sort((a, b) => String(a.repo).localeCompare(String(b.repo)) || b.number - a.number);
+  const counts = {};
+  for (const item of items) counts[item.owner.kind] = (counts[item.owner.kind] || 0) + 1;
+  return {
+    count: items.length, counts, fetched, age_seconds: ageSeconds, items,
+  };
+}
+
+/**
+ * The pull requests onto the rows that own them: every project row and every
+ * running lane gets the list of its own, so the step a pull request is and the
+ * work it belongs to are read on the same line (Martin, 2026-10-09). Same
+ * objects as `prs.items`, not copies.
+ */
+export function attachPrs({ programmes, runner, pulls }) {
+  const mine = (repo, name) => pulls.items.filter((item) => item.owner.kind === 'project'
+    && item.owner.name === name && (repo == null || item.repo === repo));
+  for (const group of programmes?.programmes || []) {
+    for (const project of group.projects || []) project.prs = mine(project.repo, project.name);
+  }
+  for (const step of runner?.steps || []) step.prs = mine(step.repo, step.name);
 }
 
 /** The stale blockers as the line draws them: how many, and the first few. */
@@ -1229,6 +1327,23 @@ export async function collectPage({
     alive,
   });
 
+  const mergesNow = mergesSection({
+    landing: merges({ repos: present, alive }), queued: queuedForMerge, prs: prs.prs, now,
+  });
+  const programmes = programmesSection({
+    plans, areas, rows, openPrs: prs.prs, live: liveNames,
+    planning: sessions.planning,
+    running: runner.steps.map((step) => step.name).filter(Boolean),
+    programmes: present.flatMap((repo) => listProgrammes(repo)),
+  });
+  const worktrees = Object.fromEntries(present.map((repo) => [
+    repo.name, parseWorktrees(git(repo.path, ['worktree', 'list', '--porcelain'])),
+  ]));
+  const pulls = prsSection({
+    prs: prs.prs, plans, worktrees, root, merges: mergesNow, fetched: prs.fetched, ageSeconds: prs.age_seconds, now,
+  });
+  attachPrs({ programmes, runner, pulls });
+
   return {
     runner,
     sessions,
@@ -1248,9 +1363,8 @@ export async function collectPage({
         git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
       }),
     }),
-    merges: mergesSection({
-      landing: merges({ repos: present, alive }), queued: queuedForMerge, now,
-    }),
+    merges: mergesNow,
+    prs: pulls,
     checks: checksSection({
       repos: present.map((repo) => {
         let nightly = null;
@@ -1260,12 +1374,7 @@ export async function collectPage({
       now,
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
-    programmes: programmesSection({
-      plans, areas, rows, openPrs: prs.prs, live: liveNames,
-      planning: sessions.planning,
-      running: runner.steps.map((step) => step.name).filter(Boolean),
-      programmes: present.flatMap((repo) => listProgrammes(repo)),
-    }),
+    programmes,
     mc: mcSection({
       process: runner.process,
       commit: runnerFile?.commit ?? null,

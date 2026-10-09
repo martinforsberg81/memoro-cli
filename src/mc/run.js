@@ -140,6 +140,7 @@ import { parentLanded, queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
 import { currentHolder } from './work-identity.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
+import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
@@ -2148,6 +2149,7 @@ export function createRunner({
     const prsFailed = [];
     const askedRepos = [];
     const github = readGithub();
+    const answered = [];
     for (const repo of repos) {
       if (only && repo.name !== only) continue;
       if (!deps.exists(join(repo.path, '.git'))) continue;
@@ -2173,6 +2175,7 @@ export function createRunner({
       try {
         if (!asked.ok) throw new Error(asked.stderr.trim().split('\n').at(-1) || 'gh pr list failed');
         prs.push(...JSON.parse(asked.stdout || '[]').map((pr) => ({ repo: repo.name, ...pr })));
+        answered.push(repo.name);
         if (held) {
           delete github[repo.name];
           writeGithub(github);
@@ -2187,6 +2190,19 @@ export function createRunner({
         say(`${repo.name}: GitHub could not be asked what is open (${error?.message || error})${cause ? ` — ${cause.label}, run: ${cause.fix}` : ''} — no step starts in this repository this round, next ask at ${github[repo.name].next_ask}`);
       }
     }
+    // What GitHub just said is what the page draws, rather than whatever the
+    // last `mc --fresh` heard (page-cache.js `mergePrs`). A cache that cannot
+    // be written costs the page its freshness and the round nothing.
+    try {
+      mergePrs({
+        root,
+        repos: answered,
+        prs: prs.filter((pr) => answered.includes(pr.repo)),
+        now: deps.now(),
+        read: (path) => deps.read(path),
+        write: writeJson,
+      });
+    } catch { /* the page says how old its cache is */ }
     return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans, prs, prsFailed };
   }
 
