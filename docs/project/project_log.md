@@ -93,3 +93,4 @@ existed?
 | 2026-10-08 | mc | deploy-beside-merges | delivered | Two deploys still never overlap, and a deploy waits for a merge round's window instead of refusing | none | c8fad78d |
 | 2026-10-08 | mc | merge-robustness | delivered | The runner lands what the session published and did not finish | [docs/technical/mc-merge.md](../technical/mc-merge.md) | ad056b39 |
 | 2026-10-08 | mc | update-handover | delivered | The successor starts at once and the old runner only finishes what it holds | none | 5c57e781 |
+| 2026-10-09 | mc | mc-deps | delivered | `mc deps bump <repo> security\|minor\|<package>[@<version>]`: a lockfile PR through the gate | none | 13c923c0 |
