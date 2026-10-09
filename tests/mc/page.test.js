@@ -1354,7 +1354,7 @@ describe('the page', () => {
     assert.doesNotMatch(text, /avatar-self-serve/u, 'a blocked project is collapsed, not listed');
     assert.match(text, /^ {7}1 blocked · 1 on a decision · held most by assistant-avatar-1 1$/mu);
     assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
-    assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+Step 1, The page — done when the step[^|]*#440/u);
+    assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+#440\s+Step 1, The page/u);
     assert.match(text, /3 of them have no workarea yet/u);
     // The workareas no project explains are one line: the numbers that still
     // open them, and the file that has them all.
@@ -1816,7 +1816,7 @@ describe('the palette', () => {
     'grey grey grey green grey grey green', //       2 · docx-editor  memoro  ready  1/2  Step 2, …  08-29 09:00Z step
     'bold+cyan green grey grey grey', //               mc  1 ready · 0 blocked   ·  no plan session
     'grey grey grey grey grey', //                   3 · mc-run  memoro-cli  done  1/1  every step is done
-    'grey grey grey green grey cyan+bold', //        4 · mc-ui  memoro-cli  ready  0/1  Step 1, …  #440
+    'grey grey grey green grey cyan+bold grey green', // 4 · mc-ui  memoro-cli  ready  0/1  #440  Step 1, …  08-29 10:00Z step
     'grey', //                                           3 of them have no workarea yet
     '',
     'bold+cyan grey grey', //                          WORK  1 session · 1 workarea with no project
@@ -2161,13 +2161,19 @@ describe('PULL REQUESTS', () => {
    * a blocked project holding one is not collapsed away, which is how #12314
    * sat ten days behind a blocked step (Martin, 2026-10-09).
    */
-  it('draws each project pull request under its project, with the step, and keeps a blocked one in sight', () => {
+  it('puts each project pull request on the project row itself, and keeps a blocked one in sight', () => {
     const { pulls, programmes, runner } = build();
     const lines = renderPageLines(pageData({ programmes, runner, prs: pulls }), { columns: 120, now: AT });
-    const at = lines.findIndex((line) => / docx-simple-toolbar /u.test(line) && /blocked/u.test(line));
+    // One row per project (Martin, 2026-10-09): the number in its own column
+    // after the steps, and no row under it.
+    const at = lines.findIndex((line) => / docx-simple-toolbar /u.test(line));
     assert.ok(at > 0, lines.join('\n'));
-    assert.match(lines[at + 1], /^ {8}↳ #12314 {2}step 4\/4 {4}docx-simple-toolbar 4: G4 walk +quiet 10 d$/u);
-    assert.ok(lines.some((line) => /^ {8}↳ #13048 {2}step 7\/7 {4}one-operation step 7: close-out +quiet 8 h$/u.test(line)), lines.join('\n'));
+    assert.match(lines[at], /blocked +3\/4 +#12314 +step 4 is blocked$/u);
+    assert.doesNotMatch(lines[at + 1], /#12314|↳/u);
+    assert.ok(lines.some((line) => /one-operation +memoro +ready +6\/7 +#13048 +step 7 is ready$/u.test(line)), lines.join('\n'));
+    // Quiet for a day it waits on a person, and says so in yellow.
+    const painted = renderPageLines(pageData({ programmes, runner, prs: pulls }), { columns: 120, colour: true, now: AT });
+    assert.ok(painted.some((line) => line.includes('\u001b[33m\u001b[1m#12314') || line.includes('\u001b[1m\u001b[33m#12314')), painted.join('\n'));
     // The running lane says which pull request its project has open.
     assert.ok(lines.some((line) => /^ {2}● memoro {6}one-operation +step 7\/7 +5 min +#13048 {2}claude opus$/u.test(line)), lines.join('\n'));
   });

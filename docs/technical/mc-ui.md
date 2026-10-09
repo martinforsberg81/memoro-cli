@@ -189,9 +189,10 @@ below is about.
   or called `plan/…`; a workarea's; one checked out somewhere else; or
   nobody's. The heading counts them all — `8 open · 4 on a step · 1 plan ·
   1 nobody's` — and the rows are only the ones no other row draws: a
-  project's pull requests are a `↳ #N  step n/m  title  quiet …` row under the
-  project in PROGRAMMES (a blocked project holding one is never collapsed),
-  and the merger's are in MERGES. A running RUNNER lane carries its project's
+  project's pull request is a column of its own on the project's row in
+  PROGRAMMES, after the steps — `#N`, or `#N+1` for more than one; one row per
+  project (Martin, 2026-10-09), and a blocked project holding one is never
+  collapsed — and the merger's are in MERGES. A running RUNNER lane carries its project's
   `#N` after the clock. The one nobody holds has the waiting `◆` in yellow;
   any pull request quiet for a day turns its `quiet …` yellow. The open pull
   requests come from `prs.json`, which every runner round now refills for the
@@ -507,8 +508,8 @@ person set it to.
 | PROGRAMMES | a programme with no project yet | grey |
 | PROGRAMMES | a collapsed row: `N blocked`, its numbers and its blockers | red, grey |
 | PROGRAMMES | the repository a project lives in | grey |
-| PROGRAMMES | an open PR, a row under its project: `↳`, `#pr`, `step n/m`, title | grey, bold cyan, grey, plain |
-| PROGRAMMES | that PR's `quiet …`: under a day, from a day; `landing now`, `queued for merge` | grey, yellow, green |
+| PROGRAMMES | the open PR's column after the steps, `#pr` or `#pr+N` | bold cyan |
+| PROGRAMMES | that column when the PR has been quiet a day; when the merger has it | bold yellow, bold green |
 | PROGRAMMES | the number, the steps done, the last-run time, the no-workarea line | grey |
 | footer | the cache line, the notes | grey |
 

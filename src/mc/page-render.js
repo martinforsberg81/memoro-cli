@@ -955,7 +955,9 @@ function projectColumns(wide) {
   const status = roomy ? 9 : 8;
   const steps = roomy ? 8 : 6;
   const repo = roomy ? 12 : 0;
-  return { status, steps, repo, name: Math.max(16, Math.min(34, wide - 10 - status - steps - repo - 8)) };
+  // The name gives way before `next` drops under ~28 columns: `next` is the
+  // sentence that says what the row is waiting on.
+  return { status, steps, repo, name: Math.max(roomy ? 22 : 16, Math.min(34, wide - 10 - status - steps - repo - PR_CELL - 9 - 28)) };
 }
 
 /**
@@ -993,46 +995,39 @@ function projectLine(c, wide, project) {
     + repo
     + `${c(pad(clip(project.status || '—', column.status), column.status), ...statusTone(project.status))} `
     + `${c(pad(steps, column.steps), 'grey')}`;
-  // A project with open pull requests has a line for each under it (`prLine`);
-  // the right-hand column is the last runner step either way, which is what
-  // says whether anything has happened. A page carrying only `pr` — no list —
-  // still draws its number there, as it always did.
-  const right = project.pr && !Array.isArray(project.prs)
-    ? paint(c, [{ text: `#${project.pr}`, styles: PR_TONE }])
-    : paint(c, [
-      { text: project.last ? `${when(project.last.ts)} ` : '', styles: ['grey'] },
-      { text: project.last ? project.last.kind : '', styles: kindTone(project.last?.kind) },
-    ]);
-  return row(c, wide, left, project.next || '', right);
+  // The right-hand column is the last runner step, which is what says whether
+  // anything has happened; the pull request has a column of its own.
+  const right = paint(c, [
+    { text: project.last ? `${when(project.last.ts)} ` : '', styles: ['grey'] },
+    { text: project.last ? project.last.kind : '', styles: kindTone(project.last?.kind) },
+  ]);
+  return row(c, wide, `${left} ${prCell(c, project)} `, project.next || '', right);
 }
 
-/** Where a project row's name starts: `  ` the number `·` and a space. */
-const PR_INDENT = 8;
+/** `#13242+1` — the widest a project's pull request cell gets. */
+const PR_CELL = 8;
 
 /**
- * One open pull request under the project it belongs to: its number, which
- * step of the plan it is, its title, and how long nothing has happened on it.
- *
- * The number was a cyan `#12314` at the right margin of the project's row —
- * the first thing a narrow terminal dropped, the only one of a project's pull
- * requests drawn, and never with the step it was. A pull request is the
- * project's work waiting to land, so it gets a row of its own, indented under
- * the name it belongs to (Martin, 2026-10-09).
+ * The project's open pull request, in a column of its own after the steps:
+ * one row per project (Martin, 2026-10-09), and the number where a narrow
+ * terminal cannot drop it. It was a cyan `#12314` at the right margin — the
+ * first thing to go, and only ever the first of a project's pull requests.
+ * More than one is `+N`; `mc prs` names them all, with the step each is.
  *
  * Green while the merger has it — it waits on nobody. Yellow once a day has
- * passed with nothing on it: then it waits on a person, which is how #12314
- * sat ten days behind a blocked step without anybody looking.
+ * passed with nothing on it — then it waits on a person, which is how #12314
+ * sat ten days behind a blocked step. Bold cyan otherwise, the colour a pull
+ * request has everywhere on the page. Empty, it is spaces.
  */
-function prLine(c, wide, pr) {
-  const at = pr.step && pr.steps ? `step ${pr.step}/${pr.steps}` : (pr.step ? `step ${pr.step}` : '');
-  const quiet = pr.quiet_seconds != null && pr.quiet_seconds >= PR_QUIET_S;
-  const tail = pr.merging
-    ? { text: pr.merging === 'landing' ? 'landing now' : 'queued for merge', styles: ['green'] }
-    : { text: pr.quiet_seconds == null ? '' : `quiet ${ageWords(pr.quiet_seconds)}`, styles: quiet ? ['yellow'] : ['grey'] };
-  const left = `${' '.repeat(PR_INDENT)}${c('↳', 'grey')} ${cell(c, `#${pr.number}`, PR_NUMBER, PR_TONE)} `
-    + (at ? `${cell(c, at, 11, ['grey'])} ` : '');
-  const title = `${pr.draft ? 'draft: ' : ''}${pr.title || pr.branch || ''}`;
-  return row(c, wide, left, title, tail.text ? paint(c, [tail]) : null);
+function prCell(c, project) {
+  const prs = Array.isArray(project.prs) ? project.prs : (project.pr ? [{ number: project.pr }] : []);
+  if (!prs.length) return ' '.repeat(PR_CELL);
+  const [first] = prs;
+  const text = clip(`#${first.number}${prs.length > 1 ? `+${prs.length - 1}` : ''}`, PR_CELL);
+  const tone = prs.some((pr) => pr.merging)
+    ? ['green', 'bold']
+    : (prs.some((pr) => pr.quiet_seconds >= PR_QUIET_S) ? ['yellow', 'bold'] : PR_TONE);
+  return cell(c, text, PR_CELL, tone);
 }
 
 /** `#13265` and one space: the column a pull request's number is drawn in. */
@@ -1211,7 +1206,6 @@ function programmesLines(lines, c, wide, programmes, expand) {
     for (const project of group.projects) {
       if (held.has(project.name) && !project.prs?.length) continue;
       lines.push(projectLine(c, wide, project));
-      for (const pr of project.prs || []) lines.push(prLine(c, wide, pr));
     }
   }
   if (programmes.no_workarea) {
