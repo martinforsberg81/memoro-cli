@@ -1,22 +1,12 @@
 /**
- * `mc merge <repo> <pr>` — what becomes of a round that did not land.
+ * `mc merge <repo> <pr>` — the door, then the merger's queue (ruling 30).
  *
- * The round itself is `tests/mc/repo-merge.test.js`; this drives the verb over
- * a fake one, because what is asserted here is the half the round knows
- * nothing about: a refusal the runner's merge lane can act on is written to
- * `~/mc/runner/merges.json` and said in one line, and a machine with no runner
- * on it is left exactly as it was — the whole point of the queue is that
- * nobody has to type the command again, and a queue nothing drains would be a
- * promise mc could not keep.
- *
- * Since step-lands-itself, the same verb also waits out a busy gate or a held
- * lease itself (`waitTurn`, in `commands/repo.js`) instead of handing `busy`
- * and `lease` to the lane, and stops at a plan-trespass before either. Every
- * wait test below gives its own `sleep`/`now`/`runningRound`/`readLease` —
- * without them the loop polls the real filesystem against a frozen clock and
- * never reaches its own bound. `planBoundary`'s own comparison rules are
- * `tests/mc/merge-boundary.test.js`'s; what is asserted here is only that
- * `gate()` reacts to what it returns.
+ * The round itself is `tests/mc/repo-merge.test.js` and the merger that runs
+ * it is `tests/mc/merger.test.js`; this drives the verb, whose whole job for
+ * one pull request is now three things: refuse a plan trespass at the door,
+ * make the step `landing` and queue the job, and see that a merger is
+ * running. It returns at once — nothing here waits, so nothing here needs a
+ * clock. `planBoundary`'s own rules are `tests/mc/merge-boundary.test.js`'s.
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -25,9 +15,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { gate } from '../../src/mc/commands/repo.js';
-import { gateLockPath, takeGateLock } from '../../src/mc/gate-lock.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
-import { claimLease, leaseLogPath, leasePath, readLease } from '../../src/mc/repo-lease.js';
 import { remainderOf, stepForMerge } from '../../src/mc/merge-step.js';
 import { registerPath } from '../../src/mc/register.js';
 
@@ -35,426 +23,7 @@ let root = null;
 let home = null;
 let priorHome = null;
 
-/** A round that stopped, in the shape `runMergeRound` returns one. */
-function stopped(stoppedAt, reason) {
-  return {
-    repo: '/repos/memoro-cli',
-    pr: { number: 671, base: 'main' },
-    batch: null,
-    ok: false,
-    merged: false,
-    merge_commit: null,
-    merged_into: null,
-    stopped_at: stoppedAt,
-    reason,
-    gate: {
-      ok: false,
-      stopped_at: stoppedAt,
-      reason,
-      pr: { number: 671, head: 'merge-queue', base: 'main' },
-      candidate: { red: [], totals: { tests: 10 } },
-      extra_gates: [],
-    },
-    deploy: null,
-  };
-}
-
-function landed() {
-  return {
-    ...stopped(null, null),
-    ok: true,
-    merged: true,
-    merge_commit: 'abc1234def',
-    merged_into: 'main',
-    default_branch: 'main',
-    off_default: false,
-    gate: { ...stopped(null, null).gate, ok: true, stopped_at: null, reason: null },
-  };
-}
-
-/**
- * Everything `gate` would otherwise reach the machine through. A test that
- * never has to wait needs none of `overrides`; one that does supplies its own
- * `runningRound`/`readLease`/`sleep`/`now`/`alive`/`gh` — real ones would poll
- * this process's own, empty `MC_HOME` forever or hit the network.
- */
-function deps(report, { runner = 'alive', overrides = {} } = {}) {
-  const out = { out: '', err: '' };
-  if (runner !== 'none') {
-    // A live pid is this process's own; a dead one is a runner that was killed
-    // and left its file behind, which `readRunner` answers as not alive.
-    const pid = runner === 'alive' ? process.pid : 2 ** 22 - 1;
-    mkdirSync(join(root, 'runner'), { recursive: true });
-    writeFileSync(join(root, 'runner', 'runner.json'), JSON.stringify({ pid, started: '2026-09-06T12:00:00Z' }));
-  }
-  return {
-    out,
-    io: {
-      stdout: { write: (text) => { out.out += text; } },
-      stderr: { write: (text) => { out.err += text; } },
-      root,
-      resolveRepo: async () => '/repos/memoro-cli',
-      mergeRound: async () => report,
-      now: () => new Date('2026-09-06T18:00:00Z'),
-      ...overrides,
-    },
-  };
-}
-
 const queue = () => parseQueue(existsSync(mergesPath(root)) ? readFileSync(mergesPath(root), 'utf8') : null);
-
-/** No lock, no lease, `gh` unreachable — `planBoundary` fails open at once. */
-const FREE = { runningRound: () => null, readLease: () => ({ held: false, holder: null }), gh: () => ({ status: 1, stdout: '' }) };
-
-describe('a red mc merge is the caller\'s — nothing is queued for a lane (ruling 21)', () => {
-  beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'mc-merge-red-'));
-    home = mkdtempSync(join(tmpdir(), 'mc-merge-home-'));
-    priorHome = process.env.MC_HOME;
-    process.env.MC_HOME = home;
-  });
-
-  afterEach(() => {
-    if (priorHome === undefined) delete process.env.MC_HOME; else process.env.MC_HOME = priorHome;
-    rmSync(root, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
-  });
-
-  it('exits 1 with the gate\'s own lines, writes no queue file and says nothing about a runner', async () => {
-    const { out, io } = deps(stopped('red', '1 test red: new thing › broke'), { overrides: FREE });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 1);
-    assert.equal(existsSync(mergesPath(root)), false, 'no queue file is even made');
-    assert.match(out.out, /^mc: nothing was merged$/mu);
-    assert.doesNotMatch(out.out, /queued/u);
-    assert.doesNotMatch(out.err, /no runner/u);
-  });
-
-  it('a stop the round could not name is the same: exit 1, nothing queued', async () => {
-    const { out, io } = deps(stopped('pr', 'gh could not read the pull request'), { overrides: FREE });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 1);
-    assert.equal(existsSync(mergesPath(root)), false);
-    assert.doesNotMatch(out.out, /queued/u);
-  });
-
-  it('a landed round touches no queue, says nothing new, and never waited', async () => {
-    const { out, io } = deps(landed(), { overrides: FREE });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 0);
-    assert.equal(existsSync(mergesPath(root)), false, 'the file is not even made');
-    assert.doesNotMatch(out.out, /queued/u);
-    assert.doesNotMatch(out.err, /waiting|waited/u, 'a free machine leaves no trace of a wait it never took');
-  });
-
-  it('--json is the round\'s own report, with no queue fields', async () => {
-    const { out, io } = deps(stopped('red', '1 test red: new thing › broke'), { overrides: FREE });
-    const code = await gate({ repo: 'memoro-cli', pr: 671, json: true }, io);
-    assert.equal(code, 1);
-    const report = JSON.parse(out.out);
-    assert.equal(report.queued, undefined);
-    assert.equal(report.stopped_at, 'red');
-  });
-});
-
-describe('mc merge waits out a busy gate or a held lease instead of refusing', () => {
-  beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'mc-merge-wait-'));
-    home = mkdtempSync(join(tmpdir(), 'mc-merge-wait-home-'));
-    priorHome = process.env.MC_HOME;
-    process.env.MC_HOME = home;
-  });
-
-  afterEach(() => {
-    if (priorHome === undefined) delete process.env.MC_HOME; else process.env.MC_HOME = priorHome;
-    rmSync(root, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
-  });
-
-  it('a free machine runs the round at once, with no waiter entry written', async () => {
-    const { out, io } = deps(landed(), { overrides: FREE });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 0);
-    assert.deepEqual(queue(), [], 'nothing was ever held, so nothing was ever queued');
-    assert.equal(out.err, '', 'no line for a wait that never happened');
-  });
-
-  it('a free machine takes away this pull request\'s own entry left by an earlier call that timed out', async () => {
-    // memoro #12353, 2026-10-02: landed through the free path, and its entry
-    // from the timed-out call before stood in the queue for a day.
-    mkdirSync(join(root, 'runner'), { recursive: true });
-    writeFileSync(mergesPath(root), JSON.stringify([
-      {
-        repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', reason: 'another gate round is running',
-        stopped_at: 'busy', since: '2026-09-06T17:00:00Z', holder: 'martin@host', pid: 424242,
-      },
-      {
-        repo: 'memoro-cli', pr: 900, branch: 'other', reason: 'another gate round is running',
-        stopped_at: 'busy', since: '2026-09-06T17:05:00Z', holder: 'martin@host', pid: 515151,
-      },
-    ]));
-    const { out, io } = deps(landed(), { overrides: FREE });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 0);
-    assert.deepEqual(queue().map((entry) => entry.pr), [900], 'its own entry is gone; somebody else\'s is not its to take');
-    assert.equal(out.err, '');
-  });
-
-  it('a held gate lock waits, then runs once released — one announce line, one waited line', async () => {
-    let clock = Date.parse('2026-09-06T18:00:00Z');
-    let polls = 0;
-    const { out, io } = deps(landed(), {
-      overrides: {
-        runningRound: () => (polls < 1 ? { pid: 999, repo: 'other', since: '2026-09-06T17:00:00Z' } : null),
-        readLease: () => ({ held: false, holder: null }),
-        alive: () => true,
-        sleep: async (ms) => { polls += 1; clock += ms; },
-        now: () => new Date(clock),
-        gh: () => ({ status: 1, stdout: '' }),
-      },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 0);
-    assert.match(out.err, /^mc: waiting behind another gate round is running.* — 0 ahead of this one$/mu);
-    assert.match(out.err, /^mc: waited \d+s$/mu);
-    assert.deepEqual(queue(), [], 'its own entry is gone once its turn ran');
-  });
-
-  it('sees the lock where the round writes it — mc\'s home, not the work root', async () => {
-    // The real reader, no `runningRound` stub: a stub is handed whatever root
-    // the wait passes and hid that the wait passed the wrong one (2026-09-19).
-    assert.equal(takeGateLock({ repo: 'memoro', pr: 11867, mode: 'merge' }).ok, true);
-    let clock = Date.parse('2026-09-06T18:00:00Z');
-    const { out, io } = deps(landed(), {
-      overrides: {
-        readLease: () => ({ held: false, holder: null }),
-        sleep: async (ms) => { clock += ms; rmSync(gateLockPath(home), { force: true }); },
-        now: () => new Date(clock),
-        gh: () => ({ status: 1, stdout: '' }),
-      },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 722 }, io);
-    assert.equal(code, 0);
-    assert.match(out.err, /^mc: waiting behind another gate round is running/mu);
-    assert.match(out.err, /^mc: waited 15s$/mu);
-  });
-
-  it('a dead waiter\'s entry is dropped, and never counted as ahead', async () => {
-    mkdirSync(join(root, 'runner'), { recursive: true });
-    writeFileSync(mergesPath(root), JSON.stringify([{
-      repo: 'memoro-cli', pr: 900, branch: 'other', reason: 'memoro-cli is held by mc-run',
-      stopped_at: 'lease', since: '2026-09-06T17:00:00Z', holder: 'martin@host', pid: 424242,
-    }]));
-    let clock = Date.parse('2026-09-06T18:00:00Z');
-    let polls = 0;
-    const { out, io } = deps(landed(), {
-      overrides: {
-        runningRound: () => null,
-        readLease: () => (polls < 1 ? { held: true, holder: 'someone' } : { held: false, holder: null }),
-        alive: (pid) => pid !== 424242,
-        sleep: async (ms) => { polls += 1; clock += ms; },
-        now: () => new Date(clock),
-        gh: () => ({ status: 1, stdout: '' }),
-      },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 0);
-    assert.match(out.err, /— 0 ahead of this one$/mu, 'the dead entry was never live to be ahead');
-    assert.deepEqual(queue(), [], 'the dead entry and this call\'s own are both gone');
-  });
-
-  it('a later mc merge counts the earlier live waiter ahead of it, then takes its turn once that one is gone', async () => {
-    mkdirSync(join(root, 'runner'), { recursive: true });
-    writeFileSync(mergesPath(root), JSON.stringify([{
-      repo: 'memoro-cli', pr: 900, branch: 'other', reason: 'another gate round is running',
-      stopped_at: 'busy', since: '2026-09-06T17:00:00Z', holder: 'martin@host', pid: 424242,
-    }]));
-    let clock = Date.parse('2026-09-06T18:00:00Z');
-    let polls = 0;
-    const { out, io } = deps(landed(), {
-      overrides: {
-        runningRound: () => (polls < 1 ? { pid: 999, since: '2026-09-06T17:00:00Z' } : null),
-        readLease: () => ({ held: false, holder: null }),
-        alive: () => true,
-        sleep: async (ms) => {
-          polls += 1;
-          clock += ms;
-          // The earlier waiter takes its own turn and leaves — the one thing
-          // this single-process test cannot let a second `mc merge` do for
-          // itself.
-          writeFileSync(mergesPath(root), JSON.stringify(queue().filter((entry) => entry.pr !== 900)));
-        },
-        now: () => new Date(clock),
-        gh: () => ({ status: 1, stdout: '' }),
-      },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 0);
-    assert.match(out.err, /^mc: waiting behind another gate round is running.* — 1 ahead of this one$/mu, 'the earlier waiter was counted');
-    assert.deepEqual(queue(), [], 'both are gone once both have their answers');
-  });
-
-  it('past MERGE_WAIT_MS, mc merge stops, prints once, exits 3, and keeps its place', async () => {
-    let clock = Date.parse('2026-09-06T18:00:00Z');
-    const { out, io } = deps(stopped('busy', 'never reached — the wait times out first'), {
-      overrides: {
-        runningRound: () => ({ pid: 999, since: '2026-09-06T17:00:00Z' }),
-        readLease: () => ({ held: false, holder: null }),
-        alive: () => true,
-        sleep: async (ms) => { clock += ms; },
-        now: () => new Date(clock),
-        gh: () => ({ status: 1, stdout: '' }),
-      },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 3);
-    assert.match(
-      out.err,
-      /^mc: still waiting behind another gate round is running.* after 8 min — run this again; the place in the queue is kept$/mu,
-    );
-    assert.equal(out.err.split('\n').filter((line) => line.startsWith('mc: still waiting')).length, 1, 'one line, not one per poll');
-    const entries = queue();
-    assert.equal(entries.length, 1, 'the place in the queue is kept, not dropped');
-    assert.equal(entries[0].pr, 671);
-  });
-});
-
-describe('mc merge does not wait behind an orphaned lease (2026-09-20)', () => {
-  // The lease a round died holding: its pid is one the fake `kill` reports
-  // gone, as `kill(pid, 0)` answered ESRCH for pid 21225 that morning.
-  const DEAD = 21225;
-  const kill = (pid) => {
-    if (pid === DEAD) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
-    return true;
-  };
-  const read = (repoPath) => readLease(repoPath, { kill });
-
-  beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'mc-merge-orphan-'));
-    home = mkdtempSync(join(tmpdir(), 'mc-merge-orphan-home-'));
-    priorHome = process.env.MC_HOME;
-    process.env.MC_HOME = home;
-    mkdirSync(join(home, 'repo-leases'), { recursive: true });
-    writeFileSync(leasePath('/repos/memoro-cli'), JSON.stringify({
-      schema: 'mc-repo-lease', version: 1, repo: '/repos/memoro-cli', holder: 'martin@MacBookAir',
-      holder_kind: 'work-area', errand: 'merge round for #11942', since: '2026-09-06T17:05:16Z', owner_pid: DEAD,
-    }));
-  });
-
-  afterEach(() => {
-    if (priorHome === undefined) delete process.env.MC_HOME; else process.env.MC_HOME = priorHome;
-    rmSync(root, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
-  });
-
-  /** The round claims as `runMergeRound` does, so the reap is the real one. */
-  const claimingRound = () => async () => {
-    const claim = claimLease({ repoPath: '/repos/memoro-cli', errand: 'merge round for #671', ownerPid: process.pid, kill });
-    assert.equal(claim.ok, true, 'the orphaned lease is taken, not refused');
-    return landed();
-  };
-
-  it('a lone waiter goes on the first poll, and its round reaps the lease', async () => {
-    let clock = Date.parse('2026-09-06T18:00:00Z');
-    let polls = 0;
-    const { out, io } = deps(landed(), {
-      overrides: {
-        runningRound: () => null,
-        readLease: read,
-        mergeRound: claimingRound(),
-        alive: () => true,
-        sleep: async (ms) => { polls += 1; clock += ms; },
-        now: () => new Date(clock),
-        gh: () => ({ status: 1, stdout: '' }),
-      },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 0);
-    assert.equal(polls, 0, 'it never slept behind a lease nobody holds');
-    assert.doesNotMatch(out.err, /waiting|waited/u);
-    assert.match(readFileSync(leaseLogPath(), 'utf8'), /reap {5}\/repos\/memoro-cli .*was=martin@MacBookAir {2}pid=21225 gone/u);
-  });
-
-  it('a waiter whose turn it is not yet names the lease as orphaned, then goes', async () => {
-    // The owner is alive when this call arrives and dies while it waits, the
-    // way the round of 2026-09-20 died under three waiters.
-    let reads = 0;
-    const dying = (repoPath) => {
-      reads += 1;
-      return readLease(repoPath, { kill: reads === 1 ? () => true : kill });
-    };
-    mkdirSync(join(root, 'runner'), { recursive: true });
-    writeFileSync(mergesPath(root), JSON.stringify([{
-      repo: 'memoro-cli', pr: 900, branch: 'other', reason: 'memoro-cli is held by martin@MacBookAir',
-      stopped_at: 'lease', since: '2026-09-06T17:00:00Z', holder: 'martin@host', pid: 424242,
-    }]));
-    let clock = Date.parse('2026-09-06T18:00:00Z');
-    const { out, io } = deps(landed(), {
-      overrides: {
-        runningRound: () => null,
-        readLease: dying,
-        mergeRound: claimingRound(),
-        alive: () => true,
-        sleep: async (ms) => {
-          clock += ms;
-          // The earlier waiter takes its turn and leaves.
-          writeFileSync(mergesPath(root), JSON.stringify(queue().filter((entry) => entry.pr !== 900)));
-        },
-        now: () => new Date(clock),
-        gh: () => ({ status: 1, stdout: '' }),
-      },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 0);
-    assert.match(out.err, /^mc: waiting behind memoro-cli's orphaned lease \(martin@MacBookAir; pid 21225 is gone\) — 1 ahead of this one$/mu);
-    assert.doesNotMatch(out.err, /is held by/u, 'a holder that is gone is not named as holding');
-    assert.match(out.err, /^mc: waited 15s$/mu);
-    assert.deepEqual(queue(), []);
-  });
-});
-
-describe('a plan-trespass stops mc merge before the gate', () => {
-  beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'mc-merge-door-'));
-    home = mkdtempSync(join(tmpdir(), 'mc-merge-door-home-'));
-    priorHome = process.env.MC_HOME;
-    process.env.MC_HOME = home;
-  });
-
-  afterEach(() => {
-    if (priorHome === undefined) delete process.env.MC_HOME; else process.env.MC_HOME = priorHome;
-    rmSync(root, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
-  });
-
-  it('every problem the door found is printed, nothing is queued, and the gate never ran', async () => {
-    let ranRound = false;
-    const { out, io } = deps(stopped('busy', 'unused — the door stops this first'), {
-      overrides: {
-        ...FREE,
-        planBoundary: async () => ({
-          checked: true, ok: false,
-          problems: ['steps[1].instruction: a step session does not change it', 'goal: a step session does not change it'],
-        }),
-        mergeRound: async () => { ranRound = true; return landed(); },
-      },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 1);
-    assert.equal(ranRound, false, 'a trespass is a fact about the pull request, not something the gate gets to measure');
-    assert.match(out.err, /^mc: plan-trespass — steps\[1\]\.instruction: a step session does not change it$/mu);
-    assert.match(out.err, /^mc: plan-trespass — goal: a step session does not change it$/mu);
-    assert.deepEqual(queue(), [], 'plan-trespass is never the lane\'s to retry');
-  });
-
-  it('a plan the door never checked (no project branch, or something unreadable) reaches the gate as before', async () => {
-    const { io } = deps(landed(), { overrides: FREE });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(code, 0, 'FREE\'s planBoundary is unstubbed, so the real one runs against an unreachable gh and fails open');
-  });
-});
-
-/* ------------------------------------------------------------ the step */
 
 const PLAN_PATH = 'docs/project/mc/merge-queue/PLAN.json';
 
@@ -474,101 +43,178 @@ function register(stepOver = {}) {
 
 const entryNow = () => JSON.parse(readFileSync(registerPath(root, 'merge-queue'), 'utf8'));
 
-/** FREE, plus what a step needs: a session's environment, a kill that records, a lock that is nobody's. */
-function stepDeps(report, { env = {}, head = null, body = null, alive = () => true } = {}) {
-  const kills = [];
-  const d = deps(report, {
-    overrides: {
-      ...FREE,
+/**
+ * Everything `gate` would otherwise reach the machine through: `gh` answers
+ * the pull request's branch, the door is open unless told otherwise, and the
+ * merger is started by a fake that counts.
+ */
+function deps({ env = {}, head = null, boundary = null, merger = { pid: 777, started: true } } = {}) {
+  const out = { out: '', err: '' };
+  const starts = [];
+  let ranRound = false;
+  return {
+    out,
+    starts,
+    ranRound: () => ranRound,
+    io: {
+      stdout: { write: (text) => { out.out += text; } },
+      stderr: { write: (text) => { out.err += text; } },
+      root,
+      resolveRepo: async () => '/repos/memoro-cli',
+      mergeRound: async () => { ranRound = true; throw new Error('mc merge runs no round of its own'); },
+      now: () => new Date('2026-09-06T18:00:00Z'),
       env: { MC_WORK_ROOT: root, ...env },
-      gh: (args) => (args[1] === 'view' && (head || body) ? { status: 0, stdout: JSON.stringify({ headRefName: head, body }) } : { status: 1, stdout: '' }),
-      kill: (pid, signal) => { kills.push([pid, signal]); },
-      alive,
+      gh: (args) => (args[1] === 'view' && head ? { status: 0, stdout: JSON.stringify({ headRefName: head }) } : { status: 1, stdout: '' }),
+      planBoundary: async () => boundary || { checked: false },
       lock: (_root, fn) => fn(),
+      startMerger: (options) => { starts.push(options); return merger; },
     },
-  });
-  return { ...d, kills };
+  };
 }
 
-describe('mc merge writes the register for a step, and ends the session on green', () => {
+function fresh(prefix) {
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'mc-merge-step-'));
-    home = mkdtempSync(join(tmpdir(), 'mc-merge-step-home-'));
+    root = mkdtempSync(join(tmpdir(), `${prefix}-`));
+    home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
     priorHome = process.env.MC_HOME;
     process.env.MC_HOME = home;
   });
-
   afterEach(() => {
     if (priorHome === undefined) delete process.env.MC_HOME; else process.env.MC_HOME = priorHome;
     rmSync(root, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   });
+}
 
-  it('green (MC_STEP): done with the pull request and the commit, the session ended, the other step untouched', async () => {
-    register();
-    const { out, kills, io } = stepDeps(landed(), { env: { MC_STEP: 'merge-queue:1' } });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
+describe('mc merge queues the pull request for the merger and returns (ruling 30)', () => {
+  fresh('mc-merge-queue');
+
+  it('exit 0, one job in the queue, a merger started, and no round run here', async () => {
+    const d = deps({ head: 'some-branch' });
+    const code = await gate({ repo: 'memoro-cli', pr: 671 }, d.io);
     assert.equal(code, 0);
-    const after = entryNow();
-    assert.equal(after.steps[1].status, 'done');
-    assert.equal(after.steps[1].pr, 671);
-    assert.deepEqual(after.steps[1].landed, { sha: 'abc1234def', into: 'main', at: '2026-09-06T18:00:00Z' });
-    assert.equal(after.steps[1].session, null);
-    assert.deepEqual(kills, [[4242, 'SIGTERM']], 'the session that called is ended — no further turn');
-    assert.match(out.out, /^mc: merge-queue step 2 is done — the register says so$/mu);
-    assert.match(out.out, /^mc: the step's session \(pid 4242\) is ended — nothing more for it to do$/mu);
-    assert.equal(after.steps[0].status, 'done');
+    assert.equal(d.ranRound(), false, 'the round is the merger\'s');
+    const [job, ...rest] = queue();
+    assert.deepEqual(rest, []);
+    assert.equal(job.repo, 'memoro-cli');
+    assert.equal(job.repo_path, '/repos/memoro-cli');
+    assert.equal(job.pr, 671);
+    assert.equal(job.branch, 'some-branch');
+    assert.equal(job.state, 'queued');
+    assert.equal(job.step, null, 'a branch that is nobody\'s step');
+    assert.equal(job.since, '2026-09-06T18:00:00Z');
+    assert.ok(job.holder?.name, 'who asked is kept for the round\'s lease');
+    assert.equal(d.starts.length, 1);
+    assert.match(d.out.out, /^mc: #671 is queued for the merger — it is next$/mu);
+    assert.match(d.out.out, /^mc: the merger \(pid 777, just started\) lands it; follow it in .*merger\.log$/mu);
   });
 
-  it('green with a `## Remainder` in the pull request: still done, and the step says what no step holds yet', async () => {
-    register();
-    const body = '## What\n\nthree modules of four\n\n## Remainder\n\n`smart-search.js` — 16 sites, 24 env records.\n\n## Verified\n\nnpm test';
-    const { out, io } = stepDeps(landed(), { env: { MC_STEP: 'merge-queue:1' }, body });
-    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, io), 0);
-    const after = entryNow();
-    assert.equal(after.steps[1].status, 'done');
-    assert.equal(after.steps[1].landed.remainder, '`smart-search.js` — 16 sites, 24 env records.');
-    assert.match(after.steps[1].comments.at(-1), /^#671 landed with a remainder no step holds yet — `smart-search\.js`/u);
-    assert.match(out.out, /^mc: #671 names a remainder — it is on the step for the planning session to home$/mu);
-    assert.equal(remainderOf('## Remainder\n\nNone.\n'), null);
-    assert.equal(remainderOf('no such heading'), null);
+  it('a second pull request stands behind the first, and the place is said', async () => {
+    await gate({ repo: 'memoro-cli', pr: 671 }, deps().io);
+    const d = deps({ merger: { pid: 777, started: false } });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 672 }, d.io), 0);
+    assert.deepEqual(queue().map((job) => job.pr), [671, 672]);
+    assert.match(d.out.out, /^mc: #672 is queued for the merger — 1 ahead of it$/mu);
+    assert.match(d.out.out, /^mc: the merger \(pid 777\) lands it/mu);
   });
 
-  it('red: the attempt is counted and the reason kept, and the session is left to fix it', async () => {
+  it('the same pull request asked twice is one job, keeping its place', async () => {
+    await gate({ repo: 'memoro-cli', pr: 671 }, deps().io);
+    await gate({ repo: 'memoro-cli', pr: 672 }, deps().io);
+    await gate({ repo: 'memoro-cli', pr: 671 }, deps().io);
+    assert.deepEqual(queue().map((job) => job.pr), [671, 672]);
+  });
+
+  it('a job the merger is landing now is left alone, and the caller is told so', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 671, state: 'landing', since: '2026-09-06T17:00:00Z' }]));
+    const d = deps();
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
+    assert.equal(queue()[0].state, 'landing');
+    assert.match(d.out.out, /^mc: #671 is queued for the merger — the merger is landing it now$/mu);
+  });
+
+  it('no merger could be started: still queued, and the next start is named', async () => {
+    const d = deps({ merger: { pid: null, started: false, error: 'spawn EACCES' } });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
+    assert.equal(queue().length, 1);
+    assert.match(d.out.out, /^mc: no merger could be started \(spawn EACCES\) — the job waits/mu);
+  });
+
+  it('--json is the job as queued', async () => {
+    const d = deps();
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671, json: true }, d.io), 0);
+    const said = JSON.parse(d.out.out);
+    assert.deepEqual(said, { queued: true, repo: 'memoro-cli', pr: 671, place: 0, merger_pid: 777, step: null });
+  });
+});
+
+describe('a plan-trespass stops mc merge at the door', () => {
+  fresh('mc-merge-door');
+
+  it('every problem the door found is printed, exit 1, nothing queued, no merger started', async () => {
     register();
-    const { out, kills, io } = stepDeps(stopped('red', '2 tests red: a › b'), { env: { MC_STEP: 'merge-queue:1' } });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, io);
+    const d = deps({
+      env: { MC_STEP: 'merge-queue:1' },
+      boundary: { checked: true, ok: false, problems: ['steps[1].instruction: a step session does not change it', 'goal: a step session does not change it'] },
+    });
+    const code = await gate({ repo: 'memoro-cli', pr: 671 }, d.io);
     assert.equal(code, 1);
+    assert.match(d.out.err, /^mc: plan-trespass — steps\[1\]\.instruction: a step session does not change it$/mu);
+    assert.match(d.out.err, /^mc: plan-trespass — goal: a step session does not change it$/mu);
+    assert.deepEqual(queue(), []);
+    assert.equal(d.starts.length, 0);
+    assert.equal(entryNow().steps[1].status, 'running', 'the session that called fixes it, still on the step');
+  });
+});
+
+describe('mc merge makes the step landing', () => {
+  fresh('mc-merge-step');
+
+  it('MC_STEP: the step is landing with its pull request, the job names it, the other step is untouched', async () => {
+    register();
+    const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
     const after = entryNow();
-    assert.equal(after.steps[1].status, 'running', 'still the session\'s');
-    assert.equal(after.steps[1].attempts, 1);
-    assert.equal(after.steps[1].reason, '2 tests red: a › b');
-    assert.deepEqual(kills, []);
-    assert.match(out.out, /^mc: merge-queue step 2 — attempt 1 did not land; fix it here and run this again$/mu);
+    assert.equal(after.steps[1].status, 'landing');
+    assert.equal(after.steps[1].pr, 671);
+    assert.equal(after.steps[1].session, null, 'the session\'s part is over');
+    assert.equal(after.steps[0].status, 'done');
+    assert.deepEqual(queue()[0].step, { project: 'merge-queue', index: 1 });
+    assert.match(d.out.out, /^mc: merge-queue step 2 is landing — green makes it done; red sends it back to the step's next session$/mu);
   });
 
   it('the step is found from the branch when MC_STEP is not set — a person typing mc merge on a project branch', async () => {
     register();
-    const { io } = stepDeps(landed(), { head: 'merge-queue-2' });
-    await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.equal(entryNow().steps[1].status, 'done');
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, deps({ head: 'merge-queue-2' }).io), 0);
+    assert.equal(entryNow().steps[1].status, 'landing');
+    assert.deepEqual(queue()[0].step, { project: 'merge-queue', index: 1 });
   });
 
-  it('a session whose pid is already gone is not signalled', async () => {
+  it('a pull request that is nobody\'s step is queued and the register is left alone', async () => {
     register();
-    const { kills, io } = stepDeps(landed(), { env: { MC_STEP: 'merge-queue:1' }, alive: () => false });
-    await gate({ repo: 'memoro-cli', pr: 671 }, io);
-    assert.deepEqual(kills, []);
-    assert.equal(entryNow().steps[1].status, 'done');
-  });
-
-  it('a pull request that is nobody\'s step gets the round and nothing else', async () => {
-    register();
-    const { out, kills, io } = stepDeps(landed(), { head: 'plan/mc' });
-    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, io), 0);
-    assert.deepEqual(kills, []);
-    assert.doesNotMatch(out.out, /register/u);
+    const d = deps({ head: 'plan/mc' });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
     assert.equal(entryNow().steps[1].status, 'running');
+    assert.equal(queue()[0].step, null);
+    assert.doesNotMatch(d.out.out, /landing —/u);
+  });
+
+  it('a step stacked on one still landing: the job names that one, and the door reads the plan from its tip', async () => {
+    register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } });
+    const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
+    let asked = null;
+    d.io.planBoundary = async (options) => { asked = options; return { checked: false }; };
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
+    assert.equal(asked.from, 'deadbeef');
+    assert.deepEqual(queue()[0].parent, { project: 'merge-queue', index: 0, pr: 600, sha: 'deadbeef' });
+    assert.match(d.out.out, /^mc: it lands after #600 \(step 1\), which it is built on$/mu);
+  });
+
+  it('remainderOf reads a `## Remainder` and nothing else', () => {
+    assert.equal(remainderOf('## Remainder\n\n`smart-search.js` — 16 sites.\n\n## Verified\n\nnpm test'), '`smart-search.js` — 16 sites.');
+    assert.equal(remainderOf('## Remainder\n\nNone.\n'), null);
+    assert.equal(remainderOf('no such heading'), null);
   });
 });
 

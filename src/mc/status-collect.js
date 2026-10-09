@@ -30,7 +30,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { openPrsFor } from './project-prs.js';
-import { REFUSAL, chooseKind, inFlight, kindFor } from './run-plan.js';
+import { REFUSAL, chooseKind, holdingPrs, inFlight, kindFor } from './run-plan.js';
 
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
 export const RUNNER_MODEL = 'opus';
@@ -136,7 +136,7 @@ export function machineState(name, {
   }
   if (prsFailed.includes(repo)) return no(REFUSAL['prs-unknown'], 'GitHub could not be asked what this repository has open');
 
-  const openPrs = openPrsFor({ prs, name, names: plans.map((p) => p.project), repo });
+  const openPrs = holdingPrs(openPrsFor({ prs, name, names: plans.map((p) => p.project), repo }), plans.find((p) => p.project === name));
   const flight = inFlight(openPrs);
   if (flight) return no(REFUSAL['in-flight'], flight.skip);
   // There was one more reading here until 2026-09-08, out of a file the runner

@@ -43,8 +43,10 @@ export const PLAN_VERSION = 1;
 // can say a step is running — a session is on it — or failed — its session
 // ended without landing, and the reason is on the register entry. Neither is
 // `ready`, so neither is handed out; a failed step is a person's, through
-// `mc step ready` (ruling 21).
-export const STEP_STATUSES = Object.freeze(['ready', 'running', 'done', 'failed', 'blocked']);
+// `mc step ready` (ruling 21). `landing` (ruling 30, 2026-10-09) is the
+// register's too: the step's pull request is in the merger's queue, and the
+// merger writes `done` or sends it back.
+export const STEP_STATUSES = Object.freeze(['ready', 'running', 'landing', 'done', 'failed', 'blocked']);
 export const BLOCKER_KINDS = Object.freeze(['decision', 'project', 'workarea']);
 
 const STATUSES = new Set(STEP_STATUSES);
@@ -359,8 +361,14 @@ export function planSummary(plan) {
  */
 export function planState(plan) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
-  const index = steps.findIndex((step) => step?.status !== 'done');
-  if (index === -1) return { status: 'done', index: -1, step: null };
+  // A `landing` step is behind the plan, not in front of it: its pull request
+  // is the merger's, and the next step starts on top of it (ruling 30, A).
+  const index = steps.findIndex((step) => step?.status !== 'done' && step?.status !== 'landing');
+  if (index === -1) {
+    const landing = steps.findIndex((step) => step?.status === 'landing');
+    if (landing === -1) return { status: 'done', index: -1, step: null };
+    return { status: 'landing', index: landing, step: steps[landing] };
+  }
   const step = steps[index];
   return { status: STATUSES.has(step?.status) ? step.status : 'invalid', index, step };
 }
@@ -381,6 +389,8 @@ export function deliverableStep(plan) {
       ? `step ${state.index + 1} is blocked on ${waiting?.kind || 'something'} ${waiting?.name || '(unnamed)'}`
       : (state.status === 'running'
         ? `step ${state.index + 1} is running${state.step?.pr ? ` (#${state.step.pr})` : ''}`
+        : state.status === 'landing'
+        ? `step ${state.index + 1} is landing — #${state.step?.pr ?? '?'} is in the merge queue`
         : (state.status === 'failed'
           ? `step ${state.index + 1} failed${state.step?.pr ? ` — #${state.step.pr} is open` : ''}; mc step ready starts it again`
           : `step ${state.index + 1} is ${state.status}`));

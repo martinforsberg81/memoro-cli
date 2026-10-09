@@ -52,11 +52,14 @@ export const REGISTER_DIR = 'projects';
  * session is on it (`session.pid` says which); `done` its pull request
  * landed on main; `failed` its session ended without landing — the pull
  * request, if any, is open and `reason` says what happened; `blocked` it
- * waits on something named in `blocked_by`. A `failed` or `blocked` step is
- * a person's: the runner never retries one, and the way back is `mc step
- * ready` (ruling 21).
+ * waits on something named in `blocked_by`; `landing` its pull request is
+ * in the merger's queue (`merge-queue.js`, ruling 30) and the merger writes
+ * what comes of it. A `failed` or `blocked` step is a person's: the runner
+ * never retries one, and the way back is `mc step ready` (ruling 21). A red
+ * round the merger sends back is `ready` with its `pr` and `reason` kept,
+ * up to `MAX_MERGE_ATTEMPTS` (merge-step.js).
  */
-export const STEP_STATES = Object.freeze(['ready', 'running', 'done', 'failed', 'blocked']);
+export const STEP_STATES = Object.freeze(['ready', 'running', 'landing', 'done', 'failed', 'blocked']);
 
 export function registerDir(root) {
   return join(root, 'runner', REGISTER_DIR);
@@ -72,7 +75,7 @@ export function registerPath(root, project) {
 export function emptyStep() {
   return {
     key: null, status: 'ready', pr: null, branch: null, blocked_by: null, reason: null, comments: [],
-    session: null, attempts: 0, landed: null, updated: null,
+    session: null, attempts: 0, landed: null, stacked_on: null, updated: null,
   };
 }
 
@@ -110,6 +113,13 @@ function normaliseStep(step) {
     session: plain(step.session) ? { ...step.session } : null,
     attempts: Number.isInteger(step.attempts) && step.attempts >= 0 ? step.attempts : 0,
     landed: plain(step.landed) ? { ...step.landed } : null,
+    // The step this one's branch started on top of while that one was still
+    // landing (ruling 30): `{ index, pr, sha }`, the sha being that branch's
+    // tip when this one began. The merger lands this one only after that one,
+    // and moves it onto main past `sha` first.
+    stacked_on: plain(step.stacked_on) && Number.isInteger(step.stacked_on.index) && typeof step.stacked_on.sha === 'string'
+      ? { index: step.stacked_on.index, pr: int(step.stacked_on.pr), sha: step.stacked_on.sha }
+      : null,
     updated: typeof step.updated === 'string' ? step.updated : null,
   };
 }

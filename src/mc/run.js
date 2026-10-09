@@ -116,7 +116,7 @@ import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { stopServersUnder } from './dev-servers.js';
-import { readPlanText, unauthorisedChanges } from './plan-schema.js';
+import { deliverableStep, readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
@@ -133,9 +133,9 @@ import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
 import { planBoundary } from './merge-boundary.js';
-import { landedPatch, redPatch, shouldWait } from './merge-step.js';
-import { runMergeRound } from './repo-merge.js';
-import { recordRound, recordRoundStart } from './repo-round-log.js';
+import { redPatch } from './merge-step.js';
+import { mergesPath, nextJob, parseQueue } from './merge-queue.js';
+import { parentLanded, queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
 import { currentHolder } from './work-identity.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
@@ -147,7 +147,7 @@ import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
-  helperDue, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
+  helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
   queueFileText, readSessionOutput, resumePrompt, sessionResult, sessionSettings, streamSummary, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
@@ -176,13 +176,6 @@ export const UPDATE_POLL_MS = 30 * 1000;
 export const DRAIN_TICK_MS = 10 * 60 * 1000;
 /** How often a lane held back by the total cap looks for a free slot again. */
 export const TOTAL_POLL_MS = 15 * 1000;
-/**
- * The runner's merge of a session's pull request waits behind another gate as
- * `mc merge` does — this often, and for as long as `mc merge`'s own eight
- * minutes — before the lock or lease it lost becomes the verdict.
- */
-export const SESSION_MERGE_POLL_MS = 30 * 1000;
-export const SESSION_MERGE_WAITS = 16;
 
 /* ------------------------------------------------------------ real deps */
 
@@ -414,19 +407,14 @@ export function realDeps(env = process.env) {
     // narration in `~/.memoro/mc/nightly/nightly.log`. A dependency so a test
     // can drive the chore without a suite behind it.
     nightlyTick: (options) => loggedTick({ env, ...options }),
-    // The one door work lands through. `mc merge`'s round and `mc merge
-    // --docs`', called in process because the runner is mc — not shelled out
-    // to, and not replaced by a `gh pr merge` that skips the gate. A
-    // dependency so a round can be driven in a test without a real suite, a
-    // real lease and a real remote behind it.
-    // Every round leaves its line in the round log, as `mc merge`'s do; the
-    // plan boundary is the check `mc merge` makes before its gate.
-    mergeRound: async (options) => {
-      recordRoundStart({ repo: options.repoPath, mode: 'merge', holder: options.holder?.name || null, prs: [options.pr] });
-      const report = await runMergeRound({ env, ...options });
-      recordRound(report, { mode: 'merge' });
-      return report;
-    },
+    // The one door work lands through: the merger's queue (ruling 30), the
+    // same call `mc merge` makes, in process because the runner is mc — and
+    // `mc merge --docs`' round for the archive pull request. The plan
+    // boundary is the check `mc merge` makes before it queues. Dependencies
+    // so a test drives them without a real merger, suite or remote.
+    queueMerge: (options) => queueMerge({ env, ...options }),
+    startMerger: (options) => startMerger({ env, ...options }),
+    pendingMerges: (root) => { try { return parseQueue(readFileSync(mergesPath(root), 'utf8')); } catch { return []; } },
     planBoundary: (options) => planBoundary(options),
     docsMerge: (options) => runDocsMerge(options),
     // The session — `streamSession` below. The session's Bash tool gets a
@@ -568,6 +556,40 @@ export function createRunner({
         if (pid && alive(pid)) return;
         say(`${record.project}: step ${index + 1} was running under pid ${pid ?? 'none'}, which is gone — failed`);
         const written = recordStep(record.project, index, { status: 'failed', reason: `the session (pid ${pid ?? 'unknown'}) is gone without a result` });
+        if (written) out = applyEntry(out, written);
+      });
+      return out;
+    });
+  }
+
+  /**
+   * The merger's side of the world, read with it (ruling 30). A queue with
+   * jobs and no merger alive is a merger that was killed — the machine slept,
+   * somebody ended it — and one is started here, so a queued pull request
+   * never waits on somebody typing `mc merge` again. A step `landing` whose
+   * job is in no queue was dropped by hand or lost; it is `failed` with that
+   * reason. Not within a minute of its own write: `queueMerge` writes the
+   * register a moment before the queue.
+   */
+  function sweepLanding(plans) {
+    const pending = deps.pendingMerges ? deps.pendingMerges(root) : [];
+    const mayGo = pending.length && nextJob(pending, { landed: parentLanded(root, { read: deps.read }) });
+    if (mayGo && deps.startMerger && !readMerger({ root, alive })) {
+      const started = deps.startMerger({ root });
+      say(`merger: ${pending.length} pull request${pending.length === 1 ? '' : 's'} queued and no merger running — ${started.pid ? `started pid ${started.pid}` : `could not start one (${started.error || 'no pid'})`}`);
+    }
+    return plans.map((record) => {
+      const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
+      let out = record;
+      steps.forEach((step, index) => {
+        if (step?.status !== 'landing') return;
+        if (pending.some((job) => job.step?.project === record.project && job.step?.index === index)) return;
+        const state = readEntry(root, record.project, { read: deps.read })?.steps?.[index];
+        const updated = Date.parse(state?.updated || '');
+        if (Number.isFinite(updated) && deps.now().getTime() - updated < 60_000) return;
+        const reason = `#${state?.pr ?? '?'} was landing but is in no merge queue — mc merge it again`;
+        say(`${record.project}: step ${index + 1} ${reason}`);
+        const written = recordStep(record.project, index, { status: 'failed', reason });
         if (written) out = applyEntry(out, written);
       });
       return out;
@@ -834,6 +856,59 @@ export function createRunner({
     }
     say(`${name}: ${branch} has already landed — moved to ${next} from origin/main`);
     return { ok: true, moved: next };
+  }
+
+  /**
+   * Where the step about to start stands, by the register (ruling 30, A):
+   *
+   * - a step the merger sent back (`ready` with its `pr` and `branch`) goes
+   *   back to its own branch — its pull request is still open there;
+   * - a step after one that is `landing` starts on a new branch on top of the
+   *   highest such step's, so it does not wait for the merger: the work it
+   *   builds on is in the branch already. `stacked` says on what, for the
+   *   register and the merger, which lands the two in order and moves this one
+   *   onto main past that sha once the one below has landed;
+   * - anything else is `freshBranch`'s, as before.
+   */
+  function placeBranch(worktree, name, record) {
+    const entry = readEntry(root, name, { read: deps.read });
+    if (!entry || !record?.plan) return freshBranch(worktree, name);
+    const { index } = deliverableStep(record.plan);
+    const state = index >= 0 ? entry.steps[index] : null;
+    const current = gitOut(worktree, ['branch', '--show-current']);
+    const onto = (branch) => {
+      if (current === branch) return true;
+      return deps.git(worktree, ['checkout', '-q', branch]).ok
+        || deps.git(worktree, ['checkout', '-q', '-B', branch, `origin/${branch}`]).ok;
+    };
+    if (state?.status === 'ready' && state.pr && state.branch) {
+      // As the pull request has it: the merger may have moved the branch onto
+      // main before its round, and the work is pushed — a dirty tree was
+      // refused before this.
+      deps.git(worktree, ['fetch', '-q', 'origin']);
+      if (!deps.git(worktree, ['checkout', '-q', '-B', state.branch, `origin/${state.branch}`]).ok && !onto(state.branch)) {
+        return { ok: false, moved: null, why: `${state.branch}, where #${state.pr} is open, could not be checked out` };
+      }
+      if (current !== state.branch) say(`${name}: back on ${state.branch} — #${state.pr} came back from the merger`);
+      // Still built on a step that has not landed: it stays so. Once that one
+      // has, main is merged in before the session and nothing is to be moved.
+      const below = state.stacked_on && entry.steps[state.stacked_on.index]?.status !== 'done' ? state.stacked_on : null;
+      return { ok: true, moved: current === state.branch ? null : state.branch, stacked: below };
+    }
+    const top = entry.steps.map((step, at) => ({ step, at }))
+      .filter(({ step, at }) => at < index && step.status === 'landing' && step.branch).at(-1);
+    if (!top) return freshBranch(worktree, name);
+    if (!onto(top.step.branch)) return { ok: false, moved: null, why: `${top.step.branch}, the landing step's branch, could not be checked out` };
+    const sha = gitOut(worktree, ['rev-parse', 'HEAD']);
+    const local = (gitOut(worktree, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']) || '').split('\n');
+    const remote = (gitOut(worktree, ['ls-remote', '--heads', 'origin']) || '').split('\n')
+      .map((line) => line.split('refs/heads/')[1]);
+    const next = nextBranch(name, [...local, ...remote].map((ref) => (ref || '').trim()).filter(Boolean));
+    if (!sha || !deps.git(worktree, ['checkout', '-q', '-b', next]).ok) {
+      return { ok: false, moved: null, why: `${next} could not be made on top of ${top.step.branch}` };
+    }
+    say(`${name}: step ${top.at + 1} is landing (#${top.step.pr}) — ${next} starts on top of it`);
+    return { ok: true, moved: next, stacked: { index: top.at, pr: top.step.pr, sha } };
   }
 
   /* --------------------------------------------------------------- landing */
@@ -1622,12 +1697,12 @@ export function createRunner({
     // plan says — the plan on origin/main and the plan in the worktree both
     // read `ready` while the step's work sits in an open pull request. The
     // rule itself is `inFlight`, beside `chooseKind` in run-plan.js.
-    const openPrs = openPrsFor({ prs, name, names: plans.map((p) => p.project), repo: repo.name });
+    const openPrs = holdingPrs(openPrsFor({ prs, name, names: plans.map((p) => p.project), repo: repo.name }), plans.find((p) => p.project === name));
     const flight = inFlight(openPrs);
     if (flight) return refuse(flight.reason, flight.skip);
     // A session must be somewhere it can push from. The push-guard asks the
     // same question at the wrong end — after ninety minutes of work.
-    const moved = freshBranch(worktree, name);
+    const moved = placeBranch(worktree, name, plans.find((p) => p.project === name));
     if (!moved.ok) return block(REFUSAL.branch, moved.why);
 
     const sync = syncMain(worktree, name);
@@ -1726,7 +1801,15 @@ export function createRunner({
       return 'skipped';
     }
     const now = deps.now();
-    const prompt = stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, now });
+    // A step the merger sent back (ruling 30) carries its pull request, the
+    // attempt and the gate's reason: the session is handed all three and goes
+    // on with the same branch and the same pull request.
+    const standingBefore = choice.index == null ? null : readEntry(root, name, { read: deps.read })?.steps?.[choice.index] || null;
+    const retry = standingBefore?.pr && standingBefore.attempts > 0 && standingBefore.reason
+      ? { pr: standingBefore.pr, reason: standingBefore.reason, attempts: standingBefore.attempts }
+      : null;
+    const stacked = moved.stacked || null;
+    const prompt = stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, retry, stacked, now });
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
 
@@ -1773,7 +1856,7 @@ export function createRunner({
     const stepBranch = gitOut(worktree, ['branch', '--show-current']) || name;
     if (stepIndex != null) {
       recordStep(name, stepIndex, {
-        status: 'running', branch: stepBranch, pr: null, reason: null,
+        status: 'running', branch: stepBranch, pr: retry ? retry.pr : null, reason: null, stacked_on: stacked,
         session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool },
       });
     }
@@ -1889,10 +1972,11 @@ export function createRunner({
     if (result.lingered) say(`${name}: the process did not exit within ${Math.round(RESULT_GRACE_MS / 60_000)}m of its result — killed, the result stands`);
 
     // Where the step stands now is the register's word, not this process's
-    // (ruling 21). The session ran `mc merge` itself: green wrote `done` and
-    // ended the session, so the process under this lane came back with a
-    // signal and no JSON, and that is the ordinary end of a landed step. A
-    // session that gave up wrote `failed` with its reason. Anything still
+    // (ruling 21). The session ran `mc merge` itself, which queued its pull
+    // request for the merger and made the step `landing` (ruling 30): that is
+    // the ordinary end of a step session now, and the merger writes `done`
+    // — or sends a red back as `ready` — on its own time. A session that
+    // gave up wrote `failed` with its reason. Anything still
     // `running` when the process is gone is failed here — no pull request at
     // all, or one left open by a session that did not end `success` — except
     // the one the session finished and did not see measured: it ended
@@ -1901,7 +1985,9 @@ export function createRunner({
     // the runner measures through the same door, and the verdict is the
     // step's (Martin, 2026-10-07). A quota answer is no session and the step
     // goes back to `ready`. The runner never retries a failed step;
-    // `mc step ready` is the way back.
+    // `mc step ready` is the way back. A red the merger sent back is `ready`
+    // with its pull request, and is the next session's (`stepPrompt`'s
+    // `retry`).
     const landSeconds = null;
     const after = readEntry(root, name, { read: deps.read })?.steps?.[choice.index] || null;
     // The row's note keeps the session's own exit word — `success`,
@@ -1910,7 +1996,13 @@ export function createRunner({
     // process died, because the verb ends the session on purpose.
     if (after?.status === 'done') {
       note = 'success,merged';
-      say(`${name}: #${after.pr || pr} landed through mc merge from the session — step ${choice.index + 1} is done`);
+      say(`${name}: #${after.pr || pr} landed through the merger — step ${choice.index + 1} is done`);
+    } else if (after?.status === 'landing') {
+      note = `${note},queued`;
+      say(`${name}: #${after.pr || pr} is in the merge queue — step ${choice.index + 1} is landing`);
+    } else if (after?.status === 'ready' && after.pr && after.attempts > (standingBefore?.attempts || 0)) {
+      note = `${note},red`;
+      say(`${name}: #${after.pr} came back red from the merger — step ${choice.index + 1} is ready for its next session (${after.reason})`);
     } else if (after?.status === 'failed') {
       note = `${note},failed`;
       say(`${name}: step ${choice.index + 1} failed by the session's own word — ${after.reason}`);
@@ -1920,7 +2012,7 @@ export function createRunner({
     } else if (read.quota) {
       recordStep(name, choice.index, { status: 'ready', session: null });
     } else if (note === 'success' && pr !== '-') {
-      note = await landForSession({ worktree, name, index: choice.index, pr, branch, rc: result.status });
+      note = await landForSession({ worktree, repo, name, index: choice.index, pr, branch, rc: result.status });
     } else {
       const said = read.said ? ` — the API said "${read.said}"` : '';
       const reason = pr !== '-'
@@ -1940,52 +2032,43 @@ export function createRunner({
     // project ready for its next one — which the order now takes care of:
     // the project is still at the head of it (2026-09-08, replacing the
     // eight-step stay a lane used to make after a merge).
-    return note === 'success,merged' || note === 'success,merged-by-runner' ? 'merged' : 'ran';
+    return note === 'success,merged' ? 'merged' : 'ran';
   }
 
   /**
-   * The merge a step session would have run, run for it: the session ended
-   * `success` with `#pr` open on the step's branch and the register still
-   * `running`, so its own `mc merge` never came back — the harness put it in
-   * the background at the tool's ceiling and it died with the session. The
-   * door is `mc merge`'s: the plan boundary, then the round as the step's
-   * workarea, waiting out another gate's lock as `mc merge` does. Green is
-   * `done` with the pull request; anything else is `failed` with the round's
-   * own reason, said to be the runner's measurement and not the session's.
-   * Returns the row's note.
+   * The merge a step session would have asked for, asked for it: the session
+   * ended `success` with `#pr` open on the step's branch and the register
+   * still `running`, so its own `mc merge` never ran (ruling 25). The door is
+   * `mc merge`'s — the plan boundary — and then the merger's queue, as `mc
+   * merge` does it (ruling 30): the step is `landing` and the merger writes
+   * what comes of it. A trespass is a red at the door and goes back to the
+   * step like any red. Returns the row's note.
    */
-  async function landForSession({ worktree, name, index, pr, branch, rc }) {
-    say(`${name}: #${pr} is open and the session ended success (rc ${rc}) without landing it — the runner runs the merge`);
+  async function landForSession({ worktree, repo, name, index, pr, branch, rc }) {
+    say(`${name}: #${pr} is open and the session ended success (rc ${rc}) without queueing it — the runner queues it`);
     const number = Number(pr);
     const boundary = deps.planBoundary ? await deps.planBoundary({ repoPath: worktree, pr: number }) : { checked: false };
-    let report;
     if (boundary.checked && !boundary.ok) {
-      report = { ok: false, merged: false, stopped_at: 'plan-trespass', reason: boundary.problems.join('; ') };
-    } else {
+      const standing = readEntry(root, name, { read: deps.read })?.steps?.[index];
+      const patch = redPatch({ step: standing, report: { stopped_at: 'plan-trespass', reason: `plan-trespass — ${boundary.problems.join('; ')}` } });
+      recordStep(name, index, { ...patch, pr: number, branch });
+      say(`${name}: step ${index + 1} is ${patch.status} — ${patch.reason}`);
+      return 'success,red';
+    }
+    try {
       const holder = currentHolder({ cwd: worktree, env: deps.env });
-      for (let waits = 0; ; waits += 1) {
-        report = await deps.mergeRound({ repoPath: worktree, pr: number, holder, mode: 'merge', onProgress: (message) => say(`${name}: ${message}`) });
-        if (!shouldWait(report) || waits >= SESSION_MERGE_WAITS) break;
-        await deps.sleep(SESSION_MERGE_POLL_MS);
-      }
+      const queued = deps.queueMerge({
+        root, repo: repo.name, repoPath: repo.path, pr: number, branch, holder,
+        step: { project: name, index }, now: deps.now(), lock: register.lock,
+      });
+      say(`${name}: #${pr} is queued for the merger${queued.place ? ` — ${queued.place} ahead of it` : ''}`);
+      return 'success,queued-by-runner';
+    } catch (error) {
+      const reason = `#${pr} could not be queued for the merger (${error?.message || error})`;
+      recordStep(name, index, { status: 'failed', pr: number, branch, reason });
+      say(`${name}: step ${index + 1} failed — ${reason}`);
+      return 'success,failed';
     }
-    if (landingNote(report) === 'merged') {
-      let body = null;
-      const seen = deps.gh(worktree, ['pr', 'view', String(number), '--json', 'body']);
-      try { body = seen.ok ? JSON.parse(seen.stdout || '{}')?.body || null : null; } catch { body = null; }
-      recordStep(name, index, { ...landedPatch({ pr: number, report, now: stamp(), body }), branch });
-      deps.git(worktree, ['fetch', '-q', 'origin']);
-      say(`${name}: #${pr} landed by the runner's merge into ${report.merged_into || 'main'} — step ${index + 1} is done`);
-      return 'success,merged-by-runner';
-    }
-    const verdict = report?.merged
-      ? `#${pr} was merged into ${report.merged_into}, not ${report.default_branch || 'main'}`
-      : `stopped at ${report?.stopped_at || 'unknown'} — ${report?.reason || 'the round said nothing'}`;
-    const reason = `the gate was still running when the session ended; measured by the runner: ${verdict}`;
-    const standing = readEntry(root, name, { read: deps.read })?.steps?.[index];
-    recordStep(name, index, { status: 'failed', pr: number, branch, attempts: redPatch({ step: standing, report }).attempts, reason });
-    say(`${name}: step ${index + 1} failed — ${reason}`);
-    return 'success,red';
   }
 
   /**
@@ -2031,7 +2114,7 @@ export function createRunner({
       // from its own file here, once, and a step whose session is gone —
       // a runner killed under it, a machine that slept — is failed here,
       // because a `running` step with no process is one nothing will finish.
-      plans.push(...sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register)));
+      plans.push(...sweepLanding(sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register))));
       // A repository whose last ask failed is not asked again until its
       // backoff has run out (github-backoff.js): every ask at a locked keychain
       // left a modal and a process behind (2026-09-20). It starts nothing

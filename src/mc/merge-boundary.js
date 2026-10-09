@@ -47,7 +47,13 @@ function names(tree) {
  * The plan text the branch started from: `path` at the merge base of the two
  * refs, else `path` on `origin/<base>`; `null` when neither will `git show`.
  */
-function beforeText({ askGit, repoPath, base, head, path }) {
+function beforeText({ askGit, repoPath, base, head, path, from = null }) {
+  // A pull request stacked on a step still landing (ruling 30) is judged
+  // against that step's tip: main does not have its plan edits yet.
+  if (from) {
+    const atFrom = askGit(['show', `${from}:${path}`], { cwd: repoPath });
+    if (atFrom.status === 0) return atFrom;
+  }
   const mergeBase = askGit(['merge-base', `origin/${base}`, `origin/${head}`], { cwd: repoPath });
   const sha = mergeBase.status === 0 ? String(mergeBase.stdout || '').trim() : '';
   if (sha) {
@@ -65,7 +71,7 @@ const notChecked = { checked: false, ok: true, problems: [] };
  * asked (no project branch, or something could not be read); `ok: false`
  * means it was asked and the answer was a trespass.
  */
-export async function planBoundary({ repoPath, pr, git, gh } = {}) {
+export async function planBoundary({ repoPath, pr, git, gh, from = null } = {}) {
   const askGit = git || run('git');
   const askGh = gh || run('gh');
 
@@ -92,7 +98,7 @@ export async function planBoundary({ repoPath, pr, git, gh } = {}) {
   });
   if (!path) return notChecked;
 
-  const mainShow = beforeText({ askGit, repoPath, base, head, path });
+  const mainShow = beforeText({ askGit, repoPath, base, head, path, from });
   if (!mainShow) return notChecked;
   const headShow = askGit(['show', `origin/${head}:${path}`], { cwd: repoPath });
   if (headShow.status !== 0) return notChecked;

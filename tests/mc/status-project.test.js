@@ -203,25 +203,21 @@ describe('collectProject', () => {
 
 
   /**
-   * A pull request a hand `mc merge` left for the runner's merge lane is not
-   * in the machine row: nothing about this project is in the way, and nobody
-   * has to type anything. What a person asking about the project wants to know
-   * is that the merge is somebody's — so it is said under the pull requests.
+   * A pull request in the merger's queue (ruling 30) is not in the machine
+   * row: nothing about this project is in the way, and nobody has to type
+   * anything. What a person asking about the project wants to know is that
+   * the merge is the merger's — so it is said under the pull requests.
    *
-   * The entry is matched by branch, the same longest-name rule pull requests
-   * are matched by (project-prs.js), so it holds with GitHub unreachable.
+   * The job is matched by the step it names, else by branch — the same
+   * longest-name rule pull requests are matched by (project-prs.js) — so it
+   * holds with GitHub unreachable.
    */
-  it('says a queued pull request is going to be landed by the runner', async () => {
+  it('says a queued pull request is in the merge queue, and whether the merger has it', async () => {
     const root = workRoot();
     writeFileSync(join(root, 'runner', 'merges.json'), JSON.stringify([
-      {
-        repo: 'memoro-cli', pr: 427, branch: 'mc-status-2', reason: 'another gate round is running',
-        stopped_at: 'busy', since: '2026-09-06T18:00:00Z', holder: 'martin@laptop',
-      },
-      {
-        repo: 'memoro-cli', pr: 999, branch: 'somebody-else', reason: 'memoro-cli is held by mc-run',
-        stopped_at: 'lease', since: '2026-09-06T18:00:00Z', holder: 'martin@laptop',
-      },
+      { repo: 'memoro-cli', pr: 427, branch: 'mc-status-2', since: '2026-09-06T18:00:00Z', state: 'queued' },
+      { repo: 'memoro-cli', pr: 428, branch: 'odd-name', step: { project: 'mc-status', index: 1 }, since: '2026-09-06T18:05:00Z', state: 'landing' },
+      { repo: 'memoro-cli', pr: 999, branch: 'somebody-else', since: '2026-09-06T18:00:00Z' },
     ]));
     const data = await collectProject('mc-status', {
       env: { MC_WORK_ROOT: root },
@@ -229,24 +225,9 @@ describe('collectProject', () => {
       offline: true,
       git,
     });
-    assert.deepEqual(data.queued.map((entry) => entry.pr), [427], 'another project\'s branch is not this project\'s');
-    assert.match(renderProject(data), /#427 is waiting for the gate \(since 09-06 18:00Z\) — another gate round is running/u);
-  });
-
-  it('does not call a pull request queued when the mc merge waiting for it is gone', async () => {
-    const root = workRoot();
-    writeFileSync(join(root, 'runner', 'merges.json'), JSON.stringify([{
-      repo: 'memoro-cli', pr: 427, branch: 'mc-status-2', reason: 'another gate round is running',
-      stopped_at: 'busy', since: '2026-09-06T18:00:00Z', holder: 'martin@laptop', pid: 424242,
-    }]));
-    const data = await collectProject('mc-status', {
-      env: { MC_WORK_ROOT: root },
-      repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
-      offline: true,
-      git,
-      alive: () => false,
-    });
-    assert.deepEqual(data.queued, []);
+    assert.deepEqual(data.queued.map((entry) => entry.pr), [427, 428], 'another project\'s branch is not this project\'s');
+    assert.match(renderProject(data), /#427 is in the merge queue \(since 09-06 18:00Z\)$/mu);
+    assert.match(renderProject(data), /#428 is in the merge queue \(since 09-06 18:05Z\) — the merger has it$/mu);
   });
 
   /**

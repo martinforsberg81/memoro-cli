@@ -1,23 +1,25 @@
 /**
- * `~/mc/runner/merges.json` — the rules, over the entries and nothing else.
+ * `~/mc/runner/merges.json` — the merger's jobs, over the entries and nothing
+ * else (ruling 30).
  *
- * The verb's own use of them is in `tests/mc/merge-command.test.js`, where a
- * refused round writes the file; these are the edges that would otherwise be
- * found by a runner at three in the morning: a file somebody hand-edited, two
- * repositories numbering their pull requests independently, and the same pull
- * request queued twice.
+ * The verb's use of them is `tests/mc/merge-command.test.js` and the merger's
+ * is `tests/mc/merger.test.js`; these are the edges that would otherwise be
+ * found by the merger at three in the morning: a file somebody hand-edited or
+ * an older mc left, two repositories numbering their pull requests
+ * independently, the same pull request queued twice, and a job a dead merger
+ * was landing.
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  dequeue, dropDeadEntries, enqueue, mergesPath, nextWaiter, parseQueue, queueEntries, queueOrder,
-  queuedFor,
+  dequeue, enqueue, markLanding, mergesPath, nextJob, parseQueue, placeOf, queueEntries, queueOrder, queuedFor,
+  waitingOnParent,
 } from '../../src/mc/merge-queue.js';
 
-const entry = (over = {}) => ({
-  repo: 'memoro-cli', pr: 671, branch: 'merge-queue', reason: 'the gate is red',
-  stopped_at: 'red', since: '2026-09-06T18:00:00Z', holder: 'martin@host', ...over,
+const job = (over = {}) => ({
+  repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 671, branch: 'merge-queue',
+  since: '2026-09-06T18:00:00Z', holder: { name: 'martin@host', kind: 'shell' }, step: null, ...over,
 });
 
 test('the file sits beside the runner\'s other state', () => {
@@ -28,60 +30,66 @@ test('an unreadable or missing file is no entries, never a crash', () => {
   assert.deepEqual(parseQueue(null), []);
   assert.deepEqual(parseQueue('{'), []);
   assert.deepEqual(parseQueue('{"pr": 1}'), [], 'an object is not a list of entries');
-  assert.deepEqual(queueEntries([{ repo: 'memoro' }, null, 'x']), [], 'an entry with no pull request is not one');
+  assert.deepEqual(queueEntries([null, { pr: 'x' }]), []);
 });
 
-test('an entry keeps the shape the lane and the page read, whatever the file says', () => {
-  const [read] = queueEntries([{ pr: '9', repo: 'memoro' }]);
-  assert.deepEqual(read, {
-    repo: 'memoro', pr: 9, branch: null, reason: 'no reason given', stopped_at: null, since: null, holder: null,
-    pid: null,
-  });
+test('an entry an older mc left — a waiter with a pid and a reason — reads as a queued job', () => {
+  const [old] = parseQueue(JSON.stringify([{ repo: 'memoro', pr: 12, branch: 'b', reason: 'busy', stopped_at: 'busy', since: 's', holder: 'martin@host', pid: 99 }]));
+  assert.equal(old.state, 'queued');
+  assert.deepEqual(old.holder, { name: 'martin@host' });
+  assert.equal(old.step, null);
+  assert.equal(old.pid, undefined, 'no process is part of a job');
 });
 
-test('a no-pid entry round-trips through the file as no-pid, not pid 0', () => {
-  // `Number(null)` is `0`, a finite number — the trap this guards against.
-  const [written] = queueEntries([entry({ pid: null })]);
-  const [reread] = queueEntries(JSON.parse(JSON.stringify([written])));
-  assert.equal(reread.pid, null, 'a refusal entry read back from disk is still not a waiter');
+test('a step that is not { project, index } is no step', () => {
+  assert.equal(queueEntries([job({ step: { project: 'x' } })])[0].step, null);
+  assert.deepEqual(queueEntries([job({ step: { project: 'x', index: 2 } })])[0].step, { project: 'x', index: 2 });
 });
 
-test('queueing the same pull request again keeps how long it has waited', () => {
-  const first = enqueue([], entry());
-  const again = enqueue(first, entry({ reason: 'the lease is held by mc-run', stopped_at: 'lease', since: '2026-09-06T18:20:00Z' }));
-  assert.equal(again.length, 1, 'one entry per pull request');
-  assert.equal(again[0].reason, 'the lease is held by mc-run', 'the newest reason is the one the lane acts on');
-  assert.equal(again[0].since, '2026-09-06T18:00:00Z', 'how long it has waited is the pull request\'s, not the round\'s');
+test('the identity is repository and number: memoro #9 and memoro-cli #9 are two jobs', () => {
+  let entries = enqueue([], job({ pr: 9 }));
+  entries = enqueue(entries, job({ repo: 'memoro', pr: 9 }));
+  assert.equal(entries.length, 2);
+  assert.equal(queuedFor(entries, 'memoro', 9).repo, 'memoro');
+  assert.deepEqual(dequeue(entries, { repo: 'memoro', pr: 9 }).map((e) => e.repo), ['memoro-cli']);
 });
 
-test('a pull request is one number in one repository', () => {
-  const both = enqueue(enqueue([], entry({ repo: 'memoro', pr: 9 })), entry({ repo: 'memoro-cli', pr: 9 }));
-  assert.equal(both.length, 2, 'memoro #9 and memoro-cli #9 are different work');
-  assert.equal(queuedFor(both, 'memoro-cli', 9).repo, 'memoro-cli');
-  assert.equal(queuedFor(both, 'memoro', 671), null);
-  assert.deepEqual(dequeue(both, { repo: 'memoro', pr: 9 }).map((item) => item.repo), ['memoro-cli']);
+test('queued again keeps its place in line', () => {
+  let entries = enqueue([], job({ since: '2026-09-06T17:00:00Z' }));
+  entries = enqueue(entries, job({ since: '2026-09-06T18:30:00Z', branch: 'merge-queue-2' }));
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].since, '2026-09-06T17:00:00Z');
+  assert.equal(entries[0].branch, 'merge-queue-2');
 });
 
-test('the lane takes them oldest first', () => {
-  const entries = [entry({ pr: 3, since: '2026-09-06T19:00:00Z' }), entry({ pr: 2, since: '2026-09-06T17:00:00Z' })];
-  assert.deepEqual(queueOrder(entries).map((item) => item.pr), [2, 3]);
+test('a job being landed is not touched by a second ask', () => {
+  const landing = markLanding(enqueue([], job()), job(), '2026-09-06T18:01:00Z');
+  assert.equal(enqueue(landing, job({ branch: 'other' })), landing);
 });
 
-
-test('a dead pid is litter, dropped by whoever polls next', () => {
-  const entries = [entry({ pid: 111 }), entry({ pr: 9, pid: 222 }), entry({ pr: 5 })];
-  const dropped = dropDeadEntries(entries, { alive: (pid) => pid === 111 });
-  assert.deepEqual(dropped.map((item) => item.pr), [671, 5], 'the dead waiter is gone, the refusal entry with no pid is untouched');
+test('oldest first; a job a dead merger was landing goes before everything', () => {
+  let entries = [];
+  entries = enqueue(entries, job({ pr: 3, since: '2026-09-06T18:03:00Z' }));
+  entries = enqueue(entries, job({ pr: 1, since: '2026-09-06T18:01:00Z' }));
+  entries = enqueue(entries, job({ pr: 2, since: '2026-09-06T18:02:00Z' }));
+  assert.deepEqual(queueOrder(entries).map((e) => e.pr), [1, 2, 3]);
+  assert.equal(nextJob(entries).pr, 1);
+  assert.equal(placeOf(entries, 'memoro-cli', 3), 2);
+  assert.equal(placeOf(entries, 'memoro-cli', 99), null);
+  const landing = markLanding(entries, { repo: 'memoro-cli', pr: 3 }, '2026-09-06T18:05:00Z');
+  assert.equal(nextJob(landing).pr, 3);
+  assert.equal(nextJob([]), null);
 });
 
-test('the oldest live waiter takes the lock; a waiter behind a held lease keeps its place', () => {
-  const entries = [
-    entry({ pr: 1, pid: 1, since: '2026-09-06T17:00:00Z' }),
-    entry({ repo: 'memoro', pr: 2, pid: 2, since: '2026-09-06T17:05:00Z' }),
-  ];
-  const heldByLease = nextWaiter(entries, { leaseHeld: (repo) => repo === 'memoro-cli' });
-  assert.equal(heldByLease.pr, 2, 'memoro-cli\'s lease is held, so the later memoro waiter goes instead');
-  const bothFree = nextWaiter(entries, { leaseHeld: () => false });
-  assert.equal(bothFree.pr, 1, 'both free: the oldest entry, whichever repository');
-  assert.equal(nextWaiter([entry({ pid: null })]), null, 'a refusal entry with no pid is not a waiter');
+test('a job built on another waits until that one has landed (ruling 30, A)', () => {
+  const parent = { project: 'mq', index: 0, pr: 9, sha: 'abc' };
+  let entries = enqueue([], job({ pr: 9, since: '2026-09-06T18:00:00Z' }));
+  entries = enqueue(entries, job({ pr: 10, since: '2026-09-06T17:00:00Z', parent }));
+  assert.deepEqual(entries[1].parent, parent);
+  assert.equal(nextJob(entries).pr, 9, 'older, but built on #9, which is still queued');
+  const alone = dequeue(entries, { repo: 'memoro-cli', pr: 9 });
+  assert.equal(nextJob(alone, { landed: () => true }).pr, 10, '#9 landed: #10 may go');
+  assert.equal(nextJob(alone, { landed: () => false }), null, '#9 came back red: #10 waits for it');
+  assert.deepEqual(waitingOnParent(alone, { landed: () => false }).map((e) => e.pr), [10]);
+  assert.deepEqual(waitingOnParent(alone, { landed: () => true }), []);
 });

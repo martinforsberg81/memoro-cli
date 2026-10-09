@@ -108,7 +108,7 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(register[1], /`~\/mc\/runner\/projects\//u);
     assert.match(register[1], /`failed`/u);
     assert.match(register[1], /`mc step ready`/u);
-    assert.deepEqual([...STEP_STATUSES], ['ready', 'running', 'done', 'failed', 'blocked']);
+    assert.deepEqual([...STEP_STATUSES], ['ready', 'running', 'landing', 'done', 'failed', 'blocked']);
     assert.ok(DOC.includes(`--autocompact ${AUTOCOMPACT_TOKENS}`), 'the argument list in the doc no longer shows the window');
     assert.ok(DOC.includes(`\`AUTOCOMPACT_TOKENS\` (${AUTOCOMPACT_TOKENS.toLocaleString('en-US').replace(/,/gu, ' ')})`));
   });

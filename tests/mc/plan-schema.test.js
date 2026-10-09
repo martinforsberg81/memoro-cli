@@ -248,6 +248,17 @@ describe('the plan has no status of its own', () => {
     assert.match(why, /step 2 is blocked on project docx-editor/u);
   });
 
+  it('steps past a landing step to the next one — the next step does not wait for the merger (ruling 30)', () => {
+    const [done, ready] = plan().steps;
+    const landing = { ...ready, status: 'landing', pr: 9 };
+    const later = { ...ready, title: 'Later', status: 'ready' };
+    assert.equal(deliverableStep(plan({ steps: [done, landing, later] })).step.title, 'Later');
+    assert.equal(deliverableStep(plan({ steps: [done, landing, later] })).index, 2);
+    const state = planState({ steps: [done, landing] });
+    assert.equal(state.status, 'landing');
+    assert.match(deliverableStep(plan({ steps: [done, landing] })).why, /step 2 is landing — #9 is in the merge queue/u);
+  });
+
   it('hands out the first ready step, and refuses a plan that does not parse', () => {
     assert.equal(deliverableStep(plan()).step.title, 'The hero object');
     assert.match(deliverableStep(plan({ contract: [] })).why, /does not parse/u);

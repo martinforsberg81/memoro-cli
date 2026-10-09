@@ -61,11 +61,11 @@ test('applyEntry lays the register over the file, and the summary is recomputed 
 
 test('patchStep refuses what it cannot record: an unknown status, blocked without a blocker, failed without a reason', () => {
   const entry = seedEntry(record([step()]));
-  assert.throws(() => patchStep(entry, 0, { status: 'parked' }), /status must be one of ready, running, done, failed, blocked/u);
+  assert.throws(() => patchStep(entry, 0, { status: 'parked' }), /status must be one of ready, running, landing, done, failed, blocked/u);
   assert.throws(() => patchStep(entry, 0, { status: 'blocked' }), /names what it waits for/u);
   assert.throws(() => patchStep(entry, 0, { status: 'failed' }), /says why/u);
   assert.throws(() => patchStep(entry, 3, { status: 'done' }), /no step 4 — the plan has 1/u);
-  assert.deepEqual(STEP_STATES, ['ready', 'running', 'done', 'failed', 'blocked']);
+  assert.deepEqual(STEP_STATES, ['ready', 'running', 'landing', 'done', 'failed', 'blocked']);
 });
 
 test('patchStep clears what the new status makes meaningless, and appends a comment when asked', () => {

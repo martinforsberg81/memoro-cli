@@ -1,14 +1,15 @@
 /**
- * What `mc merge` does for the step whose pull request it is landing.
+ * What landing does for the step whose pull request it is.
  *
- * Ruling 21 (2026-09-12): the step session runs `mc merge <repo> <pr>` itself.
- * Green is the merge, and the verb then writes `done` into the register and
- * ends the session — there is no further turn for it to take, and its
- * process tree is worth nothing (Martin: *"Processträdet saknar värde och
- * ska bara tas bort"*). Red comes back to the same session as the gate's own
- * lines, with the attempt counted in the register, and the session fixes it
- * with the diff already in its context. Nothing is queued for anybody and no
- * second session is started on the pull request.
+ * Ruling 21 (2026-09-12) made the step session run `mc merge <repo> <pr>`
+ * itself, so that a red came back to the session with the diff in context.
+ * Ruling 30 (2026-10-09) keeps the session's call and drops the wait: `mc
+ * merge` puts the pull request in the merger's queue and the step is
+ * `landing`; the session's work is over. The merger writes the answer here.
+ * Green is `done`. Red is the step `ready` again with the gate's reason and
+ * the pull request kept, so the runner's next session for the step picks up
+ * the same branch and the same PR — until `MAX_MERGE_ATTEMPTS`, after which
+ * it is `failed` and a person's.
  *
  * The step is found from `MC_STEP=<project>:<index>` in a runner session's
  * environment, and otherwise from the pull request's branch: the register
@@ -16,10 +17,10 @@
  * after. A pull request that is nobody's step — a planning session's
  * `plan/<programme>`, a hand-made branch — gets the round and nothing else.
  *
- * The door — the plan boundary checked before the gate — is `planBoundary`
- * in merge-boundary.js, landed by the runner's own step of this project.
+ * The door — the plan boundary checked before the queue — is `planBoundary`
+ * in merge-boundary.js.
  *
- * Pure over what it is handed; the verb does the reading.
+ * Pure over what it is handed; the verb and the merger do the reading.
  */
 import { projectForBranch } from './project-prs.js';
 import { currentIndex, parseStepEnv } from './register.js';
@@ -88,15 +89,39 @@ export function landedPatch({ pr, report, now, body = null }) {
   };
 }
 
-/** The register patch for a step whose gate went red: the attempt counted, the reason kept. */
+/**
+ * A red the merger sends back to a session this many times is a person's:
+ * three sessions that could not make one pull request green are not going
+ * to be helped by a fourth.
+ */
+export const MAX_MERGE_ATTEMPTS = 3;
+
+/** The register patch for a step whose pull request is in the merger's queue. */
+export function landingPatch({ pr, branch = null }) {
+  return { status: 'landing', pr: Number(pr), ...(branch ? { branch } : {}) };
+}
+
+/**
+ * The register patch for a step whose round did not land: the attempt
+ * counted, the reason kept, the pull request kept. Below the cap the step is
+ * `ready`, and the runner's next session for it is handed the reason and the
+ * open pull request (`stepPrompt`'s `retry`); at the cap it is `failed`.
+ * A round that cannot say whether it merged (`merge-unknown`) or merged off
+ * the default branch is a person's at once: another session cannot find out.
+ */
 export function redPatch({ step, report }) {
+  const attempts = (step?.attempts || 0) + 1;
+  const reason = report?.reason || `the round stopped at ${report?.stopped_at || 'unknown'}`;
+  const persons = report?.stopped_at === 'merge-unknown' || Boolean(report?.merged && report?.off_default);
+  const status = persons || attempts >= MAX_MERGE_ATTEMPTS ? 'failed' : 'ready';
   return {
-    attempts: (step?.attempts || 0) + 1,
-    reason: report?.reason || `the round stopped at ${report?.stopped_at || 'unknown'}`,
+    status,
+    attempts,
+    reason: status === 'failed' && !persons ? `${reason} (attempt ${attempts} of ${MAX_MERGE_ATTEMPTS})` : reason,
   };
 }
 
-/** The stop is one the caller waits out, not one it answers. */
+/** The stop is one the merger waits out, not one it answers. */
 export function shouldWait(report) {
   return Boolean(report) && !report.ok && WAIT_STOPS.includes(report.stopped_at);
 }

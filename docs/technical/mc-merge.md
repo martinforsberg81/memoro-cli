@@ -498,40 +498,29 @@ Both carry the holder's pid, so a round that was killed rather than finished
 is reaped by the next claim instead of blocking forever. Neither blocks git:
 they refuse `mc`, and nothing else.
 
-**A second `mc merge` no longer refuses on either — it waits.** Since
-step-lands-itself, a call whose `mode` is `merge` writes itself into
-`~/mc/runner/merges.json` as a waiter (`repo`, `pr`, `branch`, `since`,
-`holder`, `pid: process.pid`) and polls every `MERGE_POLL_MS` (15 s):
-whichever live entry is oldest, across every repository, takes the gate lock
-next when neither it nor that entry's own repository lease is held — a waiter
-behind a lease it cannot get keeps its place rather than blocking a later
-arrival whose own repository is free (`nextWaiter` in
-[`src/mc/merge-queue.js`](../../src/mc/merge-queue.js)). An entry whose pid is
-no longer alive is dropped by the next call that polls, the same reasoning the
-gate lock itself uses. A lease whose owner's process is gone is orphaned and
-counts as free here: the waiter whose turn it is goes, and its round's claim
-reaps the lease and logs `reap`. Until 2026-09-20 the wait counted it as held,
-so no waiter ever reached the claim that would have reaped it and three of
-them polled behind a dead round's lease for a morning; the waiting line now
-says `<repo>'s orphaned lease (<holder>; pid <n> is gone)` while it is not yet
-that waiter's turn.
+**`mc merge` waits for neither — the merger does** (ruling 30, 2026-10-09).
+`mc merge <repo> <pr>` checks the plan boundary (*The door*), writes the job
+into `~/mc/runner/merges.json` (`repo`, `repo_path`, `pr`, `branch`,
+`holder`, `step`, `since`, `state`) and returns at once, saying its place in
+line. One process lands the jobs, oldest first, one at a time: the merger
+([`src/mc/merger.js`](../../src/mc/merger.js), started detached by the first
+`mc merge` that finds none, its pid in `~/mc/runner/merger.json`, its output
+in `~/mc/runner/log/merger.log`). It marks a job `landing`, waits while the
+gate lock or the job's repository lease is somebody else's (an orphaned lease
+is nobody's: the round's own claim reaps it), runs the round as the holder
+who asked, records it, writes the register, drops the job, and takes the
+next; with the queue empty it leaves. A merger killed mid-round leaves its
+job `landing`, and the next merger — started by the next `mc merge`, or by
+the runner when it reads a queue with jobs and no live merger — lands that
+one first; the round itself says whether it had already merged.
 
-It prints one `mc: waiting behind …` line on stderr the first time it waits
-and one `mc: waited <n>s` line when it stops. Past `MERGE_WAIT_MS` (8
-minutes — a session's own Bash call is capped at ten) it prints `mc: still
-waiting behind … after 8 min — run this again; the place in the queue is
-kept` and exits 3, leaving its entry in place: the next call for the same
-pull request replaces the entry's pid and keeps its `since`, so the wait
-already spent is not lost to a retry. A next call that finds the machine free
-does not queue at all, and takes that kept entry away as it goes. Until it
-does, the page and `mc status <name>` leave out an entry whose pid is gone:
-memoro #12353 stood at `1 waiting` for a day after it had landed
-(2026-10-02).
-
-This is `mc merge`'s own wait. Until 2026-09-12 a round that stopped on
-`red`, `pr-tests`, `extra-gate` or `merge` was also written down here for the
-runner's merge lane to retry; ruling 21 removed the lane, and those stops are
-the caller's — the verb prints them and exits.
+Until then every `mc merge` was its own waiter — an entry with its pid,
+polling every 15 s, giving up after 8 minutes with exit 3 and "run this
+again" — and the runner's landing of a session's pull request waited the
+same way. A machine with six lanes could be six processes standing in line
+for one lock (Martin: *"Just nu blir flera processer hängande eller väntande
+på detta."*). A batch (`mc merge <repo> <pr> <pr>…`) is still measured in the
+caller's process, as before.
 
 The gate lock also carries `mode` — `check`, `merge` or `full`, the same word
 the round log writes beside it — and `phase`/`phase_at`, rewritten each time
@@ -543,39 +532,43 @@ current round's name, mode and phase come from — `runningMerge` in
 `src/mc/merges-collect.js` joins the lock to the repository's name and its
 lease's holder, so the page reads a sentence rather than a slug and a pid.
 
-**And the register** (ruling 21). For a pull request that is a step's —
-`MC_STEP=<project>:<index>` in the calling session's environment, or a branch
-a register entry stands on (`stepForMerge`, [`src/mc/merge-step.js`](../../src/mc/merge-step.js))
-— the verb writes the outcome where the state lives. On green the step is
-`done` with the pull request and the commit it landed as, and the session that
-called is ended — `SIGTERM` to the pid the register holds — because a landed
-step has no further turn to take and its process tree is worth nothing. On
-red the attempt is counted and the gate's reason kept on the entry, and the
-lines the verb prints are that session's next instruction. A red is the
-caller's to fix, in the session that wrote the code; nothing is queued for
-anybody else (until 2026-09-12 a merge lane and one repair session took it).
+**And the register** (rulings 21 and 30). For a pull request that is a
+step's — `MC_STEP=<project>:<index>` in the calling session's environment, or
+a branch a register entry stands on (`stepForMerge`,
+[`src/mc/merge-step.js`](../../src/mc/merge-step.js)) — `mc merge` makes the
+step `landing` with its pull request, and the job names the step. The
+session's part is over there: it ends. The merger writes the outcome. On green
+the step is `done` with the pull request and the commit it landed as. On red
+the attempt is counted and the gate's reason kept, the pull request stays
+open, and the step is `ready` again (`redPatch`): the runner's next session
+for it is told the reason and the pull request and goes on with the same
+branch (`retryPreamble` in `run-plan.js`) — its own open pull request does not
+hold the project (`holdingPrs`). At `MAX_MERGE_ATTEMPTS` (3), or a round that
+cannot say whether it merged, the step is `failed` and a person's. A step
+somebody made `done` or `blocked` meanwhile is left as it is.
 
-**The runner lands what the session published and did not finish** (Martin,
-2026-10-07, `merge-robustness-runner-lands-session-pr`). On 2026-10-05
-link-facts step 2 (memoro #12638) ran `mc merge` as a foreground Bash call;
-at the tool's 600 s ceiling the harness backgrounded it, the session ended its
-turn, the merge died with it (rc 143), and the runner wrote `failed` on a
-complete, unmeasured step. Now, when a step session's process is gone, the
-register still says `running`, the session ended `success`, and a pull
-request is open on the step's branch, the runner runs that merge itself
-(`landForSession` in [`src/mc/run.js`](../../src/mc/run.js)) through the
-same door: the plan boundary, then `runMergeRound` as the step's workarea,
-waiting out another round's lock or lease as `mc merge` does, with a line in
-the round log either way. Green writes `done` with the pull request and the
-row's note `success,merged-by-runner`; anything else writes `failed` with the
-attempt counted and the reason `the gate was still running when the session
-ended; measured by the runner: stopped at <stop> — <the round's reason>`, note
-`success,red` — so the register tells this apart from a red the session saw
-itself. A session that ended with no pull request, or `timeout`, `stalled` or
-`failed`, is classified as before, and the runner still retries nothing and
-lands no pull request but the step's own. The step role asks the session to
-wait for a backgrounded `mc merge` rather than end its turn, so the common
-case stays the session's own landing.
+**The next step does not wait** (ruling 30, A). A step `landing` is passed
+over by the picker (`planState`), and its open pull request does not hold the
+project (`holdingPrs`): the runner starts the next step at once on a new branch
+on top of the landing step's (`placeBranch` in `run.js`) and writes
+`stacked_on: { index, pr, sha }` on it. Its `mc merge` queues it with that as
+`parent`, and the door reads the plan from the parent's tip. The merger takes a
+job with a parent only once the parent is out of the queue and its step is
+`done` (`nextJob`), then moves the branch onto main past `sha` (`restack`:
+`rebase --onto origin/main <sha>` in a temporary worktree, pushed with a lease
+on the tip it had) — the one below was squash-merged, so its commits are in the
+branch under other names. A move that conflicts is a red, `stopped_at:
+restack`. When the one below comes back red the job on top stays in the queue
+and waits; that step is the project's next session's first, on its own branch.
+
+**The runner queues what the session published and did not** (ruling 25,
+2026-10-07). When a step session's process is gone, the register still says
+`running`, the session ended `success`, and a pull request is open on the
+step's branch, the runner asks for that merge itself (`landForSession` in
+[`src/mc/run.js`](../../src/mc/run.js)) through the same door: the plan
+boundary, then `queueMerge` as the step's workarea. The row's note is
+`success,queued-by-runner`; a trespass at the door is a red like any other,
+note `success,red`.
 
 ## The full run nobody asks for
 

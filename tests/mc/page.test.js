@@ -685,37 +685,35 @@ describe('MERGES', () => {
 
 
   /**
-   * The other half of the same answer: a pull request a hand `mc merge` could
-   * not land and left for the runner's merge lane. Held is what waits for a
-   * person; queued is what does not — and until this row existed the only
-   * trace of a queued merge was a file nobody opens.
+   * The merger's queue (ruling 30): every pull request `mc merge` or the
+   * runner handed it, oldest first, with the step it is — or its branch — and
+   * since when. Until this row existed the only trace of a queued merge was a
+   * file nobody opens.
    */
-  it('carries every queued pull request with its reason, oldest first', () => {
+  it('carries every queued pull request with its step or branch, oldest first', () => {
     const merges = mergesSection({
       queued: [
-        { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', reason: 'memoro-cli is held by mc-run', stopped_at: 'lease', since: '2026-08-29T11:00:00Z', holder: 'martin@laptop' },
-        { repo: 'memoro', pr: 11541, branch: 'docx-editor', reason: 'another gate round is running', stopped_at: 'busy', since: '2026-08-29T09:30:00Z', holder: 'martin@laptop' },
+        { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', since: '2026-08-29T11:00:00Z', state: 'queued' },
+        { repo: 'memoro', pr: 11541, branch: 'docx-editor', step: { project: 'docx-editor', index: 1 }, since: '2026-08-29T09:30:00Z', state: 'landing' },
       ],
     });
     assert.equal(merges.queued.count, 2);
     assert.deepEqual(merges.queued.items.map((item) => [item.repo, item.pr]), [['memoro', 11541], ['memoro-cli', 671]]);
-    // The rows say which repository, which number, why the round it was given
-    // did not land, and how long it has been waiting.
     const lines = renderPageLines(pageData({ merges }), { columns: 120 });
     assert.ok(lines.some((line) => /MERGES.*2 waiting/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {7}· memoro {2}#11541 {2}another gate round is running {2}\(since 08-29 09:30Z\)$/u.test(line)),
+    assert.ok(lines.some((line) => /^ {7}· memoro {2}#11541 {2}docx-editor step 2 — the merger has it {2}\(since 08-29 09:30Z\)$/u.test(line)),
+      lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {7}· memoro-cli {2}#671 {2}total-lane-cap {2}\(since 08-29 11:00Z\)$/u.test(line)),
       lines.join('\n'));
   });
 
-  it('does not draw a waiter whose process is gone', () => {
-    // memoro #12353, 2026-10-02: an `mc merge` that timed out left its entry,
-    // the pull request landed later, and the page said `1 waiting` for a day.
+  it('does not draw the job the running round is landing twice', () => {
     const merges = mergesSection({
+      landing: { pr: 12353, repo: 'memoro', mode: 'merge' },
       queued: [
-        { repo: 'memoro', pr: 12353, branch: 'claude/quirky-faraday-tuh0y0', reason: 'another gate round is running', stopped_at: 'busy', since: '2026-10-01T19:56:03Z', pid: 63515 },
-        { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', reason: 'memoro-cli is held by mc-run', stopped_at: 'lease', since: '2026-10-01T20:00:00Z', pid: 777 },
+        { repo: 'memoro', pr: 12353, branch: 'b', since: '2026-10-01T19:56:03Z', state: 'landing' },
+        { repo: 'memoro-cli', pr: 671, branch: 'total-lane-cap', since: '2026-10-01T20:00:00Z' },
       ],
-      alive: (pid) => pid === 777,
     });
     assert.deepEqual(merges.queued.items.map((item) => item.pr), [671]);
   });
@@ -1230,8 +1228,8 @@ const DATA = pageData({
   merges: mergesSection({
     queued: [{
       repo: 'memoro', pr: 10958, branch: 'docx-editor',
-      reason: 'another gate round is running', stopped_at: 'busy',
-      since: '2026-08-29T09:10:00Z', holder: 'martin@laptop', pid: 4242,
+      step: { project: 'docx-editor', index: 1 },
+      since: '2026-08-29T09:10:00Z', holder: { name: 'martin@laptop' },
     }],
   }),
   intake: intakeSection({
@@ -1298,7 +1296,7 @@ describe('the page', () => {
     // project is. The lanes run at the same time: both heads start now.
     assert.match(text, /^ {5}memoro-cli {2}mc-ui\s+step 1\/1\s+The page\n {5}memoro {6}docx-editor\s+step 2\/2\s+Measure paste and IME$/mu);
     assert.doesNotMatch(text, /skipped \d/u, 'NEXT is the order and nothing else');
-    assert.match(text, /· memoro {2}#10958 {2}another gate round is running/u);
+    assert.match(text, /· memoro {2}#10958 {2}docx-editor step 2 {2}\(since/u);
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /^ {7}memoro {6}1 new error, 1 loud · 60 min old {3}! /mu);
     assert.match(text, /^ {7}1 proposal$/mu);
@@ -1476,8 +1474,8 @@ describe('collectPage', () => {
       version: { commit: 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00', build: 23533, build_time: '2026-08-29T09:50:00Z' },
     }));
     writeFileSync(join(root, 'runner', 'merges.json'), JSON.stringify([{
-      repo: 'memoro-cli', pr: 674, branch: 'mc-ui', reason: 'another gate round is running',
-      stopped_at: 'busy', since: '2026-08-29T11:30:00Z', holder: 'martin@laptop',
+      repo: 'memoro-cli', pr: 674, branch: 'mc-ui', since: '2026-08-29T11:30:00Z', state: 'queued',
+      holder: { name: 'martin@laptop' },
     }]));
     writeFileSync(join(root, 'queue.md'), '# the queue\nmc-ui\ndocx-editor\n');
     mkdirSync(join(root, 'proposals'), { recursive: true });
@@ -1538,10 +1536,9 @@ describe('collectPage', () => {
       [['memoro', ['docx-editor']]]);
     assert.deepEqual([...new Set(gitArgs)].sort(), ['rev-parse -q --verify MERGE_HEAD', 'status --porcelain'],
       'the reading asks the worktree two read-only questions — is a merge left in it, and what is dirty — and nothing else');
-    // And beside it, `merges.json`: what a hand `mc merge` handed to the
-    // runner's merge lane rather than to whoever typed it.
-    assert.deepEqual(data.merges.queued.items.map((item) => [item.repo, item.pr, item.stopped_at]),
-      [['memoro-cli', 674, 'busy']]);
+    // And beside it, `merges.json`: the merger's queue (ruling 30).
+    assert.deepEqual(data.merges.queued.items.map((item) => [item.repo, item.pr, item.state]),
+      [['memoro-cli', 674, 'queued']]);
     // No gate lock in the isolated test home, so nothing is landing.
     assert.equal(data.merges.landing, null);
     assert.equal(data.intake.repos[0].new_errors, 1);
@@ -1800,7 +1797,7 @@ describe('the palette', () => {
     'grey grey green grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
     '',
     'bold+cyan grey grey', //                          MERGES  1 waiting        mc merge <repo> <pr>
-    'green+bold green grey', //                          · memoro  #10958  another gate round is running  (since …)
+    'green+bold green grey', //                          · memoro  #10958  docx-editor step 2  (since …)
     '',
     'bold+cyan grey grey', //                          DEPLOY  nothing deployed yet               mc deploy
     '',
