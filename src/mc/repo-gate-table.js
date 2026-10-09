@@ -197,13 +197,21 @@ export const SHIPPED = Object.freeze({
     // lockfile (three, @pixiv/three-vrm, esbuild): #13177 bumped three-vrm
     // without rebuilding it, and every deploy stopped at its post-build git
     // preflight until #13232. Rebuilt after `npm ci`, main never carries a
-    // stale copy.
+    // stale copy. The same holds for the generated session validator (ajv and
+    // src/schemas/; mc deploy runs build:validators too, and check:validators
+    // is not selected for a lockfile bump) and the TipTap bundle, whose build
+    // is deterministic since #13233.
     derived: Object.freeze([
       Object.freeze({ command: 'npm run sql:inventory -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
       Object.freeze({ command: 'npm run sql:coverage -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
       Object.freeze({
         command: 'npm run build:assistant-3d-avatar',
         paths: Object.freeze(['public/js/ui/avatars/assistant-3d-avatar-runtime.bundle.js']),
+      }),
+      Object.freeze({ command: 'npm run build:validators', paths: Object.freeze(['src/tenancy/validators.generated.mjs']) }),
+      Object.freeze({
+        command: 'npm run build:tiptap',
+        paths: Object.freeze(['public/vendor/tiptap.bundle.js', 'public/vendor/tiptap.version.json']),
       }),
     ]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro.md' }),
