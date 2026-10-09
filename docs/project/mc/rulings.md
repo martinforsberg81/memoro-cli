@@ -972,3 +972,25 @@ holds, lands them and exits.
 So: the handover is immediate; the old runner's in-flight steps stay its own
 to land; the two never hold one project or one lane; the page shows both
 while they overlap. Carried by `update-handover/PLAN.json` step 3.
+
+## 29 · `mc deps`: one reading of what is behind, and bumps only through the gate
+
+`ruling · 2026-10-09` · raised at the brief, after a deploy whose log said
+wrangler was 33 minor versions behind with a security fix, and `npm audit` on
+memoro's `origin/main` read 2 critical and 24 high
+
+The sketch put to Martin: `mc deps [<repo>]`, npm's outdated and audit
+readings merged into three groups — security fixable within the major,
+patch/minor, major — each row marked runtime or tool, and the repository's
+own wrangler tally as its own line; `mc deps bump <repo> <group|package>` in
+its own workarea, landing through the ordinary merge gate; and one deps line
+in `mc deploy`'s reading.
+
+> "Ja, bra, lägg upp mc deps som ett eget projekt" (Martin, 2026-10-09, at
+> the brief.)
+
+So: the reading is of `origin/main`'s manifest and lockfile, never a
+checkout; runtime or tool is the `package.json` section and nothing else; a
+bump writes only with `--package-lock-only`, never crosses a major unless a
+version is named, and lands only through `mc merge`; the deploy line reads the
+saved reading and makes no call. Carried by `mc-deps/PLAN.json` steps 1–3.
