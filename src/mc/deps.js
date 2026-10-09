@@ -48,6 +48,12 @@ export function loadSaved(repo, root = mcHome()) {
   try { return JSON.parse(readFileSync(savedPath(repo, root), 'utf8')); } catch { return null; }
 }
 
+/** The last saved reading of `<repo>` under `env`'s mc home, or null on any
+ * read or parse failure — what `mc deploy` says its deps line from. */
+export function readSavedReading(repo, { env = process.env } = {}) {
+  return loadSaved(repo, env.MC_HOME || mcHome());
+}
+
 /* ----------------------------------------------------------------- versions */
 
 function parseVersion(version) {
