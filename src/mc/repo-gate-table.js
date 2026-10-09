@@ -204,6 +204,13 @@ export const SHIPPED = Object.freeze({
     // 14 files from one night's merged PRs gave 123/123 with and without the
     // import — so the gate's bare runs were right, and the three are the gap.
     pr_tests_flags: Object.freeze(['--import', './tests/_helpers/browser-paths.mjs']),
+    // One-line notes `mc deps` prints under its groups (ruling 29). The script
+    // is memoro's own — it keeps a 6 h cache in `~/.cache/memoro` and gives
+    // the network 5 s — and prints one line such as
+    // `wrangler 4.116.0 → 4.149.0 (33 minor behind; D=2 S=1)`.
+    deps_notes: Object.freeze([
+      Object.freeze({ name: 'wrangler', argv: Object.freeze(['node', 'scripts/check-wrangler.mjs', '--summary']) }),
+    ]),
   }),
 });
 
@@ -479,6 +486,12 @@ function normalise(entry, env) {
     // files cannot run without. Declared here, the round measures with the
     // repository's own environment rather than an inference about it.
     pr_tests_flags: Array.isArray(entry.pr_tests_flags) ? entry.pr_tests_flags.map(String) : [],
+    // Commands whose first line of stdout `mc deps` prints as a note of its
+    // own — run in the primary checkout, because the script is the
+    // repository's. Not part of any round.
+    deps_notes: Array.isArray(entry.deps_notes)
+      ? entry.deps_notes.map(({ name, argv }) => ({ name: String(name), argv: argv.map(String) }))
+      : [],
   };
 }
 

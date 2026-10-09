@@ -26,7 +26,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc deps memoro` prints the three groups, the audit counts and the wrangler line for memoro's `origin/main`, and its counts agree with npm's own.",
       "check": "Run `mc deps memoro --json --refresh`; its `audit.counts` equals `metadata.vulnerabilities` from `npm audit --json --package-lock-only` run by hand in a directory holding `git -C ~/memoro show origin/main:package.json` and `…:package-lock.json`; `wrangler` appears in `security` (fix `4.149.0` or later) with `kind: \"tool\"` and `@capacitor/ios` with `kind: \"runtime\"`; `notes[0].text` starts with `wrangler `. `tests/mc/deps.test.js` green."
     },
