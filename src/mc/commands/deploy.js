@@ -70,7 +70,6 @@ import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
   runningDeploy,
 } from '../deploys.js';
-import { readDeps } from '../deps.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
@@ -383,7 +382,7 @@ export function leftoverStamps({ worktree, dirty, git = tryGit }) {
  */
 export async function deployPlan({
   path, env = process.env, git = tryGit, fetchVersion = fetchVersionDefault,
-  lastDeploy = lastDeployRow, nightly = nightlyReading, offline = false, depsReading = readTreeDeps,
+  lastDeploy = lastDeployRow, nightly = nightlyReading, offline = false,
 }) {
   const fetched = offline ? false : git(path, ['fetch', 'origin', 'main', '--quiet']) !== null;
   const sha = git(path, ['rev-parse', '--verify', 'origin/main']);
@@ -430,63 +429,7 @@ export async function deployPlan({
     last,
     gap: last ? count(last.sha, sha) : null,
     nightly: nightlyState,
-    deps: await depsState(depsReading, { env, path, sha }),
   };
-}
-
-/**
- * `mc deps` of `origin/main` — the tree that would ship — reused when a
- * reading of that sha is fresh, read anew when it is not.
- */
-async function readTreeDeps(repo, { env, path }) {
-  return (await readDeps({ repoPath: path, repo, env })).reading;
-}
-
-/**
- * The deps of the tree that would ship, as the deploy's last line. Counts of
- * another tree are not shown: a deploy that has just bumped its dependencies
- * would otherwise say the advisories it fixed are still there (2026-10-09).
- * The line is information only, so a reader that throws or a reading of the
- * wrong shape is no reading.
- */
-async function depsState(depsReading, { env, path, sha }) {
-  try {
-    const reading = await depsReading(REPO, { env, path });
-    if (!reading) return null;
-    if (reading.sha !== sha) return { sha: reading.sha, short: short(reading.sha), tree: short(sha), this_tree: false };
-    return {
-      sha: reading.sha,
-      short: short(reading.sha),
-      read_at: reading.read_at,
-      counts: reading.audit.counts,
-      security: reading.groups.security.length,
-      notes: reading.notes.filter((n) => n.text).map((n) => n.text),
-      this_tree: reading.sha === sha,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** Whole hours under a day, whole days after. */
-function readAge(readAt, now) {
-  const ms = now.getTime() - Date.parse(readAt);
-  if (!Number.isFinite(ms)) return 'at an unknown time';
-  const hours = Math.max(0, Math.floor(ms / 3_600_000));
-  return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
-}
-
-function depsLine(deps, now) {
-  if (!deps) return `mc: deps not read — mc deps ${REPO}`;
-  if (!deps.this_tree) return `mc: deps of ${deps.tree} not read — the reading is of ${deps.short}; mc deps ${REPO}`;
-  const critical = deps.counts?.critical || 0;
-  const high = deps.counts?.high || 0;
-  const notes = deps.notes || [];
-  const head = !critical && !high && !notes.length
-    ? 'mc: deps — nothing critical or high'
-    : `mc: deps — ${critical} critical, ${high} high${notes.map((text) => `; ${text}`).join('')}`;
-  const age = readAge(deps.read_at, now);
-  return `${head} — read ${age}`;
 }
 
 /**
@@ -507,7 +450,7 @@ function sourceLine(plan) {
 }
 
 /** The reading, in the words a person decides on. */
-export function planLines(plan, { now = new Date() } = {}) {
+export function planLines(plan) {
   const lines = [`mc: would deploy ${plan.repo} ${plan.sha}${plan.subject ? ` — ${plan.subject}` : ''}`];
   if (!plan.fetched) lines.push('mc: could not fetch origin — this is what the checkout already had');
   if (plan.worktree_created) lines.push(`mc: made mc's own main worktree at ${plan.worktree} — deploys run from it from now on`);
@@ -535,7 +478,6 @@ export function planLines(plan, { now = new Date() } = {}) {
     const ago = plan.nightly.behind === null ? 'another tree' : `${plan.nightly.behind} commit${plan.nightly.behind === 1 ? '' : 's'} ago`;
     lines.push(`mc: the nightly measured ${plan.nightly.short}, ${ago}; this tree was not measured whole`);
   }
-  lines.push(depsLine(plan.deps, now));
   return lines;
 }
 
@@ -601,7 +543,6 @@ export async function run(argv, deps = {}) {
     fetchVersion: deps.fetchVersion || fetchVersionDefault,
     lastDeploy: deps.lastDeploy || lastDeployRow,
     nightly: deps.nightly || nightlyReading,
-    depsReading: deps.depsReading || readTreeDeps,
   });
   if (!base.sha) {
     stderr.write(`mc: ${path} has no origin/main — mc deploy needs ${REPO}'s main checkout\n`);

@@ -273,9 +273,7 @@ IN FULL
   mc deploy [--dry-run] [--json]   memoro's main to production: the sha it
                                     would ship, what is live now and the gap
                                     between them, what the nightly said about
-                                    that tree, and last what mc deps memoro
-                                    last saved, with its age (a file read,
-                                    no npm) — then one question, and on a
+                                    that tree — then one question, and on a
                                     yes the repository's own npm run deploy,
                                     in its own process: no lease, so merges
                                     land beside it, and ^C stops the watching,
@@ -304,7 +302,9 @@ IN FULL
                                     ~/.memoro/mc/deps/<repo>.json; the same
                                     sha read under 6 h ago is reused unless
                                     --refresh. No repo reads every one that
-                                    has a package-lock.json
+                                    has a package-lock.json. The runner reads
+                                    every repository once a day; mc shows
+                                    the age of each reading under CHECKS
   mc deps bump <repo> <what> [--dry-run] [--json]
                                    Opens a pull request and lands it through
                                     the gate: <what> is security, minor or

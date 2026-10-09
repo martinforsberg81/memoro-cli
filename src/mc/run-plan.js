@@ -549,6 +549,15 @@ export const NIGHTLY_KIND = 'nightly';
 export const NIGHTLY_NAME = 'nightly';
 
 /**
+ * The daily `mc deps` reading of every repository mc knows, on the nightly's
+ * cadence and gated the same way, by its own row. It is a chore of its own
+ * rather than a part of the tick: a tick skipped behind a gate round, or
+ * stopped, would otherwise leave the deps unread for another day.
+ */
+export const DEPS_KIND = 'deps';
+export const DEPS_NAME = 'deps';
+
+/**
  * Once a day.
  *
  * The cadence is Martin's day rather than a cron expression: one full reading
@@ -574,9 +583,9 @@ export const NIGHTLY_INTERVAL_MS = 24 * 60 * 60 * 1000;
  * when a tick happened and is passed over; with no readable row at all the
  * tick is due, and the row it writes then is the one that closes the gate.
  */
-export function nightlyDue({ tsv = '', now = new Date(), intervalMs = NIGHTLY_INTERVAL_MS } = {}) {
+export function nightlyDue({ tsv = '', now = new Date(), intervalMs = NIGHTLY_INTERVAL_MS, kind = NIGHTLY_KIND } = {}) {
   const times = parseRuns(tsv)
-    .filter((row) => row.kind === NIGHTLY_KIND)
+    .filter((row) => row.kind === kind)
     .map((row) => Date.parse(row.ts))
     .filter((ms) => !Number.isNaN(ms));
   if (!times.length) return { due: true, why: null };
