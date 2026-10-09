@@ -17,7 +17,9 @@
  * `main`: the one where `main` is checked out — git allows one — or one mc
  * makes and keeps under `~/.memoro/mc/deploy/memoro` when nobody has `main`
  * out. It is fast-forwarded to `origin/main` under the lease before the spawn;
- * a dirty or diverged `main` is a refused row naming the path. `~/memoro`
+ * a dirty or diverged `main` is a refused row naming the path — except that in
+ * mc's own worktree, where nobody works, files git does not know are removed
+ * rather than refused (`strayPaths`). `~/memoro`
  * stays what it always was for the reads and for the lease — only the spawn's
  * cwd moved (ruling 16, 2026-09-06: two deploys had failed at *Deploy source
  * preflight* because the verb spawned the script in whatever branch `~/memoro`
@@ -59,7 +61,7 @@
  * for a bad argument or no terminal; 3 for a lease still held after the wait.
  */
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { stripAnsi } from '../../lib/prompt.js';
 import { defaultRepos } from '../brief-collect.js';
@@ -316,6 +318,30 @@ export function worktreeState({ worktree, git = tryGit }) {
   return { dirty, ahead: count('origin/main..HEAD'), behind: count('HEAD..origin/main') };
 }
 
+/** Whether `worktree` is the one mc made for itself — the only `main` whose
+ * dirt mc may remove, because nobody checks it out to work in. */
+export function isOwnWorktree(worktree, env = process.env) {
+  return resolve(worktree) === resolve(deployWorktreePath(env));
+}
+
+/**
+ * The untracked paths in `dirty` when that is all it is, else null.
+ *
+ * In mc's own worktree they are leftovers, never work: on 2026-10-09 #13137
+ * deleted the SDK generator together with the `.gitignore` block that hid its
+ * output, so the fast-forward turned `artifacts/` and `public/sdk/` — written
+ * there by every earlier deploy — into untracked files, and `deploy.mjs`'s
+ * source preflight refused the tree. A generator retired with its ignore lines
+ * does that every time, so mc removes them (`git clean -fd`, which leaves
+ * ignored files such as `node_modules/` alone) instead of handing it to a person.
+ * A modified or deleted tracked file is still a refusal: in that worktree it
+ * means something went wrong, and that is worth seeing rather than discarding.
+ */
+export function strayPaths(dirty) {
+  if (!dirty?.length) return null;
+  return dirty.every((line) => line.startsWith('?? ')) ? dirty.map((line) => line.slice(3)) : null;
+}
+
 /** The two files `deploy.mjs` stamps before wrangler and restores after it
  * (`STAMPED_FILES` there). */
 export const STAMP_FILES = ['public/sw.js', 'src/version.js'];
@@ -413,6 +439,7 @@ function sourceLine(plan) {
   if (plan.worktree_failed) return `${from}mc's own main worktree, which git worktree add would not make`;
   if (plan.worktree_absent) return `${from}mc's own main worktree, made before the script runs`;
   if (plan.stamps) return `${from}main, with the stamps a stopped deploy left in ${STAMP_FILES.join(' and ')} — the script restores them first`;
+  if (plan.strays?.length) return `${from}mc's own main, ${plan.strays.length} untracked path${plan.strays.length === 1 ? '' : 's'} removed before the script runs`;
   if (plan.dirty?.length) return `${from}main, ${plan.dirty.length} uncommitted file${plan.dirty.length === 1 ? '' : 's'}`;
   if (plan.ahead) return `${from}main, ${plan.ahead} commit${plan.ahead === 1 ? '' : 's'} not on origin/main`;
   if (plan.behind) return `${from}main, ${plan.behind} behind origin/main, fast-forwarded before the script runs`;
@@ -526,6 +553,7 @@ export async function run(argv, deps = {}) {
   const state = source.absent
     ? { dirty: [], ahead: null, behind: null }
     : worktreeState({ worktree: source.worktree, git });
+  const own = isOwnWorktree(source.worktree, env);
   const plan = {
     ...base,
     worktree: source.worktree,
@@ -534,6 +562,7 @@ export async function run(argv, deps = {}) {
     worktree_failed: source.failed,
     dirty: state.dirty,
     stamps: !source.absent && leftoverStamps({ worktree: source.worktree, dirty: state.dirty, git }),
+    strays: (own && strayPaths(state.dirty)) || [],
     ahead: state.ahead,
     behind: state.behind,
   };
@@ -569,13 +598,15 @@ export async function run(argv, deps = {}) {
 
   // Nothing here stashes, resets or discards anything: the worktree that has
   // `main` may well be somebody's, and a `main` that is not exactly
-  // `origin/main` plus nothing is a refusal with the path in the row.
+  // `origin/main` plus nothing is a refusal with the path in the row. The one
+  // exception is untracked files in mc's own worktree, removed under the lease
+  // below (`strayPaths`).
   if (source.failed) {
     refuse(`could not make mc's own main worktree at ${source.worktree}`);
     stderr.write(`mc: git worktree add ${source.worktree} main failed in ${path} — mc deploy needs a checkout of main to run the script in\n`);
     return 1;
   }
-  if (state.dirty.length && !plan.stamps) {
+  if (state.dirty.length && !plan.stamps && !plan.strays.length) {
     refuse(`main is dirty in ${source.worktree} — ${state.dirty.length} file(s)`);
     stderr.write(`mc: main in ${source.worktree} has ${state.dirty.length} uncommitted file${state.dirty.length === 1 ? '' : 's'}, and the deploy would ship that tree\n`);
     for (const line of state.dirty.slice(0, 5)) stderr.write(`mc:   ${line.trim()}\n`);
@@ -666,6 +697,31 @@ export async function run(argv, deps = {}) {
         return 1;
       }
     }
+    // The tree is read again after the fast-forward, because the fast-forward
+    // can dirty it: a commit that drops lines from `.gitignore` turns files
+    // that were ignored a moment ago into untracked ones (2026-10-09). In mc's
+    // own worktree they go; anywhere else they are somebody's to look at, and
+    // mc says so instead of letting the script's preflight say it later.
+    const after = state.behind ? worktreeState({ worktree: source.worktree, git }).dirty : state.dirty;
+    const strays = strayPaths(after);
+    if (strays && own) {
+      if (git(source.worktree, ['clean', '-fd']) === null) {
+        refuse(`could not remove untracked files in ${source.worktree}`);
+        stderr.write(`mc: git clean -fd failed in ${source.worktree} — nothing was deployed\n`);
+        return 1;
+      }
+      stdout.write(`mc: removed ${strays.length} untracked path${strays.length === 1 ? '' : 's'} from mc's own main worktree:\n`);
+      for (const file of strays.slice(0, 5)) stdout.write(`mc:   ${file}\n`);
+      if (strays.length > 5) stdout.write(`mc:   … and ${strays.length - 5} more\n`);
+    } else if (strays && state.behind) {
+      refuse(`main is dirty in ${source.worktree} after the fast-forward — ${strays.length} untracked file(s)`);
+      stderr.write(`mc: the fast-forward left ${strays.length} untracked file${strays.length === 1 ? '' : 's'} in ${source.worktree} — likely ignored until the commit that came in:\n`);
+      for (const file of strays.slice(0, 5)) stderr.write(`mc:   ${file}\n`);
+      if (strays.length > 5) stderr.write(`mc:   … and ${strays.length - 5} more\n`);
+      stderr.write('mc: remove them there and run this again — nothing was deployed\n');
+      return 1;
+    }
+
     // What ships is what that worktree stands on now, read rather than assumed:
     // the runner lands and fetches all the time, and `origin/main` is a ref every
     // worktree shares, so it can have moved between the question and the yes.

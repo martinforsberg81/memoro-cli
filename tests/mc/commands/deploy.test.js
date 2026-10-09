@@ -134,6 +134,7 @@ function fakeGit({
     if (args[0] === 'show-ref') return localMain ? '' : null;
     if (args[0] === 'status') return at(cwd).dirty.join('\n');
     if (args[0] === 'merge') return ff;
+    if (args[0] === 'clean') return '';
     if (args[0] === 'diff') return diff;
     if (args[0] === 'rev-list') {
       const range = args.at(-1);
@@ -475,6 +476,75 @@ describe('mc deploy — every case of where main is', () => {
     assert.equal(seen.length, 1, 'deploy.mjs restores the stamps itself before it builds');
     assert.match(out.stdout, /with the stamps a stopped deploy left in public\/sw\.js and src\/version\.js/u);
     assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'deployed');
+  });
+
+  it('mc\'s own main with nothing but untracked files: removed under the lease, said, and it runs', async () => {
+    const git = fakeGit({
+      worktrees: worktreeList(MINE),
+      counts: { [`${LIVE}..${SHA}`]: 6 },
+      state: { [MINE]: { dirty: ['?? artifacts/', '?? public/sdk/'], ahead: 0, behind: 0 } },
+    });
+    const { code, seen, out } = await ranIn({ git });
+    assert.equal(code, 0);
+    assert.equal(seen.length, 1);
+    assert.match(out.stdout, /mc's own main, 2 untracked paths removed before the script runs/u);
+    assert.deepEqual(git.calls.find((call) => call.args[0] === 'clean'), { cwd: MINE, args: ['clean', '-fd'] });
+    assert.match(out.stdout, /removed 2 untracked paths from mc's own main worktree:\nmc: {3}artifacts\/\nmc: {3}public\/sdk\//u);
+  });
+
+  /** A fast-forward that brings in a commit dropping lines from `.gitignore`:
+   * clean before the merge, untracked files after it (#13137, 2026-10-09). */
+  function ignoreDroppingGit(worktree) {
+    const base = fakeGit({
+      worktrees: worktreeList(worktree),
+      counts: { [`${LIVE}..${SHA}`]: 6 },
+      state: { [worktree]: { dirty: [], ahead: 0, behind: 1 } },
+    });
+    let merged = false;
+    const git = (cwd, args) => {
+      if (args[0] === 'merge') merged = true;
+      if (args[0] === 'status' && merged) {
+        base.calls.push({ cwd, args });
+        return '?? artifacts/\n?? public/sdk/';
+      }
+      return base(cwd, args);
+    };
+    git.calls = base.calls;
+    return git;
+  }
+
+  it('mc\'s own main dirtied by the fast-forward: the untracked files go and the script runs', async () => {
+    const git = ignoreDroppingGit(MINE);
+    const { code, seen, out } = await ranIn({ git });
+    assert.equal(code, 0);
+    assert.equal(seen.length, 1);
+    const order = git.calls.map((call) => call.args[0]);
+    assert.ok(order.indexOf('merge') < order.indexOf('clean'), 'cleaned after the fast-forward');
+    assert.match(out.stdout, /removed 2 untracked paths from mc's own main worktree/u);
+  });
+
+  it('somebody\'s main dirtied by the fast-forward: a refused row naming the files, nothing removed, nothing runs', async () => {
+    const git = ignoreDroppingGit(MAIN_WT);
+    const { code, seen, out } = await ranIn({ git });
+    assert.equal(code, 1);
+    assert.equal(seen.length, 0);
+    assert.equal(git.calls.some((call) => call.args[0] === 'clean'), false, 'nobody else\'s tree is cleaned');
+    const row = lastAttempt({ MC_WORK_ROOT: work });
+    assert.equal(row.outcome, 'refused');
+    assert.equal(row.note, `main is dirty in ${MAIN_WT} after the fast-forward — 2 untracked file(s)`);
+    assert.match(out.stderr, /the fast-forward left 2 untracked files .*\nmc: {3}artifacts\//u);
+  });
+
+  it('mc\'s own main with a modified tracked file: still refused, nothing removed', async () => {
+    const git = fakeGit({
+      worktrees: worktreeList(MINE),
+      counts: { [`${LIVE}..${SHA}`]: 6 },
+      state: { [MINE]: { dirty: [' M src/app.js', '?? scratch.txt'], ahead: 0, behind: 0 } },
+    });
+    const { code, seen } = await ranIn({ git });
+    assert.equal(code, 1);
+    assert.equal(seen.length, 0);
+    assert.equal(git.calls.some((call) => call.args[0] === 'clean'), false);
   });
 
   it('main with commits not on origin/main: a refused row, and nothing runs', async () => {
