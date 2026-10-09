@@ -116,7 +116,7 @@ import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { stopServersUnder } from './dev-servers.js';
-import { readPlanText, unauthorisedChanges } from './plan-schema.js';
+import { deliverableStep, readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
@@ -134,8 +134,8 @@ import {
 } from './github-backoff.js';
 import { planBoundary } from './merge-boundary.js';
 import { redPatch } from './merge-step.js';
-import { mergesPath, parseQueue } from './merge-queue.js';
-import { queueMerge, readMerger, startMerger } from './merger.js';
+import { mergesPath, nextJob, parseQueue } from './merge-queue.js';
+import { parentLanded, queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
 import { currentHolder } from './work-identity.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
@@ -573,7 +573,8 @@ export function createRunner({
    */
   function sweepLanding(plans) {
     const pending = deps.pendingMerges ? deps.pendingMerges(root) : [];
-    if (pending.length && deps.startMerger && !readMerger({ root, alive })) {
+    const mayGo = pending.length && nextJob(pending, { landed: parentLanded(root, { read: deps.read }) });
+    if (mayGo && deps.startMerger && !readMerger({ root, alive })) {
       const started = deps.startMerger({ root });
       say(`merger: ${pending.length} pull request${pending.length === 1 ? '' : 's'} queued and no merger running — ${started.pid ? `started pid ${started.pid}` : `could not start one (${started.error || 'no pid'})`}`);
     }
@@ -855,6 +856,59 @@ export function createRunner({
     }
     say(`${name}: ${branch} has already landed — moved to ${next} from origin/main`);
     return { ok: true, moved: next };
+  }
+
+  /**
+   * Where the step about to start stands, by the register (ruling 30, A):
+   *
+   * - a step the merger sent back (`ready` with its `pr` and `branch`) goes
+   *   back to its own branch — its pull request is still open there;
+   * - a step after one that is `landing` starts on a new branch on top of the
+   *   highest such step's, so it does not wait for the merger: the work it
+   *   builds on is in the branch already. `stacked` says on what, for the
+   *   register and the merger, which lands the two in order and moves this one
+   *   onto main past that sha once the one below has landed;
+   * - anything else is `freshBranch`'s, as before.
+   */
+  function placeBranch(worktree, name, record) {
+    const entry = readEntry(root, name, { read: deps.read });
+    if (!entry || !record?.plan) return freshBranch(worktree, name);
+    const { index } = deliverableStep(record.plan);
+    const state = index >= 0 ? entry.steps[index] : null;
+    const current = gitOut(worktree, ['branch', '--show-current']);
+    const onto = (branch) => {
+      if (current === branch) return true;
+      return deps.git(worktree, ['checkout', '-q', branch]).ok
+        || deps.git(worktree, ['checkout', '-q', '-B', branch, `origin/${branch}`]).ok;
+    };
+    if (state?.status === 'ready' && state.pr && state.branch) {
+      // As the pull request has it: the merger may have moved the branch onto
+      // main before its round, and the work is pushed — a dirty tree was
+      // refused before this.
+      deps.git(worktree, ['fetch', '-q', 'origin']);
+      if (!deps.git(worktree, ['checkout', '-q', '-B', state.branch, `origin/${state.branch}`]).ok && !onto(state.branch)) {
+        return { ok: false, moved: null, why: `${state.branch}, where #${state.pr} is open, could not be checked out` };
+      }
+      if (current !== state.branch) say(`${name}: back on ${state.branch} — #${state.pr} came back from the merger`);
+      // Still built on a step that has not landed: it stays so. Once that one
+      // has, main is merged in before the session and nothing is to be moved.
+      const below = state.stacked_on && entry.steps[state.stacked_on.index]?.status !== 'done' ? state.stacked_on : null;
+      return { ok: true, moved: current === state.branch ? null : state.branch, stacked: below };
+    }
+    const top = entry.steps.map((step, at) => ({ step, at }))
+      .filter(({ step, at }) => at < index && step.status === 'landing' && step.branch).at(-1);
+    if (!top) return freshBranch(worktree, name);
+    if (!onto(top.step.branch)) return { ok: false, moved: null, why: `${top.step.branch}, the landing step's branch, could not be checked out` };
+    const sha = gitOut(worktree, ['rev-parse', 'HEAD']);
+    const local = (gitOut(worktree, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']) || '').split('\n');
+    const remote = (gitOut(worktree, ['ls-remote', '--heads', 'origin']) || '').split('\n')
+      .map((line) => line.split('refs/heads/')[1]);
+    const next = nextBranch(name, [...local, ...remote].map((ref) => (ref || '').trim()).filter(Boolean));
+    if (!sha || !deps.git(worktree, ['checkout', '-q', '-b', next]).ok) {
+      return { ok: false, moved: null, why: `${next} could not be made on top of ${top.step.branch}` };
+    }
+    say(`${name}: step ${top.at + 1} is landing (#${top.step.pr}) — ${next} starts on top of it`);
+    return { ok: true, moved: next, stacked: { index: top.at, pr: top.step.pr, sha } };
   }
 
   /* --------------------------------------------------------------- landing */
@@ -1648,7 +1702,7 @@ export function createRunner({
     if (flight) return refuse(flight.reason, flight.skip);
     // A session must be somewhere it can push from. The push-guard asks the
     // same question at the wrong end — after ninety minutes of work.
-    const moved = freshBranch(worktree, name);
+    const moved = placeBranch(worktree, name, plans.find((p) => p.project === name));
     if (!moved.ok) return block(REFUSAL.branch, moved.why);
 
     const sync = syncMain(worktree, name);
@@ -1754,7 +1808,8 @@ export function createRunner({
     const retry = standingBefore?.pr && standingBefore.attempts > 0 && standingBefore.reason
       ? { pr: standingBefore.pr, reason: standingBefore.reason, attempts: standingBefore.attempts }
       : null;
-    const prompt = stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, retry, now });
+    const stacked = moved.stacked || null;
+    const prompt = stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, retry, stacked, now });
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
 
@@ -1801,7 +1856,7 @@ export function createRunner({
     const stepBranch = gitOut(worktree, ['branch', '--show-current']) || name;
     if (stepIndex != null) {
       recordStep(name, stepIndex, {
-        status: 'running', branch: stepBranch, pr: retry ? retry.pr : null, reason: null,
+        status: 'running', branch: stepBranch, pr: retry ? retry.pr : null, reason: null, stacked_on: stacked,
         session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool },
       });
     }

@@ -173,7 +173,8 @@ export function renderProject({
   // the way; the merge is simply somebody else's now.
   for (const entry of queued) {
     if (landing && Number(landing.pr) === entry.pr) continue;
-    out.push(`  #${entry.pr} is in the merge queue${entry.since ? ` (since ${when(entry.since)})` : ''}${entry.state === 'landing' ? ' — the merger has it' : ''}`);
+    const after = entry.state === 'landing' ? ' — the merger has it' : (entry.parent ? ` — lands after #${entry.parent.pr}, which it is built on` : '');
+    out.push(`  #${entry.pr} is in the merge queue${entry.since ? ` (since ${when(entry.since)})` : ''}${after}`);
   }
   for (const note of notes) out.push('', `note: ${note}`);
   return `${out.join('\n')}\n`;

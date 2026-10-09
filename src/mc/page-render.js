@@ -662,7 +662,8 @@ function queuedLines(lines, c, wide, queued) {
     const left = `· ${item.repo || 'unknown'}  #${item.pr}  `;
     const since = item.since ? `  (since ${when(item.since)})` : '';
     const what = item.step ? `${item.step.project} step ${item.step.index + 1}` : (item.branch || 'no step');
-    const reason = clip(one(item.state === 'landing' ? `${what} — the merger has it` : what), Math.max(8, wide - 7 - left.length - since.length));
+    const said = item.state === 'landing' ? `${what} — the merger has it` : (item.parent ? `${what} — after #${item.parent.pr}` : what);
+    const reason = clip(one(said), Math.max(8, wide - 7 - left.length - since.length));
     lines.push(`       ${paint(c, [
       { text: left, styles: ['green', 'bold'] },
       { text: reason, styles: ['green'] },

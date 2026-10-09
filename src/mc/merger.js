@@ -27,7 +27,9 @@
  * once. The merger waits them out; it has nobody to give up to.
  */
 import { spawn as realSpawn } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -143,7 +145,7 @@ export function startMerger({ root, env = process.env, spawn = realSpawn, alive 
  * merger is landing this very pull request now.
  */
 export function queueMerge({
-  root, repo, repoPath, pr, branch = null, holder = null, step = null,
+  root, repo, repoPath, pr, branch = null, holder = null, step = null, parent = null,
   now = new Date(), env = process.env,
   read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
   lock = realLock, start = startMerger,
@@ -155,6 +157,7 @@ export function queueMerge({
   const job = {
     repo, repo_path: repoPath, pr: Number(pr), branch, holder, since: stamp, state: 'queued',
     step: step ? { project: step.project, index: step.index } : null,
+    parent,
   };
   const entries = lock(root, () => {
     const next = enqueue(parseQueue(read(mergesPath(root))), job);
@@ -164,6 +167,59 @@ export function queueMerge({
   const already = queuedFor(entries, repo, pr)?.state === 'landing';
   const merger = start({ root, env });
   return { place: placeOf(entries, repo, pr), merger, already };
+}
+
+/**
+ * Whether the job a stacked job is built on has landed: its step is `done`
+ * in the register. A parent with no step to read is taken as landed — the
+ * queue's own order has already kept the two apart.
+ */
+export function parentLanded(root, { read = realRead } = {}) {
+  return (parent) => {
+    if (!parent?.project || !Number.isInteger(parent.index)) return true;
+    return readEntry(root, parent.project, { read })?.steps?.[parent.index]?.status === 'done';
+  };
+}
+
+const realGit = (cwd, args) => {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20 });
+  return { ok: r.status === 0, stdout: String(r.stdout || '').trim(), stderr: String(r.stderr || '').trim() };
+};
+
+/**
+ * A stacked branch moved onto main once the job below it has landed
+ * (ruling 30, A). The one below was squash-merged, so its commits are in
+ * this branch and not on main under the same names: `rebase --onto
+ * origin/main <the sha this branch started on>` replays only this step's
+ * own commits, and the branch is pushed back with a lease on the tip it had.
+ * A branch that no longer carries that sha was moved already. Returns
+ * `{ ok, moved, reason }`.
+ */
+export function restack(job, { git = realGit, say = () => {} } = {}) {
+  const repoPath = job.repo_path;
+  const branch = job.branch;
+  if (!branch || !job.parent?.sha) return { ok: true, moved: false };
+  if (!git(repoPath, ['fetch', '-q', 'origin']).ok) return { ok: false, reason: 'git fetch failed before moving the branch onto main' };
+  const tip = git(repoPath, ['rev-parse', `origin/${branch}`]);
+  if (!tip.ok) return { ok: false, reason: `origin/${branch} is not there to move onto main` };
+  if (!git(repoPath, ['merge-base', '--is-ancestor', job.parent.sha, tip.stdout]).ok) return { ok: true, moved: false };
+  const dir = mkdtempSync(join(tmpdir(), 'mc-restack-'));
+  try {
+    if (!git(repoPath, ['worktree', 'add', '-q', '--detach', dir, tip.stdout]).ok) return { ok: false, reason: 'git worktree add failed for the move onto main' };
+    const rebased = git(dir, ['rebase', '-q', '--onto', 'origin/main', job.parent.sha]);
+    if (!rebased.ok) {
+      const conflicted = git(dir, ['diff', '--name-only', '--diff-filter=U']).stdout.split('\n').filter(Boolean);
+      git(dir, ['rebase', '--abort']);
+      return { ok: false, reason: `moving #${job.pr} onto main after #${job.parent.pr} landed conflicts${conflicted.length ? ` in ${conflicted.join(' ')}` : ''} — merge origin/main into ${branch} and keep both intents` };
+    }
+    const pushed = git(dir, ['push', '-q', `--force-with-lease=${branch}:${tip.stdout}`, 'origin', `HEAD:${branch}`]);
+    if (!pushed.ok) return { ok: false, reason: `the moved ${branch} could not be pushed (${pushed.stderr.split('\n').at(-1) || 'push refused'})` };
+    say(`${job.repo} #${job.pr}: moved onto main past #${job.parent.pr}`);
+    return { ok: true, moved: true };
+  } finally {
+    git(repoPath, ['worktree', 'remove', '--force', dir]);
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /* ------------------------------------------------------------------ serve */
@@ -177,12 +233,19 @@ export async function landJob(job, {
   readRunningRound = runningRound, readLeaseFn = readLease, alive = pidAlive,
   now = () => new Date(), read = realRead, write, lock = realLock,
   recordStart = recordRoundStart, record = recordRound, appendRun = null,
+  moveOntoMain = restack,
 } = {}) {
   const label = `${job.repo} #${job.pr}`;
   const t0 = now().getTime();
   let report = null;
   let said = null;
-  for (;;) {
+  // Built on a job that has landed since: onto main first, or the round
+  // measures the one below a second time and the squash conflicts with it.
+  if (job.parent) {
+    const moved = moveOntoMain(job, { say });
+    if (!moved.ok) report = { ok: false, merged: false, stopped_at: 'restack', reason: moved.reason };
+  }
+  for (; !report;) {
     // Waited for before the round rather than inside it, so a busy gate is
     // not a round-log line every fifteen seconds. An orphaned lease is in
     // nobody's way: the round's own claim reaps it.
@@ -204,6 +267,7 @@ export async function landJob(job, {
     record(report, { mode: 'merge' });
     // Lost the race between "both free" and the round's own lock.
     if (!shouldWait(report)) break;
+    report = null;
     await sleep(MERGER_POLL_MS);
   }
 
@@ -230,7 +294,10 @@ export async function landJob(job, {
         say(`${label}: ${job.step.project} step ${job.step.index + 1} is done`);
       } else {
         const patch = redPatch({ step: standing, report });
-        updateStep({ root, project: job.step.project, index: job.step.index, patch: { ...patch, pr: job.pr }, now: stamp, ...io });
+        // Once the one below has landed, the next session merges main into
+        // this branch before it starts, and nothing is to be moved again.
+        const below = job.parent && parentLanded(root, { read })(job.parent) ? { stacked_on: null } : {};
+        updateStep({ root, project: job.step.project, index: job.step.index, patch: { ...patch, pr: job.pr, ...below }, now: stamp, ...io });
         say(patch.status === 'ready'
           ? `${label}: ${job.step.project} step ${job.step.index + 1} is ready again (attempt ${patch.attempts}) — the next session fixes it on the same pull request`
           : `${label}: ${job.step.project} step ${job.step.index + 1} failed — ${patch.reason}`);
@@ -266,6 +333,7 @@ export async function serve({
   lock = realLock, stopping = () => false, say = () => {}, now = () => new Date(),
   take = () => takeMerger({ root }), release = () => releaseMerger({ root }),
   land = (job) => landJob(job, { root, say, now, read, lock }),
+  landed = parentLanded(root, { read }),
 } = {}) {
   if (!take()) { say('another merger is running — leaving'); return 0; }
   say(`merger ${process.pid} started`);
@@ -274,7 +342,7 @@ export async function serve({
       if (stopping()) { say('asked to stop — leaving between jobs'); return 0; }
       const job = lock(root, () => {
         const entries = parseQueue(read(mergesPath(root)));
-        const next = nextJob(entries);
+        const next = nextJob(entries, { landed });
         if (next) write(mergesPath(root), markLanding(entries, next, now().toISOString()));
         return next;
       });
@@ -283,8 +351,11 @@ export async function serve({
         // the read above and now saw this merger alive and started none, so
         // the queue is read once more with the file gone — and taken again
         // if there is work, unless that call's own merger already has it.
+        // A job waiting on one that came back red stays in the queue and
+        // is not work: the merger leaves, and that one's next `mc merge`
+        // starts a merger again.
         release();
-        if (!parseQueue(read(mergesPath(root))).length || !take()) { say('the queue is empty — leaving'); return 0; }
+        if (!nextJob(parseQueue(read(mergesPath(root))), { landed }) || !take()) { say('nothing the merger may take — leaving'); return 0; }
         continue;
       }
       say(`${job.repo} #${job.pr}: landing${job.step ? ` (${job.step.project} step ${job.step.index + 1})` : ''}`);

@@ -547,6 +547,20 @@ hold the project (`holdingPrs`). At `MAX_MERGE_ATTEMPTS` (3), or a round that
 cannot say whether it merged, the step is `failed` and a person's. A step
 somebody made `done` or `blocked` meanwhile is left as it is.
 
+**The next step does not wait** (ruling 30, A). A step `landing` is passed
+over by the picker (`planState`), and its open pull request does not hold the
+project (`holdingPrs`): the runner starts the next step at once on a new branch
+on top of the landing step's (`placeBranch` in `run.js`) and writes
+`stacked_on: { index, pr, sha }` on it. Its `mc merge` queues it with that as
+`parent`, and the door reads the plan from the parent's tip. The merger takes a
+job with a parent only once the parent is out of the queue and its step is
+`done` (`nextJob`), then moves the branch onto main past `sha` (`restack`:
+`rebase --onto origin/main <sha>` in a temporary worktree, pushed with a lease
+on the tip it had) — the one below was squash-merged, so its commits are in the
+branch under other names. A move that conflicts is a red, `stopped_at:
+restack`. When the one below comes back red the job on top stays in the queue
+and waits; that step is the project's next session's first, on its own branch.
+
 **The runner queues what the session published and did not** (ruling 25,
 2026-10-07). When a step session's process is gone, the register still says
 `running`, the session ended `success`, and a pull request is open on the

@@ -361,8 +361,14 @@ export function planSummary(plan) {
  */
 export function planState(plan) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
-  const index = steps.findIndex((step) => step?.status !== 'done');
-  if (index === -1) return { status: 'done', index: -1, step: null };
+  // A `landing` step is behind the plan, not in front of it: its pull request
+  // is the merger's, and the next step starts on top of it (ruling 30, A).
+  const index = steps.findIndex((step) => step?.status !== 'done' && step?.status !== 'landing');
+  if (index === -1) {
+    const landing = steps.findIndex((step) => step?.status === 'landing');
+    if (landing === -1) return { status: 'done', index: -1, step: null };
+    return { status: 'landing', index: landing, step: steps[landing] };
+  }
   const step = steps[index];
   return { status: STATUSES.has(step?.status) ? step.status : 'invalid', index, step };
 }

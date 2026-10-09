@@ -13,3 +13,9 @@ section: Changed
   alive, and fails a `landing` step whose job is in no queue. The page's
   MERGES and `mc status <name>` draw the queue; the step role ends at
   "queued".
+- **The next step does not wait for the merger** (ruling 30, A). A step
+  `landing` is passed over: the runner starts the next step at once on a branch
+  on top of it (`stacked_on` in the register), the merger lands the two in
+  order and moves the upper one onto main past the squash below before its
+  round. A red below is the project's next session's first; the job on top
+  keeps its place and goes once that one has landed.

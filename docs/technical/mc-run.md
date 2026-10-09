@@ -704,8 +704,11 @@ old, and nothing else.
 A step's pull request goes to the merger's queue — by the session's own
 `mc merge`, or by `landForSession` when the session ended `success` without
 asking — and the step is `landing` until the merger writes `done`, or sends a
-red back as `ready` (*The register*). The round the merger runs is the one
-below, and so is everything said about what it reads back.
+red back as `ready` (*The register*). A `landing` step does not hold the
+project: the next step starts at once on a branch on top of it (`placeBranch`,
+`stacked_on`), and the merger lands the two in order
+([`mc-merge.md`](mc-merge.md) § *One round at a time*). The round the merger
+runs is the one below, and so is everything said about what it reads back.
 
 **The runner lands through `mc merge` and nothing else** (Martin, 2026-09-02).
 `repo-merge.js`'s round, called in this process rather than shelled out to,

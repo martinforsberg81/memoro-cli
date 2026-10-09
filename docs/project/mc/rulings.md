@@ -1026,3 +1026,19 @@ point: the red no longer comes back to the session that wrote the code, but
 to the step's next session, told what the gate said. `mc deploy` gets its own
 process too, beside the merger and with no queue: a deploy asked for while
 one runs is refused, as now.
+
+> "Fortsätta på en öppen pr som håller på att mergas? … Men det viktigaste är
+> att vi sparar mycket tid om nästa step kan påbörjas direkt utan att vänta på
+> merge." … "1. Vänta. 2. A." (Martin, 2026-10-09: hold the PR; A — the branch
+> goes on, the next step starts on top of the queued one.)
+
+And: **the next step does not wait for the merger.** A step `landing` is
+behind the plan, not in front of it: the runner hands out the next step at
+once, on a new branch on top of the landing one's, and the register says what
+it is built on (`stacked_on`). The merger lands them in order — a job built on
+another waits until that one is `done` — and moves the upper branch onto main
+past the sha it started on before its round, since the one below was
+squash-merged. When the one below comes back red, it is the next session's
+first: the project's next session fixes it on its own branch, and the job on
+top keeps its place and goes once that one has landed. A move onto main that
+conflicts is a red like any other.

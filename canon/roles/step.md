@@ -35,6 +35,10 @@ later one is wrong): stop. `mc step note` what you found, then
    - `plan-trespass` — undo every plan change except `met`, commit, push, run
      `mc merge` again.
 
+**When the prompt says your branch starts on top of a step in the merge
+queue:** that step's work is in your branch already. Build on it and leave it
+as it is; its red, if it comes, is that step's.
+
 **When the prompt says the step came back from the merger:** the PR is open on
 your branch. Fix what the gate named — never lower a threshold or skip/weaken
 a test; `conflicts with origin/main` is merging `origin/main` and keeping both

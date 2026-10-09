@@ -14,6 +14,7 @@ import { test } from 'node:test';
 
 import {
   dequeue, enqueue, markLanding, mergesPath, nextJob, parseQueue, placeOf, queueEntries, queueOrder, queuedFor,
+  waitingOnParent,
 } from '../../src/mc/merge-queue.js';
 
 const job = (over = {}) => ({
@@ -78,4 +79,17 @@ test('oldest first; a job a dead merger was landing goes before everything', () 
   const landing = markLanding(entries, { repo: 'memoro-cli', pr: 3 }, '2026-09-06T18:05:00Z');
   assert.equal(nextJob(landing).pr, 3);
   assert.equal(nextJob([]), null);
+});
+
+test('a job built on another waits until that one has landed (ruling 30, A)', () => {
+  const parent = { project: 'mq', index: 0, pr: 9, sha: 'abc' };
+  let entries = enqueue([], job({ pr: 9, since: '2026-09-06T18:00:00Z' }));
+  entries = enqueue(entries, job({ pr: 10, since: '2026-09-06T17:00:00Z', parent }));
+  assert.deepEqual(entries[1].parent, parent);
+  assert.equal(nextJob(entries).pr, 9, 'older, but built on #9, which is still queued');
+  const alone = dequeue(entries, { repo: 'memoro-cli', pr: 9 });
+  assert.equal(nextJob(alone, { landed: () => true }).pr, 10, '#9 landed: #10 may go');
+  assert.equal(nextJob(alone, { landed: () => false }), null, '#9 came back red: #10 waits for it');
+  assert.deepEqual(waitingOnParent(alone, { landed: () => false }).map((e) => e.pr), [10]);
+  assert.deepEqual(waitingOnParent(alone, { landed: () => true }), []);
 });

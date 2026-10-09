@@ -1425,6 +1425,70 @@ test('a step the merger sent back is handed out again, its own open pull request
   assert.equal(registerOf(f, 'm').steps[0].status, 'landing');
 });
 
+/**
+ * Ruling 30, A: the next step does not wait for the merger. A step after one
+ * that is `landing` starts on a new branch on top of that one's, its pull
+ * request is not somebody's in flight, and the register says what it is
+ * built on so the merger lands the two in order.
+ */
+const twoSteps = plan({ steps: [
+  { title: 'S1 — first', status: 'ready', done_when: 'one', instruction: ['One.'], pr: null, blocked_by: null },
+  { title: 'S2 — second', status: 'ready', done_when: 'two', instruction: ['Two.'], pr: null, blocked_by: null },
+] });
+
+test('the step after a landing one starts at once, on a branch on top of it', async () => {
+  const f = fixture({
+    plans: { memoro: { m: twoSteps } },
+    openPrs: { memoro: [{ number: 9, headRefName: 'm', baseRefName: 'main', isDraft: false, title: 'S1' }] },
+  });
+  f.files['/w/runner/projects/m.json'] = JSON.stringify({
+    project: 'm', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/m/PLAN.json',
+    steps: [
+      { key: 'S1', status: 'landing', pr: 9, branch: 'm', comments: [], attempts: 0 },
+      { key: 'S2', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+    ],
+  });
+  f.deps.pendingMerges = () => [{ repo: 'memoro', pr: 9, step: { project: 'm', index: 0 }, state: 'landing' }];
+  f.deps.session = (call) => { f.calls.sessions.push(call); return queuesItself(f, 'm', 10)(call); };
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 1, '#9 is the landing step\'s own, not in flight');
+  assert.deepEqual(f.calls.checkouts.at(-1), ['/w/m/memoro', 'm-2']);
+  const [call] = f.calls.sessions;
+  assert.match(call.prompt, /Your step is `steps\[1\]`/u);
+  assert.match(call.prompt, /^Your branch starts on top of step 1, whose #9 is in the merge queue\./mu);
+  const steps = registerOf(f, 'm').steps;
+  assert.equal(steps[1].branch, 'm-2');
+  assert.deepEqual(steps[1].stacked_on, { index: 0, pr: 9, sha: 'tip-HEAD' });
+  assert.equal(steps[0].status, 'landing', 'the one below is the merger\'s, untouched');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 is landing \(#9\) — m-2 starts on top of it/u);
+});
+
+test('a step the merger sent back below a landing one is taken first, on its own branch', async () => {
+  const f = fixture({
+    plans: { memoro: { m: twoSteps } },
+    openPrs: { memoro: [
+      { number: 9, headRefName: 'm', baseRefName: 'main', isDraft: false, title: 'S1' },
+      { number: 10, headRefName: 'm-2', baseRefName: 'main', isDraft: false, title: 'S2' },
+    ] },
+    heads: { m: 'm-2' },
+  });
+  f.files['/w/runner/projects/m.json'] = JSON.stringify({
+    project: 'm', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/m/PLAN.json',
+    steps: [
+      { key: 'S1', status: 'ready', pr: 9, branch: 'm', reason: '1 test red: a', comments: [], attempts: 1 },
+      { key: 'S2', status: 'landing', pr: 10, branch: 'm-2', comments: [], attempts: 0, stacked_on: { index: 0, pr: 9, sha: 'abc' } },
+    ],
+  });
+  f.deps.pendingMerges = () => [{ repo: 'memoro', pr: 10, step: { project: 'm', index: 1 }, parent: { project: 'm', index: 0, pr: 9, sha: 'abc' } }];
+  f.deps.session = (call) => { f.calls.sessions.push(call); return queuesItself(f, 'm', 9)(call); };
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 1);
+  assert.match(f.calls.sessions[0].prompt, /This step came back from the merger: #9 did not land/u);
+  assert.match(f.calls.sessions[0].prompt, /Your step is `steps\[0\]`/u);
+  assert.ok(f.calls.git.some((c) => c[1] === 'checkout' && c.includes('-B') && c.includes('m') && c.includes('origin/m')), 'back on the red step\'s own branch, as pushed');
+  assert.equal(registerOf(f, 'm').steps[1].status, 'landing', 'the one on top waits in the queue');
+});
+
 test('another open pull request still holds a step the merger sent back', async () => {
   const f = fixture({
     plans: { memoro: { m: ready } },

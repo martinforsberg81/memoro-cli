@@ -200,6 +200,17 @@ describe('mc merge makes the step landing', () => {
     assert.doesNotMatch(d.out.out, /landing —/u);
   });
 
+  it('a step stacked on one still landing: the job names that one, and the door reads the plan from its tip', async () => {
+    register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } });
+    const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
+    let asked = null;
+    d.io.planBoundary = async (options) => { asked = options; return { checked: false }; };
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
+    assert.equal(asked.from, 'deadbeef');
+    assert.deepEqual(queue()[0].parent, { project: 'merge-queue', index: 0, pr: 600, sha: 'deadbeef' });
+    assert.match(d.out.out, /^mc: it lands after #600 \(step 1\), which it is built on$/mu);
+  });
+
   it('remainderOf reads a `## Remainder` and nothing else', () => {
     assert.equal(remainderOf('## Remainder\n\n`smart-search.js` — 16 sites.\n\n## Verified\n\nnpm test'), '`smart-search.js` — 16 sites.');
     assert.equal(remainderOf('## Remainder\n\nNone.\n'), null);

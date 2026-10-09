@@ -8,6 +8,7 @@
  * because `O_EXCL` on a file is the whole of what it does.
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +17,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { MAX_MERGE_ATTEMPTS } from '../../src/mc/merge-step.js';
 import {
-  landJob, mergerPath, queueMerge, readMerger, releaseMerger, serve, startMerger, takeMerger,
+  landJob, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, takeMerger,
 } from '../../src/mc/merger.js';
 import { registerPath } from '../../src/mc/register.js';
 
@@ -249,5 +250,94 @@ describe('queueMerge', () => {
     assert.equal(result.place, 0);
     assert.equal(stepNow().pr, 671);
     assert.equal(stepNow().session, null);
+  });
+});
+
+describe('stacked jobs (ruling 30, A)', () => {
+  const PARENT = { project: 'mq', index: 0, pr: 9, sha: 'abc' };
+  const STACKED = { ...JOB, pr: 10, branch: 'mq-2', step: { project: 'mq', index: 1 }, parent: PARENT };
+
+  function registerTwo(first, second) {
+    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
+    writeFileSync(registerPath(root, 'mq'), JSON.stringify({
+      project: 'mq', repo: 'memoro-cli', programme: 'mc', plan: 'docs/project/mc/mq/PLAN.json',
+      steps: [
+        { status: 'done', pr: 9, branch: 'mq', comments: [], attempts: 0, ...first },
+        { status: 'landing', pr: 10, branch: 'mq-2', comments: [], attempts: 0, stacked_on: { index: 0, pr: 9, sha: 'abc' }, ...second },
+      ],
+    }));
+  }
+  const second = () => JSON.parse(readFileSync(registerPath(root, 'mq'), 'utf8')).steps[1];
+
+  it('is moved onto main before its round, and lands', async () => {
+    registerTwo({}, {});
+    const moved = [];
+    const m = machine([green], { moveOntoMain: (job) => { moved.push(job.pr); return { ok: true, moved: true }; } });
+    await landJob(STACKED, m.deps);
+    assert.deepEqual(moved, [10]);
+    assert.equal(m.rounds.length, 1);
+    assert.equal(second().status, 'done');
+  });
+
+  it('a move that conflicts is a red with the files, no round runs, and nothing is moved again', async () => {
+    registerTwo({}, {});
+    const m = machine([green], { moveOntoMain: () => ({ ok: false, reason: 'moving #10 onto main after #9 landed conflicts in a.js — merge origin/main into mq-2 and keep both intents' }) });
+    await landJob(STACKED, m.deps);
+    assert.equal(m.rounds.length, 0);
+    const step = second();
+    assert.equal(step.status, 'ready');
+    assert.match(step.reason, /conflicts in a\.js/u);
+    assert.equal(step.stacked_on, null, 'the one below has landed: the next session merges main in instead');
+    assert.equal(m.rows[0].note, 'red,restack');
+  });
+
+  it('the merger leaves when the only job waits on one that came back red', async () => {
+    registerTwo({ status: 'ready', reason: 'red', attempts: 1 }, {});
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([STACKED]));
+    let landed = 0;
+    let takes = 0;
+    const code = await serve({ root, lock, take: () => { takes += 1; return true; }, release: () => {}, land: async () => { landed += 1; } });
+    assert.equal(code, 0);
+    assert.equal(landed, 0);
+    assert.equal(takes, 1, 'no spinning on a job that may not go');
+    assert.equal(queue().length, 1, 'it keeps its place for when #9 is queued again');
+  });
+
+  it('restack: a real squash below, and only the stacked step\'s own commit is replayed onto main', () => {
+    const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
+    const sh = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
+    try {
+      const origin = join(base, 'origin.git');
+      const work = join(base, 'work');
+      sh(base, 'init', '-q', '--bare', '-b', 'main', origin);
+      sh(base, 'clone', '-q', origin, work);
+      writeFileSync(join(work, 'a.txt'), 'a\n');
+      sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'base'); sh(work, 'push', '-q', 'origin', 'HEAD:main');
+      // Step 1 on mq, step 2 on mq-2 on top of it.
+      sh(work, 'checkout', '-qb', 'mq');
+      writeFileSync(join(work, 'one.txt'), '1\n'); sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'step 1');
+      const parentSha = sh(work, 'rev-parse', 'HEAD');
+      sh(work, 'push', '-q', 'origin', 'mq');
+      sh(work, 'checkout', '-qb', 'mq-2');
+      writeFileSync(join(work, 'two.txt'), '2\n'); sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'step 2');
+      sh(work, 'push', '-q', 'origin', 'mq-2');
+      // Step 1 squash-merged onto main, as GitHub does it.
+      sh(work, 'checkout', '-q', 'main');
+      sh(work, 'merge', '-q', '--squash', 'mq'); sh(work, 'commit', '-qm', 'step 1 (#9)');
+      sh(work, 'push', '-q', 'origin', 'main');
+      const said = [];
+      const result = restack({ repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } }, { say: (l) => said.push(l) });
+      assert.deepEqual(result, { ok: true, moved: true });
+      sh(work, 'fetch', '-q', 'origin');
+      assert.equal(sh(work, 'rev-list', '--count', 'origin/main..origin/mq-2'), '1', 'one commit: step 2\'s own');
+      assert.equal(sh(work, 'log', '-1', '--format=%s', 'origin/mq-2'), 'step 2');
+      assert.equal(sh(work, 'merge-base', 'origin/main', 'origin/mq-2'), sh(work, 'rev-parse', 'origin/main'));
+      assert.match(said[0], /moved onto main past #9/u);
+      // Asked again — a merger that died after the push — it is already moved.
+      assert.deepEqual(restack({ repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } }), { ok: true, moved: false });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

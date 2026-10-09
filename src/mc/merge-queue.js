@@ -52,6 +52,11 @@ function normalise(entry) {
     branch: entry.branch ?? null,
     holder: plain(entry.holder) ? { ...entry.holder } : (typeof entry.holder === 'string' ? { name: entry.holder } : null),
     step,
+    // The job this one is built on (ruling 30, A): `{ project, index, pr,
+    // sha }`. It is not taken until that one has landed; see `nextJob`.
+    parent: plain(entry.parent) && Number.isFinite(Number(entry.parent.pr)) && typeof entry.parent.sha === 'string'
+      ? { project: entry.parent.project ?? null, index: entry.parent.index ?? null, pr: Number(entry.parent.pr), sha: entry.parent.sha }
+      : null,
     since: entry.since ?? null,
     state: JOB_STATES.includes(entry.state) ? entry.state : 'queued',
     started: entry.started ?? null,
@@ -105,11 +110,25 @@ export function queueOrder(entries) {
 
 /**
  * The job the merger takes next: one already `landing` (its merger died
- * under it), else the oldest `queued`. Null when there is nothing to do.
+ * under it), else the oldest `queued` that may go. A job built on another
+ * (`parent`) may go once that one has landed — it is not in the queue and
+ * `landed(parent)` says so. One whose parent is still queued waits behind
+ * it; one whose parent came back red waits until that one is queued again
+ * and lands. Null when there is nothing the merger may take.
  */
-export function nextJob(entries) {
+export function nextJob(entries, { landed = () => true } = {}) {
   const ordered = queueOrder(entries);
-  return ordered.find((entry) => entry.state === 'landing') || ordered[0] || null;
+  const mayGo = (entry) => !entry.parent
+    || (!queuedFor(entries, entry.repo, entry.parent.pr) && landed(entry.parent));
+  return ordered.find((entry) => entry.state === 'landing')
+    || ordered.find(mayGo)
+    || null;
+}
+
+/** Jobs waiting on a parent that has not landed, for the page: `{ entry, parent }`. */
+export function waitingOnParent(entries, { landed = () => true } = {}) {
+  return entries.filter((entry) => entry.parent && entry.state !== 'landing'
+    && (queuedFor(entries, entry.repo, entry.parent.pr) || !landed(entry.parent)));
 }
 
 /** The entry with `state` and `started` moved. */

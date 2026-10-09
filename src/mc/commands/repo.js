@@ -298,36 +298,15 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
   }
   const mode = opts.check ? 'check' : 'merge';
   const root = deps.root || workRoot(process.env);
-  // The wait and the door are both the single-`mc merge`-on-a-project-branch
-  // case: a `--check` only measures and was never asked to land anything, and
-  // a batch already falls back to one round per pull request with no single
-  // identity to wait or check as — out of this step's scope (contract).
+  // The door and the queue are both the single-`mc merge` case: a `--check`
+  // only measures and was never asked to land anything, and a batch falls back
+  // to one round per pull request with no single identity to queue as.
   const single = !opts.check && opts.pr != null && !(opts.prs && opts.prs.length);
-
-  if (single) {
-    const boundary = await (deps.planBoundary || planBoundary)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh });
-    if (boundary.checked && !boundary.ok) {
-      const now = deps.now ? deps.now() : new Date();
-      recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
-      const report = {
-        ok: false,
-        stopped_at: 'plan-trespass',
-        reason: boundary.problems.join('; '),
-        repo: repoPath,
-        pr: { number: opts.pr },
-        started_at: now.toISOString(),
-        finished_at: now.toISOString(),
-      };
-      recordRound(report, { mode });
-      for (const problem of boundary.problems) stderr.write(`mc: plan-trespass — ${problem}\n`);
-      return 1;
-    }
-  }
 
   // One pull request to land is the merger's (ruling 30): the step is
   // `landing`, the job is queued, and this call returns. What comes of it is
   // the register's word (and `merger.log`'s), not this process's.
-  if (single) return queueForMerger({ repoPath, opts, holder, root, stdout, stderr, deps });
+  if (single) return queueForMerger({ repoPath, opts, holder, mode, root, stdout, stderr, deps });
 
   const round = { repoPath, pr: opts.pr, prs: opts.prs, full: Boolean(opts.full), mode, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
   recordRoundStart({
@@ -356,7 +335,7 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
  * or sends a red back as `ready` for the step's next session. Exit 0: the
  * pull request is queued, which is all this call can know.
  */
-function queueForMerger({ repoPath, opts, holder, root, stdout, stderr, deps }) {
+async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stderr, deps }) {
   const env = deps.env || process.env;
   const repo = basename(String(repoPath).replace(/\/+$/u, ''));
   const askGh = deps.gh || spawnTool('gh');
@@ -367,10 +346,33 @@ function queueForMerger({ repoPath, opts, holder, root, stdout, stderr, deps }) 
   const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
   const step = stepForMerge({ env, head, entries: listEntries(root, io) });
+  // A step that started on top of one still landing (ruling 30, A): the
+  // merger lands it after that one, and the door compares the plan with that
+  // one's tip rather than main, which does not have its edits yet.
+  const stacked = step ? step.entry.steps[step.index]?.stacked_on || null : null;
+  const parent = stacked ? { project: step.project, index: stacked.index, pr: stacked.pr, sha: stacked.sha } : null;
+
+  const boundary = await (deps.planBoundary || planBoundary)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, from: stacked?.sha || null });
+  if (boundary.checked && !boundary.ok) {
+    const now = deps.now ? deps.now() : new Date();
+    recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
+    recordRound({
+      ok: false,
+      stopped_at: 'plan-trespass',
+      reason: boundary.problems.join('; '),
+      repo: repoPath,
+      pr: { number: opts.pr },
+      started_at: now.toISOString(),
+      finished_at: now.toISOString(),
+    }, { mode });
+    for (const problem of boundary.problems) stderr.write(`mc: plan-trespass — ${problem}\n`);
+    return 1;
+  }
+
   let queued;
   try {
     queued = queueMerge({
-      root, repo, repoPath, pr: opts.pr, branch: head, holder, step,
+      root, repo, repoPath, pr: opts.pr, branch: head, holder, step, parent,
       now: deps.now ? deps.now() : new Date(), env, ...io,
       ...(deps.startMerger ? { start: deps.startMerger } : {}),
     });
@@ -393,6 +395,7 @@ function queueForMerger({ repoPath, opts, holder, root, stdout, stderr, deps }) 
   if (merger?.pid) stdout.write(`mc: the merger (pid ${merger.pid}${merger.started ? ', just started' : ''}) lands it; follow it in ${mergerLogPath(root)}\n`);
   else stdout.write(`mc: no merger could be started${merger?.error ? ` (${merger.error})` : ''} — the job waits in the queue for the next mc merge or runner round\n`);
   if (step) stdout.write(`mc: ${step.project} step ${step.index + 1} is landing — green makes it done; red sends it back to the step's next session\n`);
+  if (parent) stdout.write(`mc: it lands after #${parent.pr} (step ${parent.index + 1}), which it is built on\n`);
   return 0;
 }
 

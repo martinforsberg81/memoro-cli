@@ -265,15 +265,19 @@ export function inFlight(openPrs = []) {
 }
 
 /**
- * The open pull requests that hold a project back, without the one its next
- * step is being handed back with. A red the merger sent back (ruling 30) is
- * the step `ready` with its `pr` kept: that pull request is the step's own
- * work for its next session to go on with, not somebody's in flight. Any
- * other open pull request still ends the round (`inFlight`).
+ * The open pull requests that hold a project back, without the project's own
+ * steps' (ruling 30). A step `landing` has its pull request in the merger's
+ * queue, and the next step starts on top of it; a red the merger sent back is
+ * the step `ready` with its `pr` kept, the next session's work. Neither is
+ * somebody's in flight. Any other open pull request still ends the round
+ * (`inFlight`).
  */
 export function holdingPrs(openPrs = [], record = null) {
-  const own = record?.plan ? deliverableStep(record.plan).step?.pr : null;
-  return own ? openPrs.filter((pr) => Number(pr.number) !== Number(own)) : openPrs;
+  const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
+  const own = new Set(steps
+    .filter((step) => step?.pr && (step.status === 'landing' || step.status === 'ready'))
+    .map((step) => Number(step.pr)));
+  return own.size ? openPrs.filter((pr) => !own.has(Number(pr.number))) : openPrs;
 }
 
 /**
@@ -706,11 +710,12 @@ function planExcerpt(plan, index, step) {
  * `plan`); the prompt quotes the part of it this step needs and says where the
  * whole file is, rather than carrying the file — see `planExcerpt`.
  */
-export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, now = new Date() }) {
+export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, stacked = null, now = new Date() }) {
   const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
     ...conflictPreamble(conflicts),
     ...retryPreamble(retry, repo),
+    ...stackedPreamble(retry ? null : stacked),
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
     `is merged in). Your plan is on disk in this worktree at \`${planPath}\`;`,
     'what follows below is the part of it this step needs — the frozen fields,',
@@ -773,6 +778,25 @@ function retryPreamble(retry, repo) {
     'Start there — `gh pr view` and the diff — fix what the gate named (never by',
     'lowering a threshold or skipping a test), push to the same branch, and run',
     `\`mc merge ${repo} ${retry.pr}\` again. No new pull request.`,
+    '',
+  ];
+}
+
+/**
+ * What a session is told when its branch starts on top of a step still in
+ * the merge queue (ruling 30, A): that step's work is already in the branch
+ * and is not this session's to change; its pull request will show those
+ * commits too until the merger has landed the one below and moved this one
+ * onto main. Empty when the branch starts from main.
+ */
+function stackedPreamble(stacked) {
+  if (!stacked) return [];
+  return [
+    `Your branch starts on top of step ${stacked.index + 1}, whose #${stacked.pr} is in the merge queue.`,
+    'Its work is in this branch already: build on it, and leave it as it is — a',
+    'red in it is that step\'s, and comes back to it. Your pull request shows its',
+    'commits too until it has landed; the merger lands it first and moves yours',
+    'onto main after.',
     '',
   ];
 }
