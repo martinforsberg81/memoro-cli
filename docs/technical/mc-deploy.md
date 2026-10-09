@@ -15,7 +15,9 @@ What the verb adds is everything around the script:
 - **a `main` to run it in**, found where `main` is already checked out or made
   and kept by mc, so nobody checks `main` out by hand to deploy;
 - **one question**, always, with no flag that skips it;
-- **the lease**, so a gate round or a landing cannot move `main` under the build;
+- **its own process**, the deployer, so the deploy runs beside the merger and
+  neither waits for the other, and a ^C at the terminal stops only the
+  watching (ruling 30);
 - **the record**, written before the deploy starts and completed after it ends,
   so a deploy that dies half-way is a row that says so rather than a silence
   somebody reconstructs from `/admin/deploy/logs` afterwards.
@@ -28,6 +30,7 @@ since removed ([`mc-helper.md`](mc-helper.md) § *the deploy section*).
 
 ```
 mc deploy [--dry-run] [--json]
+mc deploy --follow
 ```
 
 It takes no repository argument and never will: memoro-cli is installed, not
@@ -38,7 +41,7 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
 1. **Fetch and read.** `git fetch origin main` in `~/memoro`, then
    `rev-parse origin/main` — the sha that would ship — and its subject. Refs
    are shared by every worktree of a repository, so these reads stay here
-   whatever branch this checkout is on, and so does the lease in step 7.
+   whatever branch this checkout is on.
 2. **Where the script will run.** `git worktree list --porcelain` in `~/memoro`,
    and the worktree whose branch is `refs/heads/main` is the one — git allows at
    most one, so there is nothing to choose between. When no worktree has `main`
@@ -61,12 +64,18 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    still asks — it is a reading a person weighs, not a gate.
 6. **The question**, at a terminal: `deploy <short sha> to production? [y/N]`.
    Anything but `y`/`yes` ends it.
-7. **The lease.** `claimLease({ repoPath, errand: 'deploy <sha>', … })`
-   ([`src/mc/repo-lease.js`](../../src/mc/repo-lease.js)), keyed on `~/memoro`
-   because that is the path the runner's merge rounds claim against, held for
-   the whole deploy and released in a `finally` however it ends.
-8. **The fast-forward**, when the worktree is behind: `git merge --ff-only
-   origin/main` in it, under the lease, after the yes. It is the one movement of
+7. **The deployer.** Under the register's lock — milliseconds, and held by no
+   merge round — the record is read once more for a deploy in progress, an
+   abandoned `running` row is closed, the deployer is started detached
+   (`deploy-run.js`, `ship` in `commands/deploy.js`, its output in
+   `~/mc/runner/log/deploy.log`), and its row is written naming its pid. The
+   terminal that asked then follows that log (`followDeploy`) until the
+   deployer is gone and answers with the row's outcome. ^C there stops the
+   watching, not the deploy; `mc deploy --follow` watches the deploy going on
+   again. No repository lease is taken: until ruling 30 the deploy waited up to
+   eight minutes for a merge round to give it back, and gave up with exit 3.
+8. **The fast-forward**, in the deployer, when the worktree is behind: `git
+   merge --ff-only origin/main` in it, after the yes. It is the one movement of
    somebody else's checkout this verb makes, on a tree already proved clean and
    not ahead. `origin/main` is what ships — whatever is on `main` is meant to —
    and it is taken as it is *now*, which may be later than the sha the question
@@ -78,7 +87,9 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    question's sha whatever went out (2026-09-14 and 2026-09-19 were the two rows
    where it differed).
 9. **The script.** `npm run deploy` in that worktree, the process's environment
-   passed through untouched, its output echoed as it happens.
+   passed through untouched, its output in the deployer's log as it happens.
+   Its stdin is closed: a wrangler that wants a login stops with its own words
+   in the log — `wrangler login` at a terminal, then `mc deploy` again.
 10. **The row completed** — outcome, build, the live version the script verified,
     and the step it stopped at when it failed.
 
@@ -146,23 +157,25 @@ rather than assumes wherever there is nobody to ask.
 | situation | code | what happens |
 |---|---|---|
 | a positional argument, or a bad flag | 2 | usage; nothing read |
-| `--dry-run` | 0 | the reading, and it stops there — no lease, no row, no spawn |
+| `--dry-run` | 0 | the reading, and it stops there — no row, no deployer |
 | no checkout of `memoro` on this machine | 1 | says so; this verb deploys that repository and no other |
 | the checkout has no `origin/main` | 1 | says so |
 | **`main` is dirty** where it is checked out | 1 | names the path and the first five files; refused row *"main is dirty in `<path>` — `<n>` file(s)"*. Nothing is stashed, reset or discarded — that tree may be somebody's |
 | **`main` has commits `origin/main` does not** | 1 | refused row *"main in `<path>` has `<n>` commit(s) not on origin/main"*: what would ship is not that tree |
 | `git worktree add` for mc's own `main` failed | 1 | says so; refused row. There is no checkout of `main` to run the script in |
-| the fast-forward failed | 1 | refused row, lease released, nothing spawned |
+| the fast-forward failed | 1 | the deployer's row completed `failed`, stopped at `fast-forward`; nothing spawned |
 | **no TTY** | 2 | *"mc deploy asks before it deploys, and there is no terminal here to ask"* |
 | the question answered `no` | 1 | *"nothing was deployed"* |
-| the repository lease is held | 1 | names the holder and the errand, as `mc merge` does |
-| the script ran | its own | whatever `npm run deploy` exited with |
+| another deploy is running | 1 | names its sha, start and pid; refused row. There is no queue |
+| the deployer could not be started | 1 | row completed `failed`, stopped at `start` |
+| the script ran | 0 / 1 | `deployed` or not, read from the row when the deployer is gone |
+| ^C while following | 130 | the deploy goes on; `mc deploy --follow` watches again |
 
 `main` checked out **nowhere** is not on this list and is not a refusal: mc makes
 its own worktree and deploys from that. A `main` merely *behind* `origin/main` is
 not one either — it is fast-forwarded in step 8.
 
-The decisions among them — `no`, no terminal, a held lease, and the three
+The decisions among them — `no`, no terminal, a deploy already running, and the three
 worktree refusals — are each written to the record as `outcome: refused` with
 the reason. They are deploys somebody meant to make, and the page and the brief can only see
 them if they exist.
@@ -173,18 +186,22 @@ does not carry on as though it had shipped.
 `--dry-run` writes no row at all. Nothing was attempted, and a row per person
 checking what would ship would drown the ones that matter.
 
-## The lease
+## No lease, and one deploy at a time
 
-The verb claims memoro's repository lease with errand `deploy <sha>` before the
-spawn. That is the same lease a merge round takes
-([`mc-merge.md`](mc-merge.md) § *One round at a time*), so while a deploy runs,
-the runner's next gate round waits and a person's `mc merge` is refused by name.
-The reason is narrow and worth saying: what `deploy.mjs` reads out of the working
-tree must still be the tree the person said yes to. It carries the holder's pid
-like every other claim, so a deploy that was killed rather than finished is
-reaped by the next claim instead of blocking for ever.
+Until ruling 26 the verb held memoro's repository lease for the whole deploy;
+from it, only for the fast-forward and the read of the sha; since ruling 30
+(2026-10-09) not at all. A merge round holds that lease for its whole gate, so
+any hold made a deploy wait for the merges. The worktree the script runs in is
+moved by nothing but the deployer, and a merge landing on `origin/main` after
+the fast-forward changes nothing the build sees.
 
-It blocks no git at all. The lease is an agreement between mc's own verbs.
+What keeps two deploys apart is the record: a `running` row whose pid is alive
+is a deploy in progress (`runningDeploy`,
+[`src/mc/deploys.js`](../../src/mc/deploys.js)). It is read before the question
+— nobody answers one that has no yes — and again under the register's lock,
+where the new row is written. There is no queue (Martin, 2026-10-09: *"Vi skulle
+kunna låta deploy vara utan kö."*): a second `mc deploy` is refused and run again
+when the first is done.
 
 ## The record
 
@@ -311,7 +328,7 @@ The boundary is a rule, not a judgement call:
   is not `main`, and a `main` that is not `origin/main` (`REQUIRED_PROD_BRANCH`,
   `ensureCleanWorktree`, `ensureUpToDateWithOrigin`) — and mc reimplements none
   of it. What mc adds is a `cwd` that is always a `main`, and one
-  `git merge --ff-only origin/main` after the yes, under the lease, on a tree it
+  `git merge --ff-only origin/main` after the yes, by the deployer, on a tree it
   has just read as clean and not ahead. Anything else in that worktree is
   refused with the path in the row; nothing is ever stashed, reset or discarded.
   Before ruling 16 (2026-09-06) the spawn's `cwd` was `~/memoro` whatever branch
@@ -332,10 +349,11 @@ one day call this verb; whether it should is a question for after this project.
 
 [`tests/mc/commands/deploy.test.js`](../../tests/mc/commands/deploy.test.js)
 drives the whole verb with every process boundary faked — git, the spawn, the
-prompt, the version fetch, the nightly — because they are all on `deps`. The
-lease and the record are the two exceptions, and deliberately so: they are what
-this verb exists to leave behind, `env` already points both at a throwaway
-directory, and a faked writer would only prove that the fake was called. One test
+prompt, the version fetch, the nightly, the deployer (`startDeployer` runs
+`ship` in the test's own process) — because they are all on `deps`. The record
+is the exception, and deliberately so: it is what this verb exists to leave
+behind, `env` already points it at a throwaway directory, and a faked writer
+would only prove that the fake was called. One test
 starts a real `npm run deploy` against a `package.json` whose script only prints,
 and asserts both the echo and the capture.
 [`tests/mc/deploys.test.js`](../../tests/mc/deploys.test.js) covers the reader
@@ -356,7 +374,7 @@ space and a branch merely *starting* with `main`.
 `mc deploy --dry-run` was run on 2026-09-07 (both outputs above: once with the
 repository checkout on `main` and once with it on a feature branch), and on
 2026-09-04 (at `c061d74` and `e30fd83`). Everything from the question onwards —
-the fast-forward, the lease, the spawn, the completed row — has only ever run
+the fast-forward, the deployer, the spawn, the completed row — has only ever run
 against a faked script; mc's own worktree at `~/.memoro/mc/deploy/memoro` has
 therefore never been made on this machine, because `main` has always been
 checked out somewhere.

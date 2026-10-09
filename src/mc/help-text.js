@@ -34,6 +34,7 @@ THE PAGE
   mc publish                       Push this branch, open its pull request
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
+  mc deploy --follow               Watch the deploy that is running
   mc deps [<repo>]                 Which dependencies need updating, and how urgently
   mc deps bump <repo> <what>       Opens a pull request for one group and lands it through the gate
   mc dev list                      Which dev server runs in which worktree
@@ -246,10 +247,14 @@ IN FULL
                                     Refuses on main, a dirty tree, or a remote
                                     branch that moved. Ends with the mc merge
                                     line to run
-  mc merge <repo> <pr>             That same measurement, then the landing:
-                                    only if nothing new went red and the base
-                                    has not moved since, squash-merge, pull the
+  mc merge <repo> <pr>             Queue it for the merger and return: one
+                                    process lands the queue, one at a time,
+                                    with that same measurement — only if
+                                    nothing new went red and the base has not
+                                    moved since, squash-merge, pull the
                                     source-linked installation, and log a line.
+                                    A step's red goes back to its next session
+                                    (~/mc/runner/log/merger.log says it all).
                                     Nothing merges a red gate. The round does
                                     not measure the base, so the verdict
                                     carries no standing-red number: green is
@@ -271,15 +276,13 @@ IN FULL
                                     that tree, and last what mc deps memoro
                                     last saved, with its age (a file read,
                                     no npm) — then one question, and on a
-                                    yes the repository's own npm run deploy.
-                                    mc's lease covers the fast-forward of main
-                                    and the read of the sha that ships, not
-                                    the build: that runs on the sha with the
-                                    lease free, so merges land beside it.
-                                    A held lease is waited for, up to 8 min,
-                                    as mc merge waits for the gate; a second
-                                    deploy while one runs is refused with its
-                                    sha and start time. No flag skips
+                                    yes the repository's own npm run deploy,
+                                    in its own process: no lease, so merges
+                                    land beside it, and ^C stops the watching,
+                                    not the deploy (mc deploy --follow
+                                    watches again). A second deploy while one
+                                    runs is refused with its sha and start
+                                    time — there is no queue. No flag skips
                                     the question and without a terminal it
                                     refuses; --dry-run is the reading and
                                     stops there. Every deploy, and every

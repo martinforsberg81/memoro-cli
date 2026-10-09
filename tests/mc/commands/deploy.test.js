@@ -1,6 +1,6 @@
 /**
- * `mc deploy` — the reading, the one question, the script under the lease, and
- * the row it leaves behind.
+ * `mc deploy` — the reading, the one question, the deployer that runs the
+ * script beside the merges, and the row it leaves behind.
  *
  * Nothing real is behind any of it: git, the version endpoint, the nightly
  * history, the prompt and `npm run deploy` are all handed in. The lease and
@@ -19,10 +19,10 @@ import { join } from 'node:path';
 
 import {
   deployPlan, deploySource, deployWorktreePath, leftoverStamps, parseDeployArgs, planLines, readScriptOutput, run,
-  spawnDeployDefault, worktreeState,
+  deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault, worktreeState,
 } from '../../../src/mc/commands/deploy.js';
 import { mainWorktree } from '../../../src/mc/git.js';
-import { lastAttempt, lastDeploy, readDeploys, recordStart } from '../../../src/mc/deploys.js';
+import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
 import { claimLease, readLease, releaseLease } from '../../../src/mc/repo-lease.js';
 
 const SHA = '1a2b3c4d5e6f70819293a4b5c6d7e8f900112233';
@@ -82,21 +82,6 @@ const STAMP_DIFF = [
 ].join('\n');
 
 let work = null;
-
-/**
- * The clock `mc merge`'s wait tests use: `sleep` moves `now` on by what it
- * was asked to sleep, so eight minutes of polling run in no time. `onSleep`
- * is what happens in the world while the deploy sleeps, given the count.
- */
-function fakeClock({ onSleep = () => {} } = {}) {
-  let at = Date.parse('2026-10-07T12:00:00Z');
-  let count = 0;
-  return {
-    now: () => new Date(at),
-    sleep: async (ms) => { at += ms; count += 1; onSleep(count); },
-    slept: () => count,
-  };
-}
 
 function io() {
   const out = { stdout: '', stderr: '' };
@@ -166,6 +151,9 @@ function deps(extra = {}) {
     interactive: () => true,
     ask: () => 'y',
     spawnDeploy: async () => ({ code: 0 }),
+    // The deployer, run in the test's own process once its row is written
+    // (ruling 30): the same `ship` the detached `deploy-run.js` runs.
+    startDeployer: (job, d) => ({ pid: process.pid, inline: () => ship(job, d) }),
     ...extra,
   };
 }
@@ -179,7 +167,8 @@ beforeEach(() => {
 
 describe('mc deploy — the arguments', () => {
   it('takes --dry-run and --json, and nothing positional', () => {
-    assert.deepEqual(parseDeployArgs(['--dry-run']), { dryRun: true, json: false });
+    assert.deepEqual(parseDeployArgs(['--dry-run']), { dryRun: true, json: false, follow: false });
+    assert.equal(parseDeployArgs(['--follow']).follow, true);
     assert.match(parseDeployArgs(['memoro']).error, /takes no arguments \(memoro\)/u);
     assert.match(parseDeployArgs(['--force']).error, /unknown flag: --force/u);
   });
@@ -462,7 +451,7 @@ describe('mc deploy — every case of where main is', () => {
     assert.match(out.stdout, new RegExp(`mc: from ${MAIN_WT} — main at origin/main`, 'u'));
   });
 
-  it('main behind origin/main: fast-forwarded under the lease, then the script runs there', async () => {
+  it('main behind origin/main: fast-forwarded by the deployer, then the script runs there', async () => {
     const git = fakeGit({
       counts: { [`${LIVE}..${SHA}`]: 6 },
       state: { [MAIN_WT]: { dirty: [], ahead: 0, behind: 3 } },
@@ -563,7 +552,7 @@ describe('mc deploy — every case of where main is', () => {
     assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'deployed');
   });
 
-  it('mc\'s own main with nothing but untracked files: removed under the lease, said, and it runs', async () => {
+  it('mc\'s own main with nothing but untracked files: removed by the deployer, said, and it runs', async () => {
     const git = fakeGit({
       worktrees: worktreeList(MINE),
       counts: { [`${LIVE}..${SHA}`]: 6 },
@@ -615,8 +604,9 @@ describe('mc deploy — every case of where main is', () => {
     assert.equal(seen.length, 0);
     assert.equal(git.calls.some((call) => call.args[0] === 'clean'), false, 'nobody else\'s tree is cleaned');
     const row = lastAttempt({ MC_WORK_ROOT: work });
-    assert.equal(row.outcome, 'refused');
-    assert.equal(row.note, `main is dirty in ${MAIN_WT} after the fast-forward — 2 untracked file(s)`);
+    assert.equal(row.outcome, 'failed', 'the deployer had its row already: the deploy started and stopped');
+    assert.equal(row.stopped_at, 'dirty');
+    assert.equal(row.note, `mc: main is dirty in ${MAIN_WT} after the fast-forward — 2 untracked file(s)`);
     assert.match(out.stderr, /the fast-forward left 2 untracked files .*\nmc: {3}artifacts\//u);
   });
 
@@ -753,8 +743,8 @@ describe('mc deploy — the question', () => {
   });
 });
 
-describe('mc deploy — the script beside the lease', () => {
-  it('runs npm run deploy in the worktree that is main, with the environment, the lease already free and the row written', async () => {
+describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
+  it('runs npm run deploy in the worktree that is main, with the environment, the row written first naming the deployer', async () => {
     const { stdout, stderr } = io();
     const seen = [];
     const env = { ...process.env, MC_WORK_ROOT: work, MEMORO_DEPLOY_CONTAINERS: 'always' };
@@ -763,43 +753,32 @@ describe('mc deploy — the script beside the lease', () => {
       stdout,
       stderr,
       spawnDeploy: async (options) => {
-        seen.push({ ...options, lease: readLease(PATH), row: lastAttempt({ MC_WORK_ROOT: work }) });
+        seen.push({ ...options, row: lastAttempt({ MC_WORK_ROOT: work }) });
         return { code: 0 };
       },
     });
     assert.equal(code, 0);
     assert.equal(seen.length, 1);
-    assert.equal(seen[0].cwd, MAIN_WT, 'the spawn runs where main is, not where the reads and the lease are');
+    assert.equal(seen[0].cwd, MAIN_WT, 'the spawn runs where main is, not where the reads are');
     assert.equal(seen[0].env.MEMORO_DEPLOY_CONTAINERS, 'always');
-    assert.equal(seen[0].lease.held, false, 'the lease covers the read of the sha, not the build');
     assert.equal(seen[0].row.outcome, 'running');
     assert.equal(seen[0].row.sha, SHA);
-    assert.equal(readLease(PATH).held, false);
+    assert.equal(seen[0].row.pid, String(process.pid), 'the row names the process the deploy runs in');
+    assert.equal(readLease(PATH).held, false, 'no lease, at any point');
   });
 
-  it('a throw after the release does not release a lease a merge round took in between', async () => {
-    const { stdout, stderr } = io();
-    const releases = [];
-    await assert.rejects(run([], {
-      ...deps({
-        releaseLease: (args) => { releases.push(args); return releaseLease(args); },
-        spawnDeploy: async () => {
-          claimLease({ repoPath: PATH, errand: 'merge memoro #812', holder: { name: 'runner', kind: 'work-area' } });
-          throw new Error('spawn blew up');
-        },
-      }),
-      stdout,
-      stderr,
-    }), /spawn blew up/u);
-    assert.equal(releases.length, 1, 'released once, before the spawn, and not again in the finally');
-    const lease = readLease(PATH);
-    assert.equal(lease.held, true);
-    assert.equal(lease.holder, 'runner');
-    assert.equal(lease.errand, 'merge memoro #812');
-    assert.equal(readDeploys({ MC_WORK_ROOT: work })[0].outcome, 'failed');
+  it('a lease a merge round holds is in nobody\'s way: the deploy runs at once', async () => {
+    claimLease({ repoPath: PATH, errand: 'merge round for memoro #812', holder: { name: 'merger', kind: 'shell' } });
+    const { out, stdout, stderr } = io();
+    let ran = 0;
+    const code = await run([], { ...deps({ spawnDeploy: async () => { ran += 1; return { code: 0 }; } }), stdout, stderr });
+    assert.equal(code, 0);
+    assert.equal(ran, 1);
+    assert.doesNotMatch(out.stderr, /waiting|held by/u);
+    assert.equal(readLease(PATH).holder, 'merger', 'the merge round\'s lease is left as it was');
   });
 
-  it('releases the lease when something under it throws', async () => {
+  it('a throw in the deployer completes the row as failed, and goes on up', async () => {
     const { stdout, stderr } = io();
     const git = fakeGit({ state: { [MAIN_WT]: { dirty: [], ahead: 0, behind: 2 } } });
     const throwing = (cwd, args) => {
@@ -807,42 +786,24 @@ describe('mc deploy — the script beside the lease', () => {
       return git(cwd, args);
     };
     await assert.rejects(run([], { ...deps({ git: throwing }), stdout, stderr }), /git blew up/u);
-    assert.equal(readLease(PATH).held, false);
+    assert.equal(readDeploys({ MC_WORK_ROOT: work })[0].outcome, 'failed');
   });
 
-  it('returns the script\'s exit code, and releases the lease anyway', async () => {
+  it('returns the script\'s exit code', async () => {
     const { out, stdout, stderr } = io();
     const code = await run([], { ...deps({ spawnDeploy: async () => ({ code: 17 }) }), stdout, stderr });
     assert.equal(code, 17);
-    assert.equal(readLease(PATH).held, false);
     assert.match(out.stderr, /npm run deploy exited 17/u);
   });
 
-  it('releases the lease when the spawn itself throws', async () => {
+  it('a spawn that throws is a failed row', async () => {
     const { stdout, stderr } = io();
     await assert.rejects(run([], {
       ...deps({ spawnDeploy: async () => { throw new Error('spawn blew up'); } }),
       stdout,
       stderr,
     }), /spawn blew up/u);
-    assert.equal(readLease(PATH).held, false);
-  });
-
-  it('waits eight minutes for a lease that stays held, then refuses with exit 3 and runs nothing', async () => {
-    claimLease({ repoPath: PATH, errand: 'gate round #591', holder: { name: 'runner', kind: 'work-area' } });
-    const { out, stdout, stderr } = io();
-    let ran = 0;
-    const code = await run([], {
-      ...deps({ spawnDeploy: async () => { ran += 1; return { code: 0 }; }, ...fakeClock() }),
-      stdout,
-      stderr,
-    });
-    assert.equal(code, 3);
-    assert.equal(ran, 0);
-    assert.match(out.stderr, /is held by runner for “gate round #591” — waiting for the window/u);
-    assert.equal(out.stderr.match(/waiting for the window/gu).length, 1, 'said once, not every poll');
-    assert.match(out.stderr, /still waiting for .*, held by runner for “gate round #591”, after 8 min — run this again; nothing was deployed/u);
-    assert.equal(readLease(PATH).holder, 'runner');
+    assert.equal(readDeploys({ MC_WORK_ROOT: work })[0].outcome, 'failed');
   });
 
   it('says so and deploys nothing when the checkout has no origin/main', async () => {
@@ -851,55 +812,92 @@ describe('mc deploy — the script beside the lease', () => {
     assert.equal(code, 1);
     assert.match(out.stderr, /has no origin\/main/u);
   });
-});
 
-/**
- * The window and the other deploy. Since step 1 the lease covers seconds of a
- * deploy, so a held one is a merge round's gate to wait out, and what keeps two
- * deploys apart is the record: a `running` row whose process is alive.
- */
-describe('mc deploy — waiting for the window, and one deploy at a time', () => {
-  it('waits for a held lease, takes it when released, and ships the sha read after the fast-forward', async () => {
-    claimLease({ repoPath: PATH, errand: 'merge round for memoro #812', holder: { name: 'runner', kind: 'work-area' } });
-    // The merge round lands #812 while it holds the lease: origin/main moves,
-    // and the deploy fast-forwards to it once its turn comes.
-    const LANDED = '8e431c6aa0b1c2d3e4f5061728394a5b6c7d8e9f';
-    const base = fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, state: { [MAIN_WT]: { dirty: [], ahead: 0, behind: 1 } } });
-    let origin = SHA;
-    let head = SHA;
-    const git = (cwd, args) => {
-      if (args[0] === 'rev-parse') return args.at(-1) === 'HEAD' ? head : origin;
-      if (args[0] === 'merge') { base.calls.push({ cwd, args, lease: readLease(PATH) }); head = origin; return ''; }
-      return base(cwd, args);
-    };
-    const clock = fakeClock({
-      onSleep: (slept) => {
-        if (slept === 2) {
-          origin = LANDED;
-          releaseLease({ repoPath: PATH, holder: { name: 'runner', kind: 'work-area' } });
-        }
-      },
-    });
+  it('a deployer that could not be started is a failed row and exit 1', async () => {
     const { out, stdout, stderr } = io();
-    const seen = [];
+    const code = await run([], { ...deps({ startDeployer: () => ({ pid: null, error: 'spawn EACCES' }) }), stdout, stderr });
+    assert.equal(code, 1);
+    assert.match(out.stderr, /the deployer could not be started \(spawn EACCES\) — nothing was deployed/u);
+    const row = lastAttempt({ MC_WORK_ROOT: work });
+    assert.equal(row.outcome, 'failed');
+    assert.equal(row.stopped_at, 'start');
+  });
+
+  it('the real start: detached, the job as its argument, its output in deploy.log', () => {
+    const calls = [];
+    const job = { key: { started: 'x', sha: SHA }, sha: SHA, worktree: MAIN_WT, own: false, holder: 'm', json: false, root: work };
+    const started = startDeployerDefault(job, {
+      env: { PATH: '/bin' },
+      spawnProcess: (bin, args, options) => { calls.push({ bin, args, options }); return { pid: 31337, unref() {} }; },
+    });
+    assert.deepEqual(started, { pid: 31337, log: deployLogPath(work) });
+    assert.equal(calls[0].bin, process.execPath);
+    assert.match(calls[0].args[0], /deploy-run\.js$/u);
+    assert.deepEqual(JSON.parse(calls[0].args[1]), job);
+    assert.equal(calls[0].options.detached, true);
+    assert.equal(calls[0].options.cwd, MAIN_WT);
+    assert.equal(calls[0].options.stdio[0], 'ignore', 'the deployer asks nothing');
+  });
+
+  it('the terminal that asked follows the deployer\'s log, and answers with the row', async () => {
+    const env = { MC_WORK_ROOT: work };
+    const log = deployLogPath(work);
+    mkdirSync(join(work, 'runner', 'log'), { recursive: true });
+    let polls = 0;
+    const { out, stdout, stderr } = io();
     const code = await run([], {
-      ...deps({ git, ...clock, spawnDeploy: async (options) => { seen.push({ ...options, lease: readLease(PATH) }); return { code: 0 }; } }),
+      ...deps({
+        startDeployer: () => {
+          writeFileSync(log, '▸ Deploy source preflight\n');
+          return { pid: 31337, log };
+        },
+        alive: (pid) => pid === 31337 && polls < 2,
+        sleep: async () => {
+          polls += 1;
+          if (polls === 2) {
+            writeFileSync(log, '▸ Deploy source preflight\n▸ wrangler deploy\nmc: deployed — build 1 · 1a2b3c4 verified live\n');
+            const [row] = readDeploys(env);
+            // Completed with the sha that shipped — main moved after the question.
+            recordEnd({ started: row.started, sha: row.sha }, { outcome: 'deployed', sha: LIVE }, env);
+          }
+        },
+      }),
       stdout,
       stderr,
     });
     assert.equal(code, 0);
-    assert.equal(clock.slept(), 2, 'two polls, on merge\'s cadence');
-    assert.match(out.stderr, /is held by runner for “merge round for memoro #812” — waiting for the window/u);
-    assert.match(out.stderr, /waited 30s — the window is ours/u);
-    const ff = base.calls.find((call) => call.args[0] === 'merge');
-    assert.equal(ff.lease.errand, `deploy ${SHA}`, 'the fast-forward runs under the deploy\'s own lease');
-    assert.equal(seen[0].sha, LANDED);
-    assert.equal(seen[0].lease.held, false);
-    const row = lastAttempt({ MC_WORK_ROOT: work });
-    assert.equal(row.sha, LANDED, 'the row names the sha main stood on when the deploy got its turn');
-    assert.equal(row.outcome, 'deployed');
+    assert.match(out.stdout, /mc: deploying 1a2b3c4 in its own process \(pid 31337\) — merges go on beside it/u);
+    assert.match(out.stdout, /▸ Deploy source preflight\n▸ wrangler deploy\nmc: deployed/u);
+    assert.equal(out.stdout.match(/Deploy source preflight/gu).length, 1, 'each line once');
   });
 
+  it('^C stops the watching and not the deploy', async () => {
+    const signals = new EventEmitter();
+    const log = deployLogPath(work);
+    mkdirSync(join(work, 'runner', 'log'), { recursive: true });
+    writeFileSync(log, '');
+    const { out, stdout } = io();
+    const code = await followDeploy({
+      log, pid: 31337, env: { MC_WORK_ROOT: work }, stdout,
+      deps: { alive: () => true, signals, sleep: async () => { signals.emit('SIGINT'); } },
+    });
+    assert.equal(code, 130);
+    assert.match(out.stdout, /stopped watching — the deploy goes on \(pid 31337\); mc deploy --follow watches again/u);
+  });
+
+  it('--follow with nothing running says so', async () => {
+    const { out, stdout, stderr } = io();
+    assert.equal(await run(['--follow'], { ...deps(), stdout, stderr }), 0);
+    assert.match(out.stdout, /^mc: no deploy is running$/mu);
+  });
+});
+
+/**
+ * The other deploy. What keeps two deploys apart is the record: a `running`
+ * row whose process is alive, read once before the question and again under
+ * the lock, where the deployer's own row is written.
+ */
+describe('mc deploy — one deploy at a time', () => {
   it('refuses a second deploy while one is running, with its sha and start time from deploys.tsv', async () => {
     const env = { MC_WORK_ROOT: work };
     recordStart({ sha: LIVE, holder: 'martin@laptop', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, env);
@@ -919,33 +917,28 @@ describe('mc deploy — waiting for the window, and one deploy at a time', () =>
     assert.equal(ran, 0);
     assert.equal(asked, 0, 'nobody is asked a question that has no yes');
     assert.match(out.stderr, /a deploy of 9f8e7d6 has been running since 2026-10-07 19:14 \(martin@laptop, pid 4242\) — one deploy at a time; nothing was deployed/u);
-    assert.equal(readLease(PATH).held, false, 'the lease was never taken');
     const [running, refused] = readDeploys(env);
     assert.equal(running.outcome, 'running', 'the running deploy\'s row is left alone');
     assert.equal(refused.outcome, 'refused');
     assert.match(refused.note, /a deploy of 9f8e7d6 is running — started 2026-10-07T19:14:22.167Z by martin@laptop/u);
   });
 
-  it('a deploy that started while this one waited is refused under the lease', async () => {
+  it('a deploy that started while this one was asking is refused under the lock', async () => {
     const env = { MC_WORK_ROOT: work };
-    claimLease({ repoPath: PATH, errand: `deploy ${LIVE}`, holder: { name: 'other', kind: 'shell' } });
-    const clock = fakeClock({
-      onSleep: () => {
-        recordStart({ sha: LIVE, holder: 'other', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, env);
-        releaseLease({ repoPath: PATH, holder: { name: 'other', kind: 'shell' } });
-      },
-    });
     const { out, stdout, stderr } = io();
     let ran = 0;
     const code = await run([], {
-      ...deps({ alive: (pid) => pid === 4242, ...clock, spawnDeploy: async () => { ran += 1; return { code: 0 }; } }),
+      ...deps({
+        alive: (pid) => pid === 4242,
+        ask: () => { recordStart({ sha: LIVE, holder: 'other', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, env); return 'y'; },
+        spawnDeploy: async () => { ran += 1; return { code: 0 }; },
+      }),
       stdout,
       stderr,
     });
     assert.equal(code, 1);
     assert.equal(ran, 0);
     assert.match(out.stderr, /a deploy of 9f8e7d6 has been running since 2026-10-07 19:14/u);
-    assert.equal(readLease(PATH).held, false, 'its own lease is given back');
   });
 
   it('a running row whose process is gone is closed as failed, not a deploy in progress', async () => {
@@ -1078,15 +1071,6 @@ describe('mc deploy — the record', () => {
     const { stdout, stderr } = io();
     assert.equal(await run([], { ...deps({ interactive: () => false }), stdout, stderr }), 2);
     assert.match(lastAttempt({ MC_WORK_ROOT: work }).note, /no terminal/u);
-  });
-
-  it('a repository held past the wait is a refused row naming who holds it', async () => {
-    claimLease({ repoPath: PATH, errand: 'gate round #591', holder: { name: 'runner', kind: 'work-area' } });
-    const { stdout, stderr } = io();
-    await run([], { ...deps(fakeClock()), stdout, stderr });
-    const row = lastAttempt({ MC_WORK_ROOT: work });
-    assert.equal(row.outcome, 'refused');
-    assert.match(row.note, /held by runner — gate round #591/u);
   });
 
   it('--dry-run deploys nothing and records nothing', async () => {
