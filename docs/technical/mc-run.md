@@ -603,10 +603,11 @@ The prompt is `stepPrompt`: you are in this workarea, your plan is on disk at
 this path, do `steps[i]`, its `done_when` is your success criterion, say in the
 PR body how you verified it, what in the plan file you may edit, and — if the
 contract must change — stop with the step `blocked` and say so in the PR. Then
-the ending, since ruling 21: build it, set the step `done` with its `pr`, open
-the pull request, and run `mc merge <repo> <pr>` yourself until it says merged
-— a red comes back to the same session, which fixes it and runs it again;
-giving up is `mc step failed --reason "…"`. Below that comes
+the ending, since rulings 21 and 30: build it, open the pull request, run
+`mc merge <repo> <pr>` yourself — it queues the pull request for the merger
+and returns — and stop; a red comes back to the step's next session, whose
+prompt opens with the pull request and the gate's reason; giving up is
+`mc step failed --reason "…"`. Below that comes
 **the part of the plan the step needs, not the file**: rendered from the parsed
 plan, each part under a `----- <heading> -----` line the session can search
 for — `goal`, `contract`, `out_of_scope`, `success_criteria` (index, `met`,
@@ -699,6 +700,13 @@ old, and nothing else.
 
 ### The merge
 
+**Since ruling 30 (2026-10-09) the runner lands nothing in its own process.**
+A step's pull request goes to the merger's queue — by the session's own
+`mc merge`, or by `landForSession` when the session ended `success` without
+asking — and the step is `landing` until the merger writes `done`, or sends a
+red back as `ready` (*The register*). The round the merger runs is the one
+below, and so is everything said about what it reads back.
+
 **The runner lands through `mc merge` and nothing else** (Martin, 2026-09-02).
 `repo-merge.js`'s round, called in this process rather than shelled out to,
 because the runner *is* mc: it takes the repository's lease and holds it across
@@ -755,11 +763,13 @@ runner does not review; `mc brief` is what shows Martin what merged.
 
 **A refused `mc merge` was the runner's, until 2026-09-12.** A round the
 verb could not land wrote the pull request into `~/mc/runner/merges.json`
-and a merge lane in the runner landed it, or gave it one repair. Both are
-gone with ruling 21: `mc merge` waits out a busy gate itself
-([`mc-merge.md`](mc-merge.md) § *One round at a time*), a red is the
-caller's to fix, and `merges.json` holds only the waiters — every `mc merge`
-standing in line, with its pid — which is what the page's MERGES draws.
+and a merge lane in the runner landed it, or gave it one repair. Both went
+with ruling 21. Since ruling 30 (2026-10-09) `merges.json` is the merger's
+queue: every pull request `mc merge` or the runner handed it, landed one at a
+time by one process ([`mc-merge.md`](mc-merge.md) § *One round at a time*),
+which is what the page's MERGES draws. The runner reads it with the world:
+jobs and no live merger starts one (`sweepLanding`), and a step `landing`
+whose job is in no queue is `failed` with that reason.
 
 ### Held before merge — history
 
@@ -1030,11 +1040,11 @@ thing it writes into a repository: a blocked step (below).
 - **`projects/<project>.json`** — the register: where every step of every
   project stands (*The register*). Written by the runner and by `mc step` and
   `mc merge`, never by a pull request.
-- **`merges.json`** — every `mc merge` waiting for its turn at the gate, with
-  its pid (`mc-merge.md` § *One round at a time*): repository, number, branch,
-  reason, stop, `since` and who typed it. Written by the verb, in whatever
-  terminal it was typed in, and emptied by the lane one entry at a time; see
-  *The merge*.
+- **`merges.json`** — the merger's queue (`mc-merge.md` § *One round at a
+  time*): repository and its path, number, branch, who asked, the step,
+  `since`, and `queued` or `landing`. Written by `mc merge` and the runner,
+  emptied by the merger one job at a time. **`merger.json`** is the merger's
+  pid, **`log/merger.log`** what it said; see *The merge*.
 - **`block/<repo>/`** — the worktree a block is written in, existing only while
   it is written (below).
 - **`log/closed/<name>/`** — whatever a closed workarea kept beside its

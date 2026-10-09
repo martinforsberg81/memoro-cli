@@ -18,19 +18,12 @@
  * blocks nothing: git and gh are untouched by anything here.
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
-import { writeJsonAtomic } from '../atomic-write.js';
-import { describeRunning, runningRound } from '../gate-lock.js';
-import {
-  MERGE_POLL_MS, MERGE_WAIT_MS, dequeue, dropDeadEntries, enqueue, mergesPath, nextWaiter, parseQueue, queueOrder,
-  queuedFor,
-} from '../merge-queue.js';
 import { planBoundary } from '../merge-boundary.js';
-import { landedPatch, redPatch, remainderOf, stepForMerge } from '../merge-step.js';
-import { listEntries, updateStep } from '../register.js';
-import { pidAlive } from '../status-collect.js';
+import { stepForMerge } from '../merge-step.js';
+import { mergerLogPath, queueMerge } from '../merger.js';
+import { listEntries } from '../register.js';
 import { workRoot } from '../paths.js';
 import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
@@ -283,115 +276,6 @@ function spawnTool(tool) {
   return (args, options = {}) => spawnSync(tool, args, { cwd: options.cwd, encoding: 'utf8' });
 }
 
-/**
- * `mc merge`'s own wait: a held gate lock or a held repository lease no
- * longer refuses at once. The call writes itself into `merges.json` as a
- * waiter — `pid` and all — and polls until it is the oldest live entry with
- * both free, or `MERGE_WAIT_MS` runs out.
- *
- * A free machine returns `'go'` without queueing: criterion is that a call
- * that never had to wait leaves no trace of one. It does take away this pull
- * request's own entry, left by an earlier call that timed out.
- *
- * `t0`, when given, is the start of the whole wait (shared across repeated
- * calls a busy/lease round result sends back here) rather than this call's
- * own — otherwise a round that keeps losing the race for a lock this
- * function itself sees as free would restart the 8-minute clock every time.
- *
- * `contended`, when true, skips the free-machine fast path even if nothing
- * looks held right now: a round just reported `busy`/`lease`, so the lock or
- * lease it lost the race for is real even where this call's own read of it
- * is not — without this, that shape returns `'go'` at once, forever, with no
- * entry, no announcement and no bound. One call therefore owns the whole
- * wait — the entry, the one-time line, the timeout line and its exit —
- * rather than splitting that across this function and its caller.
- *
- * @returns {Promise<'go'|'timeout'>}
- */
-async function waitTurn({ repoPath, opts, root, stderr, deps, t0: sharedT0, contended = false }) {
-  const repo = basename(String(repoPath).replace(/\/+$/u, ''));
-  const pr = Number(opts.pr);
-  const read = deps.read || ((path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } });
-  const write = deps.writeJson || writeJsonAtomic;
-  const alive = deps.alive || pidAlive;
-  const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
-  const now = deps.now || (() => new Date());
-  const readRunningRound = deps.runningRound || runningRound;
-  const readLeaseFn = deps.readLease || readLease;
-  const askGh = deps.gh || spawnTool('gh');
-
-  // The gate lock and the leases live under mc's home, where the round writes
-  // them (repo-gate.js) — not under the work root, which is only where the
-  // queue file is. Read from the work root, neither is ever seen: every wait
-  // answers 'go' at once and the round is retried once a second (2026-09-19).
-  // An orphaned lease — its owner's process is gone (lease-owner.js) — is in
-  // nobody's way: the round's own `claimLease` reaps it, and only a waiter
-  // that goes ever gets that far. Counted as held, three waiters polled behind
-  // a dead round's lease for a morning and none of them reaped it (2026-09-20).
-  const blocking = (lease) => Boolean(lease.held && !lease.orphaned);
-  const startRunning = readRunningRound({ alive });
-  const startLease = readLeaseFn(repoPath);
-  if (!contended && !startRunning && !blocking(startLease)) {
-    // An earlier call for this same pull request that timed out kept its
-    // place, and nothing else takes that entry away: this call is its turn,
-    // so it goes with it. memoro #12353 was drawn as waiting for a day after
-    // it had landed through exactly this path (2026-10-02).
-    const entries = parseQueue(read(mergesPath(root)));
-    if (queuedFor(entries, repo, pr)) write(mergesPath(root), dequeue(entries, { repo, pr }));
-    return 'go';
-  }
-
-  const branched = askGh(['pr', 'view', String(pr), '--json', 'headRefName'], { cwd: repoPath });
-  let branch = null;
-  try { branch = JSON.parse(branched.stdout)?.headRefName || null; } catch { branch = null; }
-
-  const t0 = sharedT0 ?? now().getTime();
-  let announced = false;
-  const behind = (running, lease) => {
-    if (running) return describeRunning(running);
-    if (lease.orphaned) return `${repo}'s orphaned lease (${lease.holder}; pid ${lease.owner_pid} is gone)`;
-    return `${repo} is held by ${lease.holder}`;
-  };
-
-  for (;;) {
-    const running = readRunningRound({ alive });
-    const lease = readLeaseFn(repoPath);
-
-    let entries = dropDeadEntries(parseQueue(read(mergesPath(root))), { alive });
-    entries = enqueue(entries, {
-      repo,
-      pr,
-      branch,
-      reason: behind(running, lease),
-      stopped_at: running ? 'busy' : 'lease',
-      since: now().toISOString(),
-      holder: currentHolder()?.name || null,
-      pid: process.pid,
-    });
-    write(mergesPath(root), entries);
-
-    const turn = nextWaiter(entries, { leaseHeld: (candidate) => (candidate === repo ? blocking(lease) : false) });
-    if (turn && turn.repo === repo && turn.pr === pr && turn.pid === process.pid && !running && !blocking(lease)) {
-      write(mergesPath(root), dequeue(entries, { repo, pr }));
-      if (announced) stderr.write(`mc: waited ${Math.round((now().getTime() - t0) / 1000)}s\n`);
-      return 'go';
-    }
-
-    if (!announced) {
-      const ahead = Math.max(0, queueOrder(entries.filter((e) => e.pid != null)).findIndex((e) => e.repo === repo && e.pr === pr));
-      stderr.write(`mc: waiting behind ${behind(running, lease)} — ${ahead} ahead of this one\n`);
-      announced = true;
-    }
-
-    if (now().getTime() - t0 >= MERGE_WAIT_MS) {
-      stderr.write(`mc: still waiting behind ${behind(running, lease)} after 8 min — run this again; the place in the queue is kept\n`);
-      return 'timeout';
-    }
-
-    await sleep(MERGE_POLL_MS);
-  }
-}
-
 export async function gate(opts, { stdout, stderr, ...deps }) {
   const repoPath = await (deps.resolveRepo || resolveRepoPath)(opts.repo);
   if (!repoPath) {
@@ -440,98 +324,76 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
     }
   }
 
+  // One pull request to land is the merger's (ruling 30): the step is
+  // `landing`, the job is queued, and this call returns. What comes of it is
+  // the register's word (and `merger.log`'s), not this process's.
+  if (single) return queueForMerger({ repoPath, opts, holder, root, stdout, stderr, deps });
+
   const round = { repoPath, pr: opts.pr, prs: opts.prs, full: Boolean(opts.full), mode, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
-
-  let report;
-  if (single) {
-    const nowFn = deps.now || (() => new Date());
-    const waitStart = nowFn().getTime();
-    let contended = false;
-    for (;;) {
-      const turn = await waitTurn({ repoPath, opts, root, stderr, deps, t0: waitStart, contended });
-      if (turn === 'timeout') return 3;
-      // Before any work: a round that is killed mid-flight writes no end
-      // line, and the start is the only trace it will ever leave (2026-08-30).
-      recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
-      report = await (deps.mergeRound || runMergeRound)(round);
-      // Every round leaves a line — merged, stopped, refused — so "has the
-      // gate ever caught anything?" is a count, not a reading of survivors (A7).
-      recordRound(report, { mode });
-      // Lost the race between "both free" and the round's own lock: this is
-      // still a wait, not a refusal, so go back to waiting rather than fall
-      // through to the lane below — `busy`/`lease` no longer queue. `contended`
-      // tells the next `waitTurn` call that the lock or lease it just lost is
-      // real even where its own read says free, so it enters its loop (entry,
-      // announcement, timeout) rather than returning `'go'` again at once.
-      if (report.stopped_at === 'busy' || report.stopped_at === 'lease') {
-        contended = true;
-        continue;
-      }
-      break;
-    }
-  } else {
-    recordRoundStart({
-      repo: repoPath, mode, holder: holder?.name || null,
-      prs: opts.prs?.length ? opts.prs : [opts.pr].filter(Boolean),
-    });
-    report = opts.check ? await runGate(round) : await (deps.mergeRound || runMergeRound)(round);
-    recordRound(report, { mode });
-  }
-
-  // The register, for a step (ruling 21): `done` and the session ended on
-  // green; the attempt and the reason on anything else, for the same session
-  // to read and fix. Whose step this is comes from `MC_STEP` in the calling
-  // session's environment, else from the register entry the pull request's
-  // branch stands on (merge-step.js). Nothing is queued for anybody any more:
-  // a red is the caller's, whoever calls.
-  const said = [];
-  if (single) {
-    const env = deps.env || process.env;
-    const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
-    for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
-    const askGh = deps.gh || spawnTool('gh');
-    let head = null;
-    let body = null;
-    try {
-      const seen = JSON.parse(askGh(['pr', 'view', String(opts.pr), '--json', 'headRefName,body'], { cwd: repoPath }).stdout);
-      head = seen?.headRefName || null;
-      body = seen?.body || null;
-    } catch { head = null; }
-    const step = stepForMerge({ env, head, entries: listEntries(root, io) });
-    if (step) {
-      const stamp = () => (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
-      try {
-        if (report.ok && report.merged && !report.off_default) {
-          updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: opts.pr, report, now: stamp(), body }), now: stamp(), ...io });
-          said.push(`mc: ${step.project} step ${step.index + 1} is done — the register says so`);
-          if (remainderOf(body)) said.push(`mc: #${opts.pr} names a remainder — it is on the step for the planning session to home`);
-          const pid = step.entry.steps[step.index]?.session?.pid;
-          const alive = deps.alive || pidAlive;
-          if (pid && alive(pid)) {
-            (deps.kill || ((target, signal) => process.kill(target, signal)))(pid, 'SIGTERM');
-            said.push(`mc: the step's session (pid ${pid}) is ended — nothing more for it to do`);
-          }
-        } else if (!report.ok) {
-          updateStep({ root, project: step.project, index: step.index, patch: redPatch({ step: step.entry.steps[step.index], report }), now: stamp(), ...io });
-          said.push(`mc: ${step.project} step ${step.index + 1} — attempt ${(step.entry.steps[step.index]?.attempts || 0) + 1} did not land; fix it here and run this again`);
-        }
-      } catch (error) {
-        said.push(`mc: the register could not be written (${error?.message || error}) — the merge stands as the lines above say`);
-      }
-    }
-  }
+  recordRoundStart({
+    repo: repoPath, mode, holder: holder?.name || null,
+    prs: opts.prs?.length ? opts.prs : [opts.pr].filter(Boolean),
+  });
+  const report = opts.check ? await runGate(round) : await (deps.mergeRound || runMergeRound)(round);
+  recordRound(report, { mode });
 
   const code = report.ok ? 0 : 1;
   if (opts.json) {
     stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    for (const line of said) stderr.write(`${line}\n`);
     return code;
   }
 
   const lines = opts.check ? gateLines(report) : mergeLines(report);
   for (const line of lines) stdout.write(`${line}\n`);
-  for (const line of said) stdout.write(`${line}\n`);
   return code;
+}
+
+/**
+ * `mc merge <repo> <pr>`, past the door: the pull request handed to the
+ * merger (`merger.js`), and the caller told where it stands. The step it is —
+ * from `MC_STEP` in a runner session's environment, else from the branch
+ * (merge-step.js) — is `landing` in the register; the merger writes `done`,
+ * or sends a red back as `ready` for the step's next session. Exit 0: the
+ * pull request is queued, which is all this call can know.
+ */
+function queueForMerger({ repoPath, opts, holder, root, stdout, stderr, deps }) {
+  const env = deps.env || process.env;
+  const repo = basename(String(repoPath).replace(/\/+$/u, ''));
+  const askGh = deps.gh || spawnTool('gh');
+  let head = null;
+  try {
+    head = JSON.parse(askGh(['pr', 'view', String(opts.pr), '--json', 'headRefName'], { cwd: repoPath }).stdout)?.headRefName || null;
+  } catch { head = null; }
+  const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
+  for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
+  const step = stepForMerge({ env, head, entries: listEntries(root, io) });
+  let queued;
+  try {
+    queued = queueMerge({
+      root, repo, repoPath, pr: opts.pr, branch: head, holder, step,
+      now: deps.now ? deps.now() : new Date(), env, ...io,
+      ...(deps.startMerger ? { start: deps.startMerger } : {}),
+    });
+  } catch (error) {
+    stderr.write(`mc: #${opts.pr} could not be queued (${error?.message || error}) — nothing was merged\n`);
+    return 1;
+  }
+  const { place, merger, already } = queued;
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({
+      queued: true, repo, pr: Number(opts.pr), place, merger_pid: merger?.pid ?? null,
+      step: step ? { project: step.project, index: step.index } : null,
+    }, null, 2)}\n`);
+    return 0;
+  }
+  const where = already
+    ? 'the merger is landing it now'
+    : (place === 0 ? 'it is next' : `${place} ahead of it`);
+  stdout.write(`mc: #${opts.pr} is queued for the merger — ${where}\n`);
+  if (merger?.pid) stdout.write(`mc: the merger (pid ${merger.pid}${merger.started ? ', just started' : ''}) lands it; follow it in ${mergerLogPath(root)}\n`);
+  else stdout.write(`mc: no merger could be started${merger?.error ? ` (${merger.error})` : ''} — the job waits in the queue for the next mc merge or runner round\n`);
+  if (step) stdout.write(`mc: ${step.project} step ${step.index + 1} is landing — green makes it done; red sends it back to the step's next session\n`);
+  return 0;
 }
 
 /**

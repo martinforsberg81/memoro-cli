@@ -649,9 +649,9 @@ function nextLines(lines, c, wide, next) {
 export const QUEUED_DRAWN = 6;
 
 /**
- * One row per `mc merge` waiting for its turn at the gate: the repository,
- * the number, what it is waiting behind, and since when. Green, because a
- * waiter does not wait on anyone — the round ahead of it ends in minutes. The
+ * One row per pull request in the merger's queue: the repository, the
+ * number, the step it is (or its branch), and since when. Green, because a
+ * queued pull request waits on nobody — the merger takes it in turn. The
  * repository is drawn rather than a project: a waiting pull request need not
  * belong to one, and the number is only a number until the repository is
  * beside it.
@@ -661,7 +661,8 @@ function queuedLines(lines, c, wide, queued) {
   for (const item of queued.items.slice(0, QUEUED_DRAWN)) {
     const left = `· ${item.repo || 'unknown'}  #${item.pr}  `;
     const since = item.since ? `  (since ${when(item.since)})` : '';
-    const reason = clip(one(item.reason), Math.max(8, wide - 7 - left.length - since.length));
+    const what = item.step ? `${item.step.project} step ${item.step.index + 1}` : (item.branch || 'no step');
+    const reason = clip(one(item.state === 'landing' ? `${what} — the merger has it` : what), Math.max(8, wide - 7 - left.length - since.length));
     lines.push(`       ${paint(c, [
       { text: left, styles: ['green', 'bold'] },
       { text: reason, styles: ['green'] },

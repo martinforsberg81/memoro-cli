@@ -53,7 +53,7 @@ import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
 import { GITHUB_STATE, githubFailures } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
-import { dropDeadEntries, mergesPath, queueEntries, queueOrder } from './merge-queue.js';
+import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
 import { runningMerge } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.js';
@@ -531,18 +531,19 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
 }
 
 /**
- * MERGES — the one round running now, and the waiters behind it: every
- * `mc merge` standing in line for the gate (`merges.json`, with its pid).
+ * MERGES — the one round running now, and the merger's queue behind it
+ * (`merges.json`, ruling 30): every pull request `mc merge` or the runner has
+ * handed the merger and it has not answered yet.
  *
  * `landing` is `runningMerge`'s own object (merges-collect.js) or null — this
  * function does not read the lock itself, so its tests never touch a real
  * one. The held rows went with `held.json` (ruling 21): a step that did not
  * land is `failed` in the register and drawn where every other plan state is.
  */
-export function mergesSection({ landing = null, queued = [], now, alive = () => true } = {}) {
-  // A waiter whose process is gone is not waiting: nothing would ever take it
-  // off the page but another `mc merge` happening to poll (2026-10-02).
-  const queuedItems = queueOrder(dropDeadEntries(queueEntries(queued), { alive }));
+export function mergesSection({ landing = null, queued = [], now } = {}) {
+  // The one the round is landing is drawn as the round, not twice.
+  const queuedItems = queueOrder(queueEntries(queued))
+    .filter((item) => !(landing && Number(landing.pr) === item.pr && item.state === 'landing'));
   void now;
   return {
     landing,
@@ -1207,7 +1208,7 @@ export async function collectPage({
       }),
     }),
     merges: mergesSection({
-      landing: merges({ repos: present, alive }), queued: queuedForMerge, now, alive,
+      landing: merges({ repos: present, alive }), queued: queuedForMerge, now,
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes: programmesSection({

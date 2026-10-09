@@ -1,0 +1,311 @@
+/**
+ * The merger — one process that lands the pull requests `mc merge` queued,
+ * one at a time (ruling 30, 2026-10-09).
+ *
+ * Martin: *"Jag ser framför mig att merge är en separat pid. När man lägger
+ * något i kön, dvs. mc merge repo pr så bara hamnar det i en kö. Samma pid kör
+ * sedan en i taget av de pr som den fått till sig. Just nu blir flera
+ * processer hängande eller väntande på detta."*
+ *
+ * Until then every `mc merge` waited for the gate itself, and so did the
+ * runner's own landing of a session's pull request (ruling 25): six lanes
+ * could be six processes polling one lock, each giving up after eight
+ * minutes and asking to be run again. Now:
+ *
+ *   - `queueMerge` is what `mc merge` and the runner call: the step (if the
+ *     pull request is one) is `landing` in the register, the job is in
+ *     `merges.json`, and a merger is running. It returns at once.
+ *   - `serve` is the merger: take the oldest job, run the round, write the
+ *     register, drop the job, take the next; leave when the queue is empty.
+ *   - `merger.json` is its pid. Taken with `O_EXCL`; a file naming a dead pid
+ *     is a merger that was killed, and the next `mc merge` (or the runner's
+ *     next read of the world) starts another, which lands the job the dead
+ *     one had — the round itself says whether it already merged.
+ *
+ * The gate lock and the repository lease are what they were: the merger's
+ * round takes both, so a person's `mc test` and the merger never measure at
+ * once. The merger waits them out; it has nobody to give up to.
+ */
+import { spawn as realSpawn } from 'node:child_process';
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { writeJsonAtomic } from './atomic-write.js';
+import { runningRound } from './gate-lock.js';
+import {
+  dequeue, enqueue, markLanding, mergesPath, nextJob, parseQueue, placeOf, queuedFor,
+} from './merge-queue.js';
+import { landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
+import { readEntry, realLock, updateStep } from './register.js';
+import { readLease } from './repo-lease.js';
+import { runMergeRound } from './repo-merge.js';
+import { recordRound, recordRoundStart } from './repo-round-log.js';
+import { tsvHeader, tsvRow } from './run-plan.js';
+import { pidAlive } from './status-collect.js';
+
+const MERGER_RUN = fileURLToPath(new URL('./merger-run.js', import.meta.url));
+
+/** How often the merger looks again at a gate lock or a lease somebody else holds. */
+export const MERGER_POLL_MS = 15 * 1000;
+
+/**
+ * What a session's environment must not hand the merger: the merger outlives
+ * the session that started it and lands everybody's pull requests, so a
+ * `MC_STEP` it inherited would name one step for all of them.
+ */
+const SESSION_ENV = ['MC_STEP', 'MC_PROJECT', 'MC_REPO', 'MC_WORKAREA', 'MC_SCRATCH'];
+
+export function mergerPath(root) {
+  return join(root, 'runner', 'merger.json');
+}
+
+export function mergerLogPath(root) {
+  return join(root, 'runner', 'log', 'merger.log');
+}
+
+const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+
+/** The merger running now — `{ pid, since }` — or null. A dead pid is nobody. */
+export function readMerger({ root, read = realRead, alive = pidAlive } = {}) {
+  let raw = null;
+  try { raw = JSON.parse(read(mergerPath(root)) || 'null'); } catch { return null; }
+  if (!Number.isInteger(raw?.pid) || !alive(raw.pid)) return null;
+  return raw;
+}
+
+/**
+ * This process is the merger now, or another one is. One `O_EXCL` create; a
+ * file naming a dead pid — or this process, from an earlier take — is taken
+ * over.
+ */
+export function takeMerger({ root, alive = pidAlive, now = new Date(), pid = process.pid } = {}) {
+  const path = mergerPath(root);
+  mkdirSync(dirname(path), { recursive: true });
+  for (let tries = 0; tries < 3; tries += 1) {
+    try {
+      const fd = openSync(path, 'wx', 0o644);
+      writeSync(fd, JSON.stringify({ pid, since: now.toISOString() }));
+      closeSync(fd);
+      return true;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') return false;
+      let held = null;
+      try { held = JSON.parse(realRead(path) || 'null'); } catch { held = null; }
+      if (held?.pid && held.pid !== pid && alive(held.pid)) return false;
+      try { rmSync(path, { force: true }); } catch { /* raced */ }
+    }
+  }
+  return false;
+}
+
+/** Give it back — only if it is still this process's. */
+export function releaseMerger({ root, pid = process.pid } = {}) {
+  try {
+    const held = JSON.parse(realRead(mergerPath(root)) || 'null');
+    if (held?.pid !== pid) return false;
+    rmSync(mergerPath(root), { force: true });
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * A merger, running: the one there is, or a new one started detached with
+ * its output in `merger.log`. `{ pid, started }`; `pid` is null when the
+ * spawn itself failed, and the job waits in the queue for the next start.
+ */
+export function startMerger({ root, env = process.env, spawn = realSpawn, alive = pidAlive } = {}) {
+  const running = readMerger({ root, alive });
+  if (running) return { pid: running.pid, started: false };
+  const log = mergerLogPath(root);
+  let fd = null;
+  try {
+    mkdirSync(dirname(log), { recursive: true });
+    fd = openSync(log, 'a', 0o644);
+    const childEnv = { ...env, MC_WORK_ROOT: env.MC_WORK_ROOT || root };
+    for (const key of SESSION_ENV) delete childEnv[key];
+    const child = spawn(process.execPath, [MERGER_RUN, '--root', root], {
+      cwd: root, detached: true, stdio: ['ignore', fd, fd], env: childEnv,
+    });
+    child.unref();
+    return { pid: child.pid ?? null, started: true };
+  } catch (error) {
+    return { pid: null, started: false, error: error?.message || String(error) };
+  } finally {
+    if (fd != null) try { closeSync(fd); } catch { /* closed */ }
+  }
+}
+
+/**
+ * Hand a pull request to the merger. The register first — the step is
+ * `landing` with its pull request — then the job, then a merger to take it.
+ * Returns `{ place, merger, already }`: `place` 0 is next, `already` when the
+ * merger is landing this very pull request now.
+ */
+export function queueMerge({
+  root, repo, repoPath, pr, branch = null, holder = null, step = null,
+  now = new Date(), env = process.env,
+  read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
+  lock = realLock, start = startMerger,
+} = {}) {
+  const stamp = now.toISOString().replace(/\.\d{3}Z$/u, 'Z');
+  if (step) {
+    updateStep({ root, project: step.project, index: step.index, patch: landingPatch({ pr, branch }), now: stamp, read, write, lock });
+  }
+  const job = {
+    repo, repo_path: repoPath, pr: Number(pr), branch, holder, since: stamp, state: 'queued',
+    step: step ? { project: step.project, index: step.index } : null,
+  };
+  const entries = lock(root, () => {
+    const next = enqueue(parseQueue(read(mergesPath(root))), job);
+    write(mergesPath(root), next);
+    return next;
+  });
+  const already = queuedFor(entries, repo, pr)?.state === 'landing';
+  const merger = start({ root, env });
+  return { place: placeOf(entries, repo, pr), merger, already };
+}
+
+/* ------------------------------------------------------------------ serve */
+
+/**
+ * One job, landed or answered: wait while somebody else measures, run the
+ * round, record it, write the step. Returns the round's report.
+ */
+export async function landJob(job, {
+  root, mergeRound = runMergeRound, sleep, say, gh = null,
+  readRunningRound = runningRound, readLeaseFn = readLease, alive = pidAlive,
+  now = () => new Date(), read = realRead, write, lock = realLock,
+  recordStart = recordRoundStart, record = recordRound, appendRun = null,
+} = {}) {
+  const label = `${job.repo} #${job.pr}`;
+  const t0 = now().getTime();
+  let report = null;
+  let said = null;
+  for (;;) {
+    // Waited for before the round rather than inside it, so a busy gate is
+    // not a round-log line every fifteen seconds. An orphaned lease is in
+    // nobody's way: the round's own claim reaps it.
+    const running = readRunningRound({ alive });
+    const lease = readLeaseFn(job.repo_path);
+    const blocking = lease?.held && !lease.orphaned;
+    if (running || blocking) {
+      const why = running ? `another gate round (${running.repo || 'a repository'} #${running.pr ?? '?'}, pid ${running.pid})` : `${job.repo} is held by ${lease.holder}`;
+      if (why !== said) { say(`${label}: waiting behind ${why}`); said = why; }
+      await sleep(MERGER_POLL_MS);
+      continue;
+    }
+    recordStart({ repo: job.repo_path, mode: 'merge', holder: job.holder?.name || null, prs: [job.pr] });
+    report = await mergeRound({
+      repoPath: job.repo_path, pr: job.pr, mode: 'merge',
+      ...(job.holder ? { holder: job.holder } : {}),
+      onProgress: (message) => say(`${label}: ${message}`),
+    });
+    record(report, { mode: 'merge' });
+    // Lost the race between "both free" and the round's own lock.
+    if (!shouldWait(report)) break;
+    await sleep(MERGER_POLL_MS);
+  }
+
+  const seconds = Math.round((now().getTime() - t0) / 1000);
+  const landed = Boolean(report?.ok && report.merged && !report.off_default);
+  say(landed
+    ? `${label}: merged into ${report.merged_into || 'main'} as ${String(report.merge_commit || '').slice(0, 7)} (${seconds}s)`
+    : `${label}: not merged — ${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`);
+
+  if (job.step) {
+    const stamp = now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
+    const io = { read, lock, ...(write ? { write } : {}) };
+    try {
+      const standing = readEntry(root, job.step.project, { read })?.steps?.[job.step.index];
+      if (standing?.status === 'done' || standing?.status === 'blocked') {
+        say(`${label}: ${job.step.project} step ${job.step.index + 1} is ${standing.status} — the register is left as it is`);
+      } else if (landed) {
+        let body = null;
+        if (gh) {
+          const seen = gh(['pr', 'view', String(job.pr), '--json', 'body'], { cwd: job.repo_path });
+          try { body = JSON.parse(seen?.stdout || '{}')?.body || null; } catch { body = null; }
+        }
+        updateStep({ root, project: job.step.project, index: job.step.index, patch: landedPatch({ pr: job.pr, report, now: stamp, body }), now: stamp, ...io });
+        say(`${label}: ${job.step.project} step ${job.step.index + 1} is done`);
+      } else {
+        const patch = redPatch({ step: standing, report });
+        updateStep({ root, project: job.step.project, index: job.step.index, patch: { ...patch, pr: job.pr }, now: stamp, ...io });
+        say(patch.status === 'ready'
+          ? `${label}: ${job.step.project} step ${job.step.index + 1} is ready again (attempt ${patch.attempts}) — the next session fixes it on the same pull request`
+          : `${label}: ${job.step.project} step ${job.step.index + 1} failed — ${patch.reason}`);
+      }
+    } catch (error) {
+      say(`${label}: the register could not be written (${error?.message || error}) — the round stands as said above`);
+    }
+  }
+
+  if (appendRun) {
+    try {
+      appendRun({
+        ts: now().toISOString().replace(/\.\d{3}Z$/u, 'Z'),
+        name: job.step?.project || job.repo,
+        kind: 'merge',
+        exit: landed ? 0 : 1,
+        seconds,
+        pr: job.pr,
+        note: landed ? 'merged' : `red,${report?.stopped_at || 'unknown'}`,
+      });
+    } catch { /* the row is a courtesy; the register and the round log carry the answer */ }
+  }
+  return report;
+}
+
+/**
+ * The merger's loop. Returns when the queue is empty or `stopping()` says so
+ * between jobs — a job in flight is always finished, because a round cut in
+ * half is a lease and a lock somebody else has to reap.
+ */
+export async function serve({
+  root, read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
+  lock = realLock, stopping = () => false, say = () => {}, now = () => new Date(),
+  take = () => takeMerger({ root }), release = () => releaseMerger({ root }),
+  land = (job) => landJob(job, { root, say, now, read, lock }),
+} = {}) {
+  if (!take()) { say('another merger is running — leaving'); return 0; }
+  say(`merger ${process.pid} started`);
+  try {
+    for (;;) {
+      if (stopping()) { say('asked to stop — leaving between jobs'); return 0; }
+      const job = lock(root, () => {
+        const entries = parseQueue(read(mergesPath(root)));
+        const next = nextJob(entries);
+        if (next) write(mergesPath(root), markLanding(entries, next, now().toISOString()));
+        return next;
+      });
+      if (!job) {
+        // Released before the last look: an `mc merge` that queued between
+        // the read above and now saw this merger alive and started none, so
+        // the queue is read once more with the file gone — and taken again
+        // if there is work, unless that call's own merger already has it.
+        release();
+        if (!parseQueue(read(mergesPath(root))).length || !take()) { say('the queue is empty — leaving'); return 0; }
+        continue;
+      }
+      say(`${job.repo} #${job.pr}: landing${job.step ? ` (${job.step.project} step ${job.step.index + 1})` : ''}`);
+      try {
+        await land(job);
+      } catch (error) {
+        say(`${job.repo} #${job.pr}: the round threw — ${error?.stack || error}`);
+      }
+      lock(root, () => write(mergesPath(root), dequeue(parseQueue(read(mergesPath(root))), job)));
+    }
+  } finally {
+    release();
+  }
+}
+
+/** A runs.tsv appender for the merger's own rows, header first. */
+export function runsAppender(root, { read = realRead, append } = {}) {
+  const path = join(root, 'runner', 'log', 'runs.tsv');
+  return (row) => {
+    const full = { turns: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-', session: '-', landSeconds: '-', model: '-', ...row };
+    if (read(path) == null) append(path, `${tsvHeader()}\n`);
+    append(path, `${tsvRow(full)}\n`);
+  };
+}

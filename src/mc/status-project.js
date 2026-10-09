@@ -23,14 +23,14 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { defaultRepos, runsFor } from './brief-collect.js';
-import { dropDeadEntries, mergesPath, parseQueue } from './merge-queue.js';
+import { mergesPath, parseQueue, queueOrder } from './merge-queue.js';
 import { runningMerge } from './merges-collect.js';
 import { ageWords } from './page-cache.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { overlayPlans } from './register.js';
-import { machineDetail, machineState, pidAlive } from './status-collect.js';
+import { machineDetail, machineState } from './status-collect.js';
 
 /* ---------------------------------------------------------------- builders */
 
@@ -172,7 +172,8 @@ export function renderProject({
   // request is not in the machine row above — nothing about this project is in
   // the way; the merge is simply somebody else's now.
   for (const entry of queued) {
-    out.push(`  #${entry.pr} is waiting for the gate${entry.since ? ` (since ${when(entry.since)})` : ''} — ${entry.reason}`);
+    if (landing && Number(landing.pr) === entry.pr) continue;
+    out.push(`  #${entry.pr} is in the merge queue${entry.since ? ` (since ${when(entry.since)})` : ''}${entry.state === 'landing' ? ' — the merger has it' : ''}`);
   }
   for (const note of notes) out.push('', `note: ${note}`);
   return `${out.join('\n')}\n`;
@@ -238,7 +239,6 @@ export async function collectProject(name, {
   exec = execAsync,
   read = (path) => readFileSync(path, 'utf8'),
   merges = runningMerge,
-  alive = pidAlive,
 } = {}) {
   const root = workRoot(env);
   const notes = [];
@@ -327,18 +327,19 @@ export async function collectProject(name, {
     // The `mc merge` calls waiting for the gate whose branch is this
     // project's — the same longest-name rule the pull requests above are
     // matched by (project-prs.js), so it holds with GitHub unreachable too.
-    queued: queuedFor(root, read, { name, repo, names: main?.names || [name], alive }),
+    queued: queuedFor(root, read, { name, repo, names: main?.names || [name] }),
     notes,
   };
 }
 
 /** This project's entries in `~/mc/runner/merges.json`, oldest first. */
-function queuedFor(root, read, { name, repo, names, alive }) {
+function queuedFor(root, read, { name, repo, names }) {
   let entries = [];
   try { entries = parseQueue(read(mergesPath(root))); } catch { return []; }
-  // A waiter whose process is gone is not queued, as on the page.
-  return dropDeadEntries(entries, { alive }).filter((entry) => (!entry.repo || !repo || entry.repo === repo)
-    && projectForBranch(entry.branch, names) === name);
+  // Every entry is a job the merger will take (ruling 30); nothing in it is
+  // a process that could have died.
+  return queueOrder(entries).filter((entry) => (!entry.repo || !repo || entry.repo === repo)
+    && (entry.step?.project === name || projectForBranch(entry.branch, names) === name));
 }
 
 /**

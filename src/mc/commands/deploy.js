@@ -35,7 +35,7 @@
  *
  * A held lease is a window to wait for, not a refusal: a merge round holds it
  * for the length of its gate, and the deploy re-claims on `mc merge`'s cadence
- * and bound (`MERGE_POLL_MS`, `MERGE_WAIT_MS` in merge-queue.js), saying once
+ * and bound (`MERGE_POLL_MS`, `MERGE_WAIT_MS` below), saying once
  * who holds it and for what. Eight minutes on, it gives up with exit 3, as the
  * merge does, and a refused row. What keeps two deploys apart is no longer the
  * lease but the record: a `running` row whose process is alive
@@ -73,13 +73,16 @@ import { readSavedReading as readSavedDeps } from '../deps.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
-import { MERGE_POLL_MS, MERGE_WAIT_MS } from '../merge-queue.js';
 import { nightlyReading } from '../nightly-history.js';
 import { mcHome } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { claimLease as realClaim, currentHolder, releaseLease as realRelease } from '../repo-lease.js';
 import { tilde } from '../status-project.js';
 import { scanArgs } from './flags.js';
+
+/** How long, and how often, a deploy waits for a held lease (once `mc merge`'s own wait). */
+const MERGE_WAIT_MS = 8 * 60 * 1000;
+const MERGE_POLL_MS = 15 * 1000;
 
 /** The repository this verb is about. It takes no argument and never will:
  * memoro-cli is not deployed, it is installed. */

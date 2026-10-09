@@ -994,3 +994,35 @@ checkout; runtime or tool is the `package.json` section and nothing else; a
 bump writes only with `--package-lock-only`, never crosses a major unless a
 version is named, and lands only through `mc merge`; the deploy line reads the
 saved reading and makes no call. Carried by `mc-deps/PLAN.json` steps 1–3.
+
+## 30 · `mc merge` queues; one merger lands, one at a time; a red goes to the step's next session
+
+`ruling · 2026-10-09` · raised by Martin at the plan session
+
+Every `mc merge` waited for the gate in its own process — an entry in
+`merges.json` with its pid, a poll every 15 s, exit 3 and "run this again"
+after 8 minutes — and the runner's landing of a session's pull request
+(ruling 25) waited the same way. Six lanes could be six processes standing in
+line for one lock, and a step session spent turns re-running the call.
+
+> "Jag tror vi ska göra om mc merge. Jag ser framför mig att merge är en
+> separat pid. När man lägger något i kön, dvs. mc merge repo pr så bara
+> hamnar det i en kö. Samma pid kör sedan en i taget av de pr som den fått
+> till sig. Just nu blir flera processer hängande eller väntande på detta."
+> … "Och likaså bör deploy också ha en egen pid som kan köras oberoende av
+> merges." … "Vi skulle kunna låta deploy vara utan kö." … "B." (Martin,
+> 2026-10-09, choosing B: the session queues and ends; a red is in the
+> register and the step's next session takes it — over A, the session
+> following its own job.)
+
+So: `mc merge <repo> <pr>` checks the plan boundary, makes the step
+`landing`, queues the job and returns. One process, the merger, lands the
+queue oldest first, one at a time, and writes the register: green `done`;
+red the step `ready` again with the gate's reason and its pull request kept,
+so the next session goes on with the same branch and pull request, and
+`failed` at the third attempt. A queue with no live merger gets one from the
+next `mc merge` or the runner's next read. This amends ruling 21 in one
+point: the red no longer comes back to the session that wrote the code, but
+to the step's next session, told what the gate said. `mc deploy` gets its own
+process too, beside the merger and with no queue: a deploy asked for while
+one runs is refused, as now.

@@ -25,7 +25,8 @@ by a session that judges it; writing there asks a second session to work it
 out again from less than you had.
 
 The practical route to `main` is yours to settle: one branch, one PR, `mc merge <repo> <pr>` (`--docs` for a
-PR inside `docs/` only). `mc merge` decides green and lands nothing red. Never
+PR inside `docs/` only). `mc merge` queues the PR for the merger, which decides
+green and lands nothing red. Never
 `gh pr merge`. Tell Martin the outcome, not the bookkeeping. His, in one line
 with your recommendation: a merge that needed your judgement to go green,
 anything the gate refused, anything that changes what is deployed.

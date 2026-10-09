@@ -264,6 +264,17 @@ export function inFlight(openPrs = []) {
   };
 }
 
+/**
+ * The open pull requests that hold a project back, without the one its next
+ * step is being handed back with. A red the merger sent back (ruling 30) is
+ * the step `ready` with its `pr` kept: that pull request is the step's own
+ * work for its next session to go on with, not somebody's in flight. Any
+ * other open pull request still ends the round (`inFlight`).
+ */
+export function holdingPrs(openPrs = [], record = null) {
+  const own = record?.plan ? deliverableStep(record.plan).step?.pr : null;
+  return own ? openPrs.filter((pr) => Number(pr.number) !== Number(own)) : openPrs;
+}
 
 /**
  * The step a pull request carries, for judging what a session was allowed to
@@ -367,7 +378,7 @@ function pickState(name, { plans = [], prs = [], prsFailed = [] } = {}) {
   // so once and sleeps, rather than picking a name it would refuse a fetch
   // later. `queue()` has already written the line naming the repository.
   if (prsFailed.includes(repo)) return { runnable: false, reason: 'prs-unknown' };
-  const openPrs = openPrsFor({ prs, name, names: plans.map((p) => p.project), repo });
+  const openPrs = holdingPrs(openPrsFor({ prs, name, names: plans.map((p) => p.project), repo }), plans.find((p) => p.project === name));
   const flight = inFlight(openPrs);
   if (flight) return { runnable: false, reason: flight.reason };
   return { runnable: true, kind };
@@ -695,10 +706,11 @@ function planExcerpt(plan, index, step) {
  * `plan`); the prompt quotes the part of it this step needs and says where the
  * whole file is, rather than carrying the file — see `planExcerpt`.
  */
-export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], now = new Date() }) {
+export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, now = new Date() }) {
   const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
     ...conflictPreamble(conflicts),
+    ...retryPreamble(retry, repo),
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
     `is merged in). Your plan is on disk in this worktree at \`${planPath}\`;`,
     'what follows below is the part of it this step needs — the frozen fields,',
@@ -735,13 +747,34 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
     'body says is left; what you cannot finish is `mc step failed`, not a partial',
     'landing. `mc gate` runs this tree\'s gate and prints the verdict, not the',
     'suite; `mc publish` pushes this branch and opens the pull request, and',
-    `prints its number. Then run \`mc merge ${repo} <pr>\` yourself`,
-    'until it says merged — that writes `done` and the pull request for you; a',
-    'red comes back to you: fix it and run it again. Never `gh pr merge`. Giving',
-    'up is `mc step failed --reason "…"`. Do not ask questions.',
+    `prints its number. Then run \`mc merge ${repo} <pr>\` yourself: it checks`,
+    'the plan boundary, puts the pull request in the merge queue and returns at',
+    'once. When it says queued, your work is over — stop. The merger lands it',
+    'and writes `done`; a red goes to this step\'s next session with the reason.',
+    'A `plan-trespass` from `mc merge` is yours now: fix it and run it again.',
+    'Never `gh pr merge`. Giving up is `mc step failed --reason "…"`. Do not ask',
+    'questions.',
     '',
     planExcerpt(plan, index, step),
   ].join('\n');
+}
+
+/**
+ * What a session is told first when its step came back red from the merger
+ * (ruling 30): the pull request is open on this branch, and the gate's reason
+ * is the work. Empty when the step is fresh.
+ */
+function retryPreamble(retry, repo) {
+  if (!retry) return [];
+  return [
+    `This step came back from the merger: #${retry.pr} did not land (attempt ${retry.attempts}).`,
+    `The gate said: ${retry.reason}`,
+    `#${retry.pr} is still open, on this branch, with the earlier session's work.`,
+    'Start there — `gh pr view` and the diff — fix what the gate named (never by',
+    'lowering a threshold or skipping a test), push to the same branch, and run',
+    `\`mc merge ${repo} ${retry.pr}\` again. No new pull request.`,
+    '',
+  ];
 }
 
 

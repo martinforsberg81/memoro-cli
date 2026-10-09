@@ -26,8 +26,9 @@ Mixed work: the reviewed part here first, landed; then a plan for what is left.
 2. Build in pieces. At each review point stop and show Martin the thing
    itself — the diff, a screenshot (`mc shot`), the running app (`mc dev`) —
    with what you would do next. Build nothing past a point he has not seen.
-3. `mc gate`, commit, `mc publish`, `mc merge <repo> <pr>`. Fix reds yourself
-   on the same branch.
+3. `mc gate`, commit, `mc publish`, `mc merge <repo> <pr>` — it queues the PR
+   for the merger and returns; `mc step` and `merger.log` say what came of it.
+   Fix reds yourself on the same branch, and `mc merge` again.
 4. Deploy is Martin's: say what `mc deploy` would ship; run it when he says go.
 5. More than one session: one open PR carries it. Its body says what is done,
    what is next, what is open; the next session starts with `gh pr view <n>`.

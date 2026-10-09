@@ -20,37 +20,34 @@ later one is wrong): stop. `mc step note` what you found, then
 `mc step blocked --on <decision-name>` (or `--on-project <project>`) with
 `--reason "…"`, and open a PR saying what the answer is about.
 
-**Otherwise, build and land it, in this session:**
+**Otherwise, build it and hand it to the merger:**
 
 1. Run what `done_when` names and fix what it finds. `mc gate` runs the
    repository's gate on your tree — use it, not the suite into your context.
 2. Commit, then `mc publish` (pushes, opens the PR, prints its number). A
    landed PR is a `done` step, so a part you cannot finish is
    `mc step failed`, never a partial landing.
-3. `mc merge <repo> <pr>` in the foreground; read every line.
-   - `merged #N into main` — done; the session ends for you.
-   - red — fix the code (never lower a threshold or skip/weaken a test),
-     commit, push, run `mc merge` again on the same PR.
-   - `plan-trespass` — undo every plan change except `met`, commit, push,
-     again.
-   - `conflicts with origin/main` — merge `origin/main`, keep both intents,
-     push, again.
-   - `still waiting … run this again` — run it again.
+3. `mc merge <repo> <pr>`. It checks the plan boundary, queues the PR for the
+   merger and returns at once.
+   - `queued for the merger` — your work is over; end the session. The merger
+     runs the gate and lands it; a red comes back to this step's next session
+     with the gate's reason, on the same branch and PR.
+   - `plan-trespass` — undo every plan change except `met`, commit, push, run
+     `mc merge` again.
 
-Same red three times with nothing new to try, or a fix needs a decision that
-is not yours: write what the gate said and what you tried into the PR and a
-`mc step note`, push, `mc step failed --reason "<one sentence>"`, end.
+**When the prompt says the step came back from the merger:** the PR is open on
+your branch. Fix what the gate named — never lower a threshold or skip/weaken
+a test; `conflicts with origin/main` is merging `origin/main` and keeping both
+intents — push to the same branch, `mc merge` the same PR. A fix that needs a
+decision that is not yours: write what the gate said and what you tried into
+the PR and a `mc step note`, push, `mc step failed --reason "<one sentence>"`,
+end.
 
-Never `gh pr merge`, never a second PR, never `done` on a step you could not
-land. Stay on the branch you were given. A worktree handed over mid
-`git merge origin/main`: resolve the named files, commit, then do the step on
-the same branch and PR.
+Never `gh pr merge`, never a second PR, never `done` by hand. Stay on the
+branch you were given. A worktree handed over mid `git merge origin/main`:
+resolve the named files, commit, then do the step on the same branch and PR.
 
-Nothing in the background: no `run_in_background`, no `&`. `mc merge` ends the
-session the moment it lands. If the harness moves `mc merge` to the background
-at its ten-minute ceiling, do not end your turn: wait for its notification, or
-run `mc step` until the step is no longer `running` — a session that ends
-with its PR open is measured by the runner, and its red is then nobody's to fix.
+Nothing in the background: no `run_in_background`, no `&`.
 
 Verify what `done_when` names and stop. Screenshots, dev servers and proof
 scripts only when `done_when` asks for them.
