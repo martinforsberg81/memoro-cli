@@ -986,7 +986,7 @@ test("a PLAN.json whose two sides changed the same step takes main's copy, and t
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json — the plan's rule refused \(steps\[0\]: changed on this branch and on main both\); main's copy taken/u);
   assert.doesNotMatch(log, /c: merge conflict in:/u);
-  assert.deepEqual(Object.keys(f.files).filter((p) => /^\/w\/runner\/[^/]+\.json$/u.test(p)), [],
+  assert.deepEqual(Object.keys(f.files).filter((p) => /^\/w\/runner\/[^/]+\.json$/u.test(p) && p !== '/w/runner/prs.json'), [],
     'and no record of a workarea that could not merge — there is nothing left to record');
 });
 

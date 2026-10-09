@@ -131,7 +131,10 @@ export function readerFor({ stdout, lines, page, key = null }) {
 export function pageKey(data) {
   const projects = (data?.programmes?.programmes || []).flatMap((group) => group.projects || []);
   return projects
-    .map((p) => [p.name, p.status, p.steps?.done ?? '', p.steps?.total ?? '', p.running ? 1 : 0, p.pr ?? ''].join(':'))
+    // Every open pull request, not only the first: each is a row under its
+    // project now, so one opening or closing moves the rows below it.
+    .map((p) => [p.name, p.status, p.steps?.done ?? '', p.steps?.total ?? '', p.running ? 1 : 0,
+      (p.prs || []).map((pr) => pr.number).join(',') || (p.pr ?? '')].join(':'))
     .join('|');
 }
 

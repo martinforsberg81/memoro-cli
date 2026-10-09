@@ -35,6 +35,8 @@ THE PAGE
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc deploy --follow               Watch the deploy that is running
+  mc prs [--offline] [--json]      Every open pull request, and whose it is: a project's
+                                    step, a plan session, a workarea, or nobody
   mc deps [<repo>]                 Which dependencies need updating, and how urgently
   mc deps bump <repo> <what>       Opens a pull request for one group and lands it through the gate
   mc dev list                      Which dev server runs in which worktree

@@ -163,21 +163,41 @@ below is about.
   `merges-collect.js`, joins the gate lock to a name). The heading's count is
   `N landing · N waiting`, each part shown only when it is not zero,
   and `nothing landing, nothing waiting` — the literal phrase, not per missing
-  part — when both are. Under it, in order: the round itself, green like
-  a running RUNNER lane because it is the same fact — `● memoro #11651
-  sql-w5-relationship-closure  running 17 test files · 4 min`; with the gate
-  idle the heading has already said so and there is no row. A `check`-mode round (`mc test`, not `mc
-  merge`) says so rather than reading as a landing that is not one:
-  *measuring, not landing*. Then, unchanged in everything but position:
-  **waiting** — `~/mc/runner/merges.json`, every `mc merge` standing in line
-  for the gate with its pid, green, the repository, the number, what it is
-  behind, since when. The held rows that stood under it went with `held.json`
-  (ruling 21): a step that did not land is `failed` in the register and is
+  part — when both are. Under it, in order: the round itself, laid out like
+  a running RUNNER lane — the `●` in the gutter, then the repository — and
+  green like one because it is the same fact: `● memoro      #13265
+  email-inbox-fixes step 2  <title>  landing · merged origin/main into the
+  candidate · 2 min`. The name is the queue entry's step, or its branch; the
+  title is the open pull request's, and it is what a narrow terminal drops
+  first. With the gate idle the heading has already said so and there is no
+  row. A `check`-mode round (`mc test`, not `mc merge`) says *measuring, not
+  landing* where a landing says `landing`. Then **waiting**, one line —
+  `· waiting     #13255 #13250 #13248  (longest 4 min)`: the numbers from
+  `~/mc/runner/merges.json` in the order the merger takes them, green, with
+  the repository on each only when the queue spans two, `… N more` for what
+  does not fit, and how long the oldest has waited (Martin, 2026-10-09). The
+  held rows that stood under it went with `held.json` (ruling 21): a step that
+  did not land is `failed` in the register and is
   drawn where every other plan state is. `mc --json` carries `merges.queued`
   whole, and `mc status <name>` says `#N is landing now — <phase>
   (<age>)` or `#N is being measured (mc test), not landed` when the round
   matches this project's own open pull request, and `#N is queued for merge
   (since …)` for a queued one ([`mc-run.md`](mc-run.md) § *The merge*).
+- **PULL REQUESTS** — every open pull request, and whose it is (`prsSection`,
+  `page-collect.js`; the rule is `prOwner`, `project-prs.js`): a project's, by
+  the branch rule; a plan session's, checked out under `~/mc/plan/<programme>/`
+  or called `plan/…`; a workarea's; one checked out somewhere else; or
+  nobody's. The heading counts them all — `8 open · 4 on a step · 1 plan ·
+  1 nobody's` — and the rows are only the ones no other row draws: a
+  project's pull requests are a `↳ #N  step n/m  title  quiet …` row under the
+  project in PROGRAMMES (a blocked project holding one is never collapsed),
+  and the merger's are in MERGES. A running RUNNER lane carries its project's
+  `#N` after the clock. The one nobody holds has the waiting `◆` in yellow;
+  any pull request quiet for a day turns its `quiet …` yellow. The open pull
+  requests come from `prs.json`, which every runner round now refills for the
+  repositories it asked (`mergePrs`, `page-cache.js`) as well as `--fresh`.
+  `mc prs` draws all of them grouped by owner, and asks GitHub first
+  (`--offline` reads the cache).
 - **DEPLOY** — what is in production, on the section's own heading, and
   **what is wrong with it comes first**: a deploy that failed, with the step
   it stopped at, or one running now; then the sha from the last `deployed` row
@@ -324,8 +344,9 @@ they are worth different amounts:
      change?" — so there is no staleness to reason about and no age to
      print: a hit is exactly what a fresh read would have returned.
    - `prs.json` has no such key, because an open PR closes without moving
-     any sha. It is **stamped** instead, written only by `--fresh`, and the
-     page says how old it is out loud. The two files are not the same kind
+     any sha. It is **stamped** instead, written by `--fresh` and by every
+     runner round for the repositories it asked GitHub about (`mergePrs`),
+     and the page says how old it is out loud. The two files are not the same kind
      of cache and the code says so.
 
 These are the page's only writes, and the Contract's "reads only" is
@@ -434,7 +455,7 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `NEXT` `RUNNER` `MERGES` `DEPLOY` `MC` | bold cyan |
+| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `NEXT` `RUNNER` `MERGES` `PULL REQUESTS` `DEPLOY` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | RUNNER | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
 | RUNNER | the heading's lane setting and uptime | grey |
@@ -464,11 +485,14 @@ person set it to.
 | NEXT | how the order was arrived at, `… N more`, why a project was skipped | grey |
 | NEXT | `blocker finished N` and the steps under it | bold yellow, yellow |
 | NEXT | the rollup: `N blocked`, and the rest of that line | red, grey |
-| MERGES | the round landing now: its `●`, `repo #pr` | green, bold |
-| MERGES | the round's holder, phase, age, `· nothing landing` | plain, plain, grey, grey |
-| MERGES | `measuring, not landing` on a check-mode round | plain |
-| MERGES | a queued row: `· repo  #pr`, the reason, the age | green bold, green, grey |
-| MERGES | a held row: `· project  #pr`, the reason | yellow bold, yellow |
+| MERGES | the round landing now: `● repo #pr name title` | green |
+| MERGES | the round's `landing` (or `measuring, not landing`), phase, age | plain, plain, grey |
+| MERGES | the queue line: `· waiting`, the numbers in landing order, `(longest …)` | grey, green, grey |
+| RUNNER | a lane's project's open pull request, after the clock | bold cyan |
+| PULL REQUESTS | the heading's counts; `N nobody's`; a cache over 15 min old | grey, bold yellow, yellow |
+| PULL REQUESTS | a row: its mark, repository, `#pr`, title, whose, quiet time | grey, grey, bold cyan, plain, grey, grey |
+| PULL REQUESTS | one nobody holds: its `◆` and whose | yellow |
+| PULL REQUESTS | quiet for a day or more | yellow |
 | HELPER | a digest's age, under 24 h old, older | green, yellow |
 | HELPER | new errors, when > 0; the `!` before the loudest message | red |
 | HELPER | no digest yet, no new errors | grey |
@@ -483,7 +507,8 @@ person set it to.
 | PROGRAMMES | a programme with no project yet | grey |
 | PROGRAMMES | a collapsed row: `N blocked`, its numbers and its blockers | red, grey |
 | PROGRAMMES | the repository a project lives in | grey |
-| PROGRAMMES | the open PR number | cyan |
+| PROGRAMMES | an open PR, a row under its project: `↳`, `#pr`, `step n/m`, title | grey, bold cyan, grey, plain |
+| PROGRAMMES | that PR's `quiet …`: under a day, from a day; `landing now`, `queued for merge` | grey, yellow, green |
 | PROGRAMMES | the number, the steps done, the last-run time, the no-workarea line | grey |
 | footer | the cache line, the notes | grey |
 

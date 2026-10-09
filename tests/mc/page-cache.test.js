@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  PLANS_SHAPE, ageWords, cachePath, loadPlans, loadPrs, savePrs,
+  PLANS_SHAPE, ageWords, cachePath, loadPlans, loadPrs, mergePrs, savePrs,
 } from '../../src/mc/page-cache.js';
 
 const ROOT = '/w';
@@ -141,5 +141,33 @@ describe('ageWords', () => {
     assert.equal(ageWords(600), '10 min');
     assert.equal(ageWords(6 * 3600), '6 h');
     assert.equal(ageWords(5 * 24 * 3600), '5 d');
+  });
+});
+
+describe('mergePrs', () => {
+  /**
+   * A runner round asks GitHub anyway, sometimes one repository only; what it
+   * heard replaces that repository's entries and leaves the other's alone.
+   */
+  it('replaces the repositories that were asked and keeps the rest', () => {
+    const files = {
+      [`${ROOT}/runner/prs.json`]: JSON.stringify({
+        fetched: '2026-10-09T17:00:00.000Z',
+        prs: [{ repo: 'memoro', number: 1 }, { repo: 'memoro-cli', number: 2 }],
+      }),
+    };
+    const read = (path) => { if (!(path in files)) throw new Error('ENOENT'); return files[path]; };
+    const write = (path, value) => { files[path] = JSON.stringify(value); };
+    const now = new Date('2026-10-09T19:00:00Z');
+    mergePrs({ root: ROOT, repos: ['memoro'], prs: [{ repo: 'memoro', number: 3 }], now, read, write });
+    const saved = JSON.parse(files[`${ROOT}/runner/prs.json`]);
+    assert.equal(saved.fetched, now.toISOString());
+    assert.deepEqual(saved.prs.map((pr) => pr.number), [2, 3]);
+  });
+
+  it('writes nothing when no repository answered', () => {
+    let wrote = false;
+    assert.equal(mergePrs({ root: ROOT, repos: [], prs: [], write: () => { wrote = true; } }), null);
+    assert.equal(wrote, false);
   });
 });
