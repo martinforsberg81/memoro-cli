@@ -15,6 +15,8 @@
  *   mc language status <lang>    the language's four reads, run now and cached
  *   mc language key              whether the Cloudflare key is held
  *   mc language key set          the key from stdin, the account from --account
+ *   mc language run <manifest>   a cutover's acts, a question before every write
+ *   mc language resume           the stopped run, from the act it stopped at
  *
  * The key is never an argument. `mc.log` keeps a command's positionals that
  * look like identifiers (`invocationShape`, logger.js), and a shell keeps its
@@ -27,14 +29,28 @@
  * the exception, as the deploy record is in `deploy.js`: it is what the verb
  * leaves behind, and `env` already points it at a throwaway directory.
  *
- * Exit codes: 0 for a reading with every read answered, the cache shown or a
- * key kept; 1 for a reading with a failed read, a refusal (a deploy running, a
- * dirty or diverged `main`, no wrangler) or a keychain that would not write;
- * 2 for a bad argument, a token not piped in, or a subcommand not built yet.
+ * A run is the manifest's acts in order: each act's `check` read and compared
+ * with its expectations, and — for an act that writes — one question, then
+ * its `execute`. No flag skips the question and without a terminal `run` and
+ * `resume` exit 2 before reading anything, as `mc deploy` does. An `exact`
+ * expectation that does not hold stops the run before the next write, with
+ * the act's `if_not`; `advisory` ones are printed and never enforced. The key
+ * goes into the environment of a child whose act names `cloudflare-d1-edit`,
+ * and nowhere else. Every run is a record (`language-runs.js`), and a run and
+ * a deploy never write at the same time: each reads the other's record under
+ * the register's lock before it writes its own.
+ *
+ * Exit codes: 0 for a reading with every read answered, the cache shown, a
+ * key kept or a run whose every act held; 1 for a reading with a failed read,
+ * a refusal (a deploy or a run going on, a dirty or diverged `main`, no
+ * wrangler, no key), a deviation, a `no`, or a keychain that would not write;
+ * 2 for a bad argument, a token not piped in, no terminal to ask at, or a
+ * subcommand not built yet; 130 for a run stopped by ^C.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { getSecret as realGetSecret, setSecret as realSetSecret } from '../../lib/keychain.js';
 import { writeJsonAtomic } from '../atomic-write.js';
@@ -43,7 +59,15 @@ import { runningDeploy } from '../deploys.js';
 import { tryGit } from '../git.js';
 import { processAlive } from '../lease-owner.js';
 import { closingManifests, readManifests } from '../language-manifest.js';
+import {
+  actEnd, actStart, closeAbandoned, DONE, doneExecutes, endRun, FAILED, liveRun, readRuns, REFUSED, runStem,
+  startRun, STOPPED,
+} from '../language-runs.js';
 import { workRoot } from '../paths.js';
+import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
+import { realLock } from '../register.js';
+import { currentHolder } from '../repo-lease.js';
+import { scrubRuntimeSecretsFromEnv } from '../runtime-secrets.js';
 import {
   deploySource, isOwnWorktree, leftoverStamps, REPO, strayPaths, worktreeState,
 } from './deploy.js';
@@ -64,6 +88,9 @@ export function usage() {
     '        mc language key [--json]                whether the Cloudflare key is held, and its account\n',
     '        printf %s "<token>" | mc language key set --account <id>\n',
     '                                                keep the key in this machine\'s keychain — never an argument\n',
+    '        mc language run <manifest> [--dry-run]  a cutover\'s acts in order, asking before every write\n',
+    '        mc language resume [--manifest <name>] [--from-head]\n',
+    '                                                the stopped run again, from the act it stopped at\n',
   ].join('');
 }
 
@@ -96,7 +123,9 @@ export async function run(argv, deps = {}) {
   if (sub === undefined || sub.startsWith('--')) return overview(argv, io);
   if (sub === 'status') return status(rest, io);
   if (sub === 'key') return key(rest, io);
-  if (['run', 'resume', 'promote'].includes(sub)) {
+  if (sub === 'run') return runVerb(rest, io);
+  if (sub === 'resume') return resumeVerb(rest, io);
+  if (sub === 'promote') {
     stderr.write(`mc: mc language ${sub} — not yet\n`);
     return 2;
   }
@@ -416,7 +445,7 @@ export function cachedReadings(env = process.env) {
   return out;
 }
 
-/** The newest run record per language — step 2 writes them to `runs/`; none yet is none. */
+/** The newest run record per language (`language-runs.js`); none yet is none. */
 export function lastRuns(env = process.env) {
   const dir = join(languageDir(env), 'runs');
   let files = [];
@@ -475,4 +504,430 @@ async function overview(argv, { stdout, stderr, env, deps }) {
   for (const bad of unreadable) stdout.write(`unreadable manifest ${bad.name} — ${bad.problems[0]}\n`);
   stdout.write('mc: mc language status <lang> reads one again\n');
   return 0;
+}
+
+/* ------------------------------------------------------------------- run */
+
+/** The one credential a manifest may name, and the keychain entries behind it. */
+export const CREDENTIAL = 'cloudflare-d1-edit';
+
+const YES = /^y(es)?$/iu;
+const said = (answer) => YES.test(String(answer || '').trim());
+
+/** The value at a dotted path — `languages.sv.forms`, `rows.0.n` — or undefined. */
+export function valueAt(json, path) {
+  let at = json;
+  for (const key of String(path).split('.')) {
+    if (at === null || typeof at !== 'object' || !Object.hasOwn(at, key)) return undefined;
+    at = at[key];
+  }
+  return at;
+}
+
+/**
+ * Each expectation against a report: `{ path, kind, want, observed, held,
+ * ok }`. A path the report does not have is a deviation. `relax` reads every
+ * exact expectation as advisory — `held` still says, `ok` does not stop — for
+ * the one act a resume picks up mid-write.
+ */
+export function compare(expectations, json, { relax = false } = {}) {
+  return (expectations || []).map((item) => {
+    const observed = json ? valueAt(json, item.path) : undefined;
+    if (Object.hasOwn(item, 'exact')) {
+      const held = observed !== undefined && isDeepStrictEqual(observed, item.exact);
+      return { path: item.path, kind: relax ? 'relaxed' : 'exact', want: item.exact, observed, held, ok: relax || held };
+    }
+    return { path: item.path, kind: 'advisory', want: item.advisory, observed, held: null, ok: true };
+  });
+}
+
+/** The report a child printed: the whole stdout as one object, or the last
+ * `{…}` block in it when logs leaked onto stdout. */
+export function parseLastJson(text) {
+  const whole = parseReport(text);
+  if (whole) return whole;
+  const lines = String(text || '').split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i].startsWith('{')) continue;
+    const found = parseReport(lines.slice(i).join('\n'));
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Every secret in `text` replaced, as `mc shot` does with what a script echoed. */
+export function scrubber(secrets) {
+  const live = secrets.filter(Boolean);
+  return (text) => live.reduce((out, secret) => out.split(secret).join('<redacted>'), String(text));
+}
+
+const show = (value) => (value === undefined ? 'missing' : JSON.stringify(value));
+
+function comparisonLine(row, { dim }) {
+  if (row.kind === 'exact') {
+    return row.ok
+      ? `    ✓ ${row.path} = ${show(row.observed)}`
+      : `    ✗ ${row.path} = ${show(row.observed)}, expected ${show(row.want)}`;
+  }
+  if (row.kind === 'relaxed') {
+    if (row.held) return `    ✓ ${row.path} = ${show(row.observed)}`;
+    return dim(`    · ${row.path} = ${show(row.observed)}, expected ${show(row.want)} — not enforced: resuming an interrupted write`);
+  }
+  return dim(`    · ${row.path} = ${show(row.observed)} — advisory: ${row.want}`);
+}
+
+/**
+ * One act's child: the manifest's argument array as it is, no shell, in the
+ * memoro worktree. stdout is the report; stderr goes to `onStderr` as it
+ * comes. ^C, a closed terminal or a kill is passed on as SIGTERM and the child
+ * is waited for, as `spawnDeployDefault` does — a write half-done is the
+ * script's to stop, and the record is completed after it.
+ */
+export function spawnActDefault({ argv, cwd, env, onStderr, signals = process }) {
+  return new Promise((resolve) => {
+    const child = spawn(argv[0], argv.slice(1), { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { out += chunk; });
+    child.stderr.on('data', (chunk) => onStderr?.(chunk));
+    let interrupted = null;
+    const onStop = (signal) => {
+      interrupted = interrupted || signal;
+      try { child.kill('SIGTERM'); } catch { /* already gone */ }
+    };
+    for (const signal of STOP_SIGNALS) signals.on(signal, onStop);
+    let settled = false;
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      for (const signal of STOP_SIGNALS) signals.off(signal, onStop);
+      resolve({ ...result, stdout: out, interrupted });
+    };
+    child.on('error', (error) => settle({ code: 127, error: error?.message || String(error) }));
+    child.on('close', (code, signal) => settle({ code: signal ? 1 : (code ?? 1) }));
+  });
+}
+
+const STOP_SIGNALS = ['SIGINT', 'SIGHUP', 'SIGTERM'];
+
+async function runVerb(argv, io) {
+  const scanned = scanArgs(argv, { booleans: ['--dry-run'] });
+  const [name, ...extra] = scanned.positional;
+  if (scanned.error || !name || extra.length) {
+    io.stderr.write(`mc: ${scanned.error || 'mc language run takes one manifest, e.g. sv-forms-cutover'}\n${usage()}`);
+    return 2;
+  }
+  const dryRun = scanned.flags['dry-run'];
+  if (!dryRun && !(io.deps.interactive || realInteractive)(io.env)) {
+    io.stderr.write('mc: mc language run asks before every write, and there is no terminal here to ask — run it in one; nothing was read\n');
+    return 2;
+  }
+  return conduct({ name, dryRun }, io);
+}
+
+async function resumeVerb(argv, io) {
+  const scanned = scanArgs(argv, { booleans: ['--from-head'], strictValues: ['--manifest'] });
+  if (scanned.error || scanned.positional.length) {
+    io.stderr.write(`mc: ${scanned.error || `mc language resume takes no argument (${scanned.positional[0]}) — --manifest <name> picks one`}\n${usage()}`);
+    return 2;
+  }
+  if (!(io.deps.interactive || realInteractive)(io.env)) {
+    io.stderr.write('mc: mc language resume asks before every write, and there is no terminal here to ask — run it in one; nothing was read\n');
+    return 2;
+  }
+  const wanted = scanned.flags.manifest;
+  const prior = readRuns(io.env).filter((each) => !each.dry_run
+    && [STOPPED, FAILED].includes(each.outcome)
+    && (!wanted || each.manifest === wanted)).at(-1);
+  if (!prior) {
+    io.stderr.write(`mc: no stopped language run${wanted ? ` of ${wanted}` : ''} to resume\n`);
+    return 1;
+  }
+  return conduct({ name: prior.manifest, prior, fromHead: scanned.flags['from-head'] }, io);
+}
+
+/**
+ * A run, start to end: the worktree, the manifest, the record under the lock,
+ * the preflight, then the acts. Shared by `run`, `run --dry-run` and `resume`.
+ */
+async function conduct({ name, dryRun = false, prior = null, fromHead = false }, { stdout, stderr, env, deps }) {
+  const path = (deps.repos || defaultRepos(env)).find((repo) => repo.name === REPO)?.path;
+  if (!path) {
+    stderr.write(`mc: no checkout of ${REPO} on this machine — the acts run in its main\n`);
+    return 1;
+  }
+  const git = deps.git || tryGit;
+  const alive = deps.alive || processAlive;
+  const prepared = prepareWorktree({ path, git, env, alive });
+  if (prepared.refused) {
+    stderr.write(`mc: ${prepared.refused}\n`);
+    return 1;
+  }
+  const { worktree } = prepared;
+  if (!(deps.exists || existsSync)(join(worktree, 'node_modules', '.bin', 'wrangler'))) {
+    stderr.write(`mc: no wrangler in ${worktree} — run npm ci there; nothing was read\n`);
+    return 1;
+  }
+  const { manifests, unreadable } = readManifests(worktree);
+  const manifest = manifests.find((each) => each.name === name);
+  if (!manifest) {
+    const bad = unreadable.find((each) => each.name === name);
+    stderr.write(bad
+      ? `mc: the manifest ${name} is unreadable — ${bad.problems.join('; ')}\n`
+      : `mc: no manifest ${name} in ${join(worktree, 'scripts/language-library/cutovers')} — ${manifests.map((each) => each.name).join(', ') || 'none there'}\n`);
+    return 1;
+  }
+  const sha = git(worktree, ['rev-parse', 'HEAD']) || '';
+  if (prior && prior.sha !== sha && !fromHead) {
+    stderr.write(`mc: the run of ${name} stopped at ${short(prior.sha)}, and memoro's main is ${short(sha)} now — the manifest may have changed; mc language resume --from-head resumes it there\n`);
+    return 1;
+  }
+  if (manifest.ran) stdout.write(`mc: ${name} ran on ${manifest.ran.on} — ${manifest.ran.note}\n`);
+
+  // One writer to production at a time, decided under the register's lock as
+  // `mc deploy` decides it: the other's record read, abandoned runs closed,
+  // this run's record written — before any child is started.
+  const holder = (deps.holder || currentHolder()).name || '';
+  const lock = deps.lock || realLock;
+  const locked = lock(deps.root || workRoot(env), () => {
+    const deploy = runningDeploy(env, { alive });
+    if (deploy) {
+      return { refused: `a deploy of ${short(deploy.sha)} has been running since ${stamp(deploy.started)} (pid ${deploy.pid}) — nothing was written` };
+    }
+    const other = liveRun(env, { alive });
+    if (other) {
+      return { refused: `a language run of ${other.manifest} has been running since ${stamp(other.started)} (pid ${other.pid}) — one at a time; nothing was written` };
+    }
+    const closed = closeAbandoned({ alive }, env);
+    const run = startRun({
+      manifest: name, lang: manifest.lang, sha, holder, pid: deps.pid ?? process.pid, dryRun, resumes: prior?.started || null,
+    }, env);
+    return { run, closed };
+  });
+  if (locked.refused) {
+    stderr.write(`mc: ${locked.refused}\n`);
+    return 1;
+  }
+  const { run } = locked;
+  for (const old of locked.closed) stdout.write(`mc: the run of ${old.manifest} started ${stamp(old.started)} never came back — its record now says failed\n`);
+  if (prior) stdout.write(`mc: resuming the run of ${name} started ${stamp(prior.started)}${prior.sha !== sha ? ` — at ${short(sha)}, not ${short(prior.sha)}` : ''}\n`);
+
+  const ctx = {
+    stdout, stderr, env, deps, manifest, worktree, run, dryRun,
+    spawnAct: deps.spawnAct || spawnActDefault,
+    ask: deps.ask || realAsk,
+    dim: stdout.isTTY ? (text) => `\x1b[2m${text}\x1b[0m` : (text) => text,
+    scrub: (text) => text,
+    logFile: join(languageDir(env), `${runStem(run)}.log`),
+  };
+  const stop = (outcome, note, code) => {
+    endRun(run, { outcome, note }, env);
+    return code;
+  };
+
+  // The environment every child gets: mc's own, without the runtime secrets
+  // and without any CLOUDFLARE_* — the key is added to one child at a time.
+  const { env: bare, removed } = withoutCloudflare(scrubRuntimeSecretsFromEnv(env));
+  if (removed.length || Object.keys(env).some((key) => key.startsWith('CLOUDFLARE_'))) {
+    stdout.write('mc: CLOUDFLARE_* set in this shell are ignored — the key comes from the keychain\n');
+  }
+  ctx.bare = bare;
+
+  // Preflight: everything before the first write, production untouched by any of it.
+  const needed = [...new Set(manifest.acts.flatMap((act) => act.credentials))];
+  const unknown = needed.filter((credential) => credential !== CREDENTIAL);
+  if (unknown.length) {
+    stderr.write(`mc: ${name} names a credential mc does not hold — ${unknown.join(', ')}; nothing was run\n`);
+    return stop(REFUSED, `unknown credential ${unknown.join(', ')}`, 1);
+  }
+  if (needed.length) {
+    const getSecret = deps.getSecret || realGetSecret;
+    const [token, account] = [await getSecret(TOKEN_SECRET), await getSecret(ACCOUNT_SECRET)];
+    if (!token || !account) {
+      stderr.write('mc: the Cloudflare key is not in the keychain — printf %s "<token>" | mc language key set --account <id>; nothing was run\n');
+      return stop(REFUSED, 'no key in the keychain', 1);
+    }
+    ctx.key = { token, account };
+    ctx.scrub = scrubber([token]);
+    const first = manifest.acts.find((act) => act.credentials.includes(CREDENTIAL));
+    stdout.write(`mc: preflight — the key reads: ${first.id} check\n`);
+    const result = await child(ctx, first, first.check);
+    if (result.interrupted) return stop(STOPPED, `interrupted by ${result.interrupted} in preflight`, 130);
+    if (result.code !== 0) {
+      stderr.write(`mc: the key did not read — ${first.id}'s check exited ${result.code}; nothing was written\n`);
+      return stop(REFUSED, `the key did not read: ${first.id} check exit ${result.code}`, 1);
+    }
+  }
+  const done = prior ? doneExecutes(prior, readRuns(env)) : new Set();
+  const resumed = prior
+    ? prior.acts.filter((act) => act.phase === 'execute' && [FAILED, 'running'].includes(act.outcome)).at(-1)?.id || null
+    : null;
+  if (!dryRun) {
+    for (const act of manifest.acts.filter((each) => each.target === 'local' && !done.has(each.id))) {
+      stdout.write(`mc: preflight — ${act.id} (local)\n`);
+      const read = await checkAct(ctx, act, { relax: act.id === resumed, record: false });
+      if (read.interrupted) return stop(STOPPED, `interrupted by ${read.interrupted} in preflight`, 130);
+    }
+    const firstWrite = manifest.acts.find((act) => act.execute !== null && !done.has(act.id));
+    if (firstWrite) {
+      const runnable = await requiresRunnable(ctx, firstWrite);
+      if (runnable.interrupted) return stop(STOPPED, `interrupted by ${runnable.interrupted} in preflight`, 130);
+      if (!runnable.ok) return stop(REFUSED, `${firstWrite.id} is not runnable: ${runnable.failed} did not hold`, 1);
+    }
+  }
+
+  // The acts, in order.
+  const total = manifest.acts.length;
+  for (const [index, act] of manifest.acts.entries()) {
+    stdout.write(`act ${index + 1}/${total} ${act.id} — ${act.title}\n`);
+    if (done.has(act.id)) {
+      stdout.write('    written in the run this resumes — skipped\n');
+      continue;
+    }
+    const relax = act.id === resumed;
+    const read = await checkAct(ctx, act, { relax });
+    if (read.interrupted) return stop(STOPPED, `interrupted by ${read.interrupted} at ${act.id} check`, 130);
+    if (!read.ok) return deviated(ctx, act, stop);
+    if (act.execute === null) continue;
+
+    if (dryRun) {
+      if (act.target !== 'production') {
+        stdout.write(`    --dry-run — would write to ${act.target}: ${act.execute.join(' ')}\n`);
+        continue;
+      }
+      const runnable = await requiresRunnable(ctx, act);
+      if (runnable.interrupted) return stop(STOPPED, `interrupted by ${runnable.interrupted}`, 130);
+      if (!runnable.ok) return stop(STOPPED, `${act.id} is not runnable: ${runnable.failed} did not hold`, 1);
+      stdout.write(`    --dry-run — would write to production: ${act.execute.join(' ')}\n`);
+      for (const later of manifest.acts.slice(index + 1)) {
+        stdout.write(`act ${manifest.acts.indexOf(later) + 1}/${total} ${later.id} — not checkable until ${act.id} has written\n`);
+        stdout.write(`    check    ${later.check.join(' ')}\n`);
+        if (later.execute) stdout.write(`    execute  ${later.execute.join(' ')}\n`);
+      }
+      break;
+    }
+
+    // The question. What it writes already holding is said, and running it
+    // anyway is a question of its own, default no.
+    stdout.write(`    would run ${act.execute.join(' ')}\n`);
+    const already = compare(act.expect.execute, read.json).filter((row) => row.kind === 'exact');
+    if (already.length && already.every((row) => row.ok)) {
+      stdout.write(`    what ${act.id} writes already holds\n`);
+      if (!said(ctx.ask(`${act.id}: run it anyway? [y/N]`, { stdout }))) {
+        stdout.write(`    ${act.id} not run — already true\n`);
+        continue;
+      }
+    } else if (!said(ctx.ask(`${act.id}: write to ${act.target}? [y/N]`, { stdout }))) {
+      actEnd(run, actStart(run, { id: act.id, phase: 'execute' }, env), { outcome: 'declined', note: 'answered no at the question' }, env);
+      stdout.write(`mc: ${act.id} was not run — nothing more was written; mc language resume asks again\n`);
+      return stop(STOPPED, `declined at ${act.id}`, 1);
+    }
+    if (act.requires_runnable.length) {
+      const runnable = await requiresRunnable(ctx, act);
+      if (runnable.interrupted) return stop(STOPPED, `interrupted by ${runnable.interrupted}`, 130);
+      if (!runnable.ok) return stop(STOPPED, `${act.id} is not runnable: ${runnable.failed} did not hold`, 1);
+    }
+
+    const row = actStart(run, { id: act.id, phase: 'execute', opens_gap: act.opens_gap || null }, env);
+    const result = await child(ctx, act, act.execute);
+    if (result.interrupted) {
+      actEnd(run, row, { outcome: FAILED, note: `interrupted by ${result.interrupted}` }, env);
+      stderr.write(`mc: ${act.id} was interrupted by ${result.interrupted} — mc language resume picks it up\n`);
+      return stop(STOPPED, `interrupted by ${result.interrupted} at ${act.id}`, 130);
+    }
+    const rows = compare(act.expect.execute, result.json);
+    for (const line of rows) stdout.write(ctx.scrub(`${comparisonLine(line, ctx)}\n`));
+    const observed = Object.fromEntries(rows.map((line) => [line.path, line.observed ?? null]));
+    if (result.code !== 0) {
+      actEnd(run, row, { outcome: FAILED, observed, note: `exit ${result.code}${result.error ? ` — ${result.error}` : ''}` }, env);
+      stderr.write(`mc: ${act.id} exited ${result.code}\n`);
+      printIfNot(ctx, act);
+      return stop(FAILED, `${act.id} exit ${result.code}`, 1);
+    }
+    if (!rows.every((line) => line.ok)) {
+      actEnd(run, row, { outcome: 'deviated', observed }, env);
+      printIfNot(ctx, act);
+      return stop(STOPPED, `${act.id} execute deviated`, 1);
+    }
+    actEnd(run, row, { outcome: DONE, observed }, env);
+  }
+  stdout.write(dryRun ? 'mc: --dry-run — every exact expectation read held; nothing was written\n' : `mc: ${name} — every act done\n`);
+  return stop(DONE, '', 0);
+}
+
+/** The child for one argument array of `act`: the key in its environment only
+ * when the act names it, stderr teed to the terminal and the run's log. */
+async function child(ctx, act, argv) {
+  const env = { ...ctx.bare };
+  if (ctx.key && act.credentials.includes(CREDENTIAL)) {
+    env.CLOUDFLARE_API_TOKEN = ctx.key.token;
+    env.CLOUDFLARE_ACCOUNT_ID = ctx.key.account;
+  }
+  mkdirSync(languageDir(ctx.env), { recursive: true });
+  const onStderr = (chunk) => {
+    const clean = ctx.scrub(chunk);
+    try { ctx.stderr.write(clean); } catch { /* the terminal is gone */ }
+    try { appendFileSync(ctx.logFile, clean); } catch { /* the log is a copy */ }
+  };
+  const result = await ctx.spawnAct({ argv, cwd: ctx.worktree, env, onStderr });
+  return { ...result, json: parseLastJson(result.stdout) };
+}
+
+/**
+ * `act`'s check run and compared, its lines printed, and — unless `record` is
+ * false — a check row. `{ ok, json, interrupted }`: `ok` false at the first
+ * exact deviation or a check that printed no report.
+ */
+async function checkAct(ctx, act, { relax = false, record = true } = {}) {
+  const row = record ? actStart(ctx.run, { id: act.id, phase: 'check' }, ctx.env) : null;
+  const result = await child(ctx, act, act.check);
+  if (result.interrupted) {
+    if (row) actEnd(ctx.run, row, { outcome: FAILED, note: `interrupted by ${result.interrupted}` }, ctx.env);
+    return { ok: false, interrupted: result.interrupted };
+  }
+  const rows = compare(act.expect.check, result.json, { relax });
+  for (const line of rows) ctx.stdout.write(ctx.scrub(`${comparisonLine(line, ctx)}\n`));
+  const observed = Object.fromEntries(rows.map((line) => [line.path, line.observed ?? null]));
+  if (!result.json) {
+    ctx.stdout.write(`    ✗ the check printed no report — exit ${result.code}\n`);
+    if (row) actEnd(ctx.run, row, { outcome: FAILED, observed, note: `no report, exit ${result.code}` }, ctx.env);
+    return { ok: false, json: null };
+  }
+  const ok = rows.every((line) => line.ok);
+  if (row) actEnd(ctx.run, row, { outcome: ok ? 'passed' : 'deviated', observed, note: relax ? 'exact read as advisory: resuming' : '' }, ctx.env);
+  return { ok, json: result.json };
+}
+
+/** The checks of every act `act.requires_runnable` names, each with all its
+ * exact expectations holding. `{ ok, failed, interrupted }`. */
+async function requiresRunnable(ctx, act) {
+  for (const id of act.requires_runnable) {
+    const required = ctx.manifest.acts.find((each) => each.id === id);
+    ctx.stdout.write(`    requires ${id}\n`);
+    if (!required) {
+      ctx.stderr.write(`mc: ${act.id} requires ${id}, which ${ctx.manifest.name} has no act of — nothing was written\n`);
+      return { ok: false, failed: id };
+    }
+    const read = await checkAct(ctx, required);
+    if (read.interrupted) return { ok: false, interrupted: read.interrupted };
+    if (!read.ok) {
+      ctx.stderr.write(`mc: ${act.id} requires ${id}, and ${id} does not hold — nothing was written\n`);
+      printIfNot(ctx, required);
+      return { ok: false, failed: id };
+    }
+  }
+  return { ok: true };
+}
+
+function printIfNot(ctx, act) {
+  ctx.stderr.write(`mc: ${act.id} — ${act.if_not}\n`);
+}
+
+function deviated(ctx, act, stop) {
+  printIfNot(ctx, act);
+  ctx.stderr.write(ctx.dryRun
+    ? `mc: --dry-run stopped at ${act.id} — nothing was written\n`
+    : `mc: the run stopped before ${act.id}'s write — mc language resume picks it up\n`);
+  return stop(STOPPED, `${act.id} check deviated`, 1);
 }
