@@ -33,7 +33,7 @@
       "check": "Live, once, in the close-out: while a step session runs, `mc run stop --force`, then `mc run start`; the step's next row in `~/mc/runner/log/runs.tsv` has the same `session` value as the killed one, and `git status --porcelain` in its workarea was not emptied by the runner. Also `tests/mc/run.test.js` for claude and `tests/mc/run-codex.test.js` for codex argument lists."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A cold, large interrupted session gets a fresh session on the same branch with the leftover files committed as one WIP commit and a handover paragraph in its prompt.",
       "check": "`tests/mc/run.test.js`: an interrupted record with `last_activity` two hours old and `context_tokens` 120 000 over a dirty worktree; the launch is not a resume, one commit `<project>: WIP left by an interrupted session` is made with `--no-verify`, and the prompt carries the handover with the commits and the last assistant text."
     },

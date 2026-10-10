@@ -4164,6 +4164,87 @@ test('recovery: a cold small session is resumed, a cold large one is not', async
   assert.ok(areaGit(large).some((a) => a[0] === 'merge' && a.includes('origin/main')), 'a fresh session gets main merged in as always');
 });
 
+/** A cold, large interrupted session over its own dirt, with its stream log on disk. */
+function coldLargeArea(options = {}) {
+  const f = interruptedArea({ ...options, record: { last_activity: '2026-08-29T08:00:00Z', context_tokens: 120_000, ...options.record } });
+  f.files['/w/runner/log/alpha-20260829T090000Z.jsonl'] = CLAUDE_LOG;
+  return f;
+}
+
+const wipCommits = (f) => areaGit(f).filter((a) => a[0] === 'commit');
+
+test('recovery: a cold large session over its own dirt gets one WIP commit, a fresh launch and a handover', async () => {
+  const f = coldLargeArea();
+  await createRunner({ deps: f.deps }).pass();
+  const commits = wipCommits(f);
+  assert.equal(commits.length, 1, 'exactly one WIP commit');
+  assert.ok(commits[0].includes('--no-verify'));
+  assert.ok(commits[0].includes('alpha: WIP left by an interrupted session'));
+  assert.match(commits[0].join(' '), /Session c1a2b3c4-dead-4bee-8000-000000000001 was interrupted at 2026-08-29T09:58:00Z/u);
+  const git = areaGit(f);
+  assert.ok(git.findIndex((a) => a[0] === 'add' && a[1] === '-A') < git.findIndex((a) => a[0] === 'commit'));
+  assert.ok(git.findIndex((a) => a[0] === 'commit') < git.findIndex((a) => a[0] === 'merge' && a.includes('origin/main')), 'committed before main is merged in');
+  assert.equal(f.calls.sessions.length, 1);
+  const { args, prompt } = f.calls.sessions[0];
+  assert.equal(args.includes('--resume'), false);
+  assert.match(prompt, /An earlier session on this step was cut off at 2026-08-29T08:00:00Z \(cold, 120 000 tokens — fresh\)/u);
+  assert.match(prompt, /Its commits on this branch[^\n]*\n {4}abc1234/u);
+  assert.match(prompt, /tip-HEA is a WIP commit the runner made/u);
+  assert.match(prompt, /Its last words were:\n> Now the tests\./u);
+  assert.match(prompt, /Read the diff of the branch before writing anything/u);
+  assert.doesNotMatch(prompt, /refs\/mc\/checkpoint/u, 'no checkpoint ref, none named');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /uncommitted changes/u);
+  assert.equal(registerOf(f, 'alpha').steps[0].blocked_by ?? null, null);
+});
+
+test('recovery: on a branch named after the project but not the recorded one, the recorded branch is moved up first', async () => {
+  const f = coldLargeArea();
+  // fixture's `heads` is read through `branch --show-current`.
+  f.deps.git = ((inner) => (cwd, args) => {
+    if (cwd === '/w/alpha/memoro' && args[0] === 'branch' && !f.calls.git.some(([c, a0, a1, a2]) => c === cwd && a0 === 'checkout' && a2 === '-B')) {
+      f.calls.git.push([cwd, ...args]);
+      return { ok: true, stdout: 'alpha-step-2' };
+    }
+    return inner(cwd, args);
+  })(f.deps.git);
+  await createRunner({ deps: f.deps }).pass();
+  const git = areaGit(f);
+  const move = git.findIndex((a) => a.join(' ') === 'checkout -q -B alpha');
+  assert.ok(move >= 0, 'the recorded branch is moved');
+  assert.ok(git.some((a) => a.join(' ') === 'merge-base --is-ancestor alpha HEAD'));
+  assert.ok(move < git.findIndex((a) => a[0] === 'commit'), 'before the WIP commit');
+  assert.equal(wipCommits(f).length, 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: the interrupted session was on alpha-step-2 — alpha moved up to it/u);
+});
+
+test('recovery: dirt that is not the interrupted session\'s, or in a workarea with no record, still blocks as dirty-worktree', async () => {
+  const foreign = coldLargeArea();
+  foreign.deps.git = ((inner) => (cwd, args) => {
+    if (cwd === '/w/alpha/memoro' && args[0] === 'branch') { foreign.calls.git.push([cwd, ...args]); return { ok: true, stdout: 'someone-else' }; }
+    return inner(cwd, args);
+  })(foreign.deps.git);
+  await createRunner({ deps: foreign.deps }).pass();
+  assert.equal(wipCommits(foreign).length, 0);
+  assert.equal(foreign.calls.sessions.length, 0);
+  assert.deepEqual(registerOf(foreign, 'alpha').steps[0].blocked_by, { kind: 'workarea', name: 'dirty-worktree' });
+
+  const text = plan();
+  const none = fixture({ plans: { memoro: { alpha: text } }, areas: { alpha: { repo: 'memoro', programme: 'prog', plan: text } }, dirty: ['alpha'], session: okSession() });
+  await createRunner({ deps: none.deps }).pass();
+  assert.equal(wipCommits(none).length, 0);
+  assert.equal(none.calls.sessions.length, 0);
+  assert.deepEqual(registerOf(none, 'alpha').steps[0].blocked_by, { kind: 'workarea', name: 'dirty-worktree' });
+});
+
+test('recovery: a cold large session over a clean tree makes no commit and still gets the handover', async () => {
+  const f = coldLargeArea({ dirty: [] });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(wipCommits(f).length, 0);
+  const { prompt } = f.calls.sessions[0];
+  assert.match(prompt, /An earlier session on this step was cut off/u);
+  assert.doesNotMatch(prompt, /is a WIP commit/u);
+});
+
 test('recovery: an interrupted codex session is resumed through `codex exec resume`', async () => {
   const f = interruptedArea({ tool: 'codex', record: { last_activity: '2026-08-29T08:00:00Z', context_tokens: 4_000 } });
   await createRunner({ deps: f.deps }).pass();
