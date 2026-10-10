@@ -126,6 +126,9 @@ export async function runGate({
   git = null,
   gh = null,
   suite = null,
+  // How the command gates the selection named are run (`commandShell` when
+  // null): asynchronous, because they run beside the suite.
+  shell: gateShell = null,
   onProgress = () => {},
   clock = () => Date.now(),
   // Whether the round owns the lease or is running inside somebody else's.
@@ -174,6 +177,7 @@ export async function runGate({
   const askGh = gh || run('gh');
   const runSuite = suite || ((options) => realSuite({ ...options, env }));
   const runTests = tests || ((options) => realTests({ ...options, env }));
+  const runShell = gateShell || commandShell;
 
   const numbers = (Array.isArray(prs) && prs.length ? prs : [pr]).filter((n) => n !== null && n !== undefined).map(Number);
   const batch = numbers.length > 1;
@@ -585,25 +589,25 @@ export async function runGate({
     // is red.
     const flags = declared.declaration.pr_tests_flags || [];
     const is = facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
-    const after = selection
-      ? await (say(`running the ${selection.files.length} file${selection.files.length === 1 ? '' : 's'} this change reaches`), timed('suite', () => measureSelected({
-        tests: runTests, git: askGit, cwd: headDir, files: selection.files, flags, say, is,
-      })))
-      : await (say(`running the whole suite — ${commandLine.run} — this takes a while`), timed('suite', () => measure({
-        suite: runSuite, git: askGit, cwd: headDir, command: commandLine.run, say, is,
-      })));
-    if (!after.ok) return finish('suite', `the run ${after.reason}`);
-    report.candidate = after.result;
-    // The measured tree's own hash, so a landing can later prove — not
-    // assume — that main became exactly what was measured (track 3's
-    // correction, 2026-08-23: "verified together" and "landed one at a
-    // time" are two different claims, and only the first was measured).
-    report.candidate.tree = trim(askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir }).stdout) || null;
-
-    // The gates the selection named, on the candidate. After the files, in the
-    // order the selector gave, and before any verdict is reached — a round that
-    // stopped at a red test and skipped them would report a contract as
-    // unchecked exactly when it is least safe to assume it holds.
+    // The gates the selection named, on the candidate, started when the suite
+    // starts and awaited with it — before any verdict is reached, because a
+    // round that stopped at a red test and skipped them would report a
+    // contract as unchecked exactly when it is least safe to assume it holds.
+    // Every gate still runs and is judged; beside the suite they stop adding
+    // their whole time to the round (`sql:pr-ci` alone was 36 s at the median
+    // on 2026-10-09/10).
+    //
+    // Beside the suite, and still one after another in the order the selector
+    // gave, not all at once: this is an 8 GB machine already running the
+    // suite's lanes, and memory pressure was measured stretching rounds on
+    // 2026-10-10 (`kern.memorystatus_level` 30, swap 2.4 of 3 GB). One gate
+    // beside the suite is one process more; six would be six.
+    //
+    // A spawn error is a result in both halves, not a throw (`realTests`,
+    // `realSuite` and `commandShell` resolve it), so a round where neither
+    // could start reports both reasons. Anything that does throw is waited out
+    // and then thrown, as it was sequentially: the other half finishes first,
+    // and nothing turns green because one half threw.
     //
     // The base a command gate is handed is the commit the round measured
     // against, not the ref. Every worktree shares one git directory, so
@@ -614,14 +618,41 @@ export async function runGate({
     // `sql:pr-ci`'s "head does not include moving base … merge current main"
     // with nothing wrong in the change — the same red memoro's own `ci.mjs`
     // closed on 2026-09-06 by handing its gates the merge base as a commit.
-    const selectedGates = selection?.commands?.length
-      ? await runSelectedCommands({
-        commands: selection.commands, cwd: headDir, env, baseRef: report.base.commit || baseRef, say, timed, clock,
-      })
-      : [];
+    const besideFrom = clock();
+    const halves = await Promise.allSettled([
+      selection
+        ? (say(`running the ${selection.files.length} file${selection.files.length === 1 ? '' : 's'} this change reaches`), timed('suite', () => measureSelected({
+          tests: runTests, git: askGit, cwd: headDir, files: selection.files, flags, say, is,
+        })))
+        : (say(`running the whole suite — ${commandLine.run} — this takes a while`), timed('suite', () => measure({
+          suite: runSuite, git: askGit, cwd: headDir, command: commandLine.run, say, is,
+        }))),
+      selection?.commands?.length
+        ? runSelectedCommands({
+          commands: selection.commands, cwd: headDir, env, baseRef: report.base.commit || baseRef, say, timed, clock, shell: runShell,
+        })
+        : Promise.resolve([]),
+    ]);
+    if (selection?.commands?.length) report.timings.gates_beside_suite_ms = clock() - besideFrom;
+    const thrown = halves.find((half) => half.status === 'rejected');
+    if (thrown) throw thrown.reason;
+    const [after, selectedGates] = halves.map((half) => half.value);
     report.extra_gates.push(...selectedGates);
     const failedGates = selectedGates.filter((gate) => !gate.ok);
 
+    // Sequentially, a suite that could not be measured stopped the round
+    // before any gate ran. Beside it the gates did run, and are listed; the
+    // stop is the suite's, as it was.
+    if (!after.ok) return finish('suite', `the run ${after.reason}`);
+    report.candidate = after.result;
+    // The measured tree's own hash, so a landing can later prove — not
+    // assume — that main became exactly what was measured (track 3's
+    // correction, 2026-08-23: "verified together" and "landed one at a
+    // time" are two different claims, and only the first was measured).
+    report.candidate.tree = trim(askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir }).stdout) || null;
+
+    // Both halves have finished, so the probe for main red never runs beside
+    // a gate.
     say(`${after.result.red.length} red`);
     if (after.result.red.length) {
       const red = after.result.red;
@@ -924,7 +955,7 @@ async function selectFiles({ command, cwd, env, say }) {
  * command takes one — so the gate runs the repository's command rather than an
  * approximation of it.
  */
-async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, clock }) {
+async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, clock, shell: run = commandShell }) {
   const results = [];
   // The one thing the round's environment must not carry in: node sets
   // NODE_TEST_CONTEXT inside a test run, and a command that inherits it
@@ -938,7 +969,7 @@ async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, cl
     const invocation = `npm run ${entry.packageScript}${entry.passBaseRef ? ` -- --base-ref ${baseRef}` : ''}`;
     say(`command gate ${entry.packageScript}`);
     const from = clock();
-    const outcome = await timed('selected gates', async () => shell(invocation, { cwd, env: commandEnv }));
+    const outcome = await timed('selected gates', async () => run(invocation, { cwd, env: commandEnv }));
     const duration = clock() - from;
     const ran = outcome.status !== null && outcome.status !== undefined;
     results.push({
@@ -1371,6 +1402,27 @@ function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.en
  */
 function shell(command, { cwd, env }) {
   return spawnSync(command, { cwd, env, shell: true, encoding: 'utf8', maxBuffer: 256 << 20 });
+}
+
+/**
+ * `shell`, without holding the event loop. A command gate runs beside the
+ * suite, and a `spawnSync` there would stop the round reading the suite's
+ * pipes for as long as the gate took — the suite's child blocks on a full
+ * pipe, and "beside" becomes "after" again. Same result shape as `shell`:
+ * `status` null when the command did not start or was killed.
+ */
+function commandShell(command, { cwd, env }) {
+  return new Promise((resolve) => {
+    const child = spawn(command, { cwd, env, shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (error) => resolve({ status: null, stdout, stderr: stderr || error.message, error }));
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
 }
 
 /**
