@@ -65,3 +65,78 @@ test('note appends a paragraph to the step and moves nothing else', async () => 
   assert.deepEqual(f.step(0).comments, ['landed by hand']);
   assert.equal(await run(['note'], f.deps), 2);
 });
+
+/** A three-step memoro project, step 3 (index 2) the one being blocked. */
+function waiting(repo = 'memoro') {
+  const f = fixture();
+  f.deps.write(registerPath(ROOT, 'p'), {
+    project: 'p', repo,
+    steps: [{ key: 'A', status: 'done' }, { key: 'B', status: 'done', landed: { sha: 'abc1234' } }, { key: 'C', status: 'running' }],
+  });
+  f.deps.env = { MC_STEP: 'p:2' };
+  return f;
+}
+
+test('blocked --until and --after-deploy make the blocker and its name from the fields', async () => {
+  const a = waiting();
+  assert.equal(await run(['blocked', '--until', '2026-10-14T08:00Z'], a.deps), 0);
+  assert.deepEqual(a.step(2).blocked_by, { kind: 'time', name: 'until-20261014-0800', at: '2026-10-14T08:00:00Z' });
+
+  const b = waiting();
+  assert.equal(await run(['blocked', '--after-deploy', '--hours', '24'], b.deps), 0);
+  assert.deepEqual(b.step(2).blocked_by, { kind: 'deploy', name: 'deploy-step-2-24h', step: 2, hours: 24 });
+
+  const c = waiting();
+  assert.equal(await run(['blocked', 'p', '3', '--after-deploy', '1', '--reason', 'needs the migration live'], c.deps), 0);
+  assert.deepEqual(c.step(2).blocked_by, { kind: 'deploy', name: 'deploy-step-1', step: 1, hours: 0 });
+  assert.equal(c.step(2).reason, 'needs the migration live');
+});
+
+test('blocked refuses a past --until, --after-deploy outside memoro, on itself or a later step, and two waits at once', async () => {
+  const past = waiting();
+  assert.equal(await run(['blocked', '--until', '2026-09-01T00:00Z'], past.deps), 2);
+  assert.match(past.err.join(''), /has passed/u);
+  assert.equal(await run(['blocked', '--until', 'tomorrow'], past.deps), 2);
+  assert.match(past.err.join(''), /is not a time/u);
+
+  const cli = waiting('memoro-cli');
+  assert.equal(await run(['blocked', '--after-deploy'], cli.deps), 2);
+  assert.match(cli.err.join(''), /mc: memoro-cli has no deploy — mc deploy deploys memoro/u);
+
+  const self = waiting();
+  assert.equal(await run(['blocked', '--after-deploy', '3'], self.deps), 2);
+  assert.match(self.err.join(''), /a step before this one/u);
+  assert.equal(await run(['blocked', 'p', '2', '--after-deploy', '3'], self.deps), 2);
+  assert.equal(await run(['blocked', '--after-deploy', '--hours', '-1'], self.deps), 2);
+  assert.equal(await run(['blocked', '--until', '2026-10-14T08:00Z', '--on', 'x'], self.deps), 2);
+  assert.equal(self.step(2).status, 'running');
+});
+
+test('mc step <project> prints how long a time or deploy wait has left', async () => {
+  const f = fixture();
+  f.deps.now = () => new Date('2026-10-11T08:00:00Z');
+  f.deps.write(registerPath(ROOT, 'p'), {
+    project: 'p', repo: 'memoro',
+    steps: [
+      { key: 'A', status: 'done' },
+      { key: 'B', status: 'blocked', blocked_by: { kind: 'time', name: 'until-20261014-0800', at: '2026-10-14T08:00:00Z' } },
+      { key: 'C', status: 'done', landed: { sha: 'abc1234' } },
+      { key: 'D', status: 'blocked', blocked_by: { kind: 'deploy', name: 'deploy-step-3-24h', step: 3, hours: 24 } },
+      { key: 'E', status: 'blocked', blocked_by: { kind: 'deploy', name: 'deploy-step-1', step: 1, hours: 0 } },
+      { key: 'F', status: 'blocked', blocked_by: { kind: 'decision', name: 'q-1' } },
+    ],
+  });
+  f.deps.deploys = () => [{ sha: 'fff9999', ended: '2026-10-10T15:40:00Z', outcome: 'deployed' }];
+  f.deps.contains = (sha, rowSha) => sha === 'abc1234' && rowSha === 'fff9999';
+  assert.equal(await run(['p'], f.deps), 0);
+  const out = f.out.join('');
+  assert.match(out, /until 2026-10-14 08:00Z — 3d left/u);
+  assert.match(out, /on deploy of step 3 \+ 24h — 7h40m left/u);
+  assert.match(out, /on deploy of step 1 — step 1 not landed/u);
+  assert.match(out, /on decision q-1/u);
+
+  f.out.length = 0;
+  f.deps.deploys = () => [];
+  assert.equal(await run(['p'], f.deps), 0);
+  assert.match(f.out.join(''), /on deploy of step 3 \+ 24h — not deployed yet/u);
+});
