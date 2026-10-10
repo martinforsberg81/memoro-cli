@@ -22,7 +22,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc merge watch <repo> <pr>` follows a job from queued through landing to merged or red, prints one line per change, and exits with the contract's codes.",
       "check": "`tests/mc/merge-watch.test.js` with injected `readQueue`, `readMerger`, `prView`, `now` and `sleep`: queued at place 3 then landing then gone and MERGED gives three lines and exit 0, with the merge commit in the last; landing then `red` gives exit 1 with `markRed`'s reason; a job never queued and CLOSED gives exit 2; an unchanged queued state past `--timeout` gives exit 3; a queued job with `readMerger` null for two polls gives exit 4; a waiting-on-parent job prints `waits for #<parent> (stacked on it)`. `prView` is called only after the job leaves the queue."
     },
