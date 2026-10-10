@@ -1218,3 +1218,59 @@ merger. The watch is read-only. It prints a line only when the state changes,
 and it asks GitHub once, when the job has left the queue. Nothing starts it
 except a session that chooses to. Carried by `merge-watch`
 (`docs/project/mc/merge-watch/PLAN.json`).
+
+## 37 · The merger mends what it can before it says red, keeps a plan's steps in order, and never holds its own event loop
+
+`ruling · 2026-10-10` · raised by Martin in the mc planning session
+
+The merger started batching on 2026-10-10 at 17:47 UTC (ruling 34), and the
+first hour showed three faults. memoro #13372 had been merged by hand at
+17:38. Its batch round answered "#13372 is merged, so there is nothing to
+gate", and #13373 and #13374 came back red with that reason, which was not
+theirs. #13370 came back red with a one-file conflict. A planning session
+merged it by hand with `--admin`, and `merges.json` still says red. The
+merger that served 17:47-18:00 had been started by a step session from its
+own workarea. It ran that branch's code, which had batches but no lanes, so
+the two repositories took turns. The rounds run git, `npm ci`, the derived
+scripts and the selector with `spawnSync`, which blocks the merger's one
+process. A SIGTERM sent at 17:40 was only seen at 17:47,
+and then the gate's own handler cut the round short instead of letting it
+finish.
+
+> "Ja, rundorna behöver vara asynkrona. Ordna det." … "Vi behöver se till
+> att mc klarar detta själv. En merge kan bli röd av olika skäl: 'redan
+> merged' eller 'pga orsak …' (borde inte mergeprocessen i läge två
+> automatiskt starta en mc merge session som får i uppgift att fixa det?),
+> dvs den tar det internt ett (1) varv med llm innan den rapporterar som
+> red." … "Och step n+1 ska inte kunna bli mergad om inte step n i ett
+> projekt blivit mergad; det behöver vi också en spärr för."
+> (Martin, 2026-10-10)
+
+Asked in the session, Martin chose:
+
+- the mend takes conflicts and red tests the change caused, not infra, not
+  main's own red, not "already merged";
+- the job is set aside while it is mended and the lane goes on;
+- the mend is a short session of its own in a worktree of its own, never the
+  step's workarea.
+
+So:
+
+- A pull request that GitHub says is merged is answered as landed. It leaves
+  its batch, and the rest go on. One that is closed is answered red by
+  itself. Neither is a reason for its batch.
+- A job for step n+1 of a plan does not go until every earlier step of that
+  plan is `done` in the register, whether or not it names a parent.
+- A red answer the change caused gets one mend session first: one try, then
+  red as today. The session may commit and push to the pull request's
+  branch. It never merges, never force-pushes and never edits a plan. A job
+  that went red after it was mended is red at once.
+- The merger always runs from the installed mc, whoever starts it, and says
+  which commit it runs.
+- Every process the merger or a round starts runs without holding the event
+  loop. A SIGTERM to the merger lets the jobs in flight finish.
+
+This amends ruling 21 (no repair in the merge path) and ruling 30 (red goes
+straight back to the step's next session) in that one point: one mend, then
+red. Carried by `merger-hardening`
+(`docs/project/mc/merger-hardening/PLAN.json`).
