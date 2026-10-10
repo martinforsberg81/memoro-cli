@@ -877,6 +877,9 @@ export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
 export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const instr = profileArgs(toolId, instructions);
+  // `codex exec resume` takes no `--sandbox` (codex-cli 0.151.0): the same
+  // setting goes through `-c`, and the session id is the first positional.
+  if (toolId === 'codex' && resume) return ['exec', 'resume', '--json', ...modelArgs, '-c', 'sandbox_mode="danger-full-access"', ...instr, resume, prompt];
   if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...instr, prompt];
   const tuning = [...(adapter?.effortArgs?.(effort) ?? []), ...(adapter?.advisorArgs?.(advisor) ?? [])];
   const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
@@ -906,6 +909,83 @@ export function resumePrompt({ said }) {
     '',
     'Continue the step from where you stopped. Do not start it over.',
   ].join('\n');
+}
+
+/**
+ * The message a session resumed after it died under its step gets (ruling
+ * 33): when it was cut off, that its tree is as it left it, and that what it
+ * had running is not.
+ */
+export function restartPrompt({ at, why = null }) {
+  return [
+    `The runner resumed this session: it was cut off at ${at || 'an unknown time'} because the machine restarted or the runner was stopped${why ? ` (${why})` : ''}.`,
+    'The files, the branch and anything uncommitted are exactly as you left them.',
+    'The processes you had started — dev servers, background tasks, test runs — are',
+    'gone; start them again if you still need them.',
+    '',
+    'Run `git status` first, then continue the step from where you stopped. Do not start it over.',
+  ].join('\n');
+}
+
+/**
+ * How close to the cache's end a resume may still count as warm: the resumed
+ * session's first request has to reach the API inside the TTL, after the
+ * launch and the tool's own start-up.
+ */
+export const WARM_MARGIN_MS = 5 * 60_000;
+
+/**
+ * The largest conversation resumed when its cache has gone cold. Below half
+ * the compaction window, writing the conversation to the cache once costs
+ * less than a new session re-reading the code; above it the resumed session
+ * would compact soon and lose what it knew.
+ */
+export const COLD_RESUME_MAX_TOKENS = AUTOCOMPACT_TOKENS / 2;
+
+const groupDigits = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/gu, ' ');
+
+/**
+ * Whether an interrupted step's session is resumed or a fresh one started,
+ * from its `interrupted` record alone (ruling 33): `{ mode, why }`, `why`
+ * one line for the log. Fresh when there is no session to resume, when the
+ * last resume of it did not start, or when the plan's tool is not the one
+ * the session ran on. Resume while the prompt cache is warm; past it, resume
+ * a conversation small enough to be worth writing to the cache again.
+ */
+export function recoveryFor({ interrupted, toolNow, ttlMs, now }) {
+  const record = interrupted || {};
+  if (!record.session_id) return { mode: 'fresh', why: 'no session id — fresh' };
+  if (record.resume_failed) return { mode: 'fresh', why: 'the last resume did not start — fresh' };
+  if (toolNow !== record.tool) return { mode: 'fresh', why: `the tool is ${toolNow} now, the session ran on ${record.tool || 'an unknown tool'} — fresh` };
+  const last = record.last_activity ? Date.parse(record.last_activity) : NaN;
+  const nowMs = now instanceof Date ? now.getTime() : Number(now);
+  if (Number.isFinite(last) && nowMs - last < ttlMs - WARM_MARGIN_MS) {
+    return { mode: 'resume', why: `warm, ${Math.max(0, Math.round((nowMs - last) / 60_000))} min since last request` };
+  }
+  const tokens = record.context_tokens;
+  if (tokens == null) return { mode: 'resume', why: 'cold, context size unknown' };
+  if (tokens <= COLD_RESUME_MAX_TOKENS) return { mode: 'resume', why: `cold, ${groupDigits(tokens)} tokens` };
+  return { mode: 'fresh', why: `cold, ${groupDigits(tokens)} tokens — fresh` };
+}
+
+/**
+ * Whether a session said anything at all: a real assistant event for claude,
+ * a completed item or turn for codex. A resume that died before it did is
+ * one that never started (`No conversation found`, a rollout that is gone).
+ */
+export function sessionSpoke({ toolId, stdout }) {
+  for (const line of String(stdout || '').split('\n')) {
+    if (!line.trim()) continue;
+    let event = null;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (!event || typeof event !== 'object') continue;
+    if (toolId === 'codex') {
+      if (event.type === 'item.completed' || event.type === 'turn.completed') return true;
+    } else if (event.type === 'assistant' && event.message?.model !== '<synthetic>') {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

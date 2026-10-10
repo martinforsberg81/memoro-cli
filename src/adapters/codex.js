@@ -247,6 +247,11 @@ export function resumeArgs({ sessionId, model = null } = {}) {
   return ['resume', ...modelArgs(model), sessionId];
 }
 
+// How long the prompt cache keeps a session's prefix: OpenAI's prompt cache
+// keeps one minutes, not an hour. The conservative figure only makes a cold
+// resume more likely, never a wrong warm one (`recoveryFor`, run-plan.js).
+export const CACHE_TTL_MS = 5 * 60_000;
+
 /**
  * The model to run on, passed through as given. mc does not validate model
  * names — the tool is the authority on what exists, and its own error names

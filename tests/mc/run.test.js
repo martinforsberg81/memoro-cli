@@ -4082,3 +4082,98 @@ test('runLoop: a STOP read by one lane and then removed still ends the runner, a
   assert.equal(f.calls.sessions.length, 1);
   assert.equal(f.files['/w/runner/runner.json'], undefined);
 });
+
+/** A workarea whose step's session died under it, with the record the sweep wrote. */
+const DEAD_ID = 'c1a2b3c4-dead-4bee-8000-000000000001';
+function interruptedArea({ tool = 'claude', record = {}, dirty = ['alpha'], session = okSession() } = {}) {
+  const text = plan(tool === 'codex' ? { runner: { tool: 'codex' } } : {});
+  const f = fixture({ plans: { memoro: { alpha: text } }, areas: { alpha: { repo: 'memoro', programme: 'prog', plan: text } }, dirty, session });
+  f.files['/w/runner/projects/alpha.json'] = JSON.stringify({
+    project: 'alpha', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/alpha/PLAN.json',
+    steps: [{
+      status: 'ready', branch: 'alpha',
+      interrupted: {
+        at: '2026-08-29T09:58:00Z', session_id: DEAD_ID, tool, model: 'opus', log: '/w/runner/log/alpha-20260829T090000Z',
+        last_activity: '2026-08-29T09:48:00Z', context_tokens: 120_000, branch: 'alpha', count: 1, ...record,
+      },
+    }],
+  });
+  return f;
+}
+
+/** The git calls made in the workarea itself. */
+const areaGit = (f) => f.calls.git.filter(([cwd]) => cwd === '/w/alpha/memoro').map(([, ...args]) => args);
+
+test('recovery: a warm interrupted claude session over a dirty worktree is resumed with --resume, no merge, no checkout', async () => {
+  let during = null;
+  const f = interruptedArea({
+    session: (call) => { during = registerOf(f, 'alpha').steps[0]; return okSession()(call); },
+  });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 1);
+  const { args, prompt } = f.calls.sessions[0];
+  assert.deepEqual(args.slice(0, 3), ['-p', '--resume', DEAD_ID]);
+  assert.match(prompt, /cut off at 2026-08-29T09:48:00Z because the machine restarted or the runner was stopped/u);
+  assert.match(prompt, /Run `git status` first/u);
+  const git = areaGit(f);
+  assert.equal(git.some((a) => a[0] === 'merge'), false, 'no merge of main');
+  assert.equal(git.some((a) => a[0] === 'checkout'), false, 'no branch move');
+  assert.equal(git.some((a) => a[0] === 'fetch'), false);
+  assert.equal(git.some((a) => a[0] === 'status'), false, 'the dirty check is not asked');
+  assert.equal(during.status, 'running');
+  assert.equal(during.interrupted.session_id, DEAD_ID, 'the record stays while the resumed session runs');
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: resuming claude session c1a2b3c4-dead-4bee-8000-000000000001 \(warm, 12 min since last request\)/u);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /uncommitted changes/u);
+});
+
+test('recovery: a cold small session is resumed, a cold large one is not', async () => {
+  const small = interruptedArea({ record: { last_activity: '2026-08-29T08:00:00Z', context_tokens: 41_000 } });
+  await createRunner({ deps: small.deps }).pass();
+  assert.deepEqual(small.calls.sessions[0].args.slice(0, 3), ['-p', '--resume', DEAD_ID]);
+  assert.match(small.files['/w/runner/log/runner.log'], /\(cold, 41 000 tokens\)/u);
+
+  const large = interruptedArea({ dirty: [], record: { last_activity: '2026-08-29T08:00:00Z', context_tokens: 120_000 } });
+  await createRunner({ deps: large.deps }).pass();
+  assert.equal(large.calls.sessions[0].args.includes('--resume'), false);
+  assert.ok(areaGit(large).some((a) => a[0] === 'merge' && a.includes('origin/main')), 'a fresh session gets main merged in as always');
+});
+
+test('recovery: an interrupted codex session is resumed through `codex exec resume`', async () => {
+  const f = interruptedArea({ tool: 'codex', record: { last_activity: '2026-08-29T08:00:00Z', context_tokens: 4_000 } });
+  await createRunner({ deps: f.deps }).pass();
+  const { args } = f.calls.sessions[0];
+  assert.deepEqual(args.slice(0, 3), ['exec', 'resume', '--json']);
+  assert.equal(args.at(-2), DEAD_ID);
+  assert.match(args.at(-1), /cut off at 2026-08-29T08:00:00Z/u);
+});
+
+test('recovery: a resume that cannot start marks the record, and the next pick is fresh', async () => {
+  const f = interruptedArea({
+    dirty: [],
+    session: () => ({ status: 1, stdout: '', stderr: `No conversation found with session ID: ${DEAD_ID}`, timedOut: false, stalled: false, lingered: false, signal: null }),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  const step = registerOf(f, 'alpha').steps[0];
+  assert.equal(step.status, 'ready');
+  assert.equal(step.interrupted.resume_failed, true);
+  assert.equal(step.interrupted.count, 1, 'not another interruption');
+  assert.match(f.files['/w/runner/log/runner.log'], /the resume of claude session c1a2b3c4-dead-4bee-8000-000000000001 did not start \(rc 1\) — the next pick starts step 1 fresh/u);
+  assert.match(runRows(f.files)[0].note, /resume-failed$/u);
+
+  f.deps.session = (call) => { f.calls.sessions.push(call); return okSession()(call); };
+  await runner.pass();
+  assert.equal(f.calls.sessions.length, 2);
+  assert.equal(f.calls.sessions[1].args.includes('--resume'), false);
+});
+
+test('recovery: interrupted projects go first in the queue, the most recent last activity first', () => {
+  const f = fixture({ plans: { memoro: { alpha: ready, beta: ready, gamma: ready } }, queue: 'alpha\nbeta\ngamma\n' });
+  const entry = (name, lastActivity) => JSON.stringify({
+    project: name, repo: 'memoro', programme: 'prog', plan: `docs/project/prog/${name}/PLAN.json`,
+    steps: [{ status: 'ready', interrupted: { session_id: 's', tool: 'claude', last_activity: lastActivity, count: 1 } }],
+  });
+  f.files['/w/runner/projects/beta.json'] = entry('beta', '2026-08-29T09:00:00Z');
+  f.files['/w/runner/projects/gamma.json'] = entry('gamma', '2026-08-29T09:50:00Z');
+  assert.deepEqual(createRunner({ deps: f.deps }).queue().names, ['gamma', 'beta', 'alpha']);
+});
