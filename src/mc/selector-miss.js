@@ -33,10 +33,12 @@
  * file, the landing that broke it, and whether that landing's selection named
  * it. `not-selected` is the selector miss; `selected` is a test that was run
  * and landed red anyway (a flake, or a tree that differed from the measured
- * one); `no-round` is a landing mc never gated; `docs-only` is a landing that
- * changed nothing outside `docs/`, kept so a reader sees where the walk
- * stopped, and never named as the one that broke the file. The same break
- * found by a second round is written once.
+ * one); `no-round` is a landing mc never gated; `docs-only-landing` is a
+ * landing that changed nothing outside `docs/`, ran no suite, and broke the
+ * file all the same, measured twice to be sure — a miss the page counts. A
+ * docs-only landing whose second measure disagrees is `flaky`: said in the
+ * round's reason, never written here. The same break found by a second round
+ * is written once.
  */
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -90,6 +92,7 @@ export async function probeMainRed({
   const history = String(git(['rev-list', '--first-parent', `--max-count=${limit + 1}`, baseCommit], { cwd })?.stdout || '')
     .split('\n').map((line) => line.trim()).filter(Boolean);
   let still = onBase.red;
+  const flaky = [];
   for (let index = 1; index < history.length && still.length; index += 1) {
     const commit = history[index];
     const newer = history[index - 1];
@@ -104,19 +107,26 @@ export async function probeMainRed({
       break;
     }
     const passed = [...absent, ...present.filter((file) => !run.red.includes(file))];
-    for (const file of passed) probe.breaks.push(landing({ git, cwd, commit: newer, file }));
+    for (const file of passed) {
+      const found = landing({ git, cwd, commit: newer, file });
+      if (docsOnly(found.paths)) {
+        found.kind = await remeasure({ git, tests, cwd, newer, commit, file, flags, present: present.includes(file) });
+        if (found.kind === 'flaky') flaky.push(file);
+      }
+      probe.breaks.push(found);
+    }
     still = still.filter((file) => !passed.includes(file));
   }
-  probe.unresolved = still;
+  probe.unresolved = [...still, ...flaky];
 
   const rounds = readRounds({ root }).rounds;
   for (const found of probe.breaks) {
-    Object.assign(found, docsOnly(found.paths) ? { kind: 'docs-only' } : classify(found, rounds));
+    if (!found.kind) Object.assign(found, classify(found, rounds));
     const where = found.pr ? `#${found.pr}` : found.commit.slice(0, 7);
-    say(found.kind === 'docs-only'
+    say(found.kind === 'flaky'
       ? `${found.file} passes before ${where} — ${KIND_PHRASE[found.kind]}`
       : `${found.file} broke in ${where} — ${KIND_PHRASE[found.kind]}`);
-    recordSelectorMiss({ repo, ...found, found_by: foundBy }, { root });
+    if (found.kind !== 'flaky') recordSelectorMiss({ repo, ...found, found_by: foundBy }, { root });
   }
   if (still.length) say(`${still.length} file${still.length === 1 ? ' has' : 's have'} been red on main for more than ${limit} landings — the nightly dates ${still.length === 1 ? 'it' : 'them'}`);
   return probe;
@@ -127,17 +137,35 @@ const KIND_PHRASE = {
   selected: 'its round ran it green, and it landed red anyway',
   'no-selection': 'its round kept no selection to check against',
   'no-round': 'mc never gated that landing',
-  'docs-only': 'it changed only docs/, so it cannot have broken it: no landing explains this red',
+  'docs-only-landing': 'it changed only docs/ and landed without the suite — a test reads what it changed',
+  flaky: 'red and green at the same commits — not this landing\'s',
 };
 
 /**
- * A landing that changed nothing outside `docs/` cannot have broken a test.
+ * A landing that changed only `docs/` is measured again before it is named.
  *
- * 2026-10-06, `mc merge memoro 12720`: the walk named #12727 — six files under
- * `docs/project/staff/` — as the landing that broke a wall-clock budget test
- * that was red under load at both commits and green alone. The walk found
- * where a flaky test happened to pass, not what broke it. An empty list is a
- * landing whose paths could not be read, and is not called docs-only.
+ * Both ways have happened. 2026-10-06, `mc merge memoro 12720`: the walk named
+ * #12727 — six files under `docs/project/staff/` — for a wall-clock budget test
+ * that was red under load at both commits and green alone; the walk had found
+ * where a flaky test happened to pass. 2026-10-10: the walk reached #13310, an
+ * archive that deleted files a test reads, and ruling it out by path left the
+ * round's reds unexplained — a docs-only landing runs no suite, so nothing
+ * stopped it. One more run at each commit tells the two apart: red at the
+ * landing and green at its parent both times is the landing's; anything else
+ * is the test's, and blames nobody.
+ */
+async function remeasure({ git, tests, cwd, newer, commit, file, flags, present }) {
+  const atLanding = await redAt({ git, tests, cwd, commit: newer, files: [file], flags });
+  if (!atLanding.ok || !atLanding.red.includes(file)) return 'flaky';
+  if (!present) return 'docs-only-landing';
+  const atParent = await redAt({ git, tests, cwd, commit, files: [file], flags });
+  return atParent.ok && !atParent.red.includes(file) ? 'docs-only-landing' : 'flaky';
+}
+
+/**
+ * Whether a landing changed nothing outside `docs/` — the landings the walk
+ * measures again (`remeasure`). An empty list is a landing whose paths could
+ * not be read, and is not called docs-only.
  */
 export function docsOnly(paths) {
   return Array.isArray(paths) && paths.length > 0 && paths.every((path) => path.startsWith('docs/'));
@@ -236,16 +264,20 @@ export function readSelectorMisses({ root = mcHome() } = {}) {
   return lines;
 }
 
+const MISS_KINDS = new Set(['not-selected', 'docs-only-landing']);
+
 /**
  * What the repository page says: the misses of the last two weeks, newest
- * first. Only `not-selected` is a miss; the other kinds are landings that
- * turned main red for a reason the selector is not answerable for.
+ * first. `not-selected` and `docs-only-landing` are misses — a test the change
+ * reached and no round ran; the other kinds are landings that turned main red
+ * for a reason the selector is not answerable for.
  */
+
 export function selectorMissReading(repoPath, { root = mcHome(), now = Date.now(), days = 14 } = {}) {
   const repo = basename(String(repoPath || ''));
   const since = now - days * 24 * 60 * 60 * 1000;
   const recent = readSelectorMisses({ root })
-    .filter((line) => line.repo === repo && line.kind === 'not-selected' && Date.parse(line.at) >= since)
+    .filter((line) => line.repo === repo && MISS_KINDS.has(line.kind) && Date.parse(line.at) >= since)
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   return { days, misses: recent.length, recent: recent.slice(0, 5) };
 }

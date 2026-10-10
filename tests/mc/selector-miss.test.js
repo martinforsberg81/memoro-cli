@@ -28,11 +28,13 @@ function located(files) {
 
 /**
  * main, newest first, and which files are red at each commit. A file missing
- * from `present` did not exist at that commit.
+ * from `present` did not exist at that commit. `visits` gives a commit a red
+ * list per run there, the last one repeating — a test that flips.
  */
-function repo({ history, redAt, present = {}, subjects = {}, changed = {} }) {
+function repo({ history, redAt, present = {}, subjects = {}, changed = {}, visits = {} }) {
   let at = null;
   const runs = [];
+  const seen = {};
   const git = (args) => {
     if (args[0] === 'checkout') { at = args.at(-1); return { status: 0 }; }
     if (args[0] === 'rev-list') return { status: 0, stdout: history.join('\n') };
@@ -46,7 +48,9 @@ function repo({ history, redAt, present = {}, subjects = {}, changed = {} }) {
   };
   const tests = ({ files }) => {
     runs.push({ at, files: [...files] });
-    return Promise.resolve({ code: 0, tap: located((redAt[at] || []).filter((file) => files.includes(file))) });
+    const visit = seen[at] = (seen[at] ?? -1) + 1;
+    const red = visits[at] ? visits[at][Math.min(visit, visits[at].length - 1)] : redAt[at] || [];
+    return Promise.resolve({ code: 0, tap: located(red.filter((file) => files.includes(file))) });
   };
   return { git, tests, runs };
 }
@@ -125,52 +129,77 @@ describe('the walk finds the landing that broke each file', () => {
   });
 });
 
-describe('a landing that changed only docs/ is not blamed', () => {
+describe('a landing that changed only docs/ is measured again before it is named', () => {
   // 2026-10-06, `mc merge memoro 12720`: a wall-clock budget test, red under
   // load at both commits, was blamed on #12727 — six files under docs/.
-  async function walk(changed) {
+  // 2026-10-10: #13310, an archive under docs/, deleted files a test reads,
+  // and ruling it out by path left the red unexplained.
+  async function walk(changed, visits = {}) {
     const h = home();
     const fx = repo({
       history: ['c1', 'c0'],
       redAt: { c1: ['t/budget.test.js'] },
+      visits,
       subjects: { c1: 'staff notes (#12727)' },
       changed: { c1: changed },
     });
     try {
       rounds(h.root, [{ merged: [12727], selected: [] }]);
       const probe = await probeMainRed({ ...fx, cwd: '/x', baseCommit: 'c1', files: ['t/budget.test.js'], root: h.root, repo: '/r/memoro' });
-      return { probe, kept: readSelectorMisses({ root: h.root }) };
+      const now = Date.now();
+      return { probe, runs: fx.runs, kept: readSelectorMisses({ root: h.root }), reading: selectorMissReading('/r/memoro', { root: h.root, now }) };
     } finally { h.cleanup(); }
   }
+  const docs = ['docs/project/staff/a.md', 'docs/project/staff/b.md'];
 
-  it('keeps the landing, with its paths and kind docs-only, and the clause names no pull request', async () => {
-    const { probe, kept } = await walk(['docs/project/staff/a.md', 'docs/project/staff/b.md']);
-    assert.deepEqual(probe.breaks[0].paths, ['docs/project/staff/a.md', 'docs/project/staff/b.md']);
-    assert.equal(probe.breaks[0].kind, 'docs-only');
-    assert.equal(kept[0].kind, 'docs-only');
+  it('red at the landing and green at its parent both times names it, as landed without the suite, and records a miss', async () => {
+    const { probe, runs, kept, reading } = await walk(docs);
+    assert.deepEqual(probe.breaks[0].paths, docs);
+    assert.equal(probe.breaks[0].kind, 'docs-only-landing');
+    assert.deepEqual(probe.unresolved, []);
+    // The walk's run at each commit, then one more at each.
+    assert.deepEqual(runs.map((run) => run.at), ['c1', 'c0', 'c1', 'c0']);
+    assert.equal(kept[0].kind, 'docs-only-landing');
+    assert.equal(reading.misses, 1);
     assert.equal(mainRedClause(probe),
-      ' — 1 of the red files is red on main too — no landing explains it (the walk reached #12727, which changed only docs/)');
+      ' — 1 of the red files is red on main too, broken by #12727 (#12727 changed only docs/ and landed without the suite)');
+  });
+
+  it('a second measure that flips is flaky: nobody is named, nothing is recorded, the file is unresolved', async () => {
+    // Red at c1, green at c0, then green at c1 when measured again.
+    const { probe, kept, reading } = await walk(docs, { c1: [['t/budget.test.js'], []] });
+    assert.equal(probe.breaks[0].kind, 'flaky');
+    assert.deepEqual(probe.unresolved, ['t/budget.test.js']);
+    assert.deepEqual(kept, []);
+    assert.equal(reading.misses, 0);
+    assert.equal(mainRedClause(probe), ' — 1 of the red files is red on main too — 1 flaky under load');
     assert.doesNotMatch(mainRedClause(probe), /broken by/u);
   });
 
-  it('a landing with one path outside docs/ is named as before', async () => {
-    const { probe } = await walk(['docs/project/staff/a.md', 'src/budget.js']);
+  it('red at the parent on the second measure is flaky too', async () => {
+    const { probe } = await walk(docs, { c0: [[], ['t/budget.test.js']] });
+    assert.equal(probe.breaks[0].kind, 'flaky');
+  });
+
+  it('a landing with one path outside docs/ is named as before, and not measured again', async () => {
+    const { probe, runs } = await walk(['docs/project/staff/a.md', 'src/budget.js']);
     assert.deepEqual(probe.breaks[0].paths, ['docs/project/staff/a.md', 'src/budget.js']);
     assert.equal(probe.breaks[0].kind, 'not-selected');
+    assert.equal(runs.length, 2);
     assert.equal(mainRedClause(probe),
       ' — 1 of the red files is red on main too, broken by #12727 (its selection did not reach it: a selector miss)');
   });
 
-  it('names the landing that could have broken one file, and says the walk reached a docs-only one for the other', () => {
+  it('names the landing that broke one file, and says the other is flaky', () => {
     const probe = {
       red_on_main: ['t/a.test.js', 't/b.test.js'],
       breaks: [
         { file: 't/a.test.js', commit: 'c2', pr: 20, kind: 'selected', paths: ['src/a.js'] },
-        { file: 't/b.test.js', commit: 'c1', pr: 10, kind: 'docs-only', paths: ['docs/x.md'] },
+        { file: 't/b.test.js', commit: 'c1', pr: 10, kind: 'flaky', paths: ['docs/x.md'] },
       ],
     };
     assert.equal(mainRedClause(probe),
-      ' — 2 of the red files are red on main too, broken by #20 — no landing explains the rest (the walk reached #10, which changed only docs/)');
+      ' — 2 of the red files are red on main too, broken by #20 — 1 flaky under load');
   });
 
   it('paths that could not be read are not called docs-only', () => {
