@@ -696,6 +696,9 @@ test('parseRunArgs: the three orders, and the flags start carries through', () =
   assert.deepEqual(parseRunArgs(['stop', '--force']), { verb: 'stop', force: true });
   assert.deepEqual(parseRunArgs(['--update']), { verb: 'update', force: false });
   assert.deepEqual(parseRunArgs(['--update', '--force']), { verb: 'update', force: true });
+  // The word form the page's menu takes, from the shell too.
+  assert.deepEqual(parseRunArgs(['update']), { verb: 'update', force: false });
+  assert.deepEqual(parseRunArgs(['update', '--force']), { verb: 'update', force: true });
 
   // `start` is the run, in the background: its flags are parsed here so a typo
   // is answered at the terminal rather than in a log nobody is watching, and

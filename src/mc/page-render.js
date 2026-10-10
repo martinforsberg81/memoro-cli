@@ -46,7 +46,7 @@
  * at a row without splitting a page apart again.
  */
 import { ageWords } from './page-cache.js';
-import { drainLine } from './run-control.js';
+import { drainLine, stopLine } from './run-control.js';
 import { clip, pad, painter, width } from './status-render.js';
 
 /** Same glyphs as the old board, so nothing new has to be learnt. */
@@ -258,11 +258,28 @@ function runnerLines(lines, c, wide, runner) {
   } else {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c('the runner is not running — mc run starts it', 'grey')}`);
   }
+  // Stopping, in the words `mc run stop` prints (run-control.js `stopLine`):
+  // since when, the steps it still waits on, how many lanes have left — and
+  // the one thing to type to have a runner running again without waiting.
+  // A STOP with no runner alive is a leftover the next start removes.
   if (now.stop) {
+    const stopping = alive || flight;
+    const reading = stopping
+      ? stopLine({
+        stopping: true,
+        stop_requested: now.stop_requested?.at ?? null,
+        stop_since_seconds: now.stop_requested?.age_seconds ?? null,
+        inFlight: (now.steps || []).map((step) => ({
+          name: step.name, step: step.step ?? null, lane: `${step.repo}#${(step.lane || 0) + 1}`, elapsed_seconds: step.elapsed_seconds,
+        })),
+        lanes: lanes.length || null,
+      })
+      : null;
     lines.push(`  ${paint(c, [
-      { text: `${MARK.stopped} STOP requested`, styles: ['red', 'bold'] },
-      { text: ' — the runner exits after the steps it is in', styles: ['grey'] },
+      { text: `${MARK.stopped} ${stopping ? 'stopping' : 'STOP left behind'}`, styles: ['red', 'bold'] },
+      { text: stopping ? reading.slice('stopping'.length) : ' — the next start removes it', styles: ['grey'] },
     ], wide - 2)}`);
+    if (stopping) say(lines, c, wide, 4, 'start takes over now — a new runner on every lane, this one only finishes its steps', 'grey');
   }
   for (const line of now.stale) say(lines, c, wide, 2, `${MARK.quiet} stale: ${line}`, 'red');
   for (const failure of now.github || []) say(lines, c, wide, 2, githubLine(failure), 'yellow');

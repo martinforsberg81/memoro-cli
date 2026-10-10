@@ -210,6 +210,8 @@ export function productionSection({
 
 export function runnerSection({
   runner = null, currents = [], stop = false, rows = [],
+  // What STOP says: the time it was written, for the stop line's `since`.
+  stopText = null,
   deploy = null, attempt = null, live = null, repos = REPO_NAMES,
   // What `mc run lanes` set: how many lane loops each repository has, and the
   // cap across them. The rows are one per lane, so the page needs the number.
@@ -235,8 +237,12 @@ export function runnerSection({
     step.step = plan?.step ?? null;
     step.steps = plan?.steps ?? null;
   }
+  const stopAt = Date.parse(String(stopText ?? '').trim());
   return {
     ...base,
+    stop_requested: stop && !Number.isNaN(stopAt)
+      ? { at: new Date(stopAt).toISOString(), age_seconds: Math.max(0, Math.round((now.getTime() - stopAt) / 1000)) }
+      : null,
     lanes: lanesOfRunner(base.steps, repos, setting),
     setting: { per_repo: setting.per_repo ?? 1, total: setting.total ?? null },
     process,
@@ -1328,6 +1334,7 @@ export async function collectPage({
     runner: runnerFile,
     currents: readCurrents(join(root, 'runner')),
     stop,
+    stopText: stop ? readText(join(root, 'runner', 'STOP')) : null,
     rows,
     // `per_repo` lanes per repository this machine has a checkout of, drawn
     // whether or not each has a step: a lane between steps and a lane that has

@@ -50,7 +50,7 @@ function fixture({ runner = null, live = [], stop = false, update = false, files
     },
     ps: (args) => (args[0] === '-o' ? String(pgid ?? '') : table),
     openLog: (path) => { calls.opened.push(path); return 7; },
-    spawn: ({ bin, args, stdio }) => { calls.spawned.push({ bin, args, stdio }); return 4242; },
+    spawn: ({ bin, args, stdio, env }) => { calls.spawned.push({ bin, args, stdio, ...(env ? { env } : {}) }); return 4242; },
     execPath: '/usr/bin/node',
     entry: '/opt/bin/mc',
   };
@@ -122,18 +122,69 @@ describe('mc run start', () => {
     assert.equal(out.code, 2);
     assert.match(out.lines[0], /already running — pid 200/u);
 
-    // The successor died; the runner it replaced is still finishing.
-    const old = fixture({ runner: { pid: 200, predecessor: { pid: 100 } }, live: [100] });
-    const left = await startRunner({ root: ROOT, deps: old.deps });
-    assert.equal(left.ok, false);
-    assert.equal(left.code, 2);
-    assert.deepEqual(old.calls.spawned, []);
-    assert.match(left.lines.join('\n'), /pid 100/u);
-    assert.equal(paths.runner in old.store, true, 'runner.json was cleared while its predecessor was alive');
+  });
+
+  // The successor died; the runner it replaced is still finishing. Nothing
+  // runs the other lanes — a start is a new successor beside it.
+  it('takes over beside a runner still finishing what a handover left it', async () => {
+    const old = fixture({ runner: { pid: 200, predecessor: { pid: 100, started: 'T1' } }, live: [100] });
+    const out = await startRunner({ root: ROOT, deps: old.deps });
+    assert.equal(out.ok, true);
+    assert.equal(old.calls.spawned.length, 1);
+    assert.deepEqual(old.calls.spawned[0].env, { MC_RUN_SUCCESSOR_OF: '100' });
+    assert.deepEqual(JSON.parse(old.store[paths.runner]).predecessor, { pid: 100, started: 'T1' });
+    assert.match(out.lines[0], /pid 100 is finishing/u);
   });
 
   // start and stop are one switch: a switch that will not turn back on
   // because of the file the last stop wrote is not a switch.
+  // runner.json is the child's before this command returns: a second start
+  // in the second the child takes to load sees a runner, not a gap.
+  it('writes runner.json for the child the moment its pid is known', async () => {
+    const fx = fixture();
+    await startRunner({ argv: ['--no-merge'], root: ROOT, deps: fx.deps });
+    const written = JSON.parse(fx.store[paths.runner]);
+    assert.equal(written.pid, 4242);
+    assert.deepEqual(written.args, ['--no-merge']);
+    fx.alive.add(4242);
+    const again = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(again.ok, false);
+    assert.equal(fx.calls.spawned.length, 1);
+  });
+
+  // `mc run stop` then `mc run start`: the stopping runner is taken over —
+  // runner.json names the new one before STOP is removed, so the old one is
+  // never without an order — and it finishes only what it holds.
+  it('takes over from a runner that is stopping', async () => {
+    const fx = fixture({
+      runner: { pid: 100, started: 'T1', takeover: true }, live: [100], stop: true,
+      files: { [`${paths.dir}/current-memoro-5.json`]: JSON.stringify({ name: 'video-window', pid: 100 }) },
+    });
+    const order = [];
+    const write = fx.deps.write;
+    const remove = fx.deps.remove;
+    fx.deps.write = (path, text) => { order.push(`write ${path}`); write(path, text); };
+    fx.deps.remove = (path) => { order.push(`remove ${path}`); remove(path); };
+    const out = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.deepEqual(fx.calls.spawned[0].env, { MC_RUN_SUCCESSOR_OF: '100' });
+    const written = JSON.parse(fx.store[paths.runner]);
+    assert.equal(written.pid, 4242);
+    assert.deepEqual(written.predecessor, { pid: 100, started: 'T1' });
+    assert.ok(!(paths.stop in fx.store));
+    assert.ok(order.indexOf(`write ${paths.runner}`) < order.indexOf(`remove ${paths.stop}`), 'STOP went before the successor was named');
+    assert.match(out.lines[0], /pid 100 was stopping — a new runner takes over every lane now, and pid 100 only finishes 1 step in flight \(video-window\)/u);
+  });
+
+  it('waits for a stopping runner that predates take-over rather than run beside it', async () => {
+    const fx = fixture({ runner: { pid: 100 }, live: [100], stop: true });
+    const out = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, false);
+    assert.deepEqual(fx.calls.spawned, []);
+    assert.ok(paths.stop in fx.store);
+    assert.match(out.lines.join('\n'), /older than take-over/u);
+  });
+
   it('removes the STOP the last stop left, and says it did', async () => {
     const fx = fixture({ stop: true });
     const out = await startRunner({ root: ROOT, deps: fx.deps });
@@ -165,7 +216,25 @@ describe('mc run stop', () => {
     assert.equal(out.ok, true);
     assert.equal(fx.store[paths.stop], '2026-08-30T18:00:00.000Z\n');
     assert.deepEqual(fx.calls.killed, []);
-    assert.match(out.lines[0], /finishes the round it is in/u);
+    assert.match(out.lines[0], /finishes the ones in flight, then exits/u);
+    assert.match(out.lines.join('\n'), /mc run start takes over/u);
+  });
+
+  // The stop line's clock is the first stop's: a second one says it was
+  // already written rather than restarting it.
+  it('a second stop keeps the first one\'s time, and says how the stop stands', async () => {
+    const fx = fixture({
+      runner: { pid: 100 }, live: [100],
+      files: {
+        [paths.stop]: '2026-08-30T17:20:00.000Z\n',
+        [`${paths.dir}/current-memoro-5.json`]: JSON.stringify({ name: 'video-window', step: 1, pid: 100, started: '2026-08-30T16:40:00Z' }),
+      },
+    });
+    fx.deps.laneCount = () => 12;
+    const out = await stopRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(fx.store[paths.stop], '2026-08-30T17:20:00.000Z\n');
+    assert.match(out.lines[0], /^STOP was already written/u);
+    assert.match(out.lines[1], /^stopping since \d\d:\d\d \(40 min\) — waiting on video-window step 1 \(memoro#6, 80 min\); 11 lanes done$/u);
   });
 
   // STOP first, kill second, in every case: if the kill half works, or the
@@ -270,7 +339,7 @@ describe('mc run --update', () => {
     const out = requestUpdate({ root: ROOT, deps: fx.deps });
     assert.equal(out.ok, true);
     assert.equal(fx.store[paths.update], '2026-08-30T18:00:00.000Z\n');
-    assert.match(out.lines[0], /pid 100 finishes the round it is in, then restarts itself/u);
+    assert.match(out.lines[0], /pid 100 hands over to a new runner at its next look, and only finishes the steps in flight/u);
   });
 
   // Two steps in flight, the way `runStep` writes them: a repository's first
@@ -315,7 +384,7 @@ describe('mc run --update', () => {
     withGit(fx, { main: 'def5678' });
     const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
     assert.equal(fx.store[paths.update], '2026-08-30T18:00:00.000Z\n');
-    assert.match(out.lines[0], /pid 100 finishes the round it is in/u);
+    assert.match(out.lines[0], /pid 100 hands over/u);
     assert.match(out.lines[1], /fast-forwards \/code\/mc/u);
     assert.match(out.lines.at(-1), /^draining since \d\d:\d\d \(0s\) — waiting on claims-entity step 2 \(memoro#2, 30 min\), gmail-ready step 1 \(memoro#5, 14 min\); 6 lanes done$/u);
   });
@@ -373,11 +442,29 @@ describe('mc run --update', () => {
     assert.match(out.lines[1], /mc run start/u);
   });
 
-  it('refuses when STOP is already written', () => {
+  // A stopping runner will never pick again, so it is not told to update:
+  // the checkout is fast-forwarded and a new runner takes over from it, with
+  // the flags the old one ran with.
+  it('on a stopping runner fast-forwards and takes over, with its flags', () => {
+    const fx = fixture({ runner: { pid: 100, takeover: true, args: ['--no-merge'] }, live: [100], stop: true });
+    const asked = withGit(fx);
+    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.ok(!(paths.update in fx.store));
+    assert.ok(!(paths.stop in fx.store), 'STOP is still there for the new runner to read');
+    assert.ok(asked.includes('/code/mc merge --ff-only -q origin/main'));
+    assert.deepEqual(fx.calls.spawned[0].args, ['/opt/bin/mc', 'run', '--no-merge']);
+    assert.match(out.lines.join('\n'), /pid 100 was stopping — a new runner takes over/u);
+  });
+
+  it('on a stopping runner older than take-over refuses, and writes nothing', () => {
     const fx = fixture({ runner: { pid: 100 }, live: [100], stop: true });
-    const out = requestUpdate({ root: ROOT, deps: fx.deps });
+    withGit(fx);
+    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
     assert.equal(out.ok, false);
-    assert.match(out.lines[0], /on its way out/u);
+    assert.match(out.lines[0], /older than take-over/u);
+    assert.deepEqual(fx.calls.spawned, []);
+    assert.ok(paths.stop in fx.store);
     assert.ok(!(paths.update in fx.store));
   });
 });
