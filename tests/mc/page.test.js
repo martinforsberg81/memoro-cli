@@ -315,6 +315,18 @@ describe('RUNNER', () => {
     assert.deepEqual(answered.github, []);
     assert.ok(!paintedPage(pageData({ runner: answered })).some((line) => /GitHub unreachable/u.test(strip(line))));
   });
+
+  // The runner's `disk.json`, while the disk under scratch holds new starts
+  // back: the line it said, on the page; gone with the file.
+  it('says the runner starts no step while the disk is too full', () => {
+    const line = 'disk: 0.1 GiB free, below 5 GiB — no step started';
+    const full = runnerSection({ runner: RUNNER, now: NOW, alive: live, disk: { at: '2026-08-29T11:50:00Z', free_bytes: 118 * 2 ** 20, line } });
+    assert.equal(full.disk.line, line);
+    assert.ok(paintedPage(pageData({ runner: full })).some((row) => strip(row) === `  ${line}`));
+    const room = runnerSection({ runner: RUNNER, now: NOW, alive: live, disk: null });
+    assert.equal(room.disk, null);
+    assert.ok(!paintedPage(pageData({ runner: room })).some((row) => /disk:/u.test(strip(row))));
+  });
 });
 
 /**

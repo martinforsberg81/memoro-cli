@@ -115,6 +115,13 @@ export function runnerScratchDir(env = process.env) {
   return join(runnerDir(env), RUNNER_SCRATCH);
 }
 
+/**
+ * `~/mc/runner/disk.json`: present while the volume under scratch has too
+ * little room for a step to start, with the line the runner said. The page
+ * draws that line; the runner removes the file when the room is back.
+ */
+export const RUNNER_DISK = 'disk.json';
+
 /** One of the three tables, by its filename constant. */
 export function runnerTablePath(file, env = process.env) {
   return join(runnerDir(env), file);

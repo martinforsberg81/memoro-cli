@@ -103,7 +103,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
@@ -127,7 +127,7 @@ import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick } from './nightly-loop.js';
 import { readDeps } from './deps.js';
 import {
-  UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, workRoot,
+  RUNNER_DISK, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, workRoot,
 } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
 import {
@@ -156,8 +156,19 @@ import {
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
-/** A session's scratch directory is kept this long after it was last touched. */
-const SCRATCH_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * A session's scratch directory is kept this long after it was last touched.
+ * Two days, not seven: on 2026-10-08 scratch held 15 GiB and a step hit
+ * ENOSPC. Not hours either — the gate logs a proposal cites live here.
+ */
+export const SCRATCH_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
+
+/**
+ * Below this many free bytes on the volume where `MC_SCRATCH` is made, no
+ * step session starts (2026-10-08: 118 MiB free, and a step's first shell
+ * commands failed on ENOSPC). Sessions already running go on.
+ */
+export const DISK_MIN_BYTES = 5 * 2 ** 30;
 
 /**
  * The refusals a lane waits out rather than moves past: they are facts about
@@ -393,7 +404,16 @@ export function realDeps(env = process.env) {
           .map((e) => ({ name: e.name, mtimeMs: statSync(join(path, e.name)).mtimeMs }));
       } catch { return []; }
     },
-    rmTree: (path) => { try { rmSync(path, { recursive: true, force: true }); return true; } catch { return false; } },
+    // The bytes an unprivileged writer can still use on the volume holding
+    // `path` — or its nearest existing parent, since scratch may not exist
+    // yet. Null when nothing can be read.
+    freeBytes: (path) => {
+      for (let at = path; ; at = dirname(at)) {
+        try { const fs = statfsSync(at); return Number(fs.bavail) * Number(fs.bsize); } catch { /* try the parent */ }
+        if (dirname(at) === at) return null;
+      }
+    },
+    rmTree:(path) => { try { rmSync(path, { recursive: true, force: true }); return true; } catch { return false; } },
     pid: process.pid,
     addWorktree,
     role: readCanonRole,
@@ -502,6 +522,9 @@ export function createRunner({
     // The repositories GitHub could not be asked about, and when to ask
     // again (github-backoff.js). The page draws its RUNNER line from it.
     github: join(root, 'runner', GITHUB_STATE),
+    // Present while the disk is too full for a step to start; the page draws
+    // its line.
+    disk: join(root, 'runner', RUNNER_DISK),
   };
   const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
   const remove = deps.remove || (() => {});
@@ -2309,6 +2332,7 @@ export function createRunner({
     // which is how a test drives a lane over a whole queue without a clock.
     const passed = new Set(already);
     const stepOf = (name) => known.plans.find((item) => item.project === name)?.step ?? null;
+    if (!diskRoom()) return { ran: 0, waited: 'skipped:disk' };
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
       // A runner that has handed over finishes the pass it is in and picks
@@ -2343,6 +2367,28 @@ export function createRunner({
       if (!persistent.delete(pick.name) && WAIT_REFUSALS.has(outcome)) return { ran: 0, waited: outcome };
       passed.add(pick.name);
     }
+  }
+
+  /**
+   * Whether the volume where `MC_SCRATCH` is made has room for a step to
+   * start. Read once per pass, before anything is picked: under
+   * `DISK_MIN_BYTES` the line is said and written to `disk.json` for the
+   * page, and the pass starts nothing. Check-ins and landings of sessions
+   * already running are not in a pass, so they go on. No reader, or a volume
+   * that cannot be read, is room: a guess must not stop the runner.
+   */
+  function diskRoom() {
+    let free = null;
+    try { free = deps.freeBytes ? deps.freeBytes(paths.scratch) : null; } catch { free = null; }
+    if (free == null || free >= DISK_MIN_BYTES) {
+      if (deps.exists(paths.disk)) remove(paths.disk);
+      return true;
+    }
+    // Rounded down, so a disk just under the line never reads as at it.
+    const line = `disk: ${(Math.floor((free / 2 ** 30) * 10) / 10).toFixed(1)} GiB free, below ${DISK_MIN_BYTES / 2 ** 30} GiB — no step started`;
+    say(line);
+    writeJson(paths.disk, { at: stamp(), free_bytes: free, line });
+    return false;
   }
 
   /**
@@ -2398,7 +2444,7 @@ export function createRunner({
 
   /**
    * The scratch directories no session is likely to want any more: every
-   * directory directly under `~/mc/runner/scratch/` not touched for a week.
+   * directory directly under `~/mc/runner/scratch/` not touched for two days.
    * Nothing outside that directory is looked at, and a name that is not a
    * directory is left.
    */
@@ -2408,7 +2454,7 @@ export function createRunner({
     for (const dir of deps.scratchDirs(paths.scratch)) {
       if (dir.mtimeMs < cutoff && deps.rmTree(join(paths.scratch, dir.name))) removed += 1;
     }
-    if (removed) say(`scratch: ${removed} director${removed === 1 ? 'y' : 'ies'} older than seven days removed`);
+    if (removed) say(`scratch: ${removed} director${removed === 1 ? 'y' : 'ies'} older than two days removed`);
   }
 
   /**

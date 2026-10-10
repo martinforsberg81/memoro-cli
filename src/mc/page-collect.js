@@ -65,7 +65,7 @@ import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.j
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
-import { PLAN_HOME, workRoot } from './paths.js';
+import { PLAN_HOME, RUNNER_DISK, workRoot } from './paths.js';
 import { overlayPlans } from './register.js';
 import { planState } from './plan-schema.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
@@ -224,6 +224,9 @@ export function runnerSection({
   // `~/mc/runner/github.json` as the round left it: the repositories whose
   // last `gh pr list` failed, why, and since when (github-backoff.js).
   github = null,
+  // `~/mc/runner/disk.json`: present while the runner starts no step because
+  // the disk under scratch is too full, with the line it said.
+  disk = null,
   now = new Date(), alive = pidAlive,
 } = {}) {
   const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, now, alive });
@@ -251,6 +254,8 @@ export function runnerSection({
     // One entry per repository the round could not ask GitHub about, while
     // that lasts: the round's `prsFailed`, carried between rounds.
     github: githubFailures(github, { now }),
+    // The runner's own line while the disk holds new starts back.
+    disk: disk?.line ? { at: disk.at ?? null, free_bytes: disk.free_bytes ?? null, line: disk.line } : null,
     // What is in production, under the day it took to get there.
     production: productionSection({ deploy, attempt, live, now, alive }),
     day: {
@@ -1377,6 +1382,7 @@ export async function collectPage({
     lanes: laneSetting,
     plans,
     github: readJson(join(root, 'runner', GITHUB_STATE)),
+    disk: readJson(join(root, 'runner', RUNNER_DISK)),
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
     deploy: lastDeploy(env),
