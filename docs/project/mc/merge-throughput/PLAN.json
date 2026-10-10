@@ -1,0 +1,134 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "The merger lands the queue in fewer and shorter rounds. Several queued pull requests to one repository are measured as one candidate and landed in order, memoro-cli's short rounds no longer wait behind memoro's, and the parts of a round that are not the suite (command gates and `npm ci`) stop adding their full time to every round.",
+    "Measured on 2026-10-09/10 from `~/mc/runner/log/merger.log`: 96 landed rounds, 178 s median and 281 s mean, so about 13 pull requests an hour at most. The merger was busy 100 % of 12:00-15:00 UTC on 2026-10-10 with ten or more jobs in line. Per round the suite took 159 s mean (57 % of the total), command gates 65 s mean where they ran (`sql:pr-ci` 36 s median, 55 times), `npm ci` 26 s mean (15 s median), and derived plus selection 19 s."
+  ],
+  "contract": [
+    "No pull request lands on a measurement weaker than today's. A batch is one candidate with every head merged in. The suite runs over the union of what the selection reaches, each pull request's own tests run by themselves, and the landing checks tree identity per prefix. All of that is already in `runMergeRound` and `runGate` (A3); this project feeds it and does not rewrite it.",
+    "A batch that stops at a fallback stop (`FALLBACK_STOPS`, `src/mc/repo-merge.js:410`) falls back to one round per pull request, as it does today. Every job in a batch gets its own answer in `merges.json` and in the register: landed jobs are dequeued and their steps `done`, red ones `red` with their own reason and their steps through `redPatch` with their own report.",
+    "Two gate rounds never run in the same lane at once. The lanes are `heavy` (memoro and any repository that declares nothing) and `light` (memoro-cli). A heavy and a light round may run side by side. A deploy still waits for every round in flight and starts none while it runs (ruling 32).",
+    "The `npm ci` cache only replaces `npm ci` when `package-lock.json` and `package.json` are byte-identical to the ones the cached tree was installed from, and the node version is the same. Anything else runs `npm ci` as today. A cache that cannot be read, cloned or written never stops a round.",
+    "Thresholds are constants with a comment saying why, not settings: `MERGE_BATCH_MAX`, `GATE_LANES`, `PREPARE_CACHE_KEEP`.",
+    "Every step runs `npm test` and lands through `mc merge memoro-cli <pr>`. Steps that change the merger itself take effect when the merger next starts: it is a long-lived process started from the `~/memoro-cli` checkout, which the round pulls."
+  ],
+  "out_of_scope": [
+    "Holding back the runner while the queue is long (point 5 of the brief, 2026-10-10). That is the runner's policy and was not chosen.",
+    "Bisecting a red batch. The fallback stays one round per pull request.",
+    "Making memoro's own suite faster, or changing what `ci.mjs` selects.",
+    "Running two memoro rounds at once."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "With two or more jobs for one repository that may go, the merger lands them in one round of up to `MERGE_BATCH_MAX` (4), and each job gets its own answer in the queue and the register.",
+      "check": "`tests/mc/merger.test.js`: three queued memoro jobs and one memoro-cli job; `serve` hands `mergeRound` `prs: [a, b, c]` once; a green batch report dequeues all three and writes three `done` steps; a fallback report with one red round leaves that job `red` with its own reason and its step `ready` with `attempts` 1, and dequeues the other two. Live: the close-out quotes one `merger.log` line `landing a batch of N`."
+    },
+    {
+      "met": false,
+      "criterion": "A memoro-cli round runs while a memoro round is in flight; two memoro rounds never run at once.",
+      "check": "`tests/mc/gate-lock.test.js` for the two lock files; `tests/mc/merger.test.js`: one memoro and one memoro-cli job, the memoro round held open by a stub promise, and the memoro-cli round starts and finishes before it resolves. Live: the close-out quotes two `merger.log` lines from different repositories whose rounds overlap in time."
+    },
+    {
+      "met": false,
+      "criterion": "Command gates no longer add their full time to a round: they run beside the suite, and the round's verdict is unchanged.",
+      "check": "`tests/mc/repo-gate.test.js`: with a stub suite and two stub gates that each take a measurable delay, the round's wall time is below suite plus gates, a failed gate still makes `selected-gate` with every failure named, and the gates are reported in the selector's order. Live: the close-out compares suite and gate seconds over at least 20 memoro rounds against the 2026-10-09/10 figures in the goal."
+    },
+    {
+      "met": false,
+      "criterion": "A memoro round whose lockfile matches a cached tree takes no `npm ci`.",
+      "check": "`tests/mc/repo-gate.test.js` (or a new `tests/mc/prepare-cache.test.js`) with stubbed clone and shell: same key, no prepare shell call and the line `prepare: cloned node_modules from the cache (<key>)`; changed lockfile, `npm ci` runs and the cache is written; at most `PREPARE_CACHE_KEEP` entries remain. Live: the close-out quotes a `merger.log` line with the cached prepare and its seconds."
+    },
+    {
+      "met": false,
+      "criterion": "The merger's median round per landed pull request is below 120 s over the first 40 landings after the last step, against 178 s on 2026-10-09/10.",
+      "check": "The close-out runs the same parse as the brief, over `merger.log` from the first landing on the updated merger: seconds per landed pull request, where a batch's seconds are shared among the pull requests it landed. The figure is quoted in the close-out's comments whether or not it is met."
+    }
+  ],
+  "documents": [
+    { "label": "mc rulings (ruling 34)", "path": "../rulings.md" },
+    { "label": "The runner", "path": "../../../technical/mc-run.md" },
+    { "label": "mc test and mc merge", "path": "../../../technical/mc-merge.md" }
+  ],
+  "steps": [
+    {
+      "title": "1. The merger lands a batch of queued pull requests to one repository in one round",
+      "status": "ready",
+      "done_when": "`serve` takes up to `MERGE_BATCH_MAX` (4) jobs for the same repository that may go, marks them all `landing`, and `landJob` hands them to `runMergeRound` as `prs`. Every job is answered by itself in `merges.json` and the register. A merger that died under a batch takes the whole batch again. Tests cover green, fallback with one red, restack refusal of one member, and resume; `npm test` is green.",
+      "instruction": [
+        "Today `serve` (`src/mc/merger.js:350`) takes one job with `nextJob` (`src/mc/merge-queue.js:149`), and `landJob` (`merger.js:237`) calls `runMergeRound` with `pr: job.pr`. `runMergeRound` (`src/mc/repo-merge.js:66`) already takes `prs`: one candidate, the suite once, own tests per pull request, sequential squash with freshening and per-prefix tree identity, and a fallback to one round per pull request on a fallback stop (`repo-merge.js:178-206`, `:348-371`). Its report carries `batch: { prs, gate_ok, merges: [{ number, merged, merge_commit, error }], fallback, rounds }`. Nothing in the merger uses any of it.",
+        "**Choosing the batch.** Add `nextBatch(entries, { landed, max = MERGE_BATCH_MAX })` to `merge-queue.js` beside `nextJob`. If any entries are `landing`, it returns every `landing` entry of the first one's repository: a merger that died under a batch takes the batch again, and the round says what has already merged. Otherwise it takes `nextJob`'s pick, then the next entries in `queueOrder` that are for the same `repo`, `state: 'queued'` and pass the same `mayGo` test, up to `max`. Export `MERGE_BATCH_MAX = 4` from `merge-queue.js`. The comment says why 4: about 11 % of rounds on 2026-10-09/10 were red in the suite or a gate, so a batch of four is red about a third of the time and then costs its fallback rounds. Four still roughly halves the time per landing at a queue of ten, and a larger batch makes the fallback longer than the saving.",
+        "**serve.** Use `nextBatch` instead of `nextJob`, mark every job `landing` with one `started`, and call `land(batch)`, which is now an array. The empty-queue branch at `:368-379` asks `nextBatch(...).length`. The `landing` line says `memoro #13360: landing` for one job, as now, and `memoro: landing a batch of 3 — #13360 #13361 #13362` for more. After the round, under one lock, dequeue each job that merged and `markRed` each that did not, with its own reason (below).",
+        "**landJob.** Takes `jobs` (an array; one job is an array of one). Restack each job with a parent first (`moveOntoMain`, as now). A job whose restack fails is answered at once with that report and leaves the batch, and the rest go on. With one job left, call `mergeRound` with `pr` exactly as today. With more, call it with `pr: jobs[0].pr, prs: jobs.map((j) => j.pr)`. The holder is the first job's holder, the same rule the gate uses for its lease. `recordStart` gets every number.",
+        "**One answer per job.** Add a pure `answersFor(jobs, report)` in `merger.js` that returns `[{ job, landed, report }]`. Without `report.batch`, every job gets the round's report. With it, a job is landed when its `batch.merges` entry says `merged`. Its report is its own fallback round from `batch.rounds` when there is one (match on `round.pr.number`). Otherwise it is a copy of the batch report with `merged`, `merge_commit` and, when it did not merge, `stopped_at`/`reason` taken from its `merges` entry. A job with no `merges` entry, because the batch stopped before it, gets the batch's `stopped_at` and `reason`. The register code at `:299-327` and the runs.tsv row at `:329-341` then run once per answer, unchanged, with that answer's report. `dropFromPage` runs for every landed job. The `merged into main as …` line is said per landed job.",
+        "**The wait loop** at `:257-287` is unchanged apart from naming the batch in its `waiting behind` line.",
+        "**Tests.** `tests/mc/merge-queue.test.js` for `nextBatch`: the same-repository cap, a job with an unlanded parent left out, a `red` entry skipped, and resume of a `landing` batch. `tests/mc/merger.test.js` for `serve` and `landJob` with a stub `mergeRound`: a green batch of three; a fallback where #b is red in its own round (its entry `red` with that reason, its step `ready`, `attempts` 1); a restack refusal of one member while the other two still go as a batch of two; and a single job still calling `mergeRound` without `prs`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "2. memoro-cli has a gate lane of its own, and the merger serves both lanes at once",
+      "status": "ready",
+      "done_when": "The gate lock is per lane (`heavy`, `light`). memoro-cli's declaration says `gate_lane: 'light'`. `serve` runs one loop per lane, each taking only its own lane's jobs, and the deploy waits for both lanes. The page and `mc test` name the lane they wait on. Tests cover the overlap and the refusal within a lane; `npm test` is green.",
+      "instruction": [
+        "Today `gate-lock.js` has one file, `gate-running.json` (`gateLockPath`, `:45`), and every round on the machine takes it (`takeGateLock` from `repo-gate.js:285`). The merger waits on `runningRound` before every round (`merger.js:265-275`). On 2026-10-09/10 memoro-cli's rounds took 24-212 s (about 60 s typical), and each one waited behind a memoro round of three to fifteen minutes. Ruling 34 makes the exception to ruling 2026-08-30 (*\"En instans kan köra åt gången\"*): one round per lane.",
+        "**The lane.** In `src/mc/repo-gate-table.js`, the memoro-cli entry gets `gate_lane: 'light'` and a `gate_lane_why` in the table's own style. The why is measured: its suite is `node --test` over its own tests, about 60-75 s on this machine, with no `npm ci` and no browser. A repository that declares nothing is `heavy`. Validate the field where the table validates its fields (an unknown value is a declaration error, like the others). Export `GATE_LANES = ['heavy', 'light']` from `gate-lock.js`, with a comment that the lanes exist because a light round does not pin the cores the way memoro's seven-lane suite does. That pinning was the reason for one-at-a-time in the first place, per the module comment.",
+        "**The lock.** `gateLockPath(root, lane = 'heavy')`: `heavy` keeps `gate-running.json`, so a round on old code and a round on new code still exclude each other, and `light` is `gate-running-light.json`. `runningRound`, `takeGateLock`, `releaseGateLock` and `noteGatePhase` take `lane` and default to `heavy`. Add `runningRounds({ root, alive })`, which returns `{ heavy, light }` for the readers that mean any lane. `repo-gate.js` reads the lane from the declaration it already loads and passes it to `takeGateLock`, `noteGatePhase` and `releaseGateLock`. Its refusal line names the lane.",
+        "**The merger.** `serve` runs one loop per lane under `Promise.all`. A loop takes only jobs whose repository's lane is its own: `nextBatch` gets a `lane` filter, and the merger resolves a job's lane from `repo-gate-table.js` by `job.repo` and defaults to `heavy`. `merger.json` stays one pid, so the merger is still one process. Each loop writes `merges.json` only under the register lock, as now. `stopping()` is honoured between jobs in each loop. The empty-queue release and retake at `:368-379` happens only once both loops have nothing: release, then re-read, then retake when either lane has work. `landJob`'s wait reads `runningRound({ lane })` for its own lane. Deploy still blocks both.",
+        "**The deploy.** `waitForGate` (`src/mc/commands/deploy.js:745`) waits until `runningRounds()` shows neither lane. `landJob` already starts no round while a deploy row says `running`, and that now holds per loop.",
+        "**Readers.** `merges-collect.js:32` and `nightly-loop.js:157`, `:218` and `:327` use `runningRounds()`. The page shows both rounds when two run. The nightly run takes the lane of the repository it measures.",
+        "**Tests.** `tests/mc/gate-lock.test.js`: heavy and light held at once, and a second light refused. `tests/mc/merger.test.js`: one memoro and one memoro-cli job, the memoro round held open on a deferred promise; the memoro-cli job is answered before it resolves, and a second memoro job is not started until it does. `tests/mc/deploy.test.js` (or the test beside `waitForGate`): a light round alone still makes the deploy wait."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "3. The command gates the selection named run beside the suite",
+      "status": "ready",
+      "done_when": "In `runGate` the selected command gates start when the suite starts, one at a time and in the selector's order, and the round awaits both. The verdict, its stops and `extra_gates` are what they would have been sequentially. Tests cover the overlap, a failed gate beside a green suite, and a red suite beside a failed gate; `npm test` is green.",
+      "instruction": [
+        "Today `runGate` runs the suite (`src/mc/repo-gate.js:583-589`) and then `runSelectedCommands` (`:612-616`, defined at `:922`), so a memoro round pays both in full. On 2026-10-09/10 the gates added 45 s at the median where they ran, `sql:pr-ci` alone 36 s. The comment at `:598-601` explains why gates run before any verdict is reached. That reason stays true when they run beside the suite: every gate still runs and is judged.",
+        "**Beside, not between.** Start `runSelectedCommands` (unchanged, still one gate after another in the selector's order, handed `report.base.commit`) when the selected suite starts, and `await Promise.all` over the two. Gates run one at a time and not all at once, because this is an 8 GB M1 running seven suite lanes. One gate beside the suite is one process more, and the brief's measurements showed memory pressure stretching rounds (`kern.memorystatus_level` 30, swap 2.4 of 3 GB on 2026-10-10). Say that in the comment. The `say` lines keep their wording. Their order in the log interleaves, which is fine.",
+        "**Unchanged.** A red suite still returns `red` first (`:621-633`). The probe for main red runs after both have finished. A failed gate beside a green suite is `selected-gate` with every failure named. The full-suite branch (no selection) has no selected gates and is untouched. `timed('selected gates', …)` keeps measuring the gates' own time. Add `timings.gates_beside_suite_ms`, the wall time from suite start until both are done, so the close-out can read the overlap.",
+        "**Guard.** If the round's `suite` and gates both fail to start (spawn errors), the round reports both reasons as today. Nothing becomes green because one half threw: `Promise.all` over two promises that each resolve to a result object, and neither rejects. Wrap each in the same error handling it has today.",
+        "**Tests.** In `tests/mc/repo-gate.test.js` with stub `tests` and `shell`: a 200 ms suite and two 150 ms gates finish in under 450 ms, and the gates are reported in the selector's order; a green suite with one failing gate is `selected-gate` naming it; a red suite with a failing gate is `red`, and `extra_gates` still lists the failed gate."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "4. A round whose lockfile matches a cached tree clones node_modules instead of running npm ci",
+      "status": "ready",
+      "done_when": "When the declaration's `prepare` is `npm ci`, the gate keys a cache on sha256 of `package-lock.json`, `package.json` and `process.version`. On a hit it clones the cached `node_modules` into the candidate with `cp -cR` (APFS clonefile) and skips the shell. On a miss it runs `npm ci` and then stores the result. At most `PREPARE_CACHE_KEEP` (2) entries are kept per repository. Every failure falls back to `npm ci`. Tests cover hit, miss, eviction and a failed clone; `npm test` is green.",
+      "instruction": [
+        "Today `runGate` runs `declared.declaration.prepare` in every new candidate worktree (`src/mc/repo-gate.js:495-501`). For memoro that is `npm ci` (`src/mc/repo-gate-table.js:163`): 15 s median and 26 s mean over 80 rounds on 2026-10-09/10, and 332 s at the worst. Most rounds install the same lockfile as the round before.",
+        "**Where.** A new module `src/mc/prepare-cache.js`. The cache lives under the work root beside the gate's own directory (`paths.js`, next to `WORK_GATE`), at `<work root>/gate-cache/<repo slug>/<key>/node_modules`, with a `meta.json` holding `{ key, at, node, lock_sha }`. `key` is the first 16 hex characters of sha256 over the candidate's `package-lock.json` bytes, a NUL, its `package.json` bytes, a NUL, and `process.version`.",
+        "**Hit.** If `<key>/node_modules` exists and `meta.json` parses with the same key, run `cp -cR <cached>/node_modules <headDir>/node_modules` and do not run the prepare shell. Say `prepare: cloned node_modules from the cache (<key>)`, and keep the timing under `prepare` so the log stays comparable. A clone that exits non-zero removes whatever it left in `<headDir>/node_modules` and runs `npm ci` as today.",
+        "**Miss.** Run `npm ci` as today. When it exits 0, clone `<headDir>/node_modules` into `<cache>/<key>.tmp-<pid>/node_modules` with `cp -cR`, write `meta.json`, and rename the directory into place. A rename that finds the key already there, written by another round, removes its own copy. Then remove the oldest entries by `meta.at` until `PREPARE_CACHE_KEEP` (2) remain. The constant's comment says why: one entry for main's lockfile and one for a pull request that changed it. The disk was 98 % full on 2026-10-09, and memoro's tree is about 500 MB as a copy. Clones share blocks on APFS until written, so they cost far less, but more than two is a cost nothing measured asks for. Any error in storing is said once and ignored.",
+        "**Only npm ci.** The cache is used only when `prepare` is exactly `npm ci` and the platform is darwin. Any other prepare, or another platform, runs as today. memoro's `package.json` has no `postinstall` or `prepare` script today, so `node_modules` is all `npm ci` writes. The module checks that on every hit by reading those two script names from the candidate's `package.json`, and a repository that has either falls back to `npm ci`.",
+        "**Tests.** `tests/mc/prepare-cache.test.js` with injected `run`, `exists`, `read` and `now`: a hit makes no `npm ci` call and clones once; a miss calls `npm ci` and stores the result, and a third key evicts the oldest; a clone that fails falls back to `npm ci`; a candidate with a `postinstall` never uses the cache; a non-`npm ci` prepare is passed through untouched."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "5. Close-out",
+      "status": "ready",
+      "done_when": "The merger runs the new code, every criterion is measured and marked with the figures quoted in this step's comments, `docs/technical/mc-run.md` and `docs/technical/mc-merge.md` describe batches, lanes, gates beside the suite and the prepare cache, `docs/project/project_log.md` has the row, and every step is `done` with its PR.",
+      "instruction": [
+        "**Live.** The merger picks up new code when it next starts. If `~/mc/runner/merger.json` names a pid that started before step 4 landed, wait until it leaves an empty queue, or until the runner starts a new one. Do not kill it. Then wait for 40 landings on the new merger and parse `~/mc/runner/log/merger.log` from its `merger <pid> started` line. Measure seconds per landed pull request (a batch's seconds shared among those it landed), the suite and gate seconds and `gates_beside_suite_ms` over the memoro rounds, and the prepare seconds split into cache hits and misses. Quote one `landing a batch of N` line, two overlapping lines from memoro and memoro-cli, and one cached prepare line. Compare everything with the 2026-10-09/10 figures in the goal, met or not.",
+        "**Docs.** `docs/technical/mc-run.md` § *The merge* (`:779`): batches, the answer per job, and the two lanes. `docs/technical/mc-merge.md`: the lane field in § *The gate form* (`:58`), gates beside the suite, and the prepare cache, each with the constant's reason.",
+        "**Log.** Add the row to `docs/project/project_log.md` in its format: programme `mc`, project `merge-throughput`, delivered, one paragraph with the measured before and after, the technical notes, and the PRs."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
