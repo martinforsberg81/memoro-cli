@@ -254,12 +254,6 @@ describe('mc language', () => {
     assert.equal(parsed.languages.sv.reading.reads.forms.forms, 897392);
     assert.equal(parsed.languages.sv.last_run, null);
   });
-
-  it('the subcommand of a later step is not yet', async () => {
-    for (const sub of ['promote']) {
-      assert.equal(await run([sub], { env, stdout: sink(), stderr: sink() }), 2);
-    }
-  });
 });
 
 describe('withoutCloudflare', () => {
@@ -673,5 +667,174 @@ describe('mc language resume', () => {
     const stderr = sink();
     assert.equal(await run(['resume'], runDeps({ stderr })), 1);
     assert.match(stderr.text(), /no stopped language run to resume/u);
+  });
+});
+
+/* -------------------------------------------------------------- promote */
+
+/**
+ * memoro's promote wrapper: `--check` answers `buildPromotionReport` from
+ * `world`, the write promotes every ready language. `check` and `execute`
+ * override either with a function of the call.
+ */
+function fakePromote({ world = {}, check, execute, calls = [] } = {}) {
+  const langs = { sv: { status: 'unchanged', upsert: 0, delete_stale: 0, desired: 40 }, ...world };
+  const report = (status) => ({
+    languages: Object.fromEntries(Object.entries(langs).map(([lang, plan]) => [lang, { status: status(plan) }])),
+    plans: Object.fromEntries(Object.entries(langs).map(([lang, { upsert, delete_stale: stale, desired }]) => [lang, { upsert, delete_stale: stale, desired }])),
+  });
+  const spawnAct = async (call) => {
+    calls.push(call);
+    assert.equal(call.argv[1], 'scripts/admin/language-grammar-promote.mjs');
+    if (call.argv.includes('--check')) {
+      if (check) return check(call);
+      return { code: 0, stdout: JSON.stringify(report((plan) => plan.status)) };
+    }
+    if (execute) return execute(call);
+    return { code: 0, stdout: JSON.stringify(report((plan) => (plan.status === 'ready' ? 'promoted' : plan.status))) };
+  };
+  return { spawnAct, calls };
+}
+
+const WAITING = { sv: { status: 'ready', upsert: 5, delete_stale: 2, desired: 1234 }, fr: { status: 'unchanged', upsert: 0, delete_stale: 0, desired: 10 } };
+
+describe('mc language promote', () => {
+  it('with nothing waiting prints unchanged and exits 0 without asking', async () => {
+    const memoro = fakePromote();
+    const { ask, asked } = answers('y');
+    const stdout = sink();
+    const code = await run(['promote'], runDeps({ stdout, ask, spawnAct: memoro.spawnAct }));
+    assert.equal(code, 0, stdout.text());
+    assert.deepEqual(asked, []);
+    assert.match(stdout.text(), /^nothing waiting — every language unchanged$/mu);
+    assert.equal(memoro.calls.length, 1);
+    assert.deepEqual(memoro.calls[0].argv, ['node', 'scripts/admin/language-grammar-promote.mjs', '--check', '--json']);
+    const [record] = readRuns(env);
+    assert.equal(record.manifest, 'grammar-promote');
+    assert.equal(record.outcome, 'done');
+    assert.equal(record.acts.filter((act) => act.phase === 'execute').length, 0);
+  });
+
+  it('with one waiting shows the count, asks once, writes with the key and rewrites the cache', async () => {
+    await run(['status', 'sv'], statusDeps({ stdout: sink(), stderr: sink() }));
+    assert.equal(JSON.parse(readFileSync(readingPath('sv', env), 'utf8')).reads.grammar.waiting, 7);
+    const memoro = fakePromote({ world: WAITING });
+    const { ask, asked } = answers('y');
+    const stdout = sink();
+    const code = await run(['promote', '--langs', 'sv,fr'], runDeps({ stdout, ask, spawnAct: memoro.spawnAct }));
+    assert.equal(code, 0, stdout.text());
+    assert.deepEqual(asked, ['promote grammar for sv to production? [y/N]']);
+    assert.match(stdout.text(), /^sv: 5 to write, 2 stale to remove, 1,234 rows in all$/mu);
+    assert.doesNotMatch(stdout.text(), /^fr:/mu);
+    assert.deepEqual(memoro.calls.map((call) => call.argv), [
+      ['node', 'scripts/admin/language-grammar-promote.mjs', '--check', '--json', '--langs', 'sv,fr'],
+      ['node', 'scripts/admin/language-grammar-promote.mjs', '--json', '--langs', 'sv,fr'],
+    ]);
+    for (const call of memoro.calls) assert.equal(call.cwd, worktree);
+    const [record] = readRuns(env);
+    assert.equal(record.manifest, 'grammar-promote');
+    assert.equal(record.lang, 'sv,fr');
+    assert.equal(record.outcome, 'done');
+    const write = record.acts.find((act) => act.phase === 'execute');
+    assert.equal(write.outcome, 'done');
+    assert.deepEqual(write.observed, { 'languages.sv.status': 'promoted' });
+    const grammar = JSON.parse(readFileSync(readingPath('sv', env), 'utf8')).reads.grammar;
+    assert.equal(grammar.status, 'unchanged');
+    assert.equal(grammar.waiting, 0);
+    const overview = sink();
+    await run([], { ...statusDeps(), stdout: overview, stderr: sink() });
+    assert.match(overview.text(), /grammar\s+unchanged · 0 rows waiting/u);
+  });
+
+  it('a no at the question writes nothing, records declined and exits 1', async () => {
+    const memoro = fakePromote({ world: WAITING });
+    const { ask, asked } = answers('n');
+    const code = await run(['promote'], runDeps({ ask, spawnAct: memoro.spawnAct }));
+    assert.equal(code, 1);
+    assert.equal(asked.length, 1);
+    assert.equal(memoro.calls.length, 1, 'only the check');
+    const [record] = readRuns(env);
+    assert.equal(record.outcome, 'stopped');
+    assert.deepEqual(record.acts.filter((act) => act.phase === 'execute').map((act) => act.outcome), ['declined']);
+  });
+
+  it('a check the gate refuses prints the wrapper\'s lines, asks nothing and exits 1', async () => {
+    const memoro = fakePromote({
+      check: () => ({ code: 1, stdout: 'sv: 3 unresolved selectors\nclose it: mc language status sv\n' }),
+    });
+    const { ask, asked } = answers('y');
+    const stderr = sink();
+    const code = await run(['promote', '--langs', 'sv'], runDeps({ stderr, ask, spawnAct: memoro.spawnAct }));
+    assert.equal(code, 1);
+    assert.deepEqual(asked, []);
+    assert.match(stderr.text(), /sv: 3 unresolved selectors\n {4}close it: mc language status sv/u);
+    assert.match(stderr.text(), /the selector or source gate; nothing was written/u);
+    assert.equal(memoro.calls.length, 1);
+    assert.equal(readRuns(env)[0].outcome, 'refused');
+  });
+
+  it('a write that leaves a language not promoted stops with the wrapper\'s output', async () => {
+    const memoro = fakePromote({
+      world: WAITING,
+      execute: () => ({ code: 0, stdout: JSON.stringify({ languages: { sv: { status: 'ready' } } }) }),
+    });
+    const stderr = sink();
+    const code = await run(['promote'], runDeps({ stderr, ask: answers('y').ask, spawnAct: memoro.spawnAct }));
+    assert.equal(code, 1);
+    assert.match(stderr.text(), /"status":"ready"/u);
+    assert.match(stderr.text(), /left sv not promoted/u);
+    assert.match(stderr.text(), /grammar-promote — the promotion did not finish/u);
+    assert.equal(readRuns(env)[0].outcome, 'stopped');
+  });
+
+  it('the key goes into the execute child only, never an argument, never printed or logged', async () => {
+    env.CLOUDFLARE_API_TOKEN = PARENT_TOKEN;
+    env.CLOUDFLARE_ZONE = 'zone';
+    const memoro = fakePromote({
+      world: WAITING,
+      execute: (call) => {
+        call.onStderr(`writing with ${call.env.CLOUDFLARE_API_TOKEN}\n`);
+        return { code: 0, stdout: JSON.stringify({ languages: { sv: { status: 'promoted' } } }) };
+      },
+    });
+    const stdout = sink();
+    const stderr = sink();
+    const code = await run(['promote'], runDeps({ stdout, stderr, ask: answers('y').ask, spawnAct: memoro.spawnAct }));
+    assert.equal(code, 0, stderr.text());
+    const [checkCall, writeCall] = memoro.calls;
+    assert.equal(checkCall.env.CLOUDFLARE_API_TOKEN, undefined, 'the check reads on wrangler\'s login');
+    assert.equal(writeCall.env.CLOUDFLARE_API_TOKEN, TOKEN);
+    assert.equal(writeCall.env.CLOUDFLARE_ACCOUNT_ID, ACCOUNT);
+    for (const call of memoro.calls) {
+      assert.ok(!call.argv.some((arg) => arg.includes(TOKEN)));
+      assert.equal(call.env.CLOUDFLARE_ZONE, undefined);
+      assert.ok(!Object.values(call.env).includes(PARENT_TOKEN));
+    }
+    assert.match(stdout.text(), /CLOUDFLARE_\* set in this shell are ignored/u);
+    assert.ok(!stdout.text().includes(TOKEN));
+    assert.ok(!stderr.text().includes(TOKEN));
+    assert.match(stderr.text(), /writing with <redacted>/u);
+    if (existsSync(logPath())) assert.ok(!readFileSync(logPath(), 'utf8').includes(TOKEN));
+  });
+
+  it('without a terminal exits 2 before reading, and refuses a bad --langs', async () => {
+    const memoro = fakePromote({ world: WAITING });
+    assert.equal(await run(['promote'], runDeps({ interactive: () => false, spawnAct: memoro.spawnAct })), 2);
+    assert.equal(await run(['promote', '--langs', 'SV;rm'], runDeps({ spawnAct: memoro.spawnAct })), 2);
+    assert.equal(memoro.calls.length, 0);
+    assert.equal(readRuns(env).length, 0);
+  });
+
+  it('a stopped promotion is resumed as one, with the same languages', async () => {
+    const first = fakePromote({ world: WAITING, execute: () => ({ code: 1, interrupted: 'SIGINT', stdout: '' }) });
+    assert.equal(await run(['promote', '--langs', 'sv'], runDeps({ ask: answers('y').ask, spawnAct: first.spawnAct })), 130);
+    const again = fakePromote({ world: WAITING });
+    const { ask, asked } = answers('y');
+    assert.equal(await run(['resume'], runDeps({ ask, spawnAct: again.spawnAct })), 0);
+    assert.deepEqual(asked, ['promote grammar for sv to production? [y/N]']);
+    assert.ok(again.calls.every((call) => call.argv.at(-1) === 'sv'));
+    const [, resumed] = readRuns(env);
+    assert.equal(resumed.manifest, 'grammar-promote');
+    assert.equal(resumed.outcome, 'done');
   });
 });
