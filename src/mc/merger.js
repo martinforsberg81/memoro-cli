@@ -82,6 +82,13 @@ export function installedMergerRun(env = process.env) {
 export const MERGER_POLL_MS = 15 * 1000;
 
 /**
+ * How often an idle merger asks GitHub about its red rows: one `gh pr view`
+ * per red entry, so not every poll; a hand merge seen five minutes late costs
+ * a red row on the page for five minutes.
+ */
+const SWEEP_MS = MERGER_POLL_MS * 20;
+
+/**
  * What a session's environment must not hand the merger: the merger outlives
  * the session that started it and lands everybody's pull requests, so a
  * `MC_STEP` it inherited would name one step for all of them.
@@ -257,6 +264,74 @@ export function restack(job, { git = realGit, say = () => {} } = {}) {
   }
 }
 
+// The call merger-run.js makes, for a caller that hands no `gh`.
+const realGh = (args, options = {}) => spawnSync('gh', args, { cwd: options.cwd, encoding: 'utf8' });
+
+/**
+ * What GitHub says of a job's pull request: `{ state, sha, base }` for
+ * `MERGED`, `CLOSED` or `OPEN`, or null when `gh` fails or says nothing — a
+ * null is no answer, and the round decides as it always did.
+ */
+async function prStateOf(job, gh) {
+  try {
+    const seen = await gh(['pr', 'view', String(job.pr), '--json', 'state,mergeCommit,baseRefName'], { cwd: job.repo_path });
+    if (!seen || seen.error || (Number.isInteger(seen.status) && seen.status !== 0)) return null;
+    const facts = JSON.parse(seen.stdout || 'null');
+    const state = facts?.state;
+    if (state === 'MERGED') return facts.mergeCommit?.oid ? { state, sha: facts.mergeCommit.oid, base: facts.baseRefName || null } : null;
+    return state === 'CLOSED' || state === 'OPEN' ? { state } : null;
+  } catch { return null; }
+}
+
+/** The answer for a pull request somebody merged on GitHub outside the queue. */
+const alreadyMerged = (facts) => ({
+  ok: true, merged: true, merge_commit: facts.sha, merged_into: facts.base, already_merged: true, stopped_at: null, reason: null,
+});
+
+/** The answer for a pull request closed on GitHub without merging. */
+const closedOnGitHub = (job) => ({
+  ok: false, merged: false, stopped_at: 'closed', reason: `#${job.pr} was closed on GitHub without merging`,
+});
+
+/**
+ * Red entries whose pull request has left GitHub's open list since: a merged
+ * one is dequeued and its step `done` (the `tell` path, landed), a closed one
+ * is dequeued with the register left as it is (2026-10-10: #13370 and #13372
+ * sat red after being merged by hand). GitHub is asked outside the lock; an
+ * entry `mc merge` queued again meanwhile is not red any more and is left.
+ * Returns the number of entries dequeued.
+ */
+export async function sweepMergedReds({
+  root, gh = null, read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
+  lock = realLock, say = () => {}, now = () => new Date(),
+} = {}) {
+  const ask = gh || realGh;
+  const reds = parseQueue(read(mergesPath(root))).filter((entry) => entry.state === 'red');
+  const gone = [];
+  for (const entry of reds) {
+    const facts = await prStateOf(entry, ask);
+    if (facts?.state === 'MERGED' || facts?.state === 'CLOSED') gone.push({ entry, facts });
+  }
+  if (!gone.length) return 0;
+  const dropped = lock(root, () => {
+    let entries = parseQueue(read(mergesPath(root)));
+    const out = gone.filter(({ entry }) => queuedFor(entries, entry.repo, entry.pr)?.state === 'red');
+    for (const { entry } of out) entries = dequeue(entries, entry);
+    if (out.length) write(mergesPath(root), entries);
+    return out;
+  });
+  for (const { entry, facts } of dropped) {
+    if (facts.state === 'MERGED') {
+      tell(entry, true, alreadyMerged(facts), {
+        root, say, gh, now, read, write, lock, appendRun: null, dropFromPage: dropPr, seconds: 0,
+      });
+    } else {
+      say(`${entry.repo} #${entry.pr}: closed on GitHub — its red row leaves the queue`);
+    }
+  }
+  return dropped.length;
+}
+
 /* ------------------------------------------------------------------ serve */
 
 /**
@@ -325,6 +400,17 @@ export async function landJob(batch, {
     }
     jobs.push(job);
   }
+  // Asked first: a pull request somebody merged or closed on GitHub is
+  // answered by itself and leaves the batch, rather than stopping the round
+  // for everyone in it (2026-10-10 17:52, #13372 turned #13373 and #13374 red).
+  const ask = gh || realGh;
+  for (const one of [...jobs]) {
+    const facts = await prStateOf(one, ask);
+    if (facts?.state === 'MERGED') answer(one, true, alreadyMerged(facts));
+    else if (facts?.state === 'CLOSED') answer(one, false, closedOnGitHub(one));
+    else continue;
+    jobs.splice(jobs.indexOf(one), 1);
+  }
   if (!jobs.length) return answers;
 
   const [job] = jobs;
@@ -372,7 +458,9 @@ export async function landJob(batch, {
 /** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
 function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds }) {
   const label = `${job.repo} #${job.pr}`;
-  say(landed
+  say(landed && report?.already_merged
+    ? `${label}: already merged on GitHub as ${String(report.merge_commit || '').slice(0, 7)} — answered landed`
+    : landed
     ? `${label}: merged into ${report.merged_into || 'main'} as ${String(report.merge_commit || '').slice(0, 7)} (${seconds}s)`
     : `${label}: not merged — ${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`);
   // A landed pull request leaves PULL REQUESTS now, not when the page or a
@@ -449,9 +537,24 @@ export async function serve({
   // the other is landing: a job queued meanwhile saw this merger alive and
   // started none, so this loop is the one that has to find it.
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
+  gh = null,
+  sweep = () => sweepMergedReds({ root, gh, read, write, lock, say, now }),
 } = {}) {
   if (!take()) { say('another merger is running — leaving'); return 0; }
   say(version ? `merger ${process.pid} started — ${version.checkout} at ${version.commit}` : `merger ${process.pid} started`);
+  // Red rows merged or closed on GitHub since: looked for once now and then
+  // at most every SWEEP_MS by whichever loop is idle, one sweep at a time.
+  let sweeping = null;
+  let swept = -Infinity;
+  const sweepReds = async () => {
+    if (sweeping || now().getTime() - swept < SWEEP_MS) return;
+    swept = now().getTime();
+    sweeping = (async () => {
+      try { await sweep(); } catch (error) { say(`the sweep of red rows threw — ${error?.message || error}`); }
+    })();
+    try { await sweeping; } finally { sweeping = null; }
+  };
+  await sweepReds();
   const batchIn = (entries, lane) => nextBatch(entries, { landed, lane, laneOf });
   // What the loops share: which of them has nothing, whether the merger is
   // leaving, and a wake-up for a loop waiting on the other.
@@ -482,6 +585,7 @@ export async function serve({
         return next;
       });
       if (!batch.length) {
+        await sweepReds();
         idle.add(lane);
         if (idle.size < lanes.length) {
           // The other lane is landing. Looked at again when it answers a job,

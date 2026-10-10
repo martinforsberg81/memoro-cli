@@ -53,6 +53,7 @@ const code = await serve({
   say,
   version: { checkout: shown, commit },
   stopping: () => stopping,
+  gh,
   land: (batch) => landJob(batch, { root, say, sleep, gh, appendRun }),
 });
 process.exit(code);
