@@ -932,8 +932,10 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
 }
 
 /**
- * The one line for a plan that has been waiting for nothing: a step blocked
- * on a project that is finished or gone from main (stale-blockers.js).
+ * The one line for a plan that may have been waiting for nothing: a step
+ * blocked on a project that is gone from main (stale-blockers.js). One whose
+ * project is done on main is released by the runner (ruling 35) and never
+ * reaches this line.
  * Yellow, because the palette's yellow is what waits on a person and this is
  * the page asking for one — nothing flips a blocker but a human with a plan
  * edit.
@@ -942,10 +944,10 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
  * for staleness, because RUNNER two sections up already spends that word on a
  * lane file whose process is gone. One word, one meaning, on one page.
  *
- * It says *done or no longer on main* and not *not coming*, because those are
- * the only two things the check can know — `stale-blockers.js` computes `why`
- * as `is done` or `is not on main` and its docstring is careful about the
- * difference, since a project also leaves main when it is abandoned. The
+ * It says *no longer on main* and not *not coming*, because that is the one
+ * thing the check can know — `stale-blockers.js` computes `why` as `is not on
+ * main` and its docstring is careful about it, since a project also leaves
+ * main when it is abandoned. The
  * header said *not coming*, which is a prediction neither the module nor
  * anything else on this page is entitled to make.
  *
@@ -961,7 +963,7 @@ function staleLine(lines, c, wide, stale) {
   // terminal to see is one the page has not really reported.
   lines.push(`       ${paint(c, [
     { text: `blocker finished ${stale.count}`, styles: ['yellow', 'bold'] },
-    { text: ' — a blocked step names a project that is done or no longer on main', styles: ['yellow'] },
+    { text: ' — a blocked step names a project no longer on main', styles: ['yellow'] },
   ], wide - 7)}`);
   for (const item of stale.items) {
     lines.push(`       ${paint(c, [

@@ -857,23 +857,50 @@ describe('the stale-blocker line', () => {
   const PLAN = (project, steps) => ({ repo: 'memoro', programme: 'p', project, status: 'blocked', plan: { steps } });
   const BLOCKED = (name) => ({ title: 'A step', status: 'blocked', blocked_by: { kind: 'project', name } });
 
-  it('claims no more than the two things the check can know', () => {
-    // `staleBlockers` computes `why` as `is done` or `is not on main`, and is
-    // careful about the difference because a project also leaves main when it
-    // is abandoned. The header said *not coming*, which is a prediction.
+  it('claims no more than the one thing the check can know', () => {
+    // `staleBlockers` computes `why` as `is not on main`, and is careful about
+    // it because a project also leaves main when it is abandoned. One that is
+    // done on main is the runner's to release (ruling 35) and is not drawn.
+    // The header said *not coming*, which is a prediction.
     const plans = [
       PLAN('waiting-on-done', [BLOCKED('already-done')]),
       PLAN('waiting-on-gone', [BLOCKED('never-heard-of-it')]),
       { ...PLAN('already-done', [{ title: 'x', status: 'done' }]), status: 'done' },
     ];
     const queue = nextSection({ plans });
-    assert.equal(queue.stale.count, 2);
+    assert.equal(queue.stale.count, 1);
     const lines = renderPageLines(pageData({ next: queue }), { columns: 120 });
     const header = lines.find((line) => /blocker finished/u.test(line));
-    assert.match(header, /blocker finished 2 — a blocked step names a project that is done or no longer on main/u);
+    assert.match(header, /blocker finished 1 — a blocked step names a project no longer on main/u);
     assert.doesNotMatch(header, /not coming/u, 'the page predicts nothing the module refused to');
-    assert.ok(lines.some((line) => /waiting-on-done step 1 on already-done, which is done/u.test(line)), lines.join('\n'));
+    assert.ok(!lines.some((line) => /waiting-on-done/u.test(line)), lines.join('\n'));
     assert.ok(lines.some((line) => /waiting-on-gone step 1 on never-heard-of-it, which is not on main/u.test(line)), lines.join('\n'));
+  });
+});
+
+describe('the blocked line of a time or deploy wait', () => {
+  // Ruling 35: the row says what the step waits for in `describeWait`'s words,
+  // and for a time how long it has left. A deploy wait is said without its
+  // time left: knowing it needs git, and the page makes no git call per paint.
+  const AT = new Date('2026-10-11T08:00:00Z');
+  const waiting = (project, blockedBy) => planRecord({ repo: 'memoro', programme: 'p', project, status: 'blocked', title: 'Wait', done: 3, blockedBy });
+
+  it('says until when, and how long is left', () => {
+    const programmes = programmesSection({
+      plans: [
+        waiting('on-time', { kind: 'time', name: 'until-20261014-0800', at: '2026-10-14T08:00:00Z' }),
+        waiting('on-deploy', { kind: 'deploy', name: 'deploy-step-3-24h', step: 3, hours: 24 }),
+        waiting('on-decision', { kind: 'decision', name: 'p-1' }),
+      ],
+      now: AT,
+    });
+    const byName = Object.fromEntries(programmes.programmes[0].projects.map((project) => [project.name, project.next]));
+    assert.equal(byName['on-time'], 'step 4 is blocked until 2026-10-14 08:00Z — 3d left');
+    assert.equal(byName['on-deploy'], 'step 4 is blocked on deploy of step 3 + 24h');
+    assert.equal(byName['on-decision'], 'step 4 is blocked on decision p-1');
+    const lines = renderPageLines(pageData({ programmes }), { columns: 160, expand: true });
+    assert.ok(lines.some((line) => /on-time .*until 2026-10-14 08:00Z — 3d left/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /on-deploy .*on deploy of step 3 \+ 24h/u.test(line)), lines.join('\n'));
   });
 });
 

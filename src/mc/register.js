@@ -55,7 +55,10 @@ export const REGISTER_DIR = 'projects';
  * waits on something named in `blocked_by`; `landing` its pull request is
  * in the merger's queue (`merge-queue.js`, ruling 30) and the merger writes
  * what comes of it. A `failed` or `blocked` step is a person's: the runner
- * never retries one, and the way back is `mc step ready` (ruling 21). A red
+ * never retries one, and the way back is `mc step ready` (ruling 21). The
+ * one exception is a `time`, `deploy` or `project` blocker whose wait is
+ * over, which the runner releases itself (`releaseDue`, ruling 35); a
+ * `decision` or `workarea` blocker is still a person's. A red
  * round the merger sends back is `ready` with its `pr` and `reason` kept,
  * up to `MAX_MERGE_ATTEMPTS` (merge-step.js).
  *
