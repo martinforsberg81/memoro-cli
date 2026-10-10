@@ -7,7 +7,7 @@ import {
   describeSettings, describeWatch, headlessArgs, helperDue,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen, apiInterruption, resumePrompt,
-  readSessionOutput, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
+  INTERRUPT_LIMIT, readSessionOutput, sessionStanding, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow, userMessageLine,
 } from '../../src/mc/run-plan.js';
 import { NAME_RE } from '../../src/mc/plan-schema.js';
@@ -430,6 +430,35 @@ test('readSessionOutput: claude json usage fields, dashes when absent', () => {
   const r = readSessionOutput({ toolId: 'claude-code', stdout: out, exitCode: 0 });
   assert.deepEqual(r, { turns: '7', session: 's1', input: '10', output: '20', cacheRead: '30', cacheWrite: '-', note: 'success', quota: false, quotaReset: null });
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: 'garbage', exitCode: 1 }).note, 'no-json');
+});
+
+test('sessionStanding: a claude stream cut mid-line gives its session, last context and last words', () => {
+  const sid = 'c1a2b3c4-dead-4bee-8000-000000000001';
+  const lines = [
+    { type: 'system', subtype: 'init', session_id: sid },
+    { type: 'assistant', session_id: sid, message: { id: 'm1', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Reading.' }], usage: { input_tokens: 1, cache_read_input_tokens: 10, cache_creation_input_tokens: 100 } } },
+    // One message, printed one event per content block.
+    { type: 'assistant', session_id: sid, message: { id: 'm2', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Part one.' }], usage: { input_tokens: 2, cache_read_input_tokens: 2000, cache_creation_input_tokens: 300 } } },
+    { type: 'assistant', session_id: sid, message: { id: 'm2', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Part two.' }], usage: { input_tokens: 2, cache_read_input_tokens: 2000, cache_creation_input_tokens: 300 } } },
+    { type: 'assistant', session_id: sid, message: { id: 'm3', model: 'claude-opus-5-5', content: [{ type: 'tool_use', name: 'Bash' }], usage: { input_tokens: 3, cache_read_input_tokens: 4000, cache_creation_input_tokens: 0 } } },
+    { type: 'assistant', session_id: sid, message: { id: 's1', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }], usage: { input_tokens: 0 } } },
+  ];
+  const stdout = `${lines.map((e) => JSON.stringify(e)).join('\n')}\n{"type":"assistant","message":{"id":"m4","content":[{"type":"text","text":"cut`;
+  assert.deepEqual(sessionStanding({ toolId: 'claude', stdout }), { session_id: sid, context_tokens: 4003, last_text: 'Part one.\nPart two.' });
+  const long = JSON.stringify({ type: 'assistant', message: { id: 'x', model: 'm', content: [{ type: 'text', text: `a${'b'.repeat(5000)}` }] } });
+  assert.equal(sessionStanding({ toolId: 'claude', stdout: `${long}\n` }).last_text.length, 3000, 'capped from the end');
+  assert.deepEqual(sessionStanding({ toolId: 'claude', stdout: '' }), { session_id: null, context_tokens: null, last_text: null });
+});
+
+test('sessionStanding: a codex stream cut mid-line gives its thread, last input tokens and last agent message', () => {
+  const stdout = [
+    { type: 'thread.started', thread_id: '019a-thread' },
+    { type: 'item.completed', item: { type: 'agent_message', text: 'Planning.' } },
+    { type: 'item.completed', item: { type: 'command_execution', command: 'ls' } },
+    { type: 'turn.completed', usage: { input_tokens: 4000, cached_input_tokens: 3000, output_tokens: 100 } },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n{"type":"turn.completed","usage":{"input_tokens":9';
+  assert.deepEqual(sessionStanding({ toolId: 'codex', stdout }), { session_id: '019a-thread', context_tokens: 4000, last_text: 'Planning.' });
+  assert.equal(INTERRUPT_LIMIT, 3);
 });
 
 test('streamSummary: a stream mc merge ended before its result still gives turns, usage, model and session', () => {

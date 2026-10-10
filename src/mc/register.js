@@ -58,6 +58,14 @@ export const REGISTER_DIR = 'projects';
  * never retries one, and the way back is `mc step ready` (ruling 21). A red
  * round the merger sends back is `ready` with its `pr` and `reason` kept,
  * up to `MAX_MERGE_ATTEMPTS` (merge-step.js).
+ *
+ * An interrupted step is a `ready` step carrying an `interrupted` record: its
+ * session died under it — the machine restarted, the runner was killed, the
+ * process was killed by a signal the runner did not send — and the record
+ * says which session it was (id, tool, model, log, last activity, context
+ * size, branch, how many times in a row, when). It is not a state of its own
+ * (ruling 33): every reader that draws `ready` keeps working, and the record
+ * stays while the step is `ready` or `running` and goes on any other status.
  */
 export const STEP_STATES = Object.freeze(['ready', 'running', 'landing', 'done', 'failed', 'blocked']);
 
@@ -75,7 +83,7 @@ export function registerPath(root, project) {
 export function emptyStep() {
   return {
     key: null, status: 'ready', pr: null, branch: null, blocked_by: null, reason: null, comments: [],
-    session: null, attempts: 0, landed: null, stacked_on: null, updated: null,
+    session: null, attempts: 0, landed: null, stacked_on: null, interrupted: null, updated: null,
   };
 }
 
@@ -120,6 +128,8 @@ function normaliseStep(step) {
     stacked_on: plain(step.stacked_on) && Number.isInteger(step.stacked_on.index) && typeof step.stacked_on.sha === 'string'
       ? { index: step.stacked_on.index, pr: int(step.stacked_on.pr), sha: step.stacked_on.sha }
       : null,
+    // The session that died under this step (see `STEP_STATES`).
+    interrupted: plain(step.interrupted) ? { ...step.interrupted } : null,
     updated: typeof step.updated === 'string' ? step.updated : null,
   };
 }
@@ -289,6 +299,7 @@ export function patchStep(entry, index, patch = {}, now = null) {
   }
   if (next.status !== 'blocked') next.blocked_by = null;
   if (next.status !== 'running') next.session = null;
+  if (next.status !== 'ready' && next.status !== 'running') next.interrupted = null;
   if (comment) next.comments = [...(next.comments || []), String(comment)];
   next.updated = now;
   const steps = entry.steps.map((step, i) => (i === index ? next : step));
