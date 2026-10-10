@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { KEYCHAIN_TIMEOUT_MS, run } from '../../src/lib/keychain.js';
+import { KEYCHAIN_TIMEOUT_MS, macSet, run } from '../../src/lib/keychain.js';
 
 // A keychain tool that does not answer — `security` behind a locked keychain's
 // modal, with nobody there. It must be stopped, and the error must say so. The
@@ -30,4 +30,33 @@ test('a keychain tool that answers in time resolves as before', async () => {
 
 test('the default gives a person at the machine time to answer the modal', () => {
   assert.equal(KEYCHAIN_TIMEOUT_MS, 30_000);
+});
+
+// `ps` reads every process's argv, so the secret goes through stdin.
+test('macSet writes the secret through security -i stdin, never argv', async () => {
+  const calls = [];
+  const exec = async (cmd, args, stdinData) => { calls.push({ cmd, args, stdinData }); return { stdout: '', stderr: '' }; };
+  const where = await macSet('cloudflare-d1-edit-token', 'tok3nV4lue', { exec });
+  assert.equal(where, 'keychain');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, 'security');
+  assert.deepEqual(calls[0].args, ['-i']);
+  for (const arg of [calls[0].cmd, ...calls[0].args]) assert.ok(!arg.includes('tok3nV4lue'), `argv carries the secret: ${arg}`);
+  assert.equal(
+    calls[0].stdinData,
+    'add-generic-password -a "cloudflare-d1-edit-token" -s "memoro-cli" -w "tok3nV4lue" -U\n',
+  );
+});
+
+test('macSet refuses a value it cannot quote, and writes nothing', async () => {
+  const calls = [];
+  const exec = async (...args) => { calls.push(args); return { stdout: '', stderr: '' }; };
+  for (const bad of ['a"b', 'a\\b', 'a\nb']) {
+    await assert.rejects(macSet('acct', bad, { exec }), (err) => {
+      assert.equal(err.code, 'EBADSECRET');
+      assert.ok(!err.message.includes(bad));
+      return true;
+    });
+  }
+  assert.equal(calls.length, 0);
 });
