@@ -1,0 +1,194 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "The merger handles the reds it can handle and stays out of its own way. A pull request already merged on GitHub counts as landed, and nobody else in its batch pays for it. A plan's steps land in order. A red that the change itself caused gets one mend session before anyone is told it is red. The merger's two lanes really run side by side, and a SIGTERM lets the jobs in flight finish. The page shows a batch as what it is, and shows a pull request being mended on its own yellow row.",
+    "Seen in the first hour of batching, 2026-10-10 17:47-18:00 UTC (`~/mc/runner/log/merger.log`): #13372, merged by hand at 17:38, made its batch answer red, and #13373 and #13374 came back red with its reason. #13370 came back red with a one-file conflict (`card-views.js`) and was then merged by hand with `--admin`; `merges.json` still says red. The old merger got its SIGTERM at 17:40 and saw it at 17:47:06, after `npm ci` (268 s), derived (33 s) and the selector (107 s), all run with `spawnSync`. The gate's own SIGTERM handler then cut the round short (`repo-gate.js:318-341`). The merger that served 17:47-18:00 (pid 14366) had been started by a step session from its own workarea and ran that branch's code, with batches but without lanes, so the two repositories took turns. And on main, `merger-run.js` drops the lane it is handed (`:41`), so a light job waits on the heavy lane's round."
+  ],
+  "contract": [
+    "No pull request lands on a weaker measurement than today's. A mended pull request is queued again and measured by a full round like any other job. The mend session never merges, never runs `gh pr merge`, never force-pushes, never touches `main`, and never edits a `PLAN.json`.",
+    "A job gets at most one mend. A job that comes back red after it was mended is red at once, as today: entry `red`, step through `redPatch`. The same goes for a red the mend does not apply to, and for a mend that pushes nothing, fails or times out.",
+    "A job for step n of a plan (`job.step.index` n-1 > 0) does not go until every earlier step of that plan is `done` in the register. This holds whether or not the job names a `parent`, and it holds for a job already `landing` that a restarted merger resumes.",
+    "Every child process the merger starts, directly or through `runMergeRound` / `runGate` and what they call, is spawned without blocking the event loop. Results keep the `spawnSync` shape callers read today (`{ status, stdout, stderr, error, signal }`), so injected sync stubs in the tests stay valid: `await` of a plain object is that object.",
+    "The merger is still one process (`merger.json` is one pid). `mc test`, `mc merge --check` and the nightly run go through the same `runGate` and are only made async, not changed in what they measure.",
+    "Thresholds are constants with a comment saying why, not settings: `MEND_MINUTES`, `MEND_AT_ONCE`, `MEND_STOPS`.",
+    "Every step runs `npm test` and lands through `mc merge memoro-cli <pr>`. A step that changes the merger takes effect when the merger next starts. The step's session does not restart it: the close-out says when."
+  ],
+  "out_of_scope": [
+    "A second mend for one job, or a mend of a mended job's new red.",
+    "Mending infrastructure stops (`fetch`, `pr`, `killed`, `threw`, `busy`, `drift`, the deploy wait) or a red that is main's own (every red file red on the base too).",
+    "Stopping people from merging outside mc (`gh pr merge --admin`). This plan only makes the merger cope when it happens.",
+    "Running two memoro rounds at once, or changing the batch size."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A merger is always the installed mc, whoever starts it, and its first log line says which commit.",
+      "check": "`tests/mc/merger.test.js` per step 1. Live: the close-out quotes `merger <pid> started — ~/memoro-cli at <sha>` with the sha of `origin/main` at the time."
+    },
+    {
+      "met": false,
+      "criterion": "A job whose pull request is merged on GitHub is answered landed (dequeued, its step `done` if it has one) and leaves its batch; one that is closed is answered red by itself; the rest of the batch is measured and landed without them.",
+      "check": "`tests/mc/merger.test.js`: a batch of three where the stub `gh` says the second is MERGED. That job is dequeued and its step `done` with the merge commit GitHub gave; `mergeRound` gets `prs` of the other two. Same with CLOSED: that job is `red` with `closed on GitHub`. A red entry whose pull request has since merged is dequeued and its step `done` on the merger's next look. Live: the close-out quotes one `already merged on GitHub` line."
+    },
+    {
+      "met": false,
+      "criterion": "A step's job never goes before every earlier step of its plan is `done`.",
+      "check": "`tests/mc/merge-queue.test.js`: a job for step 3 with no `parent` while step 2 is `ready`, `landing` or `failed` is not in `nextBatch`, and is once step 2 is `done`. A step-1 job and a job with no step are untouched. The page's queue row says `waits for <project> step 2`."
+    },
+    {
+      "met": false,
+      "criterion": "No child process of the merger blocks its event loop, and the two lanes overlap end to end.",
+      "check": "`tests/mc/child-async.test.js` for the runner's result shape, `maxBuffer` and timeout. `tests/mc/merger.test.js`: with the heavy lane's round stubbed to resolve only after 300 ms, a light job queued meanwhile starts and finishes inside that time. A `grep` test fails if `spawnSync`, `execFileSync` or `execSync` appears in `repo-gate.js`, `repo-merge.js`, `repo-freshen.js`, `repo-derived.js`, `prepare-cache.js`, `selector-miss.js`, `merger.js` or `merger-run.js`. Live: the close-out quotes a memoro-cli `landing` line stamped while a memoro round is between `preparing the candidate` and `selection took`."
+    },
+    {
+      "met": false,
+      "criterion": "A SIGTERM to the merger lets the jobs in flight finish and then leaves within a second of the last answer.",
+      "check": "`tests/mc/merger.test.js`: `stopping()` turns true mid-round; the round's report is answered normally (no `killed`), and `serve` returns. `runGate` with `signals: false` installs no handler. Live: the close-out restarts the merger once with SIGTERM and quotes the `SIGTERM` line, the answer that follows and `merger <pid> started` of the new one."
+    },
+    {
+      "met": false,
+      "criterion": "A red the change caused gets one mend session; a mend that pushes puts the job back in line at its old place, and anything else ends red as today.",
+      "check": "`tests/mc/mend.test.js` with stub session, git and gh: a `merge` stop starts one session in a fresh worktree on the branch; a push puts the entry back in `queued` with its old `since` and `mended` set; no push makes it `red` with `<reason> — the mend pushed nothing`; a second red on a mended job starts no session; `fetch`, `pr`, `killed` and a main-own red start none; at most `MEND_AT_ONCE` run at once. Live: the close-out quotes a `mending` line and its outcome, or says that no red occurred in the window."
+    },
+    {
+      "met": false,
+      "criterion": "The page draws every pull request in a batch round on its own row, and a mend on its own yellow row, beside the merger's next round.",
+      "check": "`tests/mc/page.test.js`: a batch of three draws three green rows, the round's phase and age on the first; none of the three is counted as waiting. A `mending` entry draws a yellow row with its reason and age while another round is landing; the heading reads `1 landing · 1 mending · …`."
+    }
+  ],
+  "documents": [
+    {
+      "label": "mc rulings (ruling 37)",
+      "path": "../rulings.md"
+    },
+    {
+      "label": "The runner",
+      "path": "../../../technical/mc-run.md"
+    },
+    {
+      "label": "mc test and mc merge",
+      "path": "../../../technical/mc-merge.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. The merger always runs from the installed mc, and says which commit it runs",
+      "status": "ready",
+      "done_when": "`startMerger` spawns `merger-run.js` from the checkout the `mc` on PATH resolves to, never from the caller's own tree; `merger <pid> started` names that checkout and its commit; a test pins both; `npm test` is green.",
+      "instruction": [
+        "On 2026-10-10 17:47:42 the merge-watch step session ran `node src/mc-cli.js merge memoro-cli 850 --watch` in its workarea `~/mc/merge-watch/memoro-cli`, 36 s after the merger had left on SIGTERM. `startMerger` (`src/mc/merger.js:130-143`) spawns `MERGER_RUN`, resolved from its own `import.meta.url` (`:58`), so merger 14366 ran that branch at 4c0e94ea: batches (#838) but not lanes (#839). It served both repositories from one loop for the next fifteen minutes, and nothing in the log said so except the old wording of the `gate round started` line.",
+        "**Where from.** Add `installedMergerRun(env)` in `merger.js`: the realpath of the first `mc` on `env.PATH` (`sourceLinkedInstallations` in `src/mc/repo-status.js:77` already resolves it), and from there `src/mc/merger-run.js` in that checkout. If that file does not exist, fall back to `MERGER_RUN` and say `merger started from <path> — no installed mc found`. `startMerger` uses it. The deployer has the same hole: `DEPLOYER_RUN` (`src/mc/commands/deploy.js:897`) is resolved from `import.meta.url`, so resolve `deploy-run.js` the same way.",
+        "**Said.** `serve`'s first line (`merger.js:425`) becomes `merger <pid> started — <checkout path with ~> at <short sha>`, the sha read once with `git -C <checkout> rev-parse --short HEAD` in `merger-run.js` and passed to `serve` as `version`. `merger.json` gets `commit` beside `pid` and `since`.",
+        "**Tests.** `tests/mc/merger.test.js`: with a stub PATH whose `mc` links into a fixture checkout, `startMerger` spawns that checkout's `merger-run.js` even when called from another tree; with no `mc` on PATH it falls back and says so; `serve` says the started line with path and sha."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "2. A pull request already merged on GitHub is answered landed, by itself",
+      "status": "ready",
+      "done_when": "Before a round, `landJob` asks GitHub for each job's state. MERGED jobs are answered landed with GitHub's merge commit, CLOSED jobs are answered red, and both leave the batch. A red entry whose pull request has merged is dequeued, and its step is `done`. Tests per the first criterion; `npm test` is green.",
+      "instruction": [
+        "Today `prFacts` (`src/mc/repo-gate.js:1039`) returns `{ ok: false, reason: '#N is merged, so there is nothing to gate' }` for a merged or closed pull request, and the round stops for the whole batch. `answersFor` (`src/mc/merger.js:240-262`) then hands every job that stop. On 2026-10-10 17:52 that turned #13373 and #13374 red because of #13372, which had been merged by hand at 17:38.",
+        "**Asked first.** In `landJob` (`merger.js:270`), after the restack loop and before the wait loop, ask `gh pr view <n> --json state,mergeCommit,baseRefName` for each job in `jobs`, with `cwd: job.repo_path`. Use the `gh` that `landJob` is handed (`merger-run.js` passes one). If it is null, use the async runner from step 4's module; until step 4 lands, use the same `spawnSync` call `merger-run.js` makes. `MERGED`: answer it with `answer(job, true, { ok: true, merged: true, merge_commit: <mergeCommit.oid>, merged_into: <baseRefName>, already_merged: true, stopped_at: null, reason: null })` and drop it from `jobs`. `CLOSED`: answer it with `answer(job, false, { ok: false, merged: false, stopped_at: 'closed', reason: '#N was closed on GitHub without merging' })` and drop it. If `gh` fails or says nothing, keep the job, and the round decides as today. If no job is left, return the answers. `tell` already writes `landedPatch` for a landed answer. Its line for an `already_merged` report says `#N: already merged on GitHub as <sha7> — answered landed` in place of `merged into main as`.",
+        "**Red entries that have merged since.** The merger leaves a red entry alone until `mc merge` queues it again. #13370 and #13372 still sit red on 2026-10-10 after being merged by hand. Add `sweepMergedReds({ root, gh, read, write, lock, say, now })` in `merger.js`. For each `red` entry it asks the same `gh pr view`. A MERGED one is dequeued and its step goes through `landedPatch` (the `tell` path with `landed: true`), unless the register already says `done`. A CLOSED one is dequeued with no register change. `serve` calls it once at start and then at most every `MERGER_POLL_MS * 20` (5 min), from whichever loop is idle. Never more than one sweep at a time.",
+        "**Tests.** `tests/mc/merger.test.js` with a stub `gh` and `mergeRound`. In a batch of three where the second is MERGED, that job is dequeued with step `done` and `merge_commit` from the stub, and `mergeRound` gets `prs` of the first and third. CLOSED gives that job `red` with `stopped_at: 'closed'`. Every job MERGED means no `mergeRound` call. `sweepMergedReds` dequeues a merged red entry and marks its step `done`, dequeues a closed one, and leaves an open one."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "3. A step's job does not go until every earlier step of its plan is done",
+      "status": "ready",
+      "done_when": "`mayGoIn` (and so `nextJob` and `nextBatch`) holds back a job for step n until every earlier step of its project is `done` in the register. That applies with or without `parent`, and also to a resumed `landing` job. The page and `mc merge watch` say what it waits for. Tests per the second criterion; `npm test` is green.",
+      "instruction": [
+        "Today a job waits only on its `parent` (`mayGoIn`, `src/mc/merge-queue.js:157`), and only a stacked job has one (ruling 30, A). A job queued without a parent, for step n+1 while step n is `ready`, red or `failed`, goes at once. Martin, 2026-10-10: *\"step n+1 ska inte kunna bli mergad om inte step n i ett projekt blivit mergad\"*.",
+        "**The rule.** Add `stepsBeforeDone(root, { read })` in `merger.js` beside `parentLanded` (`:186`). It returns `(job) => boolean`: true when the job has no `step`, when `step.index` is 0, or when `readEntry(root, step.project).steps[0..index-1]` are all `done`. A register that cannot be read is true, as in `parentLanded`. Change `nextJob` and `nextBatch` to take `ordered: stepsBeforeDone` beside `landed` (default `() => true`), and `mayGoIn` to require it as well as the parent rule. The resume branch of `nextBatch` (`landing` entries, `:185-186`) filters the same way. A `landing` job whose earlier step is no longer `done` is set back to `queued`, never landed.",
+        "**serve.** `batchIn` (`merger.js:426`) passes it in. A job held back by it is not work: the empty-queue branch leaves as for a job waiting on a red parent. The runner restarts the merger when a register write makes a job able to go, through the same `mayGo` check in `run.js:769`, which gets the same function.",
+        "**Where it is said.** `waitingOnParent` (`merge-queue.js:199`) becomes `waitingOn(entries, { landed, ordered })` and returns `{ entry, parent, step }`. `mergesSection` (`src/mc/page-collect.js:569`) gives a queued item `waits_for: '<project> step <n>'` when the earlier step is the reason. `waitingNumbers` (`src/mc/page-render.js:724`) draws `#N⏸` for it, and `watchState` (`src/mc/merge-watch.js:45`) reports `kind: 'queued', waits_for`.",
+        "**Tests.** `tests/mc/merge-queue.test.js`: a step-3 job with no `parent` while step 2 is `ready`, `landing`, `failed`; then `done`. A step-1 job and a job with `step: null` are unaffected. A resumed `landing` batch drops a member whose earlier step is no longer `done`. `tests/mc/page.test.js` for the `waits for` mark."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "4. The gate's child processes run without holding the event loop",
+      "status": "ready",
+      "done_when": "A new `src/mc/child-async.js` gives `runTool` and `runShell`, which return promises of the `spawnSync` result shape. `runGate` and everything it calls (`repo-derived.js`, `prepare-cache.js`, `work-deps.js`'s gate path, `selector-miss.js`) use them and `await` every call. `runGate` takes `signals: false`. Tests pass, including the grep test for these files; `npm test` is green.",
+      "instruction": [
+        "Today `runGate` (`src/mc/repo-gate.js:98`) is async, but its `run` (`:174`) and `shell` (`:1412`) are `spawnSync`. So are `regenerateDerived`'s shell (`src/mc/repo-derived.js:88`), `prepare-cache.js`'s `defaultRun` (`:54`) and its install through the gate's `shell` (`repo-gate.js:513`), `ensureWorkDeps`' `npmCi` (`src/mc/work-deps.js:167`, `execFileSync` up to 10 min), and `probeMainRed`'s git calls (`src/mc/selector-miss.js:92` and the helpers it calls). Only the suite (`realSuite` `:1472`, `realTests` `:1377`) and the command gates (`commandShell` `:1423`) are spawned async. On 2026-10-10 17:40-17:47 the old merger's process was blocked through `npm ci` (268 s), derived (33 s) and the selector (107 s).",
+        "**The module.** `src/mc/child-async.js` exports `runTool(tool, args, { cwd, env, maxBuffer = 256 << 20, timeoutMs = null })` and `runShell(command, { cwd, env, maxBuffer = 256 << 20, timeoutMs = null })`. Both return `Promise<{ status, signal, stdout, stderr, error }>` with `encoding: 'utf8'`, as `spawnSync` gives. A child that does not start resolves with `status: null` and `error`. Output past `maxBuffer` kills the child and resolves `status: null, error: { code: 'ENOBUFS' }`, as `spawnSync` does; the comment above `shell` (`repo-gate.js:1407-1411`, #12720) is the reason to keep it. A timeout kills with SIGTERM and resolves `signal: 'SIGTERM'`. The promise never rejects. Move `commandShell` into it as `runShell`, and keep the name exported from `repo-gate.js` for its tests.",
+        "**The gate.** `run` (`:174`) and `shell` (`:1412`) use the module. Every `askGit(…)`, `askGh(…)`, `shell(…)`, `git(…)` and `gh(…)` call in `repo-gate.js` gets `await`. Each helper that makes one becomes `async` and its callers `await` it: `prFacts`, `defaultBaseRef`, `clearWorkspace`, `measure`, `measureSelected`, `selectFiles`, `ownTests`. `prepareCandidate`'s `run` and `shell`, `regenerateDerived`, and `probeMainRed`'s `git` calls are awaited the same way, and `regenerateDerived` becomes async. `ensureWorkDeps` takes `install` as a function that may return a promise. The gate passes one built on `runTool('npm', ['ci', '--no-audit', '--no-fund'], { timeoutMs: 10 * 60_000 })`, and `work-area.js`'s call keeps the sync default (it is not on the merger's path). `regenerateDerived`'s other caller, `repo-freshen.js`, gets `await` in step 5. Until then `freshenBranchForLanding` awaits it inside an `async` wrapper, as step 5 says.",
+        "**Signals.** `runGate` takes `signals = true`. With `false` it installs no `SIGINT`/`SIGTERM` handler (`:318-343`) and leaves the lease and lock release to its `finally`. `runMergeRound` passes `signals` through, and the merger passes `false` (step 4). `mc test` and `mc merge --check` keep `true`.",
+        "**Tests.** `tests/mc/child-async.test.js`: shape for exit 0 and 1, a missing binary, `maxBuffer` overflow, a timeout, and that two 200 ms `sleep` children started together finish in under 350 ms. `tests/mc/repo-gate.test.js` stays green with its sync stubs. Add one test whose stub `git` returns promises. Add a test that reads the source of `repo-gate.js`, `repo-derived.js`, `prepare-cache.js` and `selector-miss.js` and fails on `spawnSync`, `execFileSync` or `execSync`. Step 5 extends its file list."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "5. The merge round and the merger run without holding the event loop, and a SIGTERM finishes the jobs in flight",
+      "status": "ready",
+      "done_when": "`repo-merge.js`, `repo-freshen.js`, `merger.js` (`restack`, `realGit`) and `merger-run.js` use `child-async.js`. The merger runs rounds with `signals: false`. `merger-run.js` passes the lane to `landJob`. A light job starts while a heavy round is in any phase. The grep test covers these files. Tests per the third and fourth criteria; `npm test` is green.",
+      "instruction": [
+        "Today `runMergeRound`'s `run` (`src/mc/repo-merge.js:109`) is `spawnSync`, and it is used for fetch, `rev-parse`, `diff`, `gh pr merge`, `deployPull` (`:424`), `defaultBranch` (`:501`), `mergeCommitOf` (`:514`), `mergeState` (`:520`) and `candidateFilesOf` (`:613`). `freshenBranchForLanding` (`src/mc/repo-freshen.js:73`) runs git, the prepare and a push synchronously. `restack` (`src/mc/merger.js:208`) uses `realGit` (`:193`), a `spawnSync`. A restack of a memoro branch took 29 s on 2026-10-10 17:51:30-17:51:59, and a `gh pr merge` plus freshen takes 5-13 s per landing. With lanes, each of those is time the other lane stands still.",
+        "**The round.** `run` in `repo-merge.js` uses `runTool`. Every call gets `await`, and the helpers above become async. `freshenBranchForLanding` becomes async, uses `runTool`/`runShell` and `await`s `regenerateDerived`. Its three callers in `repo-merge.js` (`:190`, `:282`, `:355`) `await` it, and so does the injected `refresh`.",
+        "**The merger.** `realGit` becomes `async (cwd, args) => …` on `runTool` and keeps its `{ ok, stdout, stderr }` shape. `restack` becomes async, and `landJob`'s loop (`:292-299`) `await`s `moveOntoMain`. In `merger-run.js`, `gh` is `(args, options) => runTool('gh', args, { cwd: options.cwd })`, the `spawnSync` import goes, and `land` passes the lane on: `land: (batch, lane) => landJob(batch, { root, say, sleep, gh, appendRun, lane })`. Today it drops it (`merger-run.js:41`), so a light job's wait reads the heavy lane's round. `landJob` passes `signals: false` to `mergeRound`.",
+        "**SIGTERM.** With `signals: false`, nothing in the merger's process exits on a signal. The handler in `merger-run.js:25-31` only sets `stopping`, and each loop leaves between jobs (`merger.js:442`). Say `asked to stop — waiting for <n> job(s) in flight` once, and `left` when `serve` returns.",
+        "**Tests.** Extend the grep test to `repo-merge.js`, `repo-freshen.js`, `merger.js` and `merger-run.js`. `tests/mc/merger.test.js`: two lanes with stub `land`. The heavy lane's land awaits a deferred promise, the light lane's resolves at once, and a light job queued after the heavy one started is answered before the deferred resolves. `stopping()` set while a stub round is pending: the round's answer is written, no `killed`, and `serve` returns 0. `landJob` gets `lane` from `serve` and reads `runningRound({ lane })`. A `restack` test with an async stub git."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "6. A red the change caused gets one mend session before it is red",
+      "status": "ready",
+      "done_when": "A red answer whose `stopped_at` is in `MEND_STOPS`, on a job not yet mended, puts the entry in `mending` and starts a mend session in a worktree of its own on the branch. A push puts the job back in `queued` with `mended` set and its old `since`. Anything else is red as today. `canon/roles/mend.md` exists. At most `MEND_AT_ONCE` sessions run, and lanes do not wait for them. Tests per the fifth criterion; `npm test` is green.",
+      "instruction": [
+        "Today a red answer goes straight to `markRed` (`src/mc/merger.js:497-502`) and, for a step, through `redPatch` (`tell`, `:347`) back to the step's next session (ruling 30). Ruling 37: one mend first, for reds the change caused, set aside so the lane goes on, in a short session of its own.",
+        "**Which reds.** `MEND_STOPS = ['merge', 'restack', 'red', 'selected-gate', 'pr-tests', 'extra-gate', 'derived-outside', 'project-log']`, in `src/mc/mend.js`, with a comment saying these are the stops where the fault is in the change. `red` is mended only when `report.main_red?.red_on_main` does not cover every red file. A red that is main's own is not the branch's to fix. Not mended: a job with `mended` set, a job without a `branch`, and every other stop.",
+        "**The queue.** `JOB_STATES` (`src/mc/merge-queue.js:43`) gains `mending`. `parseQueue` keeps `mended` (`{ at, outcome }` or null) and `mend` (`{ pid, started, reason, stopped_at }` or null) on every entry. Old code drops unknown fields (the 2026-10-09 rollout incident, `stacked_on`), so these are read and written in the same commit and only by the new merger. `inLine` stays as it is, but `nextJob` and `nextBatch` take only `queued` and `landing`. `markMending(entries, job, { reason, stopped_at, started })` and `markMended(entries, job, { outcome, at })` sit beside `markRed`. `markMended` sets `state: 'queued'`, keeps `since`, and clears `mend`.",
+        "**The answer path.** In `serve`'s answer lock (`merger.js:495-503`), a red answer that qualifies is marked `mending` instead of `red`. Its `tell` call (in `landJob`) skips `redPatch` for it, so the step stays `landing` and the runner leaves it alone. `tell` says `<repo> #N: <reason> — mending (one try)`. Then `serve` calls `startMend(job, report)` without awaiting it. It runs at most `MEND_AT_ONCE` (1) at a time and queues the rest in memory in answer order. The comment on `MEND_AT_ONCE`: an 8 GB M1 already runs a memoro suite of seven lanes. `serve` does not leave while a mend runs or waits. The both-idle branch (`:464-478`) also waits for them, and a SIGTERM waits for a running mend up to its own timeout.",
+        "**The session.** `src/mc/mend.js` `runMend({ root, job, report, deps })`, modelled on `helper-turn.js` (`:230-300`). Role `canon/roles/mend.md` (frontmatter `name: mend`, `model: opus`, `tools: claude`), launched through `resolveLaunch` and `headlessArgs` (`src/mc/run-plan.js:906`) with `stream: false`, `effort: 'medium'`, the `CLAUDE_TOOLS` allowlist, and a wall clock of `MEND_MINUTES` (20). The comment says why: rounds were 3-15 min, and a mend that takes longer than a step session is the step's work. Worktree: `git -C <repo_path> fetch -q origin`, then `worktree add -q --detach ~/mc/runner/mend/<repo>-<pr> origin/<branch>`. Remove it in a `finally`, never the step's workarea. The prompt is in `mend.js` (`mendPrompt`), not in the role. It holds the repository, PR number, branch and title. It holds the stop and reason as the round said them, the red file names and the conflict paths (`report.red_files`, the reason's `conflicts in …`), and the last 40 round lines from `merger.log` for this job. For a step job it also holds the step's `title`, `done_when` and `instruction` from the plan on `origin/main`. Then the task: make the change land as its author meant. Merge `origin/main` into the branch where the stop was a conflict or restack and keep both intents. Fix the change where its tests are red. Run the red files or the repository's suite command until green. Commit and `git push origin HEAD:<branch>`, no force. Edit no `PLAN.json`. If it cannot be fixed, push nothing and say why in the last line. The role file says the same rules as Don'ts, in the style of `canon/roles/intake.md`.",
+        "**The outcome.** After the session, compare `git ls-remote origin refs/heads/<branch>` with the head the round measured. If it moved, `markMended(… { outcome: 'pushed' })` and say `<repo> #N: mended — <first line of the session's result> — back in line`. Otherwise, or on timeout or non-zero exit, `markRed` with `reason: '<original reason> — the mend <pushed nothing: <last line>|timed out|failed>'`, `mended` set, and the step through `redPatch` with that reason, as `tell` does today. Append a `runs.tsv` row with kind `mend` through `runsAppender`, with the token columns from `readSessionOutput` and the job's project as the name. When the merger starts, every `mending` entry has a dead `mend.pid`. It is set back to `queued` with `mended` unset: the mend never finished, and the next red mends again.",
+        "**Tests.** `tests/mc/mend.test.js` with stub launch, session, git and ls-remote. A `merge` stop starts one session in `~/mc/runner/mend/<repo>-<pr>` on `origin/<branch>`, and its prompt has the conflict path and the step's `done_when`. A moved head makes the entry `queued`, keeps `since`, sets `mended`, and leaves the step `landing`. An unmoved head makes it `red` with `the mend pushed nothing` and sends the step through `redPatch` with `attempts` +1. A timeout gives `timed out`. A second red on a `mended` job starts nothing. `fetch`, `pr`, `killed` and a red that is all main's start nothing. Two reds at once with `MEND_AT_ONCE` 1 run one after the other. A `mending` entry with a dead pid at start becomes `queued`. `tests/mc/merger.test.js`: while a stub mend is pending, the same lane takes and answers its next job."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "7. The page draws a batch row by row and a mend on a yellow row of its own",
+      "status": "ready",
+      "done_when": "`mergesSection` gives one landing row per pull request in a round. The round's phase and age go on its first row, and no batch member counts as waiting. A `mending` entry is a row of its own in yellow with its reason and age, drawn under the landing rows, and the heading counts `mending`. `mc status <project>` says the same. Tests per the sixth criterion; `npm test` is green.",
+      "instruction": [
+        "Today the landing row comes from the gate lock, which names only the round's first number (`runningMerges`, `src/mc/merges-collect.js:39`, and `pr: numbers[0]` in `takeGateLock`, `src/mc/repo-gate.js:304`). `mergesSection` (`src/mc/page-collect.js:569-623`) matches that one number. The other members of a batch are `landing` in `merges.json` but are counted and drawn as waiting. Martin, 2026-10-10: *\"den pr som mergas genom en session får behålla sin rad och merger tar en ny rad med nästa. merge session får bli gulmarkerad.\"*",
+        "**Batch rows.** In `mergesSection`, a round's members are the `landing` entries of its repository with the same `started` as the entry for `round.pr` (`markLanding` writes one `started` per batch). `landings` gets one item per member in queue order, each with its own `name`, `step` and `title`. The first carries the round's `phase`, `age_seconds` and `lane`. The others carry `batch_of: <first pr>` and no phase. `isLanding` covers every member. `count` counts pull requests. In `src/mc/page-render.js`, `landingLine` (`:750`) draws a member row with the same green head and, instead of the tail, `same round as #<first>` in grey. The heading's `N landing` counts pull requests.",
+        "**Mend rows.** `mergesSection` returns `mending: { count, items }` from the `mending` entries. Each has `name`, `step_number`, `title`, `reason` (`mend.reason`) and `age_seconds` from `mend.started`, or `waiting` when there is no pid yet. Add `mendLine(c, wide, item)` beside `redLine` (`:772`), drawn the same way in `yellow` with the running mark `●`: `● <repo> #N  <project> step n  mending — <reason>  <age>`, the reason giving way first. `mergesLines` (`:802`) draws the landing rows, then the mend rows, then the reds. The heading gets `N mending` in yellow between landing and red. A mended job back in line is drawn as waiting, with `↻` after its number in `waitingNumbers` (`:724`).",
+        "**mc status.** `status-project.js` (`:164-183`) says `#N is being mended after <reason> (since …)` for a `mending` entry, and `#N lands in the same round as #M` for a batch member.",
+        "**Tests.** `tests/mc/page.test.js`: three `landing` entries with one `started` and a lock naming the first draw three green rows, phase on the first only, `3 landing`, and none of them waiting. A `mending` entry beside a landing round draws a yellow row with the reason, and the heading reads `1 landing · 1 mending`. A mended `queued` entry shows `#N↻`. `tests/mc/status-project.test.js` for the two sentences."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "8. Close-out",
+      "status": "ready",
+      "done_when": "The merger runs the new code, every criterion is measured and marked with what was seen quoted in this step's comments, `docs/technical/mc-run.md` and `docs/technical/mc-merge.md` describe the already-merged answer, the step order, the async round, SIGTERM and the mend, `docs/project/project_log.md` has the row, ruling 37 is deleted from `rulings.md`, and every step is `done` with its PR.",
+      "instruction": [
+        "**Live.** The merger picks up new code when it starts. If `~/mc/runner/merger.json` names a pid that started before step 7 landed, send it SIGTERM once (`kill -TERM <pid>`). From step 5 on, that lets the jobs in flight finish. The runner starts a new merger when a job may go. Quote the `SIGTERM` line, the answer after it and the new `merger <pid> started`. Then watch `~/mc/runner/log/merger.log` from that line for 2 hours or 30 landings, whichever comes first. Quote an `already merged on GitHub` line if one occurred, a memoro-cli `landing` line stamped inside a memoro round's prepare-to-selection span, and every `mending` line with its outcome. Quote a page snapshot (`mc` output) with a batch or a mend on it if one occurred. Count mends and how many landed after their mend. Mark each criterion met or not, with what was seen.",
+        "**Docs.** `docs/technical/mc-merge.md`: the async round, `signals`, and the mend (§ after *One round at a time*), with `MEND_STOPS`, `MEND_AT_ONCE` and `MEND_MINUTES` and their reasons. `docs/technical/mc-run.md` § *The merge*: the already-merged answer, the step order, `mending` in the queue, and the page rows.",
+        "**Log.** Add the row to `docs/project/project_log.md` in its format: programme `mc`, project `merger-hardening`, delivered, one paragraph with what was measured, the technical notes, and the PRs. Delete ruling 37 from `docs/project/mc/rulings.md`, as the rulings file says for a built plan."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
