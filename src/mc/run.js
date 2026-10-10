@@ -148,6 +148,7 @@ import { readLaneCount } from './lane-count.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
+import { checkpoint } from './checkpoint.js';
 import {
   DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
@@ -182,6 +183,13 @@ export const DISK_MIN_BYTES = 5 * 2 ** 30;
 export const MEMORY_MIN_FREE_PERCENT = 20;
 
 /**
+ * How often a running step session's uncommitted work is snapshotted to
+ * `refs/mc/checkpoint/<project>` (checkpoint.js): ten minutes of a session's
+ * work is the most a lost tree costs.
+ */
+export const CHECKPOINT_MS = 10 * 60 * 1000;
+
+/**
  * The refusals a lane waits out rather than moves past: they are facts about
  * this moment, not about the project. GitHub not answering `gh pr list` and a
  * fetch that failed are the network; the bare `skipped` is this process's own
@@ -203,8 +211,8 @@ export const TOTAL_POLL_MS = 15 * 1000;
 
 /* ------------------------------------------------------------ real deps */
 
-function sh(cmd, args, { cwd, timeout = 120_000 } = {}) {
-  const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout, maxBuffer: 64 << 20 });
+function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
+  const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout, maxBuffer: 64 << 20, env: env ? { ...process.env, ...env } : undefined });
   return { ok: r.status === 0, status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
@@ -391,7 +399,7 @@ export function realDeps(env = process.env) {
     env,
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
-    git: (cwd, args) => sh('git', ['-C', cwd, ...args]),
+    git: (cwd, args, { env } = {}) => sh('git', ['-C', cwd, ...args], { env }),
     gh: (cwd, args) => sh('gh', args, { cwd }),
     // Why a `gh pr list` failed: a locked keychain or a bad token, two calls
     // of two seconds at most (github-backoff.js).
@@ -578,6 +586,17 @@ export function createRunner({
     deps.log(line);
   };
   const gitOut = (cwd, args) => { const r = deps.git(cwd, args); return r.ok ? String(r.stdout ?? '').trimEnd() : null; };
+  // A step workarea's uncommitted work, kept under `refs/mc/checkpoint/<name>`
+  // (checkpoint.js) — every `CHECKPOINT_MS` while its session runs, and before
+  // every `merge --abort` the runner makes there. Quiet when the tree is clean.
+  const snapshot = (worktree, name, label) => {
+    const sha = checkpoint({
+      git: deps.git, worktree, project: name, label, now: deps.now(), mkdir: deps.mkdir,
+      index: join(paths.scratch, `checkpoint-${name}-${pid}.index`),
+    });
+    if (sha) say(`${name}: uncommitted work snapshotted to refs/mc/checkpoint/${name} (${label}, ${sha.slice(0, 7)})`);
+    return sha;
+  };
 
   /* ------------------------------------------------------------- register */
 
@@ -1921,6 +1940,7 @@ export function createRunner({
     // aborted — the runner starts neither, so one of those is a person's work
     // and the dirty check below reports it as it always has.
     if (deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
+      snapshot(worktree, name, 'before-merge-abort');
       deps.git(worktree, ['merge', '--abort']);
       say(`${name}: a merge of origin/main was left in progress — aborted`);
     }
@@ -1974,7 +1994,10 @@ export function createRunner({
     // tree with everything staged.
     if (!sync.ok && !sync.conflicts.length) {
       if (sync.why === 'commit') {
-        if (deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) deps.git(worktree, ['merge', '--abort']);
+        if (deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
+          snapshot(worktree, name, 'before-merge-abort');
+          deps.git(worktree, ['merge', '--abort']);
+        }
         return block(REFUSAL.sync, sync.detail);
       }
       return refuse(REFUSAL.sync, 'fetch/merge failed, skip');
@@ -1995,6 +2018,7 @@ export function createRunner({
     // the old merge-only session's abort did.
     const abandonMerge = (why) => {
       if (!conflicts.length) return;
+      snapshot(worktree, name, 'before-merge-abort');
       deps.git(worktree, ['merge', '--abort']);
       say(`${name}: ${why} — the merge of origin/main is aborted, still conflicting in: ${conflicts.join(' ')}`);
     };
@@ -2169,6 +2193,9 @@ export function createRunner({
     // Whether the last interruption has already been waited out here, so the
     // quota pause after the row is not a second sleep on the same refusal.
     let waited = false;
+    // While the session runs, what it has not committed is kept under
+    // `refs/mc/checkpoint/<name>` — synchronous, and quick.
+    const checkpointTimer = setInterval(() => snapshot(worktree, name, 'running'), CHECKPOINT_MS);
     try {
       let attempt = await launchOnce(resuming ? resuming.interrupted.session_id : null, prompt);
       result = attempt;
@@ -2197,6 +2224,7 @@ export function createRunner({
         result = { ...attempt, stdout: `${joined}${attempt.stdout}`, stderr: `${result.stderr}${attempt.stderr}` };
       }
     } finally {
+      clearInterval(checkpointTimer);
       remove(currentPath);
       dropSlot();
     }
@@ -2210,6 +2238,7 @@ export function createRunner({
     // `MERGE_HEAD` behind — a step session that resolved the conflict and
     // committed it has none, and nothing of its work is touched here.
     if (conflicts.length && deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
+      snapshot(worktree, name, 'before-merge-abort');
       deps.git(worktree, ['merge', '--abort']);
       say(`${name}: the session left the merge of origin/main unfinished — merge aborted`);
     }
