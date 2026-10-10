@@ -23,7 +23,7 @@
       "check": "`tests/mc/run-plan.test.js` (or `run.test.js`) with the free-space reader stubbed under the threshold: no session is launched and the line is logged; `mc --fresh` shows the line while the condition holds."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Archiving a project whose skill texts a test reads keeps those files.",
       "check": "`tests/mc/archive-plan.test.js` and `archive-programme.test.js`: a worktree where `tests/x.test.js` names `docs/project/p/q/skills/a.md` archives `q` with `a.md` kept and the PR body naming it."
     },

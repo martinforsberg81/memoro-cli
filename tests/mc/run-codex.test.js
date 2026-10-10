@@ -5,7 +5,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { realDeps, runLoop } from '../../src/mc/run.js';
+import { DISK_MIN_BYTES, realDeps, runLoop } from '../../src/mc/run.js';
 
 /**
  * A codex step, end to end, with a stub codex.
@@ -135,7 +135,9 @@ function codexWorld(t) {
 
 test('a codex step runs through the adapter and lands in runs.tsv', async (t) => {
   const { env, work, argvFile } = codexWorld(t);
-  const deps = { ...realDeps(env), log: () => {} };
+  // The disk is the host's: a full one would refuse the step this test is
+  // about (2026-10-10, 1.7 GiB free), so it reads as room enough.
+  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, log: () => {} };
   const code = await runLoop({ once: true, merge: false, deps });
   assert.equal(code, 0);
 
@@ -198,7 +200,7 @@ test('an interrupted codex step is resumed through `codex exec resume`, its work
   }));
 
   const lines = [];
-  const deps = { ...realDeps(env), log: (line) => lines.push(line) };
+  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, log: (line) => lines.push(line) };
   assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
 
   const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);

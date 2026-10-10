@@ -1142,18 +1142,20 @@ export function mainRedClause(probe) {
   if (!probe?.red_on_main?.length) return '';
   const count = probe.red_on_main.length;
   const name = (found) => (found.pr ? `#${found.pr}` : found.commit.slice(0, 7));
-  // A landing that changed only docs/ cannot have broken a test, and is not
-  // named as if it had (2026-10-06, #12727); the walk reaching it is said.
-  const blamed = probe.breaks.filter((found) => found.kind !== 'docs-only');
-  const reached = [...new Set(probe.breaks.filter((found) => found.kind === 'docs-only').map(name))];
+  // A docs-only landing the walk measured twice is named like any other, and
+  // said to have landed without the suite (2026-10-10, #13310); one whose
+  // second measure disagreed is a flaky test and names nobody (2026-10-06,
+  // #12727).
+  const blamed = probe.breaks.filter((found) => found.kind !== 'flaky');
+  const flaky = new Set(probe.breaks.filter((found) => found.kind === 'flaky').map((found) => found.file)).size;
   const landings = [...new Set(blamed.map(name))];
+  const unsuited = [...new Set(blamed.filter((found) => found.kind === 'docs-only-landing').map(name))];
   const misses = blamed.filter((found) => found.kind === 'not-selected').length;
   return ` — ${count} of the red files ${count === 1 ? 'is' : 'are'} red on main too`
     + (landings.length ? `, broken by ${landings.join(', ')}` : '')
     + (misses ? ` (${misses === blamed.length ? 'its' : 'partly its'} selection did not reach ${misses === 1 ? 'it' : 'them'}: a selector miss)` : '')
-    + (reached.length
-      ? ` — no landing explains ${landings.length ? 'the rest' : 'it'} (the walk reached ${reached.join(', ')}, which changed only docs/)`
-      : '');
+    + (unsuited.length ? ` (${unsuited.join(', ')} changed only docs/ and landed without the suite)` : '')
+    + (flaky ? ` — ${flaky} flaky under load` : '');
 }
 
 /** The round's environment with the selection state directory in it. */

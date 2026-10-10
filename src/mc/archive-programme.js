@@ -35,7 +35,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { appendRow, remoteSlug } from './archive-plan.js';
+import { appendRow, keptFiles, keptParagraph, remoteSlug } from './archive-plan.js';
 import { listPlans, listProgrammes } from './brief-collect.js';
 import { landingNote } from './run-plan.js';
 
@@ -159,7 +159,17 @@ async function archiveOnMain(repo, programme, { deps, gitOut, say, now }) {
   try {
     const dir = join('docs', 'project', programme);
     const pointer = gitOut(worktree, ['log', '-1', '--format=%h', 'origin/main', '--', dir]);
-    if (!deps.git(worktree, ['rm', '-r', '-q', '--', dir]).ok) {
+    // A file under the programme that code or a test reads stays where it
+    // is; the rest goes. Nothing left to remove is nothing archived.
+    const read = (path) => { try { return readFileSync(join(worktree, path), 'utf8'); } catch { return ''; } };
+    const { kept, remove } = keptFiles(worktree, dir, { git: deps.git, read });
+    for (const { file, by } of kept) say(`${repo.name}: ${file} kept — named by ${by}`);
+    if (remove && !remove.length) {
+      say(`${repo.name}: every file under ${dir} is read by code outside docs/ — nothing archived`);
+      return null;
+    }
+    const rm = remove ? ['rm', '-q', '--', ...remove] : ['rm', '-r', '-q', '--', dir];
+    if (!deps.git(worktree, rm).ok) {
       say(`${repo.name}: git rm ${dir} failed — nothing archived`);
       return null;
     }
@@ -175,6 +185,7 @@ async function archiveOnMain(repo, programme, { deps, gitOut, say, now }) {
       'carries one row for the programme itself. The history is the record —',
       `\`git log -- docs/project/${programme}\` still answers every question the`,
       'removed directory could.',
+      ...keptParagraph(kept),
     ].join('\n');
     deps.git(worktree, ['add', '-A']);
     if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok

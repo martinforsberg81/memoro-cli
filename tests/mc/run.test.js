@@ -2676,6 +2676,32 @@ test('a row its close-out already wrote is kept: only the directory goes, and th
   assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro-cli prog\/mc-ui removed — row already written/u);
 });
 
+test('a file under the plan that a test reads is kept in place, and the archive PR says which and why', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    session: okSession(),
+  });
+  const wt = '/w/runner/archive/memoro';
+  const dir = 'docs/project/prog/over';
+  f.files[`${wt}/tests/x.test.js`] = `readFileSync('${dir}/skills/a.md', 'utf8');\n`;
+  const git = f.deps.git;
+  const rms = [];
+  f.deps.git = (cwd, args) => {
+    if (cwd === wt && args[0] === 'grep') return { ok: true, stdout: 'tests/x.test.js\n' };
+    if (cwd === wt && args[0] === 'ls-files') return { ok: true, stdout: `${dir}/PLAN.json\n${dir}/skills/a.md\n` };
+    if (cwd === wt && args[0] === 'rm') rms.push(args);
+    return git(cwd, args);
+  };
+  await round(createRunner({ deps: f.deps }));
+
+  assert.deepEqual(rms, [['rm', '-q', '--', `${dir}/PLAN.json`]], 'everything under the plan but the file the test reads');
+  const create = f.calls.gh.find((c) => c[0] === wt && c[2] === 'create');
+  assert.match(create[create.indexOf('--body') + 1], /- kept: docs\/project\/prog\/over\/skills\/a\.md — named by tests\/x\.test\.js:1/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro docs\/project\/prog\/over\/skills\/a\.md kept — named by tests\/x\.test\.js:1/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro prog\/over removed — row added/u, 'the row is written as for any archive');
+});
+
 test('a programme left empty by its last project goes with it; the log and the prose beside it stay', async () => {
   const f = fixture({
     plans: { memoro: { one: done(), two: done() } },
