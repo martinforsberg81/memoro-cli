@@ -31,6 +31,9 @@
  *              opens, whether or not a row is drawn for it. The workareas no
  *              project explains are counted here too, numbered after the
  *              projects.
+ * language   — the language side, from files `mc language` leaves: each
+ *              cached reading's numbers, the newest run, and the gap a stopped
+ *              run left open (`languageState`, language-runs.js).
  *
  * Plus `caches` (what the two read-through caches did) and `notes` (whatever
  * could not be read).
@@ -55,6 +58,7 @@ import {
 import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
+import { languageState } from './language-runs.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import { inLine, mergesPath, queueEntries, queueOrder, redEntries } from './merge-queue.js';
 import { runningMerges } from './merges-collect.js';
@@ -1472,6 +1476,8 @@ export async function collectPage({
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes,
+    // File reads only, as DEPLOY's are: the page never runs a read.
+    language: languageState(env),
     mc: mcSection({
       process: runner.process,
       commit: runnerFile?.commit ?? null,

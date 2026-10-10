@@ -61,7 +61,7 @@ import { tryGit } from '../git.js';
 import { processAlive } from '../lease-owner.js';
 import { closingManifests, readManifests } from '../language-manifest.js';
 import {
-  actEnd, actStart, closeAbandoned, DONE, doneExecutes, endRun, FAILED, liveRun, readRuns, REFUSED, runStem,
+  actEnd, actStart, cachedReadings, closeAbandoned, DONE, doneExecutes, endRun, FAILED, liveRun, readRuns, REFUSED, runStem,
   startRun, STOPPED,
 } from '../language-runs.js';
 import { workRoot } from '../paths.js';
@@ -429,20 +429,8 @@ function readJson(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
-/** Every cached reading, by language. */
-export function cachedReadings(env = process.env) {
-  const dir = languageDir(env);
-  let files = [];
-  try { files = readdirSync(dir); } catch { return {}; }
-  const out = {};
-  for (const file of files) {
-    const match = /^status-([a-z]{2,3})\.json$/u.exec(file);
-    if (!match) continue;
-    const reading = readJson(join(dir, file));
-    if (reading) out[match[1]] = reading;
-  }
-  return out;
-}
+// Every cached reading, by language — read where the page reads it too.
+export { cachedReadings };
 
 /** The newest run record per language (`language-runs.js`); none yet is none. */
 export function lastRuns(env = process.env) {

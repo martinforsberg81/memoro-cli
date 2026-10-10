@@ -167,6 +167,7 @@ rather than assumes wherever there is nobody to ask.
 | **no TTY** | 2 | *"mc deploy asks before it deploys, and there is no terminal here to ask"* |
 | the question answered `no` | 1 | *"nothing was deployed"* |
 | another deploy is running | 1 | names its sha, start and pid; refused row. There is no queue |
+| **a language run is running** | 1 | names its manifest, start and pid; refused row *"a language run of `<manifest>` is running"*. A language run writes to the same production ([`mc-language.md`](mc-language.md)) |
 | the deployer could not be started | 1 | row completed `failed`, stopped at `start` |
 | the script ran | 0 / 1 | `deployed` or not, read from the row when the deployer is gone |
 | ^C while following | 130 | the deploy goes on; `mc deploy --follow` watches again |
@@ -175,7 +176,7 @@ rather than assumes wherever there is nobody to ask.
 its own worktree and deploys from that. A `main` merely *behind* `origin/main` is
 not one either — it is fast-forwarded in step 8.
 
-The decisions among them — `no`, no terminal, a deploy already running, and the three
+The decisions among them — `no`, no terminal, a deploy or a language run already running, and the three
 worktree refusals — are each written to the record as `outcome: refused` with
 the reason. They are deploys somebody meant to make, and the page and the brief can only see
 them if they exist.
@@ -202,6 +203,28 @@ is a deploy in progress (`runningDeploy`,
 where the new row is written. There is no queue (Martin, 2026-10-09: *"Vi skulle
 kunna låta deploy vara utan kö."*): a second `mc deploy` is refused and run again
 when the first is done.
+
+A language run is kept apart the same way. Its record
+(`liveRun`, [`src/mc/language-runs.js`](../../src/mc/language-runs.js)) is read
+in the same places. `mc language` reads the deploy record under the same lock
+before it writes its own, so the two never write to production at the same
+time ([`mc-language.md`](mc-language.md)).
+
+## Grammar is not promoted here
+
+The deploy no longer promotes curated grammar: that is
+`mc language promote`, after its own question. memoro's check prints a line
+when grammar rows are waiting. `--dry-run` ends with one language line, read
+from the cache `mc language status` leaves and the language run records, and
+nothing is read anew. The line is one of:
+
+- `mc: language — sv 724 rows waiting (read 2h ago) · mc language promote`;
+- `… nothing waiting (read …)`;
+- `… no reading; mc language status <lang>`.
+
+When a run stopped inside an `opens_gap` window, a second line names the
+stopped run and `mc language resume`. `--json` has the same information as
+`language`.
 
 ## The record
 

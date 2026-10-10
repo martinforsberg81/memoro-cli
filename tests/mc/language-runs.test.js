@@ -100,7 +100,12 @@ describe('language-runs', () => {
 describe('mc language is Martin\'s verb', () => {
   it('no source but the verb and its help, and no role, names a language run', () => {
     const root = fileURLToPath(new URL('../../', import.meta.url));
-    const allowed = new Set(['src/mc/commands/language.js', 'src/mc/help-text.js', 'src/mc/language-runs.js']);
+    // The page and `mc deploy --dry-run` name `promote` and `resume` as the
+    // verb Martin types next, as the help does; neither runs it.
+    const allowed = new Set([
+      'src/mc/commands/language.js', 'src/mc/help-text.js', 'src/mc/language-runs.js',
+      'src/mc/page-render.js', 'src/mc/commands/deploy.js',
+    ]);
     const files = execFileSync('git', ['ls-files', 'src', 'canon'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
     const naming = files.filter((file) => !allowed.has(file)
       && /\bmc language (run|resume|promote)\b|\['language',/u.test(readFileSync(join(root, file), 'utf8')));
