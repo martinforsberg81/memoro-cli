@@ -874,6 +874,20 @@ describe('MERGES', () => {
     assert.ok(lines.some((line) => /^ {2}✗ memoro +#12900 {2}bookstores {2}red: 3 tests red {2}\d+ min ago$/u.test(line)), lines.join('\n'));
   });
 
+  it('marks a job whose plan\'s earlier step is not done, and says which step it waits for', () => {
+    const merges = mergesSection({
+      queued: [
+        { repo: 'memoro', pr: 13400, branch: 'mq-3', step: { project: 'mq', index: 2 }, since: '2026-10-10T12:00:00Z', state: 'queued' },
+        { repo: 'memoro', pr: 13401, branch: 'other', since: '2026-10-10T12:01:00Z', state: 'queued' },
+      ],
+      ordered: (entry) => entry.step?.project !== 'mq',
+      now: new Date('2026-10-10T12:05:00Z'),
+    });
+    assert.deepEqual(merges.queued.items.map((item) => item.waits_for), ['mq step 2', null]);
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /^ {2}MERGES {2}2 waiting: #13400⏸ #13401 +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
+  });
+
   it('names a one-repository queue by number alone, and counts what does not fit', () => {
     const queued = Array.from({ length: 30 }, (_, n) => ({
       repo: 'memoro', pr: 13200 + n, branch: `b${n}`, since: '2026-10-09T19:00:00Z', state: 'queued',

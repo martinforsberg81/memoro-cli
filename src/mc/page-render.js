@@ -770,12 +770,12 @@ export const QUEUED_DRAWN = 6;
 /**
  * The queue's numbers for the MERGES heading, in landing order: `#N` while
  * the queue is one repository, `repo#N` with two, `→#M` on one built on
- * another. Numbers that do not fit in `room` become `… N more`, never a
- * clipped half.
+ * another, `⏸` on one whose plan's earlier step is not done (`waits_for`).
+ * Numbers that do not fit in `room` become `… N more`, never a clipped half.
  */
 function waitingNumbers(items, room) {
   const repos = new Set(items.map((item) => item.repo));
-  const label = (item) => `${repos.size > 1 ? `${item.repo}` : ''}#${item.pr}${item.parent ? `→#${item.parent.pr}` : ''}`;
+  const label = (item) => `${repos.size > 1 ? `${item.repo}` : ''}#${item.pr}${item.parent ? `→#${item.parent.pr}` : ''}${item.waits_for ? '⏸' : ''}`;
   let shown = '';
   for (const [index, item] of items.entries()) {
     const text = `${shown ? ' ' : ''}${label(item)}`;
