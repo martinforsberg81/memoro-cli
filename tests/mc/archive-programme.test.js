@@ -38,7 +38,7 @@ const LOG = [
 ].join('\n');
 
 /** A bare origin and a clone whose main holds `docs/project/<programme>/`. */
-function fixture({ programme = 'gone', plan = null } = {}) {
+function fixture({ programme = 'gone', plan = null, extra = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-archive-programme-'));
   const origin = join(root, 'origin.git');
   const repo = join(root, 'memoro-cli');
@@ -51,6 +51,10 @@ function fixture({ programme = 'gone', plan = null } = {}) {
   if (plan) {
     mkdirSync(join(repo, 'docs', 'project', programme, 'proj'), { recursive: true });
     writeFileSync(join(repo, 'docs', 'project', programme, 'proj', 'PLAN.md'), `---\nstatus: ${plan}\n---\n`);
+  }
+  for (const [path, text] of Object.entries(extra)) {
+    mkdirSync(join(repo, path, '..'), { recursive: true });
+    writeFileSync(join(repo, path), text);
   }
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-q', '-m', 'init']);
@@ -138,6 +142,26 @@ describe('archiveProgramme', () => {
     // The temporary worktree and its local branch are gone again.
     assert.equal(git(fx.repo, ['branch', '--list', branch]).stdout, '');
     assert.equal(git(fx.repo, ['worktree', 'list']).stdout.trim().split('\n').length, 1);
+  });
+
+  it('keeps a file a test reads, removes the rest, and names it in the PR body', async () => {
+    const fx = fixture({
+      extra: {
+        'docs/project/gone/skills/a.md': '# a skill a test reads\n',
+        'docs/project/gone/skills/b.md': '# a skill nothing reads\n',
+        'tests/x.test.js': "import { readFileSync } from 'node:fs';\n\nreadFileSync('docs/project/gone/skills/a.md', 'utf8');\n",
+      },
+    });
+    const { deps, calls } = stubs();
+    const a = args(fx, deps);
+    assert.equal(await archiveProgramme('gone', a), 0);
+    const branch = git(fx.origin, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']).stdout.split('\n')
+      .find((name) => name.startsWith(`${PROGRAMME_ARCHIVE_PREFIX}gone-`));
+    assert.deepEqual(git(fx.origin, ['ls-tree', '-r', '--name-only', branch, 'docs/project/gone']).stdout.trim().split('\n'),
+      ['docs/project/gone/skills/a.md'], 'a.md is kept in place; README.md and b.md are gone');
+    const body = calls.prs[0][calls.prs[0].indexOf('--body') + 1];
+    assert.match(body, /- kept: docs\/project\/gone\/skills\/a\.md — named by tests\/x\.test\.js:3/u);
+    assert.match(a.stdout.out.text, /docs\/project\/gone\/skills\/a\.md kept — named by tests\/x\.test\.js:3/u);
   });
 
   it('touches nothing while a plan is still on main', async () => {

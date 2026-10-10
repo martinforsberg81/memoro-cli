@@ -110,8 +110,8 @@ import { resolveLaunch } from '../adapters/index.js';
 import { CACHE_TTL_MS as CLAUDE_CACHE_TTL_MS } from '../adapters/claude-code.js';
 import { CACHE_TTL_MS as CODEX_CACHE_TTL_MS } from '../adapters/codex.js';
 import {
-  ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, logRows,
-  mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
+  ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, keptFiles,
+  keptParagraph, logRows, mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded, mergedPullAtTip } from './branch-landed.js';
@@ -1236,6 +1236,7 @@ export function createRunner({
     let logText = deps.read(logPath) ?? '';
     const archived = [];
     const undocumented = [];
+    const keptAll = [];
 
     for (const plan of done) {
       const dir = join('docs', 'project', plan.programme, plan.project);
@@ -1244,10 +1245,20 @@ export function createRunner({
       const planText = deps.read(join(worktree, dir, 'PLAN.json'))
         || deps.read(join(worktree, dir, 'PLAN.md'))
         || '';
-      if (!deps.git(worktree, ['rm', '-r', '-q', '--', dir]).ok) {
+      // A file under the plan that code or a test reads stays where it is;
+      // the rest goes. Nothing left to remove is nothing archived.
+      const { kept, remove } = keptFiles(worktree, dir, { git: deps.git, read: (path) => deps.read(join(worktree, path)) });
+      for (const { file, by } of kept) say(`archive: ${repo.name} ${file} kept — named by ${by}`);
+      if (remove && !remove.length) {
+        say(`archive: ${repo.name} ${plan.programme}/${plan.project} — every file is read by code outside docs/, nothing archived`);
+        continue;
+      }
+      const rm = remove ? ['rm', '-q', '--', ...remove] : ['rm', '-r', '-q', '--', dir];
+      if (!deps.git(worktree, rm).ok) {
         say(`archive: ${repo.name} ${plan.programme}/${plan.project} — git rm failed, left alone`);
         continue;
       }
+      keptAll.push(...kept);
       // The row is preferred, never waited for: a close-out step that already
       // wrote one knows more about the project than this does.
       const existing = rowFor(logText, plan.project);
@@ -1282,6 +1293,7 @@ export function createRunner({
       'answers every question the removed directory could.',
       '',
       ...archived.map((project) => `- ${project}`),
+      ...keptParagraph(keptAll),
     ].join('\n');
     deps.git(worktree, ['add', '-A']);
     if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok
