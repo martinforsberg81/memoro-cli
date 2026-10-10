@@ -2116,6 +2116,32 @@ test('each lane picks from its own repository, and Martin\'s order holds within 
   assert.equal(runner.nextStep({ repo: 'memoro-cli', world }).name, 'mc-run');
 });
 
+/**
+ * Ruling 35: a step blocked on a time, a deploy or a project whose wait is
+ * over is released by `queue()` itself — written `ready` in the register with
+ * the comment and a runner.log line — and comes out of the same call `ready`,
+ * so the lane picks it without a person running `mc step ready`.
+ */
+test('queue releases a due blocker: the step comes out ready, the register says why, and the lane picks it', () => {
+  const waiting = (at) => plan({ steps: [{
+    title: 'Wait', status: 'blocked', done_when: 'x', instruction: ['Do x.'], pr: null,
+    blocked_by: { kind: 'time', name: 'until-x', at },
+  }] });
+  const f = fixture({ plans: { memoro: { due: waiting('2026-08-29T09:00:00Z'), later: waiting('2026-08-30T09:00:00Z') } } });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  const byName = Object.fromEntries(world.plans.map((record) => [record.project, record]));
+  assert.equal(byName.due.status, 'ready');
+  assert.equal(byName.later.status, 'blocked');
+  const step = registerOf(f, 'due').steps[0];
+  assert.equal(step.status, 'ready');
+  assert.equal(step.blocked_by, null);
+  assert.deepEqual(step.comments, ['Released 2026-08-29T10:00:00Z: time 2026-08-29T09:00Z passed']);
+  assert.equal(registerOf(f, 'later').steps[0].status, 'blocked');
+  assert.match(f.files['/w/runner/log/runner.log'], /due step 1: released — time 2026-08-29T09:00Z passed/u);
+  assert.equal(runner.nextStep({ repo: 'memoro', world }).name, 'due');
+});
+
 test('one repository with ready plans is one lane, and its steps run in order', async () => {
   const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
   await round(createRunner({ deps: f.deps }));

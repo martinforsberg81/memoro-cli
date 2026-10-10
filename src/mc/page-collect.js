@@ -68,6 +68,7 @@ import {
 import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, workRoot } from './paths.js';
 import { overlayPlans } from './register.js';
 import { planState } from './plan-schema.js';
+import { describeWait } from './step-release.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import {
   PR_LIST_ARGS, openPrsFor, parseWorktrees, prOwner, stepForPr,
@@ -933,6 +934,26 @@ function blockerOf(record) {
   return by?.name ? { kind: by.kind || null, name: by.name } : null;
 }
 
+/**
+ * A blocked row's sentence when its step waits on a time or a deploy (ruling
+ * 35): `step 2 is blocked until 2026-10-14 08:00Z — 3d left`, by
+ * `describeWait`. A deploy wait is said without what it has left: that needs
+ * the landed sha's ancestry in memoro's checkout, which is a git call per
+ * paint, so the row says what it waits for and `mc step` says how long. Null
+ * for every other row, which keeps the plan's own sentence.
+ */
+function waitNext(record, now) {
+  if (record.status !== 'blocked') return null;
+  const { step, index } = planState(record.plan);
+  const by = step?.status === 'blocked' ? step.blocked_by : null;
+  if (by?.kind === 'time') return `step ${index + 1} is blocked ${describeWait(step, { now })}`;
+  if (by?.kind === 'deploy' && Number.isInteger(by.step)) {
+    const hours = Number.isFinite(by.hours) && by.hours > 0 ? ` + ${by.hours}h` : '';
+    return `step ${index + 1} is blocked on deploy of step ${by.step}${hours}`;
+  }
+  return null;
+}
+
 /** How many of each plan status a set of projects holds. */
 function statusesOf(projects) {
   const out = {};
@@ -1042,7 +1063,7 @@ function collapsedOf(projects) {
  */
 export function programmesSection({
   plans = [], areas = [], rows = [], openPrs = [], live = [],
-  planning = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN,
+  planning = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(),
 } = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
@@ -1067,7 +1088,7 @@ export function programmesSection({
       repo: plan.repo,
       programme: plan.programme,
       status: plan.status || null,
-      next: plan.next || null,
+      next: waitNext(plan, now) || plan.next || null,
       // What would move it, for a project that is stopped. Null for every other
       // project, and for a blocked plan too old to carry the field.
       blocked_by: blockerOf(plan),
@@ -1410,6 +1431,7 @@ export async function collectPage({
     planning: sessions.planning,
     running: runner.steps.map((step) => step.name).filter(Boolean),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
+    now,
   });
   const worktrees = Object.fromEntries(present.map((repo) => [
     repo.name, parseWorktrees(git(repo.path, ['worktree', 'list', '--porcelain'])),

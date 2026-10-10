@@ -9,8 +9,9 @@
  * page say how long the rest have left with `describeWait`. `decision` and
  * `workarea` are never due here: their way back is still `mc step ready`.
  *
- * Everything here is pure. The caller hands in the clock, the plans, the
- * register, the deploy log and the ancestor question:
+ * `blockerDue` and `describeWait` are pure; `releaseDue` writes the register
+ * through what its caller hands it. The caller hands in the clock, the plans,
+ * the register, the deploy log and the ancestor question:
  *
  *   now        a Date
  *   plans      the plan records `queue()` holds, across both repositories
@@ -24,6 +25,8 @@
  * delivered, and only a person can tell which (`stale-blockers.js`).
  */
 import { DEPLOYED } from './deploys.js';
+import { planState, planSummary } from './plan-schema.js';
+import { readEntry, updateStep } from './register.js';
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -142,4 +145,48 @@ export function describeWait(step, context = {}) {
     return `on project ${blocker.name} — ${record.status === 'done' ? 'done' : 'not done'}`;
   }
   return `on ${blocker.kind} ${blocker.name}`;
+}
+
+/**
+ * The runner's release (ruling 35): every record whose current step — the one
+ * `planState` picks, so a blocked step behind another stopped step is not
+ * reached — is `blocked` on a wait that is over is written `ready` in the
+ * register with `Released <now>: <why>`, and said. `plans` holds both
+ * repositories' records, because a `project` blocker may name a project in
+ * the other one.
+ *
+ * Returns the records with each released step `ready` and its summary
+ * recomputed, so the picker sees `ready` in the same pass. A record that
+ * throws — an unreadable entry, a refused patch — is said and left as it was;
+ * the others are released all the same.
+ *
+ *   update(project, index, patch)  the register write; `updateStep` over
+ *                                  `read`, `write` and `lock` by default
+ */
+export function releaseDue(plans = [], {
+  root, now = new Date(), deploys = [], contains = () => false,
+  read, write, lock = (_root, fn) => fn(), say = () => {}, update = null,
+} = {}) {
+  const at = now.toISOString().replace(/\.\d{3}Z$/u, 'Z');
+  const release = update || ((project, index, patch) => updateStep({ root, project, index, patch, read, write, lock, now: at }));
+  return plans.map((record) => {
+    if (!record?.plan || record.legacy) return record;
+    const { status, index } = planState(record.plan);
+    if (status !== 'blocked') return record;
+    try {
+      const entry = readEntry(root, record.project, { read });
+      const step = entry?.steps[index];
+      if (step?.status !== 'blocked') return record;
+      const found = blockerDue(step, { now, plans, stepsOf: () => entry.steps, deploys, contains });
+      if (!found.due) return record;
+      release(record.project, index, { status: 'ready', blocked_by: null, reason: null, comment: `Released ${at}: ${found.why}` });
+      say(`${record.project} step ${index + 1}: released — ${found.why}`);
+      const steps = record.plan.steps.map((each, i) => (i === index ? { ...each, status: 'ready', blocked_by: null } : each));
+      const plan = { ...record.plan, steps };
+      return { ...record, plan, ...planSummary(plan) };
+    } catch (error) {
+      say(`${record.project} step ${index + 1}: not released — ${error?.message || error}`);
+      return record;
+    }
+  });
 }

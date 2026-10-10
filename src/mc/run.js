@@ -120,6 +120,8 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { deliverableStep, readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
+import { deploysPath, parseDeploys } from './deploys.js';
+import { releaseDue } from './step-release.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
@@ -2412,7 +2414,7 @@ export function createRunner({
   }
 
   function queue({ only = null } = {}) {
-    const plans = [];
+    let plans = [];
     const prs = [];
     const prsFailed = [];
     const askedRepos = [];
@@ -2458,6 +2460,22 @@ export function createRunner({
         say(`${repo.name}: GitHub could not be asked what is open (${error?.message || error})${cause ? ` — ${cause.label}, run: ${cause.fix}` : ''} — no step starts in this repository this round, next ask at ${github[repo.name].next_ask}`);
       }
     }
+    // A blocked step whose wait is over — a time, an earlier step's deploy
+    // plus a delay, another project done — is `ready` again, written by the
+    // runner and said (ruling 35). After the loop, because a `project`
+    // blocker may name a project in the other repository. A deploy counts
+    // when its sha contains the landed one, asked of memoro's checkout, which
+    // was fetched just above; a git that cannot answer releases nothing.
+    const memoro = repos.find((repo) => repo.name === 'memoro');
+    plans = releaseDue(plans, {
+      root,
+      now: deps.now(),
+      deploys: parseDeploys(deps.read(deploysPath(deps.env)) || ''),
+      contains: (sha, rowSha) => Boolean(memoro) && deps.git(memoro.path, ['merge-base', '--is-ancestor', sha, rowSha]).ok === true,
+      update: (project, index, patch) => updateStep({ root, project, index, patch, read: deps.read, write: writeJson, lock: register.lock, now: stamp() }),
+      read: deps.read,
+      say,
+    });
     // What GitHub just said is what the page draws, rather than whatever the
     // last `mc --fresh` heard (page-cache.js `mergePrs`). A cache that cannot
     // be written costs the page its freshness and the round nothing.
