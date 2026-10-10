@@ -1,0 +1,169 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A step whose session dies because the machine restarted, the runner was killed, or macOS killed the session is never `failed` and never waits on a person. The runner itself resumes the same session when its prompt cache is warm or its conversation is small, and otherwise starts a fresh session on the same branch with the earlier session's work committed and a handover in its prompt.",
+    "After a restart the runner starts by itself at login when it was running when the machine went down, and it starts no new step while memory is short. The work a running session has not committed is snapshotted to a ref while it runs."
+  ],
+  "contract": [
+    "`failed` stays the word for a session that gave up by its own word, a session that ended with no result while its process exited by itself, and a step interrupted `INTERRUPT_LIMIT` (3) times in a row. Nothing else becomes `failed` through this project.",
+    "An interrupted step is a `ready` step carrying an `interrupted` record in the register; no new value is added to `STEP_STATES` (`src/mc/register.js`). Every reader that draws `ready` keeps working unchanged, and the page and `mc step` say `interrupted` from the record.",
+    "The runner commits, resumes over, or snapshots uncommitted files only in a workarea whose step carries an `interrupted` record, or, for snapshots, whose step it is running now. Dirt in any other workarea is blocked as `dirty-worktree` exactly as today.",
+    "A resume uses the tool the session was started with, through that tool's own resume. A plan whose `runner.tool` changed since gets a fresh session instead.",
+    "Thresholds are constants with a comment saying why, not settings: warm margin, `COLD_RESUME_MAX_TOKENS`, `INTERRUPT_LIMIT`, `CHECKPOINT_MS`, `MEMORY_MIN_FREE_PERCENT`.",
+    "The login agent starts a runner only when `runner.json` names a pid that is gone and no `STOP` is present. A runner Martin stopped stays stopped across a restart.",
+    "Every step runs `npm test` and lands through `mc merge memoro-cli <pr>`."
+  ],
+  "out_of_scope": [
+    "Why the machine restarted on 2026-10-08 and twice on 2026-10-10. No panic report survived; that is an investigation, not a step.",
+    "Interactive sessions: `mc work`, `mc plan`, `mc brief`. Only runner step sessions are recovered.",
+    "The merger's own crash handling; `sweepLanding` already restarts it.",
+    "Restoring a checkpoint automatically. A checkpoint is a ref a person or a handover names; nothing applies it.",
+    "Steps that are `failed` or `blocked` from before this project; they keep needing `mc step ready`."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A step whose session pid is gone becomes `ready` with an `interrupted` record holding the session id, tool, log, last activity and context size, and is not `failed`.",
+      "check": "`tests/mc/run.test.js`: a register with a `running` step whose pid is dead and a partial claude stream log, and one with a codex log; after `queue()` the step is `ready`, `interrupted.session_id` is the stream's id, `last_activity` is the log's mtime, `count` is 1. A third interruption in a row makes it `failed` with the reason naming three interruptions."
+    },
+    {
+      "met": false,
+      "criterion": "A warm or small interrupted session is resumed: the same session id continues, in the same worktree, with its uncommitted files untouched and without origin/main merged in first.",
+      "check": "Live, once, in the close-out: while a step session runs, `mc run stop --force`, then `mc run start`; the step's next row in `~/mc/runner/log/runs.tsv` has the same `session` value as the killed one, and `git status --porcelain` in its workarea was not emptied by the runner. Also `tests/mc/run.test.js` for claude and `tests/mc/run-codex.test.js` for codex argument lists."
+    },
+    {
+      "met": false,
+      "criterion": "A cold, large interrupted session gets a fresh session on the same branch with the leftover files committed as one WIP commit and a handover paragraph in its prompt.",
+      "check": "`tests/mc/run.test.js`: an interrupted record with `last_activity` two hours old and `context_tokens` 120 000 over a dirty worktree; the launch is not a resume, one commit `<project>: WIP left by an interrupted session` is made with `--no-verify`, and the prompt carries the handover with the commits and the last assistant text."
+    },
+    {
+      "met": false,
+      "criterion": "The runner starts at login when it was running when the machine went down, and not otherwise.",
+      "check": "`tests/mc/run-control.test.js` for `--if-was-running` in the three states; `plutil -lint ~/Library/LaunchAgents/se.memoro.mc-runner.plist` passes after a `mc run start` on this machine."
+    },
+    {
+      "met": false,
+      "criterion": "No step starts while `kern.memorystatus_level` is under the floor, and the page says so, as it says the disk hold.",
+      "check": "`tests/mc/run.test.js` with the memory reader stubbed under and at the floor; `tests/mc/status-collect.test.js` (or the test beside `nowBlock`) shows `disk` and `memory` in the RUNNER block's data."
+    },
+    {
+      "met": false,
+      "criterion": "While a step session runs, its uncommitted work is snapshotted to `refs/mc/checkpoint/<project>` without touching the worktree or its index, and before every `merge --abort` the runner makes.",
+      "check": "`tests/mc/run.test.js` against a real temporary git repository: after a snapshot the ref's tree holds a modified and an untracked file, `git status --porcelain` is unchanged, and `git diff --cached` is empty."
+    }
+  ],
+  "documents": [
+    { "label": "mc rulings (ruling 33)", "path": "../rulings.md" },
+    { "label": "The runner", "path": "../../../technical/mc-run.md" }
+  ],
+  "steps": [
+    {
+      "title": "1. The session log is written as it streams, and a dead session is interrupted, not failed",
+      "status": "ready",
+      "done_when": "A session's stdout reaches `<stem>.jsonl` as it arrives; the register's `session` carries `log`; `sweepRunning` and the post-session path turn a session that died under the step into `ready` with an `interrupted` record (session id, tool, model, log, last activity, context tokens, branch, count, at), `failed` only on the third in a row; `mc step <project>` prints the record; tests cover claude and codex logs; `npm test` is green.",
+      "instruction": [
+        "Today the stream lives only in memory: `streamSession` (`src/mc/run.js:231`) collects stdout and `writeSessionLogs` (`run.js:1031`) writes `<stem>.jsonl` after the session ends. A restart therefore leaves no session id anywhere, and `patchStep` nulls `session` when a step leaves `running` (`src/mc/register.js`, the status branch near line 291). `sweepRunning` (`run.js:576-591`) writes `failed` with `the session (pid N) is gone without a result`.",
+        "**Live log.** Give `streamSession` an optional `logPath`. Every stdout chunk is appended to it as it arrives (one `openSync(path, 'a')` at spawn, `writeSync` per chunk, closed on `close`; a write error is swallowed, the session must not end on it). In `runStepClaimed` pass `${out}.jsonl` (`out` is made at `run.js:1900`; move that line above `launchOnce`). The in-process API resume (`run.js:1985-2010`) launches again with the same `logPath`, so the file is the joined stream it already logs. `writeSessionLogs` stops writing `.jsonl` when the file exists and keeps writing `.json` and `.json.err` as now. The register's `session` written at `run.js:1943` and `:1977` gains `log: out` (the stem, no extension).",
+        "**What a log says.** Add a pure `sessionStanding({ toolId, stdout })` in `src/mc/run-plan.js` beside `streamSummary` (`run-plan.js:980`): `{ session_id, context_tokens, last_text }`. Claude: `session_id` from any event carrying `session_id` (the first `system`/`init` line has it); `context_tokens` from the last non-`<synthetic>` `assistant` event's `message.usage` as `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`; `last_text` the text blocks of the last assistant message that has any, capped at 3 000 characters from the end. Codex: `session_id` from `thread_id` (as `readCodexEvents` reads it, `run-plan.js:1143`); `context_tokens` from the last `usage.input_tokens`; `last_text` from the last `item.completed` whose `item.type` is `agent_message`. A partial last line is skipped. Unknown fields are null, never guessed.",
+        "**The record.** `normaliseStep` in `register.js` keeps a new field `interrupted` (a plain object or null; add it to `emptyStep` as null). `patchStep` keeps `interrupted` while the status is `ready` or `running` and sets it null on any other status (`landing`, `done`, `failed`, `blocked`). Update the `STEP_STATES` doc comment to say what an interrupted `ready` step is.",
+        "**sweepRunning.** For a dead pid: read `session.log` + `.jsonl` (missing file: all fields null), call `sessionStanding`, take `last_activity` from the file's mtime (ISO), and write `{ status: 'ready', reason: null, session: null, interrupted: { at, session_id, tool, model, log, last_activity, context_tokens, branch, count } }`, where `tool`/`model` come from the old `session`, `branch` is the step's `branch`, and `count` is the previous record's `count + 1` or 1. When that count would reach `INTERRUPT_LIMIT = 3` (constant in `run-plan.js`, comment: three restarts on one step is a step that kills the machine or a loop, a person's), write `failed` with reason `interrupted 3 times in a row — last session <id>` instead. The `say` line names `interrupted` and the session id.",
+        "**Killed by a signal while the runner lives.** In the post-session `else` branch (`run.js:2099-2107`) a session whose process ended by a signal the runner did not send — not `stalled`, not `lingered`, no result line, and `close` reported a signal — is the same case: write the same `interrupted` record (from `${out}.jsonl` and the current session settings) instead of `failed`. `streamSession` must report the signal: add `signal` to the object resolved in its `close` handler (`run.js:342`). The runs.tsv note is `interrupted`.",
+        "**Seen.** `mc step <project>` (`src/mc/commands/step.js`, the line builder near `:147`) prints for a `ready` step with a record: `interrupted <at> · <tool> session <first 8 of id> · last activity <age> · <context_tokens> tokens`. The page needs nothing in this step.",
+        "**Tests.** `tests/mc/register.test.js` for keep-and-clear of `interrupted`; `tests/mc/run-plan.test.js` for `sessionStanding` on a claude and a codex fixture (cut mid-line); `tests/mc/run.test.js` for the sweep (first, second, third interruption) and for the signal case; `tests/mc/run-session.test.js` that `logPath` receives the chunks in order before `close`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "2. A warm or small interrupted session is resumed where it stopped",
+      "status": "ready",
+      "done_when": "`recoveryFor` decides resume or fresh from the record, the adapter's cache TTL and the context size; a resume launches the same session id through the tool's own resume with the workarea untouched (no dirty block, no branch move, no merge of main); a resume that cannot start falls back to fresh on the next pick; interrupted steps are picked first, warmest first; tests cover claude and codex; `npm test` is green.",
+      "instruction": [
+        "**Cache lifetime per tool.** Export `CACHE_TTL_MS` from each adapter: `src/adapters/claude-code.js` 60 minutes (the step sessions write `ephemeral_1h_input_tokens`, measured in `~/mc/runner/log/*.jsonl` on 2026-10-10, and nothing in `ephemeral_5m`); `src/adapters/codex.js` 5 minutes (OpenAI's prompt cache keeps a prefix minutes, not an hour; the conservative figure only makes a cold resume more likely, never a wrong warm one). Comment each with that reason.",
+        "**The rule, pure.** In `run-plan.js`: `recoveryFor({ interrupted, toolNow, ttlMs, now })` returns `{ mode: 'resume' | 'fresh', why }`. Fresh when there is no `session_id`, when `interrupted.resume_failed` is true, or when `toolNow !== interrupted.tool`. Resume when `now - last_activity < ttlMs - WARM_MARGIN_MS` (`WARM_MARGIN_MS = 5 min`: the first request of the resumed session must arrive inside the TTL). Otherwise resume when `context_tokens` is null or at most `COLD_RESUME_MAX_TOKENS = AUTOCOMPACT_TOKENS / 2` (`AUTOCOMPACT_TOKENS` is `run-plan.js:54`; comment: below half the window, writing the conversation to the cache once costs less than a new session re-reading the code, and above it the resumed session would compact soon and lose what it knew), else fresh. `why` is one line for the log: `warm, 12 min since last request`, `cold, 41 000 tokens`, `cold, 120 000 tokens — fresh`.",
+        "**Resume arguments.** `headlessArgs` (`run-plan.js:877`) already takes `resume` for claude. Give codex one: with `resume`, return `['exec', 'resume', '--json', ...modelArgs, '-c', 'sandbox_mode=\"danger-full-access\"', ...instr, resume, prompt]` (`codex exec resume` has no `--sandbox` flag; `codex exec resume --help`, codex-cli 0.151.0, lists `-c`, `-m`, `--json` and positional `[SESSION_ID] [PROMPT]`). Keep the argument building in `headlessArgs`; adapters' interactive `resumeArgs` are untouched.",
+        "**The prompt.** Add `restartPrompt({ at, why })` beside `resumePrompt` (`run-plan.js:901`): the session was cut off at `<at>` because the machine restarted or the runner was stopped; the files, branch and uncommitted changes are as it left them; processes it had started (dev servers, background tasks, test runs) are gone and must be started again if still needed; run `git status` first, then continue the step from where it stopped and do not start it over.",
+        "**runStepClaimed.** Read the step's register entry before the dirty check (`run.js:1768`). When `chooseKind` would hand out this step and its entry has `interrupted` and `recoveryFor` says `resume`: skip the dirty block, skip `placeBranch` and `syncMain` (the conversation knows this tree; a merge of main under it would change files it has read), still abort a leftover `MERGE_HEAD` as at `run.js:1760`, and launch with `headlessArgs({ ..., resume: interrupted.session_id })` and `restartPrompt` instead of `stepPrompt`. The order of the existing guards that do not touch the tree (STOP, quota, open pull request, role, tool, slot) stays. Record the step `running` as now, with `interrupted` kept, and say `<name>: resuming <tool> session <id> (<why>)`.",
+        "**A resume that cannot start.** If the resumed launch ends with no assistant message in its stream and a non-zero exit (claude says `No conversation found`; a codex rollout that is gone), write the step `ready` with `interrupted.resume_failed = true` and say so; the next pick is fresh (step 3). This is not counted as another interruption.",
+        "**First in line.** In `queue()` (`run.js:2184`, the `names` returned at its end) move the projects whose first unfinished step carries `interrupted` to the front, the most recent `last_activity` first; the rest keep their order.",
+        "**Tests.** `tests/mc/run-plan.test.js`: `recoveryFor` table (warm, cold small, cold large, no id, tool changed, resume_failed) and the codex resume argument list. `tests/mc/run.test.js`: a dirty worktree with an interrupted warm record launches with `--resume <id>`, runs no `merge` and no `checkout`; the resume-failed fallback; the queue order. `tests/mc/run-codex.test.js`: the codex resume launch."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "3. A cold, large interrupted session gets a fresh session with its leftovers committed and a handover",
+      "status": "ready",
+      "done_when": "When `recoveryFor` says fresh, the step's own leftover files are committed as one WIP commit on the step's branch before the usual flow, and `stepPrompt` carries a handover (why, the commits on the branch, the WIP commit, the last assistant text, the checkpoint ref if any); foreign dirt still blocks; tests cover it; `npm test` is green.",
+      "instruction": [
+        "**Whose dirt.** In `runStepClaimed`, when the entry has `interrupted` and the mode is `fresh`, and `git status --porcelain` is not empty: the dirt is the interrupted session's when the worktree's current branch is `interrupted.branch` or a branch whose name starts with the project's name (a session that made its own branch: on 2026-10-10 video-window's session moved from `video-window-3` to `video-window-step-2` on the same commit). Then `git add -A` and `git commit --no-verify -m \"<project>: WIP left by an interrupted session\"` with a body naming the session id and `interrupted.at`, and when the current branch is not `interrupted.branch` but that branch exists and points at an ancestor of HEAD, move it there first (`git checkout -B <branch>` keeps the tree). Any other case is foreign dirt and goes to the dirty block as today (`run.js:1768-1776`). Update the comment at `run.js:1764` (`A dirty worktree is nobody's but a person's`) to say the one exception.",
+        "**Then the usual flow.** `placeBranch` keeps a branch that is ahead (`freshBranch`, `run.js:885-901`), so the WIP commit and the earlier session's commits carry forward, and `syncMain` merges main as for any step.",
+        "**Handover.** `stepPrompt` (`run-plan.js:722`) takes `interrupted` beside `retry`; `interruptedPreamble` (beside `retryPreamble`, `run-plan.js:781`) says: an earlier session on this step was cut off at `<at>` (`<why>`); its commits on this branch are listed (`git log --oneline origin/main..HEAD`, at most 20 lines); the WIP commit, if one was made, holds files it had not committed and nothing in it has been checked; its last words were (the `last_text` from `sessionStanding` on the log, quoted); `refs/mc/checkpoint/<project>` holds the last snapshot if step 6 has landed and the ref exists. It ends: read the diff of the branch before writing anything, and do not redo what the commits already did. `retry` takes precedence in the order of preambles; both may appear.",
+        "**Tests.** `tests/mc/run.test.js`: interrupted cold-large over own dirt makes exactly one WIP commit with `--no-verify` and launches without `--resume`; over a branch named after the project but not the recorded one, the recorded branch is moved; dirt in a workarea with no record blocks as `dirty-worktree`; `tests/mc/run-plan.test.js` for the preamble text."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "4. The runner starts at login when it was running when the machine went down",
+      "status": "ready",
+      "done_when": "`mc run start --if-was-running` starts a runner only when `runner.json` names a dead pid and no `STOP` is present, and otherwise prints why not and exits 0; every `mc run start` writes `~/Library/LaunchAgents/se.memoro.mc-runner.plist` (RunAtLoad, no KeepAlive) when its content differs; `mc run` help names the flag; tests cover the three states and the plist text; `npm test` is green.",
+      "instruction": [
+        "On 2026-10-10 the machine restarted at 11:50 and the runner was started by hand at 13:19, by which time every claude session's one-hour cache had expired. `startRunner` (`src/mc/run-control.js:220`) already knows the state a crash leaves: `runnerState` returns `none` with `held` naming a dead pid (the branch at `:240-244` clears it), while a clean `mc run stop` leaves `STOP` (`:245-248`).",
+        "**The flag.** `startRunner({ argv })` with `--if-was-running`: when `held` names a dead pid and `state.stop` is false, start as now; otherwise return `ok: true, code: 0` with one line: `not started — the runner was stopped (STOP present)`, `not started — no runner was running`, or the existing `already running` lines. Parse the flag where `mc run start` parses its argv (follow `startRunner`'s caller) and add it to the `mc run` lines in `src/mc/help-text.js`.",
+        "**The agent.** On every `startRunner` that spawns (not on refusals), write the plist through a new `deps.writeAgent(path, text)` (real: write only when the file's text differs). Label `se.memoro.mc-runner`; `ProgramArguments` = `deps.execPath`, `deps.entry`, `run`, `start`, `--if-was-running`; `RunAtLoad` true; no `KeepAlive`; `EnvironmentVariables` with `PATH` and `HOME` from `deps.env` (launchd gives a login agent neither the shell's PATH nor homebrew; the current runner's PATH holds `/opt/homebrew/bin` and `~/.local/bin`, where `claude` and `codex` live); `StandardOutPath` and `StandardErrorPath` to `~/mc/runner/log/login-agent.log`. A file in `~/Library/LaunchAgents` is loaded at the next login without `launchctl`; do not call `launchctl`. A pure `agentPlist({ execPath, entry, env, log })` returns the XML so the test compares text.",
+        "**Docs.** `docs/technical/mc-run.md` § *The switch*: one paragraph on the agent, the flag, and that removing the plist turns it off.",
+        "**Tests.** `tests/mc/run-control.test.js`: `--if-was-running` in `none` with a dead `held` and no STOP (spawns), with STOP (does not), with no `runner.json` (does not), with a live runner (does not, exit 0); a spawning start writes the plist once and not again when unchanged; `agentPlist` output passes a `plutil -lint` in the test when `plutil` exists (skip otherwise)."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "5. No step starts while memory is short, and the page shows both holds",
+      "status": "ready",
+      "done_when": "A pass starts no step while `kern.memorystatus_level` is under `MEMORY_MIN_FREE_PERCENT` (20), says `memory: <n>% free, below 20% — no step started` once per pass and writes `memory.json`; `nowBlock` reads `disk.json` and `memory.json` so the RUNNER block shows either hold; tests cover both; `npm test` is green.",
+      "instruction": [
+        "The machine is a MacBookAir10,1 with 8 GB. On 2026-10-10 at 13:30, with one step session, three plan sessions and the brief open, `kern.memorystatus_level` read 30, `kern.memorystatus_vm_pressure_level` 2 (warning) and swap 2.4 of 3 GB. The dev-server admission already refuses under 15 % (`DEFAULT_MIN_FREE_PERCENT`, `src/mc/dev-servers.js:272`) with the reader `freeMemoryPercent` (`dev-servers.js:313`).",
+        "**The hold.** Mirror `diskRoom` (`src/mc/run.js:2380-2392`): `memoryRoom()` reads `deps.freeMemoryPercent()` (real: `freeMemoryPercent` from `dev-servers.js`; add it to the deps object near `freeBytes`, `run.js:410`), and under `MEMORY_MIN_FREE_PERCENT = 20` (constant beside `DISK_MIN_BYTES`, `run.js:171`; comment: above the dev servers' 15 so a step does not start into a machine the gate's own dev server would be refused on) says the line, writes `paths.memory` (`~/mc/runner/memory.json`, name it `RUNNER_MEMORY` in `src/mc/paths.js` beside `RUNNER_DISK`, `paths.js:123`) and returns false; at or above, removes the file. Call it right after `diskRoom` in `pass` (`run.js:2335`) returning `{ ran: 0, waited: 'skipped:memory' }`. A null reading is room.",
+        "**The page.** `page-render.js:288` already draws `now.disk.line`, but nothing fills `disk`: `nowBlock` (`src/mc/status-collect.js:270`) has no such field. Have its caller read `disk.json` and `memory.json` (follow where `nowBlock` is called for the arguments it gets from `~/mc/runner/`) and pass them; `nowBlock` returns `disk` and `memory` as the parsed objects or null. In `page-render.js` draw `now.memory.line` beside the disk line under the same rule (yellow, only while the runner is alive).",
+        "**Tests.** `tests/mc/run.test.js`: memory under the floor launches nothing and says the line once; at the floor a step launches; a null reader launches. The test that covers `nowBlock` shows `disk` and `memory` from given file contents, and the page render test draws the memory line."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "6. A running session's uncommitted work is snapshotted to a ref",
+      "status": "ready",
+      "done_when": "Every `CHECKPOINT_MS` (10 min) while a step session runs, and before each `merge --abort` the runner makes in a step's workarea, a dirty worktree is snapshotted to `refs/mc/checkpoint/<project>` through a temporary index, with the worktree, the real index and HEAD untouched; the handover names the ref; tests against a real git repository; `npm test` is green.",
+      "instruction": [
+        "A restart does not lose files on disk; what can lose uncommitted work is the runner's own `git merge --abort` (`src/mc/run.js:1761`, `:1799`, `:1820`, `:2025`) and a session's own `git checkout -- .` or `reset --hard`. The snapshot is the one copy that survives those.",
+        "**The snapshot, pure over git.** `checkpoint({ git, worktree, project, label, env })` in a new `src/mc/checkpoint.js`: if `git status --porcelain` is empty, nothing. Else, with `GIT_INDEX_FILE` set to a fresh path under the scratch directory: `git read-tree HEAD`, `git add -A`, `git write-tree`, then `git commit-tree <tree> -p HEAD -m \"mc checkpoint <project> <label> <iso>\"`, then `git update-ref refs/mc/checkpoint/<project> <sha>`; remove the temporary index. `deps.git` (`run.js:360`) passes no env today: add an `env` option to it that `sh` hands to `spawnSync`. Returns the sha or null; never throws into the lane.",
+        "**When.** In `runStepClaimed`, a `setInterval` of `CHECKPOINT_MS = 10 * 60 * 1000` (comment: ten minutes of a session's work is the most a lost tree costs) started after the launch and cleared in the `finally` at `run.js:2011`, labelled `running`; and immediately before each of the four `merge --abort` calls, labelled `before-merge-abort`. Snapshot work is quick; it stays synchronous.",
+        "**Seen.** The handover preamble from step 3 already names the ref when it exists; check that it reads `git rev-parse -q --verify refs/mc/checkpoint/<project>`. `docs/technical/mc-run.md`: a short paragraph under § *One step* on the ref and how a person restores from it (`git checkout refs/mc/checkpoint/<project> -- .`).",
+        "**Tests.** `tests/mc/checkpoint.test.js` against a temporary repository: a modified and an untracked file land in the ref's tree; `git status --porcelain` before and after is identical; `git diff --cached` is empty; a clean tree writes no ref. `tests/mc/run.test.js`: a snapshot is taken before the leftover-merge abort."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "7. Close-out",
+      "status": "ready",
+      "done_when": "The live resume check has been run and its runs.tsv rows quoted in this step's comments; every criterion is measured and marked; `docs/technical/mc-run.md` describes interrupted steps, resume and fresh recovery, the login agent, the memory hold and checkpoints; `docs/project/project_log.md` has the row; every step is `done` with its PR.",
+      "instruction": [
+        "**Live resume.** On `main` with the runner on the new code (`mc run --update`), wait until a step session has run for at least two minutes, note its project and the session id from `~/mc/runner/log/<name>-<ts>.jsonl`, run `mc run stop --force`, then `mc run start`. Within one pass the step must be resumed: the runner log says `resuming claude session <id>`, the next row for that project in `~/mc/runner/log/runs.tsv` has the same `session`, and the workarea's uncommitted files were not committed or removed by the runner. Quote the three lines in this step's `comments`. If no step is running, wait; do not start one by hand.",
+        "**Docs.** In `docs/technical/mc-run.md`: § *The register* (`:1152`) gets the `interrupted` record and its three outcomes; § *Sleeping and stopping* (`:1198`) the restart story end to end (sweep, rule, resume or fresh, the login agent); § *The switch* already has the agent from step 4. Replace the sentence in § *Blocked by the runner* (`:1111`) that says a dirty worktree is always a person's with the exception.",
+        "**Log.** Add the row to `docs/project/project_log.md` in its format: programme `mc`, project `step-recovery`, delivered, one sentence, the technical note, the last PR."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
