@@ -23,6 +23,8 @@ THE PAGE
   mc run start | stop [--force]    Turn it on, or off — after the steps in flight, or now;
                                     start on a stopping runner takes over at once
                                     (start, stop, update work at the mc page's prompt too)
+  mc run start --if-was-running    Only when the last runner died rather than stopped —
+                                    the login agent every start writes runs this
   mc run --update [--force]        New code, new process: the successor starts at once,
                                     the old runner finishes the steps it holds and exits
                                     Already on origin/main: nothing written (--force writes anyway)
