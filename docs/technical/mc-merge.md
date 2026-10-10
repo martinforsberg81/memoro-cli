@@ -66,6 +66,20 @@ the merge-log line are all described where they live —
 [`docs/mc-command-matrix.md`](../mc-command-matrix.md). There is still no flag
 that merges a red gate.
 
+**The lane** (ruling 34). A repository's gate table entry may say
+`gate_lane: 'light'`, with a `gate_lane_why`; nothing declared is `heavy`, and
+a lane mc does not have is a declaration error. The round reads its
+declaration before it takes the gate lock, because the lane names the lock:
+`gate-running.json` for `heavy` (the old file, so a round on old code and one
+on new code still see each other) and `gate-running-light.json` for `light`
+(`gate-lock.js`). Two rounds in one lane exclude each other; a heavy and a
+light round run side by side. memoro-cli declares `light`: its suite is one
+`node --test` over its own tree, 60–75 s here with no `npm ci` and no browser,
+and does not pin the cores the way memoro's seven-lane `test:full` does —
+which was the whole reason for one at a time — yet on 2026-10-09/10 each of
+its rounds waited behind a memoro round of three to fifteen minutes. A refusal
+and the page name the lane they wait on.
+
 ## The door
 
 Before the wait and before the gate, a pull request from a project branch is
@@ -259,6 +273,28 @@ Measured 2026-09-03 on the round for #570: the selected round was 73 files,
 tests, 0 red in 74.5 s. Neither ran a prepare step, and neither printed the
 `no node_modules` line.
 
+**A repository that prepares with `npm ci` gets it from a cache when the
+lockfile matches** (merge-throughput, ruling 34;
+[`src/mc/prepare-cache.js`](../../src/mc/prepare-cache.js)). memoro declares
+`prepare: 'npm ci'`, which took 15 s at the median and 26 s mean over 80
+rounds on 2026-10-09/10, 332 s at the worst, and most rounds install the
+lockfile the round before installed. After a green `npm ci` the round stores
+the candidate's `node_modules` under
+`<work root>/gate-cache/<repo slug>/<key>/` (`WORK_GATE_CACHE`), where the key
+is the first 16 hex of sha256 over the candidate's `package-lock.json`, its
+`package.json` and `process.version`. A candidate with the same key gets a
+clone of the stored tree — `cp -cR`, APFS clonefile, blocks shared until
+written — no prepare shell, and the line `prepare: cloned node_modules from
+the cache (<key>)`; the time stays under the round's `prepare` timing. Any
+other key is a miss and runs `npm ci` as before. The cache is used only for
+`npm ci`, on darwin, and for a `package.json` without a `postinstall` or
+`prepare` script (with one, `npm ci` writes outside `node_modules`). A key
+that cannot be read, a clone that fails or a store that fails is said and
+becomes the `npm ci` it replaced; the cache never stops a round. At most
+`PREPARE_CACHE_KEEP` (2) entries are kept per repository, oldest evicted: one
+for main's lockfile and one for a pull request that changed it — the disk was
+98 % full on 2026-10-09 and memoro's tree is about 500 MB as a copy.
+
 ## What the round measures
 
 Not "the suite", necessarily. A repository may declare `select` in the gate
@@ -284,6 +320,25 @@ measurement here.
 
 An empty selection stops the round: it is not a measurement, and a green from it
 would be the most confident kind of nothing.
+
+**The command gates the selection names run beside the suite** (merge-throughput,
+ruling 34). Until then they ran after it: 65 s mean on top of every round that
+had any on 2026-10-09/10, `sql:pr-ci` alone 36 s at the median over 55 rounds.
+Now `runGate` starts them when the suite starts and awaits both halves
+(`Promise.allSettled`); the round's `timings.gates_beside_suite_ms` is the wall
+time of the two together. They still run one at a time and in the selector's
+order, not all at once — this is an 8 GB machine already running the suite's
+lanes, and memory pressure was measured stretching rounds on 2026-10-10
+(`kern.memorystatus_level` 30, swap 2.4 of 3 GB): one gate beside the suite is
+one process more, six would be six. They run through `commandShell`, an
+asynchronous spawn, because a `spawnSync` would stop the round reading the
+suite's pipes and "beside" would become "after" again. The verdict is what it
+was sequentially: every gate runs and is judged and is reported in
+`extra_gates` in the selector's order; a failed gate beside a green suite is
+`selected-gate` with every failure named; a suite that could not be measured
+is the suite's stop, with the gates that ran listed; and a half that throws is
+waited out with the other and then thrown, so nothing turns green because one
+half threw.
 
 **`mc test <repo> --full`** is the other reading, and the only one that is about
 the code rather than about a change: the repository's declared suite command,
@@ -529,7 +584,11 @@ in `~/mc/runner/log/merger.log`). It marks a job `landing`, waits while the
 gate lock or the job's repository lease is somebody else's (an orphaned lease
 is nobody's: the round's own claim reaps it), runs the round as the holder
 who asked, records it, writes the register, drops the job, and takes the
-next; with the queue empty it leaves. A merger killed mid-round leaves its
+next; with the queue empty it leaves. Since ruling 34 it takes up to
+`MERGE_BATCH_MAX` (4) jobs for one repository into one batch round and
+answers each by itself, and it runs one loop per gate lane, so a light round
+and a heavy one are in flight at once — see [`mc-run.md`](mc-run.md)
+§ *The merge* for both. A merger killed mid-round leaves its
 job `landing`, and the next merger — started by the next `mc merge`, or by
 the runner when it reads a queue with jobs and no live merger — lands that
 one first; the round itself says whether it had already merged.

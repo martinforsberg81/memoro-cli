@@ -788,6 +788,31 @@ project: the next step starts at once on a branch on top of it (`placeBranch`,
 ([`mc-merge.md`](mc-merge.md) § *One round at a time*). The round the merger
 runs is the one below, and so is everything said about what it reads back.
 
+**Several steps land in one round** (merge-throughput, ruling 34). The merger
+takes up to `MERGE_BATCH_MAX` (4) queued jobs for one repository that may go
+(`nextBatch` in `merge-queue.js`) and hands them to the round as one batch:
+one candidate with every head merged in, measured once, landed in order. Its
+log says `<repo>: landing a batch of N — #a #b …`. Each job still gets its own
+answer (`answersFor` in `merger.js`): a landed one is dequeued and its step
+`done`; a red one — its own fallback round's red, a restack it could not
+make, or the stop the batch reached before it — is `red` in the queue with
+its own reason, and its step goes through `redPatch` with its own report. A
+batch that stops at a fallback stop is one round per pull request, as before,
+and the answers are those rounds'. A merger that dies under a batch leaves its
+jobs `landing`, and the next one takes all of them again. Four, because about
+11 % of rounds on 2026-10-09/10 were red: a batch of four is red about a third
+of the time and then pays its fallback rounds, and a larger batch makes the
+fallback cost more than the batch saves.
+
+**And it serves two lanes at once.** The merger is one process with one loop
+per gate lane (`GATE_LANES`: `heavy` — memoro and any repository that
+declares nothing — and `light`, memoro-cli by its `gate_lane`). Each loop
+takes only its own lane's jobs, so a memoro-cli round runs while a memoro
+round is in flight and two memoro rounds never do. A loop with nothing to take
+waits for the other to answer a job, or `MERGER_POLL_MS`, and the merger
+leaves only when neither lane has anything. A deploy waits for the rounds in
+both lanes and starts none while it runs (ruling 32).
+
 **The runner lands through `mc merge` and nothing else** (Martin, 2026-09-02).
 `repo-merge.js`'s round, called in this process rather than shelled out to,
 because the runner *is* mc: it takes the repository's lease and holds it across
