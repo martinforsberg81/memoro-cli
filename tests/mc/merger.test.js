@@ -26,6 +26,11 @@ beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'mc-merger-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
 const lock = (_root, fn) => fn();
+// One loop for every repository: the tests of order and batching across
+// repositories predate the lanes (ruling 34), which land memoro and
+// memoro-cli side by side; `lanes (merge-throughput step 2)` tests those.
+const ONE_LANE = { lanes: ['heavy'], laneOf: () => 'heavy' };
+const LANE_OF = (job) => (job.repo === 'memoro-cli' ? 'light' : 'heavy');
 const queue = () => parseQueue(existsSync(mergesPath(root)) ? readFileSync(mergesPath(root), 'utf8') : null);
 
 function register(stepOver = {}) {
@@ -178,7 +183,7 @@ describe('serve — the loop', () => {
     const landed = [];
     const states = [];
     const code = await serve({
-      root, lock, take, release,
+      root, lock, take, release, ...ONE_LANE,
       land: async ([job]) => { landed.push(job.pr); states.push(queue().find((e) => e.pr === job.pr).state); return green; },
     });
     assert.equal(code, 0);
@@ -206,7 +211,7 @@ describe('serve — the loop', () => {
     writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null }]));
     const landed = [];
     await serve({
-      root, lock, take, release, now: () => new Date('2026-10-10T07:00:00Z'),
+      root, lock, take, release, ...ONE_LANE, now: () => new Date('2026-10-10T07:00:00Z'),
       land: async ([job]) => { landed.push(job.pr); return job.pr === 1 ? red : green; },
     });
     assert.deepEqual(landed, [1, 2], 'the red one did not hold the next back');
@@ -249,7 +254,7 @@ describe('serve — the loop', () => {
     mkdirSync(join(root, 'runner'), { recursive: true });
     writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null }]));
     let stop = false;
-    await serve({ root, lock, take, release, stopping: () => stop, land: async () => { stop = true; return green; } });
+    await serve({ root, lock, take, release, ...ONE_LANE, stopping: () => stop, land: async () => { stop = true; return green; } });
     assert.deepEqual(queue().map((e) => e.pr), [2]);
   });
 
@@ -297,7 +302,7 @@ describe('batches (merge-throughput step 1)', () => {
     registerBatch();
     queueFour();
     const m = machine([batchGreen, green]);
-    await serve({ root, lock, take, release, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
+    await serve({ root, lock, take, release, ...ONE_LANE, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
     assert.equal(m.rounds.length, 2);
     assert.equal(m.rounds[0].pr, 11);
     assert.deepEqual(m.rounds[0].prs, [11, 12, 13]);
@@ -322,7 +327,7 @@ describe('batches (merge-throughput step 1)', () => {
       },
     };
     const m = machine([fallback, green]);
-    await serve({ root, lock, take, release, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
+    await serve({ root, lock, take, release, ...ONE_LANE, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
     const [a, b, c] = steps();
     assert.equal(a.status, 'done');
     assert.equal(a.landed.sha, 'm11');
@@ -368,12 +373,106 @@ describe('batches (merge-throughput step 1)', () => {
     const m = machine([resumed, green, green]);
     const rounds = [];
     await serve({
-      root, lock, take, release, say: m.deps.say, now: m.deps.now,
+      root, lock, take, release, ...ONE_LANE, say: m.deps.say, now: m.deps.now,
       land: (batch) => { rounds.push(batch.map((j) => j.pr)); return landJob(batch, m.deps); },
     });
     assert.deepEqual(rounds[0], [11, 13]);
     assert.deepEqual(m.rounds[0].prs, [11, 13]);
     assert.deepEqual(rounds.slice(1), [[671], [12]]);
+  });
+});
+
+describe('lanes (merge-throughput step 2)', () => {
+  const take = () => true;
+  const release = () => {};
+  const MEMORO = { ...JOB, repo: 'memoro', repo_path: '/repos/memoro', step: null };
+
+  it('a memoro-cli job is answered while a memoro round runs, and the next memoro job waits for that round', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([
+      { ...MEMORO, pr: 1, since: '2026-10-10T12:01:00Z' },
+      { ...JOB, pr: 2, since: '2026-10-10T12:02:00Z', step: null },
+    ]));
+    const events = [];
+    let finish = null;
+    const memoroRound = new Promise((resolve) => { finish = resolve; });
+    const lanesOf = [];
+    await serve({
+      root, lock, take, release, laneOf: LANE_OF,
+      land: async ([job], lane) => {
+        events.push(`start ${job.repo} #${job.pr}`);
+        lanesOf.push([job.pr, lane]);
+        if (job.pr === 1) {
+          // Queued while the first memoro round runs: not in its batch, so a
+          // second memoro round.
+          queueMerge({ root, repo: 'memoro', repoPath: '/repos/memoro', pr: 3, lock, start: () => ({ pid: process.pid, started: false }) });
+          await memoroRound;
+          events.push('end memoro #1');
+        }
+        return green;
+      },
+      // The light loop, with nothing left in its lane, waits on the heavy one:
+      // the memoro round is let go only from here, once memoro-cli's answer is
+      // in the file.
+      sleep: () => {
+        const left = queue();
+        if (!left.some((e) => e.pr === 2) && !events.includes('answered memoro-cli #2')) {
+          events.push('answered memoro-cli #2');
+          assert.equal(left.find((e) => e.pr === 1).state, 'landing', 'the memoro round is still running');
+          assert.equal(events.includes('start memoro #3'), false, 'no second memoro round beside the first');
+          finish();
+        }
+        return new Promise((resolve) => { setImmediate(resolve); });
+      },
+    });
+    assert.deepEqual(events, ['start memoro #1', 'start memoro-cli #2', 'answered memoro-cli #2', 'end memoro #1', 'start memoro #3']);
+    assert.deepEqual(lanesOf, [[1, 'heavy'], [2, 'light'], [3, 'heavy']]);
+    assert.deepEqual(queue(), []);
+  });
+
+  it('a job waits only on a round in its own lane', async () => {
+    register();
+    const lanesAsked = [];
+    const heavyBusy = ({ lane }) => { lanesAsked.push(lane); return lane === 'heavy' ? { pid: 9, repo: 'memoro', pr: 1, lane } : null; };
+    const m = machine([green], { readRunningRound: heavyBusy, lane: 'light' });
+    await landJob(JOB, m.deps);
+    assert.equal(m.rounds.length, 1);
+    assert.deepEqual([...new Set(lanesAsked)], ['light']);
+    assert.equal(m.said.some((line) => /waiting behind/u.test(line)), false, 'a heavy round does not hold a light job');
+  });
+
+  it('a round in its own lane is waited for, and the wait names the lane', async () => {
+    register();
+    let polls = 0;
+    const m = machine([green], {
+      lane: 'light',
+      readRunningRound: ({ lane }) => (lane === 'light' && polls++ < 2 ? { pid: 9, repo: 'memoro-cli', pr: 5, lane } : null),
+    });
+    await landJob(JOB, m.deps);
+    assert.ok(m.said.some((line) => /waiting behind another gate round in the light lane \(memoro-cli #5, pid 9\)/u.test(line)), m.said.join('\n'));
+  });
+
+  it('asked to stop, each lane leaves between its jobs and the merger leaves once both have', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([
+      { ...MEMORO, pr: 1, since: 'a' }, { ...JOB, pr: 2, since: 'b', step: null },
+    ]));
+    let stop = false;
+    const landed = [];
+    const code = await serve({
+      root, lock, take, release, laneOf: LANE_OF, stopping: () => stop,
+      // Asked once both lanes have a round in flight, and one more job
+      // queued behind memoro-cli's.
+      land: async ([job]) => {
+        landed.push(job.pr);
+        if (job.pr === 2) queueMerge({ root, repo: 'memoro-cli', repoPath: '/r', pr: 4, lock, start: () => ({ pid: process.pid, started: false }) });
+        stop = landed.length === 2;
+        return green;
+      },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(landed, [1, 2], 'the round in flight in each lane finished; nothing new started');
+    assert.deepEqual(queue().map((e) => e.pr), [4]);
   });
 });
 

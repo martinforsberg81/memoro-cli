@@ -172,14 +172,21 @@ export const MERGE_BATCH_MAX = 4;
  * Entries already `landing` are a merger that died under a batch: every
  * `landing` entry of the first one's repository is taken again, and the
  * round says what has already merged. Empty when there is nothing to take.
+ *
+ * With a `lane`, only the jobs whose repository's gate lane (`laneOf`) is that
+ * one: the merger runs one loop per lane (ruling 34), and each takes its own.
+ * A job's parent is in its own repository, so in its own lane.
  */
-export function nextBatch(entries, { landed = () => true, max = MERGE_BATCH_MAX } = {}) {
-  const ordered = queueOrder(inLine(entries));
+export function nextBatch(entries, {
+  landed = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = () => 'heavy',
+} = {}) {
+  const mine = lane ? entries.filter((entry) => (laneOf(entry) || 'heavy') === lane) : entries;
+  const ordered = queueOrder(inLine(mine));
   const landing = ordered.filter((entry) => entry.state === 'landing');
   if (landing.length) return landing.filter((entry) => entry.repo === landing[0].repo);
-  const first = nextJob(entries, { landed });
+  const first = nextJob(mine, { landed });
   if (!first) return [];
-  const mayGo = mayGoIn(entries, landed);
+  const mayGo = mayGoIn(mine, landed);
   const batch = [first];
   for (const entry of ordered) {
     if (batch.length >= max) break;

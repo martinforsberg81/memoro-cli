@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  SHIPPED, UNKNOWN, declarationFor, repoDeclarationPath, tablePath,
+  SHIPPED, UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath,
 } from '../../src/mc/repo-gate-table.js';
 import { gateRoot } from '../../src/mc/repo-gate.js';
 import { workDepsPath } from '../../src/mc/paths.js';
@@ -61,6 +61,31 @@ describe('an override that shadows shipped fields is said, not silent (D-0135)',
       // The shipped entry alone shadows nothing.
       const plain = declarationFor('/x/memoro-cli', { root });
       assert.deepEqual(plain.shadowed, []);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('gate lanes (ruling 34)', () => {
+  it('memoro-cli is light and says why; a repository that declares nothing is heavy', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-lane-'));
+    try {
+      assert.equal(SHIPPED['memoro-cli'].gate_lane, 'light');
+      assert.ok(SHIPPED['memoro-cli'].gate_lane_why);
+      assert.equal(declarationFor('/x/memoro-cli', { root }).declaration.gate_lane, 'light');
+      assert.equal(declarationFor('/x/memoro', { root }).declaration.gate_lane, 'heavy');
+      assert.equal(gateLaneOf('memoro-cli', { root }), 'light');
+      assert.equal(gateLaneOf('/repos/memoro', { root }), 'heavy');
+      assert.equal(gateLaneOf('nobody-knows', { root }), 'heavy');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a lane mc does not have is a declaration error, not a quiet heavy', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-lane-'));
+    try {
+      writeFileSync(join(root, 'repo-gates.json'), JSON.stringify({ 'memoro-cli': { ...SHIPPED['memoro-cli'], gate_lane: 'fast' } }));
+      const out = declarationFor('/x/memoro-cli', { root });
+      assert.equal(out.ok, false);
+      assert.match(out.reason, /gate_lane "fast"/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
@@ -381,6 +406,8 @@ describe('a repository that declares itself in .mc/test.json', () => {
         affected: null,
         serial_paths: null,
         deps_notes: [],
+        gate_lane: SHIPPED['memoro-cli'].gate_lane,
+        gate_lane_why: SHIPPED['memoro-cli'].gate_lane_why,
       });
       // And every field is attributed to the file it came from.
       assert.equal(answer.sources.select, 'shipped');

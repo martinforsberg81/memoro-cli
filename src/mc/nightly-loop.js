@@ -66,13 +66,14 @@
  * measured — because a run that could not happen is not a run that found
  * nothing.
  */
-import { gateLockPath, describeRunning, runningRound } from './gate-lock.js';
+import { gateLockPath, describeRunning, runningRounds } from './gate-lock.js';
 import { tryGit } from './git.js';
 import { mcHome } from './paths.js';
 import { appendNightlyLog } from './nightly.js';
 import { nightlyReading, recordNightlyRun } from './nightly-history.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { runGate } from './repo-gate.js';
+import { gateLaneOf } from './repo-gate-table.js';
 import { repoStatus } from './repo-status.js';
 import { currentHolder } from './work-identity.js';
 
@@ -154,9 +155,12 @@ export async function nightlyTick({
       stopped = true;
       break;
     }
-    const running = runningRound({ root });
+    // The lane of the repository it measures (ruling 34): its round takes
+    // that lane's lock, so a round in the other lane is in nobody's way.
+    const lane = gateLaneOf(repo.path || repo.name, { root });
+    const running = runningRounds({ root })[lane];
     if (running) {
-      skipped = skip(repo, running, clock, { root });
+      skipped = skip(repo, running, clock, { root, lane });
       break;
     }
     const startedAt = clock();
@@ -215,7 +219,7 @@ export async function nightlyTick({
     // reason is somebody else's round rather than anything about this
     // repository.
     if (report.stopped_at === 'busy') {
-      skipped = skip(repo, runningRound({ root }), clock, { root, reason: report.reason });
+      skipped = skip(repo, runningRounds({ root })[lane], clock, { root, lane, reason: report.reason });
       break;
     }
 
@@ -315,7 +319,7 @@ function unchangedSince(repo, head, { root }) {
 }
 
 /** What was not measured, and whose round it was. */
-function skip(repo, running, clock, { root, reason = null } = {}) {
+function skip(repo, running, clock, { root, lane = 'heavy', reason = null } = {}) {
   return {
     repo: repo.name,
     path: repo.path,
@@ -323,8 +327,8 @@ function skip(repo, running, clock, { root, reason = null } = {}) {
     // The holding round's own words, with its pid — the thing that makes a
     // skip checkable afterwards rather than a shrug.
     pid: running?.pid ?? null,
-    reason: reason || describeRunning(running),
-    lock: gateLockPath(root),
+    reason: reason || describeRunning(running, lane),
+    lock: gateLockPath(root, lane),
   };
 }
 
