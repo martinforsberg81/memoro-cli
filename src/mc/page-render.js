@@ -754,6 +754,7 @@ function landingLine(c, wide, landing) {
   const head = `  ${MARK.running} ${where} ${number}${name}`;
   const tail = trailing([
     { text: landing.mode === 'check' ? 'measuring, not landing' : 'landing' },
+    landing.lane ? { text: `${landing.lane} lane`, styles: ['grey'] } : null,
     landing.phase ? { text: landing.phase } : null,
     { text: ageWords(landing.age_seconds), styles: ['grey'] },
   ]);
@@ -789,7 +790,8 @@ function redLine(c, wide, item) {
 }
 
 /**
- * MERGES — the one gate round landing now, and the waiters behind it.
+ * MERGES — the gate rounds landing now (one per lane, ruling 34), and the
+ * waiters behind them.
  *
  * Between NEXT and RUNNER because it is the third fact about the same
  * question, *what is the runner doing with a pull request*: NEXT is the order
@@ -804,7 +806,8 @@ function mergesLines(lines, c, wide, merges) {
   const verb = 'mc merge <repo> <pr>';
   const reds = merges.red?.items || [];
   const parts = [];
-  if (merges.landing) parts.push({ text: '1 landing', styles: ['grey'] });
+  const landings = merges.landings || [].concat(merges.landing || []);
+  if (landings.length) parts.push({ text: `${landings.length} landing`, styles: ['grey'] });
   if (reds.length) parts.push({ text: `${reds.length} red`, styles: ['red', 'bold'] });
   const items = merges.queued.items || [];
   if (merges.queued.count) {
@@ -820,7 +823,7 @@ function mergesLines(lines, c, wide, merges) {
   heading(lines, c, wide, 'MERGES', counts, verb);
   // The heading has already said *nothing landing*; a row that says it again
   // is a row.
-  if (merges.landing) lines.push(landingLine(c, wide, merges.landing));
+  for (const landing of landings) lines.push(landingLine(c, wide, landing));
   for (const item of reds) lines.push(redLine(c, wide, item));
 }
 
