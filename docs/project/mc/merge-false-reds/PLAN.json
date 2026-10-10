@@ -26,7 +26,7 @@
       "check": "`tests/mc/tap-red.test.js`: `killedFiles` on TAP with `signal: 'SIGTERM'` and `exitCode: ~` names that file and not an ordinary red. `tests/mc/repo-gate.test.js`: a stub suite whose only red file was killed finishes `file-killed` without running `probeMainRed`. With one killed and one red file it is `red`, naming only the red one and listing the killed one in `report.killed_files`. `tests/mc/merger.test.js`: `file-killed` makes `landJob` run the round once more, and a second `file-killed` answers red with that reason and starts no mend."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Every session's role says it never signals a process it did not start.",
       "check": "`canon/roles/_common.md` carries the rule. A test in `tests/mc/canon-roles.test.js` (or beside the role loader's test) asserts the sentence is in the text every role is built from."
     }
