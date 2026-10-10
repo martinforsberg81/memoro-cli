@@ -32,7 +32,9 @@
  * its whole gate, and until then a deploy waited up to eight minutes for that
  * window and gave up with exit 3; but the worktree is moved by nothing but
  * this verb, and a merge landing on `origin/main` changes nothing the build
- * sees (ruling 26). There is no queue: what keeps two deploys apart is the
+ * sees (ruling 26). What it does wait for is the gate round in flight, and
+ * the merger starts none while it runs (`waitForGate`, 2026-10-10): beside a
+ * merge round the build swapped for 26 minutes. There is no queue: what keeps two deploys apart is the
  * record — a `running` row whose process is alive (`runningDeploy`,
  * deploys.js) is a deploy in progress, and a second one is refused with its
  * sha and start time. The check and the new row are one step under the
@@ -70,9 +72,11 @@ import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
   runningDeploy,
 } from '../deploys.js';
+import { runningRound } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
+import { readMerger } from '../merger.js';
 import { nightlyReading } from '../nightly-history.js';
 import { mcHome, workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
@@ -677,17 +681,54 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: the deployer could not be started (${deployer.error || 'no pid'}) — nothing was deployed\n`);
     return 1;
   }
-  stdout.write(`mc: deploying ${plan.short} in its own process (pid ${deployer.pid}) — merges go on beside it\n`);
+  stdout.write(`mc: deploying ${plan.short} in its own process (pid ${deployer.pid}) — after the gate round in flight, if any; the merge queue waits for it\n`);
   stdout.write(`mc: ^C stops watching, not the deploy; mc deploy --follow watches again\n`);
   return followDeploy({ log: deployer.log, pid: deployer.pid, key, env, stdout, deps });
 }
 
+/** How often the deployer looks again at a gate round it is waiting for. */
+export const GATE_POLL_MS = 5 * 1000;
+
 /**
- * Everything after the yes, in the deployer's own process: the worktree
- * fast-forwarded to `origin/main`, the script run there, the row completed
- * with the sha that shipped. Nothing here holds a lease or waits for a merge
- * round — the worktree is moved by nothing but this, and a merge landing on
- * `origin/main` after the fast-forward changes nothing the build sees
+ * The deploy builds alone (Martin, 2026-10-10: *"den kilar in sig efter
+ * pågående merge-process, kör själv, därefter fortsätter merge-kön"*). On an
+ * 8 GB machine a bundle beside a merge round's `npm ci` and suite swapped for
+ * 26 minutes (2026-10-10). The merger starts no round while the deploy's row
+ * says `running`; this waits for the one already in flight — any gate round,
+ * `mc test`'s too. With a merger alive the gate must be free on two reads a
+ * poll apart: a merger that read no deploy just before the row was written
+ * takes the lock within that time.
+ */
+export async function waitForGate(job, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const root = job.root || workRoot(deps.env || process.env);
+  const round = deps.runningRound || (() => runningRound({ root }));
+  const merger = deps.readMerger || (() => readMerger({ root }));
+  const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
+  let said = false;
+  for (;;) {
+    const running = round();
+    if (!running) {
+      if (said || !merger()) break;
+      await sleep(GATE_POLL_MS);
+      if (!round()) break;
+      continue;
+    }
+    if (!said) {
+      stdout.write(`mc: waiting for the gate round of ${running.repo || 'a repository'} #${running.pr ?? '?'} (pid ${running.pid}) to finish — the merger starts no other while this deploy runs\n`);
+      said = true;
+    }
+    await sleep(GATE_POLL_MS);
+  }
+  if (said) stdout.write('mc: the gate is free — deploying alone; the merge queue goes on after it\n');
+}
+
+/**
+ * Everything after the yes, in the deployer's own process: the round in
+ * flight waited for (`waitForGate`), the worktree fast-forwarded to
+ * `origin/main`, the script run there, the row completed with the sha that
+ * shipped. Nothing here holds a lease — the worktree is moved by nothing but
+ * this, and the merger lands nothing while the row says `running`
  * (rulings 26, 30).
  */
 export async function ship(job, deps = {}) {
@@ -698,6 +739,7 @@ export async function ship(job, deps = {}) {
   const { key, sha, worktree, own } = job;
   let tail = '';
   try {
+    await waitForGate(job, { ...deps, stdout });
     // The one movement of somebody else's checkout this verb may make.
     // `origin/main` is what ships — whatever is on `main` is meant to — so it
     // is fast-forwarded to `origin/main` as it is now, which may be later than

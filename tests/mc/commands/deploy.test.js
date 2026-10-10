@@ -790,9 +790,46 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
       stderr,
     });
     assert.equal(code, 0);
-    assert.match(out.stdout, /mc: deploying 1a2b3c4 in its own process \(pid 31337\) — merges go on beside it/u);
+    assert.match(out.stdout, /mc: deploying 1a2b3c4 in its own process \(pid 31337\) — after the gate round in flight, if any; the merge queue waits for it/u);
     assert.match(out.stdout, /▸ Deploy source preflight\n▸ wrangler deploy\nmc: deployed/u);
     assert.equal(out.stdout.match(/Deploy source preflight/gu).length, 1, 'each line once');
+  });
+
+  it('the deployer waits for the gate round in flight, says so once, then builds', async () => {
+    let reads = 0;
+    const order = [];
+    const { out, stdout } = io();
+    const job = { key: { started: 'x', sha: SHA }, sha: SHA, worktree: MAIN_WT, own: true, root: work };
+    const code = await ship(job, {
+      ...deps(),
+      stdout,
+      runningRound: () => (reads++ < 3 ? { pid: 9, repo: 'memoro', pr: 13301 } : null),
+      readMerger: () => ({ pid: 8 }),
+      sleep: async () => { order.push('sleep'); },
+      spawnDeploy: async () => { order.push('build'); return { code: 0 }; },
+    });
+    assert.equal(code, 0);
+    assert.equal(out.stdout.match(/waiting for the gate round of memoro #13301 \(pid 9\)/gu).length, 1);
+    assert.match(out.stdout, /the gate is free — deploying alone/u);
+    assert.equal(order.at(-1), 'build');
+    assert.equal(order.filter((step) => step === 'sleep').length, 3, 'polled until the round was gone');
+  });
+
+  it('with a merger alive and the gate free, the deployer reads the gate twice a poll apart', async () => {
+    let reads = 0;
+    const order = [];
+    const job = { key: { started: 'x', sha: SHA }, sha: SHA, worktree: MAIN_WT, own: true, root: work };
+    await ship(job, {
+      ...deps(),
+      stdout: io().stdout,
+      // Free, then a round the merger took in the window, then free again.
+      runningRound: () => { reads += 1; return reads === 2 ? { pid: 9, repo: 'memoro', pr: 1 } : null; },
+      readMerger: () => ({ pid: 8 }),
+      sleep: async () => { order.push('sleep'); },
+      spawnDeploy: async () => { order.push('build'); return { code: 0 }; },
+    });
+    assert.ok(reads >= 3, 'the round seen on the second read was waited for');
+    assert.equal(order.at(-1), 'build');
   });
 
   it('^C stops the watching and not the deploy', async () => {

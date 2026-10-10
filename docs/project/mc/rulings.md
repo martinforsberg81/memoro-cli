@@ -1084,3 +1084,27 @@ Swedish cutover is finished: its manifest is the record of the 2026-10-09 run
 and the template for the next language, and a run of it today stops at the
 first exact check. The Swedish lemma bands are in production since 2026-10-09
 (memoro `docs/project/language-content/language-content-state.md`).
+
+## 32 · A deploy waits for the round in flight, then builds alone; the queue goes on after it
+
+`ruling · 2026-10-10` · raised by Martin at the brief
+
+Ruling 30 put `mc deploy` beside the merger with no coordination. On
+2026-10-10 the deploy of 0de5a99 built its bundle beside a merge round's
+`npm ci` and suite on an 8 GB machine: the bundle took 26 minutes instead of
+under one, the round's prepare 332 s instead of 30–60, and the machine
+swapped until the deploy was stopped.
+
+> "Ja, låt deploy vänta på rätt tillfälle, den kilar in sig efter pågående
+> merge-process, kör själv, därefter fortsätter merge-kön." (Martin,
+> 2026-10-10)
+
+So: the deployer waits for the gate round in flight (`waitForGate`,
+memoro-cli `src/mc/commands/deploy.js`), and the merger starts no round while
+a deploy's row says `running` (`landJob`, `src/mc/merger.js`). This amends
+ruling 30 in that one point; a second deploy is still refused, and there is
+still no deploy queue.
+
+And: a session calls `mc merge` once and does not poll it
+(`canon/roles/_session-work.md`) — a session started before ruling 30 called
+it every 60 s until the pull request merged.

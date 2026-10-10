@@ -57,6 +57,7 @@ function machine(reports, over = {}) {
       now: () => new Date(clock),
       mergeRound: async (options) => { rounds.push(options); return queueOf.shift(); },
       readRunningRound: () => null,
+      readRunningDeploy: () => null,
       readLeaseFn: () => ({ held: false }),
       recordStart: () => {}, record: () => {},
       gh: () => ({ stdout: JSON.stringify({ body: '## What\n\nit' }) }),
@@ -116,6 +117,16 @@ describe('landJob — one job, landed or answered', () => {
     await landJob(JOB, m.deps);
     assert.equal(m.rounds.length, 1, 'no round while the lock is held');
     assert.equal(m.said.filter((line) => /waiting behind another gate round/u.test(line)).length, 1);
+    assert.equal(stepNow().status, 'done');
+  });
+
+  it('waits while a deploy runs, and lands after it', async () => {
+    register();
+    let polls = 0;
+    const m = machine([green], { readRunningDeploy: () => (polls++ < 2 ? { pid: 7, sha: 'c6b53f26a6f7' } : null) });
+    await landJob(JOB, m.deps);
+    assert.equal(m.rounds.length, 1, 'no round while the deploy runs');
+    assert.equal(m.said.filter((line) => /waiting behind the deploy of c6b53f2 \(pid 7\)/u.test(line)).length, 1);
     assert.equal(stepNow().status, 'done');
   });
 
