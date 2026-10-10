@@ -26,10 +26,10 @@
  * cost a human action, visible as one — a verb that offered the override would
  * make it look like part of the routine.
  */
-import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { runTool } from './child-async.js';
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { freshenBranchForLanding } from './repo-freshen.js';
 import { currentHolder } from './work-identity.js';
@@ -108,9 +108,9 @@ export async function runMergeRound({
   // Bound to this round's `env`, not the process's — see the same note in
   // repo-gate.js. Taking an environment and resolving binaries against another
   // one is how a stub on the PATH still reached the real `gh`.
-  const run = (tool) => (args, options = {}) => spawnSync(tool, args, {
-    cwd: options.cwd, env, encoding: 'utf8',
-  });
+  // Without holding the event loop (child-async.js): the merger's other lane
+  // lands while this round fetches, freshens and merges.
+  const run = (tool) => (args, options = {}) => runTool(tool, args, { cwd: options.cwd, env });
   const askGit = git || run('git');
   const askGh = gh || run('gh');
 
@@ -220,9 +220,9 @@ export async function runMergeRound({
     // it. A passing verdict is a statement about the tree it measured, so if the
     // base has moved since, the verdict is about a tree that no longer exists.
     const base = `origin/${verdict.pr.base}`;
-    const fetched = askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+    const fetched = await askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
     if (fetched.status !== 0) return finish('drift', 'could not re-check the base before merging');
-    const nowAt = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
+    const nowAt = trim((await askGit(['rev-parse', base], { cwd: repoPath })).stdout);
     if (!nowAt) return finish('drift', `could not read ${base} before merging`);
     let groundNote = `${base} unmoved`;
     if (nowAt !== verdict.base?.commit) {
@@ -231,9 +231,9 @@ export async function runMergeRound({
         base,
         from,
         to: nowAt,
-        fastForward: askGit(['merge-base', '--is-ancestor', from, nowAt], { cwd: repoPath }).status === 0,
-        movedFiles: pathList(askGit(['diff', '--name-only', `${from}..${nowAt}`], { cwd: repoPath })),
-        candidateFiles: candidateFilesOf(verdict, { from, repoPath, git: askGit }),
+        fastForward: (await askGit(['merge-base', '--is-ancestor', from, nowAt], { cwd: repoPath })).status === 0,
+        movedFiles: pathList(await askGit(['diff', '--name-only', `${from}..${nowAt}`], { cwd: repoPath })),
+        candidateFiles: await candidateFilesOf(verdict, { from, repoPath, git: askGit }),
       });
       if (!held.ok) return finish('drift', held.reason);
       groundNote = held.note;
@@ -261,8 +261,8 @@ export async function runMergeRound({
     let expected = nowAt;
     for (const [index, number] of numbers.entries()) {
       if (index > 0) {
-        askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
-        const at = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
+        await askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+        const at = trim((await askGit(['rev-parse', base], { cwd: repoPath })).stdout);
         if (at !== expected) {
           return finish('drift', `${base} moved to ${short(at)} between merges, and not by this round — #${number}${index + 1 < numbers.length ? ` and ${numbers.length - index - 1} more` : ''} not merged; ${index} of ${numbers.length} landed, and ${base} now stands at a state the batch never measured by itself`);
         }
@@ -290,14 +290,14 @@ export async function runMergeRound({
           }
         }
       }
-      const merged = askGh(['pr', 'merge', String(number), '--squash'], { cwd: repoPath });
+      const merged = await askGh(['pr', 'merge', String(number), '--squash'], { cwd: repoPath });
       if (merged.status !== 0) {
         // A failed call is not a failed merge. On #10844 GitHub took the call,
         // performed it, and timed out on the reply; the round said "nothing was
         // merged" and the change was on main. So the forge is asked what it
         // did before anything is claimed: merged → carry on as merged; open →
         // the merge failed; cannot ask → say exactly that, and nothing more.
-        const actual = mergeState({ gh: askGh, repoPath, pr: number });
+        const actual = await mergeState({ gh: askGh, repoPath, pr: number });
         const error = trim(merged.stderr) || `gh could not merge #${number}`;
         if (actual.state === 'merged') {
           report.merge_error = error;
@@ -316,9 +316,9 @@ export async function runMergeRound({
       // two must agree before the next merge, or somebody else landed
       // between them and the rest of the batch is measured against a tree
       // that has changed. With a forge that will not say, the base is taken.
-      askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
-      const at = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout) || null;
-      const made = mergeCommitOf({ gh: askGh, repoPath, pr: number });
+      await askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+      const at = trim((await askGit(['rev-parse', base], { cwd: repoPath })).stdout) || null;
+      const made = await mergeCommitOf({ gh: askGh, repoPath, pr: number });
       const landed = made || at;
       expected = landed;
       if (batch) {
@@ -338,7 +338,7 @@ export async function runMergeRound({
       // in rounds of its own, and nothing is carried forward.
       const expectTree = batch ? (verdict.candidate_trees || [])[index] || null : verdict.candidate.tree || null;
       if (expectTree) {
-        const landedTree = trim(askGit(['rev-parse', `${base}^{tree}`], { cwd: repoPath }).stdout) || null;
+        const landedTree = trim((await askGit(['rev-parse', `${base}^{tree}`], { cwd: repoPath })).stdout) || null;
         if (landedTree === expectTree) {
           if (report.tree_identical !== false) report.tree_identical = true;
           say(batch
@@ -379,14 +379,14 @@ export async function runMergeRound({
     // the remote points HEAD at, the line says so in its own words rather
     // than leaving a true sentence to be read as a different true sentence.
     report.merged_into = verdict.pr.base;
-    report.default_branch = defaultBranch(askGit, repoPath);
+    report.default_branch = await defaultBranch(askGit, repoPath);
     report.off_default = Boolean(report.default_branch) && report.merged_into !== report.default_branch;
     if (!batch) say(`merged #${verdict.pr.number} into ${report.merged_into} as ${short(report.merge_commit)}`);
     if (report.off_default) {
       say(`WARNING: ${report.merged_into} is not the default branch (${report.default_branch}) — this landed on a branch, not on ${report.default_branch}`);
     }
 
-    report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
+    report.deploy = await deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
     report.log_path = written.path;
     report.log_line = written.line;
@@ -423,19 +423,20 @@ const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'extra-gate', 
  * change has landed, and what is left is a machine one commit behind, which the
  * report says plainly so somebody can pull it by hand.
  */
-function deployPull({ git, repoPath, env, say, installs }) {
+async function deployPull({ git, repoPath, env, say, installs }) {
   const install = installs(env).find((item) => item.root === repoPath);
   if (!install) return { attempted: false, ok: null, reason: 'nothing on this machine runs from this checkout' };
 
-  const pulled = git(['pull', '--ff-only'], { cwd: install.root });
+  const pulled = await git(['pull', '--ff-only'], { cwd: install.root });
   const ok = pulled.status === 0;
+  const at = ok ? trim((await git(['rev-parse', 'HEAD'], { cwd: install.root })).stdout) : null;
   say(ok ? `pulled ${install.command} at ${install.root}` : `could not pull ${install.root}`);
   return {
     attempted: true,
     ok,
     root: install.root,
     command: install.command,
-    at: ok ? trim(git(['rev-parse', 'HEAD'], { cwd: install.root }).stdout) : null,
+    at,
     reason: ok ? null : trim(pulled.stderr) || 'git pull failed',
   };
 }
@@ -500,8 +501,8 @@ function writeMergeLine({ report, verdict, path, clock }) {
  * cannot say. Null is "unknown", never "main": a guess would turn the warning
  * into the very assumption it exists to catch.
  */
-function defaultBranch(git, repoPath) {
-  const head = git(['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
+async function defaultBranch(git, repoPath) {
+  const head = await git(['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
   const name = head?.status === 0 ? trim(head.stdout).replace(/^origin\//u, '') : '';
   return name || null;
 }
@@ -513,14 +514,14 @@ function defaultBranch(git, repoPath) {
  * would be a guess.
  */
 /** The squash commit a merged pull request became, or null if the forge will not say. */
-function mergeCommitOf({ gh, repoPath, pr }) {
-  const asked = gh(['pr', 'view', String(pr), '--json', 'mergeCommit'], { cwd: repoPath });
+async function mergeCommitOf({ gh, repoPath, pr }) {
+  const asked = await gh(['pr', 'view', String(pr), '--json', 'mergeCommit'], { cwd: repoPath });
   if (asked?.status !== 0) return null;
   try { return JSON.parse(asked.stdout)?.mergeCommit?.oid || null; } catch { return null; }
 }
 
-function mergeState({ gh, repoPath, pr }) {
-  const asked = gh(['pr', 'view', String(pr), '--json', 'state,mergedAt'], { cwd: repoPath });
+async function mergeState({ gh, repoPath, pr }) {
+  const asked = await gh(['pr', 'view', String(pr), '--json', 'state,mergedAt'], { cwd: repoPath });
   if (asked?.status !== 0) return { state: 'unknown', reason: trim(asked?.stderr) || 'gh could not read the pull request' };
   let raw = null;
   try { raw = JSON.parse(asked.stdout); } catch { return { state: 'unknown', reason: 'the pull request came back as something other than JSON' }; }
@@ -612,13 +613,13 @@ function pathList(result) {
  * An unreadable head contributes nothing, and `groundStillHolds` treats an
  * empty list as "not compared" rather than "no overlap".
  */
-function candidateFilesOf(verdict, { from, repoPath, git }) {
+async function candidateFilesOf(verdict, { from, repoPath, git }) {
   const heads = (verdict.prs?.length ? verdict.prs : [verdict.pr])
     .map((item) => item?.head_sha)
     .filter(Boolean);
   const files = new Set();
   for (const head of heads) {
-    for (const path of pathList(git(['diff', '--name-only', `${from}...${head}`], { cwd: repoPath }))) files.add(path);
+    for (const path of pathList(await git(['diff', '--name-only', `${from}...${head}`], { cwd: repoPath }))) files.add(path);
   }
   return [...files];
 }

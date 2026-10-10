@@ -33,13 +33,13 @@
  * on after it.
  */
 import { spawn as realSpawn } from 'node:child_process';
-import { spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import { runTool } from './child-async.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { GATE_LANES, runningRound } from './gate-lock.js';
@@ -234,8 +234,10 @@ export function stepsBeforeDone(root, { read = realRead } = {}) {
   return stepsDone((project) => readEntry(root, project, { read })?.steps ?? null);
 }
 
-const realGit = (cwd, args) => {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20 });
+// Without holding the event loop: a restack of a memoro branch took 29 s on
+// 2026-10-10, and the other lane stood still for all of it.
+const realGit = async (cwd, args) => {
+  const r = await runTool('git', args, { cwd });
   return { ok: r.status === 0, stdout: String(r.stdout || '').trim(), stderr: String(r.stderr || '').trim() };
 };
 
@@ -248,35 +250,35 @@ const realGit = (cwd, args) => {
  * A branch that no longer carries that sha was moved already. Returns
  * `{ ok, moved, reason }`.
  */
-export function restack(job, { git = realGit, say = () => {} } = {}) {
+export async function restack(job, { git = realGit, say = () => {} } = {}) {
   const repoPath = job.repo_path;
   const branch = job.branch;
   if (!branch || !job.parent?.sha) return { ok: true, moved: false };
-  if (!git(repoPath, ['fetch', '-q', 'origin']).ok) return { ok: false, reason: 'git fetch failed before moving the branch onto main' };
-  const tip = git(repoPath, ['rev-parse', `origin/${branch}`]);
+  if (!(await git(repoPath, ['fetch', '-q', 'origin'])).ok) return { ok: false, reason: 'git fetch failed before moving the branch onto main' };
+  const tip = await git(repoPath, ['rev-parse', `origin/${branch}`]);
   if (!tip.ok) return { ok: false, reason: `origin/${branch} is not there to move onto main` };
-  if (!git(repoPath, ['merge-base', '--is-ancestor', job.parent.sha, tip.stdout]).ok) return { ok: true, moved: false };
+  if (!(await git(repoPath, ['merge-base', '--is-ancestor', job.parent.sha, tip.stdout])).ok) return { ok: true, moved: false };
   const dir = mkdtempSync(join(tmpdir(), 'mc-restack-'));
   try {
-    if (!git(repoPath, ['worktree', 'add', '-q', '--detach', dir, tip.stdout]).ok) return { ok: false, reason: 'git worktree add failed for the move onto main' };
-    const rebased = git(dir, ['rebase', '-q', '--onto', 'origin/main', job.parent.sha]);
+    if (!(await git(repoPath, ['worktree', 'add', '-q', '--detach', dir, tip.stdout])).ok) return { ok: false, reason: 'git worktree add failed for the move onto main' };
+    const rebased = await git(dir, ['rebase', '-q', '--onto', 'origin/main', job.parent.sha]);
     if (!rebased.ok) {
-      const conflicted = git(dir, ['diff', '--name-only', '--diff-filter=U']).stdout.split('\n').filter(Boolean);
-      git(dir, ['rebase', '--abort']);
+      const conflicted = (await git(dir, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').filter(Boolean);
+      await git(dir, ['rebase', '--abort']);
       return { ok: false, reason: `moving #${job.pr} onto main after #${job.parent.pr} landed conflicts${conflicted.length ? ` in ${conflicted.join(' ')}` : ''} — merge origin/main into ${branch} and keep both intents` };
     }
-    const pushed = git(dir, ['push', '-q', `--force-with-lease=${branch}:${tip.stdout}`, 'origin', `HEAD:${branch}`]);
+    const pushed = await git(dir, ['push', '-q', `--force-with-lease=${branch}:${tip.stdout}`, 'origin', `HEAD:${branch}`]);
     if (!pushed.ok) return { ok: false, reason: `the moved ${branch} could not be pushed (${pushed.stderr.split('\n').at(-1) || 'push refused'})` };
     say(`${job.repo} #${job.pr}: moved onto main past #${job.parent.pr}`);
     return { ok: true, moved: true };
   } finally {
-    git(repoPath, ['worktree', 'remove', '--force', dir]);
+    await git(repoPath, ['worktree', 'remove', '--force', dir]);
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
 // The call merger-run.js makes, for a caller that hands no `gh`.
-const realGh = (args, options = {}) => spawnSync('gh', args, { cwd: options.cwd, encoding: 'utf8' });
+const realGh = (args, options = {}) => runTool('gh', args, { cwd: options.cwd });
 
 /**
  * What GitHub says of a job's pull request: `{ state, sha, base }` for
@@ -333,7 +335,7 @@ export async function sweepMergedReds({
   });
   for (const { entry, facts } of dropped) {
     if (facts.state === 'MERGED') {
-      tell(entry, true, alreadyMerged(facts), {
+      await tell(entry, true, alreadyMerged(facts), {
         root, say, gh, now, read, write, lock, appendRun: null, dropFromPage: dropPr, seconds: 0,
       });
     } else {
@@ -394,9 +396,9 @@ export async function landJob(batch, {
 } = {}) {
   const t0 = now().getTime();
   const answers = [];
-  const answer = (job, landed, report) => {
+  const answer = async (job, landed, report) => {
     answers.push({ job, landed, report });
-    tell(job, landed, report, {
+    await tell(job, landed, report, {
       root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000),
     });
   };
@@ -406,8 +408,8 @@ export async function landJob(batch, {
     // measures the one below a second time and the squash conflicts with it.
     // One that cannot be moved is answered now and leaves the batch.
     if (job.parent) {
-      const moved = moveOntoMain(job, { say });
-      if (!moved.ok) { answer(job, false, { ok: false, merged: false, stopped_at: 'restack', reason: moved.reason }); continue; }
+      const moved = await moveOntoMain(job, { say });
+      if (!moved.ok) { await answer(job, false, { ok: false, merged: false, stopped_at: 'restack', reason: moved.reason }); continue; }
     }
     jobs.push(job);
   }
@@ -417,8 +419,8 @@ export async function landJob(batch, {
   const ask = gh || realGh;
   for (const one of [...jobs]) {
     const facts = await prStateOf(one, ask);
-    if (facts?.state === 'MERGED') answer(one, true, alreadyMerged(facts));
-    else if (facts?.state === 'CLOSED') answer(one, false, closedOnGitHub(one));
+    if (facts?.state === 'MERGED') await answer(one, true, alreadyMerged(facts));
+    else if (facts?.state === 'CLOSED') await answer(one, false, closedOnGitHub(one));
     else continue;
     jobs.splice(jobs.indexOf(one), 1);
   }
@@ -450,8 +452,11 @@ export async function landJob(batch, {
     }
     recordStart({ repo: job.repo_path, mode: 'merge', holder: job.holder?.name || null, prs: numbers });
     // The first job's holder holds the round, the rule the gate's lease has.
+    // `signals: false`: the gate installs no SIGTERM handler of its own in
+    // the merger. Its exit cut the round short (2026-10-10 17:47); the
+    // merger's own handler lets the round finish and leaves between jobs.
     report = await mergeRound({
-      repoPath: job.repo_path, pr: job.pr, ...(jobs.length > 1 ? { prs: numbers } : {}), mode: 'merge',
+      repoPath: job.repo_path, pr: job.pr, ...(jobs.length > 1 ? { prs: numbers } : {}), mode: 'merge', signals: false,
       ...(job.holder ? { holder: job.holder } : {}),
       onProgress: (message) => say(`${label}: ${message}`),
     });
@@ -462,12 +467,22 @@ export async function landJob(batch, {
     await sleep(MERGER_POLL_MS);
   }
 
-  for (const one of answersFor(jobs, report)) answer(one.job, one.landed, one.report);
+  for (const one of answersFor(jobs, report)) await answer(one.job, one.landed, one.report);
   return answers;
 }
 
+/**
+ * The `land` merger-run.js hands `serve`: `landJob` with these deps and the
+ * lane `serve` names, so a job's wait reads the round in its own lane. Until
+ * merger-hardening step 5 the lane was dropped there, and a light job waited
+ * on the heavy lane's round.
+ */
+export function landerFor(deps) {
+  return (batch, lane) => landJob(batch, { ...deps, lane });
+}
+
 /** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
-function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds }) {
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds }) {
   const label = `${job.repo} #${job.pr}`;
   say(landed && report?.already_merged
     ? `${label}: already merged on GitHub as ${String(report.merge_commit || '').slice(0, 7)} — answered landed`
@@ -489,7 +504,7 @@ function tell(job, landed, report, { root, say, gh, now, read, write, lock, appe
       } else if (landed) {
         let body = null;
         if (gh) {
-          const seen = gh(['pr', 'view', String(job.pr), '--json', 'body'], { cwd: job.repo_path });
+          const seen = await gh(['pr', 'view', String(job.pr), '--json', 'body'], { cwd: job.repo_path });
           try { body = JSON.parse(seen?.stdout || '{}')?.body || null; } catch { body = null; }
         }
         updateStep({ root, project: job.step.project, index: job.step.index, patch: landedPatch({ pr: job.pr, report, now: stamp, body }), now: stamp, ...io });
@@ -572,6 +587,9 @@ export async function serve({
   // leaving, and a wake-up for a loop waiting on the other.
   const idle = new Set();
   let leaving = false;
+  // Jobs in a round now, across the lanes, and whether the stop was said.
+  let inFlight = 0;
+  let toldStop = false;
   let wake = () => {};
   let woken = new Promise((resolve) => { wake = resolve; });
   const changed = () => {
@@ -584,7 +602,9 @@ export async function serve({
     for (;;) {
       if (leaving) return;
       if (stopping()) {
-        say(lanes.length > 1 ? `asked to stop — the ${lane} lane leaves between jobs` : 'asked to stop — leaving between jobs');
+        // Seen by a lane between its jobs; a lane with a round in flight
+        // finishes it and leaves at the top of its loop.
+        if (!toldStop) { toldStop = true; say(`asked to stop — waiting for ${inFlight} job(s) in flight`); }
         leaving = true; changed(); return;
       }
       const batch = lock(root, () => {
@@ -635,12 +655,15 @@ export async function serve({
         ? `${job.repo} #${job.pr}: landing${job.step ? ` (${job.step.project} step ${job.step.index + 1})` : ''}`
         : `${job.repo}: landing a batch of ${batch.length} — ${batch.map((item) => `#${item.pr}`).join(' ')}`);
       let answers = null;
+      inFlight += batch.length;
       try {
         const result = await land(batch, lane);
         answers = Array.isArray(result) ? result : answersFor(batch, result);
       } catch (error) {
         say(`${job.repo} ${batch.map((item) => `#${item.pr}`).join(' ')}: the round threw — ${error?.stack || error}`);
         answers = answersFor(batch, { ok: false, merged: false, stopped_at: 'threw', reason: `the round threw (${error?.message || error})` });
+      } finally {
+        inFlight -= batch.length;
       }
       // Landed, the job is gone; red, it stays as a red row on the page until
       // `mc merge` puts it back in line or the pull request is closed. Each
@@ -664,6 +687,7 @@ export async function serve({
     return 0;
   } finally {
     release();
+    if (toldStop) say('left');
   }
 }
 

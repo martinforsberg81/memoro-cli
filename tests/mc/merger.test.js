@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { MAX_MERGE_ATTEMPTS } from '../../src/mc/merge-step.js';
 import {
-  landJob, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, sweepMergedReds, takeMerger,
+  landerFor, landJob, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, sweepMergedReds, takeMerger,
 } from '../../src/mc/merger.js';
 import { registerPath } from '../../src/mc/register.js';
 
@@ -773,7 +773,7 @@ describe('stacked jobs (ruling 30, A)', () => {
     assert.equal(queue().length, 1, 'it keeps its place for when #9 is queued again');
   });
 
-  it('restack: a real squash below, and only the stacked step\'s own commit is replayed onto main', () => {
+  it('restack: a real squash below, and only the stacked step\'s own commit is replayed onto main', async () => {
     const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
     const sh = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
     try {
@@ -796,7 +796,7 @@ describe('stacked jobs (ruling 30, A)', () => {
       sh(work, 'merge', '-q', '--squash', 'mq'); sh(work, 'commit', '-qm', 'step 1 (#9)');
       sh(work, 'push', '-q', 'origin', 'main');
       const said = [];
-      const result = restack({ repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } }, { say: (l) => said.push(l) });
+      const result = await restack({ repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } }, { say: (l) => said.push(l) });
       assert.deepEqual(result, { ok: true, moved: true });
       sh(work, 'fetch', '-q', 'origin');
       assert.equal(sh(work, 'rev-list', '--count', 'origin/main..origin/mq-2'), '1', 'one commit: step 2\'s own');
@@ -804,9 +804,106 @@ describe('stacked jobs (ruling 30, A)', () => {
       assert.equal(sh(work, 'merge-base', 'origin/main', 'origin/mq-2'), sh(work, 'rev-parse', 'origin/main'));
       assert.match(said[0], /moved onto main past #9/u);
       // Asked again — a merger that died after the push — it is already moved.
-      assert.deepEqual(restack({ repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } }), { ok: true, moved: false });
+      assert.deepEqual(await restack({ repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } }), { ok: true, moved: false });
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe('no round holds the other lane, and a SIGTERM finishes what is in flight (merger-hardening step 5)', () => {
+  const take = () => true;
+  const release = () => {};
+  const MEMORO = { ...JOB, repo: 'memoro', repo_path: '/repos/memoro', step: null };
+  const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+  it('a light job queued while the heavy round is pending for 300 ms starts and is answered inside that time', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...MEMORO, pr: 1, since: 'a' }]));
+    const events = [];
+    const lanesAsked = [];
+    const signals = [];
+    let lightGoneAtHeavyEnd = null;
+    const started = Date.now();
+    let lightAnswered = null;
+    const m = machine([], {
+      readRunningRound: ({ lane }) => { lanesAsked.push(lane); return null; },
+      mergeRound: async (options) => {
+        signals.push(options.signals);
+        if (options.repoPath === '/repos/memoro') {
+          events.push('heavy start');
+          queueMerge({ root, repo: 'memoro-cli', repoPath: '/repos/memoro-cli', pr: 2, lock, start: () => ({ pid: process.pid, started: false }) });
+          await pause(300);
+          lightGoneAtHeavyEnd = !queue().some((e) => e.pr === 2);
+          events.push('heavy end');
+        } else {
+          events.push('light');
+        }
+        return green;
+      },
+    });
+    const say = (line) => {
+      m.said.push(line);
+      if (/^memoro-cli #2: merged/u.test(line)) lightAnswered = Date.now() - started;
+    };
+    const code = await serve({
+      root, lock, take, release, laneOf: LANE_OF, say, now: m.deps.now,
+      sleep: () => pause(5),
+      land: landerFor({ ...m.deps, say }),
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(events, ['heavy start', 'light', 'heavy end']);
+    assert.equal(lightGoneAtHeavyEnd, true, 'the light job was answered and dequeued before the heavy round resolved');
+    assert.ok(lightAnswered !== null && lightAnswered < 300, `answered at ${lightAnswered} ms`);
+    assert.deepEqual(lanesAsked, ['heavy', 'light'], 'each job reads the round in its own lane');
+    assert.deepEqual(signals, [false, false], 'the gate installs no signal handler in the merger');
+    assert.deepEqual(queue(), []);
+  });
+
+  it('stopping() turned true mid-round: the round is answered as usual, no killed, and serve returns 0 within a second', async () => {
+    register();
+    // Another repository in the same lane, so not in the first job's batch.
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: 'a' }, { ...JOB, repo: 'other', pr: 672, since: 'b', step: null }]));
+    let stop = false;
+    let answeredAt = null;
+    const m = machine([], {
+      mergeRound: async () => { stop = true; await pause(50); return green; },
+    });
+    const say = (line) => {
+      m.said.push(line);
+      if (/^memoro-cli #671: merged/u.test(line)) answeredAt = Date.now();
+    };
+    const code = await serve({
+      root, lock, take, release, laneOf: (job) => (job.repo === 'memoro' ? 'heavy' : 'light'), stopping: () => stop, say, now: m.deps.now,
+      sleep: () => pause(5),
+      land: landerFor({ ...m.deps, say }),
+    });
+    const leftAt = Date.now();
+    assert.equal(code, 0);
+    assert.equal(stepNow().status, 'done', 'the round in flight was answered');
+    assert.deepEqual(queue().map((e) => [e.pr, e.state]), [[672, 'queued']], 'the next job waits for the next start');
+    assert.equal(m.said.some((line) => /killed/u.test(line)), false, m.said.join('\n'));
+    assert.equal(m.said.filter((line) => line === 'asked to stop — waiting for 1 job(s) in flight').length, 1, m.said.join('\n'));
+    assert.equal(m.said.at(-1), 'left');
+    assert.ok(answeredAt !== null && leftAt - answeredAt < 1000);
+  });
+
+  it('restack awaits an async git, and a conflict is said with its files', async () => {
+    const calls = [];
+    const gitWith = (conflict) => async (cwd, args) => {
+      calls.push(args[0]);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      if (args[0] === 'rebase' && args[1] === '-q') return { ok: !conflict, stdout: '', stderr: '' };
+      if (args[0] === 'diff') return { ok: true, stdout: 'a.js\nb.js', stderr: '' };
+      return { ok: true, stdout: args[0] === 'rev-parse' ? 'tip1234' : '', stderr: '' };
+    };
+    const job = { repo: 'r', repo_path: '/r', pr: 10, branch: 'mq-2', parent: { pr: 9, sha: 'abc' } };
+    const said = [];
+    assert.deepEqual(await restack(job, { git: gitWith(false), say: (l) => said.push(l) }), { ok: true, moved: true });
+    assert.deepEqual(calls, ['fetch', 'rev-parse', 'merge-base', 'worktree', 'rebase', 'push', 'worktree']);
+    assert.equal(said[0], 'r #10: moved onto main past #9');
+    const refused = await restack(job, { git: gitWith(true) });
+    assert.equal(refused.ok, false);
+    assert.match(refused.reason, /conflicts in a\.js b\.js/u);
   });
 });
