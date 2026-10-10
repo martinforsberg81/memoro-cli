@@ -48,7 +48,7 @@ export async function run(argv, deps = {}) {
     const entry = readEntry(root, target.project, io);
     if (!entry) { stderr.write(`mc: ${target.project} is not in the register — nothing on main has been read into it yet\n`); return 1; }
     if (flags.json) { stdout.write(`${JSON.stringify(entry, null, 2)}\n`); return 0; }
-    for (const line of entryLines(entry, target.index)) stdout.write(`${line}\n`);
+    for (const line of entryLines(entry, target.index, Date.parse(now))) stdout.write(`${line}\n`);
     return 0;
   }
 
@@ -136,7 +136,24 @@ function prState(repo, pr, env) {
 
 const MARK = { done: '✓', ready: '▸', running: '●', failed: '✗', blocked: '■' };
 
-function entryLines(entry, only = null) {
+/** How long ago an ISO time was, in the largest unit that fits: `40m ago`, `3h ago`, `2d ago`. */
+function ago(iso, nowMs) {
+  const at = Date.parse(iso || '');
+  if (!Number.isFinite(at) || !Number.isFinite(nowMs)) return '?';
+  const minutes = Math.max(0, Math.round((nowMs - at) / 60_000));
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 48 * 60) return `${Math.round(minutes / 60)}h ago`;
+  return `${Math.round(minutes / 1440)}d ago`;
+}
+
+/** A `ready` step's interrupted record, as one line (ruling 33). */
+function interruptedLine(record, nowMs) {
+  const id = record.session_id ? String(record.session_id).slice(0, 8) : '?';
+  const tokens = record.context_tokens == null ? '?' : String(record.context_tokens);
+  return `interrupted ${record.at || '?'} · ${record.tool || '?'} session ${id} · last activity ${ago(record.last_activity, nowMs)} · ${tokens} tokens`;
+}
+
+function entryLines(entry, only = null, nowMs = Date.now()) {
   const lines = [`${entry.project} — ${[entry.repo, entry.programme].filter(Boolean).join(' · ')}${entry.plan ? ` · ${entry.plan}` : ''}`];
   entry.steps.forEach((step, index) => {
     if (only != null && index !== only) return;
@@ -145,6 +162,7 @@ function entryLines(entry, only = null) {
     if (step.branch) bits.push(step.branch);
     if (step.status === 'blocked' && step.blocked_by) bits.push(`on ${step.blocked_by.kind} ${step.blocked_by.name}`);
     if (step.status === 'running' && step.session?.pid) bits.push(`pid ${step.session.pid} since ${step.session.started || '?'}`);
+    if (step.status === 'ready' && step.interrupted) bits.push(interruptedLine(step.interrupted, nowMs));
     if (step.attempts) bits.push(`${step.attempts} merge attempt${step.attempts === 1 ? '' : 's'}`);
     lines.push(`  ${MARK[step.status] || '·'} ${String(index + 1).padStart(2)}  ${step.status.padEnd(8)} ${bits.join(' · ')}`);
     if (step.reason) lines.push(`        ${step.reason}`);

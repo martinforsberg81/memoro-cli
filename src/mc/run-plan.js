@@ -1015,6 +1015,67 @@ export function streamSummary(stdout) {
 }
 
 /**
+ * Interruptions in a row after which a step is `failed` rather than `ready`
+ * again: three restarts on one step is a step that kills the machine, or a
+ * loop — either way a person's.
+ */
+export const INTERRUPT_LIMIT = 3;
+
+const LAST_TEXT_MAX = 3000;
+
+/**
+ * Where a session stood when its stream stopped, read from the stream alone:
+ * `{ session_id, context_tokens, last_text }`. What a session that died under
+ * its step leaves for the one that picks it up — which session to resume, how
+ * big its conversation had become, and what it said last.
+ *
+ * Claude: the id from any event carrying `session_id`; the context as the last
+ * real (`<synthetic>` is claude's own placeholder) assistant event's input,
+ * cache-read and cache-write tokens; the text blocks of the last assistant
+ * message that has any. Codex: the id from `thread_id`, the context from the
+ * last `usage.input_tokens`, the text of the last completed `agent_message`.
+ * A partial last line — the process died mid-write — is skipped; a field the
+ * stream does not give is null, never a guess.
+ */
+export function sessionStanding({ toolId, stdout }) {
+  const lines = String(stdout || '').split('\n');
+  lines.pop();
+  const out = { session_id: null, context_tokens: null, last_text: null };
+  let textId = null;
+  let texts = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let event = null;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (!event || typeof event !== 'object') continue;
+    if (toolId === 'codex') {
+      if (event.thread_id) out.session_id = String(event.thread_id);
+      if (event.usage?.input_tokens != null) out.context_tokens = Number(event.usage.input_tokens);
+      if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') out.last_text = event.item.text;
+      continue;
+    }
+    if (typeof event.session_id === 'string' && event.session_id) out.session_id = event.session_id;
+    if (event.type !== 'assistant' || event.message?.model === '<synthetic>') continue;
+    const usage = event.message?.usage;
+    if (usage) {
+      out.context_tokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
+    }
+    // claude prints one event per content block, all of one message under
+    // the same id: the text is that message's blocks joined.
+    const said = (Array.isArray(event.message?.content) ? event.message.content : [])
+      .filter((block) => block?.type === 'text' && typeof block.text === 'string' && block.text)
+      .map((block) => block.text);
+    if (!said.length) continue;
+    const id = event.message?.id ?? null;
+    if (id == null || id !== textId) { textId = id; texts = []; }
+    texts.push(...said);
+    out.last_text = texts.join('\n');
+  }
+  if (out.last_text && out.last_text.length > LAST_TEXT_MAX) out.last_text = out.last_text.slice(-LAST_TEXT_MAX);
+  return out;
+}
+
+/**
  * The session's result, read from what claude printed: the last `result`
  * line of a stream-json run, with the amounts of every result line added up.
  *

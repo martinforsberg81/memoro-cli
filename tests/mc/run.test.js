@@ -3962,17 +3962,117 @@ test('register: a session that ends with no pull request is failed with its exit
   assert.equal(registerOf(q, 'alpha').steps[0].status, 'ready', 'no session ran, so nothing failed');
 });
 
-test('register: a running step whose session is gone is failed on the next reading of the world', async () => {
+/** A claude stream cut off mid-line, as a session killed with the machine leaves it. */
+const CLAUDE_LOG = [
+  { type: 'system', subtype: 'init', session_id: 'c1a2b3c4-dead-4bee-8000-000000000001', model: 'claude-opus-5-5' },
+  { type: 'assistant', session_id: 'c1a2b3c4-dead-4bee-8000-000000000001', message: { id: 'm1', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Reading the code.' }], usage: { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 5 } } },
+  { type: 'assistant', session_id: 'c1a2b3c4-dead-4bee-8000-000000000001', message: { id: 'm2', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Now the tests.' }], usage: { input_tokens: 20, cache_read_input_tokens: 5000, cache_creation_input_tokens: 300, output_tokens: 7 } } },
+].map((e) => JSON.stringify(e)).join('\n') + '\n{"type":"assistant","message":{"id":"m3","content":[{"type":"te';
+
+/** A codex stream cut off mid-line. */
+const CODEX_LOG = [
+  { type: 'thread.started', thread_id: '019a0c0d-0000-7000-8000-00000000c0de' },
+  { type: 'item.completed', item: { id: 'i0', type: 'agent_message', text: 'Planning.' } },
+  { type: 'turn.completed', usage: { input_tokens: 4000, cached_input_tokens: 3000, output_tokens: 100 } },
+].map((e) => JSON.stringify(e)).join('\n') + '\n{"type":"turn.completed","usage":{"input_tok';
+
+/** A register whose one step is `running` under a pid that is gone, with its stream log on disk. */
+function deadSession({ tool = 'claude', log = CLAUDE_LOG, interrupted = null } = {}) {
   const f = fixture({ plans: { memoro: { alpha: ready } }, livePids: [] });
   f.files['/w/runner/projects/alpha.json'] = JSON.stringify({
     project: 'alpha', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/alpha/PLAN.json',
-    steps: [{ status: 'running', session: { pid: 99999, started: '2026-08-29T09:00:00Z' } }],
+    steps: [{ status: 'running', branch: 'alpha', interrupted, session: { pid: 99999, started: '2026-08-29T09:00:00Z', tool, model: 'm-1', log: '/w/runner/log/alpha-20260829T090000Z' } }],
   });
+  if (log != null) f.files['/w/runner/log/alpha-20260829T090000Z.jsonl'] = log;
+  f.deps.mtime = (path) => (path in f.files ? '2026-08-29T09:55:00Z' : null);
+  return f;
+}
+
+test('register: a running step whose claude session is gone is ready again with an interrupted record read off its stream log', async () => {
+  const f = deadSession();
   const runner = createRunner({ deps: f.deps });
   const world = runner.queue();
+  assert.equal(world.plans[0].status, 'ready');
+  const step = registerOf(f, 'alpha').steps[0];
+  assert.equal(step.status, 'ready');
+  assert.equal(step.session, null);
+  assert.equal(step.reason, null);
+  assert.deepEqual(step.interrupted, {
+    at: '2026-08-29T10:00:00Z', session_id: 'c1a2b3c4-dead-4bee-8000-000000000001', tool: 'claude', model: 'm-1',
+    log: '/w/runner/log/alpha-20260829T090000Z', last_activity: '2026-08-29T09:55:00Z', context_tokens: 5320, branch: 'alpha', count: 1,
+  });
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: step 1 was running under pid 99999, which is gone — interrupted/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /step 1 interrupted — claude session c1a2b3c4-dead-4bee-8000-000000000001 died under it/u);
+});
+
+test('register: a gone codex session is read from its thread id and last usage', async () => {
+  const f = deadSession({ tool: 'codex', log: CODEX_LOG });
+  createRunner({ deps: f.deps }).queue();
+  const step = registerOf(f, 'alpha').steps[0];
+  assert.equal(step.status, 'ready');
+  assert.equal(step.interrupted.session_id, '019a0c0d-0000-7000-8000-00000000c0de');
+  assert.equal(step.interrupted.context_tokens, 4000);
+  assert.equal(step.interrupted.tool, 'codex');
+  assert.equal(step.interrupted.count, 1);
+});
+
+test('register: a gone session with no log on disk is interrupted with what is not known left null', async () => {
+  const f = deadSession({ log: null });
+  createRunner({ deps: f.deps }).queue();
+  const { interrupted } = registerOf(f, 'alpha').steps[0];
+  assert.equal(interrupted.session_id, null);
+  assert.equal(interrupted.last_activity, null);
+  assert.equal(interrupted.context_tokens, null);
+  assert.equal(interrupted.count, 1);
+});
+
+test('register: the second interruption in a row counts two, the third is failed and says so', async () => {
+  const second = deadSession({ interrupted: { count: 1, session_id: 'older' } });
+  createRunner({ deps: second.deps }).queue();
+  assert.equal(registerOf(second, 'alpha').steps[0].status, 'ready');
+  assert.equal(registerOf(second, 'alpha').steps[0].interrupted.count, 2);
+
+  const third = deadSession({ interrupted: { count: 2, session_id: 'older' } });
+  const world = createRunner({ deps: third.deps }).queue();
+  const step = registerOf(third, 'alpha').steps[0];
   assert.equal(world.plans[0].status, 'failed');
-  assert.match(registerOf(f, 'alpha').steps[0].reason, /pid 99999\) is gone/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /alpha: step 1 was running under pid 99999, which is gone — failed/u);
+  assert.equal(step.status, 'failed');
+  assert.equal(step.reason, 'interrupted 3 times in a row — last session c1a2b3c4-dead-4bee-8000-000000000001');
+  assert.equal(step.interrupted, null, 'a failed step carries no record');
+});
+
+test('register: a session killed by a signal the runner did not send is interrupted, its stream on disk as it came', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } } });
+  f.deps.mtime = (path) => (path in f.files ? '2026-08-29T10:00:00Z' : null);
+  let during = null;
+  f.deps.session = (call) => {
+    f.calls.sessions.push(call);
+    call.onSpawn(31337);
+    during = registerOf(f, 'alpha').steps[0];
+    // What `streamSession` did with `logPath` while the session streamed.
+    f.files[call.logPath] = CLAUDE_LOG;
+    return { status: 1, stdout: CLAUDE_LOG, stderr: '', timedOut: false, stalled: false, lingered: false, signal: 'SIGKILL' };
+  };
+  await createRunner({ deps: f.deps }).pass();
+  const stem = '/w/runner/log/alpha-20260829T100000Z';
+  assert.equal(f.calls.sessions[0].logPath, `${stem}.jsonl`);
+  assert.equal(during.session.log, stem, 'the register names the log while the session runs');
+  const step = registerOf(f, 'alpha').steps[0];
+  assert.equal(step.status, 'ready');
+  assert.equal(step.interrupted.session_id, 'c1a2b3c4-dead-4bee-8000-000000000001');
+  assert.equal(step.interrupted.log, stem);
+  assert.equal(step.interrupted.tool, 'claude');
+  assert.equal(step.interrupted.count, 1);
+  assert.equal(f.files[`${stem}.jsonl`], CLAUDE_LOG, 'the streamed log is left as it is');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\talpha\tstep\t.*\tinterrupted\t/u);
+});
+
+test('register: a session the stall guard killed is still failed, not interrupted', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true, stalled: true, lingered: false, signal: 'SIGTERM' }) });
+  await createRunner({ deps: f.deps }).pass();
+  const step = registerOf(f, 'alpha').steps[0];
+  assert.equal(step.status, 'failed');
+  assert.equal(step.interrupted, null);
 });
 
 /**
