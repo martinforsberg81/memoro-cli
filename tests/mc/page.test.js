@@ -702,11 +702,37 @@ describe('MERGES', () => {
     assert.deepEqual(merges.queued.items.map((item) => [item.repo, item.pr]), [['memoro', 11541], ['memoro-cli', 671]]);
     assert.deepEqual(merges.queued.items.map((item) => item.wait_seconds), [9000, 3600]);
     const lines = renderPageLines(pageData({ merges }), { columns: 120 });
-    assert.ok(lines.some((line) => /MERGES.*2 waiting/u.test(line)), lines.join('\n'));
-    // One line for the queue, in landing order, with the longest wait — and the
-    // repository on each number because the queue spans two.
-    assert.ok(lines.some((line) => /^ {2}· waiting {5}memoro#11541 memoro-cli#671 {2}\(longest 3 h\)$/u.test(line)),
+    // The queue is on the heading, in landing order — with the repository on
+    // each number because the queue spans two — and has no row of its own.
+    assert.ok(lines.some((line) => /^ {2}MERGES {2}2 waiting: memoro#11541 memoro-cli#671 +mc merge <repo> <pr>$/u.test(line)),
       lines.join('\n'));
+    assert.ok(!lines.some((line) => /· waiting/u.test(line)), lines.join('\n'));
+  });
+
+  it('a red answer is a red row of its own, with its reason, while the queue goes on', () => {
+    const merges = mergesSection({
+      queued: [
+        { repo: 'memoro', pr: 13318, branch: 'english-grammar-rows-9', since: '2026-10-10T06:54:00Z', state: 'queued' },
+        {
+          repo: 'memoro', pr: 13301, branch: 'main-chat-d1-4', step: { project: 'main-chat-d1', index: 2 }, since: '2026-10-10T06:52:00Z',
+          state: 'red', reason: 'red: 3 tests red: the call-site table', answered: '2026-10-10T06:56:50Z',
+        },
+        { repo: 'memoro', pr: 12900, branch: 'bookstores', since: '2026-10-10T06:05:00Z', state: 'red', reason: 'red: 3 tests red', answered: '2026-10-10T06:09:09Z' },
+        { repo: 'memoro', pr: 13000, branch: 'gone', since: '2026-10-10T05:00:00Z', state: 'red', reason: 'red: x', answered: '2026-10-10T05:05:00Z' },
+      ],
+      prs: [
+        { repo: 'memoro', number: 13318, title: 'English grammar' },
+        { repo: 'memoro', number: 13301, title: 'main-chat-d1 3' },
+        { repo: 'memoro', number: 12900, title: 'Remove the Adlibris and Bokus site recipes' },
+      ],
+      now: new Date('2026-10-10T07:10:00Z'),
+    });
+    assert.equal(merges.queued.count, 1, 'a red answer is not waiting');
+    assert.deepEqual(merges.red.items.map((item) => item.pr), [13301, 12900], 'newest first; a closed pull request is not drawn');
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /MERGES {2}2 red · 1 waiting: #13318 +mc merge/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}✗ memoro +#13301 {2}main-chat-d1 step 3 {2}red: 3 tests red: the call-site table {2}13 min ago$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}✗ memoro +#12900 {2}bookstores {2}red: 3 tests red {2}\d+ min ago$/u.test(line)), lines.join('\n'));
   });
 
   it('names a one-repository queue by number alone, and counts what does not fit', () => {
@@ -715,9 +741,9 @@ describe('MERGES', () => {
     }));
     const merges = mergesSection({ queued, now: new Date('2026-10-09T19:04:00Z') });
     const lines = renderPageLines(pageData({ merges }), { columns: 100 });
-    const line = lines.find((l) => /· waiting/u.test(l));
-    assert.match(line, /^ {2}· waiting {5}#13200 #13201 /u);
-    assert.match(line, / … \d+ more {2}\(longest 4 min\)$/u);
+    const line = lines.find((l) => /MERGES/u.test(l));
+    assert.match(line, /^ {2}MERGES {2}30 waiting: #13200 #13201 /u);
+    assert.match(line, / … \d+ more +mc merge <repo> <pr>$/u);
     assert.ok(line.length <= 100, line);
   });
 
@@ -773,7 +799,7 @@ describe('MERGES', () => {
     const lines = renderPageLines(pageData({ merges }), { columns: 140 });
     assert.ok(lines.some((line) => /^ {2}● memoro {6}#13265 {2}email-inbox-fixes step 2 {2}email-inbox-fixes 2: the inbox reads {2}landing · running 17 test files · 4 min$/u.test(line)),
       lines.join('\n'));
-    assert.ok(lines.some((line) => /^ {2}· waiting {5}#13255 {2}\(longest 4 min\)$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}MERGES {2}1 landing · 1 waiting: #13255 +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
     // Narrow, the title gives way and the number, the name and the phase stay.
     const narrow = renderPageLines(pageData({ merges }), { columns: 80 });
     const row = narrow.find((line) => /#13265/u.test(line));
@@ -1335,12 +1361,11 @@ describe('the page', () => {
     assert.match(text, /^ {2}3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈\$8\.\d\d list \(opus, 2026-06\)$/mu);
     assert.match(text, /NEXT {2}2 runnable\s+mc status <name>/u);
     assert.doesNotMatch(text, /NEXT[^\n]*queued/u, 'queued moved to MERGES');
-    assert.match(text, /MERGES {2}1 waiting\s+mc merge <repo> <pr>/u);
+    assert.match(text, /MERGES {2}1 waiting: #10958\s+mc merge <repo> <pr>/u);
     // One block per lane, three deep, and the row says where in its plan the
     // project is. The lanes run at the same time: both heads start now.
     assert.match(text, /^ {5}memoro-cli {2}mc-ui\s+step 1\/1\s+The page\n {5}memoro {6}docx-editor\s+step 2\/2\s+Measure paste and IME$/mu);
     assert.doesNotMatch(text, /skipped \d/u, 'NEXT is the order and nothing else');
-    assert.match(text, /· waiting {5}#10958 {2}\(longest/u);
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /^ {7}memoro {6}1 new error, 1 loud · 60 min old {3}! /mu);
     assert.match(text, /^ {7}1 proposal$/mu);
@@ -1840,8 +1865,7 @@ describe('the palette', () => {
     'red+bold grey', //                              ■ STOP requested — the runner exits after the steps it is in
     'grey grey green grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
     '',
-    'bold+cyan grey grey', //                          MERGES  1 waiting        mc merge <repo> <pr>
-    'grey green grey', //                                · waiting  #10958  (longest …)
+    'bold+cyan grey green grey', //                    MERGES  1 waiting: #10958        mc merge <repo> <pr>
     '',
     'bold+cyan grey grey', //                          DEPLOY  nothing deployed yet               mc deploy
     '',

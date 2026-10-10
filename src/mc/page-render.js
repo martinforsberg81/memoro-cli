@@ -50,7 +50,7 @@ import { drainLine } from './run-control.js';
 import { clip, pad, painter, width } from './status-render.js';
 
 /** Same glyphs as the old board, so nothing new has to be learnt. */
-const MARK = { running: '●', waiting: '◆', stopped: '■', quiet: '·' };
+const MARK = { running: '●', waiting: '◆', stopped: '■', quiet: '·', red: '✗' };
 
 /** An open pull request's number, wherever the page draws one. */
 const PR_TONE = ['cyan', 'bold'];
@@ -695,40 +695,23 @@ function nextLines(lines, c, wide, next) {
 export const QUEUED_DRAWN = 6;
 
 /**
- * The merger's queue as one line: the numbers in the order they will land, and
- * how long the one that has waited longest has waited. It was a row each,
- * indented under the landing row, with each one's branch and since-when — and
- * the row anybody reads first is the one landing; the rest are a count and an
- * order (Martin, 2026-10-09: `pr pr pr pr (longest wait)`).
- *
- * Green, because a queued pull request waits on nobody — the merger takes it
- * in turn. A number is only `#N` while the whole queue is one repository; with
- * two it carries its repository's name. Numbers that do not fit become
- * `… N more`, never a clipped half.
+ * The queue's numbers for the MERGES heading, in landing order: `#N` while
+ * the queue is one repository, `repo#N` with two, `→#M` on one built on
+ * another. Numbers that do not fit in `room` become `… N more`, never a
+ * clipped half.
  */
-function queuedLine(c, wide, queued) {
-  const items = queued.items || [];
+function waitingNumbers(items, room) {
   const repos = new Set(items.map((item) => item.repo));
   const label = (item) => `${repos.size > 1 ? `${item.repo}` : ''}#${item.pr}${item.parent ? `→#${item.parent.pr}` : ''}`;
-  const waits = items.map((item) => item.wait_seconds).filter((n) => n != null);
-  const longest = waits.length ? `  (longest ${ageWords(Math.max(...waits))})` : '';
-  const lead = `  ${MARK.quiet} ${pad('waiting', LANE_REPO)} `;
-  const room = Math.max(8, wide - lead.length - longest.length);
-  const shown = [];
+  let shown = '';
   for (const [index, item] of items.entries()) {
-    const text = `${shown.length ? ' ' : ''}${label(item)}`;
+    const text = `${shown ? ' ' : ''}${label(item)}`;
     const rest = items.length - index - 1;
     const reserve = rest ? ` … ${rest} more`.length : 0;
-    if (shown.reduce((n, s) => n + s.length, 0) + text.length + reserve > room) break;
-    shown.push(text);
+    if (shown.length + text.length + reserve > room) return `${shown}${shown ? ' ' : ''}… ${items.length - index} more`;
+    shown += text;
   }
-  const more = items.length - shown.length;
-  return paint(c, [
-    { text: lead, styles: ['grey'] },
-    { text: shown.join(''), styles: ['green'] },
-    { text: more ? ` … ${more} more` : '', styles: ['green'] },
-    { text: longest, styles: ['grey'] },
-  ]);
+  return shown;
 }
 
 /**
@@ -765,6 +748,26 @@ function landingLine(c, wide, landing) {
 }
 
 /**
+ * A pull request the merger answered red and nobody has queued again: one
+ * row each, red, under the queue (Martin, 2026-10-10: *"en misslyckad merge
+ * pr bör ligga kvar som en rad i mc (röd) medan merge-kön fortsätter med
+ * nästa"*). The number and the project (or the branch) never give way; the
+ * reason is what is read, and gives way from its end; how long ago is last.
+ */
+function redLine(c, wide, item) {
+  const where = pad(clip(item.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
+  const name = item.name ? `${clip(item.name, nameWidth(wide) - 1)}${item.step_number ? ` step ${item.step_number}` : ''}  ` : '';
+  const head = `  ${MARK.red} ${where} #${item.pr}  ${name}`;
+  const age = item.age_seconds != null ? `  ${ageWords(item.age_seconds)} ago` : '';
+  const room = Math.max(8, wide - head.length - age.length - 2);
+  return paint(c, [
+    { text: head, styles: ['red', 'bold'] },
+    { text: clip(one(item.reason || 'red'), room), styles: ['red'] },
+    { text: age, styles: ['grey'] },
+  ]).replace(/[ ]+$/u, '');
+}
+
+/**
  * MERGES — the one gate round landing now, and the waiters behind it.
  *
  * Between NEXT and RUNNER because it is the third fact about the same
@@ -774,17 +777,30 @@ function landingLine(c, wide, landing) {
  * for its turn. The held rows went with `held.json` (ruling 21, 2026-09-12).
  */
 function mergesLines(lines, c, wide, merges) {
+  // The queue is on the heading, after what is landing and what came back
+  // red (Martin, 2026-10-10: *"1 landing · 2 red · 3 waiting: pr pr pr"*):
+  // the rows below are only the round in flight and the reds.
+  const verb = 'mc merge <repo> <pr>';
+  const reds = merges.red?.items || [];
   const parts = [];
   if (merges.landing) parts.push({ text: '1 landing', styles: ['grey'] });
-  if (merges.queued.count) parts.push({ text: `${merges.queued.count} waiting`, styles: ['grey'] });
+  if (reds.length) parts.push({ text: `${reds.length} red`, styles: ['red', 'bold'] });
+  const items = merges.queued.items || [];
+  if (merges.queued.count) {
+    const lead = `${merges.queued.count} waiting: `;
+    const used = parts.reduce((n, part) => n + part.text.length + 3, 0) + lead.length;
+    const room = Math.max(8, wide - 2 - 'MERGES'.length - 2 - verb.length - 4 - used);
+    parts.push({ text: lead, styles: ['grey'] });
+    parts.push({ text: waitingNumbers(items, room), styles: ['green'] });
+  }
   const counts = parts.length
-    ? between(parts, ' · ')
+    ? [...between(parts.slice(0, merges.queued.count ? -1 : undefined), ' · '), ...(merges.queued.count ? [parts.at(-1)] : [])]
     : [{ text: 'nothing landing, nothing waiting', styles: ['grey'] }];
-  heading(lines, c, wide, 'MERGES', counts, 'mc merge <repo> <pr>');
+  heading(lines, c, wide, 'MERGES', counts, verb);
   // The heading has already said *nothing landing*; a row that says it again
   // is a row.
   if (merges.landing) lines.push(landingLine(c, wide, merges.landing));
-  if (merges.queued.count) lines.push(queuedLine(c, wide, merges.queued));
+  for (const item of reds) lines.push(redLine(c, wide, item));
 }
 
 /** The words for whose a pull request is, on a PULL REQUESTS row. */
@@ -824,7 +840,7 @@ function prsLines(lines, c, wide, prs) {
   ].filter(Boolean);
   heading(lines, c, wide, 'PULL REQUESTS', prs.fetched ? between(parts, ' · ') : 'not asked yet — mc prs asks GitHub', 'mc prs');
   for (const pr of prs.items || []) {
-    if (pr.owner.kind === 'project' || pr.merging) continue;
+    if (pr.owner.kind === 'project' || pr.merging || pr.merge_red) continue;
     lines.push(prRow(c, wide, pr, ownerWords(pr.owner)));
   }
 }
@@ -878,12 +894,14 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
     const width = Math.min(40, Math.max(...own.map((pr) => whose(pr).length)));
     for (const pr of own) {
       const nobody = pr.owner.kind === 'none';
-      const mark = pr.merging ? c(MARK.running, 'green') : c(nobody ? MARK.waiting : MARK.quiet, nobody ? 'yellow' : 'grey');
+      const mark = pr.merging ? c(MARK.running, 'green')
+        : pr.merge_red ? c(MARK.red, 'red', 'bold') : c(nobody ? MARK.waiting : MARK.quiet, nobody ? 'yellow' : 'grey');
       const where = pad(clip(pr.repo || '—', LANE_REPO - 1), LANE_REPO);
       const left = `  ${mark} ${c(where, 'grey')} ${cell(c, `#${pr.number}`, PR_NUMBER, PR_TONE)} `
         + `${cell(c, clip(whose(pr), width), width, nobody ? ['yellow'] : [])}  `;
       const right = pr.merging
         ? paint(c, [{ text: pr.merging === 'landing' ? 'landing now' : 'queued for merge', styles: ['green'] }])
+        : pr.merge_red ? paint(c, [{ text: 'red from the merger', styles: ['red', 'bold'] }])
         : paint(c, [{ text: pr.quiet_seconds == null ? '' : `quiet ${ageWords(pr.quiet_seconds)}`, styles: pr.quiet_seconds >= PR_QUIET_S ? ['yellow'] : ['grey'] }]);
       lines.push(row(c, wide, left, `${pr.draft ? 'draft: ' : ''}${pr.title || pr.branch || ''}`, right || null));
     }
@@ -1026,6 +1044,7 @@ function prCell(c, project) {
   const text = clip(`#${first.number}${prs.length > 1 ? `+${prs.length - 1}` : ''}`, PR_CELL);
   const tone = prs.some((pr) => pr.merging)
     ? ['green', 'bold']
+    : prs.some((pr) => pr.merge_red) ? ['red', 'bold']
     : (prs.some((pr) => pr.quiet_seconds >= PR_QUIET_S) ? ['yellow', 'bold'] : PR_TONE);
   return cell(c, text, PR_CELL, tone);
 }

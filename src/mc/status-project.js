@@ -173,6 +173,10 @@ export function renderProject({
   // the way; the merge is simply somebody else's now.
   for (const entry of queued) {
     if (landing && Number(landing.pr) === entry.pr) continue;
+    if (entry.state === 'red') {
+      out.push(`  #${entry.pr} came back red from the merger${entry.answered ? ` (${when(entry.answered)})` : ''} — ${entry.reason || 'no reason given'}`);
+      continue;
+    }
     const after = entry.state === 'landing' ? ' — the merger has it' : (entry.parent ? ` — lands after #${entry.parent.pr}, which it is built on` : '');
     out.push(`  #${entry.pr} is in the merge queue${entry.since ? ` (since ${when(entry.since)})` : ''}${after}`);
   }

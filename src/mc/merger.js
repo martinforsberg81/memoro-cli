@@ -16,7 +16,8 @@
  *     pull request is one) is `landing` in the register, the job is in
  *     `merges.json`, and a merger is running. It returns at once.
  *   - `serve` is the merger: take the oldest job, run the round, write the
- *     register, drop the job, take the next; leave when the queue is empty.
+ *     register, drop the job — or keep it as `red` with the reason, for the
+ *     page — take the next; leave when nothing is left in line.
  *   - `merger.json` is its pid. Taken with `O_EXCL`; a file naming a dead pid
  *     is a merger that was killed, and the next `mc merge` (or the runner's
  *     next read of the world) starts another, which lands the job the dead
@@ -40,7 +41,7 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { runningDeploy } from './deploys.js';
 import { runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, markLanding, mergesPath, nextJob, parseQueue, placeOf, queuedFor,
+  dequeue, enqueue, markLanding, markRed, mergesPath, nextJob, parseQueue, placeOf, queuedFor,
 } from './merge-queue.js';
 import { landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
 import { readEntry, realLock, updateStep } from './register.js';
@@ -370,12 +371,23 @@ export async function serve({
         continue;
       }
       say(`${job.repo} #${job.pr}: landing${job.step ? ` (${job.step.project} step ${job.step.index + 1})` : ''}`);
+      let report = null;
       try {
-        await land(job);
+        report = await land(job);
       } catch (error) {
         say(`${job.repo} #${job.pr}: the round threw — ${error?.stack || error}`);
+        report = { ok: false, merged: false, stopped_at: 'threw', reason: `the round threw (${error?.message || error})` };
       }
-      lock(root, () => write(mergesPath(root), dequeue(parseQueue(read(mergesPath(root))), job)));
+      // Landed, the job is gone; red, it stays as a red row on the page until
+      // `mc merge` puts it back in line or the pull request is closed.
+      const answered = now().toISOString();
+      const done = report?.ok && report.merged;
+      lock(root, () => {
+        const entries = parseQueue(read(mergesPath(root)));
+        write(mergesPath(root), done
+          ? dequeue(entries, job)
+          : markRed(entries, job, { reason: `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`, answered }));
+      });
     }
   } finally {
     release();

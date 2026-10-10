@@ -262,12 +262,9 @@ IN FULL
                                     carries no standing-red number: green is
                                     green, and what ran is the count on the
                                     line under it
-  mc merge <repo> <pr> <pr>...      Several at once: one candidate with all
-                                    of them merged in, measured once each
-                                    side, each one's own tests by itself, then
-                                    merged in the order given. A batch that
-                                    stops — a conflict, a red — falls back to
-                                    one round per pull request and says so
+  mc merge <repo> <pr> <pr>...      Several at once: each queued for the
+                                    merger in the order given, each landed by
+                                    its own round
   mc merge <repo> <pr> --docs      Land a pull request that touches nothing
                                     outside docs/ — no suite, no lease, squash.
                                     Anything else is refused with the file
@@ -277,8 +274,9 @@ IN FULL
                                     between them, what the nightly said about
                                     that tree — then one question, and on a
                                     yes the repository's own npm run deploy,
-                                    in its own process: no lease, so merges
-                                    land beside it, and ^C stops the watching,
+                                    in its own process, after the gate round
+                                    in flight; the merger starts no other
+                                    until it is done. ^C stops the watching,
                                     not the deploy (mc deploy --follow
                                     watches again). A second deploy while one
                                     runs is refused with its sha and start

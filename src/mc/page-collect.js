@@ -56,7 +56,7 @@ import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
 import { GITHUB_STATE, githubFailures } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
-import { mergesPath, queueEntries, queueOrder } from './merge-queue.js';
+import { inLine, mergesPath, queueEntries, queueOrder, redEntries } from './merge-queue.js';
 import { runningMerge } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
@@ -546,11 +546,17 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * function does not read the lock itself, so its tests never touch a real
  * one. The held rows went with `held.json` (ruling 21): a step that did not
  * land is `failed` in the register and drawn where every other plan state is.
+ *
+ * `red` is what came back red and has not been queued again: a row each
+ * until `mc merge` puts it back in line (Martin, 2026-10-10). One whose pull
+ * request is no longer open is nobody's to fix and is not drawn — when the
+ * open pull requests are known at all.
  */
 export function mergesSection({
   landing = null, queued = [], prs = [], now = new Date(),
 } = {}) {
-  const entries = queueOrder(queueEntries(queued));
+  const all = queueEntries(queued);
+  const entries = queueOrder(inLine(all));
   const isLanding = (item) => landing && Number(landing.pr) === item.pr && item.state === 'landing';
   // The one the round is landing is drawn as the round, not twice — but its
   // queue entry is where its branch and its step are, and the open pull
@@ -580,9 +586,22 @@ export function mergesSection({
       wait_seconds: Number.isFinite(since) ? Math.max(0, Math.round((at - since) / 1000)) : null,
     };
   });
+  const open = (item) => !prs.length || Boolean(titled(item.repo, item.pr));
+  const redItems = redEntries(all).filter(open).map((item) => {
+    const answered = Date.parse(item.answered || '');
+    const pr = titled(item.repo, item.pr);
+    return {
+      ...item,
+      name: item.step ? item.step.project : (item.branch || pr?.headRefName || null),
+      step_number: item.step ? item.step.index + 1 : null,
+      title: pr?.title || null,
+      age_seconds: Number.isFinite(answered) ? Math.max(0, Math.round((at - answered) / 1000)) : null,
+    };
+  });
   return {
     landing: named,
     queued: { count: queuedItems.length, items: queuedItems },
+    red: { count: redItems.length, items: redItems },
     count: (landing ? 1 : 0) + queuedItems.length,
   };
 }
@@ -644,6 +663,7 @@ export function prsSection({
   const at = now instanceof Date ? now.getTime() : Number(now);
   const landing = merges?.landing || null;
   const queued = merges?.queued?.items || [];
+  const reds = merges?.red?.items || [];
   const items = prs.map((pr) => {
     const names = plans.filter((plan) => plan.repo === pr.repo).map((plan) => plan.project);
     const owner = prOwner(pr, { names, worktrees: worktrees[pr.repo] || [], root });
@@ -665,6 +685,10 @@ export function prsSection({
       merging: landing && landing.repo === pr.repo && Number(landing.pr) === number
         ? 'landing'
         : (queued.some((item) => item.repo === pr.repo && item.pr === number) ? 'queued' : null),
+      merge_red: (() => {
+        const red = reds.find((item) => item.repo === pr.repo && item.pr === number);
+        return red ? red.reason || 'red' : null;
+      })(),
       updated: pr.updatedAt || null,
       quiet_seconds: Number.isFinite(updated) ? Math.max(0, Math.round((at - updated) / 1000)) : null,
     };

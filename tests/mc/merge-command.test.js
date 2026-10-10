@@ -109,6 +109,16 @@ describe('mc merge queues the pull request for the merger and returns (ruling 30
     assert.match(d.out.out, /^mc: the merger \(pid 777, just started\) lands it; follow it in .*merger\.log$/mu);
   });
 
+  it('several at once are queued one by one, in the order given, each with its own place', async () => {
+    const d = deps({ env: { MC_STEP: 'merge-queue:1' } });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 673, prs: [673, 671, 672] }, d.io), 0);
+    assert.equal(d.ranRound(), false, 'no batch round: each is the merger\'s');
+    assert.deepEqual(queue().map((job) => job.pr), [673, 671, 672]);
+    assert.ok(queue().every((job) => job.step === null), 'MC_STEP names one step, not three');
+    assert.match(d.out.out, /^mc: #673 is queued for the merger — it is next$/mu);
+    assert.match(d.out.out, /^mc: #672 is queued for the merger — 2 ahead of it$/mu);
+  });
+
   it('a second pull request stands behind the first, and the place is said', async () => {
     await gate({ repo: 'memoro-cli', pr: 671 }, deps().io);
     const d = deps({ merger: { pid: 777, started: false } });
