@@ -5,14 +5,25 @@
  * (repo.js still owns that code path; only the name moved). `--docs` lands a
  * documentation-only pull request without the suite — see docs-merge.js.
  */
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+
 import { docsMergeLines, runDocsMerge } from '../docs-merge.js';
+import { mergesPath, parseQueue } from '../merge-queue.js';
+import { WATCH_TIMEOUT_MIN, watch } from '../merge-watch.js';
+import { readMerger } from '../merger.js';
+import { workRoot } from '../paths.js';
 import { recordRound } from '../repo-round-log.js';
 import { currentHolder } from '../work-identity.js';
+import { scanArgs } from './flags.js';
 import { gate, parseMergeArgs, resolveRepoPath } from './repo.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  // No repository can be called `watch` in `mc repo status`, so the word is free.
+  if (argv[0] === 'watch') return runWatch(argv.slice(1), { stdout, stderr, ...deps });
   const opts = parseMergeArgs(argv, { docs: true });
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
@@ -40,9 +51,73 @@ export async function run(argv, deps = {}) {
   return report.ok ? 0 : 1;
 }
 
+/** `mc merge watch <repo> <pr> [--timeout <min>] [--json]` — the arguments. */
+export function parseWatchArgs(argv) {
+  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--timeout'] });
+  const opts = { repo: null, pr: null, json: scanned.flags.json, timeoutMs: WATCH_TIMEOUT_MIN * 60_000 };
+  if (scanned.error) return { ...opts, error: scanned.error };
+  const [repo, number, ...rest] = scanned.positional;
+  if (!repo) return { ...opts, error: 'which repository? mc merge watch <repo> <pr>' };
+  if (number == null) return { ...opts, error: 'which pull request? mc merge watch <repo> <pr>' };
+  if (rest.length) return { ...opts, error: 'mc merge watch follows one pull request — one call per pull request' };
+  const pr = String(number).replace(/^#/u, '');
+  if (!/^\d+$/u.test(pr)) return { ...opts, error: `"${number}" is not a pull request number` };
+  if (scanned.flags.timeout !== null) {
+    const minutes = Number(scanned.flags.timeout);
+    if (!Number.isFinite(minutes) || minutes <= 0) return { ...opts, error: '--timeout needs a number of minutes' };
+    opts.timeoutMs = Math.round(minutes * 60_000);
+  }
+  return { ...opts, repo, pr: Number(pr) };
+}
+
+const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+
+/** What GitHub says of a pull request: `{ state, mergeCommit }`, or null when it cannot be asked. */
+function ghPrView(repoPath) {
+  return (repo, pr) => {
+    const r = spawnSync('gh', ['pr', 'view', String(pr), '--json', 'state,mergeCommit'], { cwd: repoPath, encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    try {
+      const view = JSON.parse(r.stdout);
+      return { state: view.state || null, mergeCommit: view.mergeCommit?.oid || null };
+    } catch { return null; }
+  };
+}
+
+async function runWatch(argv, { stdout, stderr, ...deps }) {
+  const opts = parseWatchArgs(argv);
+  if (opts.error) {
+    stderr.write(`mc: ${opts.error}\n`);
+    stderr.write(usage());
+    return 2;
+  }
+  const repoPath = await (deps.resolveRepoPath || resolveRepoPath)(opts.repo);
+  if (!repoPath) {
+    stderr.write(`mc: no repository called "${opts.repo}" — mc repo status lists the ones mc can see\n`);
+    return 2;
+  }
+  // The queue names a repository by its directory, as `queueForMerger` wrote it.
+  const repo = basename(String(repoPath).replace(/\/+$/u, ''));
+  const root = deps.root || workRoot(process.env);
+  const { code, result } = await (deps.watch || watch)({
+    repo,
+    pr: opts.pr,
+    timeoutMs: opts.timeoutMs,
+    readQueue: deps.readQueue || (() => parseQueue(realRead(mergesPath(root)))),
+    readMerger: deps.readMerger || (() => readMerger({ root })),
+    prView: deps.prView || ghPrView(repoPath),
+    ...(deps.now ? { now: deps.now } : {}),
+    ...(deps.sleep ? { sleep: deps.sleep } : {}),
+    print: opts.json ? () => {} : (line) => stdout.write(`${line}\n`),
+  });
+  if (opts.json) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  return code;
+}
+
 export function usage() {
   return [
     'usage — mc merge <repo> <pr> [<pr>...] [--check] [--json]   the gate round, then squash\n',
     '        mc merge <repo> <pr> --docs [--json]                 docs-only: no suite, squash\n',
+    '        mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a queued pull request until it lands or goes red\n',
   ].join('');
 }
