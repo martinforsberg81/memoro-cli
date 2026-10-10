@@ -266,6 +266,21 @@ project used to.
    in 4, or whose plan an earlier archive already took off `main`, which
    `project_log.md` is what still knows.
 
+**No step starts on a disk with no room.** Every pass reads the free space of
+the volume where `MC_SCRATCH` is made (`diskRoom`, `deps.freeBytes` on
+`paths.scratch`) before it picks anything. Under `DISK_MIN_BYTES` — 5 GiB, a
+constant in `run.js` — the pass starts nothing and returns `skipped:disk`; the
+lane says `disk: <n> GiB free, below 5 GiB — no step started` once in
+`runner.log` and writes the same line to `~/mc/runner/disk.json`, which the
+page's RUNNER block shows in yellow while the runner is alive. The step stays
+`ready` and nothing is written into a plan; the first pass with room removes
+the file and the line goes with it. Sessions already running, their check-ins
+and their landings are not in a pass and go on. A reader that throws, or no
+reader, counts as room: a guess must not stop the runner. On 2026-10-08 the
+volume had 118 MiB free, scratch held 15 GiB, and a step's first shell commands
+failed on ENOSPC; the hold is one answer, the two-day sweep of scratch
+(*What the session is told about itself*) the other.
+
 **`--once`** is one pass with one lane over the whole order, both
 repositories: the same pick, the same refusals, and out after the first step
 that ran (`once: exiting`) or when nothing is left (`once: nothing to run`). No
@@ -731,8 +746,8 @@ the worktree is a dirty worktree and a session that dies leaves it (a
 `*.tmp.mjs` held `mail-window-overlay-integrity` for 31 rounds, 2026-09-04). The
 dirty check is unchanged. A directory that cannot be made is said in
 `runner.log` and the session starts without the variable. The chore pass removes
-every directory under the scratch directory whose mtime is more than seven days
-old, and nothing else.
+every directory under the scratch directory whose mtime is more than two days
+old (`SCRATCH_KEEP_MS`, seven until 2026-10-10), and nothing else.
 
 ### The merge
 
@@ -784,6 +799,21 @@ exceptions in kind, not in door: an archive removes a plan directory and adds a
 documentation by construction and land through `mc merge --docs`
 (`landDocsPr`), which checks that against GitHub's own file list and refuses
 anything touching a line of code.
+
+**An archive keeps what the code reads.** memoro #13310 (2026-10-10) archived
+four skill texts that `tests/assistant/skills/delivery.test.js` reads verbatim;
+it landed as docs-only, so no test ran, and main stayed red until #13323 put
+them back. Both archives — `archiveIn` in `run.js` for a project,
+`archiveOnMain` in `archive-programme.js` for a programme — now ask the
+worktree first (`keptFiles`, `archive-plan.js`): `git grep -l -F` for the
+directory's path over `src`, `tests`, `scripts`, `config` and `package.json`,
+then, in each file that matched, which files under the directory a literal path
+or a template's fixed prefix names. Those files stay where they are, not moved;
+every other file is `git rm`'d, and with nothing named the directory goes whole
+as before. The PR body ends with one `- kept: <file> — named by <path>:<line>`
+per kept file, and `runner.log` says the same. One kept file never refuses the
+archive; only a directory whose every file is named archives nothing, and says
+so.
 
 A **stack** needs an order rather than a call — `mc merge` refuses a batch
 aimed at several bases. `stackOrder` in run-plan.js is the whole decision, over
