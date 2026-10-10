@@ -1596,6 +1596,40 @@ describe('the round measures the branch as pushed, not as GitHub remembers it', 
   });
 });
 
+describe('a project log that carries a row twice', () => {
+  /** The fixture's git, with the candidate's checkout carrying this log. */
+  const withLog = (fx, text) => (args, opts = {}) => {
+    const answer = fx.git(args, opts);
+    if (args[0] === 'worktree' && args[1] === 'add') {
+      const log = join(args[args.length - 2], 'docs', 'project', 'project_log.md');
+      mkdirSync(dirname(log), { recursive: true });
+      writeFileSync(log, text);
+    }
+    return answer;
+  };
+  const HEAD = '| date | programme | project | outcome | summary | doc | pointer |\n|---|---|---|---|---|---|---|\n';
+  const ROW = '| 2026-10-10 | staff | link-counts | delivered | s | none | #1 |\n';
+
+  it('is red, naming the row and what to do, and measures nothing', async () => {
+    const fx = fixture();
+    try {
+      const result = await fx.run({ git: withLog(fx, `${HEAD}${ROW}${ROW}`) });
+      assert.equal(result.stopped_at, 'project-log');
+      assert.equal(result.verdict, 'red');
+      assert.equal(result.reason, 'project_log.md carries the same row twice: 2026-10-10 staff link-counts — delete the copy and push');
+      assert.deepEqual(fx.ran('suite'), [], 'nothing is measured on a tree that carries the copy');
+    } finally { fx.cleanup(); }
+  });
+
+  it('one of each is not a stop', async () => {
+    const fx = fixture();
+    try {
+      const result = await fx.run({ git: withLog(fx, `${HEAD}${ROW}`) });
+      assert.equal(result.stopped_at, null, JSON.stringify(result));
+    } finally { fx.cleanup(); }
+  });
+});
+
 describe('derived artifacts are regenerated after the base is merged in', () => {
   const declared = (fx, derived) => writeJson(join(fx.mcHome, 'repo-gates.json'), {
     repo: { prepare: null, prepare_why: 'a test', extra_gates: [], merge_log: null, derived },

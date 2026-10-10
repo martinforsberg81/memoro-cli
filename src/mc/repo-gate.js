@@ -58,6 +58,7 @@ import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
 import { regenerateDerived } from './repo-derived.js';
 import { ensureWorkDeps } from './work-deps.js';
+import { duplicateRow } from './archive-plan.js';
 import { recordRound } from './repo-round-log.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 
@@ -450,6 +451,18 @@ export async function runGate({
       }
     }
 
+    // A project log that carries a row twice. `merge=union` on it keeps both
+    // sides of a conflict, so a branch that merged main in can carry a copy
+    // nobody sees (2026-10-10: one row five times on memoro's main). The
+    // copy is in the branch's tree, so the red is the branch's to fix.
+    const logPath = join(headDir, 'docs', 'project', 'project_log.md');
+    if (existsSync(logPath)) {
+      const twice = duplicateRow(readFileSync(logPath, 'utf8'));
+      if (twice) {
+        return finish('project-log', `project_log.md carries the same row twice: ${twice.date} ${twice.programme} ${twice.project} — delete the copy and push`);
+      }
+    }
+
     // The tree the candidate resolves through, made to match the candidate.
     //
     // Not a preparation of the worktree and deliberately not one: nothing is
@@ -734,6 +747,8 @@ export function verdictFor(report) {
   if (report.stopped_at === 'selected-gate') return 'red';
   // A generator that writes outside what it declared is the change's to fix.
   if (report.stopped_at === 'derived-outside') return 'red';
+  // So is a project log row its tree carries twice.
+  if (report.stopped_at === 'project-log') return 'red';
   if (report.stopped_at !== null) return 'stopped';
   return 'green';
 }

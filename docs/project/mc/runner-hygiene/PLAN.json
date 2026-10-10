@@ -28,7 +28,7 @@
       "check": "`tests/mc/archive-plan.test.js` and `archive-programme.test.js`: a worktree where `tests/x.test.js` names `docs/project/p/q/skills/a.md` archives `q` with `a.md` kept and the PR body naming it."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Two identical rows in `project_log.md` turn the gate red with a reason naming the row, and the archive's `appendRow` is idempotent.",
       "check": "`tests/mc/archive-plan.test.js` for `appendRow`; the gate's tests for the red reason."
     }
