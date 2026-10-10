@@ -1108,3 +1108,34 @@ still no deploy queue.
 And: a session calls `mc merge` once and does not poll it
 (`canon/roles/_session-work.md`) — a session started before ruling 30 called
 it every 60 s until the pull request merged.
+
+## 33 · An interrupted step is the runner's to recover, warm or cold
+
+`ruling · 2026-10-10` · raised by Martin at the brief
+
+The machine restarted on 2026-10-08 and twice on 2026-10-10. Each time every
+step session died, `sweepRunning` wrote them `failed`, and a step whose
+session had left uncommitted files was blocked as `dirty-worktree` once it was
+set `ready` again. On 2026-10-10 that was six failed steps and five blocked
+ones, set going again by hand. The runner had no session id to resume with,
+because the stream was written to disk only when a session ended.
+
+> "Nu har det hänt igen att datorn startat om. […] Jag ska inte manuellt
+> behöva göra detta... låt oss fundera på olika robusthetslösningar (som
+> också tar hänsyn till varm/kall cache)." (Martin, 2026-10-10)
+
+The brief proposed six parts: interrupted is not failed; warm cache or a small
+conversation resumes the same session, a cold large one gets a fresh session
+with a handover; a step's own leftover files never block it; snapshots of
+uncommitted work while a session runs; the runner starts itself at login when
+it was running when the machine went down; and no step starts while memory is
+short.
+
+> "Bra förslag. Vi tar alla 1-6." (Martin, 2026-10-10)
+
+The direction behind the first three was approved on 2026-10-08, with one
+condition kept here: a resume goes through each tool's own resume, so claude
+and codex stay interchangeable. Carried by `step-recovery`
+(`docs/project/mc/step-recovery/PLAN.json`). An interrupted step is a `ready`
+step with an `interrupted` record rather than a new state, so no reader of
+`ready` has to change.
