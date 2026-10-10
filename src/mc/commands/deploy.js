@@ -61,7 +61,7 @@
  * terminal; 130 when the watching was stopped and the deploy goes on. Run in
  * this process (a test), the script's own exit code.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -187,6 +187,49 @@ export function spawnDeployDefault({
  * last step header, the verified version, the failure — is at the end of it,
  * and a container build can print megabytes before that. */
 const OUTPUT_TAIL = 256 * 1024;
+
+/**
+ * The container images earlier deploys built, removed after a deploy that
+ * built new ones.
+ *
+ * memoro's `wrangler.toml` declares its containers as local Dockerfiles, so a
+ * deploy that rolls them out builds every image on this machine, and nothing
+ * removed the ones before it. On 2026-10-10 OrbStack held 21 images (17 GB)
+ * on an 8 GB machine whose disk was 98 % full, and a full disk starves swap.
+ *
+ * Only after a deploy that rolled containers out: `scripts/deploy.mjs` prints
+ * `Docker preflight skipped; containers are not rolling out.` when it does
+ * not, and otherwise has made sure Docker is up. Any `docker` call starts
+ * OrbStack, so a deploy that never needed it must not ask it anything.
+ * A week, so the images this deploy built and the last week's stay.
+ */
+export const IMAGE_KEEP_FILTER = 'until=168h';
+const CONTAINERS_SKIPPED = 'Docker preflight skipped; containers are not rolling out.';
+
+/** Whether this deploy built container images: the config has some, and the script did not skip them. */
+export function rolledOutContainers({ worktree, skipped, read = (path) => readFileSync(path, 'utf8') }) {
+  if (skipped) return false;
+  try {
+    return /^\s*\[\[containers\]\]/mu.test(read(join(worktree, 'wrangler.toml')));
+  } catch {
+    return false;
+  }
+}
+
+/** `docker image prune` for images older than a week. `{ ok, reclaimed, detail }`; never throws. */
+export function pruneImagesDefault({ cwd, env = process.env, run = spawnSync } = {}) {
+  try {
+    const r = run(env.WRANGLER_DOCKER_BIN || 'docker', ['image', 'prune', '--all', '--force', '--filter', IMAGE_KEEP_FILTER], {
+      cwd, env, encoding: 'utf8', timeout: 5 * 60 * 1000,
+    });
+    const out = `${r?.stdout || ''}${r?.stderr || ''}`;
+    const reclaimed = /Total reclaimed space:\s*(\S+)/u.exec(out)?.[1] || null;
+    if (r?.status === 0) return { ok: true, reclaimed };
+    return { ok: false, reclaimed, detail: (r?.error?.message || out.trim().split('\n').at(-1) || `exit ${r?.status}`) };
+  } catch (error) {
+    return { ok: false, reclaimed: null, detail: error?.message || String(error) };
+  }
+}
 
 /**
  * What `deploy.mjs` said, in the four things the row keeps.
@@ -788,8 +831,12 @@ export async function ship(job, deps = {}) {
     if (shipping !== sha) stdout.write(`mc: main moved to ${short(shipping)} since the question; deploying ${short(shipping)}\n`);
 
     const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
+    // Seen anywhere in the output, not only in the kept tail: the preflight
+    // line comes early and a container build prints megabytes after it.
+    let skipped = false;
     const onOutput = (chunk) => {
       tail = (tail + chunk).slice(-OUTPUT_TAIL);
+      if (!skipped && stripAnsi(String(chunk)).includes(CONTAINERS_SKIPPED)) skipped = true;
     };
     const result = await spawnDeploy({ cwd: worktree, env, sha: shipping, onOutput, stdout, stderr });
     const said = readScriptOutput(tail);
@@ -811,6 +858,15 @@ export async function ship(job, deps = {}) {
     else if (said.live_commit) {
       const retried = said.retries ? ` (after ${retryCount(said.retries)})` : '';
       stdout.write(`mc: deployed — build ${said.live_build} · ${short(said.live_commit)} verified live${retried}\n`);
+    }
+    // After the row and the verdict: a prune that fails or hangs is a line,
+    // never a deploy that failed.
+    if (ok && rolledOutContainers({ worktree, skipped, read: deps.readFile })) {
+      const pruned = (deps.pruneImages || pruneImagesDefault)({ cwd: worktree, env });
+      const line = pruned.ok
+        ? `mc: docker: images older than a week removed${pruned.reclaimed ? ` — ${pruned.reclaimed} reclaimed` : ''}\n`
+        : `mc: docker: the image prune failed (${pruned.detail}) — the deploy stands\n`;
+      (job.json ? stderr : stdout).write(line);
     }
     return result.code;
   } catch (error) {

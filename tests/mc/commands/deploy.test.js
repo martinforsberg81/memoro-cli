@@ -19,7 +19,8 @@ import { join } from 'node:path';
 
 import {
   deployPlan, deploySource, deployWorktreePath, leftoverStamps, parseDeployArgs, planLines, readScriptOutput, run,
-  deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault, worktreeState,
+  deployLogPath, followDeploy, pruneImagesDefault, rolledOutContainers, ship, spawnDeployDefault, startDeployerDefault,
+  worktreeState,
 } from '../../../src/mc/commands/deploy.js';
 import { mainWorktree } from '../../../src/mc/git.js';
 import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
@@ -1248,5 +1249,80 @@ describe('a deploy that was stopped', () => {
     assert.equal(readScriptOutput(captured).production, 'unchanged');
     assert.match(out.stderr, /mc: SIGINT — stopping the deploy; waiting for it/u);
     assert.equal(signals.listenerCount('SIGINT'), 0, 'the handlers go with the spawn');
+  });
+});
+
+describe('mc deploy — the container images earlier deploys left', () => {
+  const containers = () => '[[containers]]\nclass_name = "Sandbox"\n';
+  const said = (text) => async ({ onOutput }) => { onOutput?.(text); return { code: 0 }; };
+
+  it('after a deploy that rolled containers out, images older than a week are pruned and the line says what came back', async () => {
+    const { out, stdout, stderr } = io();
+    const calls = [];
+    const code = await run([], {
+      ...deps({
+        spawnDeploy: said('\u001b[2m  Waiting for Docker to become ready.\u001b[0m\n'),
+        readFile: containers,
+        pruneImages: (options) => { calls.push(options); return { ok: true, reclaimed: '4.2GB' }; },
+      }),
+      stdout,
+      stderr,
+    });
+    assert.equal(code, 0);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].cwd, MAIN_WT);
+    assert.match(out.stdout, /mc: docker: images older than a week removed — 4\.2GB reclaimed/u);
+  });
+
+  it('a deploy whose script skipped the containers asks Docker nothing', async () => {
+    const { stdout, stderr } = io();
+    let pruned = 0;
+    const code = await run([], {
+      ...deps({
+        spawnDeploy: said('\u001b[2m  Docker preflight skipped; containers are not rolling out.\u001b[0m\n'),
+        readFile: containers,
+        pruneImages: () => { pruned += 1; return { ok: true, reclaimed: null }; },
+      }),
+      stdout,
+      stderr,
+    });
+    assert.equal(code, 0);
+    assert.equal(pruned, 0);
+  });
+
+  it('a failed deploy prunes nothing, and a failed prune leaves a deploy that worked standing', async () => {
+    let pruned = 0;
+    const failed = io();
+    assert.equal(await run([], {
+      ...deps({ spawnDeploy: async () => ({ code: 3 }), readFile: containers, pruneImages: () => { pruned += 1; return { ok: true }; } }),
+      stdout: failed.stdout,
+      stderr: failed.stderr,
+    }), 3);
+    assert.equal(pruned, 0);
+
+    const { out, stdout, stderr } = io();
+    const code = await run([], {
+      ...deps({ spawnDeploy: said('built\n'), readFile: containers, pruneImages: () => ({ ok: false, detail: 'Cannot connect to the Docker daemon' }) }),
+      stdout,
+      stderr,
+    });
+    assert.equal(code, 0);
+    assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'deployed');
+    assert.match(out.stdout, /the image prune failed \(Cannot connect to the Docker daemon\) — the deploy stands/u);
+  });
+
+  it('rolledOutContainers reads the config and the skip; pruneImagesDefault reads what docker reclaimed', () => {
+    assert.equal(rolledOutContainers({ worktree: '/x', skipped: false, read: containers }), true);
+    assert.equal(rolledOutContainers({ worktree: '/x', skipped: true, read: containers }), false);
+    assert.equal(rolledOutContainers({ worktree: '/x', skipped: false, read: () => 'name = "memoro"\n' }), false);
+    assert.equal(rolledOutContainers({ worktree: '/x', skipped: false, read: () => { throw new Error('ENOENT'); } }), false);
+
+    const seen = [];
+    const ok = pruneImagesDefault({ cwd: '/x', env: {}, run: (bin, args) => { seen.push([bin, ...args]); return { status: 0, stdout: 'Deleted Images:\n…\nTotal reclaimed space: 3.1GB\n', stderr: '' }; } });
+    assert.deepEqual(ok, { ok: true, reclaimed: '3.1GB' });
+    assert.deepEqual(seen[0], ['docker', 'image', 'prune', '--all', '--force', '--filter', 'until=168h']);
+    const bad = pruneImagesDefault({ cwd: '/x', env: { WRANGLER_DOCKER_BIN: 'podman' }, run: (bin) => ({ status: 1, stdout: '', stderr: `${bin}: Cannot connect\n` }) });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.detail, 'podman: Cannot connect');
   });
 });
