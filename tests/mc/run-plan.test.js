@@ -380,6 +380,35 @@ test('stepPrompt: a conflicted worktree is a preamble, and the step is still the
   assert.match(p, /----- Your step: steps\[1\] -----\ntitle: The hero object/u);
 });
 
+test('stepPrompt: an interrupted step gets a handover after the retry preamble, and the step is still the job', () => {
+  const { plan } = threeSteps();
+  const step = plan.steps[1];
+  const interrupted = {
+    at: '2026-10-10T07:12:00Z', why: 'cold, 120 000 tokens — fresh',
+    commits: Array.from({ length: 25 }, (_, n) => `c0ffee${n} commit ${n}`),
+    wip: '1234567890abcdef', lastText: 'Now the tests.\nThen the docs.', checkpoint: 'refs/mc/checkpoint/x',
+  };
+  const p = stepPrompt({
+    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan, step, index: 1,
+    retry: { pr: 41, reason: 'red', attempts: 1 }, interrupted,
+  });
+  assert.ok(p.indexOf('This step came back from the merger') < p.indexOf('An earlier session on this step'), 'retry first, both there');
+  assert.match(p, /An earlier session on this step was cut off at 2026-10-10T07:12:00Z \(cold, 120 000 tokens — fresh\)\./u);
+  assert.match(p, /Its commits on this branch \(`git log --oneline origin\/main\.\.HEAD`\):\n {4}c0ffee0 commit 0\n/u);
+  assert.match(p, /c0ffee19 commit 19/u);
+  assert.doesNotMatch(p, /c0ffee20/u, 'at most 20 lines');
+  assert.match(p, /1234567 is a WIP commit the runner made of the files it had not committed; nothing in it has been checked\./u);
+  assert.match(p, /Its last words were:\n> Now the tests\.\n> Then the docs\./u);
+  assert.match(p, /`refs\/mc\/checkpoint\/x` holds the last snapshot/u);
+  assert.match(p, /Read the diff of the branch before writing anything, and do not redo what the commits already did\./u);
+  assert.match(p, /Your step is `steps\[1\]` — 2/u);
+
+  const bare = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, interrupted: { at: 'then', commits: [] } });
+  assert.match(bare, /It left no commits on this branch\./u);
+  assert.doesNotMatch(bare, /WIP commit|last words|checkpoint/u);
+  assert.doesNotMatch(stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1 }), /An earlier session/u);
+});
+
 test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex is exec --json', () => {
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs });
   assert.deepEqual(claude, ['-p', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'INSTRUCTIONS', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);

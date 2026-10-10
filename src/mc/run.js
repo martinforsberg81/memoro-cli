@@ -624,13 +624,13 @@ export function createRunner({
   }
 
   /**
-   * The interrupted step in this workarea whose session is to be resumed,
-   * or null: the step `chooseKind` would hand out from the worktree's own
-   * plan, carrying an `interrupted` record that `recoveryFor` says `resume`
-   * to, with the cache lifetime of the tool the plan names now. Returns the
-   * decision with the record and the step's index.
+   * How the interrupted step in this workarea is recovered, or null when it
+   * has none: the step `chooseKind` would hand out from the worktree's own
+   * plan, carrying an `interrupted` record, and what `recoveryFor` says to it
+   * with the cache lifetime of the tool the plan names now. Returns the
+   * decision (`resume` or `fresh`) with the record and the step's index.
    */
-  function resumable(worktree, name) {
+  function recoveryOf(worktree, name) {
     const entry = readEntry(root, name, { read: deps.read });
     const found = entry ? planOf(worktree, name) : null;
     if (!found?.plan) return null;
@@ -639,8 +639,60 @@ export function createRunner({
     if (!interrupted) return null;
     const { tool } = sessionSettings(found.plan.runner, choice.step?.runner, { kind: 'step' });
     const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? CODEX_CACHE_TTL_MS : CLAUDE_CACHE_TTL_MS, now: deps.now() });
-    if (decided.mode !== 'resume') return null;
     return { ...decided, interrupted, index: choice.index };
+  }
+
+  /**
+   * What an interrupted session left uncommitted, committed as one WIP commit
+   * before a fresh session takes its step (ruling 33) — the one case the
+   * runner commits a worktree. The dirt is the session's only when the
+   * worktree stands on the branch it ran on or on one named after the project:
+   * a session may make its own branch (2026-10-10, video-window's moved from
+   * `video-window-3` to `video-window-step-2` on the same commit), and then
+   * the recorded branch is moved up to it first when it is an ancestor, so
+   * the step's branch carries the work. `--no-verify`: nothing in it has been
+   * checked, and a hook that refuses it would leave the step parked on dirt.
+   *
+   * Returns `{ own: false }` for dirt that is not the session's, else
+   * `{ own: true, ok, sha, why }`.
+   */
+  function commitLeftovers(worktree, name, interrupted) {
+    const current = gitOut(worktree, ['branch', '--show-current']);
+    const recorded = interrupted.branch || null;
+    if (!current || !(current === recorded || current === name || current.startsWith(`${name}-`))) return { own: false };
+    if (recorded && current !== recorded
+      && deps.git(worktree, ['rev-parse', '-q', '--verify', `refs/heads/${recorded}`]).ok
+      && deps.git(worktree, ['merge-base', '--is-ancestor', recorded, 'HEAD']).ok) {
+      if (deps.git(worktree, ['checkout', '-q', '-B', recorded]).ok) say(`${name}: the interrupted session was on ${current} — ${recorded} moved up to it`);
+    }
+    const title = `${name}: WIP left by an interrupted session`;
+    const body = `Session ${interrupted.session_id || 'unknown'} was interrupted at ${interrupted.at || 'an unknown time'}; these are the files it had not committed, unchecked.`;
+    if (!deps.git(worktree, ['add', '-A']).ok || !deps.git(worktree, ['commit', '-q', '--no-verify', '-m', title, '-m', body]).ok) {
+      return { own: true, ok: false, why: 'the files an interrupted session left could not be committed' };
+    }
+    const sha = gitOut(worktree, ['rev-parse', 'HEAD']);
+    say(`${name}: the files the interrupted session left are committed as WIP${sha ? ` (${sha.slice(0, 7)})` : ''}`);
+    return { own: true, ok: true, sha: sha || null };
+  }
+
+  /**
+   * What a fresh session on an interrupted step is handed about the one
+   * before it (`interruptedPreamble`, run-plan.js): the branch's commits past
+   * main, the WIP commit, the session's last words off its stream log, and
+   * the checkpoint ref when there is one.
+   */
+  function handoverOf(worktree, name, recovery, wip) {
+    const { interrupted } = recovery;
+    const commits = (gitOut(worktree, ['log', '--oneline', '-n', '20', 'origin/main..HEAD']) || '')
+      .split('\n').map((line) => line.trim()).filter(Boolean);
+    const stdout = interrupted.log ? deps.read(`${interrupted.log}.jsonl`) : null;
+    const lastText = stdout ? sessionStanding({ toolId: interrupted.tool === 'codex' ? 'codex' : 'claude', stdout }).last_text : null;
+    const checkpointRef = `refs/mc/checkpoint/${name}`;
+    const checkpoint = deps.git(worktree, ['rev-parse', '-q', '--verify', checkpointRef]).ok ? checkpointRef : null;
+    return {
+      at: interrupted.last_activity || interrupted.at, why: recovery.why,
+      commits, wip: wip?.sha || null, lastText, checkpoint,
+    };
   }
 
   /**
@@ -993,7 +1045,7 @@ export function createRunner({
    *   onto main past that sha once the one below has landed;
    * - anything else is `freshBranch`'s, as before.
    */
-  function placeBranch(worktree, name, record) {
+  function placeBranch(worktree, name, record, { keepLocal = false } = {}) {
     const entry = readEntry(root, name, { read: deps.read });
     if (!entry || !record?.plan) return freshBranch(worktree, name);
     const { index } = deliverableStep(record.plan);
@@ -1007,9 +1059,14 @@ export function createRunner({
     if (state?.status === 'ready' && state.pr && state.branch) {
       // As the pull request has it: the merger may have moved the branch onto
       // main before its round, and the work is pushed — a dirty tree was
-      // refused before this.
+      // refused before this. Unless an interrupted session's leftovers were
+      // just committed on it (`keepLocal`): that commit is not pushed, so the
+      // local branch is kept and main is merged into it as for any step.
       deps.git(worktree, ['fetch', '-q', 'origin']);
-      if (!deps.git(worktree, ['checkout', '-q', '-B', state.branch, `origin/${state.branch}`]).ok && !onto(state.branch)) {
+      const placed = keepLocal && current === state.branch
+        ? true
+        : deps.git(worktree, ['checkout', '-q', '-B', state.branch, `origin/${state.branch}`]).ok;
+      if (!placed && !onto(state.branch)) {
         return { ok: false, moved: null, why: `${state.branch}, where #${state.pr} is open, could not be checked out` };
       }
       if (current !== state.branch) say(`${name}: back on ${state.branch} — #${state.pr} came back from the merger`);
@@ -1846,12 +1903,22 @@ export function createRunner({
     // its conversation knows this tree, uncommitted files and all, so the
     // tree is left exactly as it is — no dirty block, no branch move, no
     // merge of main under files it has read.
-    const resuming = resumable(worktree, name);
-    // A dirty worktree is nobody's but a person's — the runner never commits,
-    // stashes or restores one — so the step is blocked and the files are named:
+    const recovery = recoveryOf(worktree, name);
+    const resuming = recovery?.mode === 'resume' ? recovery : null;
+    const fresh = recovery?.mode === 'fresh' ? recovery : null;
+    // A dirty worktree is nobody's but a person's — the runner never stashes
+    // or restores one, and commits one only when it is what an interrupted
+    // session left on its own branch and a fresh session takes the step
+    // (`commitLeftovers`) — so the step is blocked and the files are named:
     // `email-window-layout` stood third in queue.md and was skipped 134 rounds
     // on three modified files before anyone read the reason.
-    const dirty = resuming ? '' : (gitOut(worktree, ['status', '--porcelain']) || '').trim();
+    let dirty = resuming ? '' : (gitOut(worktree, ['status', '--porcelain']) || '').trim();
+    let wip = null;
+    if (dirty && fresh) {
+      const left = commitLeftovers(worktree, name, fresh.interrupted);
+      if (left.own && !left.ok) return block(REFUSAL.dirty, left.why);
+      if (left.own) { wip = left; dirty = ''; }
+    }
     if (dirty) {
       // `XY path` per porcelain line; the whole is trimmed above, which takes
       // the first line's leading status space with it — hence a pattern, not
@@ -1871,7 +1938,7 @@ export function createRunner({
     if (flight) return refuse(flight.reason, flight.skip);
     // A session must be somewhere it can push from. The push-guard asks the
     // same question at the wrong end — after ninety minutes of work.
-    const moved = resuming ? { ok: true, stacked: null } : placeBranch(worktree, name, plans.find((p) => p.project === name));
+    const moved = resuming ? { ok: true, stacked: null } : placeBranch(worktree, name, plans.find((p) => p.project === name), { keepLocal: Boolean(wip) });
     if (!moved.ok) return block(REFUSAL.branch, moved.why);
 
     const sync = resuming ? { ok: true, conflicts: [] } : syncMain(worktree, name);
@@ -1979,9 +2046,12 @@ export function createRunner({
       : null;
     // A resumed step keeps the stack it was started on; the branch did not move.
     const stacked = resuming ? (standingBefore?.stacked_on ?? null) : (moved.stacked || null);
+    // A fresh session on an interrupted step is told what the one before it
+    // left, and only when it is that step it is handed.
+    const interrupted = fresh && fresh.index === choice.index ? handoverOf(worktree, name, fresh, wip) : null;
     const prompt = resuming
       ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
-      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, retry, stacked, now });
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, retry, interrupted, stacked, now });
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
 

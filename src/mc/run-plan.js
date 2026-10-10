@@ -719,11 +719,12 @@ function planExcerpt(plan, index, step) {
  * `plan`); the prompt quotes the part of it this step needs and says where the
  * whole file is, rather than carrying the file — see `planExcerpt`.
  */
-export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, stacked = null, now = new Date() }) {
+export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, interrupted = null, stacked = null, now = new Date() }) {
   const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
     ...conflictPreamble(conflicts),
     ...retryPreamble(retry, repo),
+    ...interruptedPreamble(interrupted),
     ...stackedPreamble(retry ? null : stacked),
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
     `is merged in). Your plan is on disk in this worktree at \`${planPath}\`;`,
@@ -787,6 +788,34 @@ function retryPreamble(retry, repo) {
     'Start there — `gh pr view` and the diff — fix what the gate named (never by',
     'lowering a threshold or skipping a test), push to the same branch, and run',
     `\`mc merge ${repo} ${retry.pr}\` again. No new pull request.`,
+    '',
+  ];
+}
+
+/**
+ * The handover a fresh session on an interrupted step is given (ruling 33):
+ * when the session before it was cut off and why it was not resumed, its
+ * commits on this branch (at most 20, `git log --oneline origin/main..HEAD`),
+ * the WIP commit the runner made of what it had not committed, its last
+ * words, and the checkpoint ref when one exists. Empty when the step was not
+ * interrupted.
+ */
+function interruptedPreamble(interrupted) {
+  if (!interrupted) return [];
+  const commits = (interrupted.commits || []).slice(0, 20);
+  return [
+    `An earlier session on this step was cut off at ${interrupted.at || 'an unknown time'}${interrupted.why ? ` (${interrupted.why})` : ''}.`,
+    ...(commits.length
+      ? ['Its commits on this branch (`git log --oneline origin/main..HEAD`):', ...commits.map((line) => `    ${line}`)]
+      : ['It left no commits on this branch.']),
+    ...(interrupted.wip
+      ? [`${interrupted.wip.slice(0, 7)} is a WIP commit the runner made of the files it had not committed; nothing in it has been checked.`]
+      : []),
+    ...(interrupted.lastText
+      ? ['Its last words were:', ...String(interrupted.lastText).split('\n').map((line) => `> ${line}`)]
+      : []),
+    ...(interrupted.checkpoint ? [`\`${interrupted.checkpoint}\` holds the last snapshot of its uncommitted work.`] : []),
+    'Read the diff of the branch before writing anything, and do not redo what the commits already did.',
     '',
   ];
 }
