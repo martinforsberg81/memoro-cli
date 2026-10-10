@@ -48,6 +48,8 @@ mc test  <repo> <pr> [<pr>...] [--json]            measure it; merge nothing
 mc test  <repo> --full [--json]                    the whole suite, on the default branch
 mc merge <repo> <pr> [<pr>...] [--check] [--json]   the same round, then squash
 mc merge <repo> <pr> --docs [--json]                docs-only: no suite, squash
+mc merge <repo> <pr> --watch [--json]               queue it, then follow it to the answer
+mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a job already queued
 ```
 
 `--docs` with several pull requests is refused (it lands one at a time), and so
@@ -107,6 +109,57 @@ only for a genuine trespass or a head plan that no longer parses.
 **Known gap:** the door checks one pull request. `mc merge <repo> <pr1>
 <pr2>` — a batch — does not run it; a batch is out of this step's scope, not a
 believed-safe case.
+
+### Watching a merge
+
+Past the door the pull request is the merger's, and `mc merge` returns at once
+(ruling 30). A session that wants the answer — a hand session, a close-out that
+needs its predecessors on main, a session about to `mc deploy` what it landed —
+asks for it (ruling 36):
+
+```
+mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a job that is queued
+mc merge <repo> <pr> --watch [--json]                   queue it through the door, then the same
+```
+
+[`src/mc/merge-watch.js`](../../src/mc/merge-watch.js) is both. `watchState`
+reads one job out of `merges.json` — queued with its place and the numbers
+ahead of it, waiting for the parent it is stacked on, landing (with the other
+jobs of the same batch, the entries sharing its `started`), red with
+`markRed`'s reason, or gone — and `watch` prints one line each time that state
+changes and nothing in between. The exit code is the answer:
+
+| code | outcome |
+|---|---|
+| 0 | merged — the last line names the merge commit |
+| 1 | red — the reason the merger recorded |
+| 2 | usage, or a pull request neither in the queue nor merged (open, closed, unknown) |
+| 3 | `--timeout` elapsed (30 minutes by default); the job stays in the queue |
+| 4 | no merger alive for two polls while the job waits; the job stays in the queue |
+
+`--json` prints no lines and one object at the end: `{ repo, pr, outcome,
+merge_commit, reason, place, seconds }`. With `--watch` the queueing's own
+lines come first, and with `--watch --json` the queueing says nothing, so the
+watch's object is the only output.
+
+**Opt-in and read-only.** Nothing starts a watch, and the step-session prompt
+does not mention it: a step session queues and ends, because the next step
+stacks on top. The watch never writes `merges.json`, the register or
+`merger.json`, never starts a merger and never cancels or re-queues a job — a
+3 or a 4 leaves everything where it was. `--watch` is refused with `--docs`
+(it lands in the call; there is nothing to watch), with `--check`, with several
+numbers (one call per pull request), and by `mc test`. A queueing that fails —
+a plan-trespass, say — is returned as it is, with no watch.
+
+**GitHub is asked once.** The queue is a local file, read every
+`WATCH_POLL_MS` (10 s) for nothing. A job that leaves the queue has either
+landed or been dropped, and only GitHub knows which, so `gh pr view --json
+state,mergeCommit` is asked then — once, at the end — or at once for a pull
+request that was never queued. There are no GitHub calls in the loop.
+
+**In a Claude session**, run it with Bash's `run_in_background`: the session is
+woken when the command exits, reads the few lines and the exit code, and spends
+nothing on a queue that has not moved while it waits.
 
 ## The docs form
 
