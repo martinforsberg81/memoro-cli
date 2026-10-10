@@ -450,6 +450,9 @@ export async function landJob(batch, {
   const label = `${job.repo} ${numbers.map((n) => `#${n}`).join(' ')}`;
   let report = null;
   let said = null;
+  // A test file killed from outside the round is measured once more; a second
+  // `file-killed` is answered red with its reason (ruling 38).
+  let killedOnce = false;
   for (; !report;) {
     // Waited for before the round rather than inside it, so a busy gate is
     // not a round-log line every fifteen seconds. An orphaned lease is in
@@ -480,8 +483,14 @@ export async function landJob(batch, {
       onProgress: (message) => say(`${label}: ${message}`),
     });
     record(report, { mode: 'merge' });
-    // Lost the race between "both free" and the round's own lock.
-    if (!shouldWait(report)) break;
+    if (report?.stopped_at === 'file-killed' && !killedOnce) {
+      killedOnce = true;
+      const files = (report.killed_files || []).map((one) => one.file).join(', ') || 'a test file';
+      say(`${label}: ${files} was killed from outside the round — measuring again`);
+    } else if (!shouldWait(report)) {
+      // Lost the race between "both free" and the round's own lock otherwise.
+      break;
+    }
     report = null;
     await sleep(MERGER_POLL_MS);
   }

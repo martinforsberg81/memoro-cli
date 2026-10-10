@@ -1579,6 +1579,58 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
+    /** TAP with `killed` ended by SIGTERM and a located failure in each of `red`, the way node 24.10 writes both. */
+    function withKilled({ killed = [], red = [] }) {
+      const lines = ['TAP version 13'];
+      let index = 0;
+      for (const file of killed) {
+        index += 1;
+        lines.push(`# Subtest: ${file}`, `not ok ${index} - ${file}`, '  ---', `  location: '/somewhere/candidate/${file}:1:1'`,
+          "  failureType: 'testCodeFailure'", '  exitCode: ~', "  signal: 'SIGTERM'", "  error: 'test failed'", '  ...');
+      }
+      for (const file of red) {
+        index += 1;
+        lines.push(`not ok ${index} - a test in ${file}`, '  ---', `  location: '/somewhere/candidate/${file}:3:1'`, '  ...');
+      }
+      lines.push(`1..${index}`, '# tests 6', `# pass ${6 - index}`, `# fail ${index}`);
+      return lines.join('\n');
+    }
+
+    it('the only red file was killed: file-killed, and the main-red probe is never asked', async () => {
+      const fx = selecting({ files: [scanner, own] });
+      const probed = [];
+      try {
+        const report = await fx.report({
+          tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner] }) }),
+          probeMain: async (args) => { probed.push(args); return null; },
+        });
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'file-killed');
+        assert.equal(report.verdict, 'stopped');
+        assert.equal(report.reason, `${scanner} ended by SIGTERM from outside the round — not a verdict on this change`);
+        assert.deepEqual(report.killed_files, [{ file: scanner, signal: 'SIGTERM' }]);
+        assert.deepEqual(probed, [], 'a killed file is not asked of the base');
+      } finally { fx.cleanup(); }
+    });
+
+    it('one killed and one red: red over the second alone, the killed one listed beside it', async () => {
+      const fx = selecting({ files: [scanner, own] });
+      const probed = [];
+      try {
+        const report = await fx.report({
+          tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner], red: [own] }) }),
+          probeMain: async (args) => { probed.push(args.files); return { red_on_main: [], breaks: [] }; },
+        });
+        assert.equal(report.stopped_at, 'red');
+        assert.equal(report.verdict, 'red');
+        assert.deepEqual(report.candidate.red, [`a test in ${own}`]);
+        assert.deepEqual(report.candidate.red_files, [own]);
+        assert.deepEqual(report.killed_files, [{ file: scanner, signal: 'SIGTERM' }]);
+        assert.deepEqual(probed, [[own]], 'only the change\'s red is asked of the base');
+        assert.doesNotMatch(report.reason, /scan\.test\.js/u);
+      } finally { fx.cleanup(); }
+    });
+
     it('a green round runs nothing more, and keeps the files it selected', async () => {
       const { gitAlso, tests } = onMain({ redAt: {} });
       const fx = selecting({ files: [own, scanner], gitAlso });

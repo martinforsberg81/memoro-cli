@@ -21,7 +21,7 @@
       "check": "`tests/mc/merger.test.js` (restack) on a fixture repository: parent squashed onto main, child with `git merge origin/main` in its history. The old rebase conflicts on that fixture and the new restack is clean. A child whose own commit truly conflicts is still `ok: false` with the conflicted path. Live: the close-out quotes a `moved onto main past` line for a branch whose history has a merge from main, or says none occurred."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A red file that `node --test` reports ended by a signal is not answered as the change's red: the round runs once more, and then it is a `file-killed` stop.",
       "check": "`tests/mc/tap-red.test.js`: `killedFiles` on TAP with `signal: 'SIGTERM'` and `exitCode: ~` names that file and not an ordinary red. `tests/mc/repo-gate.test.js`: a stub suite whose only red file was killed finishes `file-killed` without running `probeMainRed`. With one killed and one red file it is `red`, naming only the red one and listing the killed one in `report.killed_files`. `tests/mc/merger.test.js`: `file-killed` makes `landJob` run the round once more, and a second `file-killed` answers red with that reason and starts no mend."
     },

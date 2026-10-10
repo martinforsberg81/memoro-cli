@@ -48,7 +48,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
-import { redFiles, redNames, tapTotals } from './tap-red.js';
+import { killedFiles, redFiles, redNames, redNamesIn, tapTotals } from './tap-red.js';
 import { probeMainRed } from './selector-miss.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
@@ -146,6 +146,8 @@ export async function runGate({
   // flight finish, and a round that exits under it would end them all. With
   // `false` the `finally` below gives both back.
   signals = true,
+  // Whether a red file is red on the base too (selector-miss.js).
+  probeMain = probeMainRed,
 } = {}) {
   const startedAt = clock();
   // Where the repository may keep what it learns about its own tests between
@@ -669,12 +671,29 @@ export async function runGate({
     // a gate.
     say(`${after.result.red.length} red`);
     if (after.result.red.length) {
+      // A file something outside the round killed is not a verdict on this
+      // change, and the base would pass it — the main-red probe would then
+      // call it "this change broke them" (#13337, 2026-10-10 12:19:56). Every
+      // red killed: a stop the merger measures again. Some: the rest is the
+      // red, and the killed ones are listed beside it, never counted green.
+      const killed = after.result.killed_files || [];
+      if (killed.length) {
+        report.killed_files = killed;
+        const theirs = new Set(after.result.killed_red || []);
+        const rest = after.result.red.filter((name) => !theirs.has(name));
+        if (!rest.length) {
+          const signals = [...new Set(killed.map((one) => one.signal))].join('/');
+          return finish('file-killed', `${killed.map((one) => one.file).join(', ')} ended by ${signals} from outside the round — not a verdict on this change`);
+        }
+        after.result.red = rest;
+        if (after.result.red_files) after.result.red_files = after.result.red_files.filter((file) => !killed.some((one) => one.file === file));
+      }
       const red = after.result.red;
       // The verdict is already red; this only says whose red it is. Worth a
       // few seconds on a round that failed, because the other reading is the
       // one #12107 got: red twice on tests a landed change had broken.
       if (facts.pr && after.result.red_files?.length) {
-        report.main_red = await timed('main red', () => probeMainRed({
+        report.main_red = await timed('main red', () => probeMain({
           git: askGit, tests: runTests, cwd: headDir, baseCommit: report.base.commit, files: after.result.red_files,
           flags, say, root, repo: repoPath, foundBy: numbers,
         }));
@@ -799,6 +818,8 @@ export function verdictFor(report) {
   if (report.stopped_at === 'derived-outside') return 'red';
   // So is a project log row its tree carries twice.
   if (report.stopped_at === 'project-log') return 'red';
+  // A file killed from outside the round is measured again, not judged.
+  if (report.stopped_at === 'file-killed') return 'stopped';
   if (report.stopped_at !== null) return 'stopped';
   return 'green';
 }
@@ -879,6 +900,8 @@ async function measure({ suite, git, cwd, command, say, is }) {
       exit_code: run.code,
       totals,
       red: redNames(run.tap),
+      // No file list to name them by: the locations as node wrote them.
+      ...killedOf(run.tap, null),
     },
   };
 }
@@ -1030,8 +1053,18 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
     ok: true,
     result: {
       commit, is, exit_code: run.code, totals, red: redNames(run.tap), red_files: redFiles(run.tap, files), selected: files.length,
+      ...killedOf(run.tap, files),
     },
   };
+}
+
+/**
+ * The files of a run something outside it killed, and the red names they
+ * account for (`killed_red`), so the verdict can tell them from the change's.
+ */
+function killedOf(tap, files) {
+  const killed = killedFiles(tap, files);
+  return { killed_files: killed, killed_red: redNamesIn(tap, killed.map((one) => one.file)) };
 }
 
 /**
