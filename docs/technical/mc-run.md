@@ -797,6 +797,30 @@ session that wants to wait for the answer runs `mc merge watch <repo> <pr>`
 or `mc merge <repo> <pr> --watch`, opt-in and read-only
 ([`mc-merge.md`](mc-merge.md) § *Watching a merge*).
 
+Four answers the merger gives without a person (ruling 37,
+[`mc-merge.md`](mc-merge.md) § *The async round, SIGTERM and the mend*):
+
+- **Already merged.** A pull request somebody merged on GitHub — before its
+  round, or after it came back red — is answered landed with GitHub's merge
+  commit: dequeued, its step `done`, and the rest of its batch measured
+  without it. One closed on GitHub is red by itself and nobody else's reason.
+- **Step order.** A step's job does not go until every earlier step of its
+  plan is `done` in the register, with or without `stacked_on`, and a
+  restarted merger does not resume a `landing` job whose earlier step is not.
+  The page's queue row and `mc merge watch` say `waits for <project> step
+  <n>`.
+- **`mending` in the queue.** A red the change caused gets one mend session
+  first. The entry is `mending` and the step stays `landing`, so the runner
+  starts nothing for it. A push puts the job back in line at its old place
+  with `mended` set; anything else is red as before, and the step goes
+  through `redPatch` with the round's reason and what the mend said.
+- **The page.** MERGES draws one landing row per pull request in a round: the
+  round's phase and age on the first, and no batch member counted as
+  waiting. A mend is a yellow row of its own under the landing rows, with the
+  red's reason and how long the session has run (`waiting` before it has a
+  pid). The heading counts it: `1 landing · 1 mending · 2 red · 3 waiting:
+  …`. `mc status <project>` says the same for a step's pull request.
+
 **The runner lands through `mc merge` and nothing else** (Martin, 2026-09-02).
 `repo-merge.js`'s round, called in this process rather than shelled out to,
 because the runner *is* mc: it takes the repository's lease and holds it across
