@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { redNames, tapTotals } from '../../src/mc/tap-red.js';
+import { killedFiles, redNames, redNamesIn, tapTotals } from '../../src/mc/tap-red.js';
 
 /** TAP the shape node emits it: `# Subtest:` announcements, four-space nesting. */
 function tap({ suites = [], totals = { tests: 0, pass: 0, fail: 0 } } = {}) {
@@ -123,5 +123,52 @@ describe('the red set of a suite run', () => {
     const batched = ['# tests 100', '# fail 4', '# tests 20', '# fail 0'].join('\n');
     assert.equal(tapTotals(batched).fail, 4);
     assert.equal(tapTotals(batched).tests, 120);
+  });
+});
+
+describe('killedFiles — a file ended by a signal from outside the run', () => {
+  // node 24.10's own shape for a file whose process got `kill <pid>`.
+  const killedTap = [
+    'TAP version 13',
+    '# Subtest: tests/scripts/build-bundle.test.js',
+    'not ok 1 - tests/scripts/build-bundle.test.js',
+    '  ---',
+    '  duration_ms: 301234.5',
+    "  type: 'test'",
+    "  location: '/w/candidate/tests/scripts/build-bundle.test.js:1:1'",
+    "  failureType: 'testCodeFailure'",
+    '  exitCode: ~',
+    "  signal: 'SIGTERM'",
+    "  error: 'test failed'",
+    "  code: 'ERR_TEST_FAILURE'",
+    '  ...',
+    '# Subtest: tests/own.test.js',
+    'not ok 2 - a test in own',
+    '  ---',
+    "  location: '/w/candidate/tests/own.test.js:3:1'",
+    '  exitCode: 1',
+    '  signal: ~',
+    '  ...',
+    '# tests 4',
+    '# fail 2',
+  ].join('\n');
+  const files = ['tests/scripts/build-bundle.test.js', 'tests/own.test.js'];
+
+  it('names the killed file with its signal, and not an ordinary red', () => {
+    assert.deepEqual(killedFiles(killedTap, files), [{ file: 'tests/scripts/build-bundle.test.js', signal: 'SIGTERM' }]);
+  });
+
+  it('a run with no signal names nothing', () => {
+    assert.deepEqual(killedFiles(killedTap.replace("signal: 'SIGTERM'", 'signal: ~'), files), []);
+  });
+
+  it('only files the caller named come back; null takes the location as written', () => {
+    assert.deepEqual(killedFiles(killedTap, ['tests/own.test.js']), []);
+    assert.deepEqual(killedFiles(killedTap, null), [{ file: '/w/candidate/tests/scripts/build-bundle.test.js', signal: 'SIGTERM' }]);
+  });
+
+  it('redNamesIn gives the red names a killed file accounts for, and no others', () => {
+    assert.deepEqual(redNamesIn(killedTap, ['tests/scripts/build-bundle.test.js']), ['tests/scripts/build-bundle.test.js']);
+    assert.deepEqual(redNamesIn(killedTap, []), []);
   });
 });
