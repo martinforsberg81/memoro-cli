@@ -16,7 +16,13 @@
  * change of state and nothing in between, so a session running it in the
  * background spends nothing on a queue that has not moved.
  */
-import { inLine, placeOf, queueOrder, queuedFor, samePr, waitingOnParent } from './merge-queue.js';
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+
+import { inLine, mergesPath, parseQueue, placeOf, queueOrder, queuedFor, samePr, waitingOnParent } from './merge-queue.js';
+import { readMerger } from './merger.js';
+import { workRoot } from './paths.js';
 
 /**
  * How often the queue is read. `merges.json` is a local file, so polling it
@@ -150,4 +156,43 @@ export async function watch({
     prev = state;
     await sleep(pollMs);
   }
+}
+
+const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+
+/** What GitHub says of a pull request: `{ state, mergeCommit }`, or null when it cannot be asked. */
+function ghPrView(repoPath) {
+  return (repo, pr) => {
+    const r = spawnSync('gh', ['pr', 'view', String(pr), '--json', 'state,mergeCommit'], { cwd: repoPath, encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    try {
+      const view = JSON.parse(r.stdout);
+      return { state: view.state || null, mergeCommit: view.mergeCommit?.oid || null };
+    } catch { return null; }
+  };
+}
+
+/**
+ * The watch wired to this machine: the queue and the merger from the work
+ * root, GitHub through `gh` in the repository. Both `mc merge watch` and
+ * `mc merge --watch` end here. Returns the exit code; `--json` prints the
+ * result as one object at the end and no lines before it.
+ */
+export async function followMerge({ repoPath, pr, timeoutMs = WATCH_TIMEOUT_MIN * 60_000, json = false, stdout, deps = {} }) {
+  // The queue names a repository by its directory, as `queueForMerger` wrote it.
+  const repo = basename(String(repoPath).replace(/\/+$/u, ''));
+  const root = deps.root || workRoot(process.env);
+  const { code, result } = await (deps.watch || watch)({
+    repo,
+    pr,
+    timeoutMs,
+    readQueue: deps.readQueue || (() => parseQueue(realRead(mergesPath(root)))),
+    readMerger: deps.readMerger || (() => readMerger({ root })),
+    prView: deps.prView || ghPrView(repoPath),
+    ...(deps.now ? { now: deps.now } : {}),
+    ...(deps.sleep ? { sleep: deps.sleep } : {}),
+    print: json ? () => {} : (line) => stdout.write(`${line}\n`),
+  });
+  if (json) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  return code;
 }

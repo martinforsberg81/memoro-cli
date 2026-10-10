@@ -792,7 +792,10 @@ red back as `ready` (*The register*). A `landing` step does not hold the
 project: the next step starts at once on a branch on top of it (`placeBranch`,
 `stacked_on`), and the merger lands the two in order
 ([`mc-merge.md`](mc-merge.md) § *One round at a time*). The round the merger
-runs is the one below, and so is everything said about what it reads back.
+runs is the one below, and so is everything said about what it reads back. A
+session that wants to wait for the answer runs `mc merge watch <repo> <pr>`
+or `mc merge <repo> <pr> --watch`, opt-in and read-only
+([`mc-merge.md`](mc-merge.md) § *Watching a merge*).
 
 **The runner lands through `mc merge` and nothing else** (Martin, 2026-09-02).
 `repo-merge.js`'s round, called in this process rather than shelled out to,
