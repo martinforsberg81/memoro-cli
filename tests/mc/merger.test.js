@@ -166,7 +166,7 @@ describe('serve — the loop', () => {
     const states = [];
     const code = await serve({
       root, lock, take, release,
-      land: async (job) => { landed.push(job.pr); states.push(queue().find((e) => e.pr === job.pr).state); },
+      land: async (job) => { landed.push(job.pr); states.push(queue().find((e) => e.pr === job.pr).state); return green; },
     });
     assert.equal(code, 0);
     assert.deepEqual(landed, [1, 2]);
@@ -188,16 +188,47 @@ describe('serve — the loop', () => {
     assert.deepEqual(landed, [1, 2]);
   });
 
-  it('a round that throws is said, its job dropped, and the next one landed', async () => {
+  it('a red answer stays in the file as a red row with its reason, and the queue goes on', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, pr: 2, since: 'b', step: null }]));
+    const landed = [];
+    await serve({
+      root, lock, take, release, now: () => new Date('2026-10-10T07:00:00Z'),
+      land: async (job) => { landed.push(job.pr); return job.pr === 1 ? red : green; },
+    });
+    assert.deepEqual(landed, [1, 2], 'the red one did not hold the next back');
+    const [left] = queue();
+    assert.equal(queue().length, 1);
+    assert.equal(left.pr, 1);
+    assert.equal(left.state, 'red');
+    assert.equal(left.reason, 'red: 2 tests red: a › b');
+    assert.equal(left.answered, '2026-10-10T07:00:00.000Z');
+  });
+
+  it('queued again, a red row is back in line and landed', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null, state: 'red', reason: 'red: x', answered: 'z' }]));
+    queueMerge({ root, repo: 'memoro-cli', repoPath: '/r', pr: 1, lock, start: () => ({ pid: null, started: false }) });
+    assert.equal(queue()[0].state, 'queued');
+    assert.equal(queue()[0].reason, null);
+    const landed = [];
+    await serve({ root, lock, take, release, land: async (job) => { landed.push(job.pr); return green; } });
+    assert.deepEqual(landed, [1]);
+    assert.deepEqual(queue(), []);
+  });
+
+  it('a round that throws is said, its job kept red, and the next one landed', async () => {
     mkdirSync(join(root, 'runner'), { recursive: true });
     writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, pr: 2, since: 'b', step: null }]));
     const said = [];
     const landed = [];
     await serve({
       root, lock, take, release, say: (line) => said.push(line),
-      land: async (job) => { if (job.pr === 1) throw new Error('boom'); landed.push(job.pr); },
+      land: async (job) => { if (job.pr === 1) throw new Error('boom'); landed.push(job.pr); return green; },
     });
     assert.deepEqual(landed, [2]);
+    assert.equal(queue()[0].state, 'red');
+    assert.match(queue()[0].reason, /^threw: the round threw \(boom\)/u);
     assert.ok(said.some((line) => /#1: the round threw — Error: boom/u.test(line)));
   });
 
@@ -205,7 +236,7 @@ describe('serve — the loop', () => {
     mkdirSync(join(root, 'runner'), { recursive: true });
     writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, pr: 2, since: 'b', step: null }]));
     let stop = false;
-    await serve({ root, lock, take, release, stopping: () => stop, land: async () => { stop = true; } });
+    await serve({ root, lock, take, release, stopping: () => stop, land: async () => { stop = true; return green; } });
     assert.deepEqual(queue().map((e) => e.pr), [2]);
   });
 

@@ -12,8 +12,12 @@
  *
  * An entry is a job, not a process: what to land (`repo`, `repo_path`,
  * `pr`), who asked (`holder`), the step it is (`step`, or null for a pull
- * request that is nobody's step), and where it stands (`state`: `queued`, or
- * `landing` while the merger has it). A `landing` entry whose merger died is
+ * request that is nobody's step), and where it stands (`state`: `queued`,
+ * `landing` while the merger has it, or `red` once it answered red). A red
+ * entry is not work: it stays so the page draws it red while the queue goes
+ * on (Martin, 2026-10-10: *"en misslyckad merge pr bör ligga kvar som en rad
+ * i mc (röd) medan merge-kön fortsätter med nästa"*), and `mc merge` again
+ * puts it back in line. A `landing` entry whose merger died is
  * landed again by the next one — the round itself is what says whether the
  * pull request already merged.
  *
@@ -36,7 +40,7 @@ export function mergesPath(root) {
   return join(root, 'runner', 'merges.json');
 }
 
-export const JOB_STATES = Object.freeze(['queued', 'landing']);
+export const JOB_STATES = Object.freeze(['queued', 'landing', 'red']);
 
 const plain = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -60,6 +64,9 @@ function normalise(entry) {
     since: entry.since ?? null,
     state: JOB_STATES.includes(entry.state) ? entry.state : 'queued',
     started: entry.started ?? null,
+    // A red answer's words and when it came (`markRed`).
+    reason: entry.state === 'red' && typeof entry.reason === 'string' ? entry.reason : null,
+    answered: entry.state === 'red' ? entry.answered ?? null : null,
   };
 }
 
@@ -93,7 +100,7 @@ export function enqueue(entries, entry) {
   return entries.map((item, index) => (index === at ? { ...next, since: was.since || next.since } : item));
 }
 
-/** The entries without it: the merger has an answer, whatever the answer was. */
+/** The entries without it: landed, or nothing left to land. */
 export function dequeue(entries, { repo = null, pr }) {
   return entries.filter((entry) => !samePr(entry, { repo, pr }));
 }
@@ -103,9 +110,32 @@ export function queuedFor(entries, repo, pr) {
   return entries.find((entry) => samePr(entry, { repo: repo ?? null, pr })) || null;
 }
 
-/** Oldest first: the one that has been waiting longest is the one to land. */
+/**
+ * The entry kept with the round's red answer: `state: 'red'`, the reason and
+ * when — no longer work for the merger, still a row on the page.
+ */
+export function markRed(entries, job, { reason = null, answered = null } = {}) {
+  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'red', reason, answered } : entry));
+}
+
+/** The entries the merger still has to land: everything not answered red. */
+export function inLine(entries) {
+  return entries.filter((entry) => entry.state !== 'red');
+}
+
+/** The red answers, newest first. */
+export function redEntries(entries) {
+  return entries.filter((entry) => entry.state === 'red')
+    .sort((a, b) => String(b.answered ?? '').localeCompare(String(a.answered ?? '')) || b.pr - a.pr);
+}
+
+/**
+ * Oldest first: the one that has been waiting longest is the one to land.
+ * Queued in the same second — `mc merge <repo> <pr> <pr>` — they keep the
+ * file's order, which is the order they were given in.
+ */
 export function queueOrder(entries) {
-  return [...entries].sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.pr - b.pr);
+  return [...entries].sort((a, b) => String(a.since ?? '').localeCompare(String(b.since ?? '')));
 }
 
 /**
@@ -117,7 +147,7 @@ export function queueOrder(entries) {
  * and lands. Null when there is nothing the merger may take.
  */
 export function nextJob(entries, { landed = () => true } = {}) {
-  const ordered = queueOrder(entries);
+  const ordered = queueOrder(inLine(entries));
   const mayGo = (entry) => !entry.parent
     || (!queuedFor(entries, entry.repo, entry.parent.pr) && landed(entry.parent));
   return ordered.find((entry) => entry.state === 'landing')
@@ -127,7 +157,7 @@ export function nextJob(entries, { landed = () => true } = {}) {
 
 /** Jobs waiting on a parent that has not landed, for the page: `{ entry, parent }`. */
 export function waitingOnParent(entries, { landed = () => true } = {}) {
-  return entries.filter((entry) => entry.parent && entry.state !== 'landing'
+  return inLine(entries).filter((entry) => entry.parent && entry.state !== 'landing'
     && (queuedFor(entries, entry.repo, entry.parent.pr) || !landed(entry.parent)));
 }
 
@@ -138,6 +168,6 @@ export function markLanding(entries, job, started) {
 
 /** How many stand before this pull request — 0 is next. */
 export function placeOf(entries, repo, pr) {
-  const at = queueOrder(entries).findIndex((entry) => samePr(entry, { repo, pr }));
+  const at = queueOrder(inLine(entries)).findIndex((entry) => samePr(entry, { repo, pr }));
   return at < 0 ? null : at;
 }

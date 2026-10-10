@@ -135,7 +135,7 @@ import {
 } from './github-backoff.js';
 import { planBoundary } from './merge-boundary.js';
 import { redPatch } from './merge-step.js';
-import { mergesPath, nextJob, parseQueue } from './merge-queue.js';
+import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
 import { parentLanded, queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
 import { currentHolder } from './work-identity.js';
@@ -577,7 +577,7 @@ export function createRunner({
    * register a moment before the queue.
    */
   function sweepLanding(plans) {
-    const pending = deps.pendingMerges ? deps.pendingMerges(root) : [];
+    const pending = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
     const mayGo = pending.length && nextJob(pending, { landed: parentLanded(root, { read: deps.read }) });
     if (mayGo && deps.startMerger && !readMerger({ root, alive })) {
       const started = deps.startMerger({ root });

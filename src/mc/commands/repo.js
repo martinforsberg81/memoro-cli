@@ -298,15 +298,26 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
   }
   const mode = opts.check ? 'check' : 'merge';
   const root = deps.root || workRoot(process.env);
-  // The door and the queue are both the single-`mc merge` case: a `--check`
-  // only measures and was never asked to land anything, and a batch falls back
-  // to one round per pull request with no single identity to queue as.
-  const single = !opts.check && opts.pr != null && !(opts.prs && opts.prs.length);
-
-  // One pull request to land is the merger's (ruling 30): the step is
+  // Every pull request to land is the merger's (ruling 30): the step is
   // `landing`, the job is queued, and this call returns. What comes of it is
-  // the register's word (and `merger.log`'s), not this process's.
-  if (single) return queueForMerger({ repoPath, opts, holder, mode, root, stdout, stderr, deps });
+  // the register's word (and `merger.log`'s), not this process's. Several at
+  // once are queued one by one in the order given — no longer one candidate
+  // measured together (Martin, 2026-10-10: *"batch-merge … bara betyder att
+  // man kan skicka flera pr till merge samtidigt"*). A `--check` only
+  // measures and was never asked to land anything.
+  if (!opts.check && opts.pr != null) {
+    if (!opts.prs?.length) return queueForMerger({ repoPath, opts, holder, mode, root, stdout, stderr, deps });
+    // `MC_STEP` names one step; with several pull requests each is the step
+    // its own branch says, or none.
+    const env = { ...(deps.env || process.env) };
+    delete env.MC_STEP;
+    let code = 0;
+    for (const pr of opts.prs) {
+      const one = await queueForMerger({ repoPath, opts: { ...opts, pr, prs: null }, holder, mode, root, stdout, stderr, deps: { ...deps, env } });
+      if (one !== 0) code = one;
+    }
+    return code;
+  }
 
   const round = { repoPath, pr: opts.pr, prs: opts.prs, full: Boolean(opts.full), mode, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
   recordRoundStart({
@@ -844,8 +855,8 @@ export function parseMergeArgs(argv, { docs = false, full = false } = {}) {
   const bad = numbers.find((number) => !/^\d+$/u.test(number));
   if (bad !== undefined) return { ...opts, error: `"${bad}" is not a pull request number` };
   opts.pr = Number(numbers[0]);
-  // Several at once is one candidate and one suite run (A3); the order
-  // given is the order they land in.
+  // Several at once: `mc merge` queues each in the order given; `mc test`
+  // measures them as one candidate (A3).
   opts.prs = numbers.length > 1 ? numbers.map(Number) : null;
   if (opts.prs && new Set(opts.prs).size !== opts.prs.length) return { ...opts, error: 'the same pull request is named twice' };
   // `--check` runs the gate and stops there; without it the same round also
