@@ -13,13 +13,23 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  dequeue, enqueue, markLanding, mergesPath, nextJob, parseQueue, placeOf, queueEntries, queueOrder, queuedFor,
-  waitingOnParent,
+  MERGE_BATCH_MAX, dequeue, enqueue, markLanding, markRed, mergesPath, nextBatch, nextJob, parseQueue, placeOf,
+  queueEntries, queueOrder, queuedFor, waitingOnParent,
 } from '../../src/mc/merge-queue.js';
 
 const job = (over = {}) => ({
   repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 671, branch: 'merge-queue',
   since: '2026-09-06T18:00:00Z', holder: { name: 'martin@host', kind: 'shell' }, step: null, ...over,
+});
+
+test('with a lane, a batch is only that lane\'s jobs', () => {
+  const laneOf = (entry) => (entry.repo === 'memoro-cli' ? 'light' : 'heavy');
+  const entries = queueEntries([
+    job({ repo: 'memoro', pr: 1, since: 'a' }), job({ pr: 2, since: 'b' }), job({ repo: 'memoro', pr: 3, since: 'c' }),
+  ]);
+  assert.deepEqual(nextBatch(entries, { lane: 'heavy', laneOf }).map((e) => e.pr), [1, 3]);
+  assert.deepEqual(nextBatch(entries, { lane: 'light', laneOf }).map((e) => e.pr), [2]);
+  assert.deepEqual(nextBatch(entries).map((e) => e.pr), [1, 3], 'no lane is every job');
 });
 
 test('the file sits beside the runner\'s other state', () => {
@@ -92,4 +102,39 @@ test('a job built on another waits until that one has landed (ruling 30, A)', ()
   assert.equal(nextJob(alone, { landed: () => false }), null, '#9 came back red: #10 waits for it');
   assert.deepEqual(waitingOnParent(alone, { landed: () => false }).map((e) => e.pr), [10]);
   assert.deepEqual(waitingOnParent(alone, { landed: () => true }), []);
+});
+
+test('a batch is the next job and the ones after it for the same repository, up to MERGE_BATCH_MAX', () => {
+  const at = (minute) => `2026-10-10T12:${String(minute).padStart(2, '0')}:00Z`;
+  let entries = [];
+  for (const pr of [1, 2, 3, 4, 5, 6]) entries = enqueue(entries, job({ repo: 'memoro', pr, since: at(pr * 2) }));
+  entries = enqueue(entries, job({ pr: 7, since: at(3) }));
+  assert.equal(MERGE_BATCH_MAX, 4);
+  assert.deepEqual(nextBatch(entries).map((e) => e.pr), [1, 2, 3, 4], 'memoro-cli #7 is not in memoro\'s batch');
+  assert.deepEqual(nextBatch(entries, { max: 2 }).map((e) => e.pr), [1, 2]);
+  assert.deepEqual(nextBatch(dequeue(entries, { repo: 'memoro', pr: 1 })).map((e) => e.pr), [7], 'the oldest decides the repository');
+  assert.deepEqual(nextBatch([]), []);
+});
+
+test('a batch leaves out a red entry and a job whose parent has not landed', () => {
+  const parent = { project: 'mq', index: 0, pr: 20, sha: 'abc' };
+  let entries = [];
+  entries = enqueue(entries, job({ repo: 'memoro', pr: 1, since: '2026-10-10T12:01:00Z' }));
+  entries = enqueue(entries, job({ repo: 'memoro', pr: 2, since: '2026-10-10T12:02:00Z' }));
+  entries = enqueue(entries, job({ repo: 'memoro', pr: 3, since: '2026-10-10T12:03:00Z', parent }));
+  entries = enqueue(entries, job({ repo: 'memoro', pr: 4, since: '2026-10-10T12:04:00Z' }));
+  entries = markRed(entries, { repo: 'memoro', pr: 2 }, { reason: 'red: x', answered: 'z' });
+  assert.deepEqual(nextBatch(entries, { landed: () => false }).map((e) => e.pr), [1, 4]);
+  assert.deepEqual(nextBatch(entries, { landed: () => true }).map((e) => e.pr), [1, 3, 4]);
+  const below = enqueue(entries, job({ repo: 'memoro', pr: 20, since: '2026-10-10T12:05:00Z' }));
+  assert.deepEqual(nextBatch(below).map((e) => e.pr), [1, 4, 20], 'built on one still queued, even in the same batch, it waits');
+});
+
+test('a merger that died under a batch: every landing entry of that repository is taken again, and nothing more', () => {
+  let entries = [];
+  for (const pr of [1, 2, 3]) entries = enqueue(entries, job({ repo: 'memoro', pr, since: `2026-10-10T12:0${pr}:00Z` }));
+  entries = enqueue(entries, job({ pr: 9, since: '2026-10-10T12:00:00Z' }));
+  entries = markLanding(entries, { repo: 'memoro', pr: 1 }, 's');
+  entries = markLanding(entries, { repo: 'memoro', pr: 3 }, 's');
+  assert.deepEqual(nextBatch(entries).map((e) => [e.pr, e.state]), [[1, 'landing'], [3, 'landing']]);
 });

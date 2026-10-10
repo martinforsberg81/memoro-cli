@@ -816,6 +816,25 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
     assert.equal(order.filter((step) => step === 'sleep').length, 3, 'polled until the round was gone');
   });
 
+  it('a light round alone still makes the deployer wait, and the wait names the lane', async () => {
+    let reads = 0;
+    const order = [];
+    const { out, stdout } = io();
+    const job = { key: { started: 'x', sha: SHA }, sha: SHA, worktree: MAIN_WT, own: true, root: work };
+    const code = await ship(job, {
+      ...deps(),
+      stdout,
+      runningRounds: () => ({ heavy: null, light: reads++ < 2 ? { pid: 9, repo: 'memoro-cli', pr: 838, lane: 'light' } : null }),
+      readMerger: () => null,
+      sleep: async () => { order.push('sleep'); },
+      spawnDeploy: async () => { order.push('build'); return { code: 0 }; },
+    });
+    assert.equal(code, 0);
+    assert.equal(out.stdout.match(/waiting for the gate round of memoro-cli #838 in the light lane \(pid 9\)/gu).length, 1);
+    assert.equal(order.filter((step) => step === 'sleep').length, 2, 'polled until the light round was gone');
+    assert.equal(order.at(-1), 'build');
+  });
+
   it('with a merger alive and the gate free, the deployer reads the gate twice a poll apart', async () => {
     let reads = 0;
     const order = [];

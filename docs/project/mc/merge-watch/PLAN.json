@@ -1,0 +1,77 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A session that wants to know how its pull request's merge ends can run `mc merge watch <repo> <pr>`. The command follows the job through the merge queue and exits with the answer: merged, red with the reason, timed out, or no merger. It prints one line each time the state changes.",
+    "Since ruling 30, `mc merge` queues and returns (`queueForMerger`, `src/mc/commands/repo.js:349-407`). That is right for a step session, whose next step stacks on top. A hand session, a close-out that needs its predecessors on main, or a session that wants to deploy what it just landed has no way to wait except reading `merges.json`, tailing `merger.log` or polling `gh` by itself."
+  ],
+  "contract": [
+    "Opt-in. `mc merge` keeps returning at once. Nothing starts a watch automatically, and the step-session prompt does not mention it (Martin, 2026-10-10: *\"en bevakning som en session kan starta OM den vill\"*, ruling 36).",
+    "Read-only. The watch never writes `merges.json`, the register or `merger.json`, never starts a merger, and never cancels or re-queues a job. `mc merge <repo> <pr> --watch` queues through the ordinary door first and then watches.",
+    "The exit code is the answer: 0 merged, 1 red, 2 usage or a pull request that is neither in the queue nor open or merged, 3 `--timeout` elapsed, 4 no merger alive while the job waits. Nothing is cancelled on 3 or 4.",
+    "One line per change of state, nothing in between, so a session running it in the background spends no tokens on unchanged state. `--json` prints one object at the end.",
+    "It reads `merges.json` every `WATCH_POLL_MS` (10 s), which is a local file. It asks `gh` only when the job has gone from the queue or was never in it, so there are no GitHub calls in a loop.",
+    "It works with the batched merger of `merge-throughput` (several jobs `landing` with one `started`) and without it. The watch reads only its own job's `state`, and the batch is named only when other entries share its `started`.",
+    "Every step runs `npm test` and lands through `mc merge memoro-cli <pr>`."
+  ],
+  "out_of_scope": [
+    "Watching several pull requests in one call. Use one call per pull request.",
+    "Cancelling, reprioritising or re-queuing a job.",
+    "Deploying on green. The session runs `mc deploy` itself after exit 0 if it wants to.",
+    "A watch of `mc merge --docs`, which lands in the call itself and needs none."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`mc merge watch <repo> <pr>` follows a job from queued through landing to merged or red, prints one line per change, and exits with the contract's codes.",
+      "check": "`tests/mc/merge-watch.test.js` with injected `readQueue`, `readMerger`, `prView`, `now` and `sleep`: queued at place 3 then landing then gone and MERGED gives three lines and exit 0, with the merge commit in the last; landing then `red` gives exit 1 with `markRed`'s reason; a job never queued and CLOSED gives exit 2; an unchanged queued state past `--timeout` gives exit 3; a queued job with `readMerger` null for two polls gives exit 4; a waiting-on-parent job prints `waits for #<parent> (stacked on it)`. `prView` is called only after the job leaves the queue."
+    },
+    {
+      "met": false,
+      "criterion": "`mc merge <repo> <pr> --watch` queues and then watches, and `--json` prints the final state as one object.",
+      "check": "`tests/mc/merge-command.test.js` (or the test beside `commands/merge.js`): with a stub `queueForMerger` and a stub watch, `--watch` calls both in order and returns the watch's code; `--watch --docs` is refused; `--json` gives `{ repo, pr, outcome, merge_commit, reason, place, seconds }`."
+    },
+    {
+      "met": false,
+      "criterion": "Live: a pull request's landing is watched end to end.",
+      "check": "The close-out lands its own pull request with `mc merge memoro-cli <pr> --watch` and records the printed lines and the exit code with `mc step note` once it has merged."
+    }
+  ],
+  "documents": [
+    { "label": "mc rulings (ruling 36)", "path": "../rulings.md" },
+    { "label": "mc test and mc merge", "path": "../../../technical/mc-merge.md" },
+    { "label": "The runner (the merge)", "path": "../../../technical/mc-run.md" }
+  ],
+  "steps": [
+    {
+      "title": "1. mc merge watch <repo> <pr>: the pure state machine and the verb",
+      "status": "ready",
+      "done_when": "A new `src/mc/merge-watch.js` exports a pure `watchState(entries, { repo, pr, merger, prView })`, `watchLine(prev, next)` and an async `watch({ repo, pr, timeoutMs, ... })` loop. `mc merge watch <repo> <pr> [--timeout <minutes>] [--json]` runs it from `commands/merge.js`. The tests in success criterion 1 are green, and so is `npm test`.",
+      "instruction": [
+        "**What exists.** `merges.json` is read with `parseQueue(read(mergesPath(root)))` (`src/mc/merge-queue.js:39`, `:82`). The entries carry `state` (`queued`, `landing`, `red`), `reason` and `answered` on red, `parent` when stacked, and `started`. `placeOf(entries, repo, pr)` (`:170`) gives the place in line, and `waitingOnParent` (`:159`) whether it waits on its parent. A landed job is dequeued (`merger.js:388-396`), so a job that is gone has to be asked of GitHub. `readMerger({ root })` (`merger.js:78`) gives the live merger or null.",
+        "**watchState** returns one of `{ kind: 'queued', place, ahead: [pr…] }`, `{ kind: 'waiting', parent }`, `{ kind: 'landing', batch: [pr…], pid }`, `{ kind: 'red', reason, answered }`, `{ kind: 'gone' }`, and, when the job waits with `merger` null, adds `merger: false`. `ahead` is the numbers before it in `queueOrder` for the same repository. `batch` is the other entries with the same `started` and `state: 'landing'`, and is empty for one job. `gone` is resolved by the loop, not here.",
+        "**watch.** Each poll reads the queue and the merger and computes `watchState`. When `watchLine(prev, next)` returns a line (it returns null when nothing a reader cares about changed: same kind, same place, same parent, same batch, and `merger` unchanged), the loop prints it. On `gone`, or on the first poll when the job is not in the queue, it calls `prView(repo, pr)` once for `{ state, mergeCommit }` (`gh pr view <pr> --json state,mergeCommit` in the repository's path, as `prState` in `commands/step.js:130` does). MERGED ends with `mc: #835 merged into main as 4f2a1c9 (6m12s)` and 0. OPEN while not queued ends with `mc: #835 is open and not in the merge queue — mc merge memoro-cli 835 queues it` and 2. CLOSED ends with 2. A `red` state ends with `mc: #835 red — <reason>; fix it on its branch and mc merge again` and 1. `--timeout` (minutes, default 30) ends with the current line and `— still <kind> after 30m; the job stays in the queue` and 3. A job that waits with `merger: false` on two polls in a row ends with `mc: no merger is running and the job waits — the next mc merge or runner pass starts one` and 4. Export `WATCH_POLL_MS = 10_000`, with a comment saying the file is local and GitHub is asked only once.",
+        "**Lines.** `mc: #835 queued — place 3, behind #833 #834`, `mc: #835 waits for #834 (stacked on it) to land`, `mc: #835 landing — the merger has it (pid 41210)`, `mc: #835 landing in a batch with #833 #834 (pid 41210)`. They go to stdout, and `--json` replaces them with one object at the end: `{ repo, pr, outcome: 'merged' | 'red' | 'closed' | 'open' | 'timeout' | 'no-merger', merge_commit, reason, place, seconds }`.",
+        "**The verb.** In `commands/merge.js` `run`, when `argv[0] === 'watch'`, parse `<repo> <pr>` (the same `#` stripping as `parseMergeArgs`, `commands/repo.js:849`), `--timeout` and `--json`, and resolve the repository with `resolveRepoPath`. Refuse an unknown repository with 2, as `mc merge` does. A repository called `watch` cannot exist in `mc repo status`, so the word is free. The usage lines (`merge.js:47`) gain `mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a queued pull request until it lands or goes red`.",
+        "**Tests.** `tests/mc/merge-watch.test.js`: every case in success criterion 1, with injected IO, `now` and a `sleep` that advances `now`. Also `watchLine` returning null for an unchanged state, and a batch line."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "2. mc merge --watch, the docs, and the close-out",
+      "status": "ready",
+      "done_when": "`mc merge <repo> <pr> --watch` queues and then watches. `docs/technical/mc-merge.md` describes the watch. The criteria are marked, this step's own pull request was landed with `--watch` and its lines noted, `docs/project/project_log.md` has the row, and every step is `done` with its PR.",
+      "instruction": [
+        "**The flag.** `parseMergeArgs` (`commands/repo.js:840`) gets `--watch` as a boolean, but only for the `merge` verb. `mc test` refuses it. It is refused with `--docs` (`mc: --docs lands in the call — there is nothing to watch`), with `--check`, and with several numbers (`mc: --watch follows one pull request`). In `gate` (`commands/repo.js`), after `queueForMerger` returns 0 for one pull request, `--watch` calls `watch` from `merge-watch.js` and returns its code. A non-zero return from the queueing is returned as it is, without a watch.",
+        "**Docs.** `docs/technical/mc-merge.md` § *The door* (`:69`) gets a subsection *Watching a merge*. It covers the verb and the flag, the exit codes, that the watch is opt-in and read-only, why GitHub is asked only once, and the background pattern for a Claude session (Bash `run_in_background`, woken on exit). `docs/technical/mc-run.md` § *The merge* (`:779`) gets one sentence pointing to it.",
+        "**Live.** Land this step's own pull request with `mc merge memoro-cli <pr> --watch`, run in the background. When it exits, record the lines and the exit code with `mc step note merge-watch 2 \"…\"`. Mark criterion 3 by that note: exit 0 meets it, and anything else is recorded as it was.",
+        "**Log.** Add the row to `docs/project/project_log.md` in its format: programme `mc`, project `merge-watch`, delivered, one paragraph, and the PRs. It goes in this step's pull request, before the live landing."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}

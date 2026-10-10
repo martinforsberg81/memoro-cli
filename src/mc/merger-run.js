@@ -39,6 +39,6 @@ const code = await serve({
   root,
   say,
   stopping: () => stopping,
-  land: (job) => landJob(job, { root, say, sleep, gh, appendRun }),
+  land: (batch) => landJob(batch, { root, say, sleep, gh, appendRun }),
 });
 process.exit(code);

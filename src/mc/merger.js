@@ -25,7 +25,9 @@
  *
  * The gate lock and the repository lease are what they were: the merger's
  * round takes both, so a person's `mc test` and the merger never measure at
- * once. The merger waits them out; it has nobody to give up to. It waits out
+ * once in one lane. There is a lock per gate lane (ruling 34, gate-lock.js),
+ * and the merger runs one loop per lane: memoro-cli's minute-long rounds no
+ * longer wait behind memoro's fifteen. Still one process and one pid. The merger waits them out; it has nobody to give up to. It waits out
  * a running deploy the same way, before a round and never inside one: the
  * deployer lets the round in flight finish, builds alone, and the queue goes
  * on after it.
@@ -40,12 +42,13 @@ import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from './atomic-write.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
-import { runningRound } from './gate-lock.js';
+import { GATE_LANES, runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, markLanding, markRed, mergesPath, nextJob, parseQueue, placeOf, queuedFor,
+  dequeue, enqueue, markLanding, markRed, mergesPath, nextBatch, parseQueue, placeOf, queuedFor,
 } from './merge-queue.js';
 import { landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
 import { readEntry, realLock, updateStep } from './register.js';
+import { gateLaneOf } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
 import { runMergeRound } from './repo-merge.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
@@ -231,10 +234,40 @@ export function restack(job, { git = realGit, say = () => {} } = {}) {
 /* ------------------------------------------------------------------ serve */
 
 /**
- * One job, landed or answered: wait while somebody else measures, run the
- * round, record it, write the step. Returns the round's report.
+ * Each job of a batch with its own answer: `[{ job, landed, report }]`.
+ * A single round's report is every job's. A batch's (`report.batch`) is
+ * split: a job's own fallback round when it had one; else the batch report
+ * with this job's `merges` entry in it; and a job the batch stopped before
+ * reaching gets the batch's stop.
  */
-export async function landJob(job, {
+export function answersFor(jobs, report) {
+  const isLanded = (r) => Boolean(r?.ok && r.merged && !r.off_default);
+  if (!report?.batch) return jobs.map((job) => ({ job, landed: isLanded(report), report }));
+  const { merges = [], rounds = [] } = report.batch;
+  return jobs.map((job) => {
+    const own = rounds.find((round) => Number(round?.pr?.number) === Number(job.pr));
+    if (own) return { job, landed: isLanded(own), report: own };
+    const entry = merges.find((item) => Number(item.number) === Number(job.pr));
+    const mine = entry?.merged
+      ? {
+        ...report, ok: true, merged: true, merge_commit: entry.merge_commit, stopped_at: null, reason: null,
+        merged_into: report.merged_into || report.pr?.base || null,
+      }
+      : {
+        ...report, ok: false, merged: false, merge_commit: null,
+        stopped_at: report.stopped_at || 'batch', reason: entry?.error || report.reason,
+      };
+    return { job, landed: isLanded(mine), report: mine };
+  });
+}
+
+/**
+ * A batch of jobs for one repository (one job is a batch of one), landed or
+ * answered: move the stacked ones onto main, wait while somebody else
+ * measures, run one round over all of them, record it, and write each job's
+ * own answer. Returns the answers, `[{ job, landed, report }]`.
+ */
+export async function landJob(batch, {
   root, mergeRound = runMergeRound, sleep, say, gh = null,
   readRunningRound = runningRound, readLeaseFn = readLease, alive = pidAlive,
   readRunningDeploy = () => runningDeploy({ ...process.env, MC_WORK_ROOT: root }),
@@ -243,17 +276,36 @@ export async function landJob(job, {
   moveOntoMain = restack,
   // The page's PR cache, told at once (page-cache.js `dropPr`).
   dropFromPage = dropPr,
+  // The gate lane the batch's repository runs in: the round waited for is
+  // the one in this lane, and a round in the other lane is no reason to wait.
+  lane = 'heavy',
 } = {}) {
-  const label = `${job.repo} #${job.pr}`;
   const t0 = now().getTime();
+  const answers = [];
+  const answer = (job, landed, report) => {
+    answers.push({ job, landed, report });
+    tell(job, landed, report, {
+      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000),
+    });
+  };
+  const jobs = [];
+  for (const job of [].concat(batch)) {
+    // Built on a job that has landed since: onto main first, or the round
+    // measures the one below a second time and the squash conflicts with it.
+    // One that cannot be moved is answered now and leaves the batch.
+    if (job.parent) {
+      const moved = moveOntoMain(job, { say });
+      if (!moved.ok) { answer(job, false, { ok: false, merged: false, stopped_at: 'restack', reason: moved.reason }); continue; }
+    }
+    jobs.push(job);
+  }
+  if (!jobs.length) return answers;
+
+  const [job] = jobs;
+  const numbers = jobs.map((item) => item.pr);
+  const label = `${job.repo} ${numbers.map((n) => `#${n}`).join(' ')}`;
   let report = null;
   let said = null;
-  // Built on a job that has landed since: onto main first, or the round
-  // measures the one below a second time and the squash conflicts with it.
-  if (job.parent) {
-    const moved = moveOntoMain(job, { say });
-    if (!moved.ok) report = { ok: false, merged: false, stopped_at: 'restack', reason: moved.reason };
-  }
   for (; !report;) {
     // Waited for before the round rather than inside it, so a busy gate is
     // not a round-log line every fifteen seconds. An orphaned lease is in
@@ -263,19 +315,20 @@ export async function landJob(job, {
     // written before the deployer starts, so it is seen here before the
     // deployer looks at the gate.
     const deploying = readRunningDeploy();
-    const running = readRunningRound({ alive });
+    const running = readRunningRound({ alive, lane });
     const lease = readLeaseFn(job.repo_path);
     const blocking = lease?.held && !lease.orphaned;
     if (deploying || running || blocking) {
       const why = deploying ? `the deploy of ${String(deploying.sha || '').slice(0, 7) || '?'} (pid ${deploying.pid})`
-        : running ? `another gate round (${running.repo || 'a repository'} #${running.pr ?? '?'}, pid ${running.pid})` : `${job.repo} is held by ${lease.holder}`;
+        : running ? `another gate round in the ${lane} lane (${running.repo || 'a repository'} #${running.pr ?? '?'}, pid ${running.pid})` : `${job.repo} is held by ${lease.holder}`;
       if (why !== said) { say(`${label}: waiting behind ${why}`); said = why; }
       await sleep(MERGER_POLL_MS);
       continue;
     }
-    recordStart({ repo: job.repo_path, mode: 'merge', holder: job.holder?.name || null, prs: [job.pr] });
+    recordStart({ repo: job.repo_path, mode: 'merge', holder: job.holder?.name || null, prs: numbers });
+    // The first job's holder holds the round, the rule the gate's lease has.
     report = await mergeRound({
-      repoPath: job.repo_path, pr: job.pr, mode: 'merge',
+      repoPath: job.repo_path, pr: job.pr, ...(jobs.length > 1 ? { prs: numbers } : {}), mode: 'merge',
       ...(job.holder ? { holder: job.holder } : {}),
       onProgress: (message) => say(`${label}: ${message}`),
     });
@@ -286,8 +339,13 @@ export async function landJob(job, {
     await sleep(MERGER_POLL_MS);
   }
 
-  const seconds = Math.round((now().getTime() - t0) / 1000);
-  const landed = Boolean(report?.ok && report.merged && !report.off_default);
+  for (const one of answersFor(jobs, report)) answer(one.job, one.landed, one.report);
+  return answers;
+}
+
+/** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
+function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds }) {
+  const label = `${job.repo} #${job.pr}`;
   say(landed
     ? `${label}: merged into ${report.merged_into || 'main'} as ${String(report.merge_commit || '').slice(0, 7)} (${seconds}s)`
     : `${label}: not merged — ${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`);
@@ -339,63 +397,118 @@ export async function landJob(job, {
       });
     } catch { /* the row is a courtesy; the register and the round log carry the answer */ }
   }
-  return report;
 }
 
 /**
- * The merger's loop. Returns when the queue is empty or `stopping()` says so
- * between jobs — a job in flight is always finished, because a round cut in
- * half is a lease and a lock somebody else has to reap.
+ * The merger's loops, one per gate lane (ruling 34), side by side in this one
+ * process. Each takes only the jobs whose repository's lane is its own, so a
+ * memoro-cli round runs while a memoro round is in flight and two memoro
+ * rounds never do. Returns when neither lane has anything to take, or when
+ * `stopping()` says so — asked between jobs in each loop: a job in flight is
+ * always finished, because a round cut in half is a lease and a lock somebody
+ * else has to reap.
  */
 export async function serve({
   root, read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
   lock = realLock, stopping = () => false, say = () => {}, now = () => new Date(),
   take = () => takeMerger({ root }), release = () => releaseMerger({ root }),
-  land = (job) => landJob(job, { root, say, now, read, lock }),
+  land = (batch, lane) => landJob(batch, { root, say, now, read, lock, lane }),
   landed = parentLanded(root, { read }),
+  laneOf = (job) => gateLaneOf(job.repo),
+  lanes = GATE_LANES,
+  // How long a loop with nothing in its lane waits before it looks again while
+  // the other is landing: a job queued meanwhile saw this merger alive and
+  // started none, so this loop is the one that has to find it.
+  sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
 } = {}) {
   if (!take()) { say('another merger is running — leaving'); return 0; }
   say(`merger ${process.pid} started`);
-  try {
+  const batchIn = (entries, lane) => nextBatch(entries, { landed, lane, laneOf });
+  // What the loops share: which of them has nothing, whether the merger is
+  // leaving, and a wake-up for a loop waiting on the other.
+  const idle = new Set();
+  let leaving = false;
+  let wake = () => {};
+  let woken = new Promise((resolve) => { wake = resolve; });
+  const changed = () => {
+    const was = wake;
+    woken = new Promise((resolve) => { wake = resolve; });
+    was();
+  };
+
+  const loop = async (lane) => {
     for (;;) {
-      if (stopping()) { say('asked to stop — leaving between jobs'); return 0; }
-      const job = lock(root, () => {
+      if (leaving) return;
+      if (stopping()) {
+        say(lanes.length > 1 ? `asked to stop — the ${lane} lane leaves between jobs` : 'asked to stop — leaving between jobs');
+        leaving = true; changed(); return;
+      }
+      const batch = lock(root, () => {
         const entries = parseQueue(read(mergesPath(root)));
-        const next = nextJob(entries, { landed });
-        if (next) write(mergesPath(root), markLanding(entries, next, now().toISOString()));
+        const next = batchIn(entries, lane);
+        if (next.length) {
+          const started = now().toISOString();
+          write(mergesPath(root), next.reduce((all, job) => markLanding(all, job, started), entries));
+        }
         return next;
       });
-      if (!job) {
-        // Released before the last look: an `mc merge` that queued between
-        // the read above and now saw this merger alive and started none, so
-        // the queue is read once more with the file gone — and taken again
-        // if there is work, unless that call's own merger already has it.
-        // A job waiting on one that came back red stays in the queue and
-        // is not work: the merger leaves, and that one's next `mc merge`
-        // starts a merger again.
+      if (!batch.length) {
+        idle.add(lane);
+        if (idle.size < lanes.length) {
+          // The other lane is landing. Looked at again when it answers a job,
+          // when it has nothing either, or after a poll — whichever is first.
+          await Promise.race([woken, sleep(MERGER_POLL_MS)]);
+          idle.delete(lane);
+          continue;
+        }
+        // Neither lane has anything. Released before the last look: an `mc
+        // merge` that queued between the read above and now saw this merger
+        // alive and started none, so the queue is read once more with the
+        // file gone — and taken again if either lane has work, unless that
+        // call's own merger already has it. A job waiting on one that came
+        // back red stays in the queue and is not work: the merger leaves, and
+        // that one's next `mc merge` starts a merger again.
         release();
-        if (!nextJob(parseQueue(read(mergesPath(root))), { landed }) || !take()) { say('nothing the merger may take — leaving'); return 0; }
+        const entries = parseQueue(read(mergesPath(root)));
+        if (!lanes.some((one) => batchIn(entries, one).length) || !take()) {
+          say('nothing the merger may take — leaving');
+          leaving = true; changed(); return;
+        }
+        idle.clear(); changed();
         continue;
       }
-      say(`${job.repo} #${job.pr}: landing${job.step ? ` (${job.step.project} step ${job.step.index + 1})` : ''}`);
-      let report = null;
+      const [job] = batch;
+      say(batch.length === 1
+        ? `${job.repo} #${job.pr}: landing${job.step ? ` (${job.step.project} step ${job.step.index + 1})` : ''}`
+        : `${job.repo}: landing a batch of ${batch.length} — ${batch.map((item) => `#${item.pr}`).join(' ')}`);
+      let answers = null;
       try {
-        report = await land(job);
+        const result = await land(batch, lane);
+        answers = Array.isArray(result) ? result : answersFor(batch, result);
       } catch (error) {
-        say(`${job.repo} #${job.pr}: the round threw — ${error?.stack || error}`);
-        report = { ok: false, merged: false, stopped_at: 'threw', reason: `the round threw (${error?.message || error})` };
+        say(`${job.repo} ${batch.map((item) => `#${item.pr}`).join(' ')}: the round threw — ${error?.stack || error}`);
+        answers = answersFor(batch, { ok: false, merged: false, stopped_at: 'threw', reason: `the round threw (${error?.message || error})` });
       }
       // Landed, the job is gone; red, it stays as a red row on the page until
-      // `mc merge` puts it back in line or the pull request is closed.
+      // `mc merge` puts it back in line or the pull request is closed. Each
+      // job of a batch by its own answer.
       const answered = now().toISOString();
-      const done = report?.ok && report.merged;
       lock(root, () => {
-        const entries = parseQueue(read(mergesPath(root)));
-        write(mergesPath(root), done
-          ? dequeue(entries, job)
-          : markRed(entries, job, { reason: `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`, answered }));
+        let entries = parseQueue(read(mergesPath(root)));
+        for (const { job: one, report } of answers) {
+          entries = report?.ok && report.merged
+            ? dequeue(entries, one)
+            : markRed(entries, one, { reason: `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`, answered });
+        }
+        write(mergesPath(root), entries);
       });
+      changed();
     }
+  };
+
+  try {
+    await Promise.all(lanes.map(loop));
+    return 0;
   } finally {
     release();
   }
