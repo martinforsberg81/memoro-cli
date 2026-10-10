@@ -614,8 +614,23 @@ export function createRunner({
   // rest of its life (`runLoop`, ruling 28). Let go only when the handover
   // failed and this runner goes on.
   let updateHeld = false;
-  const updateRequested = () => updateHeld || deps.exists(paths.update);
+  const updateRequested = () => updateHeld || deps.exists(paths.update) || Boolean(replaced());
   const holdUpdate = (on) => { updateHeld = Boolean(on); };
+  /**
+   * The live runner runner.json names when it is not this one, or null: a
+   * runner `mc run start` (or `--update` on a stopping runner) started to take
+   * over from this one (run-control.js `takeOver`). It reads as an UPDATE
+   * already handed over — this runner takes no new step, finishes the ones it
+   * holds, and leaves runner.json alone — because that is what it is, done
+   * from outside rather than by this runner itself.
+   */
+  function replaced() {
+    let named = null;
+    try { named = JSON.parse(deps.read(paths.runner) ?? ''); } catch { return null; }
+    const other = Number(named?.pid);
+    if (!Number.isInteger(other) || other <= 0 || other === pid) return null;
+    return alive(other) ? { pid: other } : null;
+  }
 
   /**
    * The 5-hour Claude quota is one budget for every lane. The first lane to
@@ -2240,6 +2255,17 @@ export function createRunner({
     });
   }
 
+  /**
+   * What this runner still has in flight, for the lines a stopping lane
+   * writes: until 2026-10-10 each lane that finished its last step wrote
+   * `runner exit on STOP`, five times in seven minutes, while the runner went
+   * on with a step for another hour.
+   */
+  function stillHeld() {
+    const own = stepsHeld().filter((held) => held.pid === pid).map((held) => held.name || 'a step');
+    return own.length ? `the runner still finishes ${own.join(', ')}` : 'nothing else is in flight';
+  }
+
   /** The other runner holding this lane's file, or null when nothing does. */
   function laneHolder(repo, lane) {
     const path = paths.currentFor(repo, lane);
@@ -2307,7 +2333,7 @@ export function createRunner({
       if (outcome === 'ran' || outcome === 'merged') {
         const ran = { ran: 1, name: pick.name, step: stepOf(pick.name) };
         if (stopRequested()) {
-          say(`runner exit on STOP after ${pick.name} (remove ${paths.stop} before the next start)`);
+          say(`${label}: STOP — ${pick.name} has ended, this lane takes nothing more; ${stillHeld()}`);
           return { ...ran, stop: true };
         }
         return ran;
@@ -2398,10 +2424,16 @@ export function createRunner({
   // is still finishing what it held — until that pid is gone
   // (`dropPredecessor`), so `mc run stop` and the page find both.
   let marked = null;
-  const markRunner = ({ predecessor = null } = {}) => {
+  // `args` are the flags it runs with, for a take-over that keeps them
+  // (`mc run --update` on a stopping runner); `takeover` says this runner
+  // stands down when runner.json names another (`replaced`), which is what
+  // makes taking over from it safe (run-control.js `takeOver`).
+  const markRunner = ({ predecessor = null, args = [] } = {}) => {
     const dir = mcCheckout({ exists: deps.exists });
     const commit = dir ? gitOut(dir, ['rev-parse', '--short', 'HEAD']) : null;
-    marked = { pid, started: stamp(), ...(commit ? { commit } : {}), ...(predecessor ? { predecessor } : {}) };
+    marked = {
+      pid, started: stamp(), ...(commit ? { commit } : {}), args, takeover: true, ...(predecessor ? { predecessor } : {}),
+    };
     writeJson(paths.runner, marked);
   };
   const dropPredecessor = () => {
@@ -2410,12 +2442,16 @@ export function createRunner({
     const { predecessor: _gone, ...rest } = marked;
     marked = rest;
     writeJson(paths.runner, marked);
-    say(`update: pid ${before.pid} has finished what it held and exited`);
+    say(`pid ${before.pid}, the runner this one took over from, has finished what it held and exited`);
   };
   // A lane file another live runner holds is not a leftover: it is the
   // runner a handover replaced, still in that step.
+  //
+  // runner.json only when it is this runner's, or names nobody alive: a runner
+  // that was taken over leaves the file to the one that took over, which
+  // until 2026-10-10 nothing could do while this one still ran.
   const clearRunner = () => {
-    remove(paths.runner);
+    if (!replaced()) remove(paths.runner);
     for (const held of stepsHeld()) if (!held.other) remove(held.path);
   };
 
@@ -2423,7 +2459,7 @@ export function createRunner({
     paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runNightly, archiveDone, queue, stopRequested,
     writeUnreadable,
     blockStep,
-    updateRequested, holdUpdate, stepsHeld, laneHolder, pid, syncMain, freshBranch, landDocsPr, planOf, repoOf, markRunner, dropPredecessor, clearRunner, closeWorkareas,
+    updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, syncMain, freshBranch, landDocsPr, planOf, repoOf, markRunner, dropPredecessor, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
   };
 }
@@ -2435,6 +2471,9 @@ export function createRunner({
  */
 export async function runLoop({
   once = false, merge = true, idleSleepMs = 600_000,
+  // The flags this run was started with, as typed, kept in runner.json so a
+  // take-over can start its replacement with the same ones.
+  args = [],
   // The machine's sleep, held for the length of the run. On by default,
   // because a runner that stops because the laptop dozed is the failure this
   // exists for and nobody would think to ask for the flag beforehand.
@@ -2448,7 +2487,6 @@ export async function runLoop({
   // takes effect, and the verb says so when it writes.
   const laneSetting = (deps.laneCount || readLaneCount)();
   const runner = createRunner({ merge, deps, total: laneSetting.total });
-  if (runner.stopRequested()) { runner.say(`STOP file present (${runner.paths.stop}) — remove it before starting`); return 2; }
   // runner.json read before it is written. `markRunner()` below is a
   // statement, not a claim anyone checked, so until now a second `mc run` in
   // the same work root simply overwrote the first and became invisible to
@@ -2461,16 +2499,45 @@ export async function runLoop({
   // unattended loop, but the collision is the same one: one step, one
   // worktree, one `git add -A`, and a second session that can only stand
   // down. There is nothing about being watched that makes that safe.
-  const held = readRunner({ paths: runner.paths, read: deps.read, alive: deps.alive || pidAlive });
+  const isAlive = deps.alive || pidAlive;
+  let held = readRunner({ paths: runner.paths, read: deps.read, alive: isAlive });
+  // runner.json already naming this process is the start that spawned it
+  // (run-control.js `spawnRunner`, or `handOver`), which writes the file the
+  // moment the pid exists so nobody sees no runner in the second this one
+  // takes to load. What it names as the predecessor is the runner this one is
+  // taking over from.
+  const ours = held?.pid === runner.pid;
+  const named = ours && held.predecessor?.alive ? held.predecessor : null;
+  if (ours) held = named ? { ...named, alive: true } : null;
   // The one live holder that is no refusal: the runner that has just handed
   // over to this one, which says so in the environment it spawned this
-  // process with (`handOver`). It keeps finishing the steps it holds; this
-  // one starts at once beside it (ruling 28).
+  // process with (`handOver`, `takeOver`). It keeps finishing the steps it
+  // holds; this one starts at once beside it (ruling 28).
   const successorOf = Number(deps.env?.MC_RUN_SUCCESSOR_OF);
   const replacing = held?.alive && Number.isInteger(successorOf) && successorOf === held.pid ? held : null;
+  // STOP at start. A successor finding one was stopped during its own
+  // handover, and obeys it. Anybody else finds the one the last stop left,
+  // and removes it — the way `mc run start` always has, so a foreground
+  // `mc run` and a background one are the same switch. Read straight from the
+  // disk: `stopRequested` is sticky, and a STOP read here must not outlive
+  // its removal.
+  if (deps.exists(runner.paths.stop)) {
+    if (Number.isInteger(successorOf) && successorOf > 0) {
+      runner.say(`STOP file present (${runner.paths.stop}) — a stop came during the handover; this runner does not start`);
+      if (ours) deps.remove(runner.paths.runner);
+      return 2;
+    }
+    if (!held?.alive) {
+      deps.remove(runner.paths.stop);
+      runner.say('removed the STOP the last stop left');
+    }
+  }
   if (held?.alive && !replacing) {
-    runner.say(`a runner is already running — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`);
-    runner.say('mc run stop ends it · mc run --update restarts it on the newest code');
+    const stopping = deps.exists(runner.paths.stop);
+    runner.say(`a runner is already ${stopping ? 'stopping' : 'running'} — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`);
+    runner.say(stopping
+      ? 'mc run start takes over from it at once · or wait for it to exit'
+      : 'mc run stop ends it · mc run --update restarts it on the newest code');
     return 2;
   }
   // A file naming a pid that is gone is a killed runner's leftovers, not a
@@ -2478,7 +2545,7 @@ export async function runLoop({
   // clears it. `clearRunner()` takes the `current-<repo>.json` files with it,
   // which are the same runner's other leftovers and would otherwise draw a
   // step that has not been running for hours.
-  if (held && !replacing) {
+  if (held && !replacing && !ours) {
     runner.clearRunner();
     runner.say(`cleared runner.json — the pid it named (${held.pid}) is gone`);
   }
@@ -2498,7 +2565,7 @@ export async function runLoop({
       ? `staying awake (caffeinate ${held.flags.join(' ')} pid ${held.pid}) — ${held.note}`
       : `NOT staying awake (${held.reason}) — this machine may sleep mid-run: ${held.note}`);
   }
-  runner.markRunner(replacing ? { predecessor: { pid: replacing.pid, started: replacing.started } } : {});
+  runner.markRunner({ args, ...(replacing ? { predecessor: { pid: replacing.pid, started: replacing.started || null } } : {}) });
   // A handover is the one exit that must not clear runner.json: the runner it
   // handed to has already written its own, and removing it on the way out
   // would leave the page saying nothing is running while something is.
@@ -2517,6 +2584,15 @@ export async function runLoop({
   let handing = null;
   const update = () => handing || (handing = (async () => {
     runner.holdUpdate(true);
+    // Taken over from outside: the handover is already done, by whoever
+    // started the runner runner.json now names. Nothing to spawn.
+    const by = runner.replaced();
+    if (by) {
+      handedOver = true;
+      drainMark = deps.now().getTime();
+      runner.say(`taken over by pid ${by.pid} — finishing ${ownInFlight().length} step(s) in flight, taking nothing new`);
+      return true;
+    }
     const handed = await (deps.handOver || handOver)({
       paths: runner.paths, deps, say: runner.say, predecessor: runner.pid, finishing: ownInFlight().length,
     });
@@ -2578,6 +2654,18 @@ export async function runLoop({
       // holds — once for the runner, from whichever loop looks first, not
       // once per lane. The words are `drainWaiting`'s, the ones
       // `mc run --update` prints.
+      // An idle lane's ten minutes, and the chore loop's, in slices of
+      // `UPDATE_POLL_MS`: a STOP or an UPDATE ends the wait within thirty
+      // seconds rather than at its end. Measured 2026-10-10: STOP at
+      // 06:47:23, the chore loop read it at 06:50:43 — and a lane that has
+      // just gone to sleep would have read it ten minutes late, with nothing
+      // anywhere saying the order had been seen.
+      const nap = async (ms) => {
+        for (let left = ms; left > 0; left -= UPDATE_POLL_MS) {
+          if (runner.stopRequested() || runner.updateRequested()) return;
+          await deps.sleep(Math.min(left, UPDATE_POLL_MS));
+        }
+      };
       const drainPaths = { dir: dirname(runner.paths.update), update: runner.paths.update, runner: runner.paths.runner };
       const drainTick = () => {
         if (!handedOver) return;
@@ -2611,14 +2699,14 @@ export async function runLoop({
             const line = `${tag}: waiting for pid ${holder.pid} to finish ${holder.name || 'its step'}`;
             if (line !== quietLine) { runner.say(line); quietLine = line; }
             await deps.sleep(UPDATE_POLL_MS);
-            if (runner.stopRequested()) { runner.say(`${tag}: STOP — exiting`); return { stop: true }; }
+            if (runner.stopRequested()) { runner.say(`${tag}: STOP — this lane exits; ${runner.stillHeld()}`); return { stop: true }; }
             continue;
           }
           const r = await runner.pass({ repo: repo.name, lane: index, tag, last });
           // A lane that leaves says so: eleven silent exits are what made a
           // one-lane runner look like a busy one (2026-10-07). `pass` has
           // already said it when a step ran first.
-          if (r.stop) { if (!r.ran) runner.say(`${tag}: STOP — taking no step, exiting`); return { stop: true }; }
+          if (r.stop) { if (!r.ran) runner.say(`${tag}: STOP — taking no step, this lane exits; ${runner.stillHeld()}`); return { stop: true }; }
           // A step ran: the world it was picked from is stale now, so the next
           // pick is made at once against a fresh reading rather than after a
           // sleep nobody is waiting for.
@@ -2631,8 +2719,8 @@ export async function runLoop({
             : `${tag}: nothing to run — sleeping`;
           if (line !== quietLine) { runner.say(line); quietLine = line; }
           if (runner.updateRequested()) continue;
-          await deps.sleep(idleSleepMs);
-          if (runner.stopRequested()) { runner.say(`${tag}: STOP — exiting`); return { stop: true }; }
+          await nap(idleSleepMs);
+          if (runner.stopRequested()) { runner.say(`${tag}: STOP — this lane exits; ${runner.stillHeld()}`); return { stop: true }; }
         }
       };
       // The chore loop is the one that is never in a step, so after a
@@ -2649,15 +2737,15 @@ export async function runLoop({
             return {};
           }
           await runner.chores();
-          await deps.sleep(idleSleepMs);
+          await nap(idleSleepMs);
         }
       };
       // Until STOP, or until a handover that took and the steps this runner
       // held have all ended.
       const lanes = runner.repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)));
       const results = await Promise.all([...lanes, choreLoop()]);
-      if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
-      runner.say(`update: every step pid ${runner.pid} held has ended — exiting`);
+      if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP — pid ${runner.pid} has ended; mc run start starts the next`); return 0; }
+      runner.say(`every step pid ${runner.pid} held has ended — exiting`);
       return 0;
     }
     // `--once`: one pick over the whole queue, in Martin's order, and out.
@@ -2665,7 +2753,7 @@ export async function runLoop({
     // which is what the flag is for. A project the machine refuses is passed
     // over and the next name tried, exactly as a lane does.
     const r = await runner.pass({ tag: 'once' });
-    if (r.stop) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
+    if (r.stop) { runner.say(`runner exit on STOP — pid ${runner.pid} has ended; mc run start starts the next`); return 0; }
     runner.say(r.ran ? 'once: exiting' : 'once: nothing to run');
     return 0;
   } finally {

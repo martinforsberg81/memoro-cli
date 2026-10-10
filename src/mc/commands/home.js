@@ -155,7 +155,29 @@ export function parsePageArgs(argv) {
 const KEYS = [
   '  <n>  open it   ·   n  start something new   ·   a  every project   ·   b  brief',
   '  p  plan a programme   ·   s <name>  that project   ·   q  quit',
+  '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
+
+/**
+ * The runner's switch, typed at the menu: `start`, `stop`, `update` — with
+ * `--force` where the verb takes it — and the same with `run` or `mc run` in
+ * front. The answer is printed under the page and the page is drawn again, so
+ * the RUNNER section shows what the order did without a second terminal
+ * (asked for 2026-10-10).
+ *
+ * `stop <name>` is still `mc work stop <name>`: only a bare `stop` is the
+ * runner's. A bare `run` is not offered — a foreground runner inside the
+ * page would hold the menu for the rest of the day.
+ */
+export function runnerOrder(answer) {
+  const words = answer.split(/\s+/u).filter(Boolean);
+  if (words[0] === 'mc') words.shift();
+  if (words[0] === 'run') words.shift();
+  const [verb, ...rest] = words;
+  if (!['start', 'stop', 'update', '--update', 'lanes'].includes(verb)) return null;
+  if (verb === 'stop' && rest.some((word) => !word.startsWith('-'))) return null;
+  return [verb, ...rest];
+}
 
 /**
  * The way on from the page.
@@ -179,6 +201,8 @@ const KEYS = [
  */
 export async function menu(first, {
   stdout, stderr, page, reader, open = openArea, expand = () => {},
+  // `mc run <verb>` — a dependency so a test drives the menu without a runner.
+  runOrder = null,
 }) {
   let data = first;
   // Off, and a redraw away from on. `a` is a way of looking rather than a verb:
@@ -211,6 +235,15 @@ export async function menu(first, {
     if (answer === 'b' || answer === 'brief') {
       const brief = await import('./brief.js');
       return brief.run([], { stdout, stderr });
+    }
+
+    const order = runnerOrder(answer);
+    if (order) {
+      const verb = await import('./run.js');
+      stdout.write('\n');
+      await (runOrder || verb.run)(order, { stdout, stderr });
+      data = await redraw();
+      continue;
     }
 
     const words = answer.split(/\s+/u).filter(Boolean);

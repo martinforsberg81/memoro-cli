@@ -1576,14 +1576,31 @@ test('a codex plan that names no model gets none, and the log says so', async ()
   assert.match(f.files['/w/runner/log/runner.log'], /cx: step starting \(codex own default model, no check-in, no stall guard\)/u);
 });
 
-test('STOP file: the loop exits after the step it is in, and refuses to start while it exists', async () => {
+test('STOP file: the loop exits after the step it is in, and the next start removes the STOP it left', async () => {
   const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
   const inner = f.deps.session;
   f.deps.session = (call) => { f.files['/w/runner/STOP'] = ''; return inner(call); };
   assert.equal(await runLoop({ deps: f.deps }), 0);
   assert.equal(f.calls.sessions.length, 1);
-  assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP after a/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /memoro: STOP — a has ended, this lane takes nothing more; nothing else is in flight/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP — pid 4242 has ended; mc run start starts the next/u);
+  // A foreground `mc run` is the same switch as `mc run start`: the STOP a
+  // stopped runner left is removed and said, not a refusal.
+  f.deps.session = inner;
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+  assert.equal('/w/runner/STOP' in f.files, false);
+  assert.match(f.files['/w/runner/log/runner.log'], /removed the STOP the last stop left/u);
+});
+
+// A successor that finds STOP was stopped during its own handover, and obeys.
+test('STOP file: a successor started into a STOP does not start', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [7777] });
+  f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777, started: '2026-08-29T06:33:25Z' })}\n`;
+  f.files['/w/runner/STOP'] = '';
+  f.deps.env = { ...f.deps.env, MC_RUN_SUCCESSOR_OF: '7777' };
   assert.equal(await runLoop({ once: true, deps: f.deps }), 2);
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /a stop came during the handover/u);
 });
 
 /**
@@ -1645,6 +1662,56 @@ test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', 
 });
 
 /**
+ * `mc run start` on a stopping runner, from that runner's side: runner.json
+ * comes to name another live pid while a step is in flight. The runner takes
+ * nothing new, says who took over, finishes its step, and leaves the
+ * successor's runner.json where it is (run-control.js `takeOver`).
+ */
+test('taken over: a runner whose runner.json names another pid finishes its step and leaves the file alone', async () => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession(), livePids: [9001] });
+  const inner = f.deps.session;
+  f.deps.session = async (call) => {
+    f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 9001, started: '2026-08-29T10:00:00Z', predecessor: { pid: 4242 } })}\n`;
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => { setImmediate(resolve); });
+    return inner(call);
+  };
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  f.deps.handOver = async () => { throw new Error('a runner taken over spawned a successor of its own'); };
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.equal(f.calls.sessions.length, 1, 'the runner taken over started another step');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /taken over by pid 9001 — finishing 1 step\(s\) in flight, taking nothing new[\s\S]*a: step done[\s\S]*every step pid 4242 held has ended — exiting/u);
+  assert.equal(f.calls.removed.includes('/w/runner/runner.json'), false, "the old runner removed the new one's runner.json");
+  assert.match(f.files['/w/runner/runner.json'], /"pid":9001/u);
+});
+
+// The start that spawned a runner writes runner.json with its pid before the
+// runner has loaded; the runner finds itself there and starts, beside the
+// predecessor that file names.
+test('runLoop: runner.json already naming this pid is the start that spawned it, not a second runner', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [7777] });
+  f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 4242, started: '2026-08-29T10:00:00Z', args: ['--once'], predecessor: { pid: 7777, started: 'T0' } })}\n`;
+  f.deps.env = { ...f.deps.env, MC_RUN_SUCCESSOR_OF: '7777' };
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+  assert.equal(f.calls.sessions.length, 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /taking over from pid 7777/u);
+});
+
+// An idle lane's ten minutes are slices: a STOP is read within one.
+test('runLoop: an idle lane reads STOP within a slice, not after its whole sleep', async () => {
+  const f = fixture({ plans: {}, session: okSession() });
+  const slept = [];
+  f.deps.sleep = async (ms) => {
+    slept.push(ms);
+    if (slept.length === 3) f.files['/w/runner/STOP'] = '';
+    await new Promise((resolve) => { setImmediate(resolve); });
+  };
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.ok(slept.every((ms) => ms <= 30_000), `a sleep longer than a slice: ${slept.join(', ')}`);
+  assert.ok(slept.length < 20, `the runner slept on after STOP: ${slept.length} slices`);
+});
+
+/**
  * `mc run --update` from the runner's side, after ruling 28: the successor is
  * started at once, while the step is still in flight, and this runner only
  * finishes the step it is in — it is never cut short for the update.
@@ -1676,7 +1743,7 @@ test('UPDATE file: the handover happens while the step is in flight, and the old
   assert.deepEqual(handovers, [{ update: '/w/runner/UPDATE', predecessor: 4242, finishing: 1 }], 'one handover for the runner, not one per loop');
   assert.deepEqual(events, ['handed over', 'step ends'], 'the handover waited for the step to end');
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /handed over to pid 9001 — finishing 1 step\(s\) in flight, taking nothing new[\s\S]*a: step done[\s\S]*update: every step pid 4242 held has ended — exiting/u);
+  assert.match(log, /handed over to pid 9001 — finishing 1 step\(s\) in flight, taking nothing new[\s\S]*a: step done[\s\S]*every step pid 4242 held has ended — exiting/u);
   // The successor's files are its own: this runner leaves without touching them.
   assert.equal(f.calls.removed.includes('/w/runner/runner.json'), false, 'the old runner removed runner.json on its way out');
   assert.equal(f.calls.removed.includes('/w/runner/current-memoro-cli.json'), false, "the old runner removed the successor's lane file");
@@ -1796,7 +1863,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
     name: 'alpha', step: 1, kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', effort: 'medium', advisor: null, check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro', role: stepRole,
   });
-  assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z' });
+  assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z', args: [], takeover: true });
 
   // ...and both are gone once the step and the loop are over.
   assert.equal('/w/runner/current-memoro.json' in f.files, false);
@@ -2167,8 +2234,8 @@ test('STOP ends both lanes after the step each is in', async () => {
   assert.equal(await runLoop({ deps: f.deps }), 0);
   assert.equal(f.calls.sessions.length, 2, 'one step in each lane, and no more');
   assert.deepEqual(f.calls.sessions.map((call) => call.cwd).sort(), ['/w/a/memoro', '/w/b/memoro-cli']);
-  assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP after a\b/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP after b\b/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /: STOP — a has ended, this lane takes nothing more/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /: STOP — b has ended, this lane takes nothing more/u);
 });
 
 /* ------------------------------------------------------------- the helper */
@@ -2996,7 +3063,7 @@ test('runLoop: lanes run their own rounds — memoro-cli does not wait for memor
   assert.ok(events.indexOf('y: start') < events.indexOf('a: end'), `memoro-cli's second step waited for memoro's first: ${events.join(', ')}`);
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /y: step done[\s\S]*a: step done/u, "memoro-cli's second step did not finish before memoro's first");
-  assert.match(log, /runner exit on STOP \(remove/u);
+  assert.match(log, /runner exit on STOP — pid 4242 has ended/u);
   // A lane's round never runs the whole-queue chores: queue.md is tidied and
   // the workareas closed by the chore loop, from both repositories' plans.
   assert.equal(/memoro-cli: lanes:/u.test(log), false);
@@ -3874,8 +3941,8 @@ test('runLoop: a STOP read by one lane and then removed still ends the runner, a
   };
   assert.equal(await runLoop({ deps: f.deps }), 0);
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /memoro#2: STOP — exiting/u, 'the lane that read STOP says so');
-  assert.match(log, /memoro-cli#1: STOP — exiting/u);
+  assert.match(log, /memoro#2: STOP — this lane exits; the runner still finishes a/u, 'the lane that read STOP says so');
+  assert.match(log, /memoro-cli#1: STOP — this lane exits/u);
   assert.match(log, /chores: STOP — exiting/u);
   assert.match(log, /runner exit on STOP/u, 'the runner exits although STOP is gone');
   assert.equal(f.calls.sessions.length, 1);

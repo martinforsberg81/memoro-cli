@@ -20,7 +20,9 @@ THE PAGE
   mc plan [<programme>]            Plan a programme; no name asks which
   mc plan <programme> --archive    End a programme: off main and off disk
   mc run                           The runner: headless steps, a lane per repository
-  mc run start | stop [--force]    Turn it on, or off — after the round, or now
+  mc run start | stop [--force]    Turn it on, or off — after the steps in flight, or now;
+                                    start on a stopping runner takes over at once
+                                    (start, stop, update work at the mc page's prompt too)
   mc run --update [--force]        New code, new process: the successor starts at once,
                                     the old runner finishes the steps it holds and exits
                                     Already on origin/main: nothing written (--force writes anyway)

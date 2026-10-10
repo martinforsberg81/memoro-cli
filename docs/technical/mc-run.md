@@ -34,11 +34,30 @@ gone; the history section at the end says why.
 ## The switch
 
 ```
-mc run start [same flags]   the runner, detached, logging to runner.log
+mc run start [same flags]   the runner, detached, logging to runner.log;
+                            on a stopping runner, a new one takes over at once
 mc run stop                 after the step each lane is in
 mc run stop --force         now, and the sessions it is holding with it
-mc run --update             when every lane is between steps: new code, new process
+mc run --update             new code, new process at once; the old one finishes
+                            the steps it holds (`mc run update` is the same)
 ```
+
+The same three are answers at the `mc` page's prompt — `start`,
+`stop [--force]`, `update [--force]`, with or without `run` / `mc run` in front
+— so the switch needs no second terminal; the verb's answer is printed under
+the page and the page is drawn again. A bare `stop` is the runner's;
+`stop <name>` is still `mc work stop <name>`.
+
+**One reading first, in any order.** Every verb starts from where the runner
+stands (`runnerState`): *none*, *running*, *stopping* (STOP written, a runner
+it reaches still alive), *draining* (UPDATE written, not yet read) or
+*finishing* (only the runner a handover replaced is alive). The answers say it
+in the same words as the page: a stop prints
+`stopping since 08:47 (39 min) — waiting on video-window step 1 (memoro#6, 80 min); 11 lanes done`
+(`stopLine`), an update the matching `draining …` line (`drainLine`). Until
+2026-10-10 the shell history held `stop`, `start` (refused), `--update`
+(refused), `start` (refused), `stop --force` — sessions killed mid-step to get a
+runner going again. No sequence of the three needs `--force` now.
 
 All three orders are **files under `~/mc/runner/`, read between two picks**
 — never signals, and never mid-session. A runner ninety minutes into a
@@ -46,11 +65,23 @@ headless step is given the order without that step being interrupted, which is
 the whole reason they are files. `src/mc/run-control.js` writes them and holds
 the rules; each lane reads them before it picks.
 
-- **`start`** spawns `mc run` detached with its stdout and stderr appended to
-  `runner.log`, carrying whatever flags follow it. It removes the `STOP` the
-  last stop wrote — `start` and `stop` are one switch, and a switch that will
-  not turn back on is not one — and refuses only on a first runner that is
-  still alive.
+- **`start`** spawns `mc run` detached with its stderr appended to
+  `runner.log`, carrying whatever flags follow it, and writes `runner.json`
+  for the child the moment its pid is known — so a second `start`, or a
+  `stop`, in the second the child takes to load sees a runner rather than a
+  gap. It removes the `STOP` the last stop wrote — `start` and `stop` are one
+  switch, and a switch that will not turn back on is not one. A foreground
+  `mc run` does the same. It refuses only on a runner that is running and was
+  not told to stop.
+- **`start` on a runner on its way out** — stopping, or finishing what a
+  handover left it — **takes over** (`takeOver`): a new runner is spawned as
+  its successor (`MC_RUN_SUCCESSOR_OF`), `runner.json` names the new one with
+  the old as `predecessor`, and only then is `STOP` removed. The old runner
+  reads runner.json naming another live pid as a handover already done
+  (`replaced` in run.js): it takes no new step, finishes the ones it holds,
+  and leaves runner.json alone on its way out. A stopping runner that predates
+  `replaced` would not stand down, so it is not taken over — `start` says so
+  and waits for it.
 - **`stop`** writes `STOP`. **`stop --force`** writes it too, and then ends the
   runner now: `SIGTERM` to its process group, `SIGKILL` to whatever is left of
   it two seconds later. The group and not the pid, because the headless session
@@ -61,14 +92,17 @@ the rules; each lane reads them before it picks.
   otherwise the page draws a step that is not running. What a killed session
   leaves in its workarea — a merge of `origin/main` in progress — the next pick
   aborts (*What the worktree decides*).
-- **`--update`** writes `UPDATE`. From the moment a lane reads it, that lane
-  starts no new step; the steps in flight finish and land, and when nothing is
-  in flight anywhere the runner fast-forwards the checkout mc is running from,
-  starts a fresh `mc run` with the same argument list and the same stdio, and
-  exits. `runner.json` is cleared *before* the new process is started, so the
-  two never race for it. A checkout that will not fast-forward — local work, or
-  diverged — is said out loud and handed over anyway: the restart was asked
-  for. `UPDATE` has no other writer: the runner never orders its own
+- **`--update`** writes `UPDATE`. The first lane to read it fast-forwards the
+  checkout mc is running from and starts a fresh `mc run` with the same
+  argument list and the same stdio at once (ruling 28); this runner takes no
+  new step and exits when the steps it holds have ended. `runner.json` is
+  written for the successor — its pid and the new commit — the moment it is
+  spawned, so a second `--update` in the second it takes to load is told there
+  is nothing to update rather than ordering a second handover. A checkout that
+  will not fast-forward — local work, or diverged — is said out loud and
+  handed over anyway: the restart was asked for. On a runner that is stopping,
+  `--update` is a take-over as `start` is, after the fast-forward and with the
+  flags the old runner ran with (`args` in runner.json). `UPDATE` has no other writer: the runner never orders its own
   handover. It did for a while — a landing under `src/mc/` or `canon/` wrote
   the file — and with most memoro-cli landings touching those trees it
   drained the lanes after nearly every merge. Removed 2026-09-19; Martin
@@ -91,7 +125,9 @@ left its loop and *sat*, so the idle lanes took no work for the whole of a busy
 lane's step. Then idle lanes were let keep taking work until a quiet moment —
 and with four lanes in steady work the quiet moment never came: an `UPDATE` the
 runner wrote for itself at 09:30 was still pending two hours later. Martin chose
-the drain over an immediate handover with two runners alive.
+the drain over an immediate handover with two runners alive. Ruling 28
+(2026-10-07) took the immediate handover after all: the drain left every idle
+lane idle for up to a step's length on every update.
 
 ## Staying awake
 
@@ -1163,15 +1199,19 @@ step set ready over an open pull request would be run again on top of it.
 
 - **`~/mc/runner/STOP`** — checked by every lane before it picks and at the top
   of every step, so it ends *every* lane after the step each is in. No lane
-  abandons a session that is already running, and the runner refuses to start
-  at all while the file exists. Written by `mc run stop`, removed by
-  `mc run start`. The nightly tick (see *What runs beside it*) is asked the
+  abandons a session that is already running. Written by `mc run stop`,
+  removed by `mc run start` (and a foreground `mc run`) — except by a
+  successor that finds it: that one was stopped during its own handover and
+  does not start. A lane that leaves on STOP says what the runner still
+  finishes; `runner exit on STOP` is written once, when the process ends. The nightly tick (see *What runs beside it*) is asked the
   same question before each repository it measures, so it starts no further
   suite once STOP is there; the suite in flight is not killed.
 - **`~/mc/runner/UPDATE`** — read between picks only, and answered by a
   handover rather than an exit. Written by `mc run --update`; see *The switch*.
 - **An idle lane** sleeps `--idle-sleep` — 600 s unless it is given — and then
-  reads the world again. A lane with a step to run does not sleep at all.
+  reads the world again. The sleep, and the chore loop's, is taken in 30 s
+  slices with STOP and UPDATE read between them, so an order is seen within
+  half a minute rather than at the end of ten. A lane with a step to run does not sleep at all.
 - **The Claude quota.** The limit is one budget for the whole machine, so a
   quota answer in one lane pauses all of them. The lane that sees the refusal
   calls `quotaPause`, which holds one promise; every other lane awaits that

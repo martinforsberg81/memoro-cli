@@ -130,6 +130,11 @@ describe('RUNNER', () => {
     assert.deepEqual([runner.steps[0].check_in_seconds, runner.steps[0].check_ins], [3600, 0]);
     assert.equal(runner.stop, true);
     assert.equal(runner.process.alive, true);
+    assert.equal(runner.stop_requested, null, 'a STOP with no time in it has no since');
+    const timed = runnerSection({
+      runner: RUNNER, currents: [CURRENT], stop: true, stopText: '2026-08-29T11:30:00.000Z\n', rows: ROWS, now: NOW, alive: live,
+    });
+    assert.deepEqual(timed.stop_requested, { at: '2026-08-29T11:30:00.000Z', age_seconds: 1800 });
     assert.equal(runner.day.steps, 3);
     assert.equal(runner.day.timeout, 1);
     assert.ok(runner.day.cost > 8 && runner.day.cost < 8.2, `≈ $8.07 list (cache writes at 2×): ${runner.day.cost}`);
@@ -1326,7 +1331,8 @@ describe('the page', () => {
     assert.match(text, /^ {2}● memoro-cli {2}mc-ui\s+step {8}20 min {3}claude opus · 0 check-ins$/mu);
     assert.match(text, /^ {2}· lane 2 {6}idle$/mu);
     assert.doesNotMatch(text, /pid 4242/u);
-    assert.match(text, /■ STOP requested — the runner exits after the steps it is in/u);
+    assert.match(text, /■ stopping since an unknown time — waiting on mc-ui \(memoro-cli#1, 20 min\); 1 lane done/u);
+    assert.match(text, /start takes over now/u);
     assert.match(text, /HELPER {2}● open 60 min · claude sonnet · pid 99\s+mc helper/u);
     assert.match(text, /BRIEF {2}· {2}not open\s+mc brief/u);
     assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
@@ -1837,7 +1843,8 @@ describe('the palette', () => {
     'bold+cyan green+bold grey grey grey', //          RUNNER  1 in flight · 2 lanes              mc run
     'green green grey grey', //                      ● memoro-cli  mc-ui  step  20 min  claude opus · 0 check-ins
     'grey grey grey', //                             · lane 2      idle
-    'red+bold grey', //                              ■ STOP requested — the runner exits after the steps it is in
+    'red+bold grey', //                              ■ stopping since … — waiting on mc-ui (memoro-cli#1, 20 min); 1 lane done
+    'grey', //                                           start takes over now — a new runner on every lane …
     'grey grey green grey grey grey grey grey yellow grey grey', // 3 steps in 24 h · merged 1 · open 1 · failed 0 · timed out 1 · ≈$7.28 list …
     '',
     'bold+cyan grey grey', //                          MERGES  1 waiting        mc merge <repo> <pr>

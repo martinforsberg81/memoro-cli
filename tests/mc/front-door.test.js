@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { runMcCli } from './_helpers/mc-cli.js';
-import { menu, parsePageArgs } from '../../src/mc/commands/home.js';
+import { menu, parsePageArgs, runnerOrder } from '../../src/mc/commands/home.js';
 import { plainReader } from '../../src/mc/page-live.js';
 import { programmesSection } from '../../src/mc/page-collect.js';
 
@@ -338,6 +338,35 @@ describe('the menu under the page', () => {
    * closure and a frame that did not know the mode would put the rows away
    * again thirty seconds later (`commands/home.js`).
    */
+  // The runner's switch without a second terminal (2026-10-10): the verb's
+  // own answer under the page, then the page again, and the menu stays.
+  it('runs start, stop and update on the runner, and draws the page again', async () => {
+    const orders = [];
+    const written = [];
+    const answers = ['start', 'stop --force', 'update', 'mc run stop', 'run update --force', 'q'];
+    const stdout = { columns: 100, write: (text) => written.push(text) };
+    let drawn = 0;
+    const code = await menu(DATA, {
+      stdout,
+      stderr: { write: (text) => written.push(text) },
+      page: async () => { drawn += 1; return { data: DATA, lines: ['  PROGRAMMES'] }; },
+      reader: plainReader({ stdout, ask: () => answers.shift() ?? null }),
+      open: async () => 0,
+      runOrder: async (argv) => { orders.push(argv.join(' ')); return 0; },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(orders, ['start', 'stop --force', 'update', 'stop', 'update --force']);
+    assert.equal(drawn, 5, 'the page is drawn again after each order');
+  });
+
+  it('reads only a bare stop as the runner\'s — stop <name> is a workarea\'s', () => {
+    assert.deepEqual(runnerOrder('stop'), ['stop']);
+    assert.deepEqual(runnerOrder('mc run start --no-merge'), ['start', '--no-merge']);
+    assert.equal(runnerOrder('stop mc-ui'), null);
+    assert.equal(runnerOrder('run'), null, 'a foreground runner would hold the menu all day');
+    assert.equal(runnerOrder('mc-ui'), null);
+  });
+
   it('turns collapsing off and on again with a, and draws the page each time', async () => {
     const modes = [];
     const written = [];

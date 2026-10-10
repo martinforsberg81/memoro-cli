@@ -8,11 +8,15 @@
  * step. `--rounds N` is retired: there is no round to count (2026-09-08).
  *
  *   mc run start [flags]   the same runner, in the background, logging to
- *                          `~/mc/runner/log/runner.log`
- *   mc run stop            it finishes the step it is in, then exits
+ *                          `~/mc/runner/log/runner.log`. On a runner that
+ *                          is stopping it takes over: a new runner on every
+ *                          lane now, the old one finishes its steps
+ *   mc run stop            it finishes the steps it is in, then exits
  *   mc run stop --force    it ends now, and the session it is holding with it
- *   mc run --update        it finishes the step, fast-forwards mc's own
- *                          checkout, and restarts itself on the new code.
+ *   mc run --update        it fast-forwards mc's own checkout and hands over
+ *                          to a new runner on the new code, finishing only
+ *                          the steps in flight (`mc run update` is the same).
+ *                          On a stopping runner, it takes over as start does.
  *                          On a runner already on origin/main it writes
  *                          nothing and says so (`--force` writes anyway).
  *                          On a runner already draining it prints the drain
@@ -45,9 +49,9 @@ import { scanArgs } from './flags.js';
 
 const USAGE = [
   'usage — mc run [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]',
-  '        mc run start [same flags]   the runner, in the background',
-  '        mc run stop [--force]       after the step it is in, or now',
-  '        mc run --update [--force]   after the step: new code, new process',
+  '        mc run start [same flags]   the runner, in the background; takes over from one that is stopping',
+  '        mc run stop [--force]       after the steps in flight, or now',
+  '        mc run --update [--force]   new code, new process; the old one finishes its steps',
   '                                    already on origin/main: nothing written (--force writes anyway)',
   '                                    already draining: the drain, and the steps it waits on',
   `        mc run lanes [<n>] [--total <n>|none]`,
@@ -77,7 +81,7 @@ export async function run(argv, deps = {}) {
   }
 
   return (deps.loop || runLoop)({
-    once: opts.once, merge: opts.merge, idleSleepMs: opts.idleSleep * 1000, awake: opts.awake,
+    once: opts.once, merge: opts.merge, idleSleepMs: opts.idleSleep * 1000, awake: opts.awake, args: argv,
   });
 }
 
@@ -223,6 +227,10 @@ export function parseRunArgs(argv) {
   // could take is a property of the runner that is already running.
   // `--force` is the one thing it takes: UPDATE written to a runner that is
   // already on origin/main, for a restart wanted for another reason.
+  // `mc run update` is the same order: the page's menu takes `update`, and a
+  // verb that is a flag in one place and a word in the other is one more
+  // thing to remember.
+  if (head === 'update') argv = ['--update', ...argv.slice(1)];
   if (argv.includes('--update')) {
     const rest = argv.filter((arg) => arg !== '--update' && arg !== '--force');
     if (rest.length || argv.length > 2) {
