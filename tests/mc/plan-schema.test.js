@@ -147,6 +147,30 @@ describe('the plan schema', () => {
     );
   });
 
+  /**
+   * The two kinds that release by themselves (ruling 35): a time, and an
+   * earlier step's deploy plus a delay. Each carries its own fields, and
+   * nothing else may carry them.
+   */
+  it('takes `time` and `deploy` blockers with their fields, and refuses a malformed one', () => {
+    const [done, ready] = plan().steps;
+    const stopped = { ...ready, status: 'blocked' };
+    const check = (blocked_by) => validatePlan(plan({ steps: [done, { ...stopped, blocked_by }] }));
+    assert.ok(BLOCKER_KINDS.includes('time') && BLOCKER_KINDS.includes('deploy'));
+    assert.equal(check({ kind: 'time', name: 'until-20261014-0800', at: '2026-10-14T08:00:00Z' }).ok, true);
+    assert.equal(check({ kind: 'deploy', name: 'deploy-step-1-24h', step: 1, hours: 24 }).ok, true);
+    assert.equal(check({ kind: 'deploy', name: 'deploy-step-1', step: 1 }).ok, true, 'hours defaults to 0');
+    assert.match(check({ kind: 'time', name: 'until-x', at: 'next tuesday' }).problems.join('\n'), /steps\[1\]\.blocked_by\.at: the ISO instant/u);
+    assert.match(check({ kind: 'time', name: 'until-x' }).problems.join('\n'), /blocked_by\.at/u);
+    assert.match(check({ kind: 'deploy', name: 'deploy-step-2', step: 2 }).problems.join('\n'), /blocked_by\.step: the number of an earlier step of this plan, below 2/u);
+    assert.match(check({ kind: 'deploy', name: 'deploy-step-3', step: 3 }).problems.join('\n'), /blocked_by\.step/u);
+    assert.match(check({ kind: 'deploy', name: 'deploy-step', step: 1.5 }).problems.join('\n'), /blocked_by\.step/u);
+    assert.match(check({ kind: 'deploy', name: 'deploy-step-1', step: 1, hours: -1 }).problems.join('\n'), /blocked_by\.hours: a number of 0 or more/u);
+    assert.match(check({ kind: 'project', name: 'y', at: '2026-10-14T08:00:00Z' }).problems.join('\n'), /blocked_by\.at: only a time blocker has one/u);
+    assert.match(check({ kind: 'decision', name: 'y', step: 1 }).problems.join('\n'), /blocked_by\.step: only a deploy blocker has one/u);
+    assert.match(check({ kind: 'time', name: 'y', at: '2026-10-14T08:00:00Z', hours: 2 }).problems.join('\n'), /blocked_by\.hours: only a deploy blocker has one/u);
+  });
+
   it('takes `comments` on a step as prose, and refuses the old shared field', () => {
     const [done, ready] = plan().steps;
     assert.equal(validatePlan(plan({ steps: [{ ...done, comments: [] }, ready] })).ok, true);

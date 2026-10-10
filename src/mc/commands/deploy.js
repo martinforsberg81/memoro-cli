@@ -76,6 +76,7 @@ import { runningRounds } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
+import { liveRun } from '../language-runs.js';
 import { readMerger } from '../merger.js';
 import { nightlyReading } from '../nightly-history.js';
 import { mcHome, workRoot } from '../paths.js';
@@ -637,6 +638,15 @@ export async function run(argv, deps = {}) {
   // answer is final.
   const alive = deps.alive || processAlive;
   const refuseRunning = () => {
+    // A language run writes to the same production: the two never overlap
+    // (ruling 31), decided from the same records under the same lock.
+    const language = liveRun(env, { alive });
+    if (language) {
+      const when = String(language.started).slice(0, 16).replace('T', ' ');
+      refuse(`a language run of ${language.manifest} is running — started ${language.started} by ${language.holder || 'somebody'}`);
+      stderr.write(`mc: a language run of ${language.manifest} is running since ${when} (pid ${language.pid}) — nothing was deployed\n`);
+      return true;
+    }
     const other = runningDeploy(env, { alive });
     if (!other) return false;
     const when = String(other.started).slice(0, 16).replace('T', ' ');

@@ -198,3 +198,30 @@ test('patchStep refuses a blocker whose name is a sentence or whose kind the pla
   assert.throws(() => patchStep(entry, 0, { status: 'blocked', blocked_by: { kind: 'whim', name: 'q-1' } }), /kind/u);
   assert.equal(patchStep(entry, 0, { status: 'blocked', blocked_by: { kind: 'project', name: 'sql-w1-universe-closure' } }).steps[0].status, 'blocked');
 });
+
+test('a time or deploy blocker keeps its fields through normaliseEntry and patchStep, and a non-blocked patch clears them', () => {
+  const entry = seedEntry(record([step(), step(), step()]), 't0');
+  const time = { kind: 'time', name: 'until-20261014-0800', at: '2026-10-14T08:00:00Z' };
+  const deploy = { kind: 'deploy', name: 'deploy-step-1-24h', step: 1, hours: 24 };
+  let next = patchStep(entry, 1, { status: 'blocked', blocked_by: time }, 't1');
+  next = patchStep(next, 2, { status: 'blocked', blocked_by: deploy }, 't1');
+  const read = parseEntry(JSON.stringify(next));
+  assert.deepEqual(read.steps[1].blocked_by, time);
+  assert.deepEqual(read.steps[2].blocked_by, deploy);
+  // What is not of the field's type is dropped, not kept as it was.
+  const odd = parseEntry(JSON.stringify({ project: 'p', steps: [{ status: 'blocked', blocked_by: { kind: 'deploy', name: 'd', step: '1', hours: 'x', at: 3 } }] }));
+  assert.deepEqual(odd.steps[0].blocked_by, { kind: 'deploy', name: 'd' });
+  // A seeded plan keeps them too, and applyEntry lays them over the file.
+  const seeded = seedEntry(record([step(), step({ status: 'blocked', blocked_by: deploy })]), 't0');
+  assert.deepEqual(seeded.steps[1].blocked_by, deploy);
+  assert.deepEqual(applyEntry(record([step(), step()]), seeded).plan.steps[1].blocked_by, deploy);
+  assert.equal(patchStep(read, 2, { status: 'ready' }, 't2').steps[2].blocked_by, null);
+});
+
+test('patchStep refuses a time or deploy blocker the plan schema would refuse', () => {
+  const entry = seedEntry(record([step(), step(), step()]), 't0');
+  assert.throws(() => patchStep(entry, 1, { status: 'blocked', blocked_by: { kind: 'time', name: 'until-x', at: 'soon' } }), /blocked_by\.at/u);
+  assert.throws(() => patchStep(entry, 1, { status: 'blocked', blocked_by: { kind: 'deploy', name: 'deploy-step-2', step: 2 } }), /blocked_by\.step/u);
+  assert.throws(() => patchStep(entry, 2, { status: 'blocked', blocked_by: { kind: 'deploy', name: 'deploy-step-1', step: 1, hours: -2 } }), /blocked_by\.hours/u);
+  assert.throws(() => patchStep(entry, 1, { status: 'blocked', blocked_by: { kind: 'project', name: 'y', at: '2026-10-14T08:00:00Z' } }), /only a time blocker/u);
+});

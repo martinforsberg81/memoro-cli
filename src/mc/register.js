@@ -41,7 +41,7 @@ import { closeSync, openSync, readFileSync, readdirSync, rmSync, writeSync } fro
 import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
-import { BLOCKER_KINDS, NAME_RE, planSummary } from './plan-schema.js';
+import { BLOCKER_KINDS, NAME_RE, blockerFieldProblems, planSummary } from './plan-schema.js';
 
 export const REGISTER_SCHEMA = 'mc-register';
 export const REGISTER_VERSION = 1;
@@ -102,6 +102,25 @@ const int = (value) => (Number.isInteger(Number(value)) && Number(value) > 0 ? N
 const plain = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 const prose = (value) => (Array.isArray(value) ? value.filter((p) => typeof p === 'string' && p.trim()).map(String) : []);
 
+/**
+ * A blocker as the register keeps it: `kind` and `name`, and the fields a
+ * `time` or `deploy` blocker waits by (ruling 35) — `at` when it is a string,
+ * `step` when it is an integer, `hours` when it is a finite number — each
+ * dropped otherwise. A runner on older code keeps only `kind` and `name`, and
+ * drops these three at a handover (as ruling 30's rollout showed: old code
+ * drops register fields it does not know). Such a step then reads as blocked
+ * on a `time` or `deploy` name with nothing to release it, and `mc step`
+ * shows that name, so a person sees it.
+ */
+function blockerOf(value) {
+  if (!plain(value) || typeof value.kind !== 'string' || typeof value.name !== 'string') return null;
+  const blocker = { kind: value.kind, name: value.name };
+  if (typeof value.at === 'string') blocker.at = value.at;
+  if (Number.isInteger(value.step)) blocker.step = value.step;
+  if (Number.isFinite(value.hours)) blocker.hours = value.hours;
+  return blocker;
+}
+
 /** One step, whatever an older file or a hand edit left in it. */
 function normaliseStep(step) {
   const base = emptyStep();
@@ -113,9 +132,7 @@ function normaliseStep(step) {
     status,
     pr: int(step.pr),
     branch: typeof step.branch === 'string' && step.branch ? step.branch : null,
-    blocked_by: plain(step.blocked_by) && typeof step.blocked_by.kind === 'string' && typeof step.blocked_by.name === 'string'
-      ? { kind: step.blocked_by.kind, name: step.blocked_by.name }
-      : null,
+    blocked_by: blockerOf(step.blocked_by),
     reason: typeof step.reason === 'string' && step.reason.trim() ? step.reason : null,
     comments: prose(step.comments),
     session: plain(step.session) ? { ...step.session } : null,
@@ -174,7 +191,9 @@ function stepFromPlan(fileStep, now) {
     key: stepKey(fileStep),
     status,
     pr: int(fileStep?.pr),
-    blocked_by: status === 'blocked' && plain(fileStep?.blocked_by) ? { kind: String(fileStep.blocked_by.kind), name: String(fileStep.blocked_by.name) } : null,
+    blocked_by: status === 'blocked' && plain(fileStep?.blocked_by)
+      ? blockerOf({ ...fileStep.blocked_by, kind: String(fileStep.blocked_by.kind), name: String(fileStep.blocked_by.name) })
+      : null,
     comments: prose(fileStep?.comments),
     updated: now,
   };
@@ -293,6 +312,11 @@ export function patchStep(entry, index, patch = {}, now = null) {
   }
   if (rest.blocked_by && next.status === 'blocked' && !(BLOCKER_KINDS.includes(next.blocked_by.kind) && NAME_RE.test(next.blocked_by.name))) {
     throw new Error(`${entry.project} step ${index + 1}: blocked_by is { kind: ${BLOCKER_KINDS.join(' | ')}, name } and the name is a name, not a sentence`);
+  }
+  if (rest.blocked_by && next.status === 'blocked') {
+    const problems = blockerFieldProblems(next.blocked_by, index + 1);
+    if (problems.length) throw new Error(`${entry.project} step ${index + 1}: blocked_by.${problems.join('; blocked_by.')}`);
+    next.blocked_by = blockerOf(next.blocked_by);
   }
   if (next.status === 'failed' && !(typeof next.reason === 'string' && next.reason.trim())) {
     throw new Error(`${entry.project} step ${index + 1}: a failed step says why (reason)`);
