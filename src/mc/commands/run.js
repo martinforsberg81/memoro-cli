@@ -11,6 +11,9 @@
  *                          `~/mc/runner/log/runner.log`. On a runner that
  *                          is stopping it takes over: a new runner on every
  *                          lane now, the old one finishes its steps
+ *   mc run start --if-was-running
+ *                          only when runner.json names a dead pid and no STOP
+ *                          is written: the login agent's start after a restart
  *   mc run stop            it finishes the steps it is in, then exits
  *   mc run stop --force    it ends now, and the session it is holding with it
  *   mc run --update        it fast-forwards mc's own checkout and hands over
@@ -42,7 +45,7 @@
  */
 import { LANES_MAX, laneValue, readLaneCount, writeLaneCount } from '../lane-count.js';
 import { runnerDir } from '../paths.js';
-import { requestUpdate, startRunner, stopRunner } from '../run-control.js';
+import { IF_WAS_RUNNING, requestUpdate, startRunner, stopRunner } from '../run-control.js';
 import { REPO_NAMES, runLoop } from '../run.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
 import { scanArgs } from './flags.js';
@@ -50,6 +53,7 @@ import { scanArgs } from './flags.js';
 const USAGE = [
   'usage — mc run [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]',
   '        mc run start [same flags]   the runner, in the background; takes over from one that is stopping',
+  '        mc run start --if-was-running  only after a runner that died (the login agent\'s start)',
   '        mc run stop [--force]       after the steps in flight, or now',
   '        mc run --update [--force]   new code, new process; the old one finishes its steps',
   '                                    already on origin/main: nothing written (--force writes anyway)',
@@ -199,8 +203,10 @@ export function parseRunArgs(argv) {
     return { verb: 'stop', force: scanned.flags.force };
   }
 
+  // `--if-was-running` is start's own, not the loop's: startRunner reads it
+  // and the runner it spawns never sees it.
   if (head === 'start') {
-    const opts = parseLoopArgs(argv.slice(1));
+    const opts = parseLoopArgs(argv.slice(1).filter((arg) => arg !== IF_WAS_RUNNING));
     return opts.error ? opts : { ...opts, verb: 'start', pass: argv.slice(1) };
   }
 

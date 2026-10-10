@@ -8,10 +8,15 @@
  * a real `~/mc`.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { parseRunArgs, usage } from '../../src/mc/commands/run.js';
 import {
-  childEnv, controlPaths, drainLine, drainState, endNow, handOver, readRunner, requestUpdate, startRunner, stopRunner,
+  agentPlist, childEnv, controlPaths, drainLine, drainState, endNow, handOver, readRunner, requestUpdate, startRunner, stopRunner,
 } from '../../src/mc/run-control.js';
 
 const ROOT = '/w';
@@ -206,6 +211,139 @@ describe('mc run start', () => {
     assert.equal(out.ok, true);
     assert.ok(!(`${paths.dir}/current-memoro.json` in fx.store), 'the ghost step is still there');
     assert.ok(out.lines.some((line) => /cleared runner\.json/u.test(line)));
+  });
+});
+
+describe('mc run start --if-was-running', () => {
+  const FLAG = ['--if-was-running'];
+
+  it('starts a runner when runner.json names a dead pid and no STOP is written, with its flags', async () => {
+    const fx = fixture({ runner: { pid: 100, args: ['--no-merge'] } });
+    const out = await startRunner({ argv: FLAG, root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.equal(out.code, 0);
+    assert.deepEqual(fx.calls.spawned[0].args, ['/opt/bin/mc', 'run', '--no-merge']);
+    assert.deepEqual(JSON.parse(fx.store[paths.runner]).args, ['--no-merge']);
+  });
+
+  it('starts nothing after mc run stop, and says so', async () => {
+    const fx = fixture({ runner: { pid: 100 }, stop: true });
+    const out = await startRunner({ argv: FLAG, root: ROOT, deps: fx.deps });
+    assert.deepEqual([out.ok, out.code, out.lines], [true, 0, ['not started — the runner was stopped (STOP present)']]);
+    assert.deepEqual(fx.calls.spawned, []);
+    assert.ok(paths.stop in fx.store, 'STOP was removed');
+  });
+
+  it('starts nothing with no runner.json, and says so', async () => {
+    const fx = fixture();
+    const out = await startRunner({ argv: FLAG, root: ROOT, deps: fx.deps });
+    assert.deepEqual([out.ok, out.code, out.lines], [true, 0, ['not started — no runner was running']]);
+    assert.deepEqual(fx.calls.spawned, []);
+  });
+
+  it('starts nothing beside a live runner, and exits 0', async () => {
+    const fx = fixture({ runner: { pid: 100, started: '2026-08-30T16:22:11Z' }, live: [100] });
+    const out = await startRunner({ argv: FLAG, root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.equal(out.code, 0);
+    assert.match(out.lines[0], /already running — pid 100/u);
+    assert.deepEqual(fx.calls.spawned, []);
+  });
+
+  it('is parsed as start\'s own flag and never reaches the loop', () => {
+    const opts = parseRunArgs(['start', '--if-was-running']);
+    assert.equal(opts.error, undefined);
+    assert.deepEqual(opts.pass, ['--if-was-running']);
+    assert.match(usage(), /--if-was-running/u);
+  });
+});
+
+describe('the login agent', () => {
+  const env = { MC_WORK_ROOT: ROOT, HOME: '/Users/m', PATH: '/opt/homebrew/bin:/Users/m/.local/bin:/usr/bin' };
+  const AGENT = '/Users/m/Library/LaunchAgents/se.memoro.mc-runner.plist';
+
+  function withAgent(fx) {
+    const agents = {};
+    const writes = [];
+    fx.deps.env = env;
+    fx.deps.writeAgent = (path, text) => {
+      if (agents[path] === text) return false;
+      agents[path] = text;
+      writes.push(path);
+      return true;
+    };
+    return { agents, writes };
+  }
+
+  it('is written by a start that spawns, and not again when unchanged', async () => {
+    const fx = fixture();
+    const { agents, writes } = withAgent(fx);
+    const first = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.deepEqual(writes, [AGENT]);
+    assert.ok(first.lines.includes(`login agent: ${AGENT}`));
+    assert.equal(agents[AGENT], agentPlist({ execPath: '/usr/bin/node', entry: '/opt/bin/mc', env, log: paths.agentLog }));
+    delete fx.store[paths.runner];
+    const second = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(fx.calls.spawned.length, 2);
+    assert.deepEqual(writes, [AGENT]);
+    assert.ok(!second.lines.some((line) => /login agent/u.test(line)));
+  });
+
+  it('is not written by a start that is refused', async () => {
+    const fx = fixture({ runner: { pid: 100 }, live: [100] });
+    const { writes } = withAgent(fx);
+    await startRunner({ root: ROOT, deps: fx.deps });
+    await startRunner({ argv: ['--if-was-running'], root: ROOT, deps: fx.deps });
+    assert.deepEqual(writes, []);
+  });
+
+  it('runs start --if-was-running at load, once, with the PATH and HOME it was written with', () => {
+    assert.equal(agentPlist({ execPath: '/usr/bin/node', entry: '/opt/bin/mc', env, log: '/Users/m/mc/runner/log/login-agent.log' }), [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+      '<plist version="1.0">',
+      '<dict>',
+      '  <key>Label</key>',
+      '  <string>se.memoro.mc-runner</string>',
+      '  <key>ProgramArguments</key>',
+      '  <array>',
+      '    <string>/usr/bin/node</string>',
+      '    <string>/opt/bin/mc</string>',
+      '    <string>run</string>',
+      '    <string>start</string>',
+      '    <string>--if-was-running</string>',
+      '  </array>',
+      '  <key>RunAtLoad</key>',
+      '  <true/>',
+      '  <key>EnvironmentVariables</key>',
+      '  <dict>',
+      '    <key>PATH</key>',
+      '    <string>/opt/homebrew/bin:/Users/m/.local/bin:/usr/bin</string>',
+      '    <key>HOME</key>',
+      '    <string>/Users/m</string>',
+      '  </dict>',
+      '  <key>StandardOutPath</key>',
+      '  <string>/Users/m/mc/runner/log/login-agent.log</string>',
+      '  <key>StandardErrorPath</key>',
+      '  <string>/Users/m/mc/runner/log/login-agent.log</string>',
+      '</dict>',
+      '</plist>',
+      '',
+    ].join('\n'));
+    assert.doesNotMatch(agentPlist({ execPath: 'n', entry: 'e', env, log: 'l' }), /KeepAlive/u);
+  });
+
+  const plutil = spawnSync('plutil', ['-help'], { encoding: 'utf8' }).error ? null : 'plutil';
+  it('passes plutil -lint', { skip: plutil ? false : 'no plutil on this machine' }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-agent-'));
+    try {
+      const file = join(dir, 'agent.plist');
+      writeFileSync(file, agentPlist({ execPath: '/usr/bin/node', entry: '/opt/bin/a&b <mc>', env, log: paths.agentLog }));
+      const lint = spawnSync(plutil, ['-lint', file], { encoding: 'utf8' });
+      assert.equal(lint.status, 0, lint.stdout + lint.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

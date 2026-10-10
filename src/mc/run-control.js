@@ -12,7 +12,9 @@
  *
  *   start      spawn `mc run` detached, its output appended to runner.log;
  *              on a runner that is stopping, a new one takes over at once
- *              and the old one only finishes the steps it holds
+ *              and the old one only finishes the steps it holds; every
+ *              start that spawns writes the login agent (`agentPlist`)
+ *   start --if-was-running  the agent's start: only after a runner that died
  *   stop       write STOP; the steps in flight finish, then the runner exits
  *   stop --force  end it now — the runner and the session it is holding
  *   --update   write UPDATE; mc's own checkout is fast-forwarded, a new
@@ -49,6 +51,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -89,6 +92,7 @@ export function controlPaths(root) {
     stop: join(dir, 'STOP'),
     update: join(dir, 'UPDATE'),
     log: join(dir, 'log', 'runner.log'),
+    agentLog: join(dir, 'log', 'login-agent.log'),
   };
 }
 
@@ -123,9 +127,75 @@ export function realControlDeps(env = process.env) {
     // How many lanes the runner has in all: `per_repo` on every repository,
     // and never more than `total` (run.js `runLoop`).
     laneCount: () => laneSlots(readLaneCount(), defaultRepos(env).length),
+    // The login agent, written only when its text differs, and only on the
+    // machine that has a launchd to read it.
+    writeAgent: (path, text) => {
+      if (process.platform !== 'darwin') return false;
+      try { if (readFileSync(path, 'utf8') === text) return false; } catch { /* not there yet */ }
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, text);
+      return true;
+    },
     execPath: process.execPath,
     entry: process.argv[1],
   };
+}
+
+/* -------------------------------------------------------------- login agent */
+
+/** The launchd label of the agent that starts the runner at login. */
+export const AGENT_LABEL = 'se.memoro.mc-runner';
+/** The flag the agent starts `mc run start` with. */
+export const IF_WAS_RUNNING = '--if-was-running';
+
+/** Where the login agent lives: a file there is loaded at the next login. */
+export function agentPath(env) {
+  return join(env.HOME || homedir(), 'Library', 'LaunchAgents', `${AGENT_LABEL}.plist`);
+}
+
+function xml(text) {
+  return String(text).replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;');
+}
+
+/**
+ * The login agent's plist, as text: `mc run start --if-was-running` at load,
+ * once. No `KeepAlive` — the agent answers a restart, not a runner that
+ * exits; a runner that was stopped must stay stopped.
+ *
+ * launchd hands a login agent neither the shell's PATH nor homebrew's, and
+ * `claude` and `codex` live in `/opt/homebrew/bin` and `~/.local/bin`, so the
+ * PATH and HOME of the runner that wrote it go in with it.
+ */
+export function agentPlist({ execPath, entry, env = {}, log }) {
+  const string = (value) => `<string>${xml(value)}</string>`;
+  const vars = [['PATH', env.PATH], ['HOME', env.HOME]].filter(([, value]) => value);
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    '<dict>',
+    '  <key>Label</key>',
+    `  ${string(AGENT_LABEL)}`,
+    '  <key>ProgramArguments</key>',
+    '  <array>',
+    ...[execPath, entry, 'run', 'start', IF_WAS_RUNNING].map((arg) => `    ${string(arg)}`),
+    '  </array>',
+    '  <key>RunAtLoad</key>',
+    '  <true/>',
+    ...(vars.length ? [
+      '  <key>EnvironmentVariables</key>',
+      '  <dict>',
+      ...vars.flatMap(([name, value]) => [`    <key>${name}</key>`, `    ${string(value)}`]),
+      '  </dict>',
+    ] : []),
+    '  <key>StandardOutPath</key>',
+    `  ${string(log)}`,
+    '  <key>StandardErrorPath</key>',
+    `  ${string(log)}`,
+    '</dict>',
+    '</plist>',
+    '',
+  ].join('\n');
 }
 
 /** The lanes a runner starts: `per_repo` per repository, capped by `total`. */
@@ -216,11 +286,23 @@ function clearCurrents(paths, deps) {
  *
  * It refuses only on the thing a second runner would actually break — a
  * first runner that is running and was not told to stop.
+ *
+ * `--if-was-running` is the login agent's start (`agentPlist`): a runner only
+ * when runner.json names a pid that is gone and no STOP is written — the state
+ * a restart leaves, and not the one `mc run stop` leaves. Every other state is
+ * a line saying why not, and exit 0: at login nothing to start is not an
+ * error. The runner it starts runs with the flags the dead one ran with.
  */
 export async function startRunner({ argv = [], root = null, deps = realControlDeps() } = {}) {
   const paths = controlPaths(root ?? workRoot(deps.env));
   const state = runnerState({ paths, deps });
   const { held, live } = state;
+  if (argv.includes(IF_WAS_RUNNING)) {
+    const why = notRestarted(state, paths, deps);
+    if (why) return { ok: true, code: 0, lines: why };
+    argv = argv.filter((arg) => arg !== IF_WAS_RUNNING);
+    if (!argv.length && held.args) argv = held.args;
+  }
   if (state.kind === 'running' || state.kind === 'draining') {
     return {
       ok: false,
@@ -248,6 +330,21 @@ export async function startRunner({ argv = [], root = null, deps = realControlDe
   }
   deps.remove(paths.update);
   return spawnRunner({ argv, paths, deps, lines });
+}
+
+/**
+ * Why `--if-was-running` starts nothing, or null when the runner was running
+ * when it went down: runner.json naming a dead pid, no STOP, nobody alive.
+ */
+function notRestarted(state, paths, deps) {
+  const { kind, held, live } = state;
+  if (state.stop) return ['not started — the runner was stopped (STOP present)'];
+  if (kind === 'running' || kind === 'draining') {
+    return [`a runner is already running — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`, ...progressLines(state, paths, deps)];
+  }
+  if (live) return [`a runner is already running — pid ${live.pid}, finishing the steps a handover left it`];
+  if (!held) return ['not started — no runner was running'];
+  return null;
 }
 
 /**
@@ -287,7 +384,24 @@ function spawnRunner({ argv, paths, deps, lines, predecessor = null }) {
   }, null, 2)}\n`);
   lines.push(`runner started — pid ${pid}${argv.length ? ` (mc run ${argv.join(' ')})` : ''}`);
   lines.push(`log: ${paths.log}`);
+  lines.push(...writeLoginAgent(paths, deps));
   return { ok: true, code: 0, pid, lines };
+}
+
+/**
+ * The login agent, rewritten on every start that spawns, so it always names
+ * the node and the mc the last runner ran on. Written only when its text
+ * differs; a failure to write it is said and does not undo the start.
+ */
+function writeLoginAgent(paths, deps) {
+  if (!deps.writeAgent) return [];
+  const path = agentPath(deps.env);
+  const text = agentPlist({ execPath: deps.execPath, entry: deps.entry, env: deps.env, log: paths.agentLog });
+  try {
+    return deps.writeAgent(path, text) ? [`login agent: ${path}`] : [];
+  } catch (error) {
+    return [`could not write the login agent ${path} — ${error?.message || error}`];
+  }
 }
 
 /**
