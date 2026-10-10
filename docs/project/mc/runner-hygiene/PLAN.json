@@ -18,7 +18,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A step does not start under 5 GiB free, and the page says why.",
       "check": "`tests/mc/run-plan.test.js` (or `run.test.js`) with the free-space reader stubbed under the threshold: no session is launched and the line is logged; `mc --fresh` shows the line while the condition holds."
     },
