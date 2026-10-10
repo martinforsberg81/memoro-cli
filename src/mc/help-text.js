@@ -39,6 +39,8 @@ THE PAGE
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc deploy --follow               Watch the deploy that is running
+  mc language [status <lang>]      Each language's last reading and run; status reads one again
+  mc language key [set]            The Cloudflare key the writes get — set reads it from stdin
   mc prs [--offline] [--json]      Every open pull request, and whose it is: a project's
                                     step, a plan session, a workarea, or nobody
   mc deps [<repo>]                 Which dependencies need updating, and how urgently
@@ -294,6 +296,24 @@ IN FULL
                                     and read back by the page and
                                     mc helper. It takes no repository:
                                     memoro-cli is installed, not deployed
+  mc language [--json]             Every language with a cached reading or a
+                                    manifest: the reading's age, the manifests,
+                                    the last run. Offline and instant
+  mc language status <lang>        The language's four reads — selectors,
+                                    forms, grammar waiting, lemma bands — run
+                                    now in the memoro main mc deploy uses,
+                                    fast-forwarded first; refused while a
+                                    deploy runs or that main is dirty or
+                                    ahead. Names the manifests that close each
+                                    unresolved selector use, and caches the
+                                    reading under ~/mc/runner/log/language/
+  mc language key [--json]         Whether the Cloudflare key is held, and
+                                    its account id — never the token
+  printf %s "<token>" | mc language key set --account <id>
+                                   Keep the key in this machine's keychain.
+                                    The token is read from stdin only: an
+                                    argument is a shell history line and a
+                                    line in mc.log
   mc deps [<repo>] [--json] [--refresh]
                                    What origin/main's lockfile is behind on:
                                     npm audit and npm view of it, read in a

@@ -35,6 +35,17 @@
  *
  * It never blocks anything but a gate round. A person running `npm test` in
  * their own worktree is not asking mc's permission and is not refused it.
+ *
+ * ## One round per lane (ruling 34, 2026-10-10)
+ *
+ * "One at a time" was about the cores, and only one repository pins them:
+ * memoro's suite is seven lanes of node for five minutes. memoro-cli's is one
+ * `node --test` over its own tree in about a minute, with no `npm ci` and no
+ * browser — and on 2026-10-09/10 every one of those minutes waited behind a
+ * memoro round of three to fifteen. So there are two locks, one per lane
+ * (`GATE_LANES`): two rounds in one lane still exclude each other, and a
+ * heavy and a light round may run side by side. The heavy lane keeps the old
+ * file, so a round on old code and one on new code still see each other.
  */
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -42,19 +53,33 @@ import { join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 import { mcHome } from './paths.js';
 
-export function gateLockPath(root = mcHome()) {
-  return join(root, 'gate-running.json');
+/**
+ * The lanes a gate round runs in, one round at a time in each. They exist
+ * because a light round does not pin the cores the way memoro's seven-lane
+ * suite does, and that pinning was the whole reason for one-at-a-time (see
+ * above). `heavy` is memoro and any repository that declares nothing;
+ * `light` is a repository whose declaration says `gate_lane: 'light'`.
+ */
+export const GATE_LANES = Object.freeze(['heavy', 'light']);
+
+export function gateLockPath(root = mcHome(), lane = 'heavy') {
+  return join(root, lane === 'light' ? 'gate-running-light.json' : 'gate-running.json');
 }
 
-/** The round running right now, or null. A file that will not parse is nobody. */
-export function runningRound({ root = mcHome(), alive = isAlive } = {}) {
+/** The round running right now in this lane, or null. A file that will not parse is nobody. */
+export function runningRound({ root = mcHome(), alive = isAlive, lane = 'heavy' } = {}) {
   let raw = null;
-  try { raw = JSON.parse(readFileSync(gateLockPath(root), 'utf8')); } catch { return null; }
+  try { raw = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8')); } catch { return null; }
   if (!Number.isFinite(raw?.pid)) return null;
   // A round that was killed left this behind. It is not a holder; it is
   // litter, and saying so is the whole of the reaping this needs.
   if (!alive(raw.pid)) return null;
-  return raw;
+  return { ...raw, lane };
+}
+
+/** The round in each lane, `{ heavy, light }`, for a reader that means any round. */
+export function runningRounds({ root = mcHome(), alive = isAlive } = {}) {
+  return Object.fromEntries(GATE_LANES.map((lane) => [lane, runningRound({ root, alive, lane })]));
 }
 
 /**
@@ -65,15 +90,15 @@ export function runningRound({ root = mcHome(), alive = isAlive } = {}) {
  * and it is the other round's own words rather than a guess.
  */
 export function takeGateLock({
-  repo, pr, mode = null, root = mcHome(), alive = isAlive, now = new Date(),
+  repo, pr, mode = null, root = mcHome(), alive = isAlive, now = new Date(), lane = 'heavy',
 } = {}) {
-  const running = runningRound({ root, alive });
+  const running = runningRound({ root, alive, lane });
   if (running) return { ok: false, running };
   const mine = {
     pid: process.pid, repo: repo || null, pr: pr ?? null, mode: mode || null, since: now.toISOString(),
   };
   try {
-    writeJsonAtomic(gateLockPath(root), mine, { mode: 0o600 });
+    writeJsonAtomic(gateLockPath(root, lane), mine, { mode: 0o600 });
   } catch {
     // A lock that cannot be written must not stop the round it was meant to
     // protect: the worst case is the contention it was avoiding, and refusing
@@ -90,11 +115,11 @@ export function takeGateLock({
  * dying. Deleting the file blindly would then release somebody else's round,
  * which is the one way a lock this simple could do real damage.
  */
-export function releaseGateLock({ root = mcHome() } = {}) {
+export function releaseGateLock({ root = mcHome(), lane = 'heavy' } = {}) {
   try {
-    const raw = JSON.parse(readFileSync(gateLockPath(root), 'utf8'));
+    const raw = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8'));
     if (raw?.pid !== process.pid) return false;
-    rmSync(gateLockPath(root), { force: true });
+    rmSync(gateLockPath(root, lane), { force: true });
     return true;
   } catch { return false; }
 }
@@ -115,16 +140,16 @@ export function releaseGateLock({ root = mcHome() } = {}) {
  * within the last second of the one already on disk is not written again —
  * one write a second is plenty for a page nobody refreshes faster than that.
  */
-export function noteGatePhase({ root = mcHome(), message, now = new Date() } = {}) {
+export function noteGatePhase({ root = mcHome(), message, now = new Date(), lane = 'heavy' } = {}) {
   let raw = null;
-  try { raw = JSON.parse(readFileSync(gateLockPath(root), 'utf8')); } catch { return false; }
+  try { raw = JSON.parse(readFileSync(gateLockPath(root, lane), 'utf8')); } catch { return false; }
   if (raw?.pid !== process.pid) return false;
   if (raw.phase_at) {
     const last = Date.parse(raw.phase_at);
     if (Number.isFinite(last) && now.getTime() - last < 1000) return true;
   }
   try {
-    writeJsonAtomic(gateLockPath(root), {
+    writeJsonAtomic(gateLockPath(root, lane), {
       ...raw,
       phase: String(message).slice(0, 200),
       phase_at: now.toISOString(),
@@ -133,12 +158,13 @@ export function noteGatePhase({ root = mcHome(), message, now = new Date() } = {
   } catch { return false; }
 }
 
-/** How a refusal reads to the operator: whose round, on what, since when. */
-export function describeRunning(running) {
-  if (!running) return 'another gate round is running on this machine';
+/** How a refusal reads to the operator: whose round, in which lane, on what, since when. */
+export function describeRunning(running, lane = running?.lane) {
+  const where = lane ? ` in the ${lane} lane` : '';
+  if (!running) return `another gate round is running on this machine${where}`;
   const what = [running.repo, running.pr == null ? null : `#${running.pr}`].filter(Boolean).join(' ');
-  return `another gate round is running on this machine (pid ${running.pid}${what ? `, ${what}` : ''}`
-    + `${running.since ? `, since ${running.since}` : ''}) — one at a time`;
+  return `another gate round is running on this machine${where} (pid ${running.pid}${what ? `, ${what}` : ''}`
+    + `${running.since ? `, since ${running.since}` : ''}) — one at a time in each lane`;
 }
 
 function isAlive(pid) {

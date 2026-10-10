@@ -31,8 +31,10 @@ export async function setSecret(account, value) {
     if (p === 'win32')   return await winSet(account, value);
   } catch (err) {
     // A keychain that did not answer is there and locked, not missing: writing
-    // the secret to the file instead would be a downgrade nobody chose.
-    if (err.code === 'ETIMEDOUT') throw err;
+    // the secret to the file instead would be a downgrade nobody chose. A
+    // value the keychain's line cannot carry is the caller's mistake, and the
+    // file would take it silently.
+    if (err.code === 'ETIMEDOUT' || err.code === 'EBADSECRET') throw err;
     warnFallback(err);
   }
   return fileSet(account, value);
@@ -66,15 +68,25 @@ export async function deleteSecret(account) {
 // macOS Keychain via `security`
 // ─────────────────────────────────────────────────────────────
 
-async function macSet(account, value) {
-  // -U to update if exists; write via -w to avoid putting password in argv
-  await run('security', [
-    'add-generic-password',
-    '-a', account,
-    '-s', SERVICE,
-    '-w', value,
-    '-U',
-  ]);
+/**
+ * The secret goes through `security -i`'s stdin, never its argv: `-w <value>`
+ * on the command line is there for `ps` to read while the tool runs. One
+ * command line, each value double-quoted. `security -i` exits with the failed
+ * command's code, so a refused write is still an error here.
+ *
+ * A value with a double quote, a backslash or a line break is refused rather
+ * than escaped: how `security -i` unquotes is not documented, and a token
+ * written subtly wrong is worse than one not written.
+ */
+export async function macSet(account, value, { exec = run } = {}) {
+  for (const [what, text] of [['account', account], ['secret', value]]) {
+    if (/["\\\r\n]/u.test(String(text))) {
+      const err = new Error(`the keychain cannot take this ${what}: it contains a double quote, a backslash or a line break`);
+      err.code = 'EBADSECRET';
+      throw err;
+    }
+  }
+  await exec('security', ['-i'], `add-generic-password -a "${account}" -s "${SERVICE}" -w "${value}" -U\n`);
   return 'keychain';
 }
 
