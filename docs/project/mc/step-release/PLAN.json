@@ -28,7 +28,7 @@
       "check": "`tests/mc/plan-schema.test.js`, `tests/mc/register.test.js` (the fields survive `normaliseEntry` and `patchStep`) and `tests/mc/step-command.test.js` (or the test beside `commands/step.js`): `--until`, `--after-deploy`, `--hours`; a past `--until` is refused, as is `--after-deploy` on a memoro-cli step and `--after-deploy` naming the step itself or a later one."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A due blocker is released by the runner's `queue()` into `ready` with a comment, and one that is not due is left blocked.",
       "check": "`tests/mc/step-release.test.js`: `time` before and after `at`; `deploy` with no deployed row, a row that does not contain the sha, a row that contains it but is younger than `hours`, and one that is old enough; `project` done, not done, and not on main. `tests/mc/run.test.js` (or the runner test that drives `queue()`): a due step comes out of `queue()` as `ready`, and its register entry carries the comment."
     },

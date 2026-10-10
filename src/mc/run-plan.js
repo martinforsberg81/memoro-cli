@@ -331,7 +331,9 @@ export function nextBranch(name, taken = []) {
  *   and nothing else — it never read a decision file, counted one, or started
  *   because one was answered. ("Runner genomför planer som är ready. Om
  *   väntande beslut är ej ready.") A plan comes back by being set `ready`,
- *   which is the job of whoever applies the answer.
+ *   which is the job of whoever applies the answer — except a `time`,
+ *   `deploy` or `project` wait that is over, which `queue()` sets `ready`
+ *   before this is asked (`releaseDue`, ruling 35).
  */
 export function chooseKind({ plan, openPrs = [] }) {
   const flight = inFlight(openPrs);

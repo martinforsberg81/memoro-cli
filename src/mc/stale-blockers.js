@@ -1,6 +1,11 @@
 /**
  * A blocker nobody re-reads — the one thing on the page that says a stopped
- * plan has been waiting for nothing.
+ * plan may have been waiting for nothing.
+ *
+ * Since ruling 35 (2026-10-10) a `project` blocker whose project is `done` on
+ * main is released by the runner itself (`releaseDue`, step-release.js), so
+ * this no longer reports it. What is left here is the case no machine can
+ * settle: a blocker naming a project that is not on main at all.
  *
  * A step is `blocked` with `blocked_by: { kind, name }`, and until this
  * existed nothing in mc ever read that name a second time. The runner hands
@@ -29,9 +34,9 @@
  * `origin/main` can say whether somebody has fixed it. What says so is the
  * person who fixes it, by setting the step `ready`.
  *
- * **What counts as finished, and why the wording is careful.** A project
- * blocker is stale when the named project's plan on the same ref is `done`,
- * or when there is no plan by that name at all — `mc run` archives a plan the
+ * **What counts as gone, and why the wording is careful.** A project blocker
+ * is reported when there is no plan by that name on the same ref at all (one
+ * whose plan says `done` is the runner's to release) — `mc run` archives a plan the
  * round it says done, so a delivered project leaves nothing behind but a
  * `project_log.md` row. But a project also leaves main when it is abandoned
  * or superseded, and then the blocked step's premise may be dead rather than
@@ -54,7 +59,7 @@
  * inventing a project that is gone — the page holds both.
  */
 
-/** Blocked steps whose `project` blocker is finished or gone, in plan order. */
+/** Blocked steps whose `project` blocker is gone from main, in plan order. */
 export function staleBlockers(plans = []) {
   const known = new Map();
   for (const record of plans) {
@@ -67,9 +72,8 @@ export function staleBlockers(plans = []) {
       if (step?.status !== 'blocked') return;
       const blocker = step.blocked_by;
       if (!blocker || blocker.kind !== 'project' || !blocker.name) return;
-      const held = known.get(blocker.name);
-      const why = held ? (held.status === 'done' ? 'is done' : null) : 'is not on main';
-      if (!why) return;
+      if (known.has(blocker.name)) return;
+      const why = 'is not on main';
       out.push({
         repo: record.repo,
         programme: record.programme,
