@@ -23,7 +23,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "The plan schema, the register and `mc step blocked` accept `time` and `deploy` blockers with their fields, and refuse a malformed one.",
       "check": "`tests/mc/plan-schema.test.js`, `tests/mc/register.test.js` (the fields survive `normaliseEntry` and `patchStep`) and `tests/mc/step-command.test.js` (or the test beside `commands/step.js`): `--until`, `--after-deploy`, `--hours`; a past `--until` is refused, as is `--after-deploy` on a memoro-cli step and `--after-deploy` naming the step itself or a later one."
     },
