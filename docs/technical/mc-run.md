@@ -108,6 +108,22 @@ the rules; each lane reads them before it picks.
   drained the lanes after nearly every merge. Removed 2026-09-19; Martin
   runs `--update` when he wants the new code.
 
+**The login agent.** Every `mc run start` that spawns a runner writes
+`~/Library/LaunchAgents/se.memoro.mc-runner.plist` when its text differs
+(`agentPlist`): `RunAtLoad`, no `KeepAlive`, running
+`mc run start --if-was-running` with the node and the mc the last start used,
+the `PATH` and `HOME` that start ran with (launchd gives a login agent neither
+the shell's PATH nor homebrew, where `claude` and `codex` live), and its output
+to `~/mc/runner/log/login-agent.log`. A file there is loaded at the next login
+without `launchctl`. `--if-was-running` starts a runner only when
+`runner.json` names a pid that is gone and no `STOP` is written — what a
+restart leaves, not what `mc run stop` leaves — with the flags the dead runner
+ran with; otherwise it prints why not (`not started — the runner was stopped
+(STOP present)`, `not started — no runner was running`, or the runner already
+running) and exits 0. Measured 2026-10-10: the machine restarted at 11:50 and
+the runner was started by hand at 13:19, every session's one-hour cache gone.
+Removing the plist turns the agent off; the next `mc run start` writes it back.
+
 **Why `--update` has to exist at all.** Node reads its whole module graph at
 process start and never looks at the disk again. The runner merges pull
 requests, including pull requests that change the runner, so a runner that has
