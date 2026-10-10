@@ -888,6 +888,36 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
     assert.ok(answeredAt !== null && leftAt - answeredAt < 1000);
   });
 
+  it('while a mend is pending, the same lane takes and answers its next job (merger-hardening step 6)', async () => {
+    register();
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: 'a' }, { ...JOB, repo: 'other', pr: 672, since: 'b', step: null }]));
+    const conflict = { ok: false, merged: false, stopped_at: 'merge', reason: 'CONFLICT (content): Merge conflict in a.js' };
+    let release672 = null;
+    let otherAnsweredWhileMending = null;
+    let mendDone = false;
+    const m = machine([conflict, green]);
+    const say = (line) => {
+      m.said.push(line);
+      if (/^other #672: merged/u.test(line)) otherAnsweredWhileMending = !mendDone;
+    };
+    const code = await serve({
+      root, lock, take, release, ...ONE_LANE, say, now: m.deps.now,
+      sleep: () => pause(5),
+      land: landerFor({ ...m.deps, say, mayMend: (job) => job.pr === 671 }),
+      mend: async () => {
+        await new Promise((resolve) => { release672 = resolve; setTimeout(resolve, 300); });
+        mendDone = true;
+        return { outcome: 'nothing', line: 'gave up', status: 0, seconds: 0 };
+      },
+      appendRun: () => {},
+    });
+    assert.equal(code, 0);
+    assert.ok(release672, 'the mend was started');
+    assert.equal(otherAnsweredWhileMending, true, m.said.join('\n'));
+    assert.equal(m.rounds.length, 2);
+    assert.equal(queue().find((e) => e.pr === 671).state, 'red');
+  });
+
   it('restack awaits an async git, and a conflict is said with its files', async () => {
     const calls = [];
     const gitWith = (conflict) => async (cwd, args) => {

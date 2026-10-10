@@ -44,9 +44,10 @@ import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { GATE_LANES, runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, heldLanding, markLanding, markQueued, markRed, mergesPath, nextBatch, parseQueue, placeOf, queuedFor,
-  stepsDone,
+  dequeue, enqueue, heldLanding, markLanding, markMended, markMending, markQueued, markRed, mergesPath, nextBatch, parseQueue,
+  placeOf, queuedFor, stepsDone,
 } from './merge-queue.js';
+import { MEND_AT_ONCE, mendedReason, mendLine } from './mend.js';
 import { landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
 import { readEntry, realLock, updateStep } from './register.js';
 import { gateLaneOf } from './repo-gate-table.js';
@@ -393,13 +394,17 @@ export async function landJob(batch, {
   // The gate lane the batch's repository runs in: the round waited for is
   // the one in this lane, and a round in the other lane is no reason to wait.
   lane = 'heavy',
+  // Whether a red gets its one mend first (mend.js `mayMend`). Off unless
+  // the caller mends: `serve` with a `mend` is what sets such a job aside.
+  mayMend = () => false,
 } = {}) {
   const t0 = now().getTime();
   const answers = [];
   const answer = async (job, landed, report) => {
-    answers.push({ job, landed, report });
+    const mending = !landed && mayMend(job, report);
+    answers.push({ job, landed, report, ...(mending ? { mending: true } : {}) });
     await tell(job, landed, report, {
-      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000),
+      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), mending,
     });
   };
   const jobs = [];
@@ -482,9 +487,12 @@ export function landerFor(deps) {
 }
 
 /** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
-async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds }) {
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, mending = false }) {
   const label = `${job.repo} #${job.pr}`;
-  say(landed && report?.already_merged
+  // Set aside for its one mend: the step stays `landing`, so the runner
+  // leaves it alone, and the mend's outcome is what writes the register.
+  say(mending ? `${label}: ${report?.reason || report?.stopped_at || 'red'} — mending (one try)`
+    : landed && report?.already_merged
     ? `${label}: already merged on GitHub as ${String(report.merge_commit || '').slice(0, 7)} — answered landed`
     : landed
     ? `${label}: merged into ${report.merged_into || 'main'} as ${String(report.merge_commit || '').slice(0, 7)} (${seconds}s)`
@@ -494,7 +502,7 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   // page a stale row and the landing nothing.
   if (landed) { try { dropFromPage({ root, repo: job.repo, number: job.pr }); } catch { /* see above */ } }
 
-  if (job.step) {
+  if (job.step && !mending) {
     const stamp = now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
     const io = { read, lock, ...(write ? { write } : {}) };
     try {
@@ -566,9 +574,41 @@ export async function serve({
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
   gh = null,
   sweep = () => sweepMergedReds({ root, gh, read, write, lock, say, now }),
+  // `(job, report, { onPid }) => result` — one mend session (mend.js
+  // `runMend`), or null for a merger that does not mend: every red is red.
+  // `land` must be handed the matching `mayMend`.
+  mend = null,
+  mendAtOnce = MEND_AT_ONCE,
+  appendRun = null,
 } = {}) {
   if (!take()) { say('another merger is running — leaving'); return 0; }
   say(version ? `merger ${process.pid} started — ${version.checkout} at ${version.commit}` : `merger ${process.pid} started`);
+  // A `mending` entry at start is a mend that died with the merger before
+  // it: it never finished, so the job goes back in line unmended, and its
+  // next red mends again.
+  lock(root, () => {
+    const entries = parseQueue(read(mergesPath(root)));
+    const orphans = entries.filter((entry) => entry.state === 'mending');
+    if (!orphans.length) return;
+    write(mergesPath(root), entries.map((entry) => (entry.state === 'mending'
+      ? { ...entry, state: 'queued', started: null, mend: null, mended: null } : entry)));
+    for (const entry of orphans) say(`${entry.repo} #${entry.pr}: its mend (pid ${entry.mend?.pid ?? '?'}) never finished — back in line`);
+  });
+  const mends = mend ? mendLine({
+    atOnce: mendAtOnce,
+    run: (job, report) => {
+      say(`${job.repo} #${job.pr}: mend session starting on ${job.branch}`);
+      return mend(job, report, {
+        onPid: (pid) => lock(root, () => {
+          const entries = parseQueue(read(mergesPath(root)));
+          if (queuedFor(entries, job.repo, job.pr)?.state !== 'mending') return;
+          write(mergesPath(root), entries.map((entry) => (entry.state === 'mending' && entry.repo === job.repo && entry.pr === job.pr
+            ? { ...entry, mend: { ...entry.mend, pid } } : entry)));
+        }),
+      });
+    },
+    settle: (job, report, result) => settleMend(job, report, result, { root, say, now, read, write, lock, gh, appendRun }),
+  }) : null;
   // Red rows merged or closed on GitHub since: looked for once now and then
   // at most every SWEEP_MS by whichever loop is idle, one sweep at a time.
   let sweeping = null;
@@ -627,9 +667,12 @@ export async function serve({
       if (!batch.length) {
         await sweepReds();
         idle.add(lane);
-        if (idle.size < lanes.length) {
+        if (idle.size < lanes.length || mends?.busy()) {
           // The other lane is landing. Looked at again when it answers a job,
           // when it has nothing either, or after a poll — whichever is first.
+          // A mend running or waiting is looked at again when it settles: it
+          // may put its job back in line, and the merger does not leave
+          // before it has.
           await Promise.race([woken, sleep(MERGER_POLL_MS)]);
           idle.delete(lane);
           continue;
@@ -668,26 +711,92 @@ export async function serve({
       // Landed, the job is gone; red, it stays as a red row on the page until
       // `mc merge` puts it back in line or the pull request is closed. Each
       // job of a batch by its own answer.
+      // A red that gets its one mend is set aside as `mending`, and the lane
+      // goes on: the mend runs beside it, never awaited here.
       const answered = now().toISOString();
+      const toMend = answers.filter((one) => one.mending && mends);
       lock(root, () => {
         let entries = parseQueue(read(mergesPath(root)));
-        for (const { job: one, report } of answers) {
+        for (const { job: one, report, mending } of answers) {
+          const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
           entries = report?.ok && report.merged
             ? dequeue(entries, one)
-            : markRed(entries, one, { reason: `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`, answered });
+            : mending && mends
+            ? markMending(entries, one, { reason, stopped_at: report?.stopped_at || null, started: answered })
+            : markRed(entries, one, { reason, answered });
         }
         write(mergesPath(root), entries);
       });
+      for (const { job: one, report } of toMend) mends.start(one, report).then(changed);
       changed();
     }
   };
 
   try {
     await Promise.all(lanes.map(loop));
+    // Asked to stop, a mend not started yet is dropped (its entry stays
+    // `mending`, and the next merger puts it back in line); a running one is
+    // waited for, up to its own wall clock.
+    if (mends) {
+      if (toldStop) mends.stop();
+      await mends.idle();
+    }
     return 0;
   } finally {
     release();
     if (toldStop) say('left');
+  }
+}
+
+/**
+ * What came of a mend, written: pushed, the job is back in line at its old
+ * place, `mended` set, and the step still `landing`; anything else, the job
+ * is red with the round's reason and what the mend said, and the step goes
+ * through `redPatch` as any red does. One runs.tsv row of kind `mend`.
+ */
+export async function settleMend(job, report, result, {
+  root, say = () => {}, now = () => new Date(), read = realRead,
+  write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }), lock = realLock, gh = null, appendRun = null,
+} = {}) {
+  const outcome = result?.outcome || 'failed';
+  const at = now().toISOString();
+  const label = `${job.repo} #${job.pr}`;
+  const pushed = outcome === 'pushed';
+  const entryReason = mendedReason(`${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`, { ...result, outcome });
+  const still = lock(root, () => {
+    const entries = parseQueue(read(mergesPath(root)));
+    if (queuedFor(entries, job.repo, job.pr)?.state !== 'mending') return false;
+    write(mergesPath(root), pushed
+      ? markMended(entries, job, { outcome, at })
+      : markRed(entries, job, { reason: entryReason, answered: at, mended: { at, outcome } }));
+    return true;
+  });
+  if (!still) say(`${label}: the mend ended ${outcome}, but the entry is no longer mending — left as it is`);
+  else if (pushed) say(`${label}: mended — ${result?.line || 'pushed'} — back in line`);
+  else {
+    await tell(job, false, { ...report, reason: mendedReason(report?.reason || `the round stopped at ${report?.stopped_at || 'unknown'}`, { ...result, outcome }) }, {
+      root, say, gh, now, read, write, lock, appendRun: null, dropFromPage: () => {}, seconds: result?.seconds ?? 0,
+    });
+  }
+  if (appendRun) {
+    const counts = result?.read || {};
+    try {
+      appendRun({
+        ts: at.replace(/\.\d{3}Z$/u, 'Z'),
+        name: job.step?.project || job.repo,
+        kind: 'mend',
+        exit: pushed ? 0 : 1,
+        seconds: result?.seconds ?? 0,
+        pr: job.pr,
+        turns: counts.turns ?? '-',
+        input: counts.input ?? '-',
+        output: counts.output ?? '-',
+        cacheRead: counts.cacheRead ?? '-',
+        cacheWrite: counts.cacheWrite ?? '-',
+        session: counts.session ?? '-',
+        note: outcome.replace(/\s+/gu, '-'),
+      });
+    } catch { /* the row is a courtesy, as the merge row is */ }
   }
 }
 
