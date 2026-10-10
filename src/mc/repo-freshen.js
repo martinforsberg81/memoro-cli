@@ -36,10 +36,10 @@
  * the round's subject: a batch, whose pull requests were named on the command
  * line.
  */
-import { spawnSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { runShell, runTool } from './child-async.js';
 import { gateRoot } from './repo-gate.js';
 import { regenerateDerived } from './repo-derived.js';
 import { repoFileSlug } from './repo-snapshot.js';
@@ -73,22 +73,19 @@ import { repoFileSlug } from './repo-snapshot.js';
 export async function freshenBranchForLanding({
   repoPath, branch, base, declaration = null, env = process.env, git = null, shell = null, say = () => {},
 } = {}) {
-  const run = (tool) => (args, options = {}) => spawnSync(tool, args, {
-    cwd: options.cwd, env, encoding: 'utf8',
-  });
-  const askGit = git || run('git');
-  const askShell = shell || ((command, options = {}) => spawnSync(command, { cwd: options.cwd, env, shell: true, encoding: 'utf8' }));
+  const askGit = git || ((args, options = {}) => runTool('git', args, { cwd: options.cwd, env }));
+  const askShell = shell || ((command, options = {}) => runShell(command, { cwd: options.cwd, env }));
   const workspace = join(gateRoot(env), `${repoFileSlug(repoPath)}-freshen`);
-  askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+  await askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
   rmSync(workspace, { recursive: true, force: true });
-  askGit(['worktree', 'prune'], { cwd: repoPath });
-  const added = askGit(['worktree', 'add', '--detach', workspace, `origin/${branch}`], { cwd: repoPath });
+  await askGit(['worktree', 'prune'], { cwd: repoPath });
+  const added = await askGit(['worktree', 'add', '--detach', workspace, `origin/${branch}`], { cwd: repoPath });
   if (added.status !== 0) return { ok: false, reason: trim(added.stderr) || `could not check out origin/${branch}` };
   try {
-    const merged = askGit(['merge', '--no-edit', `origin/${base}`], { cwd: workspace });
+    const merged = await askGit(['merge', '--no-edit', `origin/${base}`], { cwd: workspace });
     if (merged.status !== 0) {
-      const conflicted = trim(askGit(['diff', '--name-only', '--diff-filter=U'], { cwd: workspace }).stdout).split('\n').filter(Boolean);
-      askGit(['merge', '--abort'], { cwd: workspace });
+      const conflicted = trim((await askGit(['diff', '--name-only', '--diff-filter=U'], { cwd: workspace })).stdout).split('\n').filter(Boolean);
+      await askGit(['merge', '--abort'], { cwd: workspace });
       return { ok: false, reason: `${branch} conflicts with ${base} in ${conflicted.slice(0, 5).join(', ') || 'unknown files'} — left exactly as it was` };
     }
     // The gate regenerated the declared derived artifacts after merging the
@@ -98,21 +95,21 @@ export async function freshenBranchForLanding({
     const derived = declaration?.derived || [];
     if (derived.length) {
       if (declaration.prepare) {
-        const ready = askShell(declaration.prepare, { cwd: workspace });
+        const ready = await askShell(declaration.prepare, { cwd: workspace });
         if (ready.status !== 0) return { ok: false, reason: `${declaration.prepare} failed before regenerating derived artifacts — ${trim(ready.stderr)}` };
       }
       const fresh = await regenerateDerived({ derived, cwd: workspace, env, git: askGit, shell: askShell, say });
       if (!fresh.ok) return { ok: false, reason: fresh.reason };
       if (fresh.commit) say(`regenerated ${fresh.regenerated.length} derived file${fresh.regenerated.length === 1 ? '' : 's'} on ${branch}`);
     }
-    const pushed = askGit(['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: workspace });
+    const pushed = await askGit(['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: workspace });
     if (pushed.status !== 0) return { ok: false, reason: trim(pushed.stderr) || 'push refused' };
-    const at = trim(askGit(['rev-parse', 'HEAD'], { cwd: workspace }).stdout).slice(0, 7);
+    const at = trim((await askGit(['rev-parse', 'HEAD'], { cwd: workspace })).stdout).slice(0, 7);
     say(`freshened ${branch} for its landing: ${base} merged in at ${at}`);
     return { ok: true, at };
   } finally {
     rmSync(workspace, { recursive: true, force: true });
-    askGit(['worktree', 'prune'], { cwd: repoPath });
+    await askGit(['worktree', 'prune'], { cwd: repoPath });
   }
 }
 

@@ -61,9 +61,12 @@ describe('runTool and runShell resolve what spawnSync returns', () => {
 });
 
 describe('the merger\'s path holds no synchronous child', () => {
-  // The gate's round and what it calls (merger-hardening step 4). Step 5 adds
-  // the merge round and the merger itself.
-  const FILES = ['repo-gate.js', 'repo-derived.js', 'prepare-cache.js', 'selector-miss.js'];
+  // The gate's round and what it calls (merger-hardening step 4), and the
+  // merge round and the merger itself (step 5).
+  const FILES = [
+    'repo-gate.js', 'repo-derived.js', 'prepare-cache.js', 'selector-miss.js',
+    'repo-merge.js', 'repo-freshen.js', 'merger.js', 'merger-run.js',
+  ];
 
   it('none of these files names spawnSync, execFileSync or execSync', () => {
     const here = dirname(fileURLToPath(import.meta.url));
