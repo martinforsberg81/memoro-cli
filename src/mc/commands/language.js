@@ -17,6 +17,7 @@
  *   mc language key set          the key from stdin, the account from --account
  *   mc language run <manifest>   a cutover's acts, a question before every write
  *   mc language resume           the stopped run, from the act it stopped at
+ *   mc language promote          the grammar waiting, as a one-act run built here
  *
  * The key is never an argument. `mc.log` keeps a command's positionals that
  * look like identifiers (`invocationShape`, logger.js), and a shell keeps its
@@ -91,6 +92,7 @@ export function usage() {
     '        mc language run <manifest> [--dry-run]  a cutover\'s acts in order, asking before every write\n',
     '        mc language resume [--manifest <name>] [--from-head]\n',
     '                                                the stopped run again, from the act it stopped at\n',
+    '        mc language promote [--langs <list>]    the curated grammar waiting, to production after one question\n',
   ].join('');
 }
 
@@ -125,10 +127,7 @@ export async function run(argv, deps = {}) {
   if (sub === 'key') return key(rest, io);
   if (sub === 'run') return runVerb(rest, io);
   if (sub === 'resume') return resumeVerb(rest, io);
-  if (sub === 'promote') {
-    stderr.write(`mc: mc language ${sub} — not yet\n`);
-    return 2;
-  }
+  if (sub === 'promote') return promoteVerb(rest, io);
   stderr.write(`mc: unknown subcommand: ${sub}\n${usage()}`);
   return 2;
 }
@@ -644,14 +643,19 @@ async function resumeVerb(argv, io) {
     io.stderr.write(`mc: no stopped language run${wanted ? ` of ${wanted}` : ''} to resume\n`);
     return 1;
   }
-  return conduct({ name: prior.manifest, prior, fromHead: scanned.flags['from-head'] }, io);
+  const built = prior.manifest === PROMOTE ? promoteManifest(prior.lang === ALL ? null : prior.lang) : null;
+  return conduct({ name: prior.manifest, manifest: built, prior, fromHead: scanned.flags['from-head'] }, io);
 }
 
 /**
  * A run, start to end: the worktree, the manifest, the record under the lock,
- * the preflight, then the acts. Shared by `run`, `run --dry-run` and `resume`.
+ * the preflight, then the acts. Shared by `run`, `run --dry-run`, `resume`
+ * and `promote`, which hands in the manifest it built (`built`) instead of
+ * naming one on disk.
  */
-async function conduct({ name, dryRun = false, prior = null, fromHead = false }, { stdout, stderr, env, deps }) {
+async function conduct({
+  name, manifest: built = null, dryRun = false, prior = null, fromHead = false,
+}, { stdout, stderr, env, deps }) {
   const path = (deps.repos || defaultRepos(env)).find((repo) => repo.name === REPO)?.path;
   if (!path) {
     stderr.write(`mc: no checkout of ${REPO} on this machine — the acts run in its main\n`);
@@ -669,7 +673,7 @@ async function conduct({ name, dryRun = false, prior = null, fromHead = false },
     stderr.write(`mc: no wrangler in ${worktree} — run npm ci there; nothing was read\n`);
     return 1;
   }
-  const { manifests, unreadable } = readManifests(worktree);
+  const { manifests, unreadable } = built ? { manifests: [built], unreadable: [] } : readManifests(worktree);
   const manifest = manifests.find((each) => each.name === name);
   if (!manifest) {
     const bad = unreadable.find((each) => each.name === name);
@@ -751,12 +755,16 @@ async function conduct({ name, dryRun = false, prior = null, fromHead = false },
     ctx.key = { token, account };
     ctx.scrub = scrubber([token]);
     const first = manifest.acts.find((act) => act.credentials.includes(CREDENTIAL));
-    stdout.write(`mc: preflight — the key reads: ${first.id} check\n`);
-    const result = await child(ctx, first, first.check);
-    if (result.interrupted) return stop(STOPPED, `interrupted by ${result.interrupted} in preflight`, 130);
-    if (result.code !== 0) {
-      stderr.write(`mc: the key did not read — ${first.id}'s check exited ${result.code}; nothing was written\n`);
-      return stop(REFUSED, `the key did not read: ${first.id} check exit ${result.code}`, 1);
+    // A check that runs without the key (`check_without_key`, the promotion's)
+    // cannot show that the key reads: its execute is the first to use it.
+    if (!first.check_without_key) {
+      stdout.write(`mc: preflight — the key reads: ${first.id} check\n`);
+      const result = await child(ctx, first, first.check);
+      if (result.interrupted) return stop(STOPPED, `interrupted by ${result.interrupted} in preflight`, 130);
+      if (result.code !== 0) {
+        stderr.write(`mc: the key did not read — ${first.id}'s check exited ${result.code}; nothing was written\n`);
+        return stop(REFUSED, `the key did not read: ${first.id} check exit ${result.code}`, 1);
+      }
     }
   }
   const done = prior ? doneExecutes(prior, readRuns(env)) : new Set();
@@ -788,6 +796,7 @@ async function conduct({ name, dryRun = false, prior = null, fromHead = false },
     const relax = act.id === resumed;
     const read = await checkAct(ctx, act, { relax });
     if (read.interrupted) return stop(STOPPED, `interrupted by ${read.interrupted} at ${act.id} check`, 130);
+    if (read.end) return stop(read.end.outcome, read.end.note, read.end.code);
     if (!read.ok) return deviated(ctx, act, stop);
     if (act.execute === null) continue;
 
@@ -818,7 +827,7 @@ async function conduct({ name, dryRun = false, prior = null, fromHead = false },
         stdout.write(`    ${act.id} not run — already true\n`);
         continue;
       }
-    } else if (!said(ctx.ask(`${act.id}: write to ${act.target}? [y/N]`, { stdout }))) {
+    } else if (!said(ctx.ask(act.question?.(read.json) || `${act.id}: write to ${act.target}? [y/N]`, { stdout }))) {
       actEnd(run, actStart(run, { id: act.id, phase: 'execute' }, env), { outcome: 'declined', note: 'answered no at the question' }, env);
       stdout.write(`mc: ${act.id} was not run — nothing more was written; mc language resume asks again\n`);
       return stop(STOPPED, `declined at ${act.id}`, 1);
@@ -835,6 +844,20 @@ async function conduct({ name, dryRun = false, prior = null, fromHead = false },
       actEnd(run, row, { outcome: FAILED, note: `interrupted by ${result.interrupted}` }, env);
       stderr.write(`mc: ${act.id} was interrupted by ${result.interrupted} — mc language resume picks it up\n`);
       return stop(STOPPED, `interrupted by ${result.interrupted} at ${act.id}`, 130);
+    }
+    if (act.confirm) {
+      // An act built in code judges its own write, exit and report together.
+      const judged = act.confirm(result);
+      for (const line of judged.lines) (judged.ok ? stdout : stderr).write(ctx.scrub(`${line}\n`));
+      if (!judged.ok) {
+        const outcome = result.code !== 0 ? FAILED : 'deviated';
+        actEnd(run, row, { outcome, observed: judged.observed, note: judged.note }, env);
+        printIfNot(ctx, act);
+        return stop(result.code !== 0 ? FAILED : STOPPED, `${act.id} execute: ${judged.note}`, 1);
+      }
+      actEnd(run, row, { outcome: DONE, observed: judged.observed }, env);
+      act.after?.(result.json, { env, now: deps.now || (() => new Date()) });
+      continue;
     }
     const rows = compare(act.expect.execute, result.json);
     for (const line of rows) stdout.write(ctx.scrub(`${comparisonLine(line, ctx)}\n`));
@@ -857,10 +880,11 @@ async function conduct({ name, dryRun = false, prior = null, fromHead = false },
 }
 
 /** The child for one argument array of `act`: the key in its environment only
- * when the act names it, stderr teed to the terminal and the run's log. */
+ * when the act names it — and not in its check when the act says
+ * `check_without_key` — stderr teed to the terminal and the run's log. */
 async function child(ctx, act, argv) {
   const env = { ...ctx.bare };
-  if (ctx.key && act.credentials.includes(CREDENTIAL)) {
+  if (ctx.key && act.credentials.includes(CREDENTIAL) && !(act.check_without_key && argv === act.check)) {
     env.CLOUDFLARE_API_TOKEN = ctx.key.token;
     env.CLOUDFLARE_ACCOUNT_ID = ctx.key.account;
   }
@@ -885,6 +909,14 @@ async function checkAct(ctx, act, { relax = false, record = true } = {}) {
   if (result.interrupted) {
     if (row) actEnd(ctx.run, row, { outcome: FAILED, note: `interrupted by ${result.interrupted}` }, ctx.env);
     return { ok: false, interrupted: result.interrupted };
+  }
+  if (act.assess) {
+    // `{ ok, lines, observed, note, end }` — `end` finishes the run here.
+    const judged = act.assess(result);
+    const out = judged.ok || judged.end?.code === 0 ? ctx.stdout : ctx.stderr;
+    for (const line of judged.lines) out.write(ctx.scrub(`${line}\n`));
+    if (row) actEnd(ctx.run, row, { outcome: judged.ok ? 'passed' : FAILED, observed: judged.observed, note: judged.note }, ctx.env);
+    return { ok: judged.ok, json: result.json, end: judged.end };
   }
   const rows = compare(act.expect.check, result.json, { relax });
   for (const line of rows) ctx.stdout.write(ctx.scrub(`${comparisonLine(line, ctx)}\n`));
@@ -930,4 +962,127 @@ function deviated(ctx, act, stop) {
     ? `mc: --dry-run stopped at ${act.id} — nothing was written\n`
     : `mc: the run stopped before ${act.id}'s write — mc language resume picks it up\n`);
   return stop(STOPPED, `${act.id} check deviated`, 1);
+}
+
+/* --------------------------------------------------------------- promote */
+
+/** The record name of a grammar promotion, and its `lang` when no --langs. */
+export const PROMOTE = 'grammar-promote';
+const ALL = 'all';
+const LANGS = /^[a-z]{2,3}(,[a-z]{2,3})*$/u;
+
+/** What the wrapper printed on stdout, the last lines of it; its stderr is
+ * already on the terminal and in the run's log. */
+const wrapperLines = (result) => tail(result.stdout, 20).map((line) => `    ${line}`);
+
+/**
+ * The grammar promotion `mc deploy` no longer does, as a one-act manifest
+ * built here: memoro's `language-grammar-promote.mjs`, whose `--check --json`
+ * is `buildPromotionReport` (memoro `promote-curated-grammar.mjs`) — per
+ * language `languages.<lang>.status` and `plans.<lang>.{desired, upsert,
+ * delete_stale}`. The act judges its own check and write (`assess`,
+ * `confirm`) because what must hold depends on which languages were ready.
+ */
+export function promoteManifest(langs = null) {
+  const only = langs ? ['--langs', langs] : [];
+  let ready = [];
+  return {
+    name: PROMOTE,
+    lang: langs || ALL,
+    closes: [],
+    acts: [{
+      id: PROMOTE,
+      title: 'The curated grammar waiting, to production',
+      target: 'production',
+      check: ['node', 'scripts/admin/language-grammar-promote.mjs', '--check', '--json', ...only],
+      execute: ['node', 'scripts/admin/language-grammar-promote.mjs', '--json', ...only],
+      credentials: [CREDENTIAL],
+      // The check reads on wrangler's login, as `mc language status` does.
+      check_without_key: true,
+      requires_runnable: [],
+      expect: { check: [], execute: [] },
+      if_not: 'the promotion did not finish — mc language status <lang> reads where it stands, then mc language promote again',
+      assess(result) {
+        if (result.code !== 0) {
+          const note = `check exit ${result.code}: the selector or source gate`;
+          return {
+            ok: false,
+            lines: [...wrapperLines(result), `mc: the promotion's check exited ${result.code} — the selector or source gate; nothing was written`],
+            note,
+            end: { outcome: REFUSED, note, code: 1 },
+          };
+        }
+        const json = result.json;
+        if (!json) {
+          return {
+            ok: false,
+            lines: ['    ✗ the check printed no report — exit 0', ...wrapperLines(result)],
+            note: 'no report',
+            end: { outcome: FAILED, note: 'the check printed no report', code: 1 },
+          };
+        }
+        const statuses = Object.entries(json.languages || {});
+        const observed = Object.fromEntries(statuses.map(([lang, entry]) => [`languages.${lang}.status`, entry?.status ?? null]));
+        ready = statuses.filter(([lang, entry]) => LANG.test(lang) && entry?.status === 'ready').map(([lang]) => lang);
+        if (!ready.length) {
+          return {
+            ok: true, lines: ['nothing waiting — every language unchanged'], observed, end: { outcome: DONE, note: 'nothing waiting', code: 0 },
+          };
+        }
+        const lines = ready.map((lang) => {
+          const plan = json.plans?.[lang] || {};
+          return `${lang}: ${number(plan.upsert)} to write, ${number(plan.delete_stale)} stale to remove, ${number(plan.desired)} rows in all`;
+        });
+        return { ok: true, lines, observed };
+      },
+      question: () => `promote grammar for ${ready.join(', ')} to production? [y/N]`,
+      confirm(result) {
+        const observed = Object.fromEntries(ready.map((lang) => [`languages.${lang}.status`, result.json?.languages?.[lang]?.status ?? null]));
+        const not = ready.filter((lang) => observed[`languages.${lang}.status`] !== 'promoted');
+        if (result.code !== 0 || !result.json || not.length) {
+          const note = result.code !== 0 ? `exit ${result.code}` : `not promoted: ${(not.length ? not : ready).join(', ')}`;
+          return {
+            ok: false,
+            lines: [...wrapperLines(result), `mc: the promotion ${result.code !== 0 ? `exited ${result.code}` : `left ${not.join(', ') || ready.join(', ')} not promoted`}`],
+            observed,
+            note,
+          };
+        }
+        return { ok: true, lines: ready.map((lang) => `    ✓ ${lang}: promoted`), observed };
+      },
+      after: (json, { env, now }) => markPromoted(ready, { env, now }),
+    }],
+  };
+}
+
+/**
+ * The cached reading of every language just promoted, its grammar rewritten
+ * to what a check would now say, so `mc language` and the page stop showing
+ * rows waiting. A language never read has no reading to rewrite.
+ */
+export function markPromoted(langs, { env = process.env, now = () => new Date() } = {}) {
+  for (const lang of langs) {
+    const path = readingPath(lang, env);
+    const reading = readJson(path);
+    if (!reading) continue;
+    reading.reads = {
+      ...reading.reads,
+      grammar: { ok: true, exit: 0, status: 'unchanged', waiting: 0, promoted: now().toISOString() },
+    };
+    writeJsonAtomic(path, reading);
+  }
+}
+
+async function promoteVerb(argv, io) {
+  const scanned = scanArgs(argv, { strictValues: ['--langs'] });
+  const langs = scanned.flags.langs ?? null;
+  if (scanned.error || scanned.positional.length || (langs !== null && !LANGS.test(langs))) {
+    io.stderr.write(`mc: ${scanned.error || 'mc language promote takes --langs <list>, e.g. --langs sv,fr, or nothing for every language'}\n${usage()}`);
+    return 2;
+  }
+  if (!(io.deps.interactive || realInteractive)(io.env)) {
+    io.stderr.write('mc: mc language promote asks before it writes, and there is no terminal here to ask — run it in one; nothing was read\n');
+    return 2;
+  }
+  return conduct({ name: PROMOTE, manifest: promoteManifest(langs) }, io);
 }
