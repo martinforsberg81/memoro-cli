@@ -53,7 +53,7 @@ import {
   DAY_MS, defaultRepos, listProgrammes, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
-import { GITHUB_STATE, githubFailures } from './github-backoff.js';
+import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import { inLine, mergesPath, queueEntries, queueOrder, redEntries } from './merge-queue.js';
@@ -62,7 +62,9 @@ import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
 import { nightlyReading } from './nightly-history.js';
 import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.js';
-import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
+import {
+  PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
+} from './page-cache.js';
 import { PLAN_HOME, workRoot } from './paths.js';
 import { overlayPlans } from './register.js';
 import { planState } from './plan-schema.js';
@@ -1249,7 +1251,10 @@ export function readAreas(root, repoNames) {
  *
  * Plans come from `origin/main` after a `git fetch`, cached in `plans.json`
  * keyed by its sha (page-cache.js); open PRs come from `prs.json` with their
- * age said out loud, refilled only by `--fresh`. `--offline` skips the fetch
+ * age said out loud. `fresh: true` (`--fresh`, `mc prs`) asks GitHub for all
+ * of them; `fresh: 'stale'` — the page at a terminal — asks only when the
+ * cache is older than `PRS_STALE_SECONDS`, and only the repositories the
+ * runner's backoff (`github.json`) does not hold. `--offline` skips the fetch
  * and reads the plans as they were last fetched (ruling 20).
  */
 export async function collectPage({
@@ -1263,7 +1268,11 @@ export async function collectPage({
   exec = execAsync,
   alive = pidAlive,
   laneCount = readLaneCount,
-  cache = { loadPlans, loadPrs, savePrs },
+  cache = { loadPlans, loadPrs, savePrs, mergePrs },
+  // `~/mc/runner/github.json`, for `fresh: 'stale'`: a repository the runner
+  // is backing off from is not asked by the page either — every ask at a
+  // locked keychain left a modal behind (2026-09-20).
+  githubState = null,
   merges = runningMerge,
   // The checkout mc itself runs from, or null. Injected so a test never reads
   // the real one.
@@ -1285,15 +1294,40 @@ export async function collectPage({
   // what nobody asked and what failed read the same to a list, and the queue
   // reading below would otherwise call a project runnable on that silence.
   const prsFailed = [];
-  if (fresh) {
+  const askGithub = async (targets) => {
     const asked = [];
-    await Promise.all(present.map((repo) => exec('gh', PR_LIST_ARGS, { cwd: repo.path }).then((r) => {
+    const answered = [];
+    await Promise.all(targets.map((repo) => exec('gh', PR_LIST_ARGS, { cwd: repo.path }).then((r) => {
       try {
-        if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
+        if (r.ok) { asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr }))); answered.push(repo.name); }
         else { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list failed`); }
       } catch { prsFailed.push(repo.name); notes.push(`${repo.name}: gh pr list unreadable`); }
     })));
+    return { asked, answered };
+  };
+  // Whether this collect went to GitHub, so a page that keeps asking on a
+  // timer can hold off after a failed ask as well as after a good one.
+  let askedGithub = fresh === true;
+  const cached = fresh === 'stale' && !offline ? cache.loadPrs({ root, now }) : null;
+  const stale = cached && (cached.age_seconds == null || cached.age_seconds >= PRS_STALE_SECONDS);
+  if (fresh === true) {
+    const { asked } = await askGithub(present);
     prs = cache.savePrs({ root, prs: asked, now });
+  } else if (stale) {
+    // Only what the runner is not backing off from; a held repository keeps
+    // the entries it had, and the age says how old the list is.
+    const held = githubState ?? readJson(join(root, 'runner', GITHUB_STATE)) ?? {};
+    const targets = present.filter((repo) => !held[repo.name] || mayAsk(held[repo.name], now));
+    const { asked, answered } = await askGithub(targets);
+    askedGithub = targets.length > 0;
+    prs = (answered.length ? (cache.mergePrs || mergePrs)({ root, repos: answered, prs: asked, now }) : null) || cached;
+    if (answered.length < present.length) {
+      const missing = present.map((repo) => repo.name).filter((name) => !answered.includes(name));
+      if (!prs.fetched) prsFailed.push(...missing);
+      notes.push(`PRs for ${missing.join(', ')} from cache — GitHub not answering or held back`);
+    }
+  } else if (cached) {
+    prs = cached;
   } else {
     prs = cache.loadPrs({ root, now });
     if (!prs.fetched) prsFailed.push(...present.map((repo) => repo.name));
@@ -1428,7 +1462,7 @@ export async function collectPage({
       now,
     }),
     caches: {
-      fresh, offline, fetched, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length },
+      fresh, offline, fetched, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length, asked: askedGithub },
     },
     notes,
   };

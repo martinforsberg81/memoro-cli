@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { runMcCli } from './_helpers/mc-cli.js';
-import { menu, parsePageArgs, runnerOrder } from '../../src/mc/commands/home.js';
+import { freshFor, menu, parsePageArgs, runnerOrder } from '../../src/mc/commands/home.js';
 import { plainReader } from '../../src/mc/page-live.js';
 import { programmesSection } from '../../src/mc/page-collect.js';
 
@@ -365,6 +365,36 @@ describe('the menu under the page', () => {
     assert.equal(runnerOrder('stop mc-ui'), null);
     assert.equal(runnerOrder('run'), null, 'a foreground runner would hold the menu all day');
     assert.equal(runnerOrder('mc-ui'), null);
+  });
+
+  it('asks GitHub on f, and draws the page again', async () => {
+    let asked = 0;
+    let drawn = 0;
+    const answers = ['f', 'fresh', 'q'];
+    const stdout = { columns: 100, write: () => {} };
+    await menu(DATA, {
+      stdout,
+      stderr: stdout,
+      page: async () => { drawn += 1; return { data: DATA, lines: ['  PROGRAMMES'] }; },
+      reader: plainReader({ stdout, ask: () => answers.shift() ?? null }),
+      fresh: () => { asked += 1; },
+    });
+    assert.equal(asked, 2);
+    assert.equal(drawn, 2);
+  });
+
+  // The page at a terminal refills a stale PR cache itself, but asks at most
+  // once in five minutes whatever the answer was: a failing `gh` is not
+  // asked again on every thirty-second redraw.
+  it('freshFor: --fresh and f ask now, a terminal every five minutes, a pipe never', () => {
+    const plain = { fresh: false, offline: false };
+    assert.equal(freshFor({ opts: { ...plain, fresh: true }, live: false, now: 0 }), true);
+    assert.equal(freshFor({ opts: plain, live: true, once: true, now: 0, askedAt: 0 }), true);
+    assert.equal(freshFor({ opts: plain, live: false, now: 0 }), false, 'a pipe reads the cache');
+    assert.equal(freshFor({ opts: { ...plain, offline: true }, live: true, now: 0 }), false);
+    assert.equal(freshFor({ opts: plain, live: true, now: 1_000 }), 'stale', 'the first draw may ask');
+    assert.equal(freshFor({ opts: plain, live: true, now: 299_000, askedAt: 0 }), false);
+    assert.equal(freshFor({ opts: plain, live: true, now: 300_000, askedAt: 0 }), 'stale');
   });
 
   it('turns collapsing off and on again with a, and draws the page each time', async () => {

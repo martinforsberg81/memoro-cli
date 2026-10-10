@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  PLANS_SHAPE, ageWords, cachePath, loadPlans, loadPrs, mergePrs, savePrs,
+  PLANS_SHAPE, ageWords, cachePath, dropPr, loadPlans, loadPrs, mergePrs, savePrs,
 } from '../../src/mc/page-cache.js';
 
 const ROOT = '/w';
@@ -168,6 +168,31 @@ describe('mergePrs', () => {
   it('writes nothing when no repository answered', () => {
     let wrote = false;
     assert.equal(mergePrs({ root: ROOT, repos: [], prs: [], write: () => { wrote = true; } }), null);
+    assert.equal(wrote, false);
+  });
+});
+
+describe('dropPr', () => {
+  // The merger has just landed it: off the list now, and the list's age is
+  // what it was — the rest of it is no fresher.
+  it('takes one landed pull request off the list and keeps fetched', () => {
+    const fs = files({
+      [`${ROOT}/runner/prs.json`]: JSON.stringify({
+        fetched: '2026-10-10T07:00:00.000Z',
+        prs: [{ repo: 'memoro', number: 12900 }, { repo: 'memoro-cli', number: 12900 }, { repo: 'memoro-cli', number: 821 }],
+      }),
+    });
+    assert.equal(dropPr({ root: ROOT, repo: 'memoro-cli', number: 12900, ...fs }), true);
+    const saved = JSON.parse(fs.held[`${ROOT}/runner/prs.json`]);
+    assert.equal(saved.fetched, '2026-10-10T07:00:00.000Z');
+    assert.deepEqual(saved.prs, [{ repo: 'memoro', number: 12900 }, { repo: 'memoro-cli', number: 821 }]);
+  });
+
+  it('writes nothing for a pull request it does not hold, or no cache', () => {
+    const fs = files({ [`${ROOT}/runner/prs.json`]: JSON.stringify({ fetched: 'T', prs: [] }) });
+    let wrote = false;
+    assert.equal(dropPr({ root: ROOT, repo: 'memoro', number: 1, read: fs.read, write: () => { wrote = true; } }), false);
+    assert.equal(dropPr({ root: ROOT, repo: 'memoro', number: 1, read: files().read }), false);
     assert.equal(wrote, false);
   });
 });

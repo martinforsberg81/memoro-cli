@@ -1561,6 +1561,87 @@ describe('collectPage', () => {
     return root;
   }
 
+  /**
+   * `fresh: 'stale'` — the page at a terminal keeping its own pull requests
+   * current: GitHub is asked only when the cache is five minutes old, only
+   * for the repositories the runner's backoff does not hold, and what it
+   * answers replaces those repositories' entries alone.
+   */
+  describe("fresh: 'stale'", () => {
+    function staleFixture({ age = 3600, held = {} } = {}) {
+      const root = workRootFixture();
+      const repos = ['memoro', 'memoro-cli'].map((name) => {
+        const path = join(root, 'repos', name);
+        mkdirSync(join(path, '.git'), { recursive: true });
+        return { name, path };
+      });
+      const gh = [];
+      const merged = [];
+      const run = (over = {}) => collectPage({
+        env: { MC_WORK_ROOT: root },
+        now: NOW,
+        repos,
+        fresh: 'stale',
+        githubState: held,
+        exec: async (cmd, args, opts) => {
+          if (cmd !== 'gh') return { ok: true, stdout: '' };
+          const name = opts.cwd.split('/').at(-1);
+          gh.push(name);
+          if (over.fails?.includes(name)) return { ok: false, stdout: '' };
+          return { ok: true, stdout: JSON.stringify([{ number: name === 'memoro' ? 12901 : 822, headRefName: 'x' }]) };
+        },
+        run: () => ({ status: 1, stdout: '' }),
+        git: () => null,
+        checkout: null,
+        cache: {
+          loadPlans: () => ({ plans: PLANS, sources: [] }),
+          loadPrs: () => ({ prs: [{ repo: 'memoro', number: 12900 }], fetched: '2026-08-29T11:00:00Z', age_seconds: age }),
+          savePrs: () => { throw new Error('savePrs replaces every repository'); },
+          mergePrs: ({ repos: answered, prs }) => {
+            merged.push({ answered, numbers: prs.map((pr) => pr.number) });
+            return { prs, fetched: NOW.toISOString(), age_seconds: 0 };
+          },
+        },
+      });
+      return { run, gh, merged };
+    }
+
+    it('leaves a cache younger than five minutes alone', async () => {
+      const fx = staleFixture({ age: 120 });
+      const data = await fx.run();
+      assert.deepEqual(fx.gh, []);
+      assert.equal(data.caches.prs.asked, false);
+      assert.equal(data.caches.prs.age_seconds, 120);
+    });
+
+    it('asks every repository for an old cache, and merges what they answer', async () => {
+      const fx = staleFixture();
+      const data = await fx.run();
+      assert.deepEqual(fx.gh.sort(), ['memoro', 'memoro-cli']);
+      assert.deepEqual(fx.merged[0].answered.sort(), ['memoro', 'memoro-cli']);
+      assert.deepEqual(fx.merged[0].numbers.sort(), [12901, 822].sort());
+      assert.equal(data.caches.prs.asked, true);
+      assert.equal(data.caches.prs.age_seconds, 0);
+    });
+
+    it('does not ask a repository the runner is backing off from', async () => {
+      const fx = staleFixture({ held: { memoro: { since: '2026-08-29T11:58:00Z', last: '2026-08-29T11:59:00Z', attempts: 4 } } });
+      const data = await fx.run();
+      assert.deepEqual(fx.gh, ['memoro-cli']);
+      assert.deepEqual(fx.merged[0].answered, ['memoro-cli']);
+      assert.ok(data.notes.some((note) => /PRs for memoro from cache/u.test(note)));
+    });
+
+    it('keeps the cache when GitHub does not answer, and says so', async () => {
+      const fx = staleFixture();
+      const data = await fx.run({ fails: ['memoro', 'memoro-cli'] });
+      assert.deepEqual(fx.merged, []);
+      assert.equal(data.caches.prs.asked, true, 'a failed ask is an ask: the page holds off after it too');
+      assert.equal(data.caches.prs.age_seconds, 3600);
+      assert.ok(data.notes.some((note) => /gh pr list failed/u.test(note)));
+    });
+  });
+
   it('builds every section from the files, offline, without git, gh or tmux', async () => {
     const root = workRootFixture();
     const asked = [];

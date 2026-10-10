@@ -38,6 +38,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { runningRound } from './gate-lock.js';
 import {
@@ -240,6 +241,8 @@ export async function landJob(job, {
   now = () => new Date(), read = realRead, write, lock = realLock,
   recordStart = recordRoundStart, record = recordRound, appendRun = null,
   moveOntoMain = restack,
+  // The page's PR cache, told at once (page-cache.js `dropPr`).
+  dropFromPage = dropPr,
 } = {}) {
   const label = `${job.repo} #${job.pr}`;
   const t0 = now().getTime();
@@ -288,6 +291,10 @@ export async function landJob(job, {
   say(landed
     ? `${label}: merged into ${report.merged_into || 'main'} as ${String(report.merge_commit || '').slice(0, 7)} (${seconds}s)`
     : `${label}: not merged — ${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`);
+  // A landed pull request leaves PULL REQUESTS now, not when the page or a
+  // runner lane next asks GitHub. A cache that cannot be written costs the
+  // page a stale row and the landing nothing.
+  if (landed) { try { dropFromPage({ root, repo: job.repo, number: job.pr }); } catch { /* see above */ } }
 
   if (job.step) {
     const stamp = now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
