@@ -237,6 +237,17 @@ export function workGatePath(env = process.env) {
   return join(workRoot(env), WORK_GATE);
 }
 
+/**
+ * Where the gate keeps installed `node_modules` trees by lockfile
+ * (`prepare-cache.js`), beside the gate's own directory and outside any
+ * checkout: `<work root>/gate-cache/<repo slug>/<key>/node_modules`.
+ */
+export const WORK_GATE_CACHE = 'gate-cache';
+
+export function workGateCachePath(env = process.env) {
+  return join(workRoot(env), WORK_GATE_CACHE);
+}
+
 /** What `npm ci` in the work root reads: a copy of the repository's two files. */
 export function workDepsManifestPath(env = process.env) {
   return join(workRoot(env), 'package.json');
