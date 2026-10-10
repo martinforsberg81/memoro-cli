@@ -5,7 +5,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { realDeps, runLoop } from '../../src/mc/run.js';
+import { DISK_MIN_BYTES, realDeps, runLoop } from '../../src/mc/run.js';
 
 /**
  * A codex step, end to end, with a stub codex.
@@ -126,7 +126,9 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   process.env.PATH = env.PATH;
   t.after(() => { process.env.PATH = realPath; });
 
-  const deps = { ...realDeps(env), log: () => {} };
+  // The disk is the host's: a full one would refuse the step this test is
+  // about (2026-10-10, 1.7 GiB free), so it reads as room enough.
+  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, log: () => {} };
   const code = await runLoop({ once: true, merge: false, deps });
   assert.equal(code, 0);
 
