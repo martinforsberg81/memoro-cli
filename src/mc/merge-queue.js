@@ -148,11 +148,51 @@ export function queueOrder(entries) {
  */
 export function nextJob(entries, { landed = () => true } = {}) {
   const ordered = queueOrder(inLine(entries));
-  const mayGo = (entry) => !entry.parent
-    || (!queuedFor(entries, entry.repo, entry.parent.pr) && landed(entry.parent));
+  const mayGo = mayGoIn(entries, landed);
   return ordered.find((entry) => entry.state === 'landing')
     || ordered.find(mayGo)
     || null;
+}
+
+const mayGoIn = (entries, landed) => (entry) => !entry.parent
+  || (!queuedFor(entries, entry.repo, entry.parent.pr) && landed(entry.parent));
+
+/**
+ * The most jobs one round lands (merge-throughput, ruling 34). About 11 % of
+ * rounds on 2026-10-09/10 were red in the suite or a gate, so a batch of four
+ * is red about a third of the time and then costs its fallback rounds — one
+ * per pull request. Four still roughly halves the time per landing at a queue
+ * of ten; a larger batch makes the fallback longer than the batch saves.
+ */
+export const MERGE_BATCH_MAX = 4;
+
+/**
+ * The jobs the merger lands in one round: `nextJob`'s pick and the next ones
+ * in line for the same repository that are `queued` and may go, up to `max`.
+ * Entries already `landing` are a merger that died under a batch: every
+ * `landing` entry of the first one's repository is taken again, and the
+ * round says what has already merged. Empty when there is nothing to take.
+ *
+ * With a `lane`, only the jobs whose repository's gate lane (`laneOf`) is that
+ * one: the merger runs one loop per lane (ruling 34), and each takes its own.
+ * A job's parent is in its own repository, so in its own lane.
+ */
+export function nextBatch(entries, {
+  landed = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = () => 'heavy',
+} = {}) {
+  const mine = lane ? entries.filter((entry) => (laneOf(entry) || 'heavy') === lane) : entries;
+  const ordered = queueOrder(inLine(mine));
+  const landing = ordered.filter((entry) => entry.state === 'landing');
+  if (landing.length) return landing.filter((entry) => entry.repo === landing[0].repo);
+  const first = nextJob(mine, { landed });
+  if (!first) return [];
+  const mayGo = mayGoIn(mine, landed);
+  const batch = [first];
+  for (const entry of ordered) {
+    if (batch.length >= max) break;
+    if (entry !== first && entry.repo === first.repo && entry.state === 'queued' && mayGo(entry)) batch.push(entry);
+  }
+  return batch;
 }
 
 /** Jobs waiting on a parent that has not landed, for the page: `{ entry, parent }`. */

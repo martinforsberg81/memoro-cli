@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  describeRunning, gateLockPath, noteGatePhase, releaseGateLock, runningRound, takeGateLock,
+  GATE_LANES, describeRunning, gateLockPath, noteGatePhase, releaseGateLock, runningRound, runningRounds, takeGateLock,
 } from '../../src/mc/gate-lock.js';
 
 const home = () => mkdtempSync(join(tmpdir(), 'mc-gate-lock-'));
@@ -101,6 +101,54 @@ describe('taking it', () => {
   });
 });
 
+describe('one round per lane (ruling 34)', () => {
+  it('the lanes are heavy and light, and heavy keeps the file it always had', () => {
+    assert.deepEqual([...GATE_LANES], ['heavy', 'light']);
+    assert.equal(gateLockPath('/h'), join('/h', 'gate-running.json'));
+    assert.equal(gateLockPath('/h', 'heavy'), join('/h', 'gate-running.json'));
+    assert.equal(gateLockPath('/h', 'light'), join('/h', 'gate-running-light.json'));
+  });
+
+  it('a heavy and a light round are held at once, and each is read in its own lane', () => {
+    const root = home();
+    try {
+      assert.equal(takeGateLock({ repo: 'memoro', pr: 1, root, alive: ALIVE }).ok, true);
+      assert.equal(takeGateLock({ repo: 'memoro-cli', pr: 2, root, alive: ALIVE, lane: 'light' }).ok, true);
+      const rounds = runningRounds({ root, alive: ALIVE });
+      assert.equal(rounds.heavy.repo, 'memoro');
+      assert.equal(rounds.heavy.lane, 'heavy');
+      assert.equal(rounds.light.repo, 'memoro-cli');
+      assert.equal(rounds.light.lane, 'light');
+      assert.equal(runningRound({ root, alive: ALIVE }).pr, 1, 'no lane is the heavy one');
+      releaseGateLock({ root, lane: 'light' });
+      assert.deepEqual(runningRounds({ root, alive: ALIVE }).light, null);
+      assert.equal(runningRounds({ root, alive: ALIVE }).heavy.pr, 1, 'giving back the light one left the heavy one');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a second light round is refused while one runs, and the refusal names the lane', () => {
+    const root = home();
+    try {
+      writeFileSync(gateLockPath(root, 'light'), JSON.stringify({ pid: 4242, repo: 'memoro-cli', pr: 7 }));
+      const out = takeGateLock({ repo: 'memoro-cli', pr: 8, root, alive: ALIVE, lane: 'light' });
+      assert.equal(out.ok, false);
+      assert.equal(out.running.pr, 7);
+      assert.match(describeRunning(out.running), /in the light lane \(pid 4242, memoro-cli #7\)/u);
+      assert.equal(takeGateLock({ repo: 'memoro', pr: 9, root, alive: ALIVE }).ok, true, 'the heavy lane is free');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a phase is written to its own lane\'s round', () => {
+    const root = home();
+    try {
+      takeGateLock({ repo: 'memoro-cli', pr: 2, root, alive: ALIVE, lane: 'light' });
+      noteGatePhase({ root, message: 'node --test', lane: 'light' });
+      assert.match(runningRounds({ root, alive: ALIVE }).light.phase || '', /node --test/u);
+      assert.equal(existsSync(gateLockPath(root)), false, 'nothing written to the heavy lane');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
 describe('narrating what it is doing', () => {
   it('rewrites phase and phase_at, and keeps the fields already there', () => {
     const root = home();
@@ -167,7 +215,7 @@ describe('what it does not do', () => {
   it('has no force, no holder, no errand, no verbs — the whole surface is the round and its phase', async () => {
     const module = await import('../../src/mc/gate-lock.js');
     assert.deepEqual(Object.keys(module).sort(), [
-      'describeRunning', 'gateLockPath', 'noteGatePhase', 'releaseGateLock', 'runningRound', 'takeGateLock',
+      'GATE_LANES', 'describeRunning', 'gateLockPath', 'noteGatePhase', 'releaseGateLock', 'runningRound', 'runningRounds', 'takeGateLock',
     ]);
   });
 
