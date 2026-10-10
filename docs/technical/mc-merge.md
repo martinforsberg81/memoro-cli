@@ -401,15 +401,35 @@ is recorded, with the paths it changed (`git diff-tree --name-only`), and the re
 reason says `— N of the red files are red on main too, broken by #M`. The
 verdict is red either way; only that sentence depends on the walk.
 
-A landing whose every path is under `docs/` cannot have broken a test, and is
-not named. On 2026-10-06 (`mc merge memoro 12720`) the walk blamed memoro
-#12727, six files under `docs/project/staff/`, for a wall-clock budget test that
-was red under load at both commits and green alone — the walk had found where a
-flaky test happened to pass, not what broke it. Such a landing is kept in the
-probe's JSON and in `selector-misses.jsonl` with `kind: 'docs-only'`, and the
-reason (and with it the register and the gate lines) says `— N of the red files
-are red on main too — no landing explains it (the walk reached #M, which changed
-only docs/)`. A landing whose paths could not be read is named as before.
+A landing whose every path is under `docs/` is measured again before it is
+named (`remeasure`). Both ways have happened. On 2026-10-06 (`mc merge memoro
+12720`) the walk blamed memoro #12727, six files under `docs/project/staff/`,
+for a wall-clock budget test that was red under load at both commits and green
+alone — the walk had found where a flaky test happened to pass. On 2026-10-10
+it reached #13310, an archive that deleted skill texts a test reads, and ruling
+docs-only out by path (the rule from 10-06 to 10-10) left that red unexplained.
+So the red file is run once more at the landing and once more at its parent:
+red at the landing and green at the parent, both times, is the landing's —
+`kind: 'docs-only-landing'`, written to `selector-misses.jsonl` and counted on
+the page as a miss beside `not-selected`, and the reason says `— N of the red
+files are red on main too, broken by #M (#M changed only docs/ and landed
+without the suite)`. Anything else is `flaky`: it names nobody, is not
+recorded, is left in the probe's `unresolved`, and the reason ends `— N flaky
+under load`. A landing whose paths could not be read is named as before,
+without the second measure.
+
+**A project log with a row twice is red.** Once the candidate is built, before
+its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,
+`archive-plan.js`) and, when two rows share date, programme and project, stops
+with `stopped_at: 'project-log'` — a red, the change's to fix — and the reason
+`project_log.md carries the same row twice: <date> <programme> <project> —
+delete the copy and push`. memoro's `.gitattributes` merges that file
+`merge=union`, which keeps both sides of a conflicting hunk: on 2026-10-10
+memoro's main carried one row five times, each copy from a step branch that
+merged main in. A batch that stops this way falls back to single rounds
+(`FALLBACK_STOPS`), so the pull request that brought the copy is the one turned
+red. The archive's `appendRow` is the other half: given a log that already has
+a row for that programme and project, it returns the text unchanged.
 
 `gateLines` in [`src/mc/commands/repo.js`](../../src/mc/commands/repo.js) builds
 them; [`tests/mc/commands/gate-verdict.test.js`](../../tests/mc/commands/gate-verdict.test.js)

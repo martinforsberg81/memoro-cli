@@ -68,10 +68,31 @@ export function rowFor(text, project) {
   return logRows(text).find((row) => row.project === project) || null;
 }
 
+/** One cell as the table writes it: one line, pipes escaped, `-` for nothing. */
+function cellText(value) {
+  return String(value ?? '-').replace(/\s+/gu, ' ').replace(/\|/gu, '\\|').trim() || '-';
+}
+
 /** One markdown row, cells in `LOG_COLUMNS` order, pipes escaped so the table survives. */
 export function formatRow(row) {
-  const cell = (value) => String(value ?? '-').replace(/\s+/gu, ' ').replace(/\|/gu, '\\|').trim() || '-';
-  return `| ${LOG_COLUMNS.map((key) => cell(row[key])).join(' | ')} |`;
+  return `| ${LOG_COLUMNS.map((key) => cellText(row[key])).join(' | ')} |`;
+}
+
+/**
+ * The first row that occurs a second time, by its `date`, `programme` and
+ * `project` cells, or null. memoro's `.gitattributes` merges this file
+ * `merge=union`, which keeps both sides of a conflicting hunk: on 2026-10-10
+ * main carried one row five times, each copy from a step branch that merged
+ * main in. The gate reads this so a copy never lands.
+ */
+export function duplicateRow(text) {
+  const seen = new Set();
+  for (const row of logRows(text)) {
+    const key = [row.date, row.programme, row.project].join('\u0000');
+    if (seen.has(key)) return row;
+    seen.add(key);
+  }
+  return null;
 }
 
 /**
@@ -79,8 +100,15 @@ export function formatRow(row) {
  * file, which would land it under whatever prose the log keeps below its
  * log. A file with no table at all gets the row at the end, which is the
  * only place left.
+ *
+ * A log that already has a row for this programme and project (a programme's
+ * own row has project `-`) is returned as it is: both archives come here, and
+ * only one of them asked `rowFor` first.
  */
 export function appendRow(text, row) {
+  const programme = cellText(row.programme);
+  const project = cellText(row.project);
+  if (logRows(text).some((have) => have.programme === programme && have.project === project)) return text;
   const lines = String(text || '').split('\n');
   let at = -1;
   for (let i = lines.length - 1; i >= 0; i -= 1) {

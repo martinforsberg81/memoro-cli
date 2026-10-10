@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  NO_DOC, UNDOCUMENTED_HEADER, appendRow, donePlans, formatRow, isUndocumented, keptFiles, keptParagraph,
+  NO_DOC, UNDOCUMENTED_HEADER, appendRow, donePlans, duplicateRow, formatRow, isUndocumented, keptFiles, keptParagraph,
   logRows, mergedPrs, namedFiles, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
 } from '../../src/mc/archive-plan.js';
 
@@ -55,6 +55,25 @@ test('a row is appended after the last row of the table, not at the end of the f
   assert.ok(at > lines.findIndex((line) => line.includes('| mc-ui |')));
   assert.ok(at < lines.findIndex((line) => line === '## Notes'), 'the row stays inside the table');
   assert.equal(logRows(out).length, 2);
+});
+
+test('a row already in the log is not appended a second time', () => {
+  const again = { date: '2026-10-10', programme: 'mc', project: 'mc-ui', outcome: 'delivered', summary: 'other', doc: NO_DOC, pointer: '#2' };
+  assert.equal(appendRow(LOG, again), LOG, 'same programme and project: the text comes back unchanged');
+  const programmeRow = appendRow(LOG, { date: '2026-10-10', programme: 'staff', project: null, outcome: 'delivered', summary: 's', doc: NO_DOC, pointer: '#3' });
+  assert.equal(logRows(programmeRow).length, 2);
+  assert.equal(appendRow(programmeRow, { date: '2026-10-11', programme: 'staff', project: '-', outcome: 'delivered', summary: 's', doc: NO_DOC, pointer: '#4' }), programmeRow,
+    'a programme row (project `-`) is not written twice either');
+  assert.equal(logRows(appendRow(LOG, { ...again, programme: 'other' })).length, 2, 'another programme\'s project of the same name is its own row');
+});
+
+test('duplicateRow names the first row that occurs twice by date, programme and project', () => {
+  assert.equal(duplicateRow(LOG), null);
+  const row = '| 2026-10-10 | staff | link-counts | delivered | s | none | #1 |';
+  const twice = `${LOG}${row}\n${row.replace('#1', '#2')}\n`;
+  const found = duplicateRow(twice);
+  assert.deepEqual([found.date, found.programme, found.project], ['2026-10-10', 'staff', 'link-counts']);
+  assert.equal(duplicateRow(`${LOG}${row}\n${row.replace('2026-10-10', '2026-10-11')}\n`), null, 'another date is another row');
 });
 
 test('a log with no table at all still gets its row', () => {
