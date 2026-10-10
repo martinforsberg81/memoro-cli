@@ -36,8 +36,12 @@ export const STOPPED = 'stopped';
 export const FAILED = 'failed';
 export const REFUSED = 'refused';
 
+function languageRoot(env) {
+  return join(workRoot(env), 'runner', 'log', 'language');
+}
+
 export function runsDir(env = process.env) {
-  return join(workRoot(env), 'runner', 'log', 'language', 'runs');
+  return join(languageRoot(env), 'runs');
 }
 
 /** `<started>-<manifest>`, with the timestamp's colons and dot made plain. */
@@ -179,4 +183,53 @@ export function openGap(env = process.env) {
   if (!last?.opens_gap) return null;
   if (doneExecutes(run, runs).has(last.opens_gap.until)) return null;
   return { run, act: last.id, says: last.opens_gap.says };
+}
+
+/** Every cached `mc language status` reading, by language. */
+export function cachedReadings(env = process.env) {
+  const dir = languageRoot(env);
+  let files = [];
+  try { files = readdirSync(dir); } catch { return {}; }
+  const out = {};
+  for (const file of files) {
+    const match = /^status-([a-z]{2,3})\.json$/u.exec(file);
+    if (!match) continue;
+    try { out[match[1]] = JSON.parse(readFileSync(join(dir, file), 'utf8')); } catch { /* not a reading */ }
+  }
+  return out;
+}
+
+/** A read's field, or null when the read failed or never ran. */
+const field = (read, name) => (read?.ok ? read[name] ?? null : null);
+
+/**
+ * The language side in one object, for the page and `mc deploy --dry-run`:
+ * each cached reading's numbers, the newest run, and the gap a run left open.
+ * File reads only — nothing is run and nothing is asked.
+ */
+export function languageState(env = process.env) {
+  const readings = cachedReadings(env);
+  const languages = Object.keys(readings).sort().map((lang) => {
+    const reads = readings[lang]?.reads || {};
+    return {
+      lang,
+      read_at: readings[lang]?.at || null,
+      unresolved: field(reads.selectors, 'unresolved'),
+      without_usable: field(reads.selectors, 'without_usable'),
+      waiting_rows: field(reads.grammar, 'waiting'),
+      forms: field(reads.forms, 'forms'),
+    };
+  });
+  const last = lastRun(env);
+  const gap = openGap(env);
+  return {
+    languages,
+    last_run: last
+      ? {
+        manifest: last.manifest, lang: last.lang, outcome: last.outcome, started: last.started,
+        ended: last.ended, dry_run: Boolean(last.dry_run),
+      }
+      : null,
+    open_gap: gap ? { manifest: gap.run.manifest, act: gap.act, says: gap.says, started: gap.run.started } : null,
+  };
 }

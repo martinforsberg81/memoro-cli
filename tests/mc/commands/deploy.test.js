@@ -263,6 +263,49 @@ describe('mc deploy — what it says before it asks', () => {
     assert.match(out.stdout, /--dry-run — nothing was deployed/u);
   });
 
+  it('--dry-run says what language data waits, from the cache, before its closing line', async () => {
+    const now = Date.now();
+    const hoursAgo = (h) => new Date(now - h * 3600_000).toISOString();
+    const said = async (language) => {
+      const { out, stdout, stderr } = io();
+      assert.equal(await run(['--dry-run'], { ...deps({ languageState: () => language }), stdout, stderr }), 0);
+      return out.stdout;
+    };
+    const waiting = await said({
+      languages: [
+        { lang: 'fr', read_at: hoursAgo(5), waiting_rows: 0 },
+        { lang: 'sv', read_at: hoursAgo(2), waiting_rows: 724 },
+      ],
+      last_run: null,
+      open_gap: null,
+    });
+    assert.match(waiting, /\nmc: language — sv 724 rows waiting \(read 2h ago\) · mc language promote\nmc: --dry-run — nothing was deployed\n$/u);
+    assert.match(await said({ languages: [{ lang: 'sv', read_at: hoursAgo(3), waiting_rows: 0 }], last_run: null, open_gap: null }),
+      /\nmc: language — nothing waiting \(read 3h ago\)\n/u);
+    assert.match(await said({ languages: [], last_run: null, open_gap: null }),
+      /\nmc: language — no reading; mc language status <lang>\n/u);
+    const gap = await said({
+      languages: [],
+      last_run: null,
+      open_gap: { manifest: 'sv-forms-cutover', act: 'purge-wiktionary-forms', says: 'sv has no forms' },
+    });
+    assert.match(gap, /\nmc: language — sv-forms-cutover stopped after purge-wiktionary-forms: sv has no forms · mc language resume\n/u);
+  });
+
+  it('--dry-run reads the language cache itself when nothing is handed in', async () => {
+    const dir = join(work, 'runner', 'log', 'language');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'status-sv.json'), JSON.stringify({
+      lang: 'sv', at: new Date().toISOString(), reads: { grammar: { ok: true, status: 'ready', waiting: 12 } },
+    }));
+    const { out, stdout, stderr } = io();
+    await run(['--dry-run', '--json'], { ...deps(), stdout, stderr });
+    const json = JSON.parse(out.stdout);
+    assert.equal(json.language.languages[0].lang, 'sv');
+    assert.equal(json.language.languages[0].waiting_rows, 12);
+    assert.equal(json.language.open_gap, null);
+  });
+
   it('--json is the same reading as one object', async () => {
     const { out, stdout, stderr } = io();
     await run(['--dry-run', '--json'], { ...deps(), stdout, stderr });

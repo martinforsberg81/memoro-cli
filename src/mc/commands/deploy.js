@@ -76,7 +76,7 @@ import { runningRounds } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
-import { liveRun } from '../language-runs.js';
+import { languageState as readLanguageState, liveRun } from '../language-runs.js';
 import { readMerger } from '../merger.js';
 import { nightlyReading } from '../nightly-history.js';
 import { mcHome, workRoot } from '../paths.js';
@@ -431,6 +431,7 @@ export function leftoverStamps({ worktree, dirty, git = tryGit }) {
 export async function deployPlan({
   path, env = process.env, git = tryGit, fetchVersion = fetchVersionDefault,
   lastDeploy = lastDeployRow, nightly = nightlyReading, offline = false,
+  languageState = readLanguageState,
 }) {
   const fetched = offline ? false : git(path, ['fetch', 'origin', 'main', '--quiet']) !== null;
   const sha = git(path, ['rev-parse', '--verify', 'origin/main']);
@@ -477,7 +478,42 @@ export async function deployPlan({
     last,
     gap: last ? count(last.sha, sha) : null,
     nightly: nightlyState,
+    // The deploy no longer promotes grammar; what waits is said here, from
+    // the cache `mc language status` leaves — nothing is read anew.
+    language: languageState(env),
   };
+}
+
+/**
+ * The language line: what waits from the cached readings, and the gap a
+ * stopped run left open. One line per fact, never a question.
+ */
+function languageLines(language, now = Date.now()) {
+  if (!language) return [];
+  const lines = [];
+  const read = (language.languages || []).filter((entry) => entry.read_at);
+  if (!read.length) {
+    lines.push('mc: language — no reading; mc language status <lang>');
+  } else {
+    const waiting = read.filter((entry) => entry.waiting_rows);
+    const ago = (entry) => {
+      const minutes = Math.max(0, Math.round((now - Date.parse(entry.read_at)) / 60_000));
+      if (!Number.isFinite(minutes)) return 'read at an unknown time';
+      if (minutes < 60) return `read ${minutes}min ago`;
+      const hours = Math.round(minutes / 60);
+      return `read ${hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`} ago`;
+    };
+    if (waiting.length) {
+      const said = waiting.map((entry) => `${entry.lang} ${entry.waiting_rows} rows waiting (${ago(entry)})`).join(', ');
+      lines.push(`mc: language — ${said} · mc language promote`);
+    } else {
+      const newest = read.reduce((a, b) => (String(b.read_at) > String(a.read_at) ? b : a));
+      lines.push(`mc: language — nothing waiting (${ago(newest)})`);
+    }
+  }
+  const gap = language.open_gap;
+  if (gap) lines.push(`mc: language — ${gap.manifest} stopped after ${gap.act}: ${gap.says} · mc language resume`);
+  return lines;
 }
 
 /**
@@ -498,7 +534,7 @@ function sourceLine(plan) {
 }
 
 /** The reading, in the words a person decides on. */
-export function planLines(plan) {
+export function planLines(plan, { now = Date.now() } = {}) {
   const lines = [`mc: would deploy ${plan.repo} ${plan.sha}${plan.subject ? ` — ${plan.subject}` : ''}`];
   if (!plan.fetched) lines.push('mc: could not fetch origin — this is what the checkout already had');
   if (plan.worktree_created) lines.push(`mc: made mc's own main worktree at ${plan.worktree} — deploys run from it from now on`);
@@ -526,6 +562,7 @@ export function planLines(plan) {
     const ago = plan.nightly.behind === null ? 'another tree' : `${plan.nightly.behind} commit${plan.nightly.behind === 1 ? '' : 's'} ago`;
     lines.push(`mc: the nightly measured ${plan.nightly.short}, ${ago}; this tree was not measured whole`);
   }
+  lines.push(...languageLines(plan.language, now));
   return lines;
 }
 
@@ -591,6 +628,7 @@ export async function run(argv, deps = {}) {
     fetchVersion: deps.fetchVersion || fetchVersionDefault,
     lastDeploy: deps.lastDeploy || lastDeployRow,
     nightly: deps.nightly || nightlyReading,
+    languageState: deps.languageState || readLanguageState,
   });
   if (!base.sha) {
     stderr.write(`mc: ${path} has no origin/main — mc deploy needs ${REPO}'s main checkout\n`);
