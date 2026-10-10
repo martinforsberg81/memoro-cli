@@ -1139,3 +1139,33 @@ and codex stay interchangeable. Carried by `step-recovery`
 (`docs/project/mc/step-recovery/PLAN.json`). An interrupted step is a `ready`
 step with an `interrupted` record rather than a new state, so no reader of
 `ready` has to change.
+
+## 34 · The merger lands batches, and memoro-cli has a gate lane of its own
+
+`ruling · 2026-10-10` · raised by Martin at the brief
+
+The merge queue stood at ten or more all afternoon. Measured from
+`merger.log` over 2026-10-09/10: 96 landed rounds, 178 s median and 281 s
+mean, so about 13 pull requests an hour at most, and the merger was busy for
+all of 12:00-15:00 UTC. The suite was 57 % of a round. Command gates added
+65 s mean where they ran (`sql:pr-ci` 36 s median), and `npm ci` 26 s mean.
+memoro-cli's rounds of about a minute each waited behind memoro's of three to
+fifteen. `runMergeRound` could already measure a batch as one candidate (A3),
+but the merger never handed it more than one pull request.
+
+> "Fundera: just nu är merge-processen en rejäl flaskhals. Det är +10 i kö
+> hela tiden. Kan vi minska tiden per merge?" … "Låt oss göra 1-4. GO."
+> (Martin, 2026-10-10)
+
+The four chosen: the merger lands up to four queued pull requests to one
+repository in one round; memoro-cli gets a gate lane of its own beside
+memoro's; command gates run beside the suite instead of after it; and `npm ci`
+is replaced by a clone of a cached tree when the lockfile has not moved. The
+fifth proposal, starting fewer steps while the queue is long, was not chosen.
+
+This amends the ruling of 2026-08-30 (*"En instans kan köra åt gången"*,
+`src/mc/gate-lock.js`) in one point: one round at a time **per lane**. memoro
+and any repository that declares nothing share the heavy lane, and memoro-cli
+is light. Two memoro rounds still never run at once, and a deploy still waits
+for every round in flight (ruling 32). Carried by `merge-throughput`
+(`docs/project/mc/merge-throughput/PLAN.json`).
