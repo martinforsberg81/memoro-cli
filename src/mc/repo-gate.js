@@ -58,6 +58,7 @@ import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
 import { regenerateDerived } from './repo-derived.js';
 import { ensureWorkDeps } from './work-deps.js';
+import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { recordRound } from './repo-round-log.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
@@ -503,7 +504,15 @@ export async function runGate({
     // that was a second `npm ci` for a 492 MB tree every round.
     if (declared.declaration.prepare) {
       say(`preparing the candidate: ${declared.declaration.prepare}`);
-      const ready = await timed('prepare', async () => shell(declared.declaration.prepare, { cwd: headDir, env }));
+      // `npm ci` may come from a tree installed from the same lockfile
+      // (`prepare-cache.js`); the timing stays under `prepare` either way.
+      const ready = await timed('prepare', async () => prepareCandidate({
+        prepare: declared.declaration.prepare,
+        headDir,
+        cacheDir: prepareCacheDir({ repoPath, env }),
+        shell: (command, options) => shell(command, { ...options, env }),
+        say,
+      }));
       if (ready.status !== 0) {
         return finish('prepare', `${declared.declaration.prepare} failed in the candidate — ${trim(ready.stderr)}`);
       }
