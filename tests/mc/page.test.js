@@ -327,6 +327,20 @@ describe('RUNNER', () => {
     assert.equal(room.disk, null);
     assert.ok(!paintedPage(pageData({ runner: room })).some((row) => /disk:/u.test(strip(row))));
   });
+
+  // The runner's `memory.json`, the same way, beside the disk line.
+  it('says the runner starts no step while memory is short, and only while the runner lives', () => {
+    const line = 'memory: 12% free, below 20% — no step started';
+    const memory = { at: '2026-08-29T11:50:00Z', free_percent: 12, line };
+    const short = runnerSection({ runner: RUNNER, now: NOW, alive: live, memory });
+    assert.equal(short.memory.line, line);
+    assert.ok(paintedPage(pageData({ runner: short })).some((row) => strip(row) === `  ${line}`));
+    const room = runnerSection({ runner: RUNNER, now: NOW, alive: live, memory: null });
+    assert.equal(room.memory, null);
+    assert.ok(!paintedPage(pageData({ runner: room })).some((row) => /memory:/u.test(strip(row))));
+    const gone = runnerSection({ runner: RUNNER, now: NOW, alive: () => false, memory });
+    assert.ok(!paintedPage(pageData({ runner: gone })).some((row) => /memory:/u.test(strip(row))));
+  });
 });
 
 /**

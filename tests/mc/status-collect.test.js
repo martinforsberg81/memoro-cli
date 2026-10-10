@@ -148,6 +148,20 @@ describe('NOW', () => {
     assert.deepEqual(block.quota, { count: 1, last: '2026-08-29T04:00:00Z' });
   });
 
+  // `disk.json` and `memory.json` as the caller read them: the runner's holds
+  // on new starts, each with the line it said; no file, or no line, is null.
+  it('carries the disk and the memory hold from the files the runner left', () => {
+    const disk = { at: '2026-08-29T10:40:00Z', free_bytes: 118 * 2 ** 20, line: 'disk: 0.1 GiB free, below 5 GiB — no step started' };
+    const memory = { at: '2026-08-29T10:45:00Z', free_percent: 12, line: 'memory: 12% free, below 20% — no step started' };
+    const held = nowBlock({ runner: RUNNER, disk, memory, now: NOW, alive: live });
+    assert.deepEqual(held.disk, disk);
+    assert.deepEqual(held.memory, memory);
+    const free = nowBlock({ runner: RUNNER, now: NOW, alive: live });
+    assert.equal(free.disk, null);
+    assert.equal(free.memory, null);
+    assert.equal(nowBlock({ runner: RUNNER, memory: {}, now: NOW, alive: live }).memory, null);
+  });
+
   it('liveness is this process by pid, and nothing for a pid that cannot exist', () => {
     assert.equal(pidAlive(process.pid), true);
     assert.equal(pidAlive(0), false);

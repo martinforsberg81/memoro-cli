@@ -266,8 +266,14 @@ function readJson(path) {
  * A file whose pid is dead is a crashed runner, not a running one: it is
  * reported as stale and counts as nothing running. `runs.tsv` cannot answer
  * any of this — its row is appended after the step is over.
+ *
+ * `disk` and `memory` are `disk.json` and `memory.json` as the caller read
+ * them: present while the runner starts no step for want of either, carrying
+ * the line it said. Returned as given, or null when there is no line.
  */
-export function nowBlock({ runner = null, currents = [], stop = false, rows = [], now = new Date(), alive = pidAlive }) {
+export function nowBlock({
+  runner = null, currents = [], stop = false, rows = [], disk = null, memory = null, now = new Date(), alive = pidAlive,
+}) {
   const stale = [];
   const runnerLive = runner ? alive(runner.pid) : false;
   if (runner && !runnerLive) stale.push(`runner.json (pid ${runner.pid} is gone)`);
@@ -318,6 +324,8 @@ export function nowBlock({ runner = null, currents = [], stop = false, rows = []
     stop,
     stale,
     quota: { count: quotaRows.length, last: quotaRows.at(-1)?.ts || null },
+    disk: disk?.line ? disk : null,
+    memory: memory?.line ? memory : null,
   };
 }
 

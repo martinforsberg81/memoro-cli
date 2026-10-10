@@ -122,6 +122,13 @@ export function runnerScratchDir(env = process.env) {
  */
 export const RUNNER_DISK = 'disk.json';
 
+/**
+ * `~/mc/runner/memory.json`: present while too little memory is free for a
+ * step to start, with the line the runner said. Drawn and removed as
+ * `disk.json` is.
+ */
+export const RUNNER_MEMORY = 'memory.json';
+
 /** One of the three tables, by its filename constant. */
 export function runnerTablePath(file, env = process.env) {
   return join(runnerDir(env), file);

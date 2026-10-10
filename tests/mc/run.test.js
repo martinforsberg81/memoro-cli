@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { DISK_MIN_BYTES, SCRATCH_KEEP_MS, createRunner, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, SCRATCH_KEEP_MS, createRunner, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { RUN_REFUSALS, WORKAREA_BLOCKS } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
@@ -605,6 +605,49 @@ test('at 5 GiB free a step launches, and the disk line is taken off the page', a
   assert.equal(f.calls.sessions.length, 1);
   assert.equal('/w/runner/disk.json' in f.files, false);
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /disk:/u);
+});
+
+/**
+ * 2026-10-10: one step session, three plan sessions and the brief left 30 %
+ * free and swap nearly full on 8 GB. Under 20 % free a pass starts nothing,
+ * says why once, and leaves the line for the page.
+ */
+test('under 20 % free memory no session launches, the line is said once and left for the page', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  f.deps.freeMemoryPercent = () => MEMORY_MIN_FREE_PERCENT - 1;
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'alpha', 77)(call); };
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 0);
+  assert.equal(r.waited, 'skipped:memory');
+  assert.equal(f.calls.sessions.length, 0, 'no session is launched');
+  const said = f.files['/w/runner/log/runner.log'].split('\n').filter((line) => /memory:/u.test(line));
+  assert.equal(said.length, 1);
+  assert.match(said[0], /memory: 19% free, below 20% — no step started$/u);
+  const written = JSON.parse(f.files['/w/runner/memory.json']);
+  assert.equal(written.free_percent, 19);
+  assert.equal(written.line, 'memory: 19% free, below 20% — no step started');
+});
+
+test('at 20 % free memory a step launches, and the memory line is taken off the page', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  f.files['/w/runner/memory.json'] = JSON.stringify({ line: 'memory: 12% free, below 20% — no step started' });
+  f.deps.freeMemoryPercent = () => MEMORY_MIN_FREE_PERCENT;
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'alpha', 77)(call); };
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 1);
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal('/w/runner/memory.json' in f.files, false);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /memory:/u);
+});
+
+test('a memory reading that cannot be had is room: a step launches', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  f.deps.freeMemoryPercent = () => null;
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'alpha', 77)(call); };
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 1);
+  assert.equal(f.calls.sessions.length, 1);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /memory:/u);
 });
 
 test('the chore pass runs the reaper every pass and says what it removed', async () => {
