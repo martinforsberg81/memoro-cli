@@ -44,7 +44,8 @@ import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { GATE_LANES, runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, markLanding, markRed, mergesPath, nextBatch, parseQueue, placeOf, queuedFor,
+  dequeue, enqueue, heldLanding, markLanding, markQueued, markRed, mergesPath, nextBatch, parseQueue, placeOf, queuedFor,
+  stepsDone,
 } from './merge-queue.js';
 import { landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
 import { readEntry, realLock, updateStep } from './register.js';
@@ -221,6 +222,16 @@ export function parentLanded(root, { read = realRead } = {}) {
     if (!parent?.project || !Number.isInteger(parent.index)) return true;
     return readEntry(root, parent.project, { read })?.steps?.[parent.index]?.status === 'done';
   };
+}
+
+/**
+ * Whether every earlier step of a job's plan is `done` in the register
+ * (`stepsDone`, merge-queue.js): a plan's steps land in order, with or
+ * without a `parent`. A register that cannot be read is taken as done, as in
+ * `parentLanded`.
+ */
+export function stepsBeforeDone(root, { read = realRead } = {}) {
+  return stepsDone((project) => readEntry(root, project, { read })?.steps ?? null);
 }
 
 const realGit = (cwd, args) => {
@@ -531,6 +542,7 @@ export async function serve({
   take = () => takeMerger({ root, commit: version?.commit || null }), release = () => releaseMerger({ root }),
   land = (batch, lane) => landJob(batch, { root, say, now, read, lock, lane }),
   landed = parentLanded(root, { read }),
+  ordered = stepsBeforeDone(root, { read }),
   laneOf = (job) => gateLaneOf(job.repo),
   lanes = GATE_LANES,
   // How long a loop with nothing in its lane waits before it looks again while
@@ -555,7 +567,7 @@ export async function serve({
     try { await sweeping; } finally { sweeping = null; }
   };
   await sweepReds();
-  const batchIn = (entries, lane) => nextBatch(entries, { landed, lane, laneOf });
+  const batchIn = (entries, lane) => nextBatch(entries, { landed, ordered, lane, laneOf });
   // What the loops share: which of them has nothing, whether the merger is
   // leaving, and a wake-up for a loop waiting on the other.
   const idle = new Set();
@@ -576,12 +588,20 @@ export async function serve({
         leaving = true; changed(); return;
       }
       const batch = lock(root, () => {
-        const entries = parseQueue(read(mergesPath(root)));
+        let entries = parseQueue(read(mergesPath(root)));
+        // A job a dead merger was landing whose earlier step is no longer
+        // `done` goes back in line rather than being landed out of order.
+        const back = heldLanding(entries, { ordered }).filter((job) => (laneOf(job) || 'heavy') === lane);
+        for (const job of back) {
+          entries = markQueued(entries, job);
+          say(`${job.repo} #${job.pr}: back in line — ${job.step.project} step ${job.step.index} is not done`);
+        }
         const next = batchIn(entries, lane);
         if (next.length) {
           const started = now().toISOString();
-          write(mergesPath(root), next.reduce((all, job) => markLanding(all, job, started), entries));
+          entries = next.reduce((all, job) => markLanding(all, job, started), entries);
         }
+        if (next.length || back.length) write(mergesPath(root), entries);
         return next;
       });
       if (!batch.length) {
