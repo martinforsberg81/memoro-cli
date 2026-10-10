@@ -157,6 +157,35 @@ describe('landJob — one job, landed or answered', () => {
     assert.equal(stepNow().status, 'done');
   });
 
+  const killed = {
+    ok: false, merged: false, stopped_at: 'file-killed', verdict: 'stopped',
+    reason: 'tests/b.test.js ended by SIGTERM from outside the round — not a verdict on this change',
+    killed_files: [{ file: 'tests/b.test.js', signal: 'SIGTERM' }],
+  };
+
+  it('a test file killed from outside the round is measured once more, and then lands', async () => {
+    register();
+    const m = machine([killed, green]);
+    await landJob(JOB, m.deps);
+    assert.equal(m.rounds.length, 2);
+    assert.ok(m.said.includes('memoro-cli #671: tests/b.test.js was killed from outside the round — measuring again'));
+    assert.equal(stepNow().status, 'done');
+  });
+
+  it('killed twice is answered red with that reason, and nothing is mended', async () => {
+    register();
+    const m = machine([killed, killed, green]);
+    const answers = await landJob(JOB, m.deps);
+    assert.equal(m.rounds.length, 2, 'once more, not on and on');
+    assert.equal(answers[0].landed, false);
+    assert.equal(answers[0].report.stopped_at, 'file-killed');
+    const step = stepNow();
+    assert.equal(step.status, 'ready', 'the next session\'s, as any red is — no mend');
+    assert.equal(step.reason, killed.reason);
+    assert.equal(m.rows[0].note, 'red,file-killed');
+    assert.equal(m.said.filter((line) => /mend/u.test(line)).length, 0);
+  });
+
   it('a step somebody marked done or blocked meanwhile is left as it is', async () => {
     register({ status: 'blocked', blocked_by: { kind: 'decision', name: 'x' } });
     await landJob(JOB, machine([red]).deps);
