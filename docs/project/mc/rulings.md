@@ -1274,30 +1274,3 @@ This amends ruling 21 (no repair in the merge path) and ruling 30 (red goes
 straight back to the step's next session) in that one point: one mend, then
 red. Carried by `merger-hardening`
 (`docs/project/mc/merger-hardening/PLAN.json`).
-
-## 38 · A red that is not the change's is not answered as the change's
-
-`ruling · 2026-10-10` · raised by Martin in the mc planning session
-
-> "Vi har förresten 2 röda merges till" … "build-bundle.test.js: det testet
-> verkar hänga sig och har orsakat failed steps. Kan vi göra något för att
-> göra det mer robust?" (Martin, 2026-10-10)
-
-Two reds of the evening were the merger's own doing. #857 and #13375 were
-red at restack, because `rebase --onto origin/main <parent sha>` replays every
-commit between the parent's old tip and the branch. That includes the main
-commits a session had merged into the branch, which are already on main and
-conflict with themselves. Replaying only the branch's own non-merge commits
-that are not on main picked #857 clean, where the rebase had conflicted in
-`merger.js`. Earlier, at 12:14, a step session killed a process it took for
-its own hung test. That process was the merger's `build-bundle.test.js` run
-for #13337. The round then measured the file as passing on the base and
-answered "this change broke them". The same PR, unchanged, went green an hour
-later. `node --test` marks such a file `signal: 'SIGTERM'`, `exitCode: ~`.
-
-So: restack moves only the branch's own commits, and merges main in before it
-gives up. A test file that ended by a signal is no verdict on the change: the
-round runs once more, and a second time it is a stop, not a red. A session
-never signals a process it did not start. memoro's own half, the build-bundle
-test building once and alone in the heavy lane, is memoro's PR. Carried by
-`merge-false-reds` (`docs/project/mc/merge-false-reds/PLAN.json`).

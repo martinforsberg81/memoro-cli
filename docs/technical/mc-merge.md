@@ -471,6 +471,24 @@ recorded, is left in the probe's `unresolved`, and the reason ends `— N flaky
 under load`. A landing whose paths could not be read is named as before,
 without the second measure.
 
+**A file killed from outside the round is no verdict** (ruling 38, since
+deleted). When something outside the round ends a test file's process,
+`node --test` writes one failing entry for that file with `signal: 'SIGTERM'`
+(or another signal) and `exitCode: ~` in its TAP block. `killedFiles(tap,
+files)` in [`src/mc/tap-red.js`](../../src/mc/tap-red.js) names every file
+whose failing block has a non-null `signal:`. Before the base probe,
+`runGate` takes those files' red names out of the red set: when nothing is
+left the round stops `stopped_at: 'file-killed'`, `<files> ended by <signal>
+from outside the round — not a verdict on this change`, and the base probe
+does not run — the base would pass the file and the probe would say the change
+broke it, which is what memoro #13337 was told on 2026-10-10 after a session's
+`kill 75754`. With other reds beside it the round is `red` over those alone,
+and `report.killed_files` lists the killed ones; they are never counted green.
+The merger (`landJob`) runs a round that stopped `file-killed` once more,
+saying `<files> was killed from outside the round — measuring again`. A second
+`file-killed` is answered red with that reason. It is not a mend stop: there is
+nothing in the change to mend.
+
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,
 `archive-plan.js`) and, when two rows share date, programme and project, stops
@@ -627,12 +645,23 @@ on top of the landing step's (`placeBranch` in `run.js`) and writes
 `stacked_on: { index, pr, sha }` on it. Its `mc merge` queues it with that as
 `parent`, and the door reads the plan from the parent's tip. The merger takes a
 job with a parent only once the parent is out of the queue and its step is
-`done` (`nextJob`), then moves the branch onto main past `sha` (`restack`:
-`rebase --onto origin/main <sha>` in a temporary worktree, pushed with a lease
-on the tip it had) — the one below was squash-merged, so its commits are in the
-branch under other names. A move that conflicts is a red, `stopped_at:
-restack`. When the one below comes back red the job on top stays in the queue
-and waits; that step is the project's next session's first, on its own branch.
+`done` (`nextJob`), then moves the branch onto main past `sha` (`restack` in
+[`src/mc/merger.js`](../../src/mc/merger.js), in a temporary worktree, pushed
+with a lease on the tip it had) — the one below was squash-merged, so its
+commits are in the branch under other names. The move replays only the
+branch's own commits: `git rev-list --reverse --no-merges <tip> ^<sha>
+^origin/main`, cherry-picked one by one onto `origin/main`; a pick that comes
+out empty, because main already has it as a squash, is skipped. Until
+2026-10-10 it was `rebase --onto origin/main <sha>`, which also replays the
+main commits a session had merged into its branch — already on main, they
+conflicted with themselves, and #857 and memoro #13375 came back `restack: …
+conflicts` though their own commit picked clean (ruling 38, since deleted). When
+a pick conflicts, the move starts again from the tip and runs `git merge
+--no-edit origin/main`; the log line then reads `moved onto main past #<n>
+(merged main in)`. Only when that merge conflicts too is it a red,
+`stopped_at: restack`, naming the conflicted paths. When the one below comes
+back red the job on top stays in the queue and waits; that step is the
+project's next session's first, on its own branch.
 
 **The runner queues what the session published and did not** (ruling 25,
 2026-10-07). When a step session's process is gone, the register still says
