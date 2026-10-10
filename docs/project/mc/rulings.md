@@ -1042,3 +1042,45 @@ squash-merged. When the one below comes back red, it is the next session's
 first: the project's next session fixes it on its own branch, and the job on
 top keeps its place and goes once that one has landed. A move onto main that
 conflicts is a red like any other.
+
+## 31 · `mc language`: language data reaches production through one door
+
+`ruling · 2026-10-10` · raised by the brief, from the proposal of 2026-10-09
+
+The Swedish SALDO cutover on 2026-10-09 took seven acts, three terminals, a
+Cloudflare key pasted into a chat, and two failed deploys — the grammar
+promotion in `scripts/deploy.mjs` writes to production for ten minutes after
+the Worker is live, and failed there twice with "production is fine" and exit
+1. The proposal: a verb `mc language` that reads a cutover manifest memoro
+owns, runs every act's read, compares it with the manifest's numbers, asks
+before each write, gives the key from the keychain to the child process alone,
+records every act and resumes. Three questions were put with a
+recommendation each — the name (`mc language`, not `mc content`); whether the
+grammar step leaves the deploy entirely or only gets a clearer error (leaves
+it; unresolved selectors still stop the deploy); and the cause of the 7403.
+
+> "Håller med om svaren." … "3. Jag vet inte orsaken till nyckelfelet, har
+> fungerat utmärkt när jag kört och den är roterad." (Martin, 2026-10-10)
+
+> On whether the GitHub deploy workflow, which also runs the promotion, follows
+> the same rule: "Samma regel" (Martin, 2026-10-10).
+
+> "Du skriver två stycken projekt, båda under programmet "mc"." (Martin,
+> 2026-10-10)
+
+So: the name is `mc language`; grammar promotion leaves `scripts/deploy.mjs`
+and `.github/workflows/deploy.yml` alike — both read, stop on unresolved
+selectors before the Worker ships, and name `mc language promote` when rows
+wait; the 7403 is not pursued, and the verb's key handling (keychain, shell
+variables ignored, key only in the child) removes the suspected cause anyway.
+Two projects under `mc`: memoro's `language-manifest` (the manifests, `--json`
+and `--help` on the scripts, one credential helper, the generated runbook, the
+deploy's check) and memoro-cli's `mc-language` (the verb), which waits for it.
+
+Two points of the proposal changed against the code. The repository lease does
+not keep a deploy and a language run apart, since a deploy holds none
+(ruling 30); each refuses while the other has a live record instead. And the
+Swedish cutover is finished: its manifest is the record of the 2026-10-09 run
+and the template for the next language, and a run of it today stops at the
+first exact check. The Swedish lemma bands are in production since 2026-10-09
+(memoro `docs/project/language-content/language-content-state.md`).
