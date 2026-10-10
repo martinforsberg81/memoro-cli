@@ -24,7 +24,10 @@
  *
  * The gate lock and the repository lease are what they were: the merger's
  * round takes both, so a person's `mc test` and the merger never measure at
- * once. The merger waits them out; it has nobody to give up to.
+ * once. The merger waits them out; it has nobody to give up to. It waits out
+ * a running deploy the same way, before a round and never inside one: the
+ * deployer lets the round in flight finish, builds alone, and the queue goes
+ * on after it.
  */
 import { spawn as realSpawn } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
@@ -34,6 +37,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import { runningDeploy } from './deploys.js';
 import { runningRound } from './gate-lock.js';
 import {
   dequeue, enqueue, markLanding, mergesPath, nextJob, parseQueue, placeOf, queuedFor,
@@ -231,6 +235,7 @@ export function restack(job, { git = realGit, say = () => {} } = {}) {
 export async function landJob(job, {
   root, mergeRound = runMergeRound, sleep, say, gh = null,
   readRunningRound = runningRound, readLeaseFn = readLease, alive = pidAlive,
+  readRunningDeploy = () => runningDeploy({ ...process.env, MC_WORK_ROOT: root }),
   now = () => new Date(), read = realRead, write, lock = realLock,
   recordStart = recordRoundStart, record = recordRound, appendRun = null,
   moveOntoMain = restack,
@@ -249,11 +254,17 @@ export async function landJob(job, {
     // Waited for before the round rather than inside it, so a busy gate is
     // not a round-log line every fifteen seconds. An orphaned lease is in
     // nobody's way: the round's own claim reaps it.
+    // A deploy asked for waits for the round in flight and then runs alone;
+    // the queue goes on after it (Martin, 2026-10-10). Its `running` row is
+    // written before the deployer starts, so it is seen here before the
+    // deployer looks at the gate.
+    const deploying = readRunningDeploy();
     const running = readRunningRound({ alive });
     const lease = readLeaseFn(job.repo_path);
     const blocking = lease?.held && !lease.orphaned;
-    if (running || blocking) {
-      const why = running ? `another gate round (${running.repo || 'a repository'} #${running.pr ?? '?'}, pid ${running.pid})` : `${job.repo} is held by ${lease.holder}`;
+    if (deploying || running || blocking) {
+      const why = deploying ? `the deploy of ${String(deploying.sha || '').slice(0, 7) || '?'} (pid ${deploying.pid})`
+        : running ? `another gate round (${running.repo || 'a repository'} #${running.pr ?? '?'}, pid ${running.pid})` : `${job.repo} is held by ${lease.holder}`;
       if (why !== said) { say(`${label}: waiting behind ${why}`); said = why; }
       await sleep(MERGER_POLL_MS);
       continue;
