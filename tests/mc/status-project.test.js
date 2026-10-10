@@ -259,6 +259,34 @@ describe('collectProject', () => {
   });
 
   /**
+   * A batch member after the round's first lands with it, and a red getting
+   * its one mend is being mended — the same two facts the page draws.
+   */
+  it('says a batch member lands in the same round, and a mend is being mended', async () => {
+    const root = workRoot();
+    const started = '2026-10-10T17:47:00Z';
+    writeFileSync(join(root, 'runner', 'merges.json'), JSON.stringify([
+      { repo: 'memoro-cli', pr: 500, branch: 'somebody-else', since: '2026-10-10T17:00:00Z', state: 'landing', started },
+      { repo: 'memoro-cli', pr: 501, branch: 'mc-status-2', since: '2026-10-10T17:01:00Z', state: 'landing', started },
+      {
+        repo: 'memoro-cli', pr: 502, branch: 'mc-status-3', since: '2026-10-10T17:02:00Z', state: 'mending',
+        mend: { pid: 77, started: '2026-10-10T17:50:00Z', reason: 'conflicts with origin/main: card-views.js', stopped_at: 'merge' },
+      },
+    ]));
+    const data = await collectProject('mc-status', {
+      env: { MC_WORK_ROOT: root },
+      repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
+      offline: true,
+      git,
+      merges: () => ({ repo: 'memoro-cli', pr: 500, phase: 'node --test', mode: 'merge', age_seconds: 60 }),
+    });
+    assert.deepEqual(data.queued.map((entry) => entry.pr), [501, 502]);
+    const text = renderProject(data);
+    assert.match(text, /^ {2}#501 lands in the same round as #500$/mu);
+    assert.match(text, /^ {2}#502 is being mended after conflicts with origin\/main: card-views\.js \(since 10-10 17:50Z\)$/mu);
+  });
+
+  /**
    * `--offline` did not ask GitHub, and what nobody asked is not the same as
    * nothing being open — the reading says so rather than promising a `ready`
    * it cannot stand behind. It is the round's own word for it.
