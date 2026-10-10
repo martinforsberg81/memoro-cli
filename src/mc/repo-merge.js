@@ -402,11 +402,12 @@ export async function runMergeRound({
 /**
  * The batch stops that mean "measure them one by one": the candidate could
  * not be built (a conflict among them), or it measured red, or one pull
- * request's own tests failed. A lease, a missing declaration or a suite that
+ * request's own tests failed, or the batch's project log carries a row
+ * twice — which one brought the copy is a single round's question. A lease, a missing declaration or a suite that
  * never summarised would stop the single rounds exactly the same way, and
  * running them would be four more of the same stop.
  */
-const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'extra-gate']);
+const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'extra-gate', 'project-log']);
 
 /**
  * Bring the installation that runs from a checkout up to what just landed.
