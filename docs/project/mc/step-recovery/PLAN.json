@@ -48,7 +48,7 @@
       "check": "`tests/mc/run.test.js` with the memory reader stubbed under and at the floor; `tests/mc/status-collect.test.js` (or the test beside `nowBlock`) shows `disk` and `memory` in the RUNNER block's data."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "While a step session runs, its uncommitted work is snapshotted to `refs/mc/checkpoint/<project>` without touching the worktree or its index, and before every `merge --abort` the runner makes.",
       "check": "`tests/mc/run.test.js` against a real temporary git repository: after a snapshot the ref's tree holds a modified and an untracked file, `git status --porcelain` is unchanged, and `git diff --cached` is empty."
     }
