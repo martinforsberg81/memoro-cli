@@ -1201,8 +1201,9 @@ went with it.
 and nothing else.** The brief lists these steps in its *Blocked* section under
 *Waiting on a workarea*, with the comment the runner wrote, and puts them as
 *fix the workarea, then set the step ready* rather than as a decision. The
-runner never writes `ready` and never retries on its own, because the retry
-was the fault:
+runner never writes `ready` over a `workarea` block and never retries on its
+own, because the retry was the fault (the waits it does release are under
+*Blockers that release themselves*):
 
 > "Hela upplägget med 'runda' är fel. Allt ska inte provas. Runner ska ta next
 > step. Punkt." … "Vägen tillbaka är via brief eller en plan-session. Om det var
@@ -1214,6 +1215,48 @@ was the fault:
 What the runner *can* settle by itself it settles at the first attempt instead
 of blocking: `main`'s copy of a `PLAN.json` the plan's rule cannot merge, and
 the abort of a merge a killed session left.
+
+### Blockers that release themselves
+
+A `blocked_by` has one of five kinds (`BLOCKER_KINDS`, `plan-schema.js`).
+Two are a person's and come back only by `mc step ready`: `decision` (what
+`mc brief` answers) and `workarea` (the runner's own, above). Three are waits
+nobody has to judge, and since ruling 35 (2026-10-10, the `step-release`
+project) the runner releases them by itself:
+
+| kind | fields | due when | set by |
+|---|---|---|---|
+| `time` | `at`, an ISO instant | the clock has passed `at` | `mc step blocked --until <iso>` — a time already past is refused |
+| `deploy` | `step` (1-based, an earlier step of the same plan), `hours` (0 or more, default 0) | that step is `done` with a `landed.sha` in the register, a `deployed` row in `~/mc/runner/log/deploys.tsv` has a `sha` that contains it (`git merge-base --is-ancestor` in memoro's checkout), and `hours` have passed since the earliest such row's `ended` | `mc step blocked --after-deploy [<n>] [--hours <h>]` — `<n>` defaults to the step before; the step itself or a later one is refused, and so is any step outside memoro, because `mc deploy` deploys memoro's main and nothing else |
+| `project` | `name`, the project | that project's plan on `origin/main` is `done` | `mc step blocked --on-project <project>` |
+
+A `project` that is not on main is never due by itself: it may have been
+abandoned rather than delivered, and only a person can tell which
+(`stale-blockers.js`, which no longer reports a `project` blocker that is
+done — the runner has released it). A step waits on a whole project, never on
+one step of another, and on one thing at a time. A deploy made from another
+machine is not in this machine's `deploys.tsv`; the step waits, and says so.
+
+The verb makes the `name` from the other fields, so it stays a name
+(`NAME_RE`): `until-20261014-0800`, `deploy-step-3-24h`. What the step waits
+for in more words goes in `--reason` and the comments.
+
+**The release is a register write, never a plan edit.** In `queue()`, after
+both repositories' plans are read and memoro's checkout fetched,
+`releaseDue` (`step-release.js`) asks `blockerDue` of every project's current
+step that is `blocked` in the register. One that is due becomes `ready`, its
+`blocked_by` and `reason` are cleared, a comment `Released <now>: <why>` is
+appended, and `runner.log` says `<project> step <n>: released — <why>`. The
+step comes out of the same `queue()` as `ready`, so the pick may start it in
+that pass. Nothing is written to the plan on main and no pull request is
+made. A record that cannot be read or written is said (`not released — …`)
+and left as it was; a git that cannot answer the ancestor question releases
+no `deploy` blocker.
+
+While they wait, `mc step <project>` and the page's blocked line say how long
+is left, from `describeWait`: `until 2026-10-14 08:00Z — 3d left`,
+`on deploy of step 3 + 24h — 7h40m left`, `on deploy of step 3 — not
+deployed yet`.
 
 ### The register
 
@@ -1254,6 +1297,10 @@ the landing held it, or with the session's exit when it left no pull request
 at all; `ready` again after a quota answer, which is no session. A failed step
 is never picked again: `kindFor` answers `skip:failed`, and `mc step ready` is
 the way back. And `blocked` for a fault it met before the session, as above.
+And `ready` for a `time`, `deploy` or `project` blocker whose wait is over,
+with `Released <now>: <why>` in the comments (*Blockers that release
+themselves*). The register keeps a blocker's own fields — `at`, `step`,
+`hours` — beside its `kind` and `name`.
 
 **An interrupted step** is one whose session died under it — the machine
 restarted, the runner was killed, macOS killed the process — rather than one
@@ -1297,8 +1344,8 @@ one of three outcomes:
   `interrupted 3 times in a row — last session <id>`. A step that keeps
   dying is a person's.
 
-**What a person writes there** is `mc step`: `failed --reason`, `blocked --on`,
-`ready`, `done`. `ready` is refused while the step's pull request is open — a
+**What a person writes there** is `mc step`: `failed --reason`, `blocked --on`
+(or `--on-project`, `--until`, `--after-deploy`), `ready`, `done`. `ready` is refused while the step's pull request is open — a
 step set ready over an open pull request would be run again on top of it.
 
 ## Sleeping and stopping

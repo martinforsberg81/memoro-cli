@@ -33,7 +33,7 @@
       "check": "`tests/mc/step-release.test.js`: `time` before and after `at`; `deploy` with no deployed row, a row that does not contain the sha, a row that contains it but is younger than `hours`, and one that is old enough; `project` done, not done, and not on main. `tests/mc/run.test.js` (or the runner test that drives `queue()`): a due step comes out of `queue()` as `ready`, and its register entry carries the comment."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc step <project>` and the page say how long a time or deploy wait has left.",
       "check": "The `mc step` test: `on deploy of step 3 + 24h — 7h40m left`, `on deploy of step 3 — not deployed yet`, `until 2026-10-14 08:00Z — 3d left`. The page test for the blocked line shows the same words."
     },
