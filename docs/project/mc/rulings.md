@@ -1169,3 +1169,52 @@ and any repository that declares nothing share the heavy lane, and memoro-cli
 is light. Two memoro rounds still never run at once, and a deploy still waits
 for every round in flight (ruling 32). Carried by `merge-throughput`
 (`docs/project/mc/merge-throughput/PLAN.json`).
+
+## 35 · A blocked step that waits for a time, a deploy or another project is released by the runner
+
+`ruling · 2026-10-10` · raised by Martin in the mc planning session
+
+A blocked step went back to `ready` only when a person set it there (ruling
+21). `blocked_by` could name a decision, a project or a workarea fault, but
+not a time, and nothing read `deploys.tsv`. `staleBlockers` noticed a done
+project blocker and, by design, wrote nothing.
+
+> "Har vi följande funktionalitet för blockerade steps: (1) timer så att step
+> ändras till ready vid viss tidpunkt eller delay, t ex 24h efter deploy av
+> steget innan, och (2) relativt beroende, dvs när step x är klart blir step y
+> ready, eller när projekt y är ready blir step 1 i project z ready."
+> (Martin, 2026-10-10)
+
+The proposal (`~/mc/proposals/archive/2026-10-10-step-blockers-that-clear-themselves.md`)
+offered `time`, `deploy`, a releasing `project`, and a `step` kind for one step
+of another project.
+
+> "Vi tar bort detta: step … Det får räcka med att vänta på att hela det andra
+> projektet ska bli klart." … "Bra. Skriv planer och landa." (Martin, 2026-10-10)
+
+So there are two new kinds. `time` is due at an instant. `deploy` is due when
+an earlier step of the same plan has landed and a deploy containing it ended a
+given number of hours ago, and it exists for memoro only. `project` is now due
+by itself when the named project's plan is `done`. "Not on main" stays a
+person's call. A step waits on a whole project, never on one step of another.
+Step y after step x in one plan needs nothing new, because steps are an order.
+The release is the runner's register write with a comment, and never a plan
+edit. `decision` and `workarea` stay a person's. This amends ruling 21 in that
+one point. Carried by `step-release` (`docs/project/mc/step-release/PLAN.json`).
+
+## 36 · `mc merge watch`: a session that wants to can follow its merge to the end
+
+`ruling · 2026-10-10` · raised by Martin in the mc planning session
+
+> "Skapa ytterligare en plan: mc merge watch pr. Det ska bli en bevakning som
+> en session kan starta OM den vill bevaka mergen av en pr." … "Bra. Skriv
+> planer och landa." (Martin, 2026-10-10)
+
+`mc merge` keeps queueing and returning (ruling 30), and a step session does
+not wait. `mc merge watch <repo> <pr>`, and `mc merge <repo> <pr> --watch`
+for one command, follow the job through `merges.json` and exit with the
+answer: 0 merged, 1 red, 2 not in the queue and not open, 3 timeout, 4 no
+merger. The watch is read-only. It prints a line only when the state changes,
+and it asks GitHub once, when the job has left the queue. Nothing starts it
+except a session that chooses to. Carried by `merge-watch`
+(`docs/project/mc/merge-watch/PLAN.json`).
