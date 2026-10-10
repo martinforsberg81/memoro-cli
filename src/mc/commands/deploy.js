@@ -72,7 +72,7 @@ import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
   runningDeploy,
 } from '../deploys.js';
-import { runningRound } from '../gate-lock.js';
+import { runningRounds } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
@@ -737,15 +737,20 @@ export const GATE_POLL_MS = 5 * 1000;
  * pågående merge-process, kör själv, därefter fortsätter merge-kön"*). On an
  * 8 GB machine a bundle beside a merge round's `npm ci` and suite swapped for
  * 26 minutes (2026-10-10). The merger starts no round while the deploy's row
- * says `running`; this waits for the one already in flight — any gate round,
- * `mc test`'s too. With a merger alive the gate must be free on two reads a
+ * says `running`; this waits for the ones already in flight — any gate round,
+ * `mc test`'s too, in either lane (ruling 34): a light round beside the bundle
+ * is still a round beside the bundle. With a merger alive the gate must be free on two reads a
  * poll apart: a merger that read no deploy just before the row was written
  * takes the lock within that time.
  */
 export async function waitForGate(job, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const root = job.root || workRoot(deps.env || process.env);
-  const round = deps.runningRound || (() => runningRound({ root }));
+  // The first round in flight in any lane, heavy first, or null. The lock
+  // files are in mc's home (`gate-lock.js`), not under the work root: read
+  // there, this saw no round at all until 2026-10-10.
+  const rounds = deps.runningRounds || (() => runningRounds());
+  const round = deps.runningRound || (() => Object.values(rounds() || {}).find(Boolean) || null);
   const merger = deps.readMerger || (() => readMerger({ root }));
   const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
   let said = false;
@@ -758,7 +763,7 @@ export async function waitForGate(job, deps = {}) {
       continue;
     }
     if (!said) {
-      stdout.write(`mc: waiting for the gate round of ${running.repo || 'a repository'} #${running.pr ?? '?'} (pid ${running.pid}) to finish — the merger starts no other while this deploy runs\n`);
+      stdout.write(`mc: waiting for the gate round of ${running.repo || 'a repository'} #${running.pr ?? '?'}${running.lane ? ` in the ${running.lane} lane` : ''} (pid ${running.pid}) to finish — the merger starts no other while this deploy runs\n`);
       said = true;
     }
     await sleep(GATE_POLL_MS);

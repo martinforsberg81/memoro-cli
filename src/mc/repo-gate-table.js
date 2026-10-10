@@ -79,6 +79,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { GATE_LANES } from './gate-lock.js';
 import { mcHome, workRoot } from './paths.js';
 
 /** Preparation that is deliberately not known, as opposed to not needed. */
@@ -149,6 +150,14 @@ export const SHIPPED = Object.freeze({
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
     // The flag its own `test` script gives node, stated rather than parsed.
     pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs']),
+    // Its own lock, beside memoro's (ruling 34, gate-lock.js). One round at a
+    // time was about memoro pinning the cores, and this suite does not: on
+    // 2026-10-09/10 its rounds took 24-212 s, and each one waited behind a
+    // memoro round of three to fifteen minutes.
+    gate_lane: 'light',
+    gate_lane_why: 'measured 2026-10-09/10 in merger.log: its suite is one `node --test` over its own '
+      + 'tests, about 60-75 s on this machine, with no npm ci and no browser — it does not pin the '
+      + 'cores the way memoro\'s seven-lane test:full does, so it need not wait for one',
   }),
   memoro: Object.freeze({
     // Measured, not guessed (D-0089, delivered 2026-08-18; declared by the PM
@@ -360,6 +369,16 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + '— or "prepare": null with the evidence that its suite runs from a clean checkout.',
       };
     }
+    // A lane mc does not have is a declaration error like any other: a round
+    // taken in a lane nobody else looks at would exclude nothing.
+    if (declared.gate_lane != null && !GATE_LANES.includes(declared.gate_lane)) {
+      return {
+        ok: false,
+        name,
+        reason: `${name} declares gate_lane ${JSON.stringify(declared.gate_lane)}, which is not a lane mc has — `
+          + `one of ${GATE_LANES.map((lane) => `"${lane}"`).join(', ')}, or nothing for "heavy".`,
+      };
+    }
     // Which fields of the layers below it this override silently dropped, if
     // it is one. A shallow table means an override states every field it
     // wants — a rule this table's own operator wrote into the memoro entry
@@ -509,7 +528,23 @@ function normalise(entry, env) {
     deps_notes: Array.isArray(entry.deps_notes)
       ? entry.deps_notes.map(({ name, argv }) => ({ name: String(name), argv: argv.map(String) }))
       : [],
+    // Which gate lock its rounds take (gate-lock.js `GATE_LANES`). Nothing
+    // declared is `heavy`: one at a time with memoro, as every round was.
+    gate_lane: entry.gate_lane ?? 'heavy',
+    gate_lane_why: entry.gate_lane_why ?? null,
   };
+}
+
+/**
+ * The gate lane a repository's rounds run in, by its name — for the merger,
+ * which sorts its jobs into one loop per lane before any round has read a
+ * declaration. The operator's entry, else the shipped one, as the round reads
+ * them; a lane mc does not have, or nothing declared, is `heavy`.
+ */
+export function gateLaneOf(repo, { root = mcHome() } = {}) {
+  const name = basenameOf(repo || '');
+  const entry = readOverrides(root)[name] || SHIPPED[name];
+  return GATE_LANES.includes(entry?.gate_lane) ? entry.gate_lane : 'heavy';
 }
 
 /**

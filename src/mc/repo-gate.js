@@ -154,9 +154,12 @@ export async function runGate({
   // round that is killed still says how far it had got and what it had decided
   // by then — the thing that was missing on 2026-08-30. One funnel, so a line
   // cannot reach one and miss the other.
+  // The gate lane this round's lock is in (gate-lock.js), read off the
+  // declaration below before the lock is taken.
+  let lane = 'heavy';
   const say = (message) => {
     log('gate.say', { text: message });
-    noteGatePhase({ root, message });
+    noteGatePhase({ root, message, lane });
     try { onProgress(message); } catch { /* progress is a courtesy */ }
   };
 
@@ -272,7 +275,18 @@ export async function runGate({
     say(`lease taken by ${holder.name}`);
   }
 
-  // One gate round at a time on this machine (gate-lock.js). A full suite
+  // What this repository needs, read before any work is done. A round that
+  // cannot know whether the suite will be complete is a round whose green
+  // means nothing, so it stops here rather than after two suite runs. Read
+  // before the lock, because the declaration names the lane the lock is in.
+  const declared = declarationFor(repoPath, { root, env });
+  if (!declared.ok) {
+    if (holdLease) releaseLease({ repoPath, holder, root });
+    return finish('declaration', declared.reason);
+  }
+  lane = declared.declaration.gate_lane || 'heavy';
+
+  // One gate round at a time in each lane on this machine (gate-lock.js). A full suite
   // pins the cores for a minute and a half, and this round runs two; two
   // rounds at once make both slower and both flakier, and the flakiness lands
   // on whichever pull request happened to be measured.
@@ -282,13 +296,13 @@ export async function runGate({
   // message, a row on the page and four verbs of its own. Four hundred lines
   // of vocabulary for "one at a time", under a name nobody could say without
   // explaining it.
-  const held = takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0] ?? null, mode: gateMode, root });
+  const held = takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0] ?? null, mode: gateMode, root, lane });
   if (!held.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
-    return finish('busy', describeRunning(held.running));
+    return finish('busy', describeRunning(held.running, lane));
   }
   const ownGateLock = held.took;
-  if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time on this machine`);
+  if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time in the ${lane} lane on this machine`);
   else say('the round lock could not be written — running anyway; another round could overlap this one');
 
   // The other half of the way back. A SIGTERM — a shell's timeout, a closed
@@ -313,7 +327,7 @@ export async function runGate({
         }, { mode: gateMode, root });
       } catch { /* the releases below matter more */ }
       if (holdLease) releaseLease({ repoPath, holder, root });
-      if (ownGateLock) releaseGateLock({ root });
+      if (ownGateLock) releaseGateLock({ root, lane });
       say(`round cut short by ${signal} — the lease and the round lock are released`);
     } finally {
       process.exit(128 + (signal === 'SIGINT' ? 2 : 15));
@@ -322,15 +336,6 @@ export async function runGate({
   const signals = ['SIGINT', 'SIGTERM'];
   for (const signal of signals) process.on(signal, onSignal);
 
-  // What this repository needs, read before any work is done. A round that
-  // cannot know whether the suite will be complete is a round whose green
-  // means nothing, so it stops here rather than after two suite runs.
-  const declared = declarationFor(repoPath, { root, env });
-  if (!declared.ok) {
-    if (holdLease) releaseLease({ repoPath, holder, root });
-    if (ownGateLock) releaseGateLock({ root });
-    return finish('declaration', declared.reason);
-  }
   report.declaration = { source: declared.source, ...declared.declaration };
   // An override that shadows shipped fields does it in silence — it took
   // extra_gates on 2026-08-22 (D-0135) and pr_tests_flags on 2026-08-24,
@@ -725,7 +730,7 @@ export async function runGate({
     }
     // And the round lock, only if this round wrote it, and only while it is
     // still ours — see releaseGateLock.
-    if (ownGateLock) releaseGateLock({ root });
+    if (ownGateLock) releaseGateLock({ root, lane });
   }
 }
 
