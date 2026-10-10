@@ -283,9 +283,10 @@ function runnerLines(lines, c, wide, runner) {
   }
   for (const line of now.stale) say(lines, c, wide, 2, `${MARK.quiet} stale: ${line}`, 'red');
   for (const failure of now.github || []) say(lines, c, wide, 2, githubLine(failure), 'yellow');
-  // Yellow while the runner holds new starts back for want of disk; a file
-  // left by a runner that is gone says nothing about now.
+  // Yellow while the runner holds new starts back for want of disk or memory;
+  // a file left by a runner that is gone says nothing about now.
   if (now.disk?.line && alive) say(lines, c, wide, 2, now.disk.line, 'yellow');
+  if (now.memory?.line && alive) say(lines, c, wide, 2, now.memory.line, 'yellow');
   dayLine(lines, c, wide, now.day);
   if (now.quota.count) {
     // Yellow while a refusal is recent enough to still be the reason the

@@ -65,7 +65,7 @@ import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.j
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
-import { PLAN_HOME, RUNNER_DISK, workRoot } from './paths.js';
+import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, workRoot } from './paths.js';
 import { overlayPlans } from './register.js';
 import { planState } from './plan-schema.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
@@ -227,9 +227,11 @@ export function runnerSection({
   // `~/mc/runner/disk.json`: present while the runner starts no step because
   // the disk under scratch is too full, with the line it said.
   disk = null,
+  // `~/mc/runner/memory.json`: the same, while too little memory is free.
+  memory = null,
   now = new Date(), alive = pidAlive,
 } = {}) {
-  const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, now, alive });
+  const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, disk, memory, now, alive });
   const tokens = rows.reduce((acc, r) => ({
     input: acc.input + (Number(r.input) || 0),
     output: acc.output + (Number(r.output) || 0),
@@ -254,8 +256,6 @@ export function runnerSection({
     // One entry per repository the round could not ask GitHub about, while
     // that lasts: the round's `prsFailed`, carried between rounds.
     github: githubFailures(github, { now }),
-    // The runner's own line while the disk holds new starts back.
-    disk: disk?.line ? { at: disk.at ?? null, free_bytes: disk.free_bytes ?? null, line: disk.line } : null,
     // What is in production, under the day it took to get there.
     production: productionSection({ deploy, attempt, live, now, alive }),
     day: {
@@ -1383,6 +1383,7 @@ export async function collectPage({
     plans,
     github: readJson(join(root, 'runner', GITHUB_STATE)),
     disk: readJson(join(root, 'runner', RUNNER_DISK)),
+    memory: readJson(join(root, 'runner', RUNNER_MEMORY)),
     // Three file reads, no network: the record `mc deploy` wrote and the
     // version the helper's last collect cached.
     deploy: lastDeploy(env),

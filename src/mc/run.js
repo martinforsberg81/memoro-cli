@@ -117,7 +117,7 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { reap as reapDevServers } from './dev-reap.js';
-import { stopServersUnder } from './dev-servers.js';
+import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { deliverableStep, readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
@@ -129,7 +129,7 @@ import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick } from './nightly-loop.js';
 import { readDeps } from './deps.js';
 import {
-  RUNNER_DISK, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, workRoot,
+  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, workRoot,
 } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
 import {
@@ -171,6 +171,15 @@ export const SCRATCH_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
  * commands failed on ENOSPC). Sessions already running go on.
  */
 export const DISK_MIN_BYTES = 5 * 2 ** 30;
+
+/**
+ * Below this `kern.memorystatus_level` (percent of memory free), no step
+ * session starts. Above the dev servers' 15 (`DEFAULT_MIN_FREE_PERCENT`,
+ * dev-servers.js), so a step does not start into a machine its gate's own dev
+ * server would be refused on (2026-10-10: 30 % free, swap 2.4 of 3 GB, on
+ * 8 GB). Sessions already running go on.
+ */
+export const MEMORY_MIN_FREE_PERCENT = 20;
 
 /**
  * The refusals a lane waits out rather than moves past: they are facts about
@@ -441,6 +450,8 @@ export function realDeps(env = process.env) {
         if (dirname(at) === at) return null;
       }
     },
+    // `kern.memorystatus_level`, the percent of memory free; null off macOS.
+    freeMemoryPercent: () => freeMemoryPercent(),
     rmTree:(path) => { try { rmSync(path, { recursive: true, force: true }); return true; } catch { return false; } },
     pid: process.pid,
     addWorktree,
@@ -553,6 +564,8 @@ export function createRunner({
     // Present while the disk is too full for a step to start; the page draws
     // its line.
     disk: join(root, 'runner', RUNNER_DISK),
+    // Present while too little memory is free for a step to start.
+    memory: join(root, 'runner', RUNNER_MEMORY),
   };
   const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
   const remove = deps.remove || (() => {});
@@ -2538,6 +2551,7 @@ export function createRunner({
     const passed = new Set(already);
     const stepOf = (name) => known.plans.find((item) => item.project === name)?.step ?? null;
     if (!diskRoom()) return { ran: 0, waited: 'skipped:disk' };
+    if (!memoryRoom()) return { ran: 0, waited: 'skipped:memory' };
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
       // A runner that has handed over finishes the pass it is in and picks
@@ -2593,6 +2607,25 @@ export function createRunner({
     const line = `disk: ${(Math.floor((free / 2 ** 30) * 10) / 10).toFixed(1)} GiB free, below ${DISK_MIN_BYTES / 2 ** 30} GiB — no step started`;
     say(line);
     writeJson(paths.disk, { at: stamp(), free_bytes: free, line });
+    return false;
+  }
+
+  /**
+   * Whether enough memory is free for a step to start, read once per pass
+   * after `diskRoom`: under `MEMORY_MIN_FREE_PERCENT` the line is said and
+   * written to `memory.json` for the page, and the pass starts nothing. No
+   * reader, or no reading, is room.
+   */
+  function memoryRoom() {
+    let free = null;
+    try { free = deps.freeMemoryPercent ? deps.freeMemoryPercent() : null; } catch { free = null; }
+    if (!Number.isFinite(free) || free >= MEMORY_MIN_FREE_PERCENT) {
+      if (deps.exists(paths.memory)) remove(paths.memory);
+      return true;
+    }
+    const line = `memory: ${free}% free, below ${MEMORY_MIN_FREE_PERCENT}% — no step started`;
+    say(line);
+    writeJson(paths.memory, { at: stamp(), free_percent: free, line });
     return false;
   }
 

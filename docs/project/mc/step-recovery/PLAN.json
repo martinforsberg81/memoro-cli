@@ -43,7 +43,7 @@
       "check": "`tests/mc/run-control.test.js` for `--if-was-running` in the three states; `plutil -lint ~/Library/LaunchAgents/se.memoro.mc-runner.plist` passes after a `mc run start` on this machine."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No step starts while `kern.memorystatus_level` is under the floor, and the page says so, as it says the disk hold.",
       "check": "`tests/mc/run.test.js` with the memory reader stubbed under and at the floor; `tests/mc/status-collect.test.js` (or the test beside `nowBlock`) shows `disk` and `memory` in the RUNNER block's data."
     },
