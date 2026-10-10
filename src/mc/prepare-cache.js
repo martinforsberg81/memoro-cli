@@ -18,13 +18,13 @@
  * left. A cache that cannot be read, cloned or written never stops a round:
  * every failure is said and becomes the install it replaced.
  */
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 
+import { runTool } from './child-async.js';
 import { workGateCachePath } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 
@@ -52,7 +52,7 @@ export function prepareCacheKey({ lock, manifest, node = process.version }) {
 }
 
 function defaultRun(command, args) {
-  return spawnSync(command, args, { encoding: 'utf8' });
+  return runTool(command, args);
 }
 
 function readMeta(dir, read) {
@@ -98,7 +98,7 @@ export async function prepareCandidate({
   const entry = join(cacheDir, key);
   const target = join(headDir, 'node_modules');
   if (exists(join(entry, 'node_modules')) && readMeta(entry, read)?.key === key) {
-    const cloned = run('cp', ['-cR', join(entry, 'node_modules'), target]);
+    const cloned = await run('cp', ['-cR', join(entry, 'node_modules'), target]);
     if (cloned.status === 0) {
       say(`prepare: cloned node_modules from the cache (${key})`);
       return { status: 0, stdout: '', stderr: '', cached: true, key };
@@ -108,16 +108,16 @@ export async function prepareCandidate({
   }
 
   const installed = await install();
-  if (installed.status === 0) store({ key, entry, cacheDir, target, run, read, now, node, pid, say });
+  if (installed.status === 0) await store({ key, entry, cacheDir, target, run, read, now, node, pid, say });
   return { ...installed, cached: false, key };
 }
 
-function store({ key, entry, cacheDir, target, run, read, now, node, pid, say }) {
+async function store({ key, entry, cacheDir, target, run, read, now, node, pid, say }) {
   const staging = `${entry}.tmp-${pid}`;
   try {
     rmSync(staging, { recursive: true, force: true });
     mkdirSync(staging, { recursive: true });
-    const cloned = run('cp', ['-cR', target, join(staging, 'node_modules')]);
+    const cloned = await run('cp', ['-cR', target, join(staging, 'node_modules')]);
     if (cloned.status !== 0) throw new Error(String(cloned.stderr || '').trim() || `cp exited ${cloned.status}`);
     const lockSha = createHash('sha256').update(read(join(target, '..', 'package-lock.json'))).digest('hex');
     writeFileSync(join(staging, 'meta.json'), `${JSON.stringify({ key, at: now(), node, lock_sha: lockSha })}\n`);

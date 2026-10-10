@@ -110,7 +110,7 @@ export function workDepsManifest(text) {
 
 /**
  * Make sure the tree above the workareas matches the repository, and say what
- * it took.
+ * it took — as a promise when `install` returns one, as the result otherwise.
  *
  * `repo` is where the two files are read from; `repoName` is which repository
  * they belong to, for the caller that reads them from somewhere that is not
@@ -149,8 +149,15 @@ export function ensureWorkDeps({ repo, repoName = null, env = process.env, insta
     mkdirSync(workRoot(env), { recursive: true });
     writeFileSync(workDepsManifestPath(env), wanted);
     writeFileSync(workDepsLockPath(env), lock);
-    install(workRoot(env));
-    return { ok: true, state: 'installed', path, why: `${name}'s lockfile changed` };
+    const installed = { ok: true, state: 'installed', path, why: `${name}'s lockfile changed` };
+    // The merge gate's install returns a promise, so the merger's process is
+    // not held for the ten minutes `npm ci` may take; `mc work add` keeps the
+    // synchronous one and gets its answer synchronously.
+    const pending = install(workRoot(env));
+    if (typeof pending?.then === 'function') {
+      return pending.then(() => installed, (error) => ({ ok: false, state: 'failed', path, why: whyItFailed(error) }));
+    }
+    return installed;
   } catch (error) {
     return { ok: false, state: 'failed', path, why: whyItFailed(error) };
   }

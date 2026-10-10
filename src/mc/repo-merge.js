@@ -90,6 +90,8 @@ export async function runMergeRound({
   // `merge` unless the caller says otherwise, so `mc merge` reads as `merge`
   // in the lock without every call site having to say so.
   mode = 'merge',
+  // Whether the gate installs its own SIGINT/SIGTERM handler (`runGate`).
+  signals = true,
 } = {}) {
   const startedAt = clock();
   // Kept as well as printed — see the note on the gate's own `say`. This is
@@ -170,7 +172,7 @@ export async function runMergeRound({
 
   try {
     const verdict = await gate({
-      repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false, mode,
+      repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false, mode, signals,
     });
     report.gate = verdict;
     report.pr = { ...report.pr, ...verdict.pr };
@@ -187,12 +189,12 @@ export async function runMergeRound({
         // branch unmergeable to the forge until it carries the new main.
         const head = (verdict.prs || []).find((item) => item.number === number)?.head;
         if (head && report.batch.merges.some((item) => item.merged)) {
-          const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base || 'main', env, git: askGit, say });
+          const ready = await (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base || 'main', env, git: askGit, say });
           if (!ready.ok) say(`#${number} could not be freshened first (${ready.reason}) — its own round will say what that means`);
         }
         say(`— round for #${number}`);
         const round = await runMergeRound({
-          repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode,
+          repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals,
         });
         report.batch.rounds.push(round);
         report.batch.merges.push({ number, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });
@@ -279,7 +281,7 @@ export async function runMergeRound({
       if (index > 0 || verdict.derived?.commit) {
         const head = batch ? (verdict.prs || []).find((item) => item.number === number)?.head : verdict.pr.head;
         if (head) {
-          const ready = (refresh || freshenBranchForLanding)({
+          const ready = await (refresh || freshenBranchForLanding)({
             repoPath, branch: head, base: verdict.pr.base, declaration: verdict.declaration, env, git: askGit, say,
           });
           if (!ready.ok) {
@@ -352,12 +354,12 @@ export async function runMergeRound({
             for (const later of rest) {
               const head = (verdict.prs || []).find((item) => item.number === later)?.head;
               if (head) {
-                const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, env, git: askGit, say });
+                const ready = await (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, env, git: askGit, say });
                 if (!ready.ok) say(`#${later} could not be freshened first (${ready.reason}) — its own round will say what that means`);
               }
               say(`— round for #${later}`);
               const round = await runMergeRound({
-                repoPath, pr: later, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode,
+                repoPath, pr: later, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals,
               });
               report.batch.rounds.push(round);
               report.batch.merges.push({ number: later, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });

@@ -1791,3 +1791,36 @@ describe('derived artifacts are regenerated after the base is merged in', () => 
     } finally { fx.cleanup(); }
   });
 });
+
+describe('the round awaits its children (merger-hardening step 4)', () => {
+  it('a git and gh that answer with promises give the same round as sync ones', async () => {
+    const fx = fixture({ changed: ['tests/a.test.js'] });
+    try {
+      const later = (fn) => (args, opts) => new Promise((resolve) => { setImmediate(() => resolve(fn(args, opts))); });
+      const report = await fx.run({ git: later(fx.git), gh: later(fx.gh) });
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.pr.head_sha, 'abc1234');
+      assert.equal(report.base.commit, 'base1111');
+      assert.equal(report.candidate.commit, 'cand2222');
+      assert.deepEqual(report.pr_tests.files, ['tests/a.test.js']);
+      assert.ok(fx.ran('git').some((call) => call.args[0] === 'worktree' && call.args[1] === 'prune'), 'the workspace was cleared');
+    } finally { fx.cleanup(); }
+  });
+
+  it('with signals: false the round installs no SIGINT or SIGTERM handler', async () => {
+    const fx = fixture();
+    try {
+      const before = { SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') };
+      const seen = [];
+      const suite = (options) => {
+        seen.push({ SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') });
+        return fx.suite(options);
+      };
+      assert.equal((await fx.run({ suite, signals: false })).ok, true);
+      assert.equal((await fx.run({ suite })).ok, true);
+      assert.deepEqual(seen[0], before, 'signals: false added a handler');
+      assert.deepEqual(seen[1], { SIGINT: before.SIGINT + 1, SIGTERM: before.SIGTERM + 1 }, 'the default still installs one');
+      assert.deepEqual({ SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') }, before, 'and takes it off again');
+    } finally { fx.cleanup(); }
+  });
+});

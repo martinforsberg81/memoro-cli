@@ -70,7 +70,7 @@ import { repoFileSlug } from './repo-snapshot.js';
  * is also why a single round calls this: when the gate had to regenerate, the
  * branch has to be given the same commit before its squash.
  */
-export function freshenBranchForLanding({
+export async function freshenBranchForLanding({
   repoPath, branch, base, declaration = null, env = process.env, git = null, shell = null, say = () => {},
 } = {}) {
   const run = (tool) => (args, options = {}) => spawnSync(tool, args, {
@@ -101,7 +101,7 @@ export function freshenBranchForLanding({
         const ready = askShell(declaration.prepare, { cwd: workspace });
         if (ready.status !== 0) return { ok: false, reason: `${declaration.prepare} failed before regenerating derived artifacts — ${trim(ready.stderr)}` };
       }
-      const fresh = regenerateDerived({ derived, cwd: workspace, env, git: askGit, shell: askShell, say });
+      const fresh = await regenerateDerived({ derived, cwd: workspace, env, git: askGit, shell: askShell, say });
       if (!fresh.ok) return { ok: false, reason: fresh.reason };
       if (fresh.commit) say(`regenerated ${fresh.regenerated.length} derived file${fresh.regenerated.length === 1 ? '' : 's'} on ${branch}`);
     }

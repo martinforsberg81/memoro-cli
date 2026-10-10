@@ -35,19 +35,19 @@ function repo() {
 const run = (fx, derived) => regenerateDerived({ derived, cwd: fx.dir, env: ENV, git: fx.git });
 
 describe('regenerating derived artifacts after a merge', () => {
-  it('a tree that is already current is left alone — no commit', () => {
+  it('a tree that is already current is left alone — no commit', async () => {
     const fx = repo();
     try {
-      const out = run(fx, [{ command: 'printf \'{"files":1}\\n\' > docs/sql/snapshot.json', paths: ['docs/sql/'] }]);
+      const out = await run(fx, [{ command: 'printf \'{"files":1}\\n\' > docs/sql/snapshot.json', paths: ['docs/sql/'] }]);
       assert.deepEqual(out, { ok: true, regenerated: [], commit: null });
       assert.equal(fx.git(['rev-list', '--count', 'HEAD']).stdout.trim(), '1');
     } finally { fx.cleanup(); }
   });
 
-  it('dirt inside the declared paths is committed, new files included', () => {
+  it('dirt inside the declared paths is committed, new files included', async () => {
     const fx = repo();
     try {
-      const out = run(fx, [
+      const out = await run(fx, [
         { command: 'printf \'{"files":2}\\n\' > docs/sql/snapshot.json', paths: ['docs/sql/'] },
         { command: 'echo report > docs/sql/report.md', paths: ['docs/sql'] },
       ]);
@@ -59,10 +59,10 @@ describe('regenerating derived artifacts after a merge', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('dirt outside the declared paths is named, and nothing is committed', () => {
+  it('dirt outside the declared paths is named, and nothing is committed', async () => {
     const fx = repo();
     try {
-      const out = run(fx, [{ command: 'echo 2 > docs/sql/snapshot.json && echo x >> src.js', paths: ['docs/sql/'] }]);
+      const out = await run(fx, [{ command: 'echo 2 > docs/sql/snapshot.json && echo x >> src.js', paths: ['docs/sql/'] }]);
       assert.equal(out.ok, false);
       assert.equal(out.kind, 'outside');
       assert.deepEqual(out.outside, ['src.js']);
@@ -71,19 +71,19 @@ describe('regenerating derived artifacts after a merge', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('a path that merely shares a prefix is not inside the declaration', () => {
+  it('a path that merely shares a prefix is not inside the declaration', async () => {
     const fx = repo();
     try {
-      const out = run(fx, [{ command: 'mkdir -p docs/sql-other && echo x > docs/sql-other/a', paths: ['docs/sql'] }]);
+      const out = await run(fx, [{ command: 'mkdir -p docs/sql-other && echo x > docs/sql-other/a', paths: ['docs/sql'] }]);
       assert.equal(out.kind, 'outside');
       assert.deepEqual(out.outside, ['docs/sql-other/a']);
     } finally { fx.cleanup(); }
   });
 
-  it('a command that fails is a reason, and stops before the next one', () => {
+  it('a command that fails is a reason, and stops before the next one', async () => {
     const fx = repo();
     try {
-      const out = run(fx, [
+      const out = await run(fx, [
         { command: 'echo nope >&2; exit 3', paths: ['docs/sql/'] },
         { command: 'echo never > docs/sql/never', paths: ['docs/sql/'] },
       ]);
@@ -94,11 +94,11 @@ describe('regenerating derived artifacts after a merge', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('nothing declared is nothing run', () => {
-    assert.deepEqual(regenerateDerived({ derived: [], cwd: '/nonexistent', git: () => { throw new Error('asked git'); } }), { ok: true, regenerated: [], commit: null });
+  it('nothing declared is nothing run', async () => {
+    assert.deepEqual(await regenerateDerived({ derived: [], cwd: '/nonexistent', git: () => { throw new Error('asked git'); } }), { ok: true, regenerated: [], commit: null });
   });
 
-  it('reads porcelain the way git writes it', () => {
+  it('reads porcelain the way git writes it', async () => {
     assert.deepEqual(dirtyPaths(' M a/b.json\n?? c d.md\nR  old -> new/x\n?? "q r.md"\n'), ['a/b.json', 'c d.md', 'new/x', 'q r.md']);
   });
 });
