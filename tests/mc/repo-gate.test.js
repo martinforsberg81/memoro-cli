@@ -1227,6 +1227,104 @@ describe('a repository that selects by diff', () => {
     } finally { fx.cleanup(); }
   });
 
+  describe('command gates beside the suite', () => {
+    const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+    const twoGates = [
+      { id: 'sql', packageScript: 'sql:pr-ci', passBaseRef: true, resourceClass: 'standard', selectedBy: ['sql'] },
+      { id: 'css-lint', packageScript: 'css:lint', passBaseRef: false, resourceClass: 'standard', selectedBy: ['css-contract'] },
+    ];
+    /** A gate shell that takes `ms`, fails the scripts in `failing`, and records when each ran. */
+    function stubShell({ ms = 150, failing = [] } = {}) {
+      const ran = [];
+      const run = async (command) => {
+        const entry = { command, from: Date.now(), to: null };
+        ran.push(entry);
+        await wait(ms);
+        entry.to = Date.now();
+        const fails = failing.some((name) => command.includes(`npm run ${name}`));
+        return { status: fails ? 2 : 0, stdout: '', stderr: fails ? 'contract broken' : '' };
+      };
+      return { ran, run };
+    }
+
+    it('starts the gates with the suite, one at a time in the selector\'s order, and awaits both', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
+      const gates = stubShell();
+      let suiteFrom = null;
+      const tests = async ({ files: ran }) => {
+        suiteFrom = Date.now();
+        await wait(200);
+        return { code: 0, tap: tapWith([], { tests: ran.length * 3 }) };
+      };
+      try {
+        const report = await fx.report({ tests, shell: gates.run });
+        assert.equal(report.ok, true, report.reason);
+        // 200 + 150 + 150 sequentially; beside, the suite hides under the gates.
+        // Read from suite start to both done, so the round's setup (a real
+        // selector shell, the worktree) does not count against a loaded machine.
+        const wall = report.timings.gates_beside_suite_ms;
+        assert.ok(wall < 450, `suite and gates took ${wall} ms, which is one after another`);
+        assert.ok(gates.ran[0].from - suiteFrom < 100, 'the first gate waited for the suite');
+        assert.ok(gates.ran[1].from >= gates.ran[0].to, 'the gates ran at once rather than one after another');
+        assert.deepEqual(report.extra_gates.map((gate) => gate.name), ['sql:pr-ci', 'css:lint'], 'in the order the selector gave');
+        assert.equal(gates.ran[0].command, 'npm run sql:pr-ci -- --base-ref base1111');
+        assert.ok(wall >= 300, 'the gates were not awaited');
+        assert.ok(report.timings['selected gates'] >= 300, 'the gates\' own time is still measured');
+      } finally { fx.cleanup(); }
+    });
+
+    it('a failed gate beside a green suite is selected-gate, naming every failure', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
+      const gates = stubShell({ ms: 10, failing: ['sql:pr-ci', 'css:lint'] });
+      try {
+        const report = await fx.report({ shell: gates.run });
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'selected-gate');
+        assert.match(report.reason, /2 command gates the selection chose failed: sql:pr-ci \(exit 2\), css:lint \(exit 2\)/u);
+        assert.deepEqual(report.extra_gates.map((gate) => gate.ok), [false, false]);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a red suite beside a failed gate is red, and the failed gate is still listed', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates, candidateRed: ['broken by the change'] });
+      const gates = stubShell({ ms: 10, failing: ['css:lint'] });
+      try {
+        const report = await fx.report({ shell: gates.run });
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'red');
+        assert.match(report.reason, /broken by the change/u);
+        assert.deepEqual(report.extra_gates.map((gate) => [gate.name, gate.ok]), [['sql:pr-ci', true], ['css:lint', false]]);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a gate shell that throws makes no green beside a green suite', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
+      let suiteDone = false;
+      const tests = async ({ files: ran }) => {
+        await wait(50);
+        suiteDone = true;
+        return { code: 0, tap: tapWith([], { tests: ran.length * 3 }) };
+      };
+      try {
+        await assert.rejects(() => fx.report({ tests, shell: () => { throw new Error('spawn EAGAIN'); } }), /spawn EAGAIN/u);
+        assert.equal(suiteDone, true, 'the round threw before the suite beside it had finished');
+      } finally { fx.cleanup(); }
+    });
+
+    it('two halves that could not start report both reasons', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
+      try {
+        const report = await fx.report({
+          tests: async () => ({ code: -1, tap: '', error: 'spawn node ENOENT' }),
+          shell: async () => ({ status: null, stdout: '', stderr: 'spawn sh ENOENT' }),
+        });
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'suite');
+        assert.deepEqual(report.extra_gates.map((gate) => [gate.ran, gate.output]), [[false, 'spawn sh ENOENT'], [false, 'spawn sh ENOENT']]);
+      } finally { fx.cleanup(); }
+    });
+  });
+
   it('a selector that names no commands is not a fault, and one that cannot be read is', async () => {
     const none = selecting({ files: ['tests/a.test.js'] });
     try {
