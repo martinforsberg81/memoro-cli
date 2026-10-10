@@ -34,7 +34,7 @@
  */
 import { spawn as realSpawn } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,11 +51,32 @@ import { readEntry, realLock, updateStep } from './register.js';
 import { gateLaneOf } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
 import { runMergeRound } from './repo-merge.js';
+import { sourceLinkedInstallations } from './repo-status.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { tsvHeader, tsvRow } from './run-plan.js';
 import { pidAlive } from './status-collect.js';
 
 const MERGER_RUN = fileURLToPath(new URL('./merger-run.js', import.meta.url));
+
+/**
+ * Where a detached mc process is started from: `relative` in the checkout the
+ * first `mc` on PATH resolves to, never the caller's own tree. A step session
+ * that runs `node src/mc-cli.js merge` in its workarea would otherwise start a
+ * merger on its branch's code (2026-10-10, merger 14366 ran the merge-watch
+ * branch for fifteen minutes). `{ path, installed }`; `installed` false is
+ * `fallback`, because no installed mc has that file.
+ */
+export function installedScript(relative, fallback, env = process.env) {
+  const install = sourceLinkedInstallations(env).find((item) => item.command === 'mc');
+  const path = install ? join(install.root, relative) : null;
+  if (path && existsSync(path)) return { path, installed: true };
+  return { path: fallback, installed: false };
+}
+
+/** The merger's script in the installed mc — `installedScript` for `merger-run.js`. */
+export function installedMergerRun(env = process.env) {
+  return installedScript(join('src', 'mc', 'merger-run.js'), MERGER_RUN, env);
+}
 
 /** How often the merger looks again at a gate lock or a lease somebody else holds. */
 export const MERGER_POLL_MS = 15 * 1000;
@@ -77,7 +98,7 @@ export function mergerLogPath(root) {
 
 const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
-/** The merger running now — `{ pid, since }` — or null. A dead pid is nobody. */
+/** The merger running now — `{ pid, since, commit }` — or null. A dead pid is nobody. */
 export function readMerger({ root, read = realRead, alive = pidAlive } = {}) {
   let raw = null;
   try { raw = JSON.parse(read(mergerPath(root)) || 'null'); } catch { return null; }
@@ -90,13 +111,13 @@ export function readMerger({ root, read = realRead, alive = pidAlive } = {}) {
  * file naming a dead pid — or this process, from an earlier take — is taken
  * over.
  */
-export function takeMerger({ root, alive = pidAlive, now = new Date(), pid = process.pid } = {}) {
+export function takeMerger({ root, alive = pidAlive, now = new Date(), pid = process.pid, commit = null } = {}) {
   const path = mergerPath(root);
   mkdirSync(dirname(path), { recursive: true });
   for (let tries = 0; tries < 3; tries += 1) {
     try {
       const fd = openSync(path, 'wx', 0o644);
-      writeSync(fd, JSON.stringify({ pid, since: now.toISOString() }));
+      writeSync(fd, JSON.stringify({ pid, since: now.toISOString(), ...(commit ? { commit } : {}) }));
       closeSync(fd);
       return true;
     } catch (error) {
@@ -124,8 +145,11 @@ export function releaseMerger({ root, pid = process.pid } = {}) {
  * A merger, running: the one there is, or a new one started detached with
  * its output in `merger.log`. `{ pid, started }`; `pid` is null when the
  * spawn itself failed, and the job waits in the queue for the next start.
+ * It runs the installed mc's `merger-run.js`, whoever calls this.
  */
-export function startMerger({ root, env = process.env, spawn = realSpawn, alive = pidAlive } = {}) {
+export function startMerger({
+  root, env = process.env, spawn = realSpawn, alive = pidAlive, now = () => new Date(),
+} = {}) {
   const running = readMerger({ root, alive });
   if (running) return { pid: running.pid, started: false };
   const log = mergerLogPath(root);
@@ -133,9 +157,11 @@ export function startMerger({ root, env = process.env, spawn = realSpawn, alive 
   try {
     mkdirSync(dirname(log), { recursive: true });
     fd = openSync(log, 'a', 0o644);
+    const run = installedMergerRun(env);
+    if (!run.installed) writeSync(fd, `${now().toISOString()}  merger started from ${run.path} — no installed mc found\n`);
     const childEnv = { ...env, MC_WORK_ROOT: env.MC_WORK_ROOT || root };
     for (const key of SESSION_ENV) delete childEnv[key];
-    const child = spawn(process.execPath, [MERGER_RUN, '--root', root], {
+    const child = spawn(process.execPath, [run.path, '--root', root], {
       cwd: root, detached: true, stdio: ['ignore', fd, fd], env: childEnv,
     });
     child.unref();
@@ -411,7 +437,10 @@ function tell(job, landed, report, { root, say, gh, now, read, write, lock, appe
 export async function serve({
   root, read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
   lock = realLock, stopping = () => false, say = () => {}, now = () => new Date(),
-  take = () => takeMerger({ root }), release = () => releaseMerger({ root }),
+  // `{ checkout, commit }` of the code this merger runs, read once by
+  // merger-run.js: the first line says it, and merger.json keeps the commit.
+  version = null,
+  take = () => takeMerger({ root, commit: version?.commit || null }), release = () => releaseMerger({ root }),
   land = (batch, lane) => landJob(batch, { root, say, now, read, lock, lane }),
   landed = parentLanded(root, { read }),
   laneOf = (job) => gateLaneOf(job.repo),
@@ -422,7 +451,7 @@ export async function serve({
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); }),
 } = {}) {
   if (!take()) { say('another merger is running — leaving'); return 0; }
-  say(`merger ${process.pid} started`);
+  say(version ? `merger ${process.pid} started — ${version.checkout} at ${version.commit}` : `merger ${process.pid} started`);
   const batchIn = (entries, lane) => nextBatch(entries, { landed, lane, laneOf });
   // What the loops share: which of them has nothing, whether the merger is
   // leaving, and a wake-up for a loop waiting on the other.

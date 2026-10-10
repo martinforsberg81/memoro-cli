@@ -9,9 +9,10 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
@@ -505,6 +506,50 @@ describe('the pid file', () => {
     assert.equal(spawned[0].options.env.MC_WORKAREA, undefined);
     assert.equal(spawned[0].options.env.PATH, '/bin');
     assert.equal(spawned[0].options.env.MC_WORK_ROOT, root);
+  });
+
+  // merger-hardening step 1: on 2026-10-10 a step session's `node src/mc-cli.js
+  // merge` started merger 14366 on its own branch's code.
+  it('startMerger runs the merger-run.js of the checkout the mc on PATH links into, not its own', () => {
+    const checkout = join(root, 'installed');
+    mkdirSync(join(checkout, 'src', 'mc'), { recursive: true });
+    writeFileSync(join(checkout, 'src', 'mc-cli.js'), '#!/usr/bin/env node\n', { mode: 0o755 });
+    writeFileSync(join(checkout, 'src', 'mc', 'merger-run.js'), '');
+    execFileSync('git', ['init', '-q', checkout]);
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    symlinkSync(join(checkout, 'src', 'mc-cli.js'), join(bin, 'mc'));
+    const spawned = [];
+    const spawn = (_bin, args) => { spawned.push(args); return { pid: 4321, unref() {} }; };
+
+    startMerger({ root, spawn, alive: () => false, env: { PATH: `${join(root, 'nothing')}:${bin}` } });
+    assert.equal(spawned[0][0], join(realpathSync(checkout), 'src', 'mc', 'merger-run.js'));
+    assert.notEqual(spawned[0][0], fileURLToPath(new URL('../../src/mc/merger-run.js', import.meta.url)));
+    assert.equal(existsSync(join(root, 'runner', 'log', 'merger.log')) && readFileSync(join(root, 'runner', 'log', 'merger.log'), 'utf8'), '');
+  });
+
+  it('with no mc on PATH it falls back to its own merger-run.js and says so in the log', () => {
+    const spawned = [];
+    const spawn = (_bin, args) => { spawned.push(args); return { pid: 4321, unref() {} }; };
+    const own = fileURLToPath(new URL('../../src/mc/merger-run.js', import.meta.url));
+    startMerger({ root, spawn, alive: () => false, env: { PATH: join(root, 'nothing') }, now: () => new Date('2026-10-10T18:00:00Z') });
+    assert.equal(spawned[0][0], own);
+    assert.equal(readFileSync(join(root, 'runner', 'log', 'merger.log'), 'utf8'),
+      `2026-10-10T18:00:00.000Z  merger started from ${own} — no installed mc found\n`);
+  });
+
+  it('serve\'s first line names the checkout and its commit, and merger.json keeps the commit', async () => {
+    const said = [];
+    let held = null;
+    await serve({
+      root, lock, ...ONE_LANE, say: (line) => said.push(line),
+      version: { checkout: '~/memoro-cli', commit: '7238d3e' },
+      release: () => { held ??= JSON.parse(readFileSync(mergerPath(root), 'utf8')); return releaseMerger({ root }); },
+      land: async () => green,
+    });
+    assert.equal(said[0], `merger ${process.pid} started — ~/memoro-cli at 7238d3e`);
+    assert.equal(held.pid, process.pid);
+    assert.equal(held.commit, '7238d3e');
   });
 });
 

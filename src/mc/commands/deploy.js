@@ -77,7 +77,7 @@ import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
 import { languageState as readLanguageState, liveRun } from '../language-runs.js';
-import { readMerger } from '../merger.js';
+import { installedScript, readMerger } from '../merger.js';
 import { nightlyReading } from '../nightly-history.js';
 import { mcHome, workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
@@ -955,7 +955,9 @@ export function startDeployerDefault(job, { env = process.env, spawnProcess = sp
   try {
     mkdirSync(dirname(log), { recursive: true });
     fd = openSync(log, 'w', 0o644);
-    const child = spawnProcess(process.execPath, [DEPLOYER_RUN, JSON.stringify(job)], {
+    // The installed mc's deployer, like the merger's: never the asking tree's.
+    const run = installedScript(join('src', 'mc', 'deploy-run.js'), DEPLOYER_RUN, env);
+    const child = spawnProcess(process.execPath, [run.path, JSON.stringify(job)], {
       cwd: job.worktree, detached: true, stdio: ['ignore', fd, fd], env,
     });
     child.unref();
