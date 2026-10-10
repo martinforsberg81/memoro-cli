@@ -16,7 +16,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A stacked branch whose parent was moved, or which has main merged into it, is restacked by replaying only its own non-merge commits that are not on main, and it falls back to merging main in before it gives up.",
       "check": "`tests/mc/merger.test.js` (restack) on a fixture repository: parent squashed onto main, child with `git merge origin/main` in its history. The old rebase conflicts on that fixture and the new restack is clean. A child whose own commit truly conflicts is still `ok: false` with the conflicted path. Live: the close-out quotes a `moved onto main past` line for a branch whose history has a merge from main, or says none occurred."
     },
