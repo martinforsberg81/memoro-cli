@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { MAX_MERGE_ATTEMPTS } from '../../src/mc/merge-step.js';
 import {
-  landJob, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, takeMerger,
+  landJob, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, sweepMergedReds, takeMerger,
 } from '../../src/mc/merger.js';
 import { registerPath } from '../../src/mc/register.js';
 
@@ -380,6 +380,130 @@ describe('batches (merge-throughput step 1)', () => {
     assert.deepEqual(rounds[0], [11, 13]);
     assert.deepEqual(m.rounds[0].prs, [11, 13]);
     assert.deepEqual(rounds.slice(1), [[671], [12]]);
+  });
+});
+
+describe('already merged or closed on GitHub (merger-hardening step 2)', () => {
+  const MEMORO = { repo: 'memoro', repo_path: '/repos/memoro', branch: null, holder: { name: 'mb', kind: 'work-area' } };
+  const jobFor = (pr, index) => ({ ...MEMORO, pr, since: `2026-10-10T17:0${index}:00Z`, step: { project: 'mb', index } });
+
+  function registerBatch(status = 'landing') {
+    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
+    writeFileSync(registerPath(root, 'mb'), JSON.stringify({
+      project: 'mb', repo: 'memoro', programme: 'mc', plan: 'docs/project/mc/mb/PLAN.json',
+      steps: [11, 12, 13].map((pr) => ({ status, pr, branch: `mb-${pr}`, comments: [], attempts: 0 })),
+    }));
+  }
+  const steps = () => JSON.parse(readFileSync(registerPath(root, 'mb'), 'utf8')).steps;
+
+  /** A stub `gh`: `pr view <n> --json state,…` answers from `states`, anything else a body. */
+  function stubGh(states) {
+    const asked = [];
+    const gh = (args, options) => {
+      asked.push({ args, cwd: options?.cwd });
+      if (!args.includes('state,mergeCommit,baseRefName')) return { status: 0, stdout: JSON.stringify({ body: 'b' }) };
+      const said = states[Number(args[2])];
+      if (said === undefined) return { status: 1, stdout: '', stderr: 'gh: not found' };
+      return { status: 0, stdout: JSON.stringify(said) };
+    };
+    return { gh, asked };
+  }
+  const OPEN = { state: 'OPEN', mergeCommit: null, baseRefName: 'main' };
+  const MERGED = { state: 'MERGED', mergeCommit: { oid: 'feed1234beef' }, baseRefName: 'main' };
+  const CLOSED = { state: 'CLOSED', mergeCommit: null, baseRefName: 'main' };
+  const two = {
+    ok: true, merged: true, merge_commit: 'ccc', merged_into: 'main', off_default: false, stopped_at: null, pr: { number: 11, base: 'main' },
+    batch: {
+      prs: [11, 13], gate_ok: true, fallback: false, rounds: [],
+      merges: [{ number: 11, merged: true, merge_commit: 'aaa', error: null }, { number: 13, merged: true, merge_commit: 'ccc', error: null }],
+    },
+  };
+
+  it('a batch of three with the second MERGED: it is landed with GitHub\'s commit and dequeued, and the round gets the other two', async () => {
+    registerBatch();
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([jobFor(11, 0), jobFor(12, 1), jobFor(13, 2)]));
+    const { gh, asked } = stubGh({ 11: OPEN, 12: MERGED, 13: OPEN });
+    const m = machine([two], { gh });
+    await serve({ root, lock, take: () => true, release: () => {}, ...ONE_LANE, gh, say: m.deps.say, now: m.deps.now, land: (batch) => landJob(batch, m.deps) });
+    assert.equal(m.rounds.length, 1);
+    assert.deepEqual(m.rounds[0].prs, [11, 13]);
+    assert.equal(m.rounds[0].pr, 11);
+    assert.deepEqual(steps().map((s) => [s.status, s.landed?.sha]), [['done', 'aaa'], ['done', 'feed1234beef'], ['done', 'ccc']]);
+    assert.equal(steps()[1].landed.into, 'main');
+    assert.deepEqual(queue(), []);
+    assert.ok(m.said.includes('memoro #12: already merged on GitHub as feed123 — answered landed'));
+    assert.ok(asked.some((a) => a.args[2] === '12' && a.cwd === '/repos/memoro'), 'asked in the job\'s repository');
+  });
+
+  it('CLOSED: that job is red with stopped_at closed, and the other two are measured and landed without it', async () => {
+    registerBatch();
+    const { gh } = stubGh({ 11: OPEN, 12: CLOSED, 13: OPEN });
+    const m = machine([two], { gh });
+    const answers = await landJob([jobFor(11, 0), jobFor(12, 1), jobFor(13, 2)], m.deps);
+    assert.deepEqual(m.rounds[0].prs, [11, 13]);
+    const closed = answers.find((a) => a.job.pr === 12);
+    assert.equal(closed.landed, false);
+    assert.equal(closed.report.stopped_at, 'closed');
+    assert.equal(closed.report.reason, '#12 was closed on GitHub without merging');
+    assert.deepEqual(steps().map((s) => s.status), ['done', 'ready', 'done']);
+  });
+
+  it('every job MERGED: no round at all', async () => {
+    registerBatch();
+    const { gh } = stubGh({ 11: MERGED, 12: MERGED, 13: MERGED });
+    const m = machine([], { gh });
+    const answers = await landJob([jobFor(11, 0), jobFor(12, 1), jobFor(13, 2)], m.deps);
+    assert.equal(m.rounds.length, 0);
+    assert.deepEqual(answers.map((a) => a.landed), [true, true, true]);
+    assert.deepEqual(steps().map((s) => s.status), ['done', 'done', 'done']);
+  });
+
+  it('gh failing or saying nothing keeps the job: the round decides as before', async () => {
+    registerBatch();
+    const { gh } = stubGh({ 11: OPEN, 12: { body: 'x' } });
+    const m = machine([{ ...two, batch: { ...two.batch, prs: [11, 12, 13] } }], { gh });
+    await landJob([jobFor(11, 0), jobFor(12, 1), jobFor(13, 2)], m.deps);
+    assert.deepEqual(m.rounds[0].prs, [11, 12, 13]);
+  });
+
+  it('sweepMergedReds: a merged red entry is dequeued and its step done, a closed one dequeued, an open one left', async () => {
+    registerBatch('ready');
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    const redOf = (job) => ({ ...job, state: 'red', reason: 'red: x', answered: 'z' });
+    writeFileSync(mergesPath(root), JSON.stringify([redOf(jobFor(11, 0)), redOf(jobFor(12, 1)), redOf(jobFor(13, 2)), jobFor(14, 3)]));
+    const { gh, asked } = stubGh({ 11: MERGED, 12: CLOSED, 13: OPEN, 14: MERGED });
+    const said = [];
+    const dropped = await sweepMergedReds({ root, gh, lock, say: (line) => said.push(line) });
+    assert.equal(dropped, 2);
+    assert.deepEqual(queue().map((e) => [e.pr, e.state]), [[13, 'red'], [14, 'queued']]);
+    assert.deepEqual(steps().map((s) => s.status), ['done', 'ready', 'ready']);
+    assert.equal(steps()[0].landed.sha, 'feed1234beef');
+    assert.equal(asked.filter((a) => a.args.includes('state,mergeCommit,baseRefName')).length, 3, 'only red entries are asked about');
+    assert.ok(said.includes('memoro #11: already merged on GitHub as feed123 — answered landed'));
+  });
+
+  it('sweepMergedReds leaves a step that is done already as it is', async () => {
+    registerBatch('done');
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...jobFor(11, 0), state: 'red', reason: 'r', answered: 'z' }]));
+    await sweepMergedReds({ root, gh: stubGh({ 11: MERGED }).gh, lock });
+    assert.deepEqual(queue(), []);
+    assert.equal(steps()[0].landed, undefined);
+  });
+
+  it('serve sweeps once at start, before anything else, and not again within five minutes', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, step: null }]));
+    let sweeps = 0;
+    const order = [];
+    await serve({
+      root, lock, take: () => true, release: () => {},
+      sweep: async () => { sweeps += 1; order.push('sweep'); },
+      land: async ([job]) => { order.push(job.pr); return green; },
+    });
+    assert.equal(sweeps, 1);
+    assert.deepEqual(order, ['sweep', 1]);
   });
 });
 
