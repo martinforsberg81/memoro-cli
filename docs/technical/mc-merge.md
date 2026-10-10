@@ -672,6 +672,100 @@ boundary, then `queueMerge` as the step's workarea. The row's note is
 `success,queued-by-runner`; a trespass at the door is a red like any other,
 note `success,red`.
 
+**The merger is the installed mc** (ruling 37, 2026-10-10). `startMerger`
+spawns `merger-run.js` from the checkout the `mc` on PATH resolves to
+(`installedMergerRun`), never from the caller's own tree, and the first line
+of every merger reads `merger <pid> started — ~/memoro-cli at <sha>`. On
+2026-10-10 the merger that served 17:47-18:00 had been started by a step
+session from its workarea and ran that branch's code, with batches and
+without lanes.
+
+## The async round, SIGTERM and the mend
+
+**Nothing the merger starts holds its event loop** (ruling 37). Every child
+of the gate and the merge round — git, gh, `npm ci`, the derived commands, the
+selector — goes through [`src/mc/child-async.js`](../../src/mc/child-async.js):
+`runTool` (no shell) and `runShell` (a declaration as written, `npm ci`).
+Both resolve to the result shape the synchronous spawn gave, `{ status,
+signal, stdout, stderr, error }`, and never reject, so callers read it as
+before and a test's sync stub still works (`await` of an object is the
+object). `maxBuffer` is 256 MiB per stream, stated because Node's 1 MiB
+default killed memoro's selector at 1.3 MB (#12720); a timeout kills with
+SIGTERM and says `ETIMEDOUT`. A `grep` test fails if `spawnSync`,
+`execFileSync` or `execSync` appears in `repo-gate.js`, `repo-merge.js`,
+`repo-freshen.js`, `repo-derived.js`, `prepare-cache.js`, `selector-miss.js`,
+`merger.js` or `merger-run.js`. What it replaced: on 2026-10-10 the merger was
+blocked from 17:40 to 17:47 through `npm ci` (268 s), derived (33 s) and the
+selector (107 s), and the light lane stood still beside the heavy one.
+`merger-run.js` now passes the lane it is handed to `landJob`, so a light job
+starts and lands while a heavy round is in any phase. `mc test`, `mc merge
+--check` and the nightly run go through the same `runGate`, only awaited.
+
+**`signals`.** `runGate` installs its own SIGINT/SIGTERM handler, which ends
+the round and leaves, unless it is called with `signals: false`. The merger
+always passes `false`. Its own handler in `merger-run.js` only sets
+`stopping`: the loops take no new job, say `asked to stop — waiting for <n>
+job(s) in flight`, answer the rounds in flight as usual (no `killed`), and
+`serve` returns — `left` — within a second of the last answer. What is still
+queued waits for the next start. The gate's handler had cut the 17:47 round
+short (`repo-gate.js:318-341` then).
+
+**Already merged on GitHub.** Before a round, `landJob` asks GitHub for each
+job's state (`prStateOf`). A MERGED one is answered landed by itself with
+GitHub's merge commit (`memoro #13372: already merged on GitHub as <sha> —
+answered landed`), dequeued and its step `done`; a CLOSED one is red by itself
+(`closed on GitHub`). Both leave the batch, and the rest are measured without
+them. Red rows are looked at too, at start and then every `SWEEP_MS` by an
+idle loop (`sweepMergedReds`): a red whose pull request has since merged is
+dequeued and its step `done`; a closed one leaves the queue. On 2026-10-10 a
+hand-merged #13372 turned #13373 and #13374 red with its reason, and #13370
+stayed red in `merges.json` after its `--admin` merge.
+
+**A plan's steps land in order.** A job for step n goes only once every
+earlier step of its plan is `done` in the register (`stepsDone` in
+[`src/mc/merge-queue.js`](../../src/mc/merge-queue.js), read by `nextJob` and
+`nextBatch`), whether or not it names a `parent`. A `landing` job a restarted
+merger would resume while an earlier step is no longer `done` is put back in
+line (`heldLanding`). `waitingOn` says what each held job waits for; the page
+and `mc merge watch` read it as `waits for <project> step <n>`.
+
+**The mend** (ruling 37, amending rulings 21 and 30 in one point: one mend,
+then red). A red the change itself caused — `stopped_at` in `MEND_STOPS`, on a
+job with a branch and no `mended` — is not answered red at once. The entry
+becomes `mending` (`{ pid, started, reason, stopped_at }`), the step stays
+`landing`, the lane goes on with its next job, and a session of role `mend`
+([`canon/roles/mend.md`](../../canon/roles/mend.md)) starts in a worktree of
+its own on the branch (`runMend` in [`src/mc/mend.js`](../../src/mc/mend.js),
+under the work root, never the step's workarea). The prompt carries the
+round's reason, its red files or conflicted paths, the step's title and
+`done_when`, and the job's last lines of `merger.log`. When the session ends:
+
+| the branch on origin | the entry | the step |
+| --- | --- | --- |
+| moved past the head the round measured | `queued`, its old `since`, `mended: { at, outcome: 'pushed' }` — measured by a full round like any other job | still `landing` |
+| did not move, the session failed or timed out | `red` with `<reason> — the mend pushed nothing: <its last line>` (or `timed out`, `failed`) | through `redPatch`, as any red |
+
+A job that comes back red after its mend is red at once, and so is a red
+outside `MEND_STOPS` or one that is main's own (every red file red on the base
+too). The mend never merges, never runs `gh pr merge`, never force-pushes,
+never touches `main` and edits no `PLAN.json`; whatever it pushes is measured
+by the same round. One runs.tsv row of kind `mend` per mend. A `mending` entry
+a merger finds at start belonged to a mend that died with the merger before
+it: it goes back in line unmended. A SIGTERM drops the mends waiting (their
+entries stay `mending`) and waits for the one running.
+
+The three numbers are constants with their reasons beside them, not settings:
+
+- **`MEND_STOPS`** — `merge`, `restack`, `red`, `selected-gate`, `pr-tests`,
+  `extra-gate`, `derived-outside`, `project-log`: where the fault is in the
+  change. `fetch`, `pr`, `killed`, `threw`, `busy`, `drift` and the deploy
+  wait are the machine's, and a session on the branch cannot fix them.
+- **`MEND_AT_ONCE`** = 1 — an 8 GB M1 already runs a memoro suite of seven
+  lanes; a second session with its own suite beside it makes the round's own
+  timings lie. Further mends wait in memory, in answer order (`mendLine`).
+- **`MEND_MINUTES`** = 20 — rounds took 3-15 minutes on 2026-10-09/10, and a
+  mend that needs longer than that is the step's work, not a mend.
+
 ## The full run nobody asks for
 
 The runner runs `mc test <repo> --full` for every repository mc knows, once a

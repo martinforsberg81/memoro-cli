@@ -22,32 +22,32 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A merger is always the installed mc, whoever starts it, and its first log line says which commit.",
       "check": "`tests/mc/merger.test.js` per step 1. Live: the close-out quotes `merger <pid> started — ~/memoro-cli at <sha>` with the sha of `origin/main` at the time."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A job whose pull request is merged on GitHub is answered landed (dequeued, its step `done` if it has one) and leaves its batch; one that is closed is answered red by itself; the rest of the batch is measured and landed without them.",
       "check": "`tests/mc/merger.test.js`: a batch of three where the stub `gh` says the second is MERGED. That job is dequeued and its step `done` with the merge commit GitHub gave; `mergeRound` gets `prs` of the other two. Same with CLOSED: that job is `red` with `closed on GitHub`. A red entry whose pull request has since merged is dequeued and its step `done` on the merger's next look. Live: the close-out quotes one `already merged on GitHub` line."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A step's job never goes before every earlier step of its plan is `done`.",
       "check": "`tests/mc/merge-queue.test.js`: a job for step 3 with no `parent` while step 2 is `ready`, `landing` or `failed` is not in `nextBatch`, and is once step 2 is `done`. A step-1 job and a job with no step are untouched. The page's queue row says `waits for <project> step 2`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No child process of the merger blocks its event loop, and the two lanes overlap end to end.",
       "check": "`tests/mc/child-async.test.js` for the runner's result shape, `maxBuffer` and timeout. `tests/mc/merger.test.js`: with the heavy lane's round stubbed to resolve only after 300 ms, a light job queued meanwhile starts and finishes inside that time. A `grep` test fails if `spawnSync`, `execFileSync` or `execSync` appears in `repo-gate.js`, `repo-merge.js`, `repo-freshen.js`, `repo-derived.js`, `prepare-cache.js`, `selector-miss.js`, `merger.js` or `merger-run.js`. Live: the close-out quotes a memoro-cli `landing` line stamped while a memoro round is between `preparing the candidate` and `selection took`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A SIGTERM to the merger lets the jobs in flight finish and then leaves within a second of the last answer.",
       "check": "`tests/mc/merger.test.js`: `stopping()` turns true mid-round; the round's report is answered normally (no `killed`), and `serve` returns. `runGate` with `signals: false` installs no handler. Live: the close-out restarts the merger once with SIGTERM and quotes the `SIGTERM` line, the answer that follows and `merger <pid> started` of the new one."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A red the change caused gets one mend session; a mend that pushes puts the job back in line at its old place, and anything else ends red as today.",
       "check": "`tests/mc/mend.test.js` with stub session, git and gh: a `merge` stop starts one session in a fresh worktree on the branch; a push puts the entry back in `queued` with its old `since` and `mended` set; no push makes it `red` with `<reason> — the mend pushed nothing`; a second red on a mended job starts no session; `fetch`, `pr`, `killed` and a main-own red start none; at most `MEND_AT_ONCE` run at once. Live: the close-out quotes a `mending` line and its outcome, or says that no red occurred in the window."
     },
