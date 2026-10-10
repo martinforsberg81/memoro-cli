@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { createRunner, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { DISK_MIN_BYTES, SCRATCH_KEEP_MS, createRunner, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { RUN_REFUSALS, WORKAREA_BLOCKS } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
@@ -559,18 +559,52 @@ test('a scratch directory that cannot be made is said, and the session starts wi
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: no scratch directory .*EACCES/u);
 });
 
-test('the chore pass removes a scratch directory older than seven days and keeps a newer one', async () => {
+test('the chore pass removes a scratch directory older than two days and keeps a newer one', async () => {
   const f = fixture({ now: '2026-09-19T10:00:00Z' });
-  const day = 24 * 60 * 60 * 1000;
+  const hour = 60 * 60 * 1000;
   const now = Date.parse('2026-09-19T10:00:00Z');
-  for (const [name, age] of [['old-20260911T090000Z', 8 * day], ['new-20260918T090000Z', 1 * day]]) {
+  assert.equal(SCRATCH_KEEP_MS, 48 * hour);
+  for (const [name, age] of [['old-20260917T090000Z', 49 * hour], ['new-20260917T120000Z', 47 * hour]]) {
     f.dirs.add(`/w/runner/scratch/${name}`);
     f.scratchAges[`/w/runner/scratch/${name}`] = now - age;
   }
   await createRunner({ deps: f.deps }).chores();
-  assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/old-20260911T090000Z']);
-  assert.ok(f.dirs.has('/w/runner/scratch/new-20260918T090000Z'));
-  assert.match(f.files['/w/runner/log/runner.log'], /scratch: 1 directory older than seven days removed/u);
+  assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/old-20260917T090000Z']);
+  assert.ok(f.dirs.has('/w/runner/scratch/new-20260917T120000Z'));
+  assert.match(f.files['/w/runner/log/runner.log'], /scratch: 1 directory older than two days removed/u);
+});
+
+/**
+ * 2026-10-08: a step session hit ENOSPC on its first shell commands with
+ * 118 MiB free. Under 5 GiB on the volume where scratch is made, a pass
+ * starts nothing, says why once, and leaves the line for the page.
+ */
+test('under 5 GiB free on the scratch volume no session launches, the line is said once and left for the page', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  const asked = [];
+  f.deps.freeBytes = (path) => { asked.push(path); return DISK_MIN_BYTES - 1; };
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'alpha', 77)(call); };
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 0);
+  assert.equal(r.waited, 'skipped:disk');
+  assert.equal(f.calls.sessions.length, 0, 'no session is launched');
+  assert.deepEqual(asked, ['/w/runner/scratch'], 'the volume read is the one MC_SCRATCH is made on');
+  const said = f.files['/w/runner/log/runner.log'].split('\n').filter((line) => /disk:/u.test(line));
+  assert.equal(said.length, 1);
+  assert.match(said[0], /disk: 4\.9 GiB free, below 5 GiB — no step started$/u);
+  assert.match(JSON.parse(f.files['/w/runner/disk.json']).line, /^disk: 4\.9 GiB free, below 5 GiB — no step started$/u);
+});
+
+test('at 5 GiB free a step launches, and the disk line is taken off the page', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
+  f.files['/w/runner/disk.json'] = JSON.stringify({ line: 'disk: 1.0 GiB free, below 5 GiB — no step started' });
+  f.deps.freeBytes = () => DISK_MIN_BYTES;
+  f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'alpha', 77)(call); };
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 1);
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal('/w/runner/disk.json' in f.files, false);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /disk:/u);
 });
 
 test('the chore pass runs the reaper every pass and says what it removed', async () => {
