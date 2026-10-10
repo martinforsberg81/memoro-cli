@@ -809,6 +809,79 @@ describe('stacked jobs (ruling 30, A)', () => {
       rmSync(base, { recursive: true, force: true });
     }
   });
+
+  // Ruling 38: the child has main merged into it, and main moved on past the
+  // squash of its parent — the shape of #857 on 2026-10-10.
+  const stackedFixture = (base, { childEdits }) => {
+    const sh = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
+    const origin = join(base, 'origin.git');
+    const work = join(base, 'work');
+    sh(base, 'init', '-q', '--bare', '-b', 'main', origin);
+    sh(base, 'clone', '-q', origin, work);
+    writeFileSync(join(work, 'a.txt'), 'a\n');
+    sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'base'); sh(work, 'push', '-q', 'origin', 'HEAD:main');
+    // Parent P on mq.
+    sh(work, 'checkout', '-qb', 'mq');
+    writeFileSync(join(work, 'one.txt'), '1\n'); sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'P');
+    const parentSha = sh(work, 'rev-parse', 'HEAD');
+    sh(work, 'push', '-q', 'origin', 'mq');
+    // Child C on P.
+    sh(work, 'checkout', '-qb', 'mq-2');
+    childEdits(work); sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'C');
+    // P squashed onto main.
+    sh(work, 'checkout', '-q', 'main');
+    sh(work, 'merge', '-q', '--squash', 'mq'); sh(work, 'commit', '-qm', 'P (#9)');
+    sh(work, 'push', '-q', 'origin', 'main');
+    // The child merges that main in.
+    sh(work, 'checkout', '-q', 'mq-2');
+    sh(work, 'merge', '-q', '--no-edit', 'main');
+    sh(work, 'push', '-q', 'origin', 'mq-2');
+    // Main moves on, over the lines the squash wrote and over a.txt.
+    sh(work, 'checkout', '-q', 'main');
+    writeFileSync(join(work, 'one.txt'), '1 later\n');
+    writeFileSync(join(work, 'a.txt'), 'a on main\n');
+    sh(work, 'add', '.'); sh(work, 'commit', '-qm', 'later on main'); sh(work, 'push', '-q', 'origin', 'main');
+    return { sh, work, job: { repo: 'r', repo_path: work, pr: 10, branch: 'mq-2', parent: { pr: 9, sha: parentSha } } };
+  };
+
+  it('restack: a child with main merged in is moved with exactly its own commit over main, where the old rebase --onto conflicts', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
+    try {
+      const { sh, work, job } = stackedFixture(base, { childEdits: (w) => writeFileSync(join(w, 'two.txt'), '2\n') });
+      // What it fixes: the old move replays the squash the merge brought in.
+      const old = join(base, 'old');
+      sh(work, 'worktree', 'add', '-q', '--detach', old, 'origin/mq-2');
+      assert.throws(() => sh(old, 'rebase', '-q', '--onto', 'origin/main', job.parent.sha), 'the old rebase --onto conflicts on this fixture');
+      sh(old, 'rebase', '--abort');
+      sh(work, 'worktree', 'remove', '--force', old);
+
+      const said = [];
+      assert.deepEqual(await restack(job, { say: (l) => said.push(l) }), { ok: true, moved: true });
+      sh(work, 'fetch', '-q', 'origin');
+      assert.equal(sh(work, 'rev-list', '--count', 'origin/main..origin/mq-2'), '1', 'exactly C over main');
+      assert.equal(sh(work, 'log', '-1', '--format=%s', 'origin/mq-2'), 'C');
+      assert.equal(sh(work, 'rev-parse', 'origin/mq-2^'), sh(work, 'rev-parse', 'origin/main'));
+      assert.equal(said[0], 'r #10: moved onto main past #9');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('restack: a child whose own commit edits the line main changed is ok: false and names the file', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'mc-restack-'));
+    try {
+      const { sh, work, job } = stackedFixture(base, { childEdits: (w) => writeFileSync(join(w, 'a.txt'), 'a on the child\n') });
+      const tipBefore = sh(work, 'rev-parse', 'origin/mq-2');
+      const result = await restack(job);
+      assert.equal(result.ok, false);
+      assert.match(result.reason, /moving #10 onto main after #9 landed conflicts in a\.txt — merge origin\/main into mq-2/u);
+      sh(work, 'fetch', '-q', 'origin');
+      assert.equal(sh(work, 'rev-parse', 'origin/mq-2'), tipBefore, 'nothing pushed');
+      assert.equal(sh(work, 'worktree', 'list').split('\n').length, 1, 'the temporary worktree is gone');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('no round holds the other lane, and a SIGTERM finishes what is in flight (merger-hardening step 5)', () => {
@@ -918,22 +991,42 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
     assert.equal(queue().find((e) => e.pr === 671).state, 'red');
   });
 
-  it('restack awaits an async git, and a conflict is said with its files', async () => {
-    const calls = [];
-    const gitWith = (conflict) => async (cwd, args) => {
-      calls.push(args[0]);
-      await new Promise((resolve) => { setImmediate(resolve); });
-      if (args[0] === 'rebase' && args[1] === '-q') return { ok: !conflict, stdout: '', stderr: '' };
-      if (args[0] === 'diff') return { ok: true, stdout: 'a.js\nb.js', stderr: '' };
-      return { ok: true, stdout: args[0] === 'rev-parse' ? 'tip1234' : '', stderr: '' };
+  it('restack awaits an async git, skips an empty pick, merges main in on a conflicting pick, and a conflicting merge is said with its files', async () => {
+    let calls = [];
+    // pick: 'clean' | 'empty' | 'conflict'; mergeConflict: whether the fallback merge conflicts too.
+    const gitWith = ({ pick = 'clean', mergeConflict = false } = {}) => {
+      let inPick = false;
+      let inMerge = false;
+      return async (cwd, args) => {
+        calls.push(args[0] === 'cherry-pick' && args[1]?.startsWith('--') ? `cherry-pick ${args[1]}` : args[0]);
+        await new Promise((resolve) => { setImmediate(resolve); });
+        if (args[0] === 'rev-list') return { ok: true, stdout: 'c1\nc2', stderr: '' };
+        if (args[0] === 'cherry-pick' && args[1] === 'c2' && pick !== 'clean') { inPick = pick === 'conflict'; return { ok: false, stdout: '', stderr: '' }; }
+        if (args[0] === 'merge' && args[1] === '--no-edit') { inMerge = mergeConflict; return { ok: !mergeConflict, stdout: '', stderr: '' }; }
+        if (args[0] === 'diff') return { ok: true, stdout: inMerge ? 'a.js\nb.js' : inPick ? 'p.js' : '', stderr: '' };
+        return { ok: true, stdout: args[0] === 'rev-parse' ? 'tip1234' : '', stderr: '' };
+      };
     };
     const job = { repo: 'r', repo_path: '/r', pr: 10, branch: 'mq-2', parent: { pr: 9, sha: 'abc' } };
     const said = [];
-    assert.deepEqual(await restack(job, { git: gitWith(false), say: (l) => said.push(l) }), { ok: true, moved: true });
-    assert.deepEqual(calls, ['fetch', 'rev-parse', 'merge-base', 'worktree', 'rebase', 'push', 'worktree']);
-    assert.equal(said[0], 'r #10: moved onto main past #9');
-    const refused = await restack(job, { git: gitWith(true) });
+    assert.deepEqual(await restack(job, { git: gitWith(), say: (l) => said.push(l) }), { ok: true, moved: true });
+    assert.deepEqual(calls, ['fetch', 'rev-parse', 'merge-base', 'worktree', 'rev-list', 'checkout', 'cherry-pick', 'cherry-pick', 'push', 'worktree']);
+    assert.equal(said.at(-1), 'r #10: moved onto main past #9');
+
+    calls = [];
+    assert.deepEqual(await restack(job, { git: gitWith({ pick: 'empty' }), say: (l) => said.push(l) }), { ok: true, moved: true });
+    assert.deepEqual(calls.slice(6, -1), ['cherry-pick', 'cherry-pick', 'diff', 'cherry-pick --skip', 'push'], 'an empty pick is skipped, not a conflict');
+    assert.equal(said.at(-1), 'r #10: moved onto main past #9');
+
+    calls = [];
+    assert.deepEqual(await restack(job, { git: gitWith({ pick: 'conflict' }), say: (l) => said.push(l) }), { ok: true, moved: true });
+    assert.deepEqual(calls.slice(6, -1), ['cherry-pick', 'cherry-pick', 'diff', 'cherry-pick --abort', 'checkout', 'merge', 'push']);
+    assert.equal(said.at(-1), 'r #10: moved onto main past #9 (merged main in)');
+
+    calls = [];
+    const refused = await restack(job, { git: gitWith({ pick: 'conflict', mergeConflict: true }) });
     assert.equal(refused.ok, false);
-    assert.match(refused.reason, /conflicts in a\.js b\.js/u);
+    assert.match(refused.reason, /conflicts in a\.js b\.js — merge origin\/main into mq-2/u, 'the merge\'s conflicted paths');
+    assert.ok(calls.includes('merge') && !calls.includes('push'));
   });
 });

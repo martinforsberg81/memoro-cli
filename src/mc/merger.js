@@ -245,10 +245,15 @@ const realGit = async (cwd, args) => {
 /**
  * A stacked branch moved onto main once the job below it has landed
  * (ruling 30, A). The one below was squash-merged, so its commits are in
- * this branch and not on main under the same names: `rebase --onto
- * origin/main <the sha this branch started on>` replays only this step's
- * own commits, and the branch is pushed back with a lease on the tip it had.
- * A branch that no longer carries that sha was moved already. Returns
+ * this branch and not on main under the same names. Only this step's own
+ * commits are replayed onto origin/main: the non-merge commits on the tip
+ * that are neither on the sha this branch started on nor on main (ruling 38)
+ * — a `rebase --onto` would also replay what a merge of main, or a parent
+ * moved after the stack, brought in. A pick that main already has is empty
+ * and skipped. A pick that conflicts falls back to merging origin/main into
+ * the tip, as `freshenBranchForLanding` does; only a conflicting merge is a
+ * stop. The branch is pushed back with a lease on the tip it had. A branch
+ * that no longer carries that sha was moved already. Returns
  * `{ ok, moved, reason }`.
  */
 export async function restack(job, { git = realGit, say = () => {} } = {}) {
@@ -262,15 +267,29 @@ export async function restack(job, { git = realGit, say = () => {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'mc-restack-'));
   try {
     if (!(await git(repoPath, ['worktree', 'add', '-q', '--detach', dir, tip.stdout])).ok) return { ok: false, reason: 'git worktree add failed for the move onto main' };
-    const rebased = await git(dir, ['rebase', '-q', '--onto', 'origin/main', job.parent.sha]);
-    if (!rebased.ok) {
-      const conflicted = (await git(dir, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').filter(Boolean);
-      await git(dir, ['rebase', '--abort']);
-      return { ok: false, reason: `moving #${job.pr} onto main after #${job.parent.pr} landed conflicts${conflicted.length ? ` in ${conflicted.join(' ')}` : ''} — merge origin/main into ${branch} and keep both intents` };
+    const conflictedIn = async () => (await git(dir, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').filter(Boolean);
+    const own = await git(dir, ['rev-list', '--reverse', '--no-merges', tip.stdout, `^${job.parent.sha}`, '^origin/main']);
+    if (!own.ok) return { ok: false, reason: `git rev-list failed listing ${branch}'s own commits` };
+    let replayed = (await git(dir, ['checkout', '-q', '--detach', 'origin/main'])).ok;
+    for (const sha of replayed ? own.stdout.split('\n').filter(Boolean) : []) {
+      if ((await git(dir, ['cherry-pick', sha])).ok) continue;
+      // An empty pick — main already has it as a squash — is no conflict.
+      if (!(await conflictedIn()).length && (await git(dir, ['cherry-pick', '--skip'])).ok) continue;
+      await git(dir, ['cherry-pick', '--abort']);
+      replayed = false;
+      break;
+    }
+    if (!replayed) {
+      if (!(await git(dir, ['checkout', '-q', '--detach', tip.stdout])).ok) return { ok: false, reason: `git checkout of ${branch}'s tip failed for the move onto main` };
+      if (!(await git(dir, ['merge', '--no-edit', 'origin/main'])).ok) {
+        const conflicted = await conflictedIn();
+        await git(dir, ['merge', '--abort']);
+        return { ok: false, reason: `moving #${job.pr} onto main after #${job.parent.pr} landed conflicts${conflicted.length ? ` in ${conflicted.join(' ')}` : ''} — merge origin/main into ${branch} and keep both intents` };
+      }
     }
     const pushed = await git(dir, ['push', '-q', `--force-with-lease=${branch}:${tip.stdout}`, 'origin', `HEAD:${branch}`]);
     if (!pushed.ok) return { ok: false, reason: `the moved ${branch} could not be pushed (${pushed.stderr.split('\n').at(-1) || 'push refused'})` };
-    say(`${job.repo} #${job.pr}: moved onto main past #${job.parent.pr}`);
+    say(`${job.repo} #${job.pr}: moved onto main past #${job.parent.pr}${replayed ? '' : ' (merged main in)'}`);
     return { ok: true, moved: true };
   } finally {
     await git(repoPath, ['worktree', 'remove', '--force', dir]);
