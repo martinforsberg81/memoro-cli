@@ -83,6 +83,17 @@ describe('landJob — one job, landed or answered', () => {
     assert.equal(m.rows[0].name, 'mq');
   });
 
+  it('a landed pull request leaves the page\'s PR cache at once; a red one stays', async () => {
+    register();
+    const dropped = [];
+    await landJob(JOB, machine([green], { dropFromPage: (pr) => dropped.push(pr) }).deps);
+    assert.deepEqual(dropped, [{ root, repo: 'memoro-cli', number: 671 }]);
+    register();
+    const kept = [];
+    await landJob(JOB, machine([red], { dropFromPage: (pr) => kept.push(pr) }).deps);
+    assert.deepEqual(kept, []);
+  });
+
   it('red: the step is ready again with the reason, the attempt and the pull request — the next session\'s', async () => {
     register();
     const m = machine([red]);

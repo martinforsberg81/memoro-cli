@@ -23,15 +23,17 @@
  *                     there is no second opinion about it
  *
  * Every print fetches `origin/main` first (ruling 20), so `plans.json` stays
- * current; `prs.json` and its age still come from cache and are only refilled
- * by `--fresh`, which also asks GitHub. `--offline` skips the fetch and reads
- * the plans as they were last fetched.
+ * current. `prs.json` comes from cache with its age; at a terminal the page
+ * refills it itself when it is five minutes old (`freshFor`), `f` at the menu
+ * and `--fresh` ask GitHub now, and a pipe reads the cache as it is.
+ * `--offline` skips the fetch and reads the plans as they were last fetched.
  *
  * `--json` prints the same object the renderer takes, so the two surfaces
  * cannot drift.
  */
 import { getPackageVersion } from '../../lib/version.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
+import { PRS_STALE_SECONDS } from '../page-cache.js';
 import { collectPage } from '../page-collect.js';
 import { LIVE_MIN_COLUMNS, liveReader, plainReader } from '../page-live.js';
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
@@ -73,10 +75,26 @@ export async function run(argv, deps = {}) {
   // mode would collapse the rows again, thirty seconds after somebody asked to
   // see them.
   let expand = false;
+  // At a terminal the page keeps its own pull requests current: every draw,
+  // the live loop's included, asks GitHub when the cache is older than five
+  // minutes (page-collect.js, `fresh: 'stale'`). A pipe reads the cache as it
+  // always has, so a script reaches the network only when it asks to. `f` at
+  // the menu asks now, once (`freshOnce`).
+  //
+  // One ask per five minutes per open page whatever the answer was: a `gh`
+  // that fails — a locked keychain, no network — must not be asked again on
+  // every thirty-second redraw (2026-09-20: a modal per ask).
+  const live = (deps.interactive || interactive)();
+  let freshOnce = false;
+  let askedAt = -Infinity;
+  const clock = deps.clock || (() => Date.now());
   // One way to make a page, used by both surfaces: the width and the
   // colour are read per draw.
   const page = async () => {
-    const data = await collect({ fresh: opts.fresh, offline: opts.offline });
+    const fresh = freshFor({ opts, live, once: freshOnce, now: clock(), askedAt });
+    freshOnce = false;
+    const data = await collect({ fresh, offline: opts.offline });
+    if (data?.caches?.prs?.asked) askedAt = clock();
     return {
       data,
       key: pageKey(data),
@@ -99,11 +117,23 @@ export async function run(argv, deps = {}) {
   // person at a terminal is asked instead of being handed a grammar — and
   // only there does anything refresh, because this is the only place that
   // knows there is a terminal to refresh.
-  if (!(deps.interactive || interactive)()) return 0;
+  if (!live) return 0;
   const reader = deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
-    stdout, stderr, page, reader, open: deps.openArea, expand: (on) => { expand = on; },
+    stdout, stderr, page, reader, open: deps.openArea, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
   });
+}
+
+/**
+ * What one draw asks of GitHub: everything under `--fresh` or after `f`;
+ * at a terminal, a stale cache's refill (`'stale'`) at most once per
+ * `PRS_STALE_SECONDS` since this page last asked, however that ask went;
+ * otherwise nothing.
+ */
+export function freshFor({ opts, live, once = false, now, askedAt = -Infinity }) {
+  if (opts.fresh || once) return true;
+  if (!live || opts.offline) return false;
+  return now - askedAt >= PRS_STALE_SECONDS * 1000 ? 'stale' : false;
 }
 
 /**
@@ -154,7 +184,7 @@ export function parsePageArgs(argv) {
 
 const KEYS = [
   '  <n>  open it   ·   n  start something new   ·   a  every project   ·   b  brief',
-  '  p  plan a programme   ·   s <name>  that project   ·   q  quit',
+  '  p  plan a programme   ·   s <name>  that project   ·   f  fresh from GitHub   ·   q  quit',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
 
@@ -201,6 +231,8 @@ export function runnerOrder(answer) {
  */
 export async function menu(first, {
   stdout, stderr, page, reader, open = openArea, expand = () => {},
+  // Asks the next draw to go to GitHub for the pull requests (`f`).
+  fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
   runOrder = null,
 }) {
@@ -229,6 +261,13 @@ export async function menu(first, {
     if (answer === 'a' || answer === 'all') {
       all = !all;
       expand(all);
+      data = await redraw();
+      continue;
+    }
+    // The page again with every pull request asked of GitHub now, rather than
+    // when the cache is next five minutes old.
+    if (answer === 'f' || answer === 'fresh') {
+      fresh();
       data = await redraw();
       continue;
     }

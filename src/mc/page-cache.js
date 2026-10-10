@@ -15,8 +15,10 @@
  * the reader gained a field is not what a fresh read would return either.
  *
  * **prs.json** has no such key — an open PR closes without moving any sha —
- * so it is stamped instead, written by `--fresh` and by every runner round
- * that asked GitHub (`mergePrs`), and the page says how old it is. That is the
+ * so it is stamped instead, written by `--fresh`, by every runner round
+ * that asked GitHub and by a page at a terminal whose copy is five minutes old
+ * (`mergePrs`), and trimmed by the merger the moment a pull request lands
+ * (`dropPr`). The page says how old it is. That is the
  * whole difference between the two files.
  *
  * These are the page's only writes. They are a read-through cache of things
@@ -127,6 +129,31 @@ export function mergePrs({
   const cache = readJson(cachePath(root, PRS_FILE), read);
   const kept = Array.isArray(cache?.prs) ? cache.prs.filter((pr) => !repos.includes(pr.repo)) : [];
   return savePrs({ root, prs: [...kept, ...prs], now, write });
+}
+
+/**
+ * How old the PR cache may be before a page at a terminal asks GitHub itself
+ * (page-collect.js, `fresh: 'stale'`). Until 2026-10-10 only `--fresh`,
+ * `mc prs` and a runner lane's pick refilled it, so with the runner stopped —
+ * or every lane an hour into a step — PULL REQUESTS said `as of 55 min ago`
+ * and nothing was going to change that.
+ */
+export const PRS_STALE_SECONDS = 300;
+
+/**
+ * A pull request taken off the cached list the moment it has landed (the
+ * merger), so the page stops drawing it as open. `fetched` is kept: the rest
+ * of the list is no fresher than it was.
+ */
+export function dropPr({
+  root, repo, number, read = readFileSync, write = writeJsonAtomic,
+} = {}) {
+  const cache = readJson(cachePath(root, PRS_FILE), read);
+  if (!cache || !Array.isArray(cache.prs)) return false;
+  const prs = cache.prs.filter((pr) => !(pr.repo === repo && Number(pr.number) === Number(number)));
+  if (prs.length === cache.prs.length) return false;
+  try { write(cachePath(root, PRS_FILE), { ...cache, prs }); } catch { return false; }
+  return true;
 }
 
 /** "3 min", "2 h", "4 d" — how old a cache is, in the page's own voice. */
