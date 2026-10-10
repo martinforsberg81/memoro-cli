@@ -107,6 +107,8 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
+import { CACHE_TTL_MS as CLAUDE_CACHE_TTL_MS } from '../adapters/claude-code.js';
+import { CACHE_TTL_MS as CODEX_CACHE_TTL_MS } from '../adapters/codex.js';
 import {
   ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, keptFiles,
   keptParagraph, logRows, mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
@@ -150,7 +152,7 @@ import {
   DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
-  queueFileText, readSessionOutput, resumePrompt, sessionResult, sessionSettings, sessionStanding, streamSummary, describeSettings, describeWatch,
+  queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -619,6 +621,26 @@ export function createRunner({
         last_activity: lastActivity, context_tokens: standing.context_tokens, branch: branch ?? null, count,
       },
     });
+  }
+
+  /**
+   * The interrupted step in this workarea whose session is to be resumed,
+   * or null: the step `chooseKind` would hand out from the worktree's own
+   * plan, carrying an `interrupted` record that `recoveryFor` says `resume`
+   * to, with the cache lifetime of the tool the plan names now. Returns the
+   * decision with the record and the step's index.
+   */
+  function resumable(worktree, name) {
+    const entry = readEntry(root, name, { read: deps.read });
+    const found = entry ? planOf(worktree, name) : null;
+    if (!found?.plan) return null;
+    const choice = chooseKind({ plan: applyEntry({ ...found, project: name }, entry) });
+    const interrupted = choice.kind === 'step' ? entry.steps?.[choice.index]?.interrupted : null;
+    if (!interrupted) return null;
+    const { tool } = sessionSettings(found.plan.runner, choice.step?.runner, { kind: 'step' });
+    const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? CODEX_CACHE_TTL_MS : CLAUDE_CACHE_TTL_MS, now: deps.now() });
+    if (decided.mode !== 'resume') return null;
+    return { ...decided, interrupted, index: choice.index };
   }
 
   /**
@@ -1832,11 +1854,16 @@ export function createRunner({
       deps.git(worktree, ['merge', '--abort']);
       say(`${name}: a merge of origin/main was left in progress — aborted`);
     }
+    // A step whose session died under it and is to be resumed (ruling 33):
+    // its conversation knows this tree, uncommitted files and all, so the
+    // tree is left exactly as it is — no dirty block, no branch move, no
+    // merge of main under files it has read.
+    const resuming = resumable(worktree, name);
     // A dirty worktree is nobody's but a person's — the runner never commits,
     // stashes or restores one — so the step is blocked and the files are named:
     // `email-window-layout` stood third in queue.md and was skipped 134 rounds
     // on three modified files before anyone read the reason.
-    const dirty = (gitOut(worktree, ['status', '--porcelain']) || '').trim();
+    const dirty = resuming ? '' : (gitOut(worktree, ['status', '--porcelain']) || '').trim();
     if (dirty) {
       // `XY path` per porcelain line; the whole is trimmed above, which takes
       // the first line's leading status space with it — hence a pattern, not
@@ -1856,10 +1883,10 @@ export function createRunner({
     if (flight) return refuse(flight.reason, flight.skip);
     // A session must be somewhere it can push from. The push-guard asks the
     // same question at the wrong end — after ninety minutes of work.
-    const moved = placeBranch(worktree, name, plans.find((p) => p.project === name));
+    const moved = resuming ? { ok: true, stacked: null } : placeBranch(worktree, name, plans.find((p) => p.project === name));
     if (!moved.ok) return block(REFUSAL.branch, moved.why);
 
-    const sync = syncMain(worktree, name);
+    const sync = resuming ? { ok: true, conflicts: [] } : syncMain(worktree, name);
     // A fetch that failed is the network and this lane waits it out; a merge
     // that resolved and would not commit is this workarea, and a person's.
     // The merge git would not commit is aborted before the block is written,
@@ -1962,8 +1989,11 @@ export function createRunner({
     const retry = standingBefore?.pr && standingBefore.attempts > 0 && standingBefore.reason
       ? { pr: standingBefore.pr, reason: standingBefore.reason, attempts: standingBefore.attempts }
       : null;
-    const stacked = moved.stacked || null;
-    const prompt = stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, retry, stacked, now });
+    // A resumed step keeps the stack it was started on; the branch did not move.
+    const stacked = resuming ? (standingBefore?.stacked_on ?? null) : (moved.stacked || null);
+    const prompt = resuming
+      ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, retry, stacked, now });
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
 
@@ -1971,6 +2001,7 @@ export function createRunner({
     const out = join(paths.log, `${name}-${ts}`);
     // A plan that names no model on a tool that is not claude gets none, and
     // the line says so rather than printing `null`: the tool picks.
+    if (resuming) say(`${name}: resuming ${settings.tool} session ${resuming.interrupted.session_id} (${resuming.why})`);
     say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})`);
     const t0 = deps.now().getTime();
     // The lane's current file exists exactly as long as the session does —
@@ -2010,7 +2041,7 @@ export function createRunner({
     const stepBranch = gitOut(worktree, ['branch', '--show-current']) || name;
     if (stepIndex != null) {
       recordStep(name, stepIndex, {
-        status: 'running', branch: stepBranch, pr: retry ? retry.pr : null, reason: null, stacked_on: stacked,
+        status: 'running', branch: stepBranch, pr: retry ? retry.pr : (resuming ? standingBefore?.pr ?? null : null), reason: null, stacked_on: stacked,
         session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool, log: out },
       });
     }
@@ -2056,7 +2087,7 @@ export function createRunner({
     // quota pause after the row is not a second sleep on the same refusal.
     let waited = false;
     try {
-      let attempt = await launchOnce(null, prompt);
+      let attempt = await launchOnce(resuming ? resuming.interrupted.session_id : null, prompt);
       result = attempt;
       for (let resumes = 0; ; resumes += 1) {
         const last = readSessionOutput({ toolId: launch.id, stdout: attempt.stdout, stderr: attempt.stderr, exitCode: attempt.status, timedOut: attempt.timedOut, stalled: attempt.stalled, now: deps.now() });
@@ -2170,6 +2201,13 @@ export function createRunner({
       recordStep(name, choice.index, { status: 'ready', session: null });
     } else if (note === 'success' && pr !== '-') {
       note = await landForSession({ worktree, repo, name, index: choice.index, pr, branch, rc: result.status });
+    } else if (resuming && !result.signal && result.status !== 0 && !sessionSpoke({ toolId: launch.id, stdout: result.stdout }) && choice.index != null) {
+      // The resume never started — claude's `No conversation found`, a codex
+      // rollout that is gone. Not another interruption: the step is ready
+      // with its record marked, and the next pick starts it fresh.
+      recordStep(name, choice.index, { status: 'ready', session: null, interrupted: { ...resuming.interrupted, resume_failed: true } });
+      say(`${name}: the resume of ${settings.tool} session ${resuming.interrupted.session_id} did not start (rc ${result.status}) — the next pick starts step ${choice.index + 1} fresh`);
+      note = `${note},resume-failed`;
     } else if (result.signal && !result.stalled && !result.lingered && !sessionResult(result.stdout) && choice.index != null) {
       // Killed by a signal this runner did not send — macOS taking memory
       // back, a person's `kill` — with no answer written: the same death as
@@ -2321,7 +2359,24 @@ export function createRunner({
         write: writeJson,
       });
     } catch { /* the page says how old its cache is */ }
-    return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans, prs, prsFailed };
+    return { names: interruptedFirst(assembleQueue(deps.read(paths.queue) || '', plans)), plans, prs, prsFailed };
+  }
+
+  /**
+   * The projects whose first unfinished step carries an `interrupted` record
+   * go first, the most recent `last_activity` first: the warmest cache is the
+   * one a resume can still read from (ruling 33). The rest keep their order.
+   */
+  function interruptedFirst(names) {
+    const lastOf = new Map();
+    for (const name of names) {
+      const entry = readEntry(root, name, { read: deps.read });
+      const record = entry ? entry.steps[currentIndex(entry)]?.interrupted : null;
+      if (record) lastOf.set(name, record.last_activity || '');
+    }
+    if (!lastOf.size) return names;
+    const first = [...lastOf.keys()].sort((a, b) => (lastOf.get(a) < lastOf.get(b) ? 1 : lastOf.get(a) > lastOf.get(b) ? -1 : 0));
+    return [...first, ...names.filter((name) => !lastOf.has(name))];
   }
 
   /**

@@ -88,7 +88,11 @@ function stub(dir, name, body) {
   return path;
 }
 
-test('a codex step runs through the adapter and lands in runs.tsv', async (t) => {
+/**
+ * The world the runner is started in: a stub codex, a repository with one
+ * ready plan on its origin/main, and a workarea that is a real worktree of it.
+ */
+function codexWorld(t) {
   const base = mkdtempSync(join(tmpdir(), 'mc-run-codex-'));
   const bin = join(base, 'bin');
   const reposHome = join(base, 'repos');
@@ -126,6 +130,11 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   process.env.PATH = env.PATH;
   t.after(() => { process.env.PATH = realPath; });
 
+  return { env, work, repo, argvFile, worktree: join(work, 'cx', 'memoro-cli') };
+}
+
+test('a codex step runs through the adapter and lands in runs.tsv', async (t) => {
+  const { env, work, argvFile } = codexWorld(t);
   // The disk is the host's: a full one would refuse the step this test is
   // about (2026-10-10, 1.7 GiB free), so it reads as room enough.
   const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, log: () => {} };
@@ -164,4 +173,47 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   // sentence is what the session verifies before it stops.
   assert.match(argv.at(-1), /Your step is `steps\[0\]` — 1, "The one step"/u);
   assert.match(argv.at(-1), /Done when: the row is written/u);
+});
+
+test('an interrupted codex step is resumed through `codex exec resume`, its workarea untouched', async (t) => {
+  const { env, work, repo, argvFile, worktree } = codexWorld(t);
+  // Main moves on after the session died: a resume must not merge it in.
+  writeFileSync(join(repo, 'later.txt'), 'later\n');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-qm', 'later on main');
+  git(repo, 'push', '-q', 'origin', 'main');
+  // What the dead session left: a modified file and an untracked one.
+  writeFileSync(join(worktree, 'docs', 'project', 'mc', 'cx', 'notes.md'), 'half done\n');
+  writeFileSync(join(worktree, 'README.md'), 'edited\n');
+  const head = git(worktree, 'rev-parse', 'HEAD').trim();
+  const status = git(worktree, 'status', '--porcelain');
+  mkdirSync(join(work, 'runner', 'projects'), { recursive: true });
+  writeFileSync(join(work, 'runner', 'projects', 'cx.json'), JSON.stringify({
+    project: 'cx', repo: 'memoro-cli', programme: 'mc', plan: 'docs/project/mc/cx/PLAN.json',
+    steps: [{
+      status: 'ready', branch: 'cx',
+      interrupted: {
+        at: '2026-10-10T08:00:00Z', session_id: '019a0c0d-0000-7000-8000-00000000c0de', tool: 'codex', model: null,
+        log: null, last_activity: '2026-10-10T07:55:00Z', context_tokens: 4000, branch: 'cx', count: 1,
+      },
+    }],
+  }));
+
+  const lines = [];
+  const deps = { ...realDeps(env), freeBytes: () => DISK_MIN_BYTES, log: (line) => lines.push(line) };
+  assert.equal(await runLoop({ once: true, merge: false, deps }), 0);
+
+  const argv = readFileSync(argvFile, 'utf8').split(ARG_SEP).slice(0, -1);
+  assert.deepEqual(argv.slice(0, 3), ['exec', 'resume', '--json']);
+  assert.equal(argv.includes('--sandbox'), false, '`codex exec resume` has no --sandbox');
+  assert.equal(argv[argv.indexOf('-c') + 1], 'sandbox_mode="danger-full-access"');
+  assert.equal(argv.at(-2), '019a0c0d-0000-7000-8000-00000000c0de');
+  assert.match(argv.at(-1), /cut off at 2026-10-10T07:55:00Z/u);
+  assert.match(argv.at(-1), /Run `git status` first/u);
+  assert.match(lines.join('\n'), /cx: resuming codex session 019a0c0d-0000-7000-8000-00000000c0de \(cold, 4 000 tokens\)/u);
+
+  // The tree as the session left it: same commit, same changes, nothing of main's.
+  assert.equal(git(worktree, 'rev-parse', 'HEAD').trim(), head);
+  assert.equal(git(worktree, 'status', '--porcelain'), status);
+  assert.equal(git(worktree, 'branch', '--show-current').trim(), 'cx');
 });

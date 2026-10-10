@@ -7,7 +7,7 @@ import {
   describeSettings, describeWatch, headlessArgs, helperDue,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen, apiInterruption, resumePrompt,
-  INTERRUPT_LIMIT, readSessionOutput, sessionStanding, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
+  COLD_RESUME_MAX_TOKENS, INTERRUPT_LIMIT, WARM_MARGIN_MS, readSessionOutput, recoveryFor, restartPrompt, sessionStanding, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow, userMessageLine,
 } from '../../src/mc/run-plan.js';
 import { NAME_RE } from '../../src/mc/plan-schema.js';
@@ -1009,4 +1009,37 @@ test('resumePrompt: names what the API said and says the workarea is untouched',
   assert.match(text, /"Not logged in · Please run \/login"/u);
   assert.match(text, /exactly as you left them/u);
   assert.match(text, /Do not start it over/u);
+});
+
+test('recoveryFor: resume while warm or small, fresh otherwise', () => {
+  const now = new Date('2026-10-10T12:00:00Z');
+  const ttlMs = 60 * 60_000;
+  const record = (over = {}) => ({ session_id: 'sid', tool: 'claude', last_activity: '2026-10-10T11:48:00Z', context_tokens: 120_000, ...over });
+  const cases = [
+    ['warm', record(), 'claude', { mode: 'resume', why: 'warm, 12 min since last request' }],
+    ['cold small', record({ last_activity: '2026-10-10T10:00:00Z', context_tokens: 41_000 }), 'claude', { mode: 'resume', why: 'cold, 41 000 tokens' }],
+    ['cold large', record({ last_activity: '2026-10-10T10:00:00Z' }), 'claude', { mode: 'fresh', why: 'cold, 120 000 tokens — fresh' }],
+    ['cold, size unknown', record({ last_activity: null, context_tokens: null }), 'claude', { mode: 'resume', why: 'cold, context size unknown' }],
+    ['inside the margin is cold', record({ last_activity: '2026-10-10T11:04:00Z' }), 'claude', { mode: 'fresh', why: 'cold, 120 000 tokens — fresh' }],
+    ['no id', record({ session_id: null }), 'claude', { mode: 'fresh', why: 'no session id — fresh' }],
+    ['tool changed', record(), 'codex', { mode: 'fresh', why: 'the tool is codex now, the session ran on claude — fresh' }],
+    ['resume failed', record({ resume_failed: true }), 'claude', { mode: 'fresh', why: 'the last resume did not start — fresh' }],
+  ];
+  for (const [label, interrupted, toolNow, want] of cases) {
+    assert.deepEqual(recoveryFor({ interrupted, toolNow, ttlMs, now }), want, label);
+  }
+  assert.equal(WARM_MARGIN_MS, 5 * 60_000);
+  assert.equal(COLD_RESUME_MAX_TOKENS, 75_000);
+  assert.equal(recoveryFor({ interrupted: record({ context_tokens: 75_000, last_activity: null }), toolNow: 'claude', ttlMs, now }).mode, 'resume', 'at the limit is resumed');
+});
+
+test('headlessArgs: a codex resume is `exec resume` with the sandbox through -c and the id before the prompt', () => {
+  const args = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'INSTRUCTIONS', prompt: 'go on', profileArgs, resume: 'thread-1' });
+  assert.deepEqual(args.slice(0, 6), ['exec', 'resume', '--json', '-m', 'o3', '-c']);
+  assert.equal(args[6], 'sandbox_mode="danger-full-access"');
+  assert.equal(args.includes('--sandbox'), false);
+  assert.deepEqual(args.slice(-2), ['thread-1', 'go on']);
+  const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: null, prompt: 'go on', profileArgs, resume: 'sid' });
+  assert.deepEqual(claude.slice(0, 3), ['-p', '--resume', 'sid']);
+  assert.match(restartPrompt({ at: '2026-10-10T11:48:00Z', why: 'warm, 12 min since last request' }), /cut off at 2026-10-10T11:48:00Z .*\n.*exactly as you left them/u);
 });

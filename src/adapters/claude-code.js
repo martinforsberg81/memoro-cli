@@ -128,6 +128,13 @@ export function resumeArgs({ sessionId, model = null } = {}) {
   return ['--resume', sessionId, ...modelArgs(model)];
 }
 
+// How long the prompt cache keeps a session's prefix: the runner's step
+// sessions write `ephemeral_1h_input_tokens` and nothing in `ephemeral_5m`
+// (measured in ~/mc/runner/log/*.jsonl, 2026-10-10). Inside it a resumed
+// session's first request reads its conversation from the cache
+// (`recoveryFor`, run-plan.js).
+export const CACHE_TTL_MS = 60 * 60_000;
+
 /**
  * The model to run on, passed through as given. mc does not validate model
  * names — the tool is the authority on what exists, and its own error names
