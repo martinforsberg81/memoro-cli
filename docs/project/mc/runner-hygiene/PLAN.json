@@ -1,0 +1,111 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "Four ways the runner hurt its own rounds in the week of 2026-10-06 are closed: a step no longer starts on a disk with no room, and scratch is swept after two days rather than seven; archiving a project no longer deletes a file that code or a test outside `docs/` reads; the merger's main-red walk measures a docs-only landing instead of ruling it out by path; a `project_log.md` that carries the same row twice is refused at the gate, and the archive never appends a row that is already there."
+  ],
+  "contract": [
+    "The runner writes nothing into a plan for any of this; a refused start is a `runner.log` line and a page line, and the step stays `ready`.",
+    "Free-space threshold: 5 GiB on the volume holding `~/mc`, measured where `MC_SCRATCH` is made. Scratch is kept 48 hours after it was last touched. Both are constants with a comment, not settings.",
+    "The archive keeps a referenced file in place (not moved) and says so in the PR body; it never refuses the whole archive for one file.",
+    "A docs-only landing the walk blames is re-measured before it is named, so the 2026-10-06 flake (#12727, a wall-clock budget test) is not blamed again.",
+    "Every step runs `npm test` and lands through `mc merge memoro-cli <pr>`."
+  ],
+  "out_of_scope": [
+    "Why a dev server registered for one worktree served another's bundle (2026-10-08) — `test-environment.js` matches on `worktree_path`, so the cause is in how the server registered; an investigation, not a step.",
+    "A size cap on scratch per session.",
+    "OrbStack's disk use."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A step does not start under 5 GiB free, and the page says why.",
+      "check": "`tests/mc/run-plan.test.js` (or `run.test.js`) with the free-space reader stubbed under the threshold: no session is launched and the line is logged; `mc --fresh` shows the line while the condition holds."
+    },
+    {
+      "met": false,
+      "criterion": "Archiving a project whose skill texts a test reads keeps those files.",
+      "check": "`tests/mc/archive-plan.test.js` and `archive-programme.test.js`: a worktree where `tests/x.test.js` names `docs/project/p/q/skills/a.md` archives `q` with `a.md` kept and the PR body naming it."
+    },
+    {
+      "met": false,
+      "criterion": "Two identical rows in `project_log.md` turn the gate red with a reason naming the row, and the archive's `appendRow` is idempotent.",
+      "check": "`tests/mc/archive-plan.test.js` for `appendRow`; the gate's tests for the red reason."
+    }
+  ],
+  "documents": [
+    { "label": "mc rulings", "path": "../rulings.md" },
+    { "label": "The proposals this plan consumes (archive)", "path": "../../../../../mc/proposals/archive/" }
+  ],
+  "steps": [
+    {
+      "title": "1. No step on a full disk, and scratch kept two days",
+      "status": "ready",
+      "done_when": "`mc run` reads the free space of the volume under `~/mc` before launching a step session and, under 5 GiB, launches none, logs `disk: <n> GiB free, below 5 GiB — no step started` once per pass and shows it on the page; `SCRATCH_KEEP_MS` is 48 hours; tests cover both; `npm test` is green.",
+      "instruction": [
+        "On 2026-10-08 a step session hit ENOSPC on its first shell commands: 118 MiB free, `~/mc/runner/scratch` 15 GiB (9 GiB in one running session's folder, the rest from closed runs). On 2026-10-09 OrbStack's VM stopped on a write error with under 2 GB free and container proofs failed. `src/mc/run.js:160` keeps scratch seven days (`SCRATCH_KEEP_MS`); `sweepScratch` (`:2405–2412`) runs at the end of a pass (`:2374`) and removes directories not touched since; the scratch directory for a session is made at `:1927–1934` (`MC_SCRATCH`).",
+        "**Free space.** Add a `freeBytes(path)` dependency beside `scratchDirs` in the deps object (`:386–396`), implemented with `statfsSync` from `node:fs` (`bavail * bsize`), stubbed in tests. Before the pass picks a step to start (the place that calls the launch at `:1920`), read it for `paths.scratch`'s volume; under `5 * 2**30` say the line above through `say`, record it where the page reads the runner's state (the same place a lane's idle reason is written — read `page-collect.js`/`page-render.js` for the RUNNER block's line), and skip starting. Check-ins and landings of sessions already running go on; only new starts are held.",
+        "**Scratch.** `SCRATCH_KEEP_MS` to `2 * 24 * 60 * 60 * 1000` with the comment saying why (the gate logs a proposal cites live here, so not hours). `sweepScratch` is unchanged otherwise.",
+        "**Tests.** `tests/mc/run-plan.test.js` or the run tests that stub deps: under the threshold nothing launches and the line is said once; at the threshold a step launches. The sweep test's age moves to 48 h."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "2. The archive keeps what the code reads",
+      "status": "ready",
+      "done_when": "Both archives (`archiveIn` in `run.js`, `archiveOnMain` in `archive-programme.js`) run `git grep -l` for the directory path over `src`, `tests`, `scripts`, `config`, `package.json` in the worktree before `git rm`, keep every file under the directory that a match names, and the PR body lists the kept files with the path that names each; tests cover a kept file; `npm test` is green.",
+      "instruction": [
+        "memoro #13310 (\"Archive 10 done projects\", 2026-10-10 04:06) deleted `docs/project/staff/day/skills/{calm-day,evening,week-ahead}.md` and `docs/project/staff/mosaic/skills/mosaic.md`; `tests/assistant/skills/delivery.test.js:77,87` reads them verbatim and `src/assistant/skills/*.js` name them. The archive landed as docs-only through `mc merge --docs`, so no test ran, and main was red on that file for every gate until the brief restored the four files (#13323).",
+        "**Where.** `src/mc/run.js:1081–1086` (`archiveIn`: `git rm -r -q -- <dir>` per done plan) and `src/mc/archive-programme.js:160–163` (`archiveOnMain`, the same for a programme). Before the `git rm`: `git grep -l -- \"<dir>/\" -- src tests scripts config package.json` in the worktree (the directory path with a trailing slash, so `staff/day/` does not match `staff/day-two/`); for each matching file, read its lines that name the path and collect the files under `<dir>` they name (a literal path, or a template whose fixed prefix is the directory — treat a template as naming every file in the directory it points at). `git rm` everything under `<dir>` except those; if nothing is left to remove, archive nothing for that plan and say so. Write a paragraph into the PR body: `kept: <file> — named by <path>:<line>`.",
+        "**Row.** The project log row is unchanged. `docs/project/README.md` in memoro says a plan directory is removed at archive; the kept files are the exception and the PR body is the record.",
+        "**Tests.** `tests/mc/archive-plan.test.js` and `archive-programme.test.js` build their worktree through stubbed `git`/`deps`; add a case where `git grep` answers one file naming `<dir>/skills/a.md`: the rm list excludes it and the body names it."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "3. The main-red walk measures a docs-only landing",
+      "status": "ready",
+      "done_when": "When `probeMainRed` finds the red file passes before a landing that changed only `docs/`, it measures the file once more at the landing and once more at its parent; stable (red at the landing, green at the parent, both times) is reported as `docs-only-landing` (\"landed without the suite\") and recorded as a selector miss of that kind; unstable is `flaky` and blames nobody; `mainRedClause` says each; tests cover both; `npm test` is green.",
+      "instruction": [
+        "`src/mc/selector-miss.js:72–122` walks first-parent history measuring the red files at each commit (`redAt`, `:147`) and, for each landing where a file passed before it, pushes a `break`; `:114` then stamps `kind: 'docs-only'` when `docsOnly(found.paths)` (`:142–144`), and `KIND_PHRASE['docs-only']` (`:131`) says \"it changed only docs/, so it cannot have broken it\". `mainRedClause` (`src/mc/repo-gate.js:1140–1160`) excludes those from the blamed landings. On 2026-10-10 06:08 the walk reached #13310 — the archive that deleted files a test reads — and ruled it out by path; the round's reds stayed unexplained. The exemption exists for 2026-10-06, when the walk reached #12727 for a wall-clock budget test that was red under load at both commits.",
+        "**The re-measure.** In the loop (`:97–113`), when the landing's paths are docs-only, run `redAt` once more at `newer` and once more at `commit` for that file before pushing the break: red at `newer` both times and green at `commit` both times → `kind: 'docs-only-landing'`, phrase \"it changed only docs/ and landed without the suite — a test reads what it changed\"; anything else → `kind: 'flaky'`, phrase \"red and green at the same commits — not this landing's\", and the file goes to `probe.unresolved`. Keep `docsOnly` for the path test. `recordSelectorMiss` records `docs-only-landing` so the page's selector-miss count sees it; `flaky` is said, not recorded.",
+        "**The clause.** `mainRedClause`: `docs-only-landing` is a blamed landing (named in `broken by …`), `flaky` is said in its own clause (`— <n> flaky under load`).",
+        "**Tests.** `tests/mc/selector-miss.test.js`: the walk with a docs-only landing whose re-measure is stable names it; one whose re-measure flips names nobody; the clause text for both."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "4. A duplicated project_log row is refused, and never appended twice",
+      "status": "ready",
+      "done_when": "The gate round reads the candidate's `docs/project/project_log.md` and, when any row occurs twice, the round is red with reason `project_log.md carries the same row twice: <date> <programme> <project> — delete the copy and push`; `appendRow` returns the text unchanged when the row is already present; tests cover both; `npm test` is green.",
+      "instruction": [
+        "memoro's `.gitattributes` gives `docs/project/project_log.md` `merge=union`, which keeps both sides of every conflicting hunk; its own comment says the result is \"a duplicated row that nobody notices\" the moment rows are not purely appended. On 2026-10-10 `main`'s log carried the `staff/focused-composer-keyboard` row five times and `staff/link-counts` four times, added by #13287, #13288, #13289, #13298, #13299, #13300 — each a step PR whose branch merged main under union. Nothing reads the file for duplicates.",
+        "**The gate.** In the round, after the candidate worktree is built and before the verdict (`src/mc/repo-gate.js`; find where the candidate is merged and measured), read `docs/project/project_log.md` if present, split rows as `logRows` in `src/mc/archive-plan.js:56` does, and compare rows by their `date`, `programme`, `project` cells: a second occurrence makes the round red with the reason above, naming the first duplicate. This red is the branch's to fix (the duplicates are in its tree); the reason says what to do.",
+        "**The archive.** `appendRow` (`archive-plan.js:83`) appends; `rowFor` (`:67`) finds a row by project. Make `appendRow` return `text` unchanged when a row with the same `programme` and `project` (and for a programme row, `project` `-`) is already there, so the two archives (`run.js:1092–1102` already prefers an existing row; `archive-programme.js:166–168` does not check) cannot add a second.",
+        "**Tests.** `tests/mc/archive-plan.test.js` for `appendRow`; the gate's tests (`git grep -l repo-gate tests/mc`) for the red reason with a candidate log holding a duplicate."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "5. Close-out",
+      "status": "ready",
+      "done_when": "The criteria are measured and marked; `docs/project/project_log.md` has the row; `docs/technical/mc-merge.md` (or the runner's technical note) says the three new behaviours; every step is `done` with its PR.",
+      "instruction": [
+        "Run the tests the criteria name on `main`; `mc --fresh` with the free-space reader forced under the threshold (an env override is not wanted — stub it in a test only, and say the page check was by test).",
+        "Add one paragraph each to the technical note that describes the merger's main-red walk and the archive (`git grep -l \"main-red\\|archive\" docs/technical`): the re-measure, the kept files, the duplicate-row red, the free-space hold.",
+        "Add the row to `docs/project/project_log.md` in the file's format (programme `mc`, project `runner-hygiene`)."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
