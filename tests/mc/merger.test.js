@@ -251,6 +251,28 @@ describe('serve — the loop', () => {
     assert.ok(said.some((line) => /#1: the round threw — Error: boom/u.test(line)));
   });
 
+  it('a step whose earlier step is not done is not landed, even resumed from landing; once it is done, it goes', async () => {
+    register();
+    const steps = (first) => writeFileSync(registerPath(root, 'mq'), JSON.stringify({
+      project: 'mq', repo: 'memoro-cli', programme: 'mc', plan: 'docs/project/mc/mq/PLAN.json',
+      steps: [{ status: first, comments: [], attempts: 0 }, { status: 'landing', pr: 672, branch: 'mq-2', comments: [], attempts: 0 }],
+    }));
+    steps('failed');
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 672, since: 'a', step: { project: 'mq', index: 1 }, state: 'landing', started: 's' }]));
+    const said = [];
+    const landed = [];
+    const land = async ([job]) => { landed.push(job.pr); return green; };
+    await serve({ root, lock, take, release, say: (line) => said.push(line), land });
+    assert.deepEqual(landed, []);
+    assert.equal(queue()[0].state, 'queued', 'put back in line, not landed');
+    assert.equal(queue()[0].since, 'a');
+    assert.ok(said.some((line) => /#672: back in line — mq step 1 is not done/u.test(line)), said.join('\n'));
+    assert.ok(said.includes('nothing the merger may take — leaving'));
+    steps('done');
+    await serve({ root, lock, take, release, land });
+    assert.deepEqual(landed, [672]);
+  });
+
   it('asked to stop, it leaves between jobs and the rest wait', async () => {
     mkdirSync(join(root, 'runner'), { recursive: true });
     writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null }]));
@@ -270,16 +292,20 @@ describe('batches (merge-throughput step 1)', () => {
   const take = () => true;
   const release = () => {};
   const MEMORO = { repo: 'memoro', repo_path: '/repos/memoro', branch: null, holder: { name: 'mb', kind: 'work-area' } };
-  const jobFor = (pr, index, since) => ({ ...MEMORO, pr, since, step: { project: 'mb', index } });
+  // One plan per pull request: a plan's own steps never share a batch, because
+  // step n+1 waits until step n is done (merger-hardening step 3).
+  const jobFor = (pr, _index, since) => ({ ...MEMORO, pr, since, step: { project: `mb-${pr}`, index: 0 } });
 
   function registerBatch() {
     mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
-    writeFileSync(registerPath(root, 'mb'), JSON.stringify({
-      project: 'mb', repo: 'memoro', programme: 'mc', plan: 'docs/project/mc/mb/PLAN.json',
-      steps: [11, 12, 13].map((pr) => ({ status: 'landing', pr, branch: `mb-${pr}`, comments: [], attempts: 0 })),
-    }));
+    for (const pr of [11, 12, 13]) {
+      writeFileSync(registerPath(root, `mb-${pr}`), JSON.stringify({
+        project: `mb-${pr}`, repo: 'memoro', programme: 'mc', plan: `docs/project/mc/mb-${pr}/PLAN.json`,
+        steps: [{ status: 'landing', pr, branch: `mb-${pr}`, comments: [], attempts: 0 }],
+      }));
+    }
   }
-  const steps = () => JSON.parse(readFileSync(registerPath(root, 'mb'), 'utf8')).steps;
+  const steps = () => [11, 12, 13].map((pr) => JSON.parse(readFileSync(registerPath(root, `mb-${pr}`), 'utf8')).steps[0]);
 
   function queueFour(extra = {}) {
     mkdirSync(join(root, 'runner'), { recursive: true });
@@ -385,16 +411,19 @@ describe('batches (merge-throughput step 1)', () => {
 
 describe('already merged or closed on GitHub (merger-hardening step 2)', () => {
   const MEMORO = { repo: 'memoro', repo_path: '/repos/memoro', branch: null, holder: { name: 'mb', kind: 'work-area' } };
-  const jobFor = (pr, index) => ({ ...MEMORO, pr, since: `2026-10-10T17:0${index}:00Z`, step: { project: 'mb', index } });
+  // One plan per pull request, so the batch is not held apart by step order.
+  const jobFor = (pr, index) => ({ ...MEMORO, pr, since: `2026-10-10T17:0${index}:00Z`, step: { project: `mb-${pr}`, index: 0 } });
 
   function registerBatch(status = 'landing') {
     mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
-    writeFileSync(registerPath(root, 'mb'), JSON.stringify({
-      project: 'mb', repo: 'memoro', programme: 'mc', plan: 'docs/project/mc/mb/PLAN.json',
-      steps: [11, 12, 13].map((pr) => ({ status, pr, branch: `mb-${pr}`, comments: [], attempts: 0 })),
-    }));
+    for (const pr of [11, 12, 13]) {
+      writeFileSync(registerPath(root, `mb-${pr}`), JSON.stringify({
+        project: `mb-${pr}`, repo: 'memoro', programme: 'mc', plan: `docs/project/mc/mb-${pr}/PLAN.json`,
+        steps: [{ status, pr, branch: `mb-${pr}`, comments: [], attempts: 0 }],
+      }));
+    }
   }
-  const steps = () => JSON.parse(readFileSync(registerPath(root, 'mb'), 'utf8')).steps;
+  const steps = () => [11, 12, 13].map((pr) => JSON.parse(readFileSync(registerPath(root, `mb-${pr}`), 'utf8')).steps[0]);
 
   /** A stub `gh`: `pr view <n> --json state,…` answers from `states`, anything else a body. */
   function stubGh(states) {

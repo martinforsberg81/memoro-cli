@@ -140,7 +140,7 @@ import {
 import { planBoundary } from './merge-boundary.js';
 import { redPatch } from './merge-step.js';
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
-import { parentLanded, queueMerge, readMerger, startMerger } from './merger.js';
+import { parentLanded, queueMerge, readMerger, startMerger, stepsBeforeDone } from './merger.js';
 import { pidAlive } from './status-collect.js';
 import { currentHolder } from './work-identity.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
@@ -767,7 +767,9 @@ export function createRunner({
    */
   function sweepLanding(plans) {
     const pending = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
-    const mayGo = pending.length && nextJob(pending, { landed: parentLanded(root, { read: deps.read }) });
+    const mayGo = pending.length && nextJob(pending, {
+      landed: parentLanded(root, { read: deps.read }), ordered: stepsBeforeDone(root, { read: deps.read }),
+    });
     if (mayGo && deps.startMerger && !readMerger({ root, alive })) {
       const started = deps.startMerger({ root });
       say(`merger: ${pending.length} pull request${pending.length === 1 ? '' : 's'} queued and no merger running — ${started.pid ? `started pid ${started.pid}` : `could not start one (${started.error || 'no pid'})`}`);

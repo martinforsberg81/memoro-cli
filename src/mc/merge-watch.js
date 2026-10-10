@@ -20,8 +20,8 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
-import { inLine, mergesPath, parseQueue, placeOf, queueOrder, queuedFor, samePr, waitingOnParent } from './merge-queue.js';
-import { readMerger } from './merger.js';
+import { inLine, mergesPath, parseQueue, placeOf, queueOrder, queuedFor, samePr, waitingOn } from './merge-queue.js';
+import { readMerger, stepsBeforeDone } from './merger.js';
 import { workRoot } from './paths.js';
 
 /**
@@ -38,10 +38,12 @@ export const WATCH_TIMEOUT_MIN = 30;
  * `queued` (place counted from 1, `ahead` the same repository's numbers
  * before it), `waiting` on its parent, `landing` (with the other jobs of the
  * same round, if it is a batch), `red`, or `gone` — which only GitHub can
- * resolve, and the loop asks. A job that waits while no merger is alive
- * carries `merger: false`.
+ * resolve, and the loop asks. A queued job whose plan's earlier step is not
+ * `done` carries `waits_for: '<project> step <n>'` (`ordered`, merger.js
+ * `stepsBeforeDone`). A job that waits while no merger is alive carries
+ * `merger: false`.
  */
-export function watchState(entries, { repo, pr, merger = null } = {}) {
+export function watchState(entries, { repo, pr, merger = null, ordered = () => true } = {}) {
   const entry = queuedFor(entries, repo, pr);
   if (!entry) return { kind: 'gone' };
   if (entry.state === 'red') return { kind: 'red', reason: entry.reason, answered: entry.answered };
@@ -51,15 +53,16 @@ export function watchState(entries, { repo, pr, merger = null } = {}) {
       .map((other) => other.pr);
     return { kind: 'landing', batch, pid: merger?.pid ?? null };
   }
-  const waits = waitingOnParent(entries).some((other) => samePr(other, entry));
+  const waits = waitingOn(entries, { ordered }).find((other) => samePr(other.entry, entry)) || null;
   const line = queueOrder(inLine(entries)).filter((other) => other.repo === entry.repo);
-  const state = waits
-    ? { kind: 'waiting', parent: entry.parent.pr }
+  const state = waits?.parent != null
+    ? { kind: 'waiting', parent: waits.parent }
     : {
       kind: 'queued',
       place: placeOf(entries, repo, pr) + 1,
       ahead: line.slice(0, line.findIndex((other) => samePr(other, entry))).map((other) => other.pr),
     };
+  if (state.kind === 'queued' && waits?.step) state.waits_for = `${waits.step.project} step ${waits.step.number}`;
   if (!merger) state.merger = false;
   return state;
 }
@@ -71,7 +74,8 @@ function lineOf(pr, state) {
   const noMerger = state.merger === false ? ' — no merger is running' : '';
   if (state.kind === 'queued') {
     const where = state.ahead.length ? `behind ${prs(state.ahead)}` : 'next in line';
-    return `mc: #${pr} queued — place ${state.place}, ${where}${noMerger}`;
+    const order = state.waits_for ? `, waits for ${state.waits_for}` : '';
+    return `mc: #${pr} queued — place ${state.place}, ${where}${order}${noMerger}`;
   }
   if (state.kind === 'waiting') return `mc: #${pr} waits for #${state.parent} (stacked on it) to land${noMerger}`;
   if (state.kind === 'landing') {
@@ -86,13 +90,15 @@ function lineOf(pr, state) {
 
 /**
  * The line to print for `next`, or null when nothing a reader cares about
- * changed: same kind, same place, same parent, same batch, same merger.
+ * changed: same kind, same place, same parent, same step waited for, same
+ * batch, same merger.
  */
 export function watchLine(prev, next, { pr = null } = {}) {
   if (!next || next.kind === 'gone') return null;
   if (prev && prev.kind === next.kind
     && prev.place === next.place
     && prev.parent === next.parent
+    && (prev.waits_for ?? null) === (next.waits_for ?? null)
     && String(prev.batch ?? '') === String(next.batch ?? '')
     && (prev.merger === false) === (next.merger === false)) return null;
   return lineOf(pr ?? next.pr ?? '?', next);
@@ -113,7 +119,7 @@ const realSleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); })
  */
 export async function watch({
   repo, pr, timeoutMs = WATCH_TIMEOUT_MIN * 60_000, pollMs = WATCH_POLL_MS,
-  readQueue, readMerger, prView, now = Date.now, sleep = realSleep, print = () => {},
+  readQueue, readMerger, prView, ordered = () => true, now = Date.now, sleep = realSleep, print = () => {},
 }) {
   const number = Number(pr);
   const start = now();
@@ -129,7 +135,7 @@ export async function watch({
   };
 
   for (;;) {
-    const state = watchState(readQueue(), { repo, pr: number, merger: readMerger() });
+    const state = watchState(readQueue(), { repo, pr: number, merger: readMerger(), ordered });
     if (state.kind === 'gone') {
       const view = prView(repo, number);
       const took = elapsed((now() - start) / 1000);
@@ -189,6 +195,7 @@ export async function followMerge({ repoPath, pr, timeoutMs = WATCH_TIMEOUT_MIN 
     readQueue: deps.readQueue || (() => parseQueue(realRead(mergesPath(root)))),
     readMerger: deps.readMerger || (() => readMerger({ root })),
     prView: deps.prView || ghPrView(repoPath),
+    ordered: deps.ordered || stepsBeforeDone(root),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
     print: json ? () => {} : (line) => stdout.write(`${line}\n`),

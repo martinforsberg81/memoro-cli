@@ -144,6 +144,12 @@ describe('watch', () => {
     assert.equal(w.lines[0], 'mc: #835 waits for #834 (stacked on it) to land');
   });
 
+  it('a job whose plan\'s earlier step is not done is queued and says what it waits for', async () => {
+    const w = world({ polls: [[job(835, { step: { project: 'merge-watch', index: 2 } })]], view: null });
+    await watch({ ...w.deps, timeoutMs: 0, ordered: () => false });
+    assert.equal(w.lines[0], 'mc: #835 queued — place 1, next in line, waits for merge-watch step 2');
+  });
+
   it('polls every WATCH_POLL_MS', () => {
     assert.equal(WATCH_POLL_MS, 10_000);
   });

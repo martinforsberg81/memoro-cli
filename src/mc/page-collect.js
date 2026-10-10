@@ -60,7 +60,9 @@ import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
-import { inLine, mergesPath, queueEntries, queueOrder, redEntries } from './merge-queue.js';
+import {
+  inLine, mergesPath, queueEntries, queueOrder, redEntries, samePr, stepsDone, waitingOn,
+} from './merge-queue.js';
 import { runningMerges } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
@@ -70,7 +72,7 @@ import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
 import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, workRoot } from './paths.js';
-import { overlayPlans } from './register.js';
+import { overlayPlans, readEntry } from './register.js';
 import { planState } from './plan-schema.js';
 import { describeWait } from './step-release.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
@@ -570,9 +572,12 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * until `mc merge` puts it back in line (Martin, 2026-10-10). One whose pull
  * request is no longer open is nobody's to fix and is not drawn — when the
  * open pull requests are known at all.
+ *
+ * A queued job whose plan's earlier step is not `done` (`ordered`, the
+ * merger's own rule) carries `waits_for: '<project> step <n>'`.
  */
 export function mergesSection({
-  landing = null, queued = [], prs = [], now = new Date(),
+  landing = null, queued = [], prs = [], now = new Date(), ordered = () => true,
 } = {}) {
   const all = queueEntries(queued);
   const entries = queueOrder(inLine(all));
@@ -598,11 +603,14 @@ export function mergesSection({
     };
   });
   const at = now instanceof Date ? now.getTime() : Number(now);
+  const waits = waitingOn(all, { ordered }).filter((one) => one.step);
   const queuedItems = entries.filter((item) => !isLanding(item)).map((item) => {
     const since = Date.parse(item.since || '');
+    const step = waits.find((one) => samePr(one.entry, item))?.step || null;
     return {
       ...item,
       title: titled(item.repo, item.pr)?.title || null,
+      waits_for: step ? `${step.project} step ${step.number}` : null,
       wait_seconds: Number.isFinite(since) ? Math.max(0, Math.round((at - since) / 1000)) : null,
     };
   });
@@ -1429,6 +1437,7 @@ export async function collectPage({
 
   const mergesNow = mergesSection({
     landing: merges({ repos: present, alive }), queued: queuedForMerge, prs: prs.prs, now,
+    ordered: stepsDone((project) => readEntry(root, project)?.steps ?? null),
   });
   const programmes = programmesSection({
     plans, areas, rows, openPrs: prs.prs, live: liveNames,
