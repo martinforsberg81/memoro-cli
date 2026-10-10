@@ -43,7 +43,7 @@
  * out is a selector that reaches fewer unrelated tests, which belongs in the
  * repository rather than in a second measurement here.
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
@@ -52,6 +52,7 @@ import { redFiles, redNames, tapTotals } from './tap-red.js';
 import { probeMainRed } from './selector-miss.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
+import { runShell as runShellAsync, runTool } from './child-async.js';
 import { log } from './logger.js';
 import { mcHome, workGatePath } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
@@ -139,6 +140,12 @@ export async function runGate({
   // round was free to move. So it claims first and passes `holdLease: false`,
   // and this module neither takes nor gives back what it did not claim.
   holdLease = true,
+  // Whether the round installs its own SIGINT/SIGTERM handler, which gives
+  // the lease and the round lock back and exits. `mc test` and `mc merge
+  // --check` want that. The merger does not: its own handler lets the jobs in
+  // flight finish, and a round that exits under it would end them all. With
+  // `false` the `finally` below gives both back.
+  signals = true,
 } = {}) {
   const startedAt = clock();
   // Where the repository may keep what it learns about its own tests between
@@ -171,9 +178,7 @@ export async function runGate({
   // A round that took an environment and then resolved its binaries against a
   // different one is answering a question nobody asked, and it is why a test
   // that put a stub `gh` on the PATH still reached the real one.
-  const run = (tool) => (args, options = {}) => spawnSync(tool, args, {
-    cwd: options.cwd, env, encoding: 'utf8',
-  });
+  const run = (tool) => (args, options = {}) => runTool(tool, args, { cwd: options.cwd, env });
   const askGit = git || run('git');
   const askGh = gh || run('gh');
   const runSuite = suite || ((options) => realSuite({ ...options, env }));
@@ -338,8 +343,8 @@ export async function runGate({
       process.exit(128 + (signal === 'SIGINT' ? 2 : 15));
     }
   };
-  const signals = ['SIGINT', 'SIGTERM'];
-  for (const signal of signals) process.on(signal, onSignal);
+  const caught = signals ? ['SIGINT', 'SIGTERM'] : [];
+  for (const signal of caught) process.on(signal, onSignal);
 
   report.declaration = { source: declared.source, ...declared.declaration };
   // An override that shadows shipped fields does it in silence — it took
@@ -362,7 +367,7 @@ export async function runGate({
     // is aimed at all come from the forge.
     const all = [];
     for (const number of numbers) {
-      const facts = prFacts({ gh: askGh, git: askGit, repoPath, pr: number, say });
+      const facts = await prFacts({ gh: askGh, git: askGit, repoPath, pr: number, say });
       if (!facts.ok) return finish('pr', facts.reason);
       all.push(facts.pr);
       say(`#${facts.pr.number} — ${facts.pr.head} into ${facts.pr.base}`);
@@ -383,7 +388,7 @@ export async function runGate({
     const fetched = await timed('fetch', async () => askGit(['fetch', 'origin', '--prune'], { cwd: repoPath }));
     if (fetched.status !== 0) return finish('fetch', trim(fetched.stderr) || 'git fetch failed');
 
-    clearWorkspace({ git: askGit, repoPath, workspace });
+    await clearWorkspace({ git: askGit, repoPath, workspace });
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
 
     // The branch the change is aimed at — or, with no pull request to ask it
@@ -391,9 +396,9 @@ export async function runGate({
     // here would measure a tree nobody asked about on a repository that calls
     // it something else, so it is read, and a repository that will not say is
     // a stop.
-    const baseRef = facts.pr ? `origin/${facts.pr.base}` : defaultBaseRef({ git: askGit, repoPath });
+    const baseRef = facts.pr ? `origin/${facts.pr.base}` : await defaultBaseRef({ git: askGit, repoPath });
     if (!baseRef) return finish('base', 'no pull request named a base and origin does not say which branch is its default');
-    report.base = { ref: baseRef, commit: trim(askGit(['rev-parse', baseRef], { cwd: repoPath }).stdout) || null };
+    report.base = { ref: baseRef, commit: trim((await askGit(['rev-parse', baseRef], { cwd: repoPath })).stdout) || null };
 
     // What gets run: the test files the repository's selector says this change
     // reaches, or the repository's own whole suite. `full` asks for the second
@@ -417,11 +422,11 @@ export async function runGate({
     // candidate without that ever becoming a commit on somebody's branch:
     // what is measured is a state, not a change to the repository.
     if (!facts.pr) {
-      const only = askGit(['worktree', 'add', '--detach', headDir, baseRef], { cwd: repoPath });
+      const only = await askGit(['worktree', 'add', '--detach', headDir, baseRef], { cwd: repoPath });
       if (only.status !== 0) return finish('worktree', trim(only.stderr) || `could not check out ${baseRef}`);
       say(`measuring ${baseRef} as fetched — the whole suite, one tree`);
     } else if (!batch) {
-      const candidate = askGit(['worktree', 'add', '--detach', headDir, facts.pr.head_sha], { cwd: repoPath });
+      const candidate = await askGit(['worktree', 'add', '--detach', headDir, facts.pr.head_sha], { cwd: repoPath });
       if (candidate.status !== 0) {
         return finish('worktree', trim(candidate.stderr) || `could not check out ${facts.pr.head_sha}`);
       }
@@ -430,7 +435,7 @@ export async function runGate({
       // that is green against the main its author branched from and red against
       // the main it is about to land on is exactly the collision this exists to
       // catch, and it is invisible if the head commit is tested on its own.
-      const merged = askGit(['merge', '--no-edit', baseRef], { cwd: headDir });
+      const merged = await askGit(['merge', '--no-edit', baseRef], { cwd: headDir });
       if (merged.status !== 0) {
         return finish('merge', `#${facts.pr.number} conflicts with ${baseRef} — ${trim(merged.stdout) || 'merge failed'}`);
       }
@@ -440,13 +445,13 @@ export async function runGate({
       // order given — the tree main would be after landing them in that
       // order. A conflict names the pull request that could not go in, so
       // the caller can fall back to one round per pull request and say so.
-      const candidate = askGit(['worktree', 'add', '--detach', headDir, baseRef], { cwd: repoPath });
+      const candidate = await askGit(['worktree', 'add', '--detach', headDir, baseRef], { cwd: repoPath });
       if (candidate.status !== 0) {
         return finish('worktree', trim(candidate.stderr) || `could not check out ${baseRef}`);
       }
       report.candidate_trees = [];
       for (const item of all) {
-        const merged = askGit(['merge', '--no-edit', item.head_sha], { cwd: headDir });
+        const merged = await askGit(['merge', '--no-edit', item.head_sha], { cwd: headDir });
         if (merged.status !== 0) {
           return finish('merge', `#${item.number} conflicts with ${baseRef} and the pull requests before it in the batch — ${trim(merged.stdout) || 'merge failed'}`);
         }
@@ -456,7 +461,7 @@ export async function runGate({
         // measured; the chain is what makes each landing checkable the
         // second it happens rather than at the end (PM's ruling on the
         // tracks' disagreement, 2026-08-23).
-        report.candidate_trees.push(trim(askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir }).stdout) || null);
+        report.candidate_trees.push(trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null);
         say(`merged #${item.number} (${item.head}) into the candidate`);
       }
     }
@@ -493,7 +498,7 @@ export async function runGate({
     // It never stops the round. Whether the suite can resolve its
     // dependencies is measured below, from the candidate, and a measurement
     // beats a report of what an install thought it did.
-    const deps = ensureWorkDeps({ repo: headDir, repoName: basename(repoPath), env });
+    const deps = await ensureWorkDeps({ repo: headDir, repoName: basename(repoPath), env, install: npmCiAsync });
     if (deps.state === 'installed') say(`the dependency tree above the candidate was installed — ${deps.why}`);
     if (!deps.ok) say(`the dependency tree above the candidate could not be made current — ${deps.why}`);
 
@@ -558,7 +563,7 @@ export async function runGate({
       if (fresh.commit) {
         say(`regenerated ${fresh.regenerated.length} derived file${fresh.regenerated.length === 1 ? '' : 's'} after the merge and committed them in the candidate`);
         if (report.candidate_trees?.length) {
-          report.candidate_trees[report.candidate_trees.length - 1] = trim(askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir }).stdout) || null;
+          report.candidate_trees[report.candidate_trees.length - 1] = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
         }
       } else {
         say('derived artifacts already current after the merge');
@@ -658,7 +663,7 @@ export async function runGate({
     // assume — that main became exactly what was measured (track 3's
     // correction, 2026-08-23: "verified together" and "landed one at a
     // time" are two different claims, and only the first was measured).
-    report.candidate.tree = trim(askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir }).stdout) || null;
+    report.candidate.tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
 
     // Both halves have finished, so the probe for main red never runs beside
     // a gate.
@@ -733,7 +738,7 @@ export async function runGate({
     gateEnv.NODE_OPTIONS = `${String(env.NODE_OPTIONS || '').replace(/--test-reporter(-destination)?[=\s]\S+/gu, '').trim()} --test-reporter=tap`.trim();
     for (const gate of gates) {
       say(`extra gate ${gate.name}`);
-      const outcome = await timed('extra gates', async () => shell(gate.command, { cwd: headDir, env: gateEnv }));
+      const outcome = await timed('extra gates', async () => await shell(gate.command, { cwd: headDir, env: gateEnv }));
       const head = gateSide(outcome);
       report.extra_gates.push({
         // What an operator declared beside the suite, as opposed to what the
@@ -758,8 +763,8 @@ export async function runGate({
 
     return finish(null, null);
   } finally {
-    for (const signal of signals) process.off(signal, onSignal);
-    clearWorkspace({ git: askGit, repoPath, workspace });
+    for (const signal of caught) process.off(signal, onSignal);
+    await clearWorkspace({ git: askGit, repoPath, workspace });
     // Always, and last. A round that died half way through must not leave the
     // repository held by a session that is no longer running — but a round
     // running inside somebody else's lease gives back nothing, because the
@@ -855,7 +860,7 @@ function scopeOf(report) {
  * as evidence.
  */
 async function measure({ suite, git, cwd, command, say, is }) {
-  const at = git(['rev-parse', 'HEAD'], { cwd });
+  const at = await git(['rev-parse', 'HEAD'], { cwd });
   const run = await suite({ cwd, command, onLine: (line) => say(line) });
   const totals = tapTotals(run.tap);
   if (!totals.finished) {
@@ -895,7 +900,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
  * Run in the candidate worktree, so the diff it computes is the pull request's.
  */
 async function selectFiles({ command, cwd, env, say }) {
-  const run = shell(command, { cwd, env });
+  const run = await shell(command, { cwd, env });
   if (run.status !== 0) {
     return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || run.error?.code || `exit ${run.status}`}` };
   }
@@ -1013,7 +1018,7 @@ async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, cl
  * "no tests ran" is an easy accident and an expensive one.
  */
 async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
-  const at = git(['rev-parse', 'HEAD'], { cwd });
+  const at = await git(['rev-parse', 'HEAD'], { cwd });
   const commit = at?.status === 0 ? String(at.stdout || '').trim() : null;
   const run = await tests({ cwd, files, flags, onLine: (line) => say(line) });
   const totals = tapTotals(run.tap);
@@ -1036,8 +1041,8 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
  * measures nothing, and the answer it would give — green — is the one most
  * likely to be acted on.
  */
-function prFacts({ gh, git = null, repoPath, pr, say = () => {} }) {
-  const asked = gh(
+async function prFacts({ gh, git = null, repoPath, pr, say = () => {} }) {
+  const asked = await gh(
     ['pr', 'view', String(pr), '--json', 'number,headRefName,baseRefName,headRefOid,state,title'],
     { cwd: repoPath },
   );
@@ -1060,7 +1065,7 @@ function prFacts({ gh, git = null, repoPath, pr, say = () => {} }) {
   // remote itself; an empty or failed answer leaves GitHub's word standing.
   let headSha = raw.headRefOid;
   if (git) {
-    const remote = git(['ls-remote', 'origin', `refs/heads/${raw.headRefName}`], { cwd: repoPath });
+    const remote = await git(['ls-remote', 'origin', `refs/heads/${raw.headRefName}`], { cwd: repoPath });
     const sha = remote.status === 0 ? String(remote.stdout || '').trim().split(/\s+/u)[0] : '';
     if (/^[0-9a-f]{40}$/u.test(sha) && sha !== headSha) {
       say(`#${pr} — GitHub still says ${headSha.slice(0, 7)}, origin/${raw.headRefName} is at ${sha.slice(0, 7)}: measuring the branch as pushed`);
@@ -1165,8 +1170,8 @@ function annotate(command, repoPath) {
  * would be a whole-suite answer about a tree nobody asked about. A remote that
  * does not say gives null, and the round stops rather than guessing.
  */
-function defaultBaseRef({ git, repoPath }) {
-  const asked = git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
+async function defaultBaseRef({ git, repoPath }) {
+  const asked = await git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
   const ref = asked?.status === 0 ? trim(asked.stdout) : '';
   return ref || null;
 }
@@ -1179,16 +1184,16 @@ function defaultBaseRef({ git, repoPath }) {
  * the directory is already gone and only the record is left, which is what an
  * interrupted round leaves behind.
  */
-function clearWorkspace({ git, repoPath, workspace }) {
+async function clearWorkspace({ git, repoPath, workspace }) {
   // `candidate` is the only one the round makes now; `baseline` is swept for
   // the rounds that ran before 2026-08-31 and may have left one behind.
   for (const name of ['baseline', 'candidate']) {
     const dir = join(workspace, name);
     if (existsSync(dir)) {
-      try { git(['worktree', 'remove', '--force', dir], { cwd: repoPath }); } catch { /* pruned below */ }
+      try { await git(['worktree', 'remove', '--force', dir], { cwd: repoPath }); } catch { /* pruned below */ }
     }
   }
-  try { git(['worktree', 'prune'], { cwd: repoPath }); } catch { /* nothing to prune */ }
+  try { await git(['worktree', 'prune'], { cwd: repoPath }); } catch { /* nothing to prune */ }
   try { rmSync(workspace, { recursive: true, force: true }); } catch { /* gone */ }
 }
 
@@ -1282,7 +1287,7 @@ async function ownTests({ git, tests, cwd, baseRef, head = 'HEAD', say, flags = 
   // not what the base changed since — on a batch candidate, HEAD carries the
   // other pull requests' files too, and a plain two-dot diff would run them
   // under this one's name.
-  const diff = git(['diff', '--name-only', '--diff-filter=AM', `${baseRef}...${head}`], { cwd });
+  const diff = await git(['diff', '--name-only', '--diff-filter=AM', `${baseRef}...${head}`], { cwd });
   if (diff?.status !== 0) {
     return { ok: false, reason: 'could not list the files the pull request changes', result: null };
   }
@@ -1405,33 +1410,33 @@ function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.en
 }
 
 /**
- * `maxBuffer` is stated because Node's default is 1 MiB and a child that
- * prints more is killed for it (`ENOBUFS`, status null): memoro's selector
- * printed 1.3 MB for #12720 and the round stopped with nothing measured.
+ * A declared command, through `child-async.js`: the selector, the prepare and
+ * the extra gates. Its 256 MiB `maxBuffer` is kept because Node's default is
+ * 1 MiB and a child that prints more is killed for it (`ENOBUFS`, status
+ * null): memoro's selector printed 1.3 MB for #12720 and the round stopped
+ * with nothing measured.
  */
 function shell(command, { cwd, env }) {
-  return spawnSync(command, { cwd, env, shell: true, encoding: 'utf8', maxBuffer: 256 << 20 });
+  return runShellAsync(command, { cwd, env });
 }
 
 /**
- * `shell`, without holding the event loop. A command gate runs beside the
- * suite, and a `spawnSync` there would stop the round reading the suite's
- * pipes for as long as the gate took — the suite's child blocks on a full
- * pipe, and "beside" becomes "after" again. Same result shape as `shell`:
- * `status` null when the command did not start or was killed.
+ * How the command gates the selection named are run, beside the suite. The
+ * name stays for its tests; it is `child-async.js`'s `runShell`, which is
+ * what every child of the round now is.
  */
-function commandShell(command, { cwd, env }) {
-  return new Promise((resolve) => {
-    const child = spawn(command, { cwd, env, shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.on('error', (error) => resolve({ status: null, stdout, stderr: stderr || error.message, error }));
-    child.on('close', (status) => resolve({ status, stdout, stderr }));
-  });
+export const commandShell = runShellAsync;
+
+/**
+ * `npm ci` for the dependency tree above the candidate (`work-deps.js`),
+ * without holding the event loop for up to ten minutes. `ensureWorkDeps`
+ * reads a throw as the install failing, with npm's stderr as the reason.
+ */
+async function npmCiAsync(cwd) {
+  const ran = await runTool('npm', ['ci', '--no-audit', '--no-fund'], { cwd, timeoutMs: 10 * 60_000 });
+  if (ran.status !== 0) {
+    throw Object.assign(new Error(ran.error?.message || `npm ci exited ${ran.status}`), { stderr: ran.stderr });
+  }
 }
 
 /**

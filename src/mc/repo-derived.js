@@ -19,7 +19,7 @@
  * generator writing outside what it declared is not something to commit in
  * silence.
  */
-import { spawnSync } from 'node:child_process';
+import { runShell } from './child-async.js';
 
 export const DERIVED_COMMIT_MESSAGE = 'Regenerate derived artifacts after merging the base';
 
@@ -32,18 +32,18 @@ export const DERIVED_COMMIT_MESSAGE = 'Regenerate derived artifacts after mergin
  * for a command that did not run and `outside` for dirt the declaration does
  * not cover.
  */
-export function regenerateDerived({ derived, cwd, env = process.env, git, shell = runShell, say = () => {} }) {
+export async function regenerateDerived({ derived, cwd, env = process.env, git, shell = runShell, say = () => {} }) {
   const entries = Array.isArray(derived) ? derived : [];
   if (!entries.length) return { ok: true, regenerated: [], commit: null };
   for (const entry of entries) {
     say(`regenerating derived artifacts: ${entry.command}`);
-    const ran = shell(entry.command, { cwd, env });
+    const ran = await shell(entry.command, { cwd, env });
     if (ran.status !== 0) {
       return { ok: false, kind: 'failed', reason: `${entry.command} failed — ${trim(ran.stderr) || trim(ran.stdout) || `exit ${ran.status}`}`, outside: [] };
     }
   }
 
-  const status = git(['status', '--porcelain', '--untracked-files=all'], { cwd });
+  const status = await git(['status', '--porcelain', '--untracked-files=all'], { cwd });
   if (status.status !== 0) {
     return { ok: false, kind: 'failed', reason: `could not read the tree after regenerating — ${trim(status.stderr)}`, outside: [] };
   }
@@ -63,13 +63,13 @@ export function regenerateDerived({ derived, cwd, env = process.env, git, shell 
     };
   }
 
-  const added = git(['add', '-A', '--', ...allowed], { cwd });
+  const added = await git(['add', '-A', '--', ...allowed], { cwd });
   if (added.status !== 0) return { ok: false, kind: 'failed', reason: `git add failed — ${trim(added.stderr)}`, outside: [] };
-  const committed = git(['commit', '--no-verify', '-m', DERIVED_COMMIT_MESSAGE], { cwd });
+  const committed = await git(['commit', '--no-verify', '-m', DERIVED_COMMIT_MESSAGE], { cwd });
   if (committed.status !== 0) {
     return { ok: false, kind: 'failed', reason: `could not commit the regenerated artifacts — ${trim(committed.stderr) || trim(committed.stdout)}`, outside: [] };
   }
-  const commit = trim(git(['rev-parse', 'HEAD'], { cwd }).stdout) || null;
+  const commit = trim((await git(['rev-parse', 'HEAD'], { cwd })).stdout) || null;
   return { ok: true, regenerated: dirty, commit };
 }
 
@@ -83,10 +83,6 @@ export function dirtyPaths(porcelain) {
       const arrow = path.indexOf(' -> ');
       return (arrow === -1 ? path : path.slice(arrow + 4)).replace(/^"(.*)"$/u, '$1');
     });
-}
-
-function runShell(command, { cwd, env }) {
-  return spawnSync(command, { cwd, env, shell: true, encoding: 'utf8' });
 }
 
 function trim(value) {

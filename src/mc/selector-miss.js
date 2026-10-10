@@ -89,7 +89,7 @@ export async function probeMainRed({
   probe.red_on_main = onBase.red;
   say(`${onBase.red.length} of the red file${onBase.red.length === 1 ? ' is' : 's are'} red on the base too — looking for the landing that broke ${onBase.red.length === 1 ? 'it' : 'them'}`);
 
-  const history = String(git(['rev-list', '--first-parent', `--max-count=${limit + 1}`, baseCommit], { cwd })?.stdout || '')
+  const history = String((await git(['rev-list', '--first-parent', `--max-count=${limit + 1}`, baseCommit], { cwd }))?.stdout || '')
     .split('\n').map((line) => line.trim()).filter(Boolean);
   let still = onBase.red;
   const flaky = [];
@@ -99,7 +99,8 @@ export async function probeMainRed({
     // A file that did not exist yet was added red by the landing after this
     // one. That landing's own tests would have run it; it is recorded all the
     // same, because it is still the landing that turned main red.
-    const present = still.filter((file) => exists(git, cwd, commit, file));
+    const present = [];
+    for (const file of still) if (await exists(git, cwd, commit, file)) present.push(file);
     const absent = still.filter((file) => !present.includes(file));
     const run = present.length ? await redAt({ git, tests, cwd, commit, files: present, flags }) : { ok: true, red: [] };
     if (!run.ok) {
@@ -108,7 +109,7 @@ export async function probeMainRed({
     }
     const passed = [...absent, ...present.filter((file) => !run.red.includes(file))];
     for (const file of passed) {
-      const found = landing({ git, cwd, commit: newer, file });
+      const found = await landing({ git, cwd, commit: newer, file });
       if (docsOnly(found.paths)) {
         found.kind = await remeasure({ git, tests, cwd, newer, commit, file, flags, present: present.includes(file) });
         if (found.kind === 'flaky') flaky.push(file);
@@ -173,7 +174,7 @@ export function docsOnly(paths) {
 
 /** Check out one commit and run `files` there; which of them came back red. */
 async function redAt({ git, tests, cwd, commit, files, flags }) {
-  const moved = git(['checkout', '--detach', '--force', commit], { cwd });
+  const moved = await git(['checkout', '--detach', '--force', commit], { cwd });
   if (moved?.status !== 0) return { ok: false, reason: `could not check out ${commit.slice(0, 7)}` };
   const run = await tests({ cwd, files, flags });
   // A run that never summarised is not evidence either way, here as in the
@@ -182,8 +183,8 @@ async function redAt({ git, tests, cwd, commit, files, flags }) {
   return { ok: true, red: redFiles(run.tap, files) };
 }
 
-function exists(git, cwd, commit, file) {
-  return git(['cat-file', '-e', `${commit}:${file}`], { cwd })?.status === 0;
+async function exists(git, cwd, commit, file) {
+  return (await git(['cat-file', '-e', `${commit}:${file}`], { cwd }))?.status === 0;
 }
 
 /**
@@ -191,10 +192,10 @@ function exists(git, cwd, commit, file) {
  * the paths it changed — so a landing that could not have broken the file is
  * not blamed for it.
  */
-function landing({ git, cwd, commit, file }) {
-  const subject = String(git(['log', '-1', '--format=%s', commit], { cwd })?.stdout || '').trim();
+async function landing({ git, cwd, commit, file }) {
+  const subject = String((await git(['log', '-1', '--format=%s', commit], { cwd }))?.stdout || '').trim();
   const number = /\(#(\d+)\)\s*$/u.exec(subject);
-  const changed = git(['diff-tree', '--no-commit-id', '--name-only', '-r', commit], { cwd });
+  const changed = await git(['diff-tree', '--no-commit-id', '--name-only', '-r', commit], { cwd });
   const paths = changed?.status === 0
     ? String(changed.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean)
     : [];
