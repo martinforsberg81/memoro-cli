@@ -1,0 +1,102 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A blocked step that waits for a time, for an earlier step's deploy plus a delay, or for another project to be done becomes `ready` by itself. Nobody has to notice and run `mc step ready`.",
+    "Today `blocked_by` is `{ kind, name }` with `kind` one of `decision | project | workarea` (`src/mc/plan-schema.js:50`). A blocked step is a person's (ruling 21), and the runner never reads `deploys.tsv` when it decides what is ready. `staleBlockers` (`src/mc/stale-blockers.js:58`) notices that a `project` blocker is done, but by design it writes nothing, so the step still waits for a person."
+  ],
+  "contract": [
+    "Two new blocker kinds, `time` and `deploy`. The existing `project` kind now releases by itself. `decision` and `workarea` are unchanged and stay a person's.",
+    "`time` is `{ kind: 'time', name, at }`, with `at` an ISO instant. It is due when the clock passes `at`.",
+    "`deploy` is `{ kind: 'deploy', name, step, hours }`. `step` is a 1-based step of the same plan, before the blocked one. `hours` is a number of 0 or more and defaults to 0. It is due when that step is `done` with a `landed.sha` in the register, a `deployed` row in `~/mc/runner/log/deploys.tsv` has a `sha` that contains `landed.sha` (`git merge-base --is-ancestor` in the repository's checkout), and `hours` have passed since the earliest such row's `ended`. Only memoro deploys (`mc deploy` deploys memoro's main and nothing else), so `deploy` is refused for a step in any other repository.",
+    "`project` is due when the named project's plan on `origin/main` is `done`. A project that is not on main is never due by itself: it may have been abandoned rather than delivered, and only a person can tell which (the reason given in the `stale-blockers.js` header).",
+    "A step waits on a whole project, never on one step of another project (Martin, 2026-10-10, ruling 35).",
+    "The release is a register write made by the runner: the step's status becomes `ready` and a comment says what released it. The plan file on main is not touched and no pull request is made. The register already holds `blocked_by` (`register.js` `normaliseStep`), so the new fields live there.",
+    "`name` stays a name (`NAME_RE`, ruled 2026-09-05). The verb makes it from the other fields, and what the step waits for in more words goes in the comments.",
+    "Every step runs `npm test` and lands through `mc merge memoro-cli <pr>`. The release takes effect when the runner runs the new code (`mc run --update`)."
+  ],
+  "out_of_scope": [
+    "Waiting on a single step of another project (struck by Martin, 2026-10-10).",
+    "Releasing `decision` or `workarea` blockers.",
+    "Deploys made from another machine. The step waits, and `mc step` says no deploy has been seen.",
+    "Several blockers on one step. A step waits for one thing, as today."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "The plan schema, the register and `mc step blocked` accept `time` and `deploy` blockers with their fields, and refuse a malformed one.",
+      "check": "`tests/mc/plan-schema.test.js`, `tests/mc/register.test.js` (the fields survive `normaliseEntry` and `patchStep`) and `tests/mc/step-command.test.js` (or the test beside `commands/step.js`): `--until`, `--after-deploy`, `--hours`; a past `--until` is refused, as is `--after-deploy` on a memoro-cli step and `--after-deploy` naming the step itself or a later one."
+    },
+    {
+      "met": false,
+      "criterion": "A due blocker is released by the runner's `queue()` into `ready` with a comment, and one that is not due is left blocked.",
+      "check": "`tests/mc/step-release.test.js`: `time` before and after `at`; `deploy` with no deployed row, a row that does not contain the sha, a row that contains it but is younger than `hours`, and one that is old enough; `project` done, not done, and not on main. `tests/mc/run.test.js` (or the runner test that drives `queue()`): a due step comes out of `queue()` as `ready`, and its register entry carries the comment."
+    },
+    {
+      "met": false,
+      "criterion": "`mc step <project>` and the page say how long a time or deploy wait has left.",
+      "check": "The `mc step` test: `on deploy of step 3 + 24h — 7h40m left`, `on deploy of step 3 — not deployed yet`, `until 2026-10-14 08:00Z — 3d left`. The page test for the blocked line shows the same words."
+    },
+    {
+      "met": false,
+      "criterion": "Live: a step is released by the runner on the new code.",
+      "check": "The close-out quotes the `runner.log` line for the first release after the runner runs step 2's code, together with that step's register comment. If no release has happened by then, the close-out says so in its comments instead of inventing one."
+    }
+  ],
+  "documents": [
+    {
+      "label": "mc rulings (ruling 35)",
+      "path": "../rulings.md"
+    },
+    {
+      "label": "The runner",
+      "path": "../../../technical/mc-run.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. time and deploy blockers in the schema, the register and mc step blocked, and the pure rule for when one is due",
+      "status": "ready",
+      "done_when": "`BLOCKER_KINDS` holds `time` and `deploy`. The schema, `normaliseStep` and `patchStep` accept and keep `at`, `step` and `hours`. `mc step blocked` takes `--until <iso>` and `--after-deploy [<n>] [--hours <h>]`. A new `src/mc/step-release.js` exports a pure `blockerDue(step, context)` and `describeWait(step, context)`. `mc step <project>` prints the wait. The tests in success criteria 1 and 3 are green, and so is `npm test`.",
+      "instruction": [
+        "**Schema** (`src/mc/plan-schema.js`). `BLOCKER_KINDS` (`:50`) becomes `['decision', 'project', 'workarea', 'time', 'deploy']`. `BLOCKER_KEYS` (`:117`) becomes `['kind', 'name', 'at', 'step', 'hours']`. In `validateBlocker` (`:201`), `time` must have an `at` that `Date.parse` reads, and `deploy` must have an integer `step` of 1 or more that is below the blocked step's own number, and an optional `hours` that is a finite number of 0 or more. Any other kind carrying `at`, `step` or `hours` is a problem (`blocked_by.at: only a time blocker has one`). The comment on `BLOCKER_KINDS` says which kinds release by themselves (`time`, `deploy`, `project`) and points at `step-release.js`.",
+        "**Register** (`src/mc/register.js`). `normaliseStep` (`:107`) today keeps only `kind` and `name` of `blocked_by`, and `applyEntry` (`:257`) copies `blocked_by` into the plan record. Keep `at` when it is a string, `step` when it is an integer, and `hours` when it is a finite number, and drop them otherwise. `patchStep` (`:281`) applies the same checks as the schema for `time` and `deploy`. The schema already refuses an unknown kind. Say in a comment that a runner on older code drops these three fields at a handover (memory of ruling 30's rollout: old code drops unknown register fields). Such a step then reads as blocked on a `time`/`deploy` name with nothing to release it, and `mc step` shows the name, so a person sees it.",
+        "**The rule** (new `src/mc/step-release.js`). This part is pure. `blockerDue(step, { now, plans, stepsOf, deploys, contains })` returns `{ due, why }`. `now` is a Date. `plans` is the plan records `queue()` holds, across both repositories. `stepsOf(index)` gives this project's register steps. `deploys` is `readDeploys()` rows. `contains(sha, rowSha)` answers the ancestor question. `time`: due when `now >= at`, and `why` is `time 2026-10-14T08:00Z passed`. `deploy`: find register step `step - 1`. If it is not `done` or has no `landed.sha`, it is not due. Take the `deployed` rows with an `ended` whose `sha` contains `landed.sha`, ordered by `ended`. The first one's `ended` plus `hours` must be `<= now`, and `why` is `deploy 4f2a1c9 ended 2026-10-11T09:12Z, + 24h`. `project`: due when a record with that `project` has `status: 'done'`, and `why` is `project y is done`. Anything else is `{ due: false }`. `describeWait(step, context)` gives the words `mc step` and the page show: `on deploy of step 3 + 24h — 7h40m left`, `on deploy of step 3 — not deployed yet`, `on deploy of step 3 — step 3 not landed`, `until 2026-10-14 08:00Z — 3d left`, `on project y — not done`. Reuse `ago`'s unit rule from `commands/step.js` (move it into the module and import it back).",
+        "**The verb** (`src/mc/commands/step.js:74-87`). Add `--until <iso>` (refused when unparsable or already past) and `--after-deploy [<n>]` with `--hours <h>`. `<n>` defaults to the step before. It is refused when it is not before the blocked step, and when `entry.repo` is not `memoro` (`mc: memoro-cli has no deploy — mc deploy deploys memoro`). Exactly one of `--on`, `--on-project`, `--until` or `--after-deploy` is given. The name is made from the fields, because `NAME_RE` is lower-case and has no colons: `until-20261014-0800` and `deploy-step-3-24h` (`deploy-step-3` without hours). The usage lines (`:7`, `:182`) list the new forms. The status line (`:163`) uses `describeWait` for `time` and `deploy`, with the context built from the clock, `readDeploys()` and a `contains` that runs `git merge-base --is-ancestor` in the repository's path from `defaultRepos`. The other kinds keep today's `on <kind> <name>`.",
+        "**Tests.** `tests/mc/plan-schema.test.js`: the two kinds, a bad `at`, a `step` that is not earlier, a negative `hours`, and `at` on a `project` blocker. `tests/mc/register.test.js`: the fields round-trip through `normaliseEntry` and `patchStep`, and a non-blocked patch clears them. `tests/mc/step-release.test.js`: every case in success criterion 2's first sentence, against `blockerDue` and `describeWait` with an injected `now` and `contains`. The `mc step` test: the three verb forms, the four refusals, and the printed wait lines."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "2. The runner releases due blockers in queue(), and the page shows the wait",
+      "status": "ready",
+      "done_when": "The runner's `queue()` (`src/mc/run.js:2414`) releases every current blocked step whose blocker is due: the register step becomes `ready` with the comment `Released <now>: <why>` and a `runner.log` line. Released steps come out of `queue()` as `ready` the same call. `staleBlockers` no longer reports a `project` blocker that is done. The page's blocked line uses `describeWait`. The tests in success criterion 2 are green, and so is `npm test`.",
+      "instruction": [
+        "**Where.** `queue()` builds `plans` per repository as `sweepLanding(sweepRunning(overlayPlans(listPlans(...), register)))` (`run.js:2431`). After the repository loop, when every record of both repositories is in `plans`, call a new `releaseDue(plans, { root, now, deploys, contains, update, say })` from `step-release.js` and use what it returns as `plans`. The release must see both repositories, because a `project` blocker may name a project in the other one. `deploys` is `readDeploys(env)`, read once per call. `contains` runs `git merge-base --is-ancestor <landed> <rowSha>` in memoro's `repo.path`, where `queue()` has just fetched. Answer `false` when git fails, so a missing commit never releases anything.",
+        "**releaseDue.** For each record whose current step (`planState(record.plan)`) is `blocked`, read the register entry (`readEntry`), build the context for `blockerDue`, and when it is due call `update` (`updateStep`) with `{ status: 'ready', blocked_by: null, reason: null, comment: 'Released <now ISO>: <why>' }`. Then say `<project> step <n>: released — <why>`. Return the records with that step's `status` set to `ready` and `blocked_by` null, then `planSummary` as `applyEntry` does, so the picker sees `ready` in the same pass. A throw from one record (an unreadable entry, a refused patch) is said once and leaves that record as it was. Only the current step is considered: a blocked step behind another stopped step is not reached, by the same rule as `planState` (`plan-schema.js:355-360`).",
+        "**The register comment on a person's rule.** `register.js`'s header (`:47-55`) says a `blocked` step is a person's and the runner never retries one. Amend it in one sentence: the three self-releasing kinds are released by the runner (ruling 35), and `decision` and `workarea` are still a person's. Do the same in `run-plan.js`'s `chooseKind` comment (`:330-334`).",
+        "**staleBlockers** (`src/mc/stale-blockers.js:58`). Drop the `is done` case, because the runner now releases it. Keep `is not on main`. Rewrite the header's first paragraph to say so. Update `tests/mc/stale-blockers.test.js` and the expectation in `tests/mc/page.test.js:861`.",
+        "**The page.** Where the page draws a blocked step's `on <kind> <name>` (find it from `page.test.js`'s blocked-step case), use `describeWait` for `time` and `deploy`, with the same context the page already has from `deploys.tsv` (the deploy reading on the page) and a `contains` over the memoro checkout. If the page has no such reading at hand, show `until <at>` or `on deploy of step <n> + <h>h` without the remaining time. Do not add a git call per paint.",
+        "**Tests.** `tests/mc/step-release.test.js` gets `releaseDue` with an in-memory register (`read`/`write` as in `register.test.js`): a due `time` step is written `ready` with the comment and comes back `ready`; a step that is not due is untouched; a `project` blocker on a project in the other repository's records is released; one record that throws leaves the others released. The runner test that drives `queue()`: a due step leaves `queue()` `ready` and `nextFor` picks it."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "3. Close-out",
+      "status": "ready",
+      "done_when": "The runner runs step 2's code, every criterion is marked with what was measured, `docs/technical/mc-run.md` describes the self-releasing blockers, `docs/project/project_log.md` has the row, and every step is `done` with its PR.",
+      "instruction": [
+        "**Live.** Read `~/mc/runner/runner.json`'s `commit`. If it does not contain step 2's merge commit, say so in this step's comments and do not stop the runner: it is updated with `mc run --update` by Martin. Search `~/mc/runner/log/runner.log` for `: released — ` after the runner's start line, and quote the first line with the released step's register comment (`mc step <project>`). If there is none, write that no release was seen yet and leave criterion 4 `met: false` with that sentence.",
+        "**Docs.** `docs/technical/mc-run.md` § *The register* (`:1209`) and the part on blocked steps (§ *Blocked by the runner*, `:1168`, or the paragraph nearest it on how a blocked step comes back): the five kinds, which three release by themselves, the rule for each, `mc step blocked --until / --after-deploy / --on-project`, and that the release is a register write with a comment and never a plan edit.",
+        "**Log.** Add the row to `docs/project/project_log.md` in its format: programme `mc`, project `step-release`, delivered, one paragraph, and the PRs."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
