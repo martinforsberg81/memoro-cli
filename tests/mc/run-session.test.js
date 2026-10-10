@@ -8,6 +8,9 @@
  */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 
 import { streamSession } from '../../src/mc/run.js';
@@ -221,6 +224,34 @@ describe('streamSession', () => {
     run(child, 20);
     assert.deepEqual(child.killed, ['SIGTERM']);
     assert.equal(texts().some((t) => t.startsWith('quiet')), false);
+  });
+
+  it('appends every stdout chunk to logPath as it arrives, and reports the signal it ended on', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-session-log-'));
+    try {
+      const logPath = join(dir, 'log', 'alpha-1.jsonl');
+      const { child, session } = start({ logPath });
+      child.say('{"type":"system","session_id":"s"}');
+      assert.equal(readFileSync(logPath, 'utf8'), '{"type":"system","session_id":"s"}\n', 'on disk before the session ends');
+      child.stdout.emit('data', Buffer.from('{"type":"assistant","mes'));
+      child.stdout.emit('data', Buffer.from('sage":{}}\n'));
+      assert.equal(readFileSync(logPath, 'utf8'), '{"type":"system","session_id":"s"}\n{"type":"assistant","message":{}}\n');
+      child.emit('close', null, 'SIGKILL');
+      const result = await session;
+      assert.equal(result.signal, 'SIGKILL');
+      assert.equal(result.stalled, false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('goes on when the log cannot be opened', async () => {
+    const { child, session } = start({ logPath: '/dev/null/cannot/be' });
+    child.say(RESULT);
+    child.emit('close', 0, null);
+    const result = await session;
+    assert.equal(result.status, 0);
+    assert.equal(result.signal, null);
   });
 
   it('with no prompt, stdin is not piped and nothing is written', async () => {

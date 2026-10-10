@@ -45,6 +45,16 @@ test('blocked refuses a name the plan schema would refuse — 2026-09-18, `proje
   assert.equal(await run(['blocked', '--on', 'a', '--on-project', 'p'], f.deps), 2);
 });
 
+test('mc step <project> prints an interrupted ready step\'s record', async () => {
+  const f = fixture();
+  f.deps.write(registerPath(ROOT, 'p'), {
+    project: 'p', repo: 'memoro',
+    steps: [{ key: 'A', status: 'ready', interrupted: { at: '2026-09-18T09:30:00Z', session_id: 'c1a2b3c4-dead', tool: 'claude', last_activity: '2026-09-18T09:20:00Z', context_tokens: 5320, count: 1 } }],
+  });
+  assert.equal(await run(['p'], f.deps), 0);
+  assert.match(f.out.join(''), /ready +interrupted 2026-09-18T09:30:00Z · claude session c1a2b3c4 · last activity 40m ago · 5320 tokens/u);
+});
+
 test('note appends a paragraph to the step and moves nothing else', async () => {
   const f = fixture();
   assert.equal(await run(['note', '14 admissions still to write; the list is in the pull request'], f.deps), 0);

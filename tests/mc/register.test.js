@@ -44,6 +44,20 @@ test('seedEntry reads a plan file\'s own state once: done with its pr, blocked w
   assert.equal(entry.steps[2].updated, '2026-09-12T10:00:00Z');
 });
 
+test('patchStep keeps an interrupted record while the step is ready or running, and clears it on any other status', () => {
+  const rec = record([step(), step()]);
+  const record1 = { at: 'now', session_id: 's-1', tool: 'claude', count: 1 };
+  let entry = patchStep(seedEntry(rec), 0, { status: 'ready', interrupted: record1 }, 'now');
+  assert.deepEqual(entry.steps[0].interrupted, record1);
+  assert.equal(parseEntry(JSON.stringify(entry)).steps[0].interrupted.session_id, 's-1', 'the register file keeps it');
+  assert.equal(parseEntry(JSON.stringify(entry)).steps[1].interrupted, null);
+  entry = patchStep(entry, 0, { status: 'running', session: { pid: 4 } }, 'now');
+  assert.deepEqual(entry.steps[0].interrupted, record1, 'kept while the next session runs');
+  for (const [status, extra] of [['landing', {}], ['done', {}], ['failed', { reason: 'r' }], ['blocked', { blocked_by: { kind: 'decision', name: 'q-1' } }]]) {
+    assert.equal(patchStep(entry, 0, { status, ...extra }, 'now').steps[0].interrupted, null, status);
+  }
+});
+
 test('applyEntry lays the register over the file, and the summary is recomputed from it', () => {
   const rec = record([step({ status: 'done', pr: 1 }), step(), step()]);
   const entry = patchStep(seedEntry(rec), 1, { status: 'failed', reason: 'the gate was red', pr: 9 }, 'now');

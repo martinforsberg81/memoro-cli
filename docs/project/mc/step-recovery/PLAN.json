@@ -23,7 +23,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A step whose session pid is gone becomes `ready` with an `interrupted` record holding the session id, tool, log, last activity and context size, and is not `failed`.",
       "check": "`tests/mc/run.test.js`: a register with a `running` step whose pid is dead and a partial claude stream log, and one with a codex log; after `queue()` the step is `ready`, `interrupted.session_id` is the stream's id, `last_activity` is the log's mtime, `count` is 1. A third interruption in a row makes it `failed` with the reason naming three interruptions."
     },

@@ -103,7 +103,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
@@ -147,10 +147,10 @@ import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './role
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
-  DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
+  DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
-  queueFileText, readSessionOutput, resumePrompt, sessionResult, sessionSettings, streamSummary, describeSettings, describeWatch,
+  queueFileText, readSessionOutput, resumePrompt, sessionResult, sessionSettings, sessionStanding, streamSummary, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -227,14 +227,34 @@ function sh(cmd, args, { cwd, timeout = 120_000 } = {}) {
  * synchronous wait would hold the event loop for the whole session — the
  * second lane would never get to start. The output is collected here instead
  * of by `maxBuffer`, and capped rather than allowed to eat the machine.
+ *
+ * `logPath`, when given, gets every stdout chunk appended as it arrives: a
+ * session that dies with the machine leaves its stream — its session id, its
+ * context, its last words — on disk, where the next runner reads it
+ * (`sweepRunning`, ruling 33). The log is a record, not the session: a write
+ * that fails is dropped and the session goes on. The resolved object carries
+ * the `signal` the process ended on, if it did.
  */
-export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSpawn = null, spawn: spawnFn = spawn }) {
+export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn }) {
   return new Promise((resolve) => {
     const piped = prompt != null;
     const child = spawnFn(bin, args, { cwd, stdio: [piped ? 'pipe' : 'ignore', 'pipe', 'pipe'], env });
     // The register records the pid as the step's session (ruling 21); a
     // record, not the session, so a throwing recorder must not end the run.
     if (child.pid && onSpawn) { try { onSpawn(child.pid); } catch { /* recorded elsewhere */ } }
+    let logFd = null;
+    if (logPath) {
+      try { mkdirSync(dirname(logPath), { recursive: true }); logFd = openSync(logPath, 'a'); } catch { logFd = null; }
+    }
+    const logChunk = (chunk) => {
+      if (logFd == null) return;
+      try { writeSync(logFd, chunk); } catch { /* a record, not the session */ }
+    };
+    const closeLog = () => {
+      if (logFd == null) return;
+      try { closeSync(logFd); } catch { /* already closed */ }
+      logFd = null;
+    };
     const cap = 256 << 20;
     const collect = (stream, onChunk) => {
       const chunks = [];
@@ -303,6 +323,7 @@ export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 
     // after its usage, some 2 000 characters in, so a look at the head of the
     // line never saw one (2026-09-25).
     const scan = (chunk) => {
+      logChunk(chunk);
       asked = false;
       armStall();
       if (!piped || resultSeen) return;
@@ -337,9 +358,10 @@ export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 
     armStall();
     child.on('error', (error) => {
       failure = error;
-      if (!child.pid) done({ status: 1, stdout: '', stderr: String(error.message), timedOut: false, stalled: false });
+      if (!child.pid) { closeLog(); done({ status: 1, stdout: '', stderr: String(error.message), timedOut: false, stalled: false }); }
     });
-    child.on('close', (status) => {
+    child.on('close', (status, signal) => {
+      closeLog();
       done({
         status: stalled ? TIMEOUT_EXIT : (lingered ? 0 : (status ?? 1)),
         stdout: stdout(),
@@ -347,6 +369,7 @@ export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 
         timedOut: stalled,
         stalled,
         lingered,
+        signal: signal ?? null,
       });
     });
   });
@@ -369,6 +392,9 @@ export function realDeps(env = process.env) {
     // to every reader of it.
     alive: pidAlive,
     read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
+    // When a file was last written, ISO, or null: a dead session's last
+    // activity is its stream log's mtime.
+    mtime: (path) => { try { return statSync(path).mtime.toISOString(); } catch { return null; } },
     list: (path) => { try { return readdirSync(path); } catch { return []; } },
     // Files only, for the one caller that must not mistake a directory for an
     // item: `~/mc/intake/decisions-archive/` is an archive, not an inbox entry.
@@ -566,12 +592,42 @@ export function createRunner({
   }
 
   /**
+   * A session that died under its step — the machine restarted, the runner
+   * was killed, something killed the process — written as what it is
+   * (ruling 33): the step is `ready` again with an `interrupted` record read
+   * off the session's stream log (`<log>.jsonl`, written as it streamed), so
+   * the next session can be handed what this one left. Never `failed` for
+   * that alone: only the `INTERRUPT_LIMIT`th interruption in a row is, since
+   * a step that keeps dying is a person's. Returns the entry as written.
+   */
+  function recordInterrupted({ name, index, was, log, tool, model, branch }) {
+    const stdout = log ? deps.read(`${log}.jsonl`) : null;
+    const standing = sessionStanding({ toolId: tool === 'codex' ? 'codex' : 'claude', stdout: stdout ?? '' });
+    const lastActivity = log && stdout != null && deps.mtime ? deps.mtime(`${log}.jsonl`) : null;
+    const count = (Number(was?.interrupted?.count) || 0) + 1;
+    const id = standing.session_id || 'unknown';
+    if (count >= INTERRUPT_LIMIT) {
+      const reason = `interrupted ${count} times in a row — last session ${id}`;
+      say(`${name}: step ${index + 1} ${reason} — failed`);
+      return recordStep(name, index, { status: 'failed', reason, session: null });
+    }
+    say(`${name}: step ${index + 1} interrupted — ${tool || 'the'} session ${id} died under it (${count} in a row), ready again`);
+    return recordStep(name, index, {
+      status: 'ready', reason: null, session: null,
+      interrupted: {
+        at: stamp(), session_id: standing.session_id, tool: tool ?? null, model: model ?? null, log: log ?? null,
+        last_activity: lastActivity, context_tokens: standing.context_tokens, branch: branch ?? null, count,
+      },
+    });
+  }
+
+  /**
    * A `running` step whose session is not there is a step nothing will
-   * finish: the runner that held it was killed, or the machine slept through
-   * it. It is `failed` with that reason, so the picker does not wait on it
-   * for ever and a person sees it where every other failed step is. A pid
-   * this process owns and is still awaiting is alive, so this never touches
-   * a lane's own session.
+   * finish: the runner that held it was killed, or the machine slept or
+   * restarted through it. It is interrupted (`recordInterrupted`), so the
+   * picker does not wait on it for ever and the session it lost is named. A
+   * pid this process owns and is still awaiting is alive, so this never
+   * touches a lane's own session.
    */
   function sweepRunning(plans) {
     return plans.map((record) => {
@@ -580,10 +636,12 @@ export function createRunner({
       steps.forEach((step, index) => {
         if (step?.status !== 'running') return;
         const entry = readEntry(root, record.project, { read: deps.read });
-        const pid = entry?.steps?.[index]?.session?.pid;
+        const state = entry?.steps?.[index];
+        const pid = state?.session?.pid;
         if (pid && alive(pid)) return;
-        say(`${record.project}: step ${index + 1} was running under pid ${pid ?? 'none'}, which is gone — failed`);
-        const written = recordStep(record.project, index, { status: 'failed', reason: `the session (pid ${pid ?? 'unknown'}) is gone without a result` });
+        say(`${record.project}: step ${index + 1} was running under pid ${pid ?? 'none'}, which is gone — interrupted`);
+        const session = state?.session || {};
+        const written = recordInterrupted({ name: record.project, index, was: state, log: session.log, tool: session.tool, model: session.model, branch: state?.branch });
         if (written) out = applyEntry(out, written);
       });
       return out;
@@ -1024,12 +1082,13 @@ export function createRunner({
 
   /**
    * A session's three log files under one stem: the stream as it came
-   * (`.jsonl`), the result read from it alone (`.json`, the summed object
+   * (`.jsonl` — already there when the session streamed into it, and then
+   * left as it is), the result read from it alone (`.json`, the summed object
    * `scripts/measure-steps.py` reads — absent when there was none), and
    * stderr (`.json.err`, where it always was).
    */
   function writeSessionLogs(stem, result) {
-    deps.write(`${stem}.jsonl`, result.stdout);
+    if (!deps.exists(`${stem}.jsonl`)) deps.write(`${stem}.jsonl`, result.stdout);
     // A session `mc merge` ended has no result line; its turns and usage are
     // read from the stream instead (`streamSummary`, `subtype: 'killed'`).
     const summed = sessionResult(result.stdout) || streamSummary(result.stdout);
@@ -1952,7 +2011,7 @@ export function createRunner({
     if (stepIndex != null) {
       recordStep(name, stepIndex, {
         status: 'running', branch: stepBranch, pr: retry ? retry.pr : null, reason: null, stacked_on: stacked,
-        session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool },
+        session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool, log: out },
       });
     }
     // A directory outside the worktree for whatever the session measures with:
@@ -1976,6 +2035,9 @@ export function createRunner({
       bin: launch.spec.bin,
       args: resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt: text, profileArgs, resume }) : args,
       cwd: worktree,
+      // The stream reaches disk as it arrives; a resume appends to the same
+      // file, which is the joined stream the logs keep.
+      logPath: `${out}.jsonl`,
       ...watchFor(launch, settings, {
         prompt: text, name,
         onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
@@ -1986,7 +2048,7 @@ export function createRunner({
       },
       onSpawn: (childPid) => {
         if (stepIndex == null) return;
-        recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool } });
+        recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool, log: out } });
       },
     });
     let result;
@@ -2108,6 +2170,12 @@ export function createRunner({
       recordStep(name, choice.index, { status: 'ready', session: null });
     } else if (note === 'success' && pr !== '-') {
       note = await landForSession({ worktree, repo, name, index: choice.index, pr, branch, rc: result.status });
+    } else if (result.signal && !result.stalled && !result.lingered && !sessionResult(result.stdout) && choice.index != null) {
+      // Killed by a signal this runner did not send — macOS taking memory
+      // back, a person's `kill` — with no answer written: the same death as
+      // a restart, while the runner lives (ruling 33).
+      const written = recordInterrupted({ name, index: choice.index, was: after, log: out, tool: settings.tool, model: settings.model, branch });
+      note = written?.steps?.[choice.index]?.status === 'failed' ? 'interrupted,failed' : 'interrupted';
     } else {
       const said = read.said ? ` — the API said "${read.said}"` : '';
       const reason = pr !== '-'
