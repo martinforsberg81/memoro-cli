@@ -1,0 +1,95 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "The merger stops answering red for reds that are not the change's. A stacked branch is moved onto main without replaying commits main already has. A test file that something outside the round killed is measured again, not blamed on the pull request. A session never kills a process it did not start.",
+    "Seen on 2026-10-10. #857 (merger-hardening step 4, 18:41:47) and #13375 (leftovers-sweep step 4) came back `restack: … conflicts`. Replaying only #857's own commit onto the same main was clean (checked by hand). At 12:14:08 a mail-data-hygiene session ran `kill 75754`, the merger's `build-bundle.test.js` process for memoro #13337. The round answered `red: 1 test red: tests/scripts/build-bundle.test.js` with \"the red files pass on the base — this change broke them\" (merger.log, 12:19:56), and #13337 went green unchanged at 13:16."
+  ],
+  "contract": [
+    "No pull request lands on a weaker measurement than today's. A file killed by a signal is measured again in a full round. It is never counted green.",
+    "A real conflict between the branch's own commits and main is still a `restack` stop, answered as today.",
+    "Every step runs `npm test` and lands through `mc merge memoro-cli <pr>`. A change to the merger takes effect when the merger next starts."
+  ],
+  "out_of_scope": [
+    "memoro's `build-bundle.test.js` itself: building once, the heavy lane and a named timeout are a memoro pull request of their own.",
+    "Stopping a session from running `kill` by tooling. This plan writes the rule where every session reads it."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A stacked branch whose parent was moved, or which has main merged into it, is restacked by replaying only its own non-merge commits that are not on main, and it falls back to merging main in before it gives up.",
+      "check": "`tests/mc/merger.test.js` (restack) on a fixture repository: parent squashed onto main, child with `git merge origin/main` in its history. The old rebase conflicts on that fixture and the new restack is clean. A child whose own commit truly conflicts is still `ok: false` with the conflicted path. Live: the close-out quotes a `moved onto main past` line for a branch whose history has a merge from main, or says none occurred."
+    },
+    {
+      "met": false,
+      "criterion": "A red file that `node --test` reports ended by a signal is not answered as the change's red: the round runs once more, and then it is a `file-killed` stop.",
+      "check": "`tests/mc/tap-red.test.js`: `killedFiles` on TAP with `signal: 'SIGTERM'` and `exitCode: ~` names that file and not an ordinary red. `tests/mc/repo-gate.test.js`: a stub suite whose only red file was killed finishes `file-killed` without running `probeMainRed`. With one killed and one red file it is `red`, naming only the red one and listing the killed one in `report.killed_files`. `tests/mc/merger.test.js`: `file-killed` makes `landJob` run the round once more, and a second `file-killed` answers red with that reason and starts no mend."
+    },
+    {
+      "met": false,
+      "criterion": "Every session's role says it never signals a process it did not start.",
+      "check": "`canon/roles/_common.md` carries the rule. A test in `tests/mc/canon-roles.test.js` (or beside the role loader's test) asserts the sentence is in the text every role is built from."
+    }
+  ],
+  "documents": [
+    { "label": "mc rulings (ruling 38)", "path": "../rulings.md" },
+    { "label": "mc test and mc merge", "path": "../../../technical/mc-merge.md" }
+  ],
+  "steps": [
+    {
+      "title": "1. Restack replays only the branch's own commits, and merges main in before it gives up",
+      "status": "ready",
+      "done_when": "`restack` cherry-picks `git rev-list --reverse --no-merges <tip> ^<parent.sha> ^origin/main` onto `origin/main`. On a conflict it starts again from the tip and runs `git merge --no-edit origin/main`, and only if that conflicts too is it `ok: false` with the conflicted paths. Tests per the first criterion; `npm test` is green.",
+      "instruction": [
+        "Today `restack` (`src/mc/merger.js:253`) runs `rebase -q --onto origin/main <parent.sha>` (`:264`), which replays every commit reachable from the tip and not from `parent.sha`. Two kinds of commit are in that set although main already has them. The first: a session merged `origin/main` into the branch, as `621dddaf` did on merger-hardening-5. Its merge brings main's commits (the squashes of the steps below) into the set, and replaying them onto main conflicts. The second: the parent's branch moved after the child stacked on it, as #856 did when it was moved onto main past #855. On 2026-10-10, #857 conflicted in `src/mc/merger.js` this way. Cherry-picking its own one commit onto the same main (`f22cf3f2`) was clean.",
+        "**The replay.** In the temporary worktree on `tip.stdout` (`:262`), list `rev-list --reverse --no-merges <tip> ^<parent.sha> ^origin/main`. Detach at `origin/main` and `cherry-pick` each in turn (no `-q`; `cherry-pick` has none). An empty pick, a commit main already has as a squash, is skipped with `cherry-pick --skip`. That is not a conflict. Then push with the same `--force-with-lease` as now (`:270`).",
+        "**The fallback.** If a pick conflicts, `cherry-pick --abort`, check out the tip again and run `git merge --no-edit origin/main`. That is the merge `freshenBranchForLanding` does before a landing (`repo-freshen.js`), and it resolves changes made identically on both sides. If it is clean, push it as above and say `moved onto main past #<parent> (merged main in)`. If it conflicts, `merge --abort` and answer `ok: false` with the merge's conflicted paths, in today's wording.",
+        "**Tests.** A fixture repository in `tests/mc/merger.test.js` built with real git in a temp dir: `main`; a parent branch with a commit P; a child on P with its own commit C, then a merge of a main that already has P squashed. `restack` moves the child cleanly, and the result has exactly C over main. The same fixture under the old `rebase --onto` conflicts (asserted, so the test shows what it fixes). A child whose C edits the same line as a later main commit is `ok: false` and names the file."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "2. A test file killed by a signal is measured again, not answered as the change's red",
+      "status": "ready",
+      "done_when": "`killedFiles(tap, files)` in `tap-red.js` names the files whose TAP block has a non-null `signal:`. `runGate` finishes `file-killed`, without the main-red probe, when every red file was killed. With other reds, the round is `red` over those alone, and `report.killed_files` lists the killed ones. `landJob` runs a round that stopped `file-killed` once more. A second `file-killed` is answered red with that reason, and it is not a mend stop. Tests per the second criterion; `npm test` is green.",
+      "instruction": [
+        "Today the gate's red branch (`src/mc/repo-gate.js:670-683`) takes every red file as the change's, and `probeMainRed` then decides whose red it is by running those files on the base. A file whose process was killed from outside passes there, and the round says \"this change broke them\". #13337 got that verdict on 2026-10-10 at 12:19:56 after a session's `kill 75754`. `node --test` reports such a file as `not ok` with `exitCode: ~` and `signal: 'SIGTERM'` in its YAML block (checked by hand on node 24.10).",
+        "**Reading it.** Add `killedFiles(tap, files)` to `src/mc/tap-red.js` beside `redFiles` (`:147`), with the same block walk. In a failing block whose location or name is one of `files`, a line `signal: '<NAME>'` (not `~`) marks it killed. It returns `[{ file, signal }]`. `measure`/`measureSelected` (`repo-gate.js`) put it on the result as `killed_files`.",
+        "**The verdict.** Before the main-red probe: if every red file is in `killed_files`, `finish('file-killed', '<files> ended by <signal> from outside the round — not a verdict on this change')`. If only some are, take them out of `red` and `red_files` before the probe and the `red` finish, and keep them in `report.killed_files`. `verdictFor` (`:788`) returns `stopped` for `file-killed`.",
+        "**The merger.** In `landJob`'s round loop, a report with `stopped_at === 'file-killed'` runs the round once more after `MERGER_POLL_MS`. Say `<label>: <file> was killed from outside the round — measuring again`. A second `file-killed` is answered red with its reason. `file-killed` is not in `MEND_STOPS` (`src/mc/mend.js`, merger-hardening step 6). If that step has not landed when this one is built, leave a comment where `MEND_STOPS` is defined, saying `file-killed` must stay out of it.",
+        "**Tests.** `tests/mc/tap-red.test.js` with the TAP above. `tests/mc/repo-gate.test.js` with a stub `tests` whose TAP marks the only red file killed: `file-killed`, and the stub `probeMainRed` is not called. One killed and one red: `red` naming only the second, with `killed_files` set. `tests/mc/merger.test.js`: `mergeRound` stubbed to return `file-killed` and then green lands the job. Twice `file-killed` is red with the reason, and no mend starts."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "3. No session signals a process it did not start",
+      "status": "ready",
+      "done_when": "`canon/roles/_common.md` has the rule in its own paragraph, a test pins it, and `npm test` is green.",
+      "instruction": [
+        "At 12:14:08 on 2026-10-10 a mail-data-hygiene step session ran `kill 75754`, the merger's test process for #13337. It took it for its own hung test, which was another pid. `canon/roles/_common.md` is the text every role starts from and says nothing about processes.",
+        "**The rule.** Add a paragraph after the one on files that are not the change: *\"Never signal a process you did not start in this session: not with `kill`, `pkill` or `killall`, and not by name. A gate round, a test run, a dev server or a session that looks stuck is someone's; a pid you did not get from your own command is not yours. Say what you saw (pid, command, how long) to Martin, or as a proposal, and carry on. Your own: by the pid your command gave you.\"*",
+        "**Test.** Find the test that reads `canon/roles/*.md` (`grep -rl \"_common.md\" tests/mc`). If there is one, add an assertion there that the built text of the `step` role contains `Never signal a process you did not start`. If there is none, add `tests/mc/canon-roles.test.js` that reads `canon/roles/_common.md` and asserts it."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "4. Close-out",
+      "status": "ready",
+      "done_when": "Every criterion is marked with what was seen, `docs/technical/mc-merge.md` describes the restack and `file-killed`, `docs/project/project_log.md` has the row, ruling 38 is deleted from `rulings.md`, and every step is `done` with its PR.",
+      "instruction": [
+        "**Live.** From the first `merger <pid> started` line after step 3 landed, read `~/mc/runner/log/merger.log` for 2 hours. Quote every `moved onto main past` line, every `restack:` red, every `killed from outside the round` line, and every `file-killed` answer. Mark each criterion met or not, with what was seen. If none occurred, say so.",
+        "**Docs.** `docs/technical/mc-merge.md`: restack (the replay set, the merge fallback) and `file-killed` (what it reads in the TAP, the one rerun), beside the stops the round already lists.",
+        "**Log.** Add the row to `docs/project/project_log.md` in its format: programme `mc`, project `merge-false-reds`, delivered, one paragraph, the PRs. Delete ruling 38 from `docs/project/mc/rulings.md`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
