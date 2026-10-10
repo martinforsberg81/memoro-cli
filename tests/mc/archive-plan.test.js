@@ -7,8 +7,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  NO_DOC, UNDOCUMENTED_HEADER, appendRow, donePlans, formatRow, isUndocumented, logRows, mergedPrs,
-  planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
+  NO_DOC, UNDOCUMENTED_HEADER, appendRow, donePlans, formatRow, isUndocumented, keptFiles, keptParagraph,
+  logRows, mergedPrs, namedFiles, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
 } from '../../src/mc/archive-plan.js';
 
 const LOG = `# Project log
@@ -119,4 +119,59 @@ test('the intake row names the project and where its record is', () => {
     undocumentedRow({ date: '2026-08-29', repo: 'memoro', programme: 'prog', project: 'p', pointer: '#7' }),
     '| 2026-08-29 | memoro | prog | p | #7 |',
   );
+});
+
+/** A worktree as `git grep` and `git ls-files` answer it, with the files `read` returns. */
+function worktree({ grep = [], files = [], texts = {} }) {
+  const calls = [];
+  return {
+    calls,
+    git: (cwd, args) => {
+      calls.push(args);
+      if (args[0] === 'grep') return grep.length ? { ok: true, stdout: `${grep.join('\n')}\n` } : { ok: false, stdout: '' };
+      if (args[0] === 'ls-files') return { ok: true, stdout: `${files.join('\n')}\n` };
+      return { ok: true, stdout: '' };
+    },
+    read: (path) => texts[path] ?? '',
+  };
+}
+
+const Q = 'docs/project/p/q';
+const Q_FILES = [`${Q}/PLAN.json`, `${Q}/skills/a.md`, `${Q}/skills/b.md`, `${Q}/notes/c.md`];
+
+test('a file under the plan that a test names is kept, and everything else is removed', () => {
+  const w = worktree({
+    grep: ['tests/x.test.js'],
+    files: Q_FILES,
+    texts: { 'tests/x.test.js': "const a = 1;\nreadFileSync('docs/project/p/q/skills/a.md', 'utf8');\n" },
+  });
+  const { kept, remove } = keptFiles('/wt', Q, w);
+  assert.deepEqual(kept, [{ file: `${Q}/skills/a.md`, by: 'tests/x.test.js:2' }]);
+  assert.deepEqual(remove, [`${Q}/PLAN.json`, `${Q}/skills/b.md`, `${Q}/notes/c.md`]);
+  assert.deepEqual(w.calls[0], ['grep', '-l', '-F', '--', `${Q}/`, '--', 'src', 'tests', 'scripts', 'config', 'package.json'],
+    'the directory with its trailing slash, over the code and nothing under docs/');
+  assert.deepEqual(keptParagraph(kept).at(-1), `- kept: ${Q}/skills/a.md — named by tests/x.test.js:2`);
+});
+
+test('nothing named is the whole directory, as before — and git ls-files is not asked', () => {
+  const w = worktree({ grep: [] });
+  assert.deepEqual(keptFiles('/wt', Q, w), { kept: [], remove: null });
+  assert.deepEqual(w.calls.map((c) => c[0]), ['grep']);
+  assert.deepEqual(keptParagraph([]), []);
+});
+
+test('a template names every file under the directory its fixed prefix points at', () => {
+  const kept = namedFiles(Q, Q_FILES, [
+    { path: 'src/skills.js', text: 'const at = `docs/project/p/q/skills/${name}.md`;' },
+  ]);
+  assert.deepEqual(kept.map((k) => k.file), [`${Q}/skills/a.md`, `${Q}/skills/b.md`]);
+  assert.deepEqual(kept.map((k) => k.by), ['src/skills.js:1', 'src/skills.js:1']);
+});
+
+test('a directory named literally keeps what is under it; a file that is not there keeps nothing', () => {
+  assert.deepEqual(namedFiles(Q, Q_FILES, [{ path: 'src/a.js', text: "join(root, 'docs/project/p/q/notes', f)" }]).map((k) => k.file),
+    [`${Q}/notes/c.md`]);
+  assert.deepEqual(namedFiles(Q, Q_FILES, [{ path: 'src/a.js', text: "'docs/project/p/q/gone.md'" }]), []);
+  assert.deepEqual(namedFiles(Q, Q_FILES, [{ path: 'src/a.js', text: "'docs/project/p/q-two/skills/a.md'" }]), [],
+    'q-two is not q');
 });
