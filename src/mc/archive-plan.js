@@ -181,3 +181,88 @@ export function undocumentedRow({ date, repo, programme, project, pointer }) {
   const cell = (value) => String(value ?? '-').replace(/\s+/gu, ' ').replace(/\|/gu, '\\|').trim() || '-';
   return `| ${[date, repo, programme, project, pointer].map(cell).join(' | ')} |`;
 }
+
+/* ----------------------------------------------- what code outside docs/ reads */
+
+/** Where the code lives that an archive must not break: everything a test can read from. */
+export const CODE_PATHS = ['src', 'tests', 'scripts', 'config', 'package.json'];
+
+/** Where a path stops in a line of code: a quote, a bracket, a separator, whitespace. */
+const PATH_END = /[\s'"`()[\],;]/u;
+
+/** Where a template's fixed part stops: `${…}`, `{a,b}`, a glob, a `<placeholder>`. */
+const TEMPLATE = /[$*{<]/u;
+
+/**
+ * The files under `dir` that code outside `docs/` names, each with the first
+ * `<path>:<line>` that names it — from text alone. `files` is every file
+ * under `dir`; `sources` is `[{ path, text }]`, the files `git grep` matched.
+ *
+ * A literal path names that file, or every file under it when it is a
+ * directory. A template whose fixed prefix is inside `dir` names every file
+ * under the directory that prefix points at — the code picks one at run
+ * time, and which is not readable here.
+ */
+export function namedFiles(dir, files, sources) {
+  const prefix = `${dir.replace(/\/+$/u, '')}/`;
+  const by = new Map();
+  const name = (file, where) => { if (!by.has(file)) by.set(file, where); };
+  for (const { path, text } of sources) {
+    String(text || '').split('\n').forEach((line, i) => {
+      for (let at = line.indexOf(prefix); at >= 0; at = line.indexOf(prefix, at + prefix.length)) {
+        const tail = line.slice(at + prefix.length);
+        const end = tail.search(PATH_END);
+        const token = prefix + (end < 0 ? tail : tail.slice(0, end));
+        const where = `${path}:${i + 1}`;
+        const cut = token.search(TEMPLATE);
+        if (cut >= 0) {
+          const under = token.slice(0, token.lastIndexOf('/', cut) + 1);
+          for (const file of files) if (file.startsWith(under)) name(file, where);
+          continue;
+        }
+        const literal = token.replace(/[.:]+$/u, '');
+        if (files.includes(literal)) { name(literal, where); continue; }
+        const under = literal.endsWith('/') ? literal : `${literal}/`;
+        for (const file of files) if (file.startsWith(under)) name(file, where);
+      }
+    });
+  }
+  return [...by].map(([file, where]) => ({ file, by: where })).sort((a, b) => a.file.localeCompare(b.file));
+}
+
+/**
+ * What archiving `dir` may remove, asked of the worktree before `git rm`.
+ * memoro #13310 (2026-10-10) archived four skill texts that
+ * `tests/assistant/skills/delivery.test.js` reads verbatim; it landed as
+ * docs-only, so no test ran, and main stayed red until #13323 put them back.
+ *
+ * Returns `{ kept, remove }`: `kept` is `[{ file, by }]`, the files some
+ * code names; `remove` is every other file under `dir`, or null when nothing
+ * is named — the whole directory goes, as it always did. `git(cwd, args)`
+ * answers `{ ok, stdout }`; `read(path)` reads a path of the worktree.
+ */
+export function keptFiles(worktree, dir, { git, read }) {
+  const prefix = `${dir.replace(/\/+$/u, '')}/`;
+  // The trailing slash: `staff/day/` must not match `staff/day-two/`. No
+  // match is exit 1, which is the same answer as an empty list.
+  const grep = git(worktree, ['grep', '-l', '-F', '--', prefix, '--', ...CODE_PATHS]);
+  const hits = grep.ok ? String(grep.stdout || '').split('\n').filter(Boolean) : [];
+  if (!hits.length) return { kept: [], remove: null };
+  const files = String(git(worktree, ['ls-files', '--', dir]).stdout || '').split('\n').filter(Boolean);
+  const kept = namedFiles(dir, files, hits.map((path) => ({ path, text: read(path) })));
+  if (!kept.length) return { kept: [], remove: null };
+  const named = new Set(kept.map((k) => k.file));
+  return { kept, remove: files.filter((file) => !named.has(file)) };
+}
+
+/** The PR body's paragraph for the files an archive left in place, or no lines. */
+export function keptParagraph(kept) {
+  if (!kept.length) return [];
+  return [
+    '',
+    'Kept in place, because code outside `docs/` reads them — the directory is',
+    'otherwise gone, and this list is the record of why these files are not:',
+    '',
+    ...kept.map(({ file, by }) => `- kept: ${file} — named by ${by}`),
+  ];
+}
