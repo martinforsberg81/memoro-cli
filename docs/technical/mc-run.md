@@ -332,6 +332,17 @@ A project is asked in two places, and the order is the whole of what a pick
 costs: **the plan on `origin/main` decides before anything is touched, and the
 worktree decides after.**
 
+What a step session has not committed is snapshotted to
+`refs/mc/checkpoint/<project>` (`src/mc/checkpoint.js`): every `CHECKPOINT_MS`
+(ten minutes) while the session runs, and immediately before each
+`git merge --abort` the runner makes in the step's workarea. The snapshot is a
+commit on top of `HEAD` built through a temporary index under the runner's
+scratch directory, so the worktree, its real index and `HEAD` are untouched;
+a clean tree writes nothing, and each snapshot replaces the last. Nothing
+applies it. A fresh session's handover names the ref when it exists, and a
+person restores from it with `git checkout refs/mc/checkpoint/<project> -- .`
+in the workarea (or looks first with `git show --stat refs/mc/checkpoint/<project>`).
+
 ### What the plan on main decides
 
 The pick answers it (step 3 above), from the plans the lane has just read.

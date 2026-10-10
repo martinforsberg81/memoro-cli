@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, SCRATCH_KEEP_MS, createRunner, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, SCRATCH_KEEP_MS, createRunner, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { checkpoint } from '../../src/mc/checkpoint.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { RUN_REFUSALS, WORKAREA_BLOCKS } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
@@ -1263,6 +1265,85 @@ test('a merge a killed session left in the workarea is aborted before the dirty 
   assert.ok(aborts.length >= 1);
   assert.match(f.files['/w/runner/log/runner.log'], /c: a merge of origin\/main was left in progress — aborted/u);
   assert.equal(f.calls.sessions.length, 1, 'and the step runs, in the same pass');
+});
+
+/**
+ * The abort throws away what the tree had not committed, so it is snapshotted
+ * first (checkpoint.js): through a temporary index, then
+ * `refs/mc/checkpoint/<project>`, and only then `merge --abort`.
+ */
+test('a snapshot is taken before the leftover-merge abort', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    mergeLeft: ['c'], dirty: ['c'],
+    session: okSession(),
+  });
+  f.deps.git = ((inner) => (cwd, args, options) => {
+    if (cwd === '/w/c/memoro' && ['write-tree', 'commit-tree'].includes(args[0])) {
+      f.calls.git.push([cwd, ...args]);
+      assert.match(options?.env?.GIT_INDEX_FILE || '', /^\/w\/runner\/scratch\/checkpoint-c-/u, 'through a temporary index');
+      return { ok: true, stdout: args[0] === 'write-tree' ? 'tree123' : 'snap4567890' };
+    }
+    if (cwd === '/w/c/memoro' && args[0] === 'rev-parse' && args.at(-1) === 'HEAD') {
+      f.calls.git.push([cwd, ...args]);
+      return { ok: true, stdout: 'head123' };
+    }
+    if (cwd === '/w/c/memoro' && args[0] === 'update-ref') {
+      assert.ok(options?.env?.GIT_INDEX_FILE);
+    }
+    return inner(cwd, args, options);
+  })(f.deps.git);
+  const runner = createRunner({ deps: f.deps });
+  await runner.runStep('c', runner.queue());
+  const git = f.calls.git.filter((c) => c[0] === '/w/c/memoro').map((c) => c.slice(1));
+  const ref = git.findIndex((a) => a[0] === 'update-ref' && a[1] === 'refs/mc/checkpoint/c' && a[2] === 'snap4567890');
+  const abort = git.findIndex((a) => a[0] === 'merge' && a[1] === '--abort');
+  assert.ok(ref >= 0, 'the ref is written');
+  assert.ok(ref < abort, 'before the abort');
+  assert.ok(git.findIndex((a) => a[0] === 'read-tree' && a[1] === 'HEAD') < ref);
+  assert.ok(git.findIndex((a) => a[0] === 'add' && a[1] === '-A') < ref);
+  assert.match(f.files['/w/runner/log/runner.log'], /c: uncommitted work snapshotted to refs\/mc\/checkpoint\/c \(before-merge-abort, snap456\)/u);
+});
+
+/**
+ * The same snapshot through the runner's own `deps.git` against a real
+ * repository: the temporary index reaches git only if `sh` hands `env` on.
+ */
+test('the runner\'s git snapshots a real repository without touching its worktree or index', () => {
+  const base = mkdtempSync(join(tmpdir(), 'mc-run-checkpoint-'));
+  const work = join(base, 'work');
+  const { git } = realDeps();
+  try {
+    git(base, ['init', '-q', '-b', 'main', work]);
+    for (const [key, value] of [['user.name', 'T'], ['user.email', 't@example.com'], ['commit.gpgsign', 'false']]) git(work, ['config', key, value]);
+    writeFileSync(join(work, 'a.txt'), 'one\n');
+    git(work, ['add', '-A']);
+    git(work, ['commit', '-q', '-m', 'first']);
+    writeFileSync(join(work, 'a.txt'), 'changed\n');
+    writeFileSync(join(work, 'new.txt'), 'untracked\n');
+    const before = git(work, ['status', '--porcelain']).stdout;
+    const sha = checkpoint({ git, worktree: work, project: 'p', label: 'running', index: join(base, 'scratch', 'p.index') });
+    assert.ok(sha);
+    assert.equal(git(work, ['ls-tree', '--name-only', 'refs/mc/checkpoint/p']).stdout, 'a.txt\nnew.txt\n');
+    assert.equal(git(work, ['show', 'refs/mc/checkpoint/p:a.txt']).stdout, 'changed\n');
+    assert.equal(git(work, ['status', '--porcelain']).stdout, before);
+    assert.equal(git(work, ['diff', '--cached']).stdout, '');
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+/** A clean tree before the abort writes no snapshot. */
+test('a clean tree before the leftover-merge abort writes no ref', async () => {
+  const f = fixture({
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    mergeLeft: ['c'],
+    session: okSession(), gh: { c: { number: 97, title: 'The one step' } },
+  });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.git.some((c) => c[1] === 'update-ref' || c[1] === 'read-tree'), false);
 });
 
 /** What the abort cannot fix is still a dirty worktree, and still says so. */
@@ -4238,6 +4319,20 @@ test('recovery: a cold large session over its own dirt gets one WIP commit, a fr
   assert.doesNotMatch(prompt, /refs\/mc\/checkpoint/u, 'no checkpoint ref, none named');
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /uncommitted changes/u);
   assert.equal(registerOf(f, 'alpha').steps[0].blocked_by ?? null, null);
+});
+
+test('recovery: the handover names the checkpoint ref when git verifies it', async () => {
+  const f = coldLargeArea();
+  f.deps.git = ((inner) => (cwd, args, options) => {
+    if (args[0] === 'rev-parse' && args.at(-1) === 'refs/mc/checkpoint/alpha') {
+      f.calls.git.push([cwd, ...args]);
+      assert.deepEqual(args, ['rev-parse', '-q', '--verify', 'refs/mc/checkpoint/alpha']);
+      return { ok: true, stdout: 'snap456' };
+    }
+    return inner(cwd, args, options);
+  })(f.deps.git);
+  await createRunner({ deps: f.deps }).pass();
+  assert.match(f.calls.sessions[0].prompt, /`refs\/mc\/checkpoint\/alpha` holds the last snapshot of its uncommitted work\./u);
 });
 
 test('recovery: on a branch named after the project but not the recorded one, the recorded branch is moved up first', async () => {
