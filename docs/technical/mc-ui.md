@@ -45,11 +45,15 @@ reading the plans as they were last fetched rather than as they are now.
 ## The sections
 
 In this order (Martin, 2026-09-19): PROGRAMMES, WORK, HELPER, BRIEF, NEXT,
-RUNNER, MERGES, DEPLOY, and one line for mc itself. It still keeps the rule the
-page had — **what does not move above what does**. PROGRAMMES and WORK are the
-page as a listing; the two desks change when somebody sits down; NEXT changes
-with every pick and RUNNER every frame; MERGES, DEPLOY and the MC line are the
-short end of the page, a few rows that are always within reach of the prompt.
+RUNNER, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
+still keeps the rule the page had — **what does not move above what does**.
+PROGRAMMES and WORK are the page as a listing; the two desks change when
+somebody sits down; NEXT changes with every pick and RUNNER every frame;
+MERGES, DEPLOY, LANGUAGE and the MC line are the short end of the page, a few
+rows that are always within reach of the prompt. One line can come above all
+of them: while a language run has stopped inside an `opens_gap` window it
+reads, in red, `language: <manifest> stopped after <act> — <says> · mc language
+resume`. It goes there because while it shows, production is missing data.
 The live loop rewrites rows where they stand (`page-frame.js`), and a row that
 has scrolled off the top cannot be written to — which is what
 [*a status that changed out of reach*](#a-status-that-changed-out-of-reach)
@@ -213,6 +217,19 @@ below is about.
   **on the shorter of them**: `deploys.tsv` records the whole 40-character sha
   and `/api/version` answers seven. Where neither source knows anything the
   heading says `nothing deployed yet`.
+- **LANGUAGE** — what `mc language` left behind, read from its files only:
+  the cached `status-<lang>.json` readings and the run records under
+  `~/mc/runner/log/language/` ([`mc-language.md`](mc-language.md)).
+  - **The heading:** the last run — its manifest, its outcome (green
+    running, yellow stopped or refused, red failed, grey done) and how long
+    ago it was.
+  - **The rows:** a row only for a language with something to say:
+    - unresolved selectors;
+    - grammar rows waiting, in yellow with `· mc language promote`;
+    - a reading at least seven days old.
+
+  With nothing to say and no run recorded, the section is not drawn at all, so
+  an empty page gains no line.
 - **MC** — mc itself, in one line: the version, **whether there is newer code
   than the runner is running**, how long the runner has been up, and the
   commit it is on. `mc run` writes the commit it started on into
@@ -456,7 +473,7 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `NEXT` `RUNNER` `MERGES` `PULL REQUESTS` `DEPLOY` `MC` | bold cyan |
+| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `NEXT` `RUNNER` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | RUNNER | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
 | RUNNER | the heading's lane setting and uptime | grey |

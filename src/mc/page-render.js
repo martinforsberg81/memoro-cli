@@ -474,6 +474,58 @@ function deployLines(lines, c, wide, production) {
   heading(lines, c, wide, 'DEPLOY', fitting(parts, room), verb);
 }
 
+/** A language reading older than this is one worth taking again. */
+export const LANGUAGE_STALE_S = 7 * 24 * 60 * 60;
+
+/** A language run's outcome, one colour each: what stopped waits on a person. */
+const RUN_TONE = { running: ['green'], stopped: ['yellow'], refused: ['yellow'], failed: ['red'], done: ['grey'] };
+
+/**
+ * LANGUAGE — what `mc language` last read and last ran, right after DEPLOY
+ * because it is the other door to production. Only the languages with
+ * something to say are drawn — unresolved selectors, rows waiting, a reading a
+ * week old — and the last run rides on the heading. With neither the section
+ * is not drawn at all: the empty page gains no line.
+ */
+function languageLines(lines, c, wide, language, at) {
+  const ageOf = (iso) => {
+    const ms = at - Date.parse(iso);
+    return Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000)) : null;
+  };
+  const rows = (language?.languages || []).map((entry) => {
+    const age = entry.read_at ? ageOf(entry.read_at) : null;
+    const stale = age === null || age >= LANGUAGE_STALE_S;
+    const parts = [];
+    if (entry.unresolved) parts.push({ text: `${entry.unresolved} unresolved selector${entry.unresolved === 1 ? '' : 's'}`, styles: ['yellow'] });
+    if (entry.waiting_rows) parts.push({ text: `${entry.waiting_rows} rows waiting · mc language promote`, styles: ['yellow'] });
+    if (!parts.length && !stale) return null;
+    parts.push({ text: entry.read_at ? `read ${ageWords(age)} ago` : 'never read', styles: stale ? ['yellow'] : ['grey'] });
+    return { lang: entry.lang, parts };
+  }).filter(Boolean);
+  const last = language?.last_run;
+  if (!rows.length && !last) return false;
+  const counts = last
+    ? [
+      { text: `last run ${last.manifest}${last.dry_run ? ' (dry run)' : ''} · ` },
+      { text: last.outcome, styles: RUN_TONE[last.outcome] || ['grey'] },
+      { text: ` · ${ageWords(ageOf(last.ended || last.started))} ago`, styles: ['grey'] },
+    ]
+    : 'no run recorded';
+  heading(lines, c, wide, 'LANGUAGE', counts, 'mc language');
+  for (const { lang, parts } of rows) {
+    const left = `    ${c(pad(lang, 4), 'bold')}`;
+    lines.push(`${left}${paint(c, between(parts, ' · '), wide - width(left))}`);
+  }
+  return true;
+}
+
+/** The red line above every section while a run is stopped inside a gap. */
+function openGapLine(lines, c, wide, gap) {
+  if (!gap) return;
+  say(lines, c, wide, 2, `language: ${gap.manifest} stopped after ${gap.act} — ${gap.says} · mc language resume`, ['red', 'bold']);
+  lines.push('');
+}
+
 /** A daily reading older than this missed a day: its age is drawn yellow. */
 const CHECK_STALE_S = 36 * 60 * 60;
 
@@ -754,6 +806,7 @@ function landingLine(c, wide, landing) {
   const head = `  ${MARK.running} ${where} ${number}${name}`;
   const tail = trailing([
     { text: landing.mode === 'check' ? 'measuring, not landing' : 'landing' },
+    landing.lane ? { text: `${landing.lane} lane`, styles: ['grey'] } : null,
     landing.phase ? { text: landing.phase } : null,
     { text: ageWords(landing.age_seconds), styles: ['grey'] },
   ]);
@@ -789,7 +842,8 @@ function redLine(c, wide, item) {
 }
 
 /**
- * MERGES — the one gate round landing now, and the waiters behind it.
+ * MERGES — the gate rounds landing now (one per lane, ruling 34), and the
+ * waiters behind them.
  *
  * Between NEXT and RUNNER because it is the third fact about the same
  * question, *what is the runner doing with a pull request*: NEXT is the order
@@ -804,7 +858,8 @@ function mergesLines(lines, c, wide, merges) {
   const verb = 'mc merge <repo> <pr>';
   const reds = merges.red?.items || [];
   const parts = [];
-  if (merges.landing) parts.push({ text: '1 landing', styles: ['grey'] });
+  const landings = merges.landings || [].concat(merges.landing || []);
+  if (landings.length) parts.push({ text: `${landings.length} landing`, styles: ['grey'] });
   if (reds.length) parts.push({ text: `${reds.length} red`, styles: ['red', 'bold'] });
   const items = merges.queued.items || [];
   if (merges.queued.count) {
@@ -820,7 +875,7 @@ function mergesLines(lines, c, wide, merges) {
   heading(lines, c, wide, 'MERGES', counts, verb);
   // The heading has already said *nothing landing*; a row that says it again
   // is a row.
-  if (merges.landing) lines.push(landingLine(c, wide, merges.landing));
+  for (const landing of landings) lines.push(landingLine(c, wide, landing));
   for (const item of reds) lines.push(redLine(c, wide, item));
 }
 
@@ -1349,6 +1404,9 @@ export function renderPageLines(data, {
   lines.push('');
   lines.push(`  ${brand} ${c('─'.repeat(Math.max(2, rule)), 'grey')} ${counts}`);
   lines.push('');
+  // A language run stopped inside a gap is production half-way between two
+  // states: above every section, until `mc language resume` closes it.
+  openGapLine(lines, c, wide, data.language?.open_gap);
 
   const sessions = data.sessions || { desks: {}, others: [] };
   // The order is Martin's (2026-09-19), and it still keeps the rule the page
@@ -1356,8 +1414,8 @@ export function renderPageLines(data, {
   // rows where they stand (page-live.js), and a row near the prompt is one it
   // can always reach. PROGRAMMES and WORK are the page as a listing; the two
   // desks change when somebody sits down; NEXT changes every round and RUNNER
-  // every frame; MERGES, DEPLOY, CHECKS and the MC line are the short end of
-  // the page.
+  // every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
+  // short end of the page.
   programmesLines(lines, c, wide, data.programmes, expand);
   lines.push('');
   workLines(lines, c, wide, sessions, data.programmes?.unplanned);
@@ -1378,6 +1436,7 @@ export function renderPageLines(data, {
   }
   deployLines(lines, c, wide, data.runner?.production);
   lines.push('');
+  if (languageLines(lines, c, wide, data.language, at)) lines.push('');
   checksLines(lines, c, wide, data.checks);
   lines.push('');
   mcLine(lines, c, wide, data.mc, data.caches, version);

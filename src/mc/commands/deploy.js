@@ -72,10 +72,11 @@ import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
   runningDeploy,
 } from '../deploys.js';
-import { runningRound } from '../gate-lock.js';
+import { runningRounds } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
+import { languageState as readLanguageState, liveRun } from '../language-runs.js';
 import { readMerger } from '../merger.js';
 import { nightlyReading } from '../nightly-history.js';
 import { mcHome, workRoot } from '../paths.js';
@@ -430,6 +431,7 @@ export function leftoverStamps({ worktree, dirty, git = tryGit }) {
 export async function deployPlan({
   path, env = process.env, git = tryGit, fetchVersion = fetchVersionDefault,
   lastDeploy = lastDeployRow, nightly = nightlyReading, offline = false,
+  languageState = readLanguageState,
 }) {
   const fetched = offline ? false : git(path, ['fetch', 'origin', 'main', '--quiet']) !== null;
   const sha = git(path, ['rev-parse', '--verify', 'origin/main']);
@@ -476,7 +478,42 @@ export async function deployPlan({
     last,
     gap: last ? count(last.sha, sha) : null,
     nightly: nightlyState,
+    // The deploy no longer promotes grammar; what waits is said here, from
+    // the cache `mc language status` leaves — nothing is read anew.
+    language: languageState(env),
   };
+}
+
+/**
+ * The language line: what waits from the cached readings, and the gap a
+ * stopped run left open. One line per fact, never a question.
+ */
+function languageLines(language, now = Date.now()) {
+  if (!language) return [];
+  const lines = [];
+  const read = (language.languages || []).filter((entry) => entry.read_at);
+  if (!read.length) {
+    lines.push('mc: language — no reading; mc language status <lang>');
+  } else {
+    const waiting = read.filter((entry) => entry.waiting_rows);
+    const ago = (entry) => {
+      const minutes = Math.max(0, Math.round((now - Date.parse(entry.read_at)) / 60_000));
+      if (!Number.isFinite(minutes)) return 'read at an unknown time';
+      if (minutes < 60) return `read ${minutes}min ago`;
+      const hours = Math.round(minutes / 60);
+      return `read ${hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`} ago`;
+    };
+    if (waiting.length) {
+      const said = waiting.map((entry) => `${entry.lang} ${entry.waiting_rows} rows waiting (${ago(entry)})`).join(', ');
+      lines.push(`mc: language — ${said} · mc language promote`);
+    } else {
+      const newest = read.reduce((a, b) => (String(b.read_at) > String(a.read_at) ? b : a));
+      lines.push(`mc: language — nothing waiting (${ago(newest)})`);
+    }
+  }
+  const gap = language.open_gap;
+  if (gap) lines.push(`mc: language — ${gap.manifest} stopped after ${gap.act}: ${gap.says} · mc language resume`);
+  return lines;
 }
 
 /**
@@ -497,7 +534,7 @@ function sourceLine(plan) {
 }
 
 /** The reading, in the words a person decides on. */
-export function planLines(plan) {
+export function planLines(plan, { now = Date.now() } = {}) {
   const lines = [`mc: would deploy ${plan.repo} ${plan.sha}${plan.subject ? ` — ${plan.subject}` : ''}`];
   if (!plan.fetched) lines.push('mc: could not fetch origin — this is what the checkout already had');
   if (plan.worktree_created) lines.push(`mc: made mc's own main worktree at ${plan.worktree} — deploys run from it from now on`);
@@ -525,6 +562,7 @@ export function planLines(plan) {
     const ago = plan.nightly.behind === null ? 'another tree' : `${plan.nightly.behind} commit${plan.nightly.behind === 1 ? '' : 's'} ago`;
     lines.push(`mc: the nightly measured ${plan.nightly.short}, ${ago}; this tree was not measured whole`);
   }
+  lines.push(...languageLines(plan.language, now));
   return lines;
 }
 
@@ -590,6 +628,7 @@ export async function run(argv, deps = {}) {
     fetchVersion: deps.fetchVersion || fetchVersionDefault,
     lastDeploy: deps.lastDeploy || lastDeployRow,
     nightly: deps.nightly || nightlyReading,
+    languageState: deps.languageState || readLanguageState,
   });
   if (!base.sha) {
     stderr.write(`mc: ${path} has no origin/main — mc deploy needs ${REPO}'s main checkout\n`);
@@ -637,6 +676,15 @@ export async function run(argv, deps = {}) {
   // answer is final.
   const alive = deps.alive || processAlive;
   const refuseRunning = () => {
+    // A language run writes to the same production: the two never overlap
+    // (ruling 31), decided from the same records under the same lock.
+    const language = liveRun(env, { alive });
+    if (language) {
+      const when = String(language.started).slice(0, 16).replace('T', ' ');
+      refuse(`a language run of ${language.manifest} is running — started ${language.started} by ${language.holder || 'somebody'}`);
+      stderr.write(`mc: a language run of ${language.manifest} is running since ${when} (pid ${language.pid}) — nothing was deployed\n`);
+      return true;
+    }
     const other = runningDeploy(env, { alive });
     if (!other) return false;
     const when = String(other.started).slice(0, 16).replace('T', ' ');
@@ -737,15 +785,20 @@ export const GATE_POLL_MS = 5 * 1000;
  * pågående merge-process, kör själv, därefter fortsätter merge-kön"*). On an
  * 8 GB machine a bundle beside a merge round's `npm ci` and suite swapped for
  * 26 minutes (2026-10-10). The merger starts no round while the deploy's row
- * says `running`; this waits for the one already in flight — any gate round,
- * `mc test`'s too. With a merger alive the gate must be free on two reads a
+ * says `running`; this waits for the ones already in flight — any gate round,
+ * `mc test`'s too, in either lane (ruling 34): a light round beside the bundle
+ * is still a round beside the bundle. With a merger alive the gate must be free on two reads a
  * poll apart: a merger that read no deploy just before the row was written
  * takes the lock within that time.
  */
 export async function waitForGate(job, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const root = job.root || workRoot(deps.env || process.env);
-  const round = deps.runningRound || (() => runningRound({ root }));
+  // The first round in flight in any lane, heavy first, or null. The lock
+  // files are in mc's home (`gate-lock.js`), not under the work root: read
+  // there, this saw no round at all until 2026-10-10.
+  const rounds = deps.runningRounds || (() => runningRounds());
+  const round = deps.runningRound || (() => Object.values(rounds() || {}).find(Boolean) || null);
   const merger = deps.readMerger || (() => readMerger({ root }));
   const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
   let said = false;
@@ -758,7 +811,7 @@ export async function waitForGate(job, deps = {}) {
       continue;
     }
     if (!said) {
-      stdout.write(`mc: waiting for the gate round of ${running.repo || 'a repository'} #${running.pr ?? '?'} (pid ${running.pid}) to finish — the merger starts no other while this deploy runs\n`);
+      stdout.write(`mc: waiting for the gate round of ${running.repo || 'a repository'} #${running.pr ?? '?'}${running.lane ? ` in the ${running.lane} lane` : ''} (pid ${running.pid}) to finish — the merger starts no other while this deploy runs\n`);
       said = true;
     }
     await sleep(GATE_POLL_MS);

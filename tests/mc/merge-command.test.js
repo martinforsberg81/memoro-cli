@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { gate } from '../../src/mc/commands/repo.js';
+import { gate, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { remainderOf, stepForMerge } from '../../src/mc/merge-step.js';
 import { registerPath } from '../../src/mc/register.js';
@@ -243,5 +243,63 @@ describe('stepForMerge', () => {
     assert.equal(named.index, 1, 'the running step, not the done one');
     assert.equal(stepForMerge({ env: {}, head: 'plan/mc', entries }), null);
     assert.equal(stepForMerge({ env: { MC_STEP: 'ghost:0' }, head: 'x', entries }), null, 'a project the register does not have');
+  });
+});
+
+describe('mc merge --watch queues, then follows the job (ruling 36)', () => {
+  fresh('mc-merge-watch');
+
+  const sink = () => { const out = []; return { out, write: (s) => { out.push(s); } }; };
+
+  it('queues first, then watches, and returns the watch\'s code', async () => {
+    const calls = [];
+    const stdout = sink();
+    const code = await gate({ repo: 'memoro-cli', pr: 835, watch: true }, {
+      stdout, stderr: sink(), root,
+      resolveRepo: async () => '/repos/memoro-cli',
+      queueForMerger: async ({ opts }) => { calls.push(['queue', opts.pr]); return 0; },
+      watch: async (options) => { calls.push(['watch', options.repo, options.pr]); options.print('mc: #835 red — x'); return { code: 1, result: {} }; },
+    });
+    assert.equal(code, 1);
+    assert.deepEqual(calls, [['queue', 835], ['watch', 'memoro-cli', 835]]);
+    assert.deepEqual(stdout.out, ['mc: #835 red — x\n']);
+  });
+
+  it('a queueing that failed is returned as it is, with no watch', async () => {
+    let watched = false;
+    const code = await gate({ repo: 'memoro-cli', pr: 835, watch: true }, {
+      stdout: sink(), stderr: sink(), root,
+      resolveRepo: async () => '/repos/memoro-cli',
+      queueForMerger: async () => 1,
+      watch: async () => { watched = true; return { code: 0, result: {} }; },
+    });
+    assert.equal(code, 1);
+    assert.equal(watched, false);
+  });
+
+  it('--json prints the final state as one object, and the queueing says nothing', async () => {
+    const stdout = sink();
+    const code = await gate({ repo: 'memoro-cli', pr: 835, watch: true, json: true }, {
+      stdout, stderr: sink(), root,
+      resolveRepo: async () => '/repos/memoro-cli',
+      queueForMerger: async ({ stdout: out }) => { out.write('mc: #835 is queued for the merger — it is next\n'); return 0; },
+      readQueue: () => [],
+      readMerger: () => null,
+      prView: () => ({ state: 'MERGED', mergeCommit: 'abc1234def' }),
+      now: () => 0,
+      sleep: async () => {},
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(JSON.parse(stdout.out.join('')), {
+      repo: 'memoro-cli', pr: 835, outcome: 'merged', merge_commit: 'abc1234def', reason: null, place: null, seconds: 0,
+    });
+  });
+
+  it('--watch is refused with --docs, --check and several numbers, and by mc test', () => {
+    assert.equal(parseMergeArgs(['memoro-cli', '835', '--watch', '--docs'], { docs: true, watch: true }).error, '--docs lands in the call — there is nothing to watch');
+    assert.match(parseMergeArgs(['memoro-cli', '835', '--watch', '--check'], { docs: true, watch: true }).error, /nothing to watch/u);
+    assert.match(parseMergeArgs(['memoro-cli', '835', '836', '--watch'], { docs: true, watch: true }).error, /^--watch follows one pull request/u);
+    assert.equal(parseMergeArgs(['memoro-cli', '835', '--watch'], { full: true }).error, 'unknown flag: --watch');
+    assert.equal(parseMergeArgs(['memoro-cli', '835', '--watch'], { docs: true, watch: true }).watch, true);
   });
 });

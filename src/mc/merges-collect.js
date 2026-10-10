@@ -1,5 +1,6 @@
 /**
- * The one running gate round, read from the lock plus the lease beside it.
+ * The running gate rounds — one per lane at most (ruling 34) — read from the
+ * locks plus the lease beside each.
  *
  * `gate-lock.js` is a file and a pid and nothing else, on purpose (its own
  * header explains why) — it does not know a repository's name, only the slug
@@ -12,7 +13,7 @@
  * stays importing nothing about leases or a list of repositories — the
  * "whole surface is the round and its phase" that its own tests pin.
  */
-import { runningRound } from './gate-lock.js';
+import { runningRounds } from './gate-lock.js';
 import { readLease } from './repo-lease.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { mcHome } from './paths.js';
@@ -26,11 +27,23 @@ import { mcHome } from './paths.js';
  * matches nothing (a repository the lock was taken for but this list does not
  * carry) falls back to the slug itself rather than hiding the round.
  */
-export function runningMerge({
+export function runningMerge(options = {}) {
+  return runningMerges(options)[0] || null;
+}
+
+/**
+ * Every round running right now, heavy lane first, each with a name a person
+ * can read and its `lane` — an empty list when none is. Two when a memoro and
+ * a memoro-cli round run side by side, and the page draws both.
+ */
+export function runningMerges({
   root = mcHome(), repos = [], alive = undefined, now = new Date(),
 } = {}) {
-  const running = runningRound({ root, ...(alive ? { alive } : {}) });
-  if (!running) return null;
+  const rounds = runningRounds({ root, ...(alive ? { alive } : {}) });
+  return Object.values(rounds).filter(Boolean).map((running) => named(running, { root, repos, now }));
+}
+
+function named(running, { root, repos, now }) {
 
   const match = repos.find((candidate) => repoFileSlug(candidate.path) === running.repo) || null;
   const lease = match ? readLease(match.path, { root, now: now.getTime() }) : null;
@@ -41,6 +54,7 @@ export function runningMerge({
   return {
     repo: match ? match.name : running.repo,
     slug: running.repo,
+    lane: running.lane || 'heavy',
     pr: running.pr ?? null,
     pid: running.pid,
     mode: running.mode || null,

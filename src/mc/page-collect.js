@@ -14,7 +14,7 @@
  * next       — the order `mc run` would take (`assembleQueue`), one block per
  *              lane and three deep: what each lane starts now, how much of the
  *              walk is runnable, and what is skipped, counted by reason.
- * merges     — the one gate round running now (`runningMerge`), and the two
+ * merges     — the gate rounds running now, one per lane (`runningMerges`), and the two
  *              queues behind it: what `mc merge` left for the runner's lane,
  *              and what the runner refuses to land at all.
  * intake     — the helper's newest digest per repository, what is new in it,
@@ -31,6 +31,9 @@
  *              opens, whether or not a row is drawn for it. The workareas no
  *              project explains are counted here too, numbered after the
  *              projects.
+ * language   — the language side, from files `mc language` leaves: each
+ *              cached reading's numbers, the newest run, and the gap a stopped
+ *              run left open (`languageState`, language-runs.js).
  *
  * Plus `caches` (what the two read-through caches did) and `notes` (whatever
  * could not be read).
@@ -55,9 +58,10 @@ import {
 import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
+import { languageState } from './language-runs.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
 import { inLine, mergesPath, queueEntries, queueOrder, redEntries } from './merge-queue.js';
-import { runningMerge } from './merges-collect.js';
+import { runningMerges } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
 import { nightlyReading } from './nightly-history.js';
@@ -556,9 +560,10 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * (`merges.json`, ruling 30): every pull request `mc merge` or the runner has
  * handed the merger and it has not answered yet.
  *
- * `landing` is `runningMerge`'s own object (merges-collect.js) or null — this
- * function does not read the lock itself, so its tests never touch a real
- * one. The held rows went with `held.json` (ruling 21): a step that did not
+ * `landing` is `runningMerges`'s list (merges-collect.js) — one round per
+ * gate lane, so two when a memoro and a memoro-cli round run side by side —
+ * or one such object, or null. This function does not read the locks itself,
+ * so its tests never touch a real one. The held rows went with `held.json` (ruling 21): a step that did not
  * land is `failed` in the register and drawn where every other plan state is.
  *
  * `red` is what came back red and has not been queued again: a row each
@@ -571,26 +576,27 @@ export function mergesSection({
 } = {}) {
   const all = queueEntries(queued);
   const entries = queueOrder(inLine(all));
-  const isLanding = (item) => landing && Number(landing.pr) === item.pr && item.state === 'landing';
-  // The one the round is landing is drawn as the round, not twice — but its
+  const rounds = [].concat(landing || []).filter(Boolean);
+  const landingFor = (round) => (item) => Number(round.pr) === item.pr && item.state === 'landing'
+    && (!round.repo || !item.repo || round.repo === item.repo);
+  const isLanding = (item) => rounds.some((round) => landingFor(round)(item));
+  // The one a round is landing is drawn as the round, not twice — but its
   // queue entry is where its branch and its step are, and the open pull
   // requests are where its title is: the row names what is landing, not only
   // its number (Martin, 2026-10-09).
-  const own = entries.find(isLanding) || null;
   const titled = (repo, number) => prs.find((pr) => pr.repo === repo && Number(pr.number) === Number(number)) || null;
-  const named = landing
-    ? (() => {
-      const pr = titled(landing.repo, landing.pr);
-      const branch = own?.branch || pr?.headRefName || null;
-      return {
-        ...landing,
-        branch,
-        name: own?.step ? own.step.project : branch,
-        step: own?.step ? own.step.index + 1 : null,
-        title: pr?.title || null,
-      };
-    })()
-    : null;
+  const landings = rounds.map((round) => {
+    const own = entries.find(landingFor(round)) || null;
+    const pr = titled(round.repo, round.pr);
+    const branch = own?.branch || pr?.headRefName || null;
+    return {
+      ...round,
+      branch,
+      name: own?.step ? own.step.project : branch,
+      step: own?.step ? own.step.index + 1 : null,
+      title: pr?.title || null,
+    };
+  });
   const at = now instanceof Date ? now.getTime() : Number(now);
   const queuedItems = entries.filter((item) => !isLanding(item)).map((item) => {
     const since = Date.parse(item.since || '');
@@ -613,10 +619,11 @@ export function mergesSection({
     };
   });
   return {
-    landing: named,
+    landing: landings[0] || null,
+    landings,
     queued: { count: queuedItems.length, items: queuedItems },
     red: { count: redItems.length, items: redItems },
-    count: (landing ? 1 : 0) + queuedItems.length,
+    count: landings.length + queuedItems.length,
   };
 }
 
@@ -675,7 +682,7 @@ export function prsSection({
   prs = [], plans = [], worktrees = {}, root = '', merges = null, fetched = null, ageSeconds = null, now = new Date(),
 } = {}) {
   const at = now instanceof Date ? now.getTime() : Number(now);
-  const landing = merges?.landing || null;
+  const landings = merges?.landings || [].concat(merges?.landing || []);
   const queued = merges?.queued?.items || [];
   const reds = merges?.red?.items || [];
   const items = prs.map((pr) => {
@@ -696,7 +703,7 @@ export function prsSection({
       step: plan ? stepForPr(pr, plan) : null,
       steps: plan ? (Array.isArray(plan.plan?.steps) ? plan.plan.steps.length : plan.steps ?? null) : null,
       status: plan?.status || null,
-      merging: landing && landing.repo === pr.repo && Number(landing.pr) === number
+      merging: landings.some((landing) => landing.repo === pr.repo && Number(landing.pr) === number)
         ? 'landing'
         : (queued.some((item) => item.repo === pr.repo && item.pr === number) ? 'queued' : null),
       merge_red: (() => {
@@ -1299,7 +1306,7 @@ export async function collectPage({
   // is backing off from is not asked by the page either — every ask at a
   // locked keychain left a modal behind (2026-09-20).
   githubState = null,
-  merges = runningMerge,
+  merges = runningMerges,
   // The checkout mc itself runs from, or null. Injected so a test never reads
   // the real one.
   checkout = mcCheckout(),
@@ -1469,6 +1476,8 @@ export async function collectPage({
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes,
+    // File reads only, as DEPLOY's are: the page never runs a read.
+    language: languageState(env),
     mc: mcSection({
       process: runner.process,
       commit: runnerFile?.commit ?? null,

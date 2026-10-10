@@ -16,6 +16,7 @@ import {
 } from '../../src/mc/page-collect.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
+import { actEnd, actStart, endRun, startRun } from '../../src/mc/language-runs.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { controlPaths, drainLine, drainState } from '../../src/mc/run-control.js';
 import { width } from '../../src/mc/status-render.js';
@@ -478,6 +479,113 @@ describe('DEPLOY', () => {
   });
 });
 
+describe('LANGUAGE — the cached readings, the last run, and an open gap', () => {
+  const READ = (over = {}) => ({
+    lang: 'sv', read_at: '2026-08-29T10:00:00Z', unresolved: 0, without_usable: 0, waiting_rows: 0, forms: 120000, ...over,
+  });
+  const LAST = {
+    manifest: 'sv-forms-cutover', lang: 'sv', outcome: 'stopped', started: '2026-08-29T09:00:00Z',
+    ended: '2026-08-29T11:00:00Z', dry_run: false,
+  };
+  const drawn = (language) => paintedPage(pageData({ language }));
+
+  it('is not drawn when there is nothing to say — the empty page gains no line', () => {
+    const empty = renderPageLines(pageData(), { columns: 120, now: NOW });
+    const quiet = renderPageLines(pageData({
+      language: { languages: [READ()], last_run: null, open_gap: null },
+    }), { columns: 120, now: NOW });
+    assert.ok(!empty.some((line) => line.includes('LANGUAGE')));
+    assert.deepEqual(quiet, empty, 'a fresh reading with nothing waiting says nothing');
+    // And a page without the key at all — an older `--json` — draws the same.
+    const { language: _, ...without } = pageData();
+    assert.deepEqual(renderPageLines(without, { columns: 120, now: NOW }), empty);
+  });
+
+  it('draws only the languages with something to say, and the last run on its heading', () => {
+    const lines = drawn({
+      languages: [
+        READ({ lang: 'de' }),
+        READ({ lang: 'fr', read_at: '2026-08-20T10:00:00Z' }),
+        READ({ waiting_rows: 724, unresolved: 3 }),
+      ],
+      last_run: LAST,
+      open_gap: null,
+    });
+    const head = rowWith(lines, 'LANGUAGE');
+    assert.match(strip(head), /^ {2}LANGUAGE {2}last run sv-forms-cutover · stopped · 60 min ago +mc language$/u);
+    assert.deepEqual(signature(head).split(' '), ['bold+cyan', 'yellow', 'grey', 'grey'],
+      'a section title, and a stopped run waits on a person');
+    assert.match(strip(rowWith(lines, 'rows waiting')), /^ {4}sv {2}3 unresolved selectors · 724 rows waiting · mc language promote · read 2 h ago$/u);
+    assert.match(strip(rowWith(lines, ' fr ')), /^ {4}fr {2}read 9 d ago$/u, 'a reading a week old is worth taking again');
+    assert.ok(!lines.some((line) => /^ {4}de /u.test(strip(line))), 'a fresh reading with nothing waiting is not drawn');
+    // Right after DEPLOY, before CHECKS.
+    const text = lines.map(strip).join('\n');
+    assert.ok(text.indexOf('\n  DEPLOY') < text.indexOf('\n  LANGUAGE'));
+    assert.ok(text.indexOf('\n  LANGUAGE') < text.indexOf('\n  CHECKS'));
+  });
+
+  it('puts one red line above every section while a run is stopped inside a gap', () => {
+    const lines = drawn({
+      languages: [],
+      last_run: LAST,
+      open_gap: { manifest: 'sv-forms-cutover', act: 'purge-wiktionary-forms', says: 'sv has no forms', started: LAST.started },
+    });
+    const gap = rowWith(lines, 'mc language resume');
+    assert.equal(strip(gap), '  language: sv-forms-cutover stopped after purge-wiktionary-forms — sv has no forms · mc language resume');
+    assert.equal(signature(gap), 'red+bold');
+    assert.ok(lines.indexOf(gap) < lines.findIndex((line) => strip(line).startsWith('  PROGRAMMES')), 'above every section');
+  });
+
+  it('is gathered from the cache and the run records, offline', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-language-'));
+    const env = { MC_WORK_ROOT: root };
+    const dir = join(root, 'runner', 'log', 'language');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'status-sv.json'), JSON.stringify({
+      lang: 'sv',
+      at: '2026-08-29T10:00:00Z',
+      reads: {
+        selectors: { ok: true, unresolved: 3, without_usable: 40 },
+        forms: { ok: true, forms: 120000 },
+        grammar: { ok: true, status: 'ready', waiting: 724 },
+        anchors: { ok: false, exit: 1 },
+      },
+    }));
+    const run = startRun({ manifest: 'sv-forms-cutover', lang: 'sv', started: '2026-08-29T09:00:00Z' }, env);
+    const row = actStart(run, {
+      id: 'purge-wiktionary-forms', phase: 'execute', opens_gap: { until: 'ingest-saldo', says: 'sv has no forms' },
+    }, env);
+    actEnd(run, row, { outcome: 'done' }, env);
+    endRun(run, { outcome: 'stopped' }, env);
+
+    const data = await collectPage({
+      env,
+      now: NOW,
+      repos: [],
+      offline: true,
+      exec: async () => ({ ok: false, stdout: '' }),
+      run: () => ({ status: 1, stdout: '' }),
+      git: () => null,
+      checkout: null,
+      cache: {
+        loadPlans: () => ({ plans: [], sources: [] }),
+        loadPrs: () => ({ prs: [], fetched: null, age_seconds: null }),
+        savePrs: () => { throw new Error('savePrs on the offline page'); },
+      },
+    });
+    assert.deepEqual(data.language.languages, [{
+      lang: 'sv', read_at: '2026-08-29T10:00:00Z', unresolved: 3, without_usable: 40, waiting_rows: 724, forms: 120000,
+    }]);
+    assert.equal(data.language.last_run.manifest, 'sv-forms-cutover');
+    assert.equal(data.language.last_run.outcome, 'stopped');
+    assert.deepEqual(
+      { ...data.language.open_gap, started: undefined },
+      { manifest: 'sv-forms-cutover', act: 'purge-wiktionary-forms', says: 'sv has no forms', started: undefined },
+    );
+    assert.match(renderPage(data, { columns: 120, now: NOW }), /^ {2}language: sv-forms-cutover stopped after purge-wiktionary-forms — sv has no forms · mc language resume$/mu);
+  });
+});
+
 describe('SESSIONS', () => {
   const HELPER = {
     verb: 'helper', area: null, tool: 'claude', model: 'sonnet', pid: 99,
@@ -807,6 +915,23 @@ describe('MERGES', () => {
     // The mark in the gutter, as a running lane has it; no holder on the row.
     assert.ok(lines.some((line) => /^ {2}● memoro {6}#11651 {2}landing · running 17 test files · 4 min$/u.test(line)),
       lines.join('\n'));
+  });
+
+  /**
+   * Two rounds at once — a memoro round in the heavy lane and a memoro-cli
+   * round in the light one (ruling 34) — are two rows, each naming its lane.
+   */
+  it('draws both rounds when one runs in each lane, and names the lane of each', () => {
+    const merges = mergesSection({
+      landing: [{ ...LANDING, lane: 'heavy' }, { ...LANDING, repo: 'memoro-cli', pr: 838, phase: 'node --test', lane: 'light' }],
+      queued: [{ repo: 'memoro-cli', pr: 838, since: '2026-10-10T12:00:00Z', state: 'landing' }],
+    });
+    assert.equal(merges.count, 2, 'the light one is not counted twice as a waiter');
+    assert.equal(merges.landings.length, 2);
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /MERGES.*2 landing/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /● memoro {6}#11651 {2}landing · heavy lane · running 17 test files/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /● memoro-cli {2}#838 {2}landing · light lane · node --test/u.test(line)), lines.join('\n'));
   });
 
   /**
@@ -1321,6 +1446,7 @@ function pageData(over = {}) {
     merges: mergesSection({}),
     intake: intakeSection({ digests: [], proposals: [], now: NOW }),
     programmes: programmesSection({ areas: [], plans: [] }),
+    language: { languages: [], last_run: null, open_gap: null },
     caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },
     notes: [],
     ...over,
@@ -1378,6 +1504,16 @@ const DATA = pageData({
     live: [],
     repoOrder: ['memoro', 'memoro-cli'],
   }),
+  language: {
+    languages: [{
+      lang: 'sv', read_at: '2026-08-29T10:00:00Z', unresolved: 0, without_usable: 0, waiting_rows: 724, forms: 120000,
+    }],
+    last_run: {
+      manifest: 'sv-forms-cutover', lang: 'sv', outcome: 'done', started: '2026-08-28T09:00:00Z',
+      ended: '2026-08-28T10:00:00Z', dry_run: false,
+    },
+    open_gap: null,
+  },
   caches: { fresh: false, plans: [], prs: { fetched: '2026-08-29T10:00:00Z', age_seconds: 7200, count: 1 } },
   notes: ['PRs from cache, 2 h old — --fresh asks GitHub', 'no queue.md'],
 });
@@ -1397,7 +1533,7 @@ describe('the page', () => {
     // The order itself is Martin's (2026-09-19): the listing, the two desks
     // with what lies on each, what the runner takes next and what it is doing,
     // and the short end of the page — merges, the deploy, mc itself.
-    const at = ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'NEXT', 'RUNNER', 'MERGES', 'DEPLOY', 'MC  '].map((head) => text.indexOf(`\n  ${head}`));
+    const at = ['PROGRAMMES', 'WORK', 'HELPER', 'BRIEF', 'NEXT', 'RUNNER', 'MERGES', 'DEPLOY', 'LANGUAGE', 'MC  '].map((head) => text.indexOf(`\n  ${head}`));
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
@@ -1557,7 +1693,7 @@ describe('the page', () => {
     const code = await page(['--json'], { collect: async () => DATA, stdout: { write: (s) => { out += s; } } });
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
-    assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'language', 'caches', 'notes']);
     assert.equal(parsed.programmes.programmes[0].projects[0].name, 'avatar-self-serve');
     assert.equal(parsed.next.runnable, 2);
     // Every field the section draws is in the object, lanes and all: the page
@@ -2010,6 +2146,9 @@ describe('the palette', () => {
     '',
     'bold+cyan grey grey', //                          DEPLOY  nothing deployed yet               mc deploy
     '',
+    'bold+cyan grey grey grey', //                     LANGUAGE  last run sv-forms-cutover · done · 1 d ago
+    'bold yellow grey grey', //                          sv  724 rows waiting · read 2 h ago
+    '',
     'bold+cyan grey grey', //                          CHECKS  full test and deps, once a day
     '',
     'bold+cyan grey grey', //                          MC  0.7.11 · runner up 120 min
@@ -2069,7 +2208,7 @@ describe('the palette', () => {
     });
     assert.equal(code, 0);
     assert.ok(!out.includes(ESC), '--json is bytes for a program, never for an eye');
-    assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'language', 'caches', 'notes']);
   });
 
   it('gives a step kind one colour wherever a kind is printed', () => {

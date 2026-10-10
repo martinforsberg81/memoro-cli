@@ -24,6 +24,7 @@ import {
 } from '../../../src/mc/commands/deploy.js';
 import { mainWorktree } from '../../../src/mc/git.js';
 import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
+import { startRun } from '../../../src/mc/language-runs.js';
 import { claimLease, readLease, releaseLease } from '../../../src/mc/repo-lease.js';
 
 const SHA = '1a2b3c4d5e6f70819293a4b5c6d7e8f900112233';
@@ -260,6 +261,49 @@ describe('mc deploy — what it says before it asks', () => {
     assert.equal(ran, 0);
     assert.equal(readLease(PATH).held, false);
     assert.match(out.stdout, /--dry-run — nothing was deployed/u);
+  });
+
+  it('--dry-run says what language data waits, from the cache, before its closing line', async () => {
+    const now = Date.now();
+    const hoursAgo = (h) => new Date(now - h * 3600_000).toISOString();
+    const said = async (language) => {
+      const { out, stdout, stderr } = io();
+      assert.equal(await run(['--dry-run'], { ...deps({ languageState: () => language }), stdout, stderr }), 0);
+      return out.stdout;
+    };
+    const waiting = await said({
+      languages: [
+        { lang: 'fr', read_at: hoursAgo(5), waiting_rows: 0 },
+        { lang: 'sv', read_at: hoursAgo(2), waiting_rows: 724 },
+      ],
+      last_run: null,
+      open_gap: null,
+    });
+    assert.match(waiting, /\nmc: language — sv 724 rows waiting \(read 2h ago\) · mc language promote\nmc: --dry-run — nothing was deployed\n$/u);
+    assert.match(await said({ languages: [{ lang: 'sv', read_at: hoursAgo(3), waiting_rows: 0 }], last_run: null, open_gap: null }),
+      /\nmc: language — nothing waiting \(read 3h ago\)\n/u);
+    assert.match(await said({ languages: [], last_run: null, open_gap: null }),
+      /\nmc: language — no reading; mc language status <lang>\n/u);
+    const gap = await said({
+      languages: [],
+      last_run: null,
+      open_gap: { manifest: 'sv-forms-cutover', act: 'purge-wiktionary-forms', says: 'sv has no forms' },
+    });
+    assert.match(gap, /\nmc: language — sv-forms-cutover stopped after purge-wiktionary-forms: sv has no forms · mc language resume\n/u);
+  });
+
+  it('--dry-run reads the language cache itself when nothing is handed in', async () => {
+    const dir = join(work, 'runner', 'log', 'language');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'status-sv.json'), JSON.stringify({
+      lang: 'sv', at: new Date().toISOString(), reads: { grammar: { ok: true, status: 'ready', waiting: 12 } },
+    }));
+    const { out, stdout, stderr } = io();
+    await run(['--dry-run', '--json'], { ...deps(), stdout, stderr });
+    const json = JSON.parse(out.stdout);
+    assert.equal(json.language.languages[0].lang, 'sv');
+    assert.equal(json.language.languages[0].waiting_rows, 12);
+    assert.equal(json.language.open_gap, null);
   });
 
   it('--json is the same reading as one object', async () => {
@@ -816,6 +860,25 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
     assert.equal(order.filter((step) => step === 'sleep').length, 3, 'polled until the round was gone');
   });
 
+  it('a light round alone still makes the deployer wait, and the wait names the lane', async () => {
+    let reads = 0;
+    const order = [];
+    const { out, stdout } = io();
+    const job = { key: { started: 'x', sha: SHA }, sha: SHA, worktree: MAIN_WT, own: true, root: work };
+    const code = await ship(job, {
+      ...deps(),
+      stdout,
+      runningRounds: () => ({ heavy: null, light: reads++ < 2 ? { pid: 9, repo: 'memoro-cli', pr: 838, lane: 'light' } : null }),
+      readMerger: () => null,
+      sleep: async () => { order.push('sleep'); },
+      spawnDeploy: async () => { order.push('build'); return { code: 0 }; },
+    });
+    assert.equal(code, 0);
+    assert.equal(out.stdout.match(/waiting for the gate round of memoro-cli #838 in the light lane \(pid 9\)/gu).length, 1);
+    assert.equal(order.filter((step) => step === 'sleep').length, 2, 'polled until the light round was gone');
+    assert.equal(order.at(-1), 'build');
+  });
+
   it('with a merger alive and the gate free, the deployer reads the gate twice a poll apart', async () => {
     let reads = 0;
     const order = [];
@@ -901,6 +964,48 @@ describe('mc deploy — one deploy at a time', () => {
     assert.equal(code, 1);
     assert.equal(ran, 0);
     assert.match(out.stderr, /a deploy of 9f8e7d6 has been running since 2026-10-07 19:14/u);
+  });
+
+  it('refuses while a language run is alive, with a refusal row', async () => {
+    const env = { MC_WORK_ROOT: work };
+    startRun({ manifest: 'sv-forms-cutover', lang: 'sv', sha: SHA, holder: 'martin@laptop', pid: 4242, started: '2026-10-10T08:00:00.000Z' }, env);
+    const { out, stdout, stderr } = io();
+    let ran = 0;
+    let asked = 0;
+    const code = await run([], {
+      ...deps({
+        alive: (pid) => pid === 4242,
+        ask: () => { asked += 1; return 'y'; },
+        spawnDeploy: async () => { ran += 1; return { code: 0 }; },
+      }),
+      stdout,
+      stderr,
+    });
+    assert.equal(code, 1);
+    assert.equal(ran, 0);
+    assert.equal(asked, 0);
+    assert.match(out.stderr, /mc: a language run of sv-forms-cutover is running since 2026-10-10 08:00 \(pid 4242\) — nothing was deployed/u);
+    const [refused] = readDeploys(env);
+    assert.equal(refused.outcome, 'refused');
+    assert.match(refused.note, /a language run of sv-forms-cutover is running — started 2026-10-10T08:00:00.000Z by martin@laptop/u);
+  });
+
+  it('a language run that started while this one was asking is refused under the lock', async () => {
+    const env = { MC_WORK_ROOT: work };
+    const { out, stdout, stderr } = io();
+    let ran = 0;
+    const code = await run([], {
+      ...deps({
+        alive: (pid) => pid === 4242,
+        ask: () => { startRun({ manifest: 'sv-forms-cutover', lang: 'sv', pid: 4242 }, env); return 'y'; },
+        spawnDeploy: async () => { ran += 1; return { code: 0 }; },
+      }),
+      stdout,
+      stderr,
+    });
+    assert.equal(code, 1);
+    assert.equal(ran, 0);
+    assert.match(out.stderr, /a language run of sv-forms-cutover is running since/u);
   });
 
   it('a running row whose process is gone is closed as failed, not a deploy in progress', async () => {

@@ -24,7 +24,7 @@ import { join } from 'node:path';
 
 import { defaultRepos, runsFor } from './brief-collect.js';
 import { mergesPath, parseQueue, queueOrder } from './merge-queue.js';
-import { runningMerge } from './merges-collect.js';
+import { runningMerges } from './merges-collect.js';
 import { ageWords } from './page-cache.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
@@ -243,7 +243,7 @@ export async function collectProject(name, {
   git = runGit,
   exec = execAsync,
   read = (path) => readFileSync(path, 'utf8'),
-  merges = runningMerge,
+  merges = runningMerges,
 } = {}) {
   const root = workRoot(env);
   const notes = [];
@@ -307,15 +307,14 @@ export async function collectProject(name, {
     git: (cwd, args) => { const out = git(cwd, args); return { ok: out != null, stdout: out ?? '' }; },
   });
 
-  // The gate round, matched against this project's own fetched pull requests
-  // rather than a branch: `runningMerge`'s object carries no branch, only a
+  // The gate round — one per lane may run, so the one of this repository —
+  // matched against this project's own fetched pull requests rather than a
+  // branch: `runningMerges`'s objects carry no branch, only a
   // repository and a pull request number. Matching through `prs` rather than
   // asking again means `--offline` and a failed `gh` leave it silent, same as
   // the pull requests themselves above.
-  const running = merges({ repos: present });
-  const landing = running && running.repo === repo && prs.some((pr) => pr.number === running.pr)
-    ? running
-    : null;
+  const landing = [].concat(merges({ repos: present }) || [])
+    .find((running) => running && running.repo === repo && prs.some((pr) => pr.number === running.pr)) || null;
 
   return {
     name,
