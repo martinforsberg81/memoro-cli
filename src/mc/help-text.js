@@ -42,6 +42,7 @@ THE PAGE
   mc language [status <lang>]      Each language's last reading and run; status reads one again
   mc language key [set]            The Cloudflare key the writes get — set reads it from stdin
   mc language run <manifest>       A cutover's acts in order, a question before every write
+  mc language promote              The curated grammar waiting, to production after one question
   mc prs [--offline] [--json]      Every open pull request, and whose it is: a project's
                                     step, a plan session, a workarea, or nobody
   mc deps [<repo>]                 Which dependencies need updating, and how urgently
@@ -330,6 +331,13 @@ IN FULL
                                     skipped, the interrupted one checked and
                                     asked again. Refused when memoro's main
                                     moved since, unless --from-head
+  mc language promote [--langs <list>]
+                                   The grammar promotion mc deploy no longer
+                                    does, as a one-act run: memoro's promote
+                                    check, one line per language waiting, one
+                                    question, then the write with the key.
+                                    Nothing waiting asks nothing. Recorded as
+                                    grammar-promote, resumed like a run
   mc deps [<repo>] [--json] [--refresh]
                                    What origin/main's lockfile is behind on:
                                     npm audit and npm view of it, read in a
