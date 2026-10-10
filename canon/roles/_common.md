@@ -37,3 +37,9 @@ result for hunks kept twice.
 
 Files that are not the change (probes, output, scripts) go in `$MC_SCRATCH`,
 or the system temp directory when it is unset — never the worktree.
+
+Never signal a process you did not start in this session: not with `kill`,
+`pkill` or `killall`, and not by name. A gate round, a test run, a dev server
+or a session that looks stuck is someone's; a pid you did not get from your
+own command is not yours. Say what you saw (pid, command, how long) to Martin,
+or as a proposal, and carry on. Your own: by the pid your command gave you.
