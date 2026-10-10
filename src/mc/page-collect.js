@@ -575,6 +575,11 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  *
  * A queued job whose plan's earlier step is not `done` (`ordered`, the
  * merger's own rule) carries `waits_for: '<project> step <n>'`.
+ *
+ * `landings` is one item per pull request in a round: the first carries the
+ * round's phase, age and lane, the rest `batch_of: <first pr>`. `mending` is
+ * what is getting its one mend, each with the red's reason and how long the
+ * session has run (`waiting` before it has a pid).
  */
 export function mergesSection({
   landing = null, queued = [], prs = [], now = new Date(), ordered = () => true,
@@ -582,29 +587,66 @@ export function mergesSection({
   const all = queueEntries(queued);
   const entries = queueOrder(inLine(all));
   const rounds = [].concat(landing || []).filter(Boolean);
-  const landingFor = (round) => (item) => Number(round.pr) === item.pr && item.state === 'landing'
-    && (!round.repo || !item.repo || round.repo === item.repo);
-  const isLanding = (item) => rounds.some((round) => landingFor(round)(item));
+  const ofRepo = (round, item) => !round.repo || !item.repo || round.repo === item.repo;
+  const landingFor = (round) => (item) => Number(round.pr) === item.pr && item.state === 'landing' && ofRepo(round, item);
   // The one a round is landing is drawn as the round, not twice — but its
   // queue entry is where its branch and its step are, and the open pull
   // requests are where its title is: the row names what is landing, not only
   // its number (Martin, 2026-10-09).
   const titled = (repo, number) => prs.find((pr) => pr.repo === repo && Number(pr.number) === Number(number)) || null;
-  const landings = rounds.map((round) => {
-    const own = entries.find(landingFor(round)) || null;
-    const pr = titled(round.repo, round.pr);
-    const branch = own?.branch || pr?.headRefName || null;
+  const named = (repo, number, entry) => {
+    const pr = titled(repo, number);
+    const branch = entry?.branch || pr?.headRefName || null;
     return {
-      ...round,
       branch,
-      name: own?.step ? own.step.project : branch,
-      step: own?.step ? own.step.index + 1 : null,
+      name: entry?.step ? entry.step.project : branch,
+      step: entry?.step ? entry.step.index + 1 : null,
       title: pr?.title || null,
     };
+  };
+  // A batch is one round, but every pull request in it keeps its own row
+  // (Martin, 2026-10-10: *"den pr som mergas genom en session får behålla sin
+  // rad"*). The lock names only the first; the others are the `landing`
+  // entries of its repository that `markLanding` gave the same `started`.
+  const members = new Set();
+  const landings = rounds.flatMap((round) => {
+    const own = entries.find(landingFor(round)) || null;
+    if (own) members.add(own);
+    const rest = own?.started
+      ? entries.filter((item) => item !== own && item.state === 'landing' && item.started === own.started && ofRepo(round, item))
+      : [];
+    for (const item of rest) members.add(item);
+    return [
+      { ...round, ...named(round.repo, round.pr, own) },
+      ...rest.map((item) => ({
+        repo: item.repo || round.repo || null, pr: item.pr, mode: round.mode || null, batch_of: Number(round.pr),
+        ...named(item.repo || round.repo, item.pr, item),
+      })),
+    ];
   });
+  const isLanding = (item) => members.has(item);
   const at = now instanceof Date ? now.getTime() : Number(now);
+  const ageOf = (when) => {
+    const ms = Date.parse(when || '');
+    return Number.isFinite(ms) ? Math.max(0, Math.round((at - ms) / 1000)) : null;
+  };
+  // A red getting its one mend (mend.js): a row of its own, not a waiter —
+  // the merger cannot take it until the mend puts it back as `queued`.
+  const mendingItems = entries.filter((item) => item.state === 'mending').map((item) => {
+    const { name, title } = named(item.repo, item.pr, item);
+    const started = item.mend?.pid != null;
+    return {
+      ...item,
+      name,
+      step_number: item.step ? item.step.index + 1 : null,
+      title,
+      reason: item.mend?.reason || null,
+      waiting: !started,
+      age_seconds: started ? ageOf(item.mend?.started) : null,
+    };
+  });
   const waits = waitingOn(all, { ordered }).filter((one) => one.step);
-  const queuedItems = entries.filter((item) => !isLanding(item)).map((item) => {
+  const queuedItems = entries.filter((item) => !isLanding(item) && item.state !== 'mending').map((item) => {
     const since = Date.parse(item.since || '');
     const step = waits.find((one) => samePr(one.entry, item))?.step || null;
     return {
@@ -630,6 +672,7 @@ export function mergesSection({
     landing: landings[0] || null,
     landings,
     queued: { count: queuedItems.length, items: queuedItems },
+    mending: { count: mendingItems.length, items: mendingItems },
     red: { count: redItems.length, items: redItems },
     count: landings.length + queuedItems.length,
   };
