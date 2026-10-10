@@ -770,12 +770,13 @@ export const QUEUED_DRAWN = 6;
 /**
  * The queue's numbers for the MERGES heading, in landing order: `#N` while
  * the queue is one repository, `repo#N` with two, `→#M` on one built on
- * another, `⏸` on one whose plan's earlier step is not done (`waits_for`).
+ * another, `⏸` on one whose plan's earlier step is not done (`waits_for`),
+ * `↻` on one back in line after its mend (`mended`).
  * Numbers that do not fit in `room` become `… N more`, never a clipped half.
  */
 function waitingNumbers(items, room) {
   const repos = new Set(items.map((item) => item.repo));
-  const label = (item) => `${repos.size > 1 ? `${item.repo}` : ''}#${item.pr}${item.parent ? `→#${item.parent.pr}` : ''}${item.waits_for ? '⏸' : ''}`;
+  const label = (item) => `${repos.size > 1 ? `${item.repo}` : ''}#${item.pr}${item.mended ? '↻' : ''}${item.parent ? `→#${item.parent.pr}` : ''}${item.waits_for ? '⏸' : ''}`;
   let shown = '';
   for (const [index, item] of items.entries()) {
     const text = `${shown ? ' ' : ''}${label(item)}`;
@@ -798,13 +799,17 @@ function waitingNumbers(items, room) {
  *
  * The title is what gives way on a narrow terminal, and after it the tail from
  * the end; the number and the name never do.
+ *
+ * A batch member after the round's first (`batch_of`) has the same green head
+ * and, where the tail would be, `same round as #<first>` in grey: the phase
+ * and the clock are the round's, and are on the first row.
  */
 function landingLine(c, wide, landing) {
   const where = pad(clip(landing.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
   const number = landing.pr != null ? `#${landing.pr}  ` : '';
   const name = landing.name ? `${clip(landing.name, nameWidth(wide) - 1)}${landing.step ? ` step ${landing.step}` : ''}  ` : '';
   const head = `  ${MARK.running} ${where} ${number}${name}`;
-  const tail = trailing([
+  const tail = landing.batch_of != null ? [{ text: `same round as #${landing.batch_of}`, styles: ['grey'] }] : trailing([
     { text: landing.mode === 'check' ? 'measuring, not landing' : 'landing' },
     landing.lane ? { text: `${landing.lane} lane`, styles: ['grey'] } : null,
     landing.phase ? { text: landing.phase } : null,
@@ -842,6 +847,24 @@ function redLine(c, wide, item) {
 }
 
 /**
+ * A red getting its one mend (mend.js): drawn as `redLine` is, in yellow with
+ * the running mark — a session has the branch and nobody has to do anything
+ * yet. The reason gives way first; the number and the name never do.
+ */
+function mendLine(c, wide, item) {
+  const where = pad(clip(item.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
+  const name = item.name ? `${clip(item.name, nameWidth(wide) - 1)}${item.step_number ? ` step ${item.step_number}` : ''}  ` : '';
+  const head = `  ${MARK.running} ${where} #${item.pr}  ${name}mending — `;
+  const age = `  ${item.waiting ? 'waiting' : ageWords(item.age_seconds)}`;
+  const room = Math.max(8, wide - head.length - age.length - 2);
+  return paint(c, [
+    { text: head, styles: ['yellow'] },
+    { text: clip(one(item.reason || 'red'), room), styles: ['yellow'] },
+    { text: age, styles: ['grey'] },
+  ]).replace(/[ ]+$/u, '');
+}
+
+/**
  * MERGES — the gate rounds landing now (one per lane, ruling 34), and the
  * waiters behind them.
  *
@@ -857,9 +880,11 @@ function mergesLines(lines, c, wide, merges) {
   // the rows below are only the round in flight and the reds.
   const verb = 'mc merge <repo> <pr>';
   const reds = merges.red?.items || [];
+  const mends = merges.mending?.items || [];
   const parts = [];
   const landings = merges.landings || [].concat(merges.landing || []);
   if (landings.length) parts.push({ text: `${landings.length} landing`, styles: ['grey'] });
+  if (mends.length) parts.push({ text: `${mends.length} mending`, styles: ['yellow'] });
   if (reds.length) parts.push({ text: `${reds.length} red`, styles: ['red', 'bold'] });
   const items = merges.queued.items || [];
   if (merges.queued.count) {
@@ -876,6 +901,7 @@ function mergesLines(lines, c, wide, merges) {
   // The heading has already said *nothing landing*; a row that says it again
   // is a row.
   for (const landing of landings) lines.push(landingLine(c, wide, landing));
+  for (const item of mends) lines.push(mendLine(c, wide, item));
   for (const item of reds) lines.push(redLine(c, wide, item));
 }
 

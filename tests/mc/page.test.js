@@ -949,6 +949,79 @@ describe('MERGES', () => {
   });
 
   /**
+   * A batch is one round and three pull requests: each keeps its own row,
+   * the round's phase and clock on the first, and none of them is a waiter
+   * (Martin, 2026-10-10).
+   */
+  it('draws every pull request of a batch round on its own row, the phase on the first', () => {
+    const started = '2026-10-10T17:47:00Z';
+    const merges = mergesSection({
+      landing: { ...LANDING, pr: 13372 },
+      queued: [
+        { repo: 'memoro', pr: 13372, branch: 'a-1', step: { project: 'a', index: 0 }, since: '2026-10-10T17:30:00Z', state: 'landing', started },
+        { repo: 'memoro', pr: 13373, branch: 'b-2', step: { project: 'b', index: 1 }, since: '2026-10-10T17:31:00Z', state: 'landing', started },
+        { repo: 'memoro', pr: 13374, branch: 'loose', since: '2026-10-10T17:32:00Z', state: 'landing', started },
+        { repo: 'memoro', pr: 13380, branch: 'next', since: '2026-10-10T17:40:00Z', state: 'queued' },
+      ],
+      prs: [{ repo: 'memoro', number: 13373, title: 'b 2: the second' }],
+      now: new Date('2026-10-10T17:51:00Z'),
+    });
+    assert.deepEqual(merges.landings.map((item) => item.pr), [13372, 13373, 13374]);
+    assert.deepEqual(merges.landings.map((item) => item.phase ?? null), [LANDING.phase, null, null]);
+    assert.deepEqual(merges.landings.map((item) => item.batch_of ?? null), [null, 13372, 13372]);
+    assert.deepEqual(merges.landings.map((item) => [item.name, item.step]), [['a', 1], ['b', 2], ['loose', null]]);
+    assert.deepEqual(merges.queued.items.map((item) => item.pr), [13380], 'no batch member is waiting');
+    assert.equal(merges.count, 4);
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /^ {2}MERGES {2}3 landing · 1 waiting: #13380 +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}● memoro {6}#13372 {2}a step 1 {2}landing · running 17 test files · 4 min$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}● memoro {6}#13373 {2}b step 2 {2}b 2: the second {2}same round as #13372$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /^ {2}● memoro {6}#13374 {2}loose {2}same round as #13372$/u.test(line)), lines.join('\n'));
+    assert.equal(lines.filter((line) => /running 17 test files/u.test(line)).length, 1, 'the phase is on the first row only');
+  });
+
+  /**
+   * A red getting its one mend is a yellow row of its own under the round
+   * landing beside it, and the heading counts it; a mended job back in line
+   * is a waiter again, marked `↻`.
+   */
+  it('draws a mend on a yellow row of its own beside a landing round, and marks a mended waiter', () => {
+    const merges = mergesSection({
+      landing: { ...LANDING, pr: 13390 },
+      queued: [
+        { repo: 'memoro', pr: 13390, branch: 'c', since: '2026-10-10T17:00:00Z', state: 'landing', started: '2026-10-10T17:47:00Z' },
+        {
+          repo: 'memoro', pr: 13370, branch: 'card-views-3', step: { project: 'card-views', index: 2 }, since: '2026-10-10T16:50:00Z', state: 'mending',
+          mend: { pid: 4242, started: '2026-10-10T17:45:00Z', reason: 'conflicts with origin/main: card-views.js', stopped_at: 'merge' },
+        },
+        { repo: 'memoro', pr: 13360, branch: 'd', since: '2026-10-10T16:40:00Z', state: 'queued', mended: { at: '2026-10-10T17:40:00Z', outcome: 'pushed' } },
+      ],
+      now: new Date('2026-10-10T17:51:00Z'),
+    });
+    assert.deepEqual(merges.mending.items.map((item) => [item.pr, item.reason, item.age_seconds, item.waiting]), [
+      [13370, 'conflicts with origin/main: card-views.js', 360, false],
+    ]);
+    assert.deepEqual(merges.queued.items.map((item) => item.pr), [13360], 'a mend is not a waiter');
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /^ {2}MERGES {2}1 landing · 1 mending · 1 waiting: #13360↻ +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
+    const landingAt = lines.findIndex((line) => /#13390/u.test(line));
+    const mendAt = lines.findIndex((line) => /^ {2}● memoro {6}#13370 {2}card-views step 3 {2}mending — conflicts with origin\/main: card-views\.js {2}6 min$/u.test(line));
+    assert.ok(mendAt > landingAt && landingAt >= 0, lines.join('\n'));
+    // Before the session has a pid, the mend is waiting for it.
+    const quiet = mergesSection({
+      queued: [{ repo: 'memoro', pr: 13371, branch: 'quiet', since: '2026-10-10T16:55:00Z', state: 'mending', mend: { pid: null, started: null, reason: 'red: 2 tests red', stopped_at: 'gate' } }],
+    });
+    assert.ok(renderPageLines(pageData({ merges: quiet }), { columns: 120 })
+      .some((line) => /^ {2}● memoro {6}#13371 {2}quiet {2}mending — red: 2 tests red {2}waiting$/u.test(line)));
+    const painted = renderPageLines(pageData({ merges }), { columns: 120, colour: true }).find((line) => /#13370/u.test(line));
+    assert.match(painted, /\x1b\[33m/u, 'the mend row is yellow');
+    // Narrow, the reason gives way and the number and the name stay.
+    const narrow = renderPageLines(pageData({ merges }), { columns: 70 }).find((line) => /#13370/u.test(line));
+    assert.ok(narrow.length <= 70, narrow);
+    assert.match(narrow, /#13370 {2}card-views step 3 {2}mending — /u);
+  });
+
+  /**
    * What is landing, named: the queue entry has its step and branch, the open
    * pull requests its title — the row was a number and a holder's hostname
    * (Martin, 2026-10-09).

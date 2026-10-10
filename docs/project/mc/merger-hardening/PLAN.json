@@ -52,7 +52,7 @@
       "check": "`tests/mc/mend.test.js` with stub session, git and gh: a `merge` stop starts one session in a fresh worktree on the branch; a push puts the entry back in `queued` with its old `since` and `mended` set; no push makes it `red` with `<reason> — the mend pushed nothing`; a second red on a mended job starts no session; `fetch`, `pr`, `killed` and a main-own red start none; at most `MEND_AT_ONCE` run at once. Live: the close-out quotes a `mending` line and its outcome, or says that no red occurred in the window."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The page draws every pull request in a batch round on its own row, and a mend on its own yellow row, beside the merger's next round.",
       "check": "`tests/mc/page.test.js`: a batch of three draws three green rows, the round's phase and age on the first; none of the three is counted as waiting. A `mending` entry draws a yellow row with its reason and age while another round is landing; the heading reads `1 landing · 1 mending · …`."
     }

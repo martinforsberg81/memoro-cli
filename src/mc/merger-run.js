@@ -18,6 +18,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { runTool } from './child-async.js';
+import { mayMend, runMend } from './mend.js';
 import { landerFor, runsAppender, serve } from './merger.js';
 import { workRoot } from './paths.js';
 
@@ -54,6 +55,9 @@ const code = await serve({
   version: { checkout: shown, commit },
   stopping: () => stopping,
   gh,
-  land: landerFor({ root, say, sleep, gh, appendRun }),
+  appendRun,
+  // A red the change caused gets one mend session first (ruling 37).
+  land: landerFor({ root, say, sleep, gh, appendRun, mayMend }),
+  mend: (job, report, { onPid }) => runMend({ root, job, report, deps: { onPid } }),
 });
 process.exit(code);

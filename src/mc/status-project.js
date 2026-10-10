@@ -177,6 +177,14 @@ export function renderProject({
       out.push(`  #${entry.pr} came back red from the merger${entry.answered ? ` (${when(entry.answered)})` : ''} — ${entry.reason || 'no reason given'}`);
       continue;
     }
+    if (entry.state === 'mending') {
+      out.push(`  #${entry.pr} is being mended after ${entry.mend?.reason || 'a red'}${entry.mend?.started ? ` (since ${when(entry.mend.started)})` : ''}`);
+      continue;
+    }
+    if (entry.batch_of) {
+      out.push(`  #${entry.pr} lands in the same round as #${entry.batch_of}`);
+      continue;
+    }
     const after = entry.state === 'landing' ? ' — the merger has it' : (entry.parent ? ` — lands after #${entry.parent.pr}, which it is built on` : '');
     out.push(`  #${entry.pr} is in the merge queue${entry.since ? ` (since ${when(entry.since)})` : ''}${after}`);
   }
@@ -313,8 +321,8 @@ export async function collectProject(name, {
   // repository and a pull request number. Matching through `prs` rather than
   // asking again means `--offline` and a failed `gh` leave it silent, same as
   // the pull requests themselves above.
-  const landing = [].concat(merges({ repos: present }) || [])
-    .find((running) => running && running.repo === repo && prs.some((pr) => pr.number === running.pr)) || null;
+  const rounds = [].concat(merges({ repos: present }) || []).filter(Boolean);
+  const landing = rounds.find((running) => running.repo === repo && prs.some((pr) => pr.number === running.pr)) || null;
 
   return {
     name,
@@ -331,19 +339,31 @@ export async function collectProject(name, {
     // The `mc merge` calls waiting for the gate whose branch is this
     // project's — the same longest-name rule the pull requests above are
     // matched by (project-prs.js), so it holds with GitHub unreachable too.
-    queued: queuedFor(root, read, { name, repo, names: main?.names || [name] }),
+    queued: queuedFor(root, read, { name, repo, names: main?.names || [name], rounds }),
     notes,
   };
 }
 
-/** This project's entries in `~/mc/runner/merges.json`, oldest first. */
-function queuedFor(root, read, { name, repo, names }) {
+/**
+ * This project's entries in `~/mc/runner/merges.json`, oldest first. A
+ * `landing` entry in a batch after its round's first carries `batch_of: <first
+ * pr>` — the round is the lock's number, or, with no lock read, the oldest
+ * `landing` entry with the same `started` (`markLanding` writes one a batch).
+ */
+function queuedFor(root, read, { name, repo, names, rounds = [] }) {
   let entries = [];
-  try { entries = parseQueue(read(mergesPath(root))); } catch { return []; }
+  try { entries = queueOrder(parseQueue(read(mergesPath(root)))); } catch { return []; }
+  const batchOf = (entry) => {
+    if (entry.state !== 'landing' || !entry.started) return null;
+    const same = entries.filter((one) => one.state === 'landing' && one.started === entry.started && one.repo === entry.repo);
+    const first = same.find((one) => rounds.some((round) => (!round.repo || round.repo === one.repo) && Number(round.pr) === one.pr)) || same[0];
+    return first && first.pr !== entry.pr ? first.pr : null;
+  };
   // Every entry is a job the merger will take (ruling 30); nothing in it is
   // a process that could have died.
-  return queueOrder(entries).filter((entry) => (!entry.repo || !repo || entry.repo === repo)
-    && (entry.step?.project === name || projectForBranch(entry.branch, names) === name));
+  return entries.filter((entry) => (!entry.repo || !repo || entry.repo === repo)
+    && (entry.step?.project === name || projectForBranch(entry.branch, names) === name))
+    .map((entry) => ({ ...entry, batch_of: batchOf(entry) }));
 }
 
 /**
