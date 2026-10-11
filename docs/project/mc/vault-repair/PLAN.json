@@ -22,12 +22,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "The vault key cache is written through the real macOS keychain guard and read back.",
       "check": "`tests/vault/engine/key-cache.test.js`: `cacheVaultKey` with `deps.setSecret` calling the real `macSet` (only its `exec` stubbed, capturing the `security -i` stdin line) returns `true`, and `readCachedVaultKey` with `deps.getSecret` returning the captured `-w` value yields the same 32 key bytes, `durable: true`, and the `authHash` and `deviceId` that were written."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A cache entry in the pre-2026-10-10 shape still reads, and a corrupt encoded entry is cleared rather than thrown.",
       "check": "`tests/vault/engine/key-cache.test.js`: a store seeded with `JSON.stringify({ vaultKeyB64, authHash, expiresAt: null })` reads as present and is not deleted; a store seeded with `b64:` followed by non-base64 or non-JSON reads as `null`, `inspectCachedVaultKey` reports `invalid-json`, and the entry is deleted."
     },

@@ -14,8 +14,12 @@
  * appending the user id to the account name; the API below stays the
  * same.
  *
- * Cache value shape (JSON in the keychain entry):
- *   { vaultKeyB64: string, expiresAt: ISO-string }
+ * Cache value shape (in the keychain entry):
+ *   'b64:' + base64(JSON.stringify({ vaultKeyB64, authHash?, deviceId?, expiresAt }))
+ * The JSON record is base64-encoded behind `b64:` because `macSet`
+ * (src/lib/keychain.js) refuses `"`, `\`, CR and LF since #843, and a JSON
+ * string always carries quotes. Entries written before that — plain JSON
+ * in the same entry — are still read.
  *
  * We embed expiresAt rather than relying on OS-keychain TTL because:
  *   - Linux libsecret has no native expiry
@@ -44,6 +48,11 @@ import { bytesToBase64, base64ToBytes, importVaultKey } from './client-crypto.js
 
 export const VAULT_CACHE_ACCOUNT = 'mc-vault:active-key';
 export const TTL_MS = 15 * 60 * 1000;
+const CACHE_PREFIX = 'b64:';
+
+function encodeCacheRecord(record) {
+  return CACHE_PREFIX + Buffer.from(JSON.stringify(record), 'utf8').toString('base64');
+}
 
 /**
  * Compute the cache key for a given identity. Today we don't have a
@@ -56,8 +65,8 @@ export function cacheAccountFor(identity = null) {
 }
 
 /**
- * Cache an unlocked vault-key. Writes JSON-encoded
- * { vaultKeyB64, expiresAt } into the keychain entry. Best-effort:
+ * Cache an unlocked vault-key. Writes the `b64:`-encoded
+ * { vaultKeyB64, expiresAt } record into the keychain entry. Best-effort:
  * a keychain write failure does NOT throw — falling back to "prompt
  * every command" is preferable to refusing to operate.
  *
@@ -85,7 +94,7 @@ export async function cacheVaultKey(vaultKeyBytes, {
   // behind the OS user's own auth, IS the device trust boundary. The
   // cached authHash lets later commands re-open the server vault session
   // without a prompt ("one prompt per device, ever").
-  const value = JSON.stringify({
+  const value = encodeCacheRecord({
     vaultKeyB64: bytesToBase64(vaultKeyBytes),
     ...(authHash ? { authHash } : {}),
     ...(deviceId ? { deviceId } : {}),
@@ -186,7 +195,11 @@ function emptyInspect(reason) {
 
 function parseCacheRecord(raw, now) {
   let parsed;
-  try { parsed = JSON.parse(raw); }
+  try {
+    parsed = raw.startsWith(CACHE_PREFIX)
+      ? JSON.parse(Buffer.from(raw.slice(CACHE_PREFIX.length), 'base64').toString('utf8'))
+      : JSON.parse(raw);
+  }
   catch { return { present: false, expiresAt: null, expiresInMs: 0, reason: 'invalid-json', clear: true }; }
 
   const durable = parsed?.expiresAt === null;
