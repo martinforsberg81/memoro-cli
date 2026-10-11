@@ -1262,3 +1262,44 @@ credits, and to nothing else. The key is then visible to the commands that
 session runs; Martin accepted that, with the spend cap Martin sets on the
 Console workspace `mc` as the bound. Carried by `step-credits`
 (`docs/project/mc/step-credits/PLAN.json`).
+
+## 39 · What mc keeps: one root per kind of area, a closeout in git, retention per root
+
+`ruling · 2026-10-11` · raised by Martin in the mc planning session
+
+> "vi måste hitta ett system där mc på ett smartare sätt rensar ut data som
+> inte längre behövs" … "Bokslutet i git." … "Programmens konversationer:
+> alltid behålla den aktuella; gamla kan städas efter 72h." … "En plan kan
+> gott behålla sina workarea; de ska egentligen bara ha max två: en memoro
+> och en memoro-cli. En fast kostnad som inte växer." … "En plan-session kan
+> använda sig av underagenter ibland som var och en arbetar i sin egen
+> workarea. Vi kan inte ha så stränga regler." … "låt oss gruppera alla
+> workareas på ett smart sätt: plan/ har sin egen, låt oss skapa en work/ och
+> varför inte ett runner/ eller step/." … "jag godkänner detta. GO."
+> (Martin, 2026-10-11)
+
+A programme (staff, msr-core, mc …) is long-lived; a project is a plan run
+through quickly, though a step may wait about a week on a timed blocker. The
+two are kept differently.
+
+Each kind of area has its own root, and the path says what it is:
+`~/mc/plan/<programme>/`, `~/mc/step/<project>/` (the runner's),
+`~/mc/work/<name>/` (`mc work`). Existing areas are not moved; those directly
+under `~/mc/` drain in place.
+
+A project's data lives until its closeout. The archive PR that removes the
+plan also adds `docs/project/<programme>/closeout/<project>.json`: goal, steps
+with PR, sha and date, and per-session time, tokens and cost. Once that is on
+main and the area is closed, the register file, session logs, closed
+leftovers, scratch and transcripts are removed.
+
+A programme's planning area keeps its `memoro` and `memoro-cli` checkouts for
+good. Extra worktrees there are allowed (a subagent's) and go once finished.
+A programme keeps its current conversation, and the others go after 72 h. A
+`mc work` area stays until it is released or discarded.
+
+Every removal is list-first: the targets are written to a file, each is
+re-checked when it is removed, and a check that errors means keep (the
+2026-09-26 incident). `mc tidy` does it, and the runner runs it daily and when
+lanes skip for disk. Carried by `retention`
+(`docs/project/mc/retention/PLAN.json`).
