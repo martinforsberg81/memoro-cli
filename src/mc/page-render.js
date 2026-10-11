@@ -865,6 +865,27 @@ function mendLine(c, wide, item) {
 }
 
 /**
+ * A red a runner session is on (ruling 39, Martin, 2026-10-11: *"bli
+ * gulmarkerad när en runner är igång med den med status-uppdateringar"*):
+ * drawn as `mendLine` is, in yellow with the running mark, with the session's
+ * last sentence in place of the reason (the reason when it has said nothing
+ * yet) and how long the session has run. The sentence gives way first; the
+ * number and the name never do.
+ */
+function fixingLine(c, wide, item) {
+  const where = pad(clip(item.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
+  const name = item.name ? `${clip(item.name, nameWidth(wide) - 1)}${item.step_number ? ` step ${item.step_number}` : ''}  ` : '';
+  const head = `  ${MARK.running} ${where} #${item.pr}  ${name}fixing — `;
+  const age = item.age_seconds != null ? `  ${ageWords(item.age_seconds)}` : '';
+  const room = Math.max(8, wide - head.length - age.length - 2);
+  return paint(c, [
+    { text: head, styles: ['yellow'] },
+    { text: clip(one(item.said || item.reason || 'red'), room), styles: ['yellow'] },
+    { text: age, styles: ['grey'] },
+  ]).replace(/[ ]+$/u, '');
+}
+
+/**
  * MERGES — the gate rounds landing now (one per lane, ruling 34), and the
  * waiters behind them.
  *
@@ -881,10 +902,12 @@ function mergesLines(lines, c, wide, merges) {
   const verb = 'mc merge <repo> <pr>';
   const reds = merges.red?.items || [];
   const mends = merges.mending?.items || [];
+  const fixing = merges.fixing?.items || [];
   const parts = [];
   const landings = merges.landings || [].concat(merges.landing || []);
   if (landings.length) parts.push({ text: `${landings.length} landing`, styles: ['grey'] });
   if (mends.length) parts.push({ text: `${mends.length} mending`, styles: ['yellow'] });
+  if (fixing.length) parts.push({ text: `${fixing.length} fixing`, styles: ['yellow'] });
   if (reds.length) parts.push({ text: `${reds.length} red`, styles: ['red', 'bold'] });
   const items = merges.queued.items || [];
   if (merges.queued.count) {
@@ -902,6 +925,7 @@ function mergesLines(lines, c, wide, merges) {
   // is a row.
   for (const landing of landings) lines.push(landingLine(c, wide, landing));
   for (const item of mends) lines.push(mendLine(c, wide, item));
+  for (const item of fixing) lines.push(fixingLine(c, wide, item));
   for (const item of reds) lines.push(redLine(c, wide, item));
 }
 

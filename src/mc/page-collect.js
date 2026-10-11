@@ -73,6 +73,8 @@ import {
 } from './page-cache.js';
 import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, workRoot } from './paths.js';
 import { overlayPlans, readEntry } from './register.js';
+import { readTailEntries } from './conversations.js';
+import { claudeTail, codexTail } from './work-status.js';
 import { planState } from './plan-schema.js';
 import { describeWait } from './step-release.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
@@ -580,9 +582,17 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * round's phase, age and lane, the rest `batch_of: <first pr>`. `mending` is
  * what is getting its one mend, each with the red's reason and how long the
  * session has run (`waiting` before it has a pid).
+ *
+ * `fixing` is a red whose step a live runner session holds (ruling 39): a
+ * lane file (`currents`, `current-*.json`) of kind `step` on the red's project
+ * and step, with a pid `alive` says is running. It leaves `red` and carries
+ * the session's last assistant sentence (`said`, from `<session.log>.jsonl`
+ * of the register step `entry(project)` returns; null when there is no
+ * reader or no transcript), how long the session has run, and its lane.
  */
 export function mergesSection({
   landing = null, queued = [], prs = [], now = new Date(), ordered = () => true,
+  currents = [], alive = pidAlive, entry = null,
 } = {}) {
   const all = queueEntries(queued);
   const entries = queueOrder(inLine(all));
@@ -668,14 +678,50 @@ export function mergesSection({
       age_seconds: Number.isFinite(answered) ? Math.max(0, Math.round((at - answered) / 1000)) : null,
     };
   });
+  // A red the runner has handed a session (ruling 30: the next session's
+  // first) is somebody's work, not a row asking for one (Martin, 2026-10-11).
+  const holder = (item) => (item.step ? currents.find((current) => current?.kind === 'step'
+    && current.name === item.step.project && Number(current.step) === item.step.index + 1
+    && current.pid != null && alive(current.pid)) : null) || null;
+  const fixingItems = [];
+  const reds = [];
+  for (const item of redItems) {
+    const current = holder(item);
+    if (!current) { reds.push(item); continue; }
+    fixingItems.push({
+      ...item,
+      said: saidBy(entry, item.step, current.tool),
+      age_seconds: ageOf(current.started),
+      lane: current.lane ?? null,
+    });
+  }
   return {
     landing: landings[0] || null,
     landings,
     queued: { count: queuedItems.length, items: queuedItems },
     mending: { count: mendingItems.length, items: mendingItems },
-    red: { count: redItems.length, items: redItems },
+    fixing: { count: fixingItems.length, items: fixingItems },
+    red: { count: reds.length, items: reds },
     count: landings.length + queuedItems.length,
   };
+}
+
+/** How much of a session's transcript the fixing row reads: its last sentence is near the end. */
+export const SAID_TAIL_BYTES = 64 * 1024;
+
+/**
+ * The last thing a runner session said, from the transcript its register step
+ * names (`session.log` + `.jsonl`, written as it streams). Null when there is
+ * no reader, no step, no log or nothing readable — never an error.
+ */
+function saidBy(entry, step, tool) {
+  if (!entry) return null;
+  try {
+    const log = entry(step.project)?.steps?.[step.index]?.session?.log;
+    if (!log) return null;
+    const entries = readTailEntries(`${log}.jsonl`, SAID_TAIL_BYTES);
+    return (tool === 'codex' ? codexTail(entries) : claudeTail(entries)).said || null;
+  } catch { return null; }
 }
 
 /**
@@ -735,7 +781,8 @@ export function prsSection({
   const at = now instanceof Date ? now.getTime() : Number(now);
   const landings = merges?.landings || [].concat(merges?.landing || []);
   const queued = merges?.queued?.items || [];
-  const reds = merges?.red?.items || [];
+  // A red being fixed is still red from the merger, and still drawn in MERGES.
+  const reds = [...(merges?.red?.items || []), ...(merges?.fixing?.items || [])];
   const items = prs.map((pr) => {
     const names = plans.filter((plan) => plan.repo === pr.repo).map((plan) => plan.project);
     const owner = prOwner(pr, { names, worktrees: worktrees[pr.repo] || [], root });
@@ -1448,9 +1495,11 @@ export async function collectPage({
   // one head per lane.
   const laneSetting = laneCount();
   const runnerFile = readJson(join(root, 'runner', 'runner.json'));
+  // Read once, for RUNNER's lanes and for MERGES's fixing rows both.
+  const currents = readCurrents(join(root, 'runner'));
   const runner = runnerSection({
     runner: runnerFile,
-    currents: readCurrents(join(root, 'runner')),
+    currents,
     stop,
     stopText: stop ? readText(join(root, 'runner', 'STOP')) : null,
     rows,
@@ -1481,6 +1530,7 @@ export async function collectPage({
   const mergesNow = mergesSection({
     landing: merges({ repos: present, alive }), queued: queuedForMerge, prs: prs.prs, now,
     ordered: stepsDone((project) => readEntry(root, project)?.steps ?? null),
+    currents, alive, entry: (project) => readEntry(root, project),
   });
   const programmes = programmesSection({
     plans, areas, rows, openPrs: prs.prs, live: liveNames,

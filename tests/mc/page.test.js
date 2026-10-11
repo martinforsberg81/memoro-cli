@@ -1022,6 +1022,57 @@ describe('MERGES', () => {
   });
 
   /**
+   * A red whose step a live runner session holds is that session's work
+   * (ruling 39): a yellow row with what it last said and how long it has run,
+   * counted `fixing` and not `red`. Nobody on it, it is the red row.
+   */
+  it('draws a red a live runner session holds as a yellow fixing row with its last sentence', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-page-fixing-'));
+    const log = join(dir, 'card-views-20261010T174500Z');
+    writeFileSync(`${log}.jsonl`, [
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Merging origin/main.' }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Running the gate.' }, { type: 'tool_use', name: 'Bash' }] } },
+    ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+    const red = {
+      repo: 'memoro', pr: 13370, branch: 'card-views-3', step: { project: 'card-views', index: 2 }, since: '2026-10-10T16:50:00Z',
+      state: 'red', reason: 'red: conflicts with origin/main: card-views.js', answered: '2026-10-10T17:30:00Z',
+    };
+    const current = { name: 'card-views', step: 3, kind: 'step', tool: 'claude', pid: 4242, lane: 0, started: '2026-10-10T17:45:00Z' };
+    const register = (path) => (project) => (project === 'card-views'
+      ? { project, steps: [{ status: 'done' }, { status: 'done' }, { status: 'running', session: { log: path } }] }
+      : null);
+    const section = (overrides = {}) => mergesSection({
+      queued: [red], now: new Date('2026-10-10T17:51:00Z'), currents: [current], alive: (pid) => pid === 4242, entry: register(log), ...overrides,
+    });
+    const merges = section();
+    assert.deepEqual(merges.fixing.items.map((item) => [item.pr, item.said, item.age_seconds, item.lane]), [[13370, 'Running the gate.', 360, 0]]);
+    assert.equal(merges.red.count, 0, 'a red being fixed is not a red row');
+    const lines = renderPageLines(pageData({ merges }), { columns: 120 });
+    assert.ok(lines.some((line) => /^ {2}MERGES {2}1 fixing +mc merge <repo> <pr>$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.includes('  ● memoro      #13370  card-views step 3  fixing — Running the gate.  6 min'), lines.join('\n'));
+    assert.ok(!lines.some((line) => /✗.*#13370/u.test(line)), lines.join('\n'));
+    const painted = renderPageLines(pageData({ merges }), { columns: 120, colour: true }).find((line) => /#13370/u.test(line));
+    assert.match(painted, /\x1b\[33m/u, 'the fixing row is yellow');
+    // Narrow, the sentence gives way and the number and the name stay.
+    const narrow = renderPageLines(pageData({ merges }), { columns: 70 }).find((line) => /#13370/u.test(line));
+    assert.ok(narrow.length <= 70, narrow);
+    assert.match(narrow, /#13370 {2}card-views step 3 {2}fixing — /u);
+    // The pid dead, or the lane on another step: nobody is on it, and it is red.
+    for (const nobody of [section({ alive: () => false }), section({ currents: [{ ...current, step: 4 }] })]) {
+      assert.equal(nobody.fixing.count, 0);
+      const rows = renderPageLines(pageData({ merges: nobody }), { columns: 120 });
+      assert.ok(rows.some((line) => /^ {2}MERGES {2}1 red +mc merge <repo> <pr>$/u.test(line)), rows.join('\n'));
+      assert.ok(rows.some((line) => /^ {2}✗ memoro +#13370 {2}card-views step 3 {2}red: conflicts with origin\/main: card-views\.js {2}21 min ago$/u.test(line)), rows.join('\n'));
+    }
+    // No transcript yet: the row says the red's reason.
+    const silent = section({ entry: register(join(dir, 'missing')) });
+    assert.equal(silent.fixing.items[0].said, null);
+    assert.ok(renderPageLines(pageData({ merges: silent }), { columns: 120 })
+      .includes('  ● memoro      #13370  card-views step 3  fixing — red: conflicts with origin/main: card-views.js  6 min'));
+  });
+
+  /**
    * What is landing, named: the queue entry has its step and branch, the open
    * pull requests its title — the row was a number and a holder's hostname
    * (Martin, 2026-10-09).

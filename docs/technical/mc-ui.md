@@ -165,7 +165,7 @@ below is about.
   ([**ruling 20**](#the-surfaces) put a round on the page; the section itself
   is `mergesSection`, `page-collect.js`, and `runningMerge`,
   `merges-collect.js`, joins the gate lock to a name). The heading's count is
-  `N landing · N waiting`, each part shown only when it is not zero,
+  `N landing · N mending · N fixing · N red · N waiting`, each part shown only when it is not zero,
   and `nothing landing, nothing waiting` — the literal phrase, not per missing
   part — when both are. Under it, in order: the round itself, laid out like
   a running RUNNER lane — the `●` in the gutter, then the repository — and
@@ -179,8 +179,24 @@ below is about.
   `· waiting     #13255 #13250 #13248  (longest 4 min)`: the numbers from
   `~/mc/runner/merges.json` in the order the merger takes them, green, with
   the repository on each only when the queue spans two, `… N more` for what
-  does not fit, and how long the oldest has waited (Martin, 2026-10-09). The
-  held rows that stood under it went with `held.json` (ruling 21): a step that
+  does not fit, and how long the oldest has waited (Martin, 2026-10-09).
+  Under the round, three kinds of row for what came back red. A red getting
+  its one mend (`state: 'mending'`, `mend.js`) is yellow with the running
+  mark: `● memoro      #13370  card-views step 3  mending — <reason>  6 min`.
+  A red a runner session is fixing (ruling 39) is yellow the same way:
+  `● memoro      #13370  card-views step 3  fixing — Running the gate.  6 min`.
+  It is a red whose queue entry's `step: { project, index }` some lane file
+  (`current-*.json`) holds: `kind` is `step`, `name` is the project, `step` is
+  `index + 1`, and its `pid` is alive. The sentence after `fixing —` is the
+  session's last assistant text, read from the last 64 KiB of
+  `<session.log>.jsonl` — `session.log` is that step's in the register
+  (`~/mc/runner/projects/<project>.json`) — with `claudeTail`, or `codexTail`
+  for a codex lane (`work-status.js`). With no transcript yet it is the red's
+  reason. The time is how long the session has run. The sentence gives way
+  first on a narrow terminal; the number and the name never do. A fixing red
+  is in `merges.fixing` in `mc --json` and not in `merges.red`. A red nobody
+  holds is the red row, `✗ memoro      #13301  main-chat-d1 step 3  <reason>
+  13 min ago`, until `mc merge` queues it again. The held rows that stood under it went with `held.json` (ruling 21): a step that
   did not land is `failed` in the register and is
   drawn where every other plan state is. `mc --json` carries `merges.queued`
   whole, and `mc status <name>` says `#N is landing now — <phase>
@@ -506,6 +522,10 @@ person set it to.
 | MERGES | the round landing now: `● repo #pr name title` | green |
 | MERGES | the round's `landing` (or `measuring, not landing`), phase, age | plain, plain, grey |
 | MERGES | the queue line: `· waiting`, the numbers in landing order, `(longest …)` | grey, green, grey |
+| MERGES | a red nobody is fixing: `✗ repo #pr name` and its reason; how long ago | bold red, red; grey |
+| MERGES | a red getting its mend: `● repo #pr name mending —` and its reason; the session's age | yellow; grey |
+| MERGES | a red a runner session is fixing: `● repo #pr name fixing —` and what it last said; the session's age | yellow; grey |
+| MERGES | the heading's `N mending`, `N fixing`; `N red` | yellow; bold red |
 | RUNNER | a lane's project's open pull request, after the clock | bold cyan |
 | PULL REQUESTS | the heading's counts; `N nobody's`; a cache over 15 min old | grey, bold yellow, yellow |
 | PULL REQUESTS | a row: its mark, repository, `#pr`, title, whose, quiet time | grey, grey, bold cyan, plain, grey, grey |
