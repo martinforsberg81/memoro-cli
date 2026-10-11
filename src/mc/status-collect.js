@@ -29,8 +29,10 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { stepAreaName } from './paths.js';
 import { openPrsFor } from './project-prs.js';
 import { REFUSAL, chooseKind, holdingPrs, inFlight, kindFor } from './run-plan.js';
+import { listStepAreas } from './work-area.js';
 
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
 export const RUNNER_MODEL = 'opus';
@@ -119,7 +121,7 @@ export function machineState(name, {
   // left here is a plan whose repository is not one of mc's.
   const repo = repoFor(name, { plans, root, repoNames, exists });
   if (!repo) return no('no-plan', 'no workarea and no plan on main');
-  const worktree = root ? join(root, name, repo) : null;
+  const worktree = root ? join(root, stepAreaName(name, { root, exists, list: () => repoNames }), repo) : null;
   const gitOut = (args) => { const r = git(worktree, args); return r?.ok ? String(r.stdout ?? '').trimEnd() : null; };
 
   // A worktree that is not there yet is not in the way: the round makes one
@@ -169,7 +171,10 @@ export function machineDetail(machine, home = homedir()) {
 
 /** memoro | memoro-cli | null — an existing workarea first, then the plan's own. `repoOf`'s rule (run.js), over read data. */
 function repoFor(name, { plans = [], root = null, repoNames = REPO_NAMES, exists = existsSync } = {}) {
-  if (root) for (const repo of repoNames) if (exists(join(root, name, repo, '.git'))) return repo;
+  if (root) {
+    const area = join(root, stepAreaName(name, { root, exists, list: () => repoNames }));
+    for (const repo of repoNames) if (exists(join(area, repo, '.git'))) return repo;
+  }
   return plans.find((p) => p.project === name)?.repo || null;
 }
 
@@ -333,8 +338,10 @@ export function nowBlock({
 /* ------------------------------------------------------------------- areas */
 
 /**
- * Areas under the work root that hold a checkout of a repository mc knows,
- * each with the repositories it holds.
+ * The runner's areas that hold a checkout of a repository mc knows — under
+ * `~/mc/step/`, and the ones from before it directly under `~/mc`
+ * (`listStepAreas`, work-area.js) — each with its project name, its path and
+ * the repositories it holds.
  *
  * A folder without `memoro/` or `memoro-cli/` in it is not a workarea and is
  * never listed: `bin/`, `brief/`, `inbox/`, `intake/`,
@@ -344,14 +351,5 @@ export function nowBlock({
  * bookkeeping on the board as work.
  */
 export function areasWithCheckout(root, repoNames = REPO_NAMES) {
-  try {
-    return readdirSync(root, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
-      .map((d) => ({
-        name: d.name,
-        repos: repoNames.filter((repo) => existsSync(join(root, d.name, repo, '.git'))),
-      }))
-      .filter((area) => area.repos.length)
-      .sort((a, b) => a.name.localeCompare(b.name));
-  } catch { return []; }
+  return listStepAreas({ root, repoNames });
 }

@@ -93,12 +93,21 @@ beyond them:
   plan is gone and `docs/project/project_log.md` carries the row the archive
   wrote for it,
 - its worktree has no uncommitted change,
-- its last row in `~/mc/runner/log/runs.tsv` ends `merged`.
+- for an area at `~/mc/step/<project>/`, every step of the project is `done`
+  in the register; for one left directly at `~/mc/<project>/`, its last row in
+  `~/mc/runner/log/runs.tsv` ends `merged`.
+
+The runner's areas live at `~/mc/step/<project>/<repo>` (ruling 39). Areas
+left at `~/mc/<project>/` from before that drain in place: stepped, closed and
+removed where they stand, never moved.
 
 The last two are what keep the second half of the first from taking anything
 it should not. A folder somebody made by hand that happens to share a name
 with a project archived weeks ago has no runner step to point at, so it is
-kept and filed as one nothing explains.
+kept and filed as one nothing explains. Under `step/` that cannot happen —
+only the runner makes areas there — so the register's word is enough, where
+the last-run rule had kept done areas open on `success,blocked` and
+`success,failed` (106 rounds of it on 2026-10-11).
 
 Commit counting against main is deliberately not one of them: the runner
 squash-merges, so every finished branch reads as "ahead" forever. A live
@@ -108,7 +117,9 @@ somebody is sitting in is the one irreversible thing here.
 
 The close hands the worktree back through the repository that owns it,
 deletes the local branch, and moves everything the folder kept beside its
-checkout to `~/mc/runner/log/closed/<name>/`. The remote branch and the PRs
+checkout to `~/mc/runner/log/closed/<name>/` — `<name>` the project, wherever
+its area stood — before the emptied directory is removed (not recursively).
+The remote branch and the PRs
 stay. Conversations are not a reason to keep a folder — what is current lives
 in the plans and in decisions on main — so their index and log files are moved,
 never deleted.
@@ -155,7 +166,8 @@ Two things a machine must not decide, so it writes them down and moves on:
   note never stops an archive: keeping a project alive because its
   documentation is thin is how `docs/plans/` reached 656 files.
 - **`~/mc/runner/unplanned-workareas.md`** — rewritten every chore pass with every
-  folder under `~/mc` that **no project** explains — no plan on main and no
+  runner area — under `~/mc/step/`, or left directly under `~/mc` — that
+  **no project** explains — no plan on main and no
   row in `project_log.md` (sixteen of them on 2026-08-29, from before the plan
   world; fifty-seven on 2026-08-30). Such a folder is work somebody started and
   only Martin can say is finished, so no machine removes one. Each row carries whether the branch's content is already on main —

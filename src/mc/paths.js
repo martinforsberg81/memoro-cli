@@ -16,7 +16,7 @@
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 
 export function mcHome() {
   return process.env.MC_HOME || join(homedir(), '.memoro', 'mc');
@@ -149,10 +149,10 @@ export function workAreaStatePath(name, env = process.env) {
  *
  * It is deliberately *not* a work area, and the reason is structural rather
  * than a rule about names: `mc run`'s `workareas()` and `mc status`'s
- * `areasWithCheckout()` both list top-level directories under the work root
- * that hold a checkout, and this one holds none — the checkouts are a level
- * further down, under each programme. So the runner cannot reach a planning
- * session, and nothing has to remember not to.
+ * `areasWithCheckout()` both list directories under the work root and under
+ * `step/` that hold a checkout, and this one holds none — the checkouts are a
+ * level further down, under each programme. So the runner cannot reach a
+ * planning session; `listStepAreas` (work-area.js) skips it by name as well.
  *
  * The name lives here, with the rest of the work root's shape, because two
  * modules need it — `commands/plan.js` to build the directory and
@@ -163,6 +163,46 @@ export const PLAN_HOME = 'plan';
 
 export function planHome(env = process.env) {
   return join(workRoot(env), PLAN_HOME);
+}
+
+/**
+ * `~/mc/step/` — the runner's areas, one per project: `step/<project>/<repo>`.
+ * Ruling 39: the path says what an area is, so nothing else — no marker file,
+ * no lookup in the register — has to.
+ */
+export const STEP_HOME = 'step';
+
+export function stepHome(env = process.env) {
+  return join(workRoot(env), STEP_HOME);
+}
+
+/**
+ * `~/mc/work/` — the areas `mc work` makes, one per name. Ruling 39: the path
+ * says what an area is.
+ */
+export const WORK_HOME = 'work';
+
+export function workHome(env = process.env) {
+  return join(workRoot(env), WORK_HOME);
+}
+
+/**
+ * The area name — its path relative to the work root — of a project's runner
+ * area: `<project>` when `<root>/<project>` already holds a checkout (an area
+ * from before `step/`, stepped and closed where it stands), else
+ * `step/<project>`.
+ *
+ * The one place the legacy fallback lives. It goes when no area is left
+ * directly under `~/mc`.
+ */
+export function stepAreaName(project, {
+  root = workRoot(),
+  exists = existsSync,
+  list = (path) => { try { return readdirSync(path); } catch { return []; } },
+} = {}) {
+  const legacy = join(root, project);
+  const holdsCheckout = list(legacy).some((child) => exists(join(legacy, child, '.git')));
+  return holdsCheckout ? project : `${STEP_HOME}/${project}`;
 }
 
 /**

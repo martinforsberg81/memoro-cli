@@ -40,15 +40,24 @@ function repository() {
   git(repo, ['push', '-q', 'origin', 'HEAD:main']);
   git(repo, ['fetch', '-q', 'origin']);
 
-  // Three workareas: one finished, one with an uncommitted change, and one
-  // from before the plan world with a commit of its own and no plan at all.
+  // Three workareas: one finished — under `step/`, where the runner makes
+  // them (ruling 39) — one with an uncommitted change, and one from before the
+  // plan world with a commit of its own and no plan at all. The last two stand
+  // directly under the root, as areas from before `step/` do.
+  const areaOf = (name) => (name === 'finished' ? join(work, 'step', name) : join(work, name));
   for (const name of ['finished', 'dirty', 'orphan']) {
-    git(repo, ['worktree', 'add', '-q', '-b', name, join(work, name, 'memoro-cli'), 'origin/main']);
+    git(repo, ['worktree', 'add', '-q', '-b', name, join(areaOf(name), 'memoro-cli'), 'origin/main']);
   }
-  mkdirSync(join(work, 'finished', 'decisions'), { recursive: true });
-  writeFileSync(join(work, 'finished', 'decisions', 'mc-1.md'), '# a question that was answered\n');
-  mkdirSync(join(work, 'finished', 'inbox'), { recursive: true });
-  writeFileSync(join(work, 'finished', 'inbox', 'note.md'), 'a message\n');
+  mkdirSync(join(areaOf('finished'), 'decisions'), { recursive: true });
+  writeFileSync(join(areaOf('finished'), 'decisions', 'mc-1.md'), '# a question that was answered\n');
+  mkdirSync(join(areaOf('finished'), 'inbox'), { recursive: true });
+  writeFileSync(join(areaOf('finished'), 'inbox', 'note.md'), 'a message\n');
+  // Under `step/` the register decides, not the last run: every step done.
+  mkdirSync(join(work, 'runner', 'projects'), { recursive: true });
+  writeFileSync(join(work, 'runner', 'projects', 'finished.json'), JSON.stringify({
+    project: 'finished', repo: 'memoro-cli', programme: 'mc', plan: 'docs/project/mc/finished/PLAN.json',
+    steps: [{ key: 'One', status: 'done', pr: 77, comments: [] }],
+  }));
   writeFileSync(join(work, 'dirty', 'memoro-cli', 'README.md'), '# edited, not committed\n');
   writeFileSync(join(work, 'orphan', 'memoro-cli', 'kept.md'), '# work main does not have\n');
   git(join(work, 'orphan', 'memoro-cli'), ['add', '-A']);
@@ -85,7 +94,8 @@ describe('closing a workarea, for real', () => {
     const out = createRunner({ deps: fx.deps }).closeWorkareas(PLANS, ['finished', 'dirty']);
     assert.equal(out.closed, 1);
 
-    assert.equal(existsSync(join(fx.work, 'finished')), false, 'the folder is gone');
+    assert.equal(existsSync(join(fx.work, 'step', 'finished')), false, 'the folder is gone');
+    assert.equal(existsSync(join(fx.work, 'step')), true, 'step/ itself stays');
     assert.doesNotMatch(git(fx.repo, ['worktree', 'list']), /\/finished\//u);
     assert.doesNotMatch(git(fx.repo, ['branch', '--list', 'finished']), /finished/u);
     // Nothing was deleted: what the folder kept is where the log line says.

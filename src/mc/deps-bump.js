@@ -19,7 +19,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { compareVersions, defaultGit, defaultNpm, directDependencies, majorLine, readDeps } from './deps.js';
-import { workAreaPath } from './paths.js';
+import { STEP_HOME, workAreaPath } from './paths.js';
 import { addWorktree as defaultAddWorktree } from './work-area.js';
 
 const SECTIONS = ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies'];
@@ -206,7 +206,10 @@ export async function bump({
   }
 
   const name = workareaName(repo, what, now());
-  const area = workAreaPath(name, env);
+  // The runner's own kind of area (ruling 39): under `step/`, while the
+  // branch — and the holder name its leases carry — stays `name`.
+  const areaName = `${STEP_HOME}/${name}`;
+  const area = workAreaPath(areaName, env);
   const checkout = join(area, repo);
   const result = { repo, what, changes, workarea: area, branch: name, pr: null, merged: null };
   const done = (code) => { if (json) stdout.write(`${JSON.stringify(result, null, 2)}\n`); return code; };
@@ -228,7 +231,7 @@ export async function bump({
     return done(0);
   }
 
-  const made = addWorktree({ name, repo: repoPath, branch: name, from: 'origin/main', env });
+  const made = addWorktree({ name: areaName, repo: repoPath, branch: name, from: 'origin/main', env });
   if (!made?.ok) { say(`could not make ${tilde(area)} (${made?.reason || 'git worktree add failed'}) — ${made?.path || checkout}`); return 1; }
   const cwd = made.path || checkout;
 
@@ -267,7 +270,7 @@ export async function bump({
     return 1;
   }
   if (!dirty.length) {
-    out.write(`npm changed nothing — nothing to commit; mc work discard ${name} --apply removes ${tilde(area)}\n`);
+    out.write(`npm changed nothing — nothing to commit; mc work discard ${areaName} --apply removes ${tilde(area)}\n`);
     return done(0);
   }
 

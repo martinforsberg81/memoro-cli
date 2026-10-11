@@ -1361,15 +1361,16 @@ function dateOf(name) {
 }
 
 /**
- * The areas under the work root that hold a checkout, each with its mtime and
- * the repositories it holds. `repoNames` is what makes a directory a workarea
- * at all, and defaults to the two mc knows — mc's own folders under `~/mc`
- * hold neither.
+ * The runner's areas that hold a checkout — under `~/mc/step/`, and the ones
+ * from before it directly under `~/mc` — each with its project name, its mtime
+ * and the repositories it holds. `repoNames` is what makes a directory a
+ * workarea at all, and defaults to the two mc knows — mc's own folders under
+ * `~/mc` hold neither.
  */
 export function readAreas(root, repoNames) {
-  return areasWithCheckout(root, repoNames).map(({ name, repos }) => {
+  return areasWithCheckout(root, repoNames).map(({ name, path, repos }) => {
     let mtime = 0;
-    try { mtime = statSync(join(root, name)).mtimeMs; } catch { mtime = 0; }
+    try { mtime = statSync(path).mtimeMs; } catch { mtime = 0; }
     return { name, repos, mtime_ms: mtime };
   });
 }

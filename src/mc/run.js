@@ -103,7 +103,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
@@ -131,7 +131,7 @@ import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick } from './nightly-loop.js';
 import { readDeps } from './deps.js';
 import {
-  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, workRoot,
+  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
 import {
@@ -151,7 +151,7 @@ import { CREDITS_RETRY_MS, billingFor, patchBillingState, planWindows, readBilli
 import { readStepCreditKey } from '../vault/engine/step-credit-key.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf, withWorkers } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
-import { addWorktree } from './work-area.js';
+import { addWorktree, listStepAreas } from './work-area.js';
 import { checkpoint } from './checkpoint.js';
 import {
   DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
@@ -443,8 +443,9 @@ export function realDeps(env = process.env) {
       try { mkdirSync(dirname(to), { recursive: true }); renameSync(from, to); return true; } catch { return false; }
     },
     // The area directory itself, once everything in it has been moved out.
-    // Called with an empty directory and nothing else — see `closeWorkarea`.
-    rmdir: (path) => { try { rmSync(path, { recursive: true }); return true; } catch { return false; } },
+    // Called with an empty directory and nothing else — see `closeWorkarea` —
+    // and not recursive, so one that is not empty stays.
+    rmdir: (path) => { try { rmdirSync(path); return true; } catch { return false; } },
     // A closing workarea's dev servers, through each manifest's own stop.
     stopServersUnder,
     // The chore pass's reaper: dev processes nobody owns any more.
@@ -559,6 +560,11 @@ export function createRunner({
   total = null,
 } = {}) {
   const root = workRoot(deps.env);
+  // A project's runner area, by name relative to the root and as a path:
+  // `step/<project>`, or `<project>` for an area from before `step/` that is
+  // stepped and closed where it stands (`stepAreaName`, paths.js).
+  const areaName = (name) => stepAreaName(name, { root, exists: deps.exists, list: deps.list });
+  const areaPath = (name) => join(root, areaName(name));
   const paths = {
     queue: join(root, 'queue.md'),
     log: join(root, 'runner', 'log'),
@@ -945,7 +951,7 @@ export function createRunner({
 
   /** memoro | memoro-cli | null — an existing workarea first, then the main trees. */
   function repoOf(name, plans) {
-    for (const repo of repos) if (deps.exists(join(root, name, repo.name, '.git'))) return repo;
+    for (const repo of repos) if (deps.exists(join(areaPath(name), repo.name, '.git'))) return repo;
     const plan = plans.find((p) => p.project === name);
     return plan ? repos.find((r) => r.name === plan.repo) || null : null;
   }
@@ -1408,7 +1414,7 @@ export function createRunner({
       say(`${name}: step ${index + 1} is already blocked on ${step.blocked_by?.kind || 'something'} ${step.blocked_by?.name || '(unnamed)'} — not written again`);
       return false;
     }
-    const area = join(root, name, repo.name);
+    const area = join(areaPath(name), repo.name);
     const written = recordStep(name, index, {
       status: 'blocked',
       blocked_by: { kind: 'workarea', name: reason },
@@ -1423,11 +1429,15 @@ export function createRunner({
 
   /** The repositories this workarea has a checkout of. Empty means it is not one. */
   function areaRepos(name) {
-    return repos.filter((repo) => deps.exists(join(root, name, repo.name, '.git')));
+    const area = areaPath(name);
+    return repos.filter((repo) => deps.exists(join(area, repo.name, '.git')));
   }
 
   /**
-   * Every directory under `~/mc` that is a workarea, sorted.
+   * Every project with a runner area, sorted: the directories under
+   * `~/mc/step/` that hold a checkout, and those directly under `~/mc` that do
+   * (areas from before `step/`, draining in place). Names, not paths —
+   * `areaPath` says where each one is.
    *
    * A folder without `memoro/` or `memoro-cli/` in it is not a workarea:
    * `bin/`, `brief/`, `inbox/`, `intake/`, `runner/`, `status/`
@@ -1435,13 +1445,14 @@ export function createRunner({
    * looking at them.
    */
   function workareas() {
-    return deps.list(root).filter((name) => !name.startsWith('.') && areaRepos(name).length).sort();
+    return listStepAreas({ root, repoNames: repos.map((repo) => repo.name), list: deps.list, exists: deps.exists })
+      .map((area) => area.name);
   }
 
   /** `git status --porcelain` across every checkout the area holds. */
   function uncommitted(name) {
     return areaRepos(name).reduce((count, repo) => {
-      const out = gitOut(join(root, name, repo.name), ['status', '--porcelain']) || '';
+      const out = gitOut(join(areaPath(name), repo.name), ['status', '--porcelain']) || '';
       return count + out.split('\n').filter(Boolean).length;
     }, 0);
   }
@@ -1464,7 +1475,7 @@ export function createRunner({
    * has not been moved yet, and the next round tries again.
    */
   function closeWorkarea(name) {
-    const area = join(root, name);
+    const area = areaPath(name);
     // Its dev servers first: a server outlives the worktree otherwise, and
     // nothing else will ever stop it. A failed stop does not stop the close —
     // `git worktree remove` decides, as it always has.
@@ -1522,6 +1533,8 @@ export function createRunner({
         dirty: uncommitted(name) > 0,
         live: deps.tmuxHas(`mc-${name}`),
         lastRun: lastRunFor(tsv, name),
+        legacy: areaName(name) === name,
+        stepsDone: stepsDone(name),
       });
       if (verdict.unplanned) { rows.push(unplannedFor(name)); continue; }
       if (!verdict.close) { say(`close: ${name} kept — ${verdict.why}`); continue; }
@@ -1535,6 +1548,12 @@ export function createRunner({
     deps.write(paths.unplanned, unplannedFile(rows));
     if (rows.length) say(`close: ${rows.length} workarea(s) with no project on main — ${paths.unplanned}`);
     return { closed, unplanned: rows.length };
+  }
+
+  /** Every step of the project is `done` in the register. No entry is not done. */
+  function stepsDone(name) {
+    const steps = readEntry(root, name, { read: deps.read })?.steps || [];
+    return steps.length > 0 && steps.every((step) => step.status === 'done');
   }
 
   /**
@@ -1562,7 +1581,7 @@ export function createRunner({
    */
   function unplannedFor(name) {
     const [repo] = areaRepos(name);
-    const worktree = join(root, name, repo.name);
+    const worktree = join(areaPath(name), repo.name);
     // The branch is asked of the worktree, not guessed from the folder: a
     // workarea from before the plan world was made by hand and need not be
     // named after its branch (msr-track-1 sits on `msr-track1-skin`).
@@ -1944,7 +1963,7 @@ export function createRunner({
     // `no-plan` and not a word of its own: no workarea and no plan on main is
     // the same fact `kindFor` answers with, met one question later.
     if (!repo) return refuse('no-plan', 'no workarea and no plan on main, skip');
-    const worktree = join(root, name, repo.name);
+    const worktree = join(areaPath(name), repo.name);
     // The other way out, for the refusals a person has to act on: the same word
     // back to the lane, and the step written `blocked` on `main` so that this
     // project is never picked again until somebody sets it `ready`
@@ -1958,7 +1977,7 @@ export function createRunner({
     if (!deps.exists(worktree)) {
       say(`${name}: no workarea — creating ${repo.name} worktree from origin/main`);
       deps.git(repo.path, ['fetch', '-q', 'origin']);
-      const added = deps.addWorktree({ name, repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
+      const added = deps.addWorktree({ name: areaName(name), repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
       if (!added.ok) return block(REFUSAL.worktree, `git worktree add failed (${added.reason})`);
     }
     // A merge of origin/main a killed session left behind. The runner aborts

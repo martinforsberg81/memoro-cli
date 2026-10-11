@@ -19,7 +19,7 @@
 import { realpathSync } from 'node:fs';
 import { hostname, userInfo } from 'node:os';
 
-import { workRoot } from './paths.js';
+import { STEP_HOME, WORK_HOME, workRoot } from './paths.js';
 
 export function currentHolder({ cwd = process.cwd(), env = process.env } = {}) {
   // Both sides resolved: a shell's working directory comes back through the
@@ -29,7 +29,10 @@ export function currentHolder({ cwd = process.cwd(), env = process.env } = {}) {
   const root = canonical(workRoot(env));
   const here = canonical(cwd);
   if (here === root || here.startsWith(`${root}/`)) {
-    const [area] = here.slice(root.length + 1).split('/').filter(Boolean);
+    const [first, second] = here.slice(root.length + 1).split('/').filter(Boolean);
+    // `step/<project>` and `work/<name>` (ruling 39): the holder is the
+    // project or the work, so leases and the merge queue keep its name.
+    const area = first === STEP_HOME || first === WORK_HOME ? second : first;
     if (area) return { name: area, kind: 'work-area' };
   }
   let who = 'someone';
