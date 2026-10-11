@@ -1039,6 +1039,19 @@ test('apiInterruption: a limit is quota, a lost login is login, a 5xx is server,
   assert.equal(apiInterruption(null), null);
 });
 
+test('apiInterruption: an exhausted credit is credits and a rejected key is key, before the quota test', () => {
+  const low = 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.';
+  assert.deepEqual(apiInterruption(apiEnded(low, { api_error_status: 400 })), { kind: 'credits', said: low });
+  assert.deepEqual(apiInterruption(apiEnded(low, { api_error_status: 429 })), { kind: 'credits', said: low }, 'before the 429 test');
+  assert.deepEqual(apiInterruption(apiEnded('Invalid API key · Fix external API key', { api_error_status: null })), { kind: 'key', said: 'Invalid API key · Fix external API key' });
+  assert.equal(apiInterruption(apiEnded("You've hit your weekly limit · resets Sep 25 at 3pm", { api_error_status: 429 })).kind, 'quota');
+  const read = readSessionOutput({ toolId: 'claude-code', stdout: JSON.stringify(apiEnded(low)), exitCode: 1 });
+  assert.equal(read.interrupted, 'credits');
+  assert.equal(read.note, 'interrupted');
+  assert.equal(read.quota, false);
+  assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: JSON.stringify(apiEnded('Invalid API key · Fix external API key')), exitCode: 1 }).note, 'interrupted');
+});
+
 test('readSessionOutput: a long session the API ended is interrupted, and a limit is quota whatever the turn count', () => {
   const login = readSessionOutput({ toolId: 'claude-code', stdout: JSON.stringify(apiEnded('Not logged in · Please run /login')), exitCode: 0 });
   assert.equal(login.note, 'interrupted');
@@ -1089,6 +1102,21 @@ test('recoveryFor: resume while warm or small, fresh otherwise', () => {
   assert.equal(WARM_MARGIN_MS, 5 * 60_000);
   assert.equal(COLD_RESUME_MAX_TOKENS, 75_000);
   assert.equal(recoveryFor({ interrupted: record({ context_tokens: 75_000, last_activity: null }), toolNow: 'claude', ttlMs, now }).mode, 'resume', 'at the limit is resumed');
+});
+
+test('recoveryFor: a resume across billings is never warm', () => {
+  const now = new Date('2026-10-10T12:00:00Z');
+  const ttlMs = 60 * 60_000;
+  const record = (over = {}) => ({ session_id: 'sid', tool: 'claude', last_activity: '2026-10-10T11:59:00Z', billing: 'plan', ...over });
+  assert.deepEqual(recoveryFor({ interrupted: record({ context_tokens: 41_000 }), toolNow: 'claude', ttlMs, now, billingNow: 'credits' }),
+    { mode: 'resume', why: 'billing changed plan→credits, cold, 41 000 tokens' });
+  assert.deepEqual(recoveryFor({ interrupted: record({ context_tokens: 120_000 }), toolNow: 'claude', ttlMs, now, billingNow: 'credits' }),
+    { mode: 'fresh', why: 'billing changed plan→credits, cold, 120 000 tokens — fresh' });
+  assert.deepEqual(recoveryFor({ interrupted: record({ billing: 'credits', context_tokens: 120_000 }), toolNow: 'claude', ttlMs, now, billingNow: 'plan' }),
+    { mode: 'fresh', why: 'billing changed credits→plan, cold, 120 000 tokens — fresh' });
+  assert.deepEqual(recoveryFor({ interrupted: record({ billing: undefined, context_tokens: 120_000 }), toolNow: 'claude', ttlMs, now, billingNow: 'plan' }),
+    { mode: 'resume', why: 'warm, 1 min since last request' }, 'a record with no billing ran on plan');
+  assert.equal(recoveryFor({ interrupted: record({ context_tokens: 120_000 }), toolNow: 'claude', ttlMs, now }).mode, 'resume', 'no billingNow is today');
 });
 
 test('headlessArgs: a codex resume is `exec resume` with the sandbox through -c and the id before the prompt', () => {

@@ -1514,7 +1514,26 @@ needs no restart. `mc run --billing` with no mode prints the mode, the
 windows, any refusal or credit mark, and what the next claude step session
 would run on.
 
-So far this only records: no session is launched differently by it yet.
+**A refusal hands the step over instead of sleeping.** A refusal on a plan
+session (the quota, 429) writes `plan.refused_until` — the refusal's reset, or
+`QUOTA_SLEEP_MS` from now when it named none — in every mode. An exhausted
+credit (`Your credit balance is too low …`, `apiInterruption` kind `credits`)
+or a rejected key (`Invalid API key`, kind `key`) on a credits session writes
+`credits.unusable_until` 24 h out (`CREDITS_RETRY_MS`) with its `why`, and a
+`runner.log` line that names `mc run --billing <mode>` as the way to clear it
+sooner. Then `billingFor` is asked for the next launch: when it is the other
+billing, the session is not waited on or resumed — the step goes back `ready`
+with an `interrupted` record whose `billing` is the one it ran on, its `count`
+unchanged (a hand-over is not a death and never reaches `INTERRUPT_LIMIT`),
+and the row's note ends `,handed-to-credits` or `,handed-to-plan`. When it is
+the same billing — mode `plan`, a credits session's own 429, or the other side
+unusable too — everything is as before: the quota sleeps, a server error waits
+five minutes, and the session is resumed.
+
+The next pick resumes or restarts the step on the new billing, and that resume
+is never warm: the prompt cache is per organisation and workspace, so
+`recoveryFor` treats any billing change as cold (`billing changed plan→credits,
+cold, …`) and `COLD_RESUME_MAX_TOKENS` decides resume or fresh.
 
 ## What runs beside it
 

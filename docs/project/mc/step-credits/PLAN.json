@@ -43,7 +43,7 @@
       "check": "`tests/mc/billing.test.js` on `billingFor`: 0.79 → plan, 0.80 → credits, 0.95 with `resets_at` in the past → plan, `refused_until` in the future → credits, `credits.unusable_until` in the future → plan in every mode, a codex tool → plan."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A plan refusal in `auto` does not sleep: the step is handed to the next pick on credits as an interrupted step that does not count towards `INTERRUPT_LIMIT`; an exhausted or invalid credit marks the credit unusable for 24 h and hands the step back the same way.",
       "check": "`tests/mc/run.test.js`: a claude stream ending in a 429 refusal in `auto` leaves the step `ready` with an `interrupted` record whose `billing` is `plan` and whose `count` is unchanged, no `quotaPause` sleep, and `refused_until` written; a result `Your credit balance is too low to access the Anthropic API. …` on a credits session writes `credits.unusable_until` now + 24 h and the same hand-back. `tests/mc/run-plan.test.js`: `apiInterruption` returns `credits` and `key` for the two texts, and `recoveryFor` with a billing change is never `warm`."
     },

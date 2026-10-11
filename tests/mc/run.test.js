@@ -4585,6 +4585,140 @@ test('a running step on credits whose session is gone is interrupted with billin
   assert.equal(registerOf(f, 'alpha').steps[0].interrupted.billing, 'credits');
 });
 
+/**
+ * A runner on `mode` whose billing state is held in memory and patched the
+ * way `patchBillingState` does, its first session ending on `first`, every
+ * later one landing.
+ */
+function onRefusal(mode, first, { state = {} } = {}) {
+  const f = fixture({ plans: { memoro: { r: ready } }, session: () => null });
+  const billing = { plan: {}, credits: {}, ...state };
+  f.deps.billing = {
+    readMode: () => mode,
+    readState: () => billing,
+    patchState: (patch) => { billing.plan = { ...billing.plan, ...(patch.plan || {}) }; billing.credits = { ...billing.credits, ...(patch.credits || {}) }; },
+  };
+  f.deps.creditKey = async () => ({ ok: true, key: 'sk-ant-test-key' });
+  const slept = [];
+  f.deps.sleep = async (ms) => { slept.push(ms); };
+  const calls = [];
+  const lands = landsItself(f, 'r', 64, okSession({ type: 'result' }));
+  f.deps.session = (call) => {
+    f.calls.sessions.push(call);
+    calls.push({ call, register: registerOf(f, 'r').steps[0] });
+    return calls.length === 1 ? first(call) : lands(call);
+  };
+  return { f, billing, slept, calls };
+}
+
+/** An API-ended session as a stream: its init line, then the result. */
+const streamed = (ended) => (call) => {
+  const answer = ended(call);
+  return { ...answer, stdout: `${JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sid-1' })}\n${answer.stdout}\n` };
+};
+const REFUSED_429 = streamed(apiEndedSession("You've hit your 5-hour limit · resets 3pm (UTC)", { api_error_status: 429 }));
+const CREDIT_LOW = streamed(apiEndedSession('Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.', { api_error_status: 400 }));
+
+test('auto: a plan refusal writes refused_until and hands the step to credits without a quota sleep', async () => {
+  const { f, billing, slept, calls } = onRefusal('auto', REFUSED_429);
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z', 'the refusal\'s own reset');
+  assert.deepEqual(slept, [], 'no quota pause');
+  assert.equal(calls.length, 1, 'not resumed on the plan');
+  const step = registerOf(f, 'r').steps[0];
+  assert.equal(step.status, 'ready');
+  assert.equal(step.interrupted.billing, 'plan');
+  assert.equal(step.interrupted.count, 0, 'a hand-over is not counted');
+  assert.equal(step.interrupted.session_id, 'sid-1');
+  const [row] = runRows(f.files).filter((r) => r.kind === 'step');
+  assert.equal(row.note, 'quota,handed-to-credits');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /r: step 1 handed from plan to credits — ready for the next pick/u);
+  assert.doesNotMatch(log, /every lane sleeping/u);
+});
+
+test('auto: a refusal that named no reset is refused for QUOTA_SLEEP_MS', async () => {
+  const { f, billing } = onRefusal('auto', streamed(apiEndedSession('API Error: Request rejected (429)', { api_error_status: 429 })));
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(billing.plan.refused_until, new Date(Date.parse('2026-08-29T10:00:00Z') + 30 * 60_000).toISOString());
+  assert.equal(registerOf(f, 'r').steps[0].status, 'ready');
+});
+
+test('the pick after a hand-over resumes cold on the other billing, and a hand-over back keeps the count', async () => {
+  const { f, billing, calls } = onRefusal('auto', REFUSED_429);
+  await createRunner({ deps: f.deps }).pass();
+  assert.ok(billing.plan.refused_until);
+  // Two interruptions before this one: a third that counted would fail the step.
+  const entry = registerOf(f, 'r');
+  entry.steps[0].interrupted.count = 2;
+  f.files['/w/runner/projects/r.json'] = JSON.stringify(entry);
+  f.deps.session = (call) => { f.calls.sessions.push(call); calls.push({ call }); return CREDIT_LOW(call); };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].call.args.slice(0, 3), ['-p', '--resume', 'sid-1']);
+  assert.equal(calls[1].call.env.ANTHROPIC_API_KEY, 'sk-ant-test-key');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /resuming claude session sid-1 \(billing changed plan→credits, cold/u);
+  assert.doesNotMatch(log, /\(warm,/u);
+  const step = registerOf(f, 'r').steps[0];
+  assert.equal(step.status, 'ready', 'INTERRUPT_LIMIT is not reached by a hand-over');
+  assert.equal(step.interrupted.count, 2);
+  assert.equal(step.interrupted.billing, 'credits');
+  assert.ok(billing.credits.unusable_until);
+});
+
+test('credits: an exhausted credit marks it unusable for 24 h and hands the step back to the plan', async () => {
+  for (const [first, why] of [[CREDIT_LOW, 'credit balance too low'], [streamed(apiEndedSession('Invalid API key · Fix external API key')), 'API key rejected']]) {
+    const { f, billing, slept, calls } = onRefusal('credits', first);
+    await createRunner({ deps: f.deps }).pass();
+    assert.equal(calls[0].call.env.ANTHROPIC_API_KEY, 'sk-ant-test-key');
+    assert.equal(billing.credits.unusable_until, new Date(Date.parse('2026-08-29T10:00:00Z') + 24 * 60 * 60_000).toISOString(), why);
+    assert.equal(billing.credits.why, why);
+    assert.equal(billing.plan.refused_until, undefined, 'the plan is not touched');
+    assert.deepEqual(slept, []);
+    assert.equal(calls.length, 1);
+    const step = registerOf(f, 'r').steps[0];
+    assert.equal(step.status, 'ready');
+    assert.equal(step.interrupted.billing, 'credits');
+    assert.equal(step.interrupted.count, 0);
+    const [row] = runRows(f.files).filter((r) => r.kind === 'step');
+    assert.equal(row.note, 'interrupted,handed-to-plan');
+    const log = f.files['/w/runner/log/runner.log'];
+    assert.match(log, new RegExp(`r: the step credit is unusable until [^\\n]* \\(${why}\\) — \`mc run --billing credits\` clears it sooner`, 'u'));
+    assert.doesNotMatch(log, /sk-ant-test-key/u);
+  }
+});
+
+test('plan: the same 429 is today\'s quota pause and resume, with the refusal written', async () => {
+  const { f, billing, slept, calls } = onRefusal('plan', REFUSED_429);
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z');
+  assert.ok(slept.length > 0, 'the quota pause');
+  assert.match(f.files['/w/runner/log/runner.log'], /every lane sleeping/u);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].call.args.slice(0, 3), ['-p', '--resume', 'sid-1']);
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+});
+
+test('credits: a 429 on a credits session leaves the plan alone and is waited out as today', async () => {
+  const { f, billing, slept, calls } = onRefusal('credits', REFUSED_429);
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(billing.plan.refused_until, undefined);
+  assert.equal(billing.credits.unusable_until, undefined);
+  assert.ok(slept.length > 0);
+  assert.equal(calls.length, 2);
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+});
+
+test('auto with the credit unusable: a plan refusal is slept on as today', async () => {
+  const { f, billing, slept, calls } = onRefusal('auto', REFUSED_429, { state: { credits: { unusable_until: '2026-08-30T10:00:00Z', why: 'credit balance too low' } } });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(billing.plan.refused_until, '2026-08-29T15:00:00.000Z');
+  assert.ok(slept.length > 0);
+  assert.equal(calls.length, 2);
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+});
+
 test('initSource reads apiKeySource off the first init line only', () => {
   assert.equal(initSource(`${INIT('ANTHROPIC_API_KEY')}${INIT('none')}`), 'ANTHROPIC_API_KEY');
   assert.equal(initSource('{"type":"assistant"}\n'), null);
