@@ -33,7 +33,7 @@ A programme is the initiative the work serves — `msr-core`, `sql-readiness`,
 one `PLAN.json`, one branch, one workarea, archived off main by the runner's
 next chore pass once its plan says done.
 
-`mc plan <name>` used to make `~/mc/<name>` on branch `<name>` — exactly the
+`mc plan <name>` used to make `~/mc/<name>` on branch `<name>` — then exactly the
 directory and the branch the runner gives the project of that name. One word
 was the session, the project and the workarea at once, so the planning session
 sat in the folder `mc run` would later merge into, close and hand back to git,
@@ -58,11 +58,11 @@ So a planning session lives at:
 `~/mc/plan/` is mc's own directory, beside `runner/`, `intake/` and `brief/`.
 **The runner cannot reach what is under it**, and not by a rule about names
 that could drift: `mc run`'s `workareas()` and `mc status`'s
-`areasWithCheckout()` both list *top-level* directories under `~/mc` that hold
-a checkout of a repository mc knows, and `~/mc/plan/` holds none. The
-programmes are one level below that, where neither looks. `listWorkAreas` skips
-the directory by name for the same reason, so `mc work` does not list a
-"workarea" called `plan` whose repositories are programme names. The name lives
+`areasWithCheckout()` list the directories under `~/mc/step/` — and, from
+before it, directly under `~/mc` — that hold a checkout of a repository mc
+knows, and `~/mc/plan/` holds none. The programmes are one level below that,
+where neither looks. `listWorkAreas` lists only `~/mc/work/`, so `mc work` does
+not list a "workarea" called `plan` whose repositories are programme names. The name lives
 once, in [`paths.js`](../../src/mc/paths.js).
 
 The session's working directory is the programme directory itself, not either

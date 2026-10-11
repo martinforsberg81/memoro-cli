@@ -39,6 +39,7 @@ import { LIVE_MIN_COLUMNS, liveReader, plainReader } from '../page-live.js';
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
 import { interactive } from '../prompt.js';
 import { inspectWorkArea } from '../work-area.js';
+import { workAreaName } from '../paths.js';
 import { openArea, parseArgs, runVerb, startSomething } from './work.js';
 
 const USAGE = [
@@ -352,7 +353,7 @@ export async function typed(answer, areas, { stdout, stderr, open = openArea }) 
   // only name it has.
   if (sub.verb === 'open' && words.length === 1
     && !areas.some((area) => area.name === sub.name)
-    && !inspectWorkArea(sub.name).exists) {
+    && !inspectWorkArea(workAreaName(sub.name).name, undefined, { conversations: false, git: false }).exists) {
     stderr.write(`\nmc: nothing here called "${sub.name}" — n starts one\n`);
     return null;
   }

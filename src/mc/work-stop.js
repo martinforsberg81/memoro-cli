@@ -15,6 +15,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 
 import { log } from './logger.js';
+import { sessionName } from './paths.js';
 import { currentHolder } from './work-identity.js';
 import { toolProcesses } from './work-status.js';
 import { markStopped } from './work-stop-marker.js';
@@ -97,7 +98,7 @@ export function stopWork(area, {
   const stopped = [];
   const kept = [];
 
-  const background = (deps.stopBackground || stopBackground)(area.name);
+  const background = (deps.stopBackground || stopBackground)(sessionName(area.name));
   if (background) stopped.push(background);
 
   const paths = [area.path, ...area.worktrees.map((worktree) => worktree.path)];

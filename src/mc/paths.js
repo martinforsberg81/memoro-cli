@@ -206,6 +206,48 @@ export function stepAreaName(project, {
 }
 
 /**
+ * The area a name typed at `mc work` opens: `{ name, runner }`, where `name`
+ * is the area's path relative to the work root.
+ *
+ * `work/<name>` when it exists. Else the runner's area for a project of that
+ * name, when there is one (`stepAreaName`) — `mc work <project>` is how a
+ * person looks into a runner area, and `runner: true` is what lets the verbs
+ * say so and `release`/`discard` refuse. Else `work/<name>`, to be created.
+ */
+export function workAreaName(name, {
+  root = workRoot(),
+  exists = existsSync,
+  list = (path) => { try { return readdirSync(path); } catch { return []; } },
+} = {}) {
+  const own = `${WORK_HOME}/${name}`;
+  if (exists(join(root, own))) return { name: own, runner: false };
+  const step = stepAreaName(name, { root, exists, list });
+  if (exists(join(root, step))) return { name: step, runner: true };
+  return { name: own, runner: false };
+}
+
+/**
+ * An area's name without its kind: `work/foo` and `step/foo` are `foo`. What
+ * a person types, what a lease's holder says, and what a tmux session is
+ * called (`mc-<name>`) — the path below the work root is only the address.
+ */
+export function sessionName(areaName) {
+  const [home, ...rest] = String(areaName).split('/');
+  return (home === WORK_HOME || home === STEP_HOME) && rest.length ? rest.join('/') : String(areaName);
+}
+
+/**
+ * The directories directly under `~/mc` that are mc's own and not an area:
+ * every kind's root, and the homes of the things beside them. Anything else
+ * there that is not a legacy runner area is a stray (`listStrays`,
+ * work-area.js). Dot-directories are left out by the caller.
+ */
+export const STATE_HOMES = new Set([
+  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, 'gate', 'gate-cache', 'brief', 'proposals', 'intake',
+  'node_modules', 'bin', 'npm', 'status', 'helper', 'pm',
+]);
+
+/**
  * `~/mc/brief/` — where the brief session stands. Not the work root: every
  * other session is launched somewhere below that, and a session resumes the
  * newest conversation at or below where it stands, so from the root the brief

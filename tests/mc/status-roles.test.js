@@ -43,10 +43,10 @@ function fixture() {
   mkdirSync(rolesDir, { recursive: true });
   writeFileSync(join(rolesDir, 'worker.md'), WORKER_MD);
 
-  for (const name of ['marked', 'plain', 'filed']) mkdirSync(join(workRoot, name), { recursive: true });
-  writeFileSync(join(workRoot, 'marked', '.mc-role'), 'worker\n');
+  for (const name of ['marked', 'plain', 'filed']) mkdirSync(join(workRoot, 'work', name), { recursive: true });
+  writeFileSync(join(workRoot, 'work', 'marked', '.mc-role'), 'worker\n');
   // And one directory that is genuinely work, beside the filing.
-  mkdirSync(join(workRoot, 'filed', 'some-repo'), { recursive: true });
+  mkdirSync(join(workRoot, 'work', 'filed', 'some-repo'), { recursive: true });
 
   return {
     root,
@@ -85,7 +85,7 @@ describe('the work model, on roles and on filing', () => {
         ['conversations', 'menu', 'name', 'path', 'role', 'running', 'stopped', 'waiting', 'working', 'worktrees'],
       );
       assert.equal(areas.plain.name, 'plain');
-      assert.equal(areas.plain.path, join(fx.workRoot, 'plain'));
+      assert.equal(areas.plain.path, join(fx.workRoot, 'work', 'plain'));
       assert.deepEqual(areas.plain.running, []);
       assert.deepEqual(areas.plain.worktrees, []);
       assert.equal(areas.plain.waiting, false);

@@ -28,20 +28,20 @@ describe('backgroundTarget finds a session by where it stands', () => {
   };
 
   it('mc-<name> first, whatever the panes say', () => {
-    assert.equal(backgroundTarget('alpha', { run: tmux([['ops', '%3', '1', '1', '1', '/w/alpha']], true), env }), 'mc-alpha');
+    assert.equal(backgroundTarget('alpha', { run: tmux([['ops', '%3', '1', '1', '1', '/w/work/alpha']], true), env }), 'mc-alpha');
   });
 
   it('a pane standing in the area or under it is the address — the session name when it is alone', () => {
-    assert.equal(backgroundTarget('alpha', { run: tmux([['ops', '%3', '1', '1', '1', '/w/alpha/memoro']]), env }), 'ops');
-    assert.equal(discoveredTarget('alpha', { tmux: tmux([['ops', '%3', '1', '1', '1', '/w/alpha']]), env }), 'ops');
+    assert.equal(backgroundTarget('alpha', { run: tmux([['ops', '%3', '1', '1', '1', '/w/work/alpha/memoro']]), env }), 'ops');
+    assert.equal(discoveredTarget('alpha', { tmux: tmux([['ops', '%3', '1', '1', '1', '/w/work/alpha']]), env }), 'ops');
   });
 
   it('a pane among several is addressed by its id, so the knock lands in that one', () => {
-    assert.equal(backgroundTarget('alpha', { run: tmux([['ops', '%7', '0', '2', '3', '/w/alpha/memoro']]), env }), '%7');
+    assert.equal(backgroundTarget('alpha', { run: tmux([['ops', '%7', '0', '2', '3', '/w/work/alpha/memoro']]), env }), '%7');
   });
 
   it('a pane in a neighbouring area is not this one, and none at all is null', () => {
-    assert.equal(backgroundTarget('alpha', { run: tmux([['ops', '%3', '1', '1', '1', '/w/alphabet']]), env }), null);
+    assert.equal(backgroundTarget('alpha', { run: tmux([['ops', '%3', '1', '1', '1', '/w/work/alphabet']]), env }), null);
     assert.equal(backgroundTarget('alpha', { run: tmux([]), env }), null);
     assert.equal(backgroundTarget('alpha', { run: () => ({ status: 1 }), env }), null);
   });

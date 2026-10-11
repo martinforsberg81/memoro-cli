@@ -71,7 +71,8 @@ import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.j
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
-import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, workRoot } from './paths.js';
+import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, workRoot } from './paths.js';
+import { listStrays } from './work-area.js';
 import { overlayPlans, readEntry } from './register.js';
 import { readTailEntries } from './conversations.js';
 import { claudeTail, codexTail } from './work-status.js';
@@ -1165,11 +1166,12 @@ function collapsedOf(projects) {
  */
 export function programmesSection({
   plans = [], areas = [], rows = [], openPrs = [], live = [],
-  planning = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(),
+  planning = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(), strays = [],
 } = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
-  const held = new Set(areas.map((area) => (typeof area === 'string' ? area : area.name)));
+  // An `mc work` area (`kind: 'work'`) never holds a project, whatever its name.
+  const held = new Set(areas.filter((area) => area?.kind !== 'work').map((area) => (typeof area === 'string' ? area : area.name)));
   // A project's branches are `<name>` or `<name>-<suffix>`, so the row can say
   // what the project is waiting on rather than only what sits on a branch of
   // its own name: `action-window` had three branches with an open pull request
@@ -1214,9 +1216,9 @@ export function programmesSection({
   const known = new Set(projects.map((project) => project.name));
   const orphans = areas
     .map((area) => (typeof area === 'string' ? { name: area } : area))
-    .filter((area) => !known.has(area.name))
+    .filter((area) => area.kind === 'work' || !known.has(area.name))
     .map((area) => {
-      const last = lastRun[area.name] || null;
+      const last = area.kind === 'work' ? null : lastRun[area.name] || null;
       const ran = last ? Date.parse(last.ts) : NaN;
       return {
         name: area.name,
@@ -1286,7 +1288,9 @@ export function programmesSection({
     planning: groups.filter((group) => group.planning).length,
     running: projects.filter((project) => project.running).length,
     no_workarea: projects.filter((project) => !project.workarea).length,
-    unplanned: { count: orphans.length, shown: drawn, more: Math.max(0, orphans.length - drawn.length) },
+    // The directories under `~/mc` that are none of the kinds (`listStrays`),
+    // drawn under `not an area mc knows`. Nothing removes one.
+    unplanned: { count: orphans.length, shown: drawn, more: Math.max(0, orphans.length - drawn.length), strays },
   };
 }
 
@@ -1368,10 +1372,34 @@ function dateOf(name) {
  * `~/mc` hold neither.
  */
 export function readAreas(root, repoNames) {
-  return areasWithCheckout(root, repoNames).map(({ name, path, repos }) => {
-    let mtime = 0;
-    try { mtime = statSync(path).mtimeMs; } catch { mtime = 0; }
-    return { name, repos, mtime_ms: mtime };
+  const mtimeOf = (path) => { try { return statSync(path).mtimeMs; } catch { return 0; } };
+  const runner = areasWithCheckout(root, repoNames).map(({ name, path, repos }) => ({ name, repos, mtime_ms: mtimeOf(path) }));
+  // And `mc work`'s, under `~/mc/work/`, by the name `mc work <name>` opens.
+  let names = [];
+  try { names = readdirSync(join(root, WORK_HOME)).filter((name) => !name.startsWith('.')); } catch { names = []; }
+  const work = names.map((name) => {
+    const path = join(root, WORK_HOME, name);
+    const repos = (repoNames || REPO_NAMES).filter((repo) => existsSync(join(path, repo, '.git')));
+    return { name, repos, mtime_ms: mtimeOf(path), kind: 'work' };
+  }).filter((area) => area.repos.length);
+  return [...runner, ...work];
+}
+
+/**
+ * The strays under `~/mc` (`listStrays`, work-area.js), with the two facts
+ * the page says about each and nothing it would have to weigh: whether it
+ * holds a checkout, and how many uncommitted changes those hold. Read-only.
+ */
+export function readStrays(root, { git = runGit } = {}) {
+  return listStrays({ root }).map(({ name, path }) => {
+    let children = [];
+    try { children = readdirSync(path).filter((child) => !child.startsWith('.')); } catch { children = []; }
+    const checkouts = children.filter((child) => existsSync(join(path, child, '.git')));
+    const uncommitted = checkouts.reduce((sum, child) => {
+      const status = git(join(path, child), ['status', '--porcelain']);
+      return sum + (status ? status.split('\n').filter(Boolean).length : 0);
+    }, 0);
+    return { name, checkout: checkouts.length > 0, uncommitted };
   });
 }
 
@@ -1538,6 +1566,7 @@ export async function collectPage({
     planning: sessions.planning,
     running: runner.steps.map((step) => step.name).filter(Boolean),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
+    strays: readStrays(root, { git }),
     now,
   });
   const worktrees = Object.fromEntries(present.map((repo) => [

@@ -1,5 +1,6 @@
 /**
- * A piece of work is a directory under `~/mc`.
+ * A piece of work is a directory under `~/mc` — `work/<name>` for what
+ * `mc work` makes, `step/<project>` for the runner's.
  *
  * Everything about it is derived, never stored: the worktrees it spans are the
  * directories under it, their branches come from git, whether a thing can be
@@ -24,7 +25,10 @@ import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { deleteConversations, listConversations } from './conversations.js';
-import { PLAN_HOME, STEP_HOME, WORK_HOME, workAreaPath, workAreaStatePath, workRoot } from './paths.js';
+import {
+  PLAN_HOME, STATE_HOMES, STEP_HOME, WORK_HOME, workAreaPath, workAreaStatePath, workRoot,
+} from './paths.js';
+import { registerPath } from './register.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
@@ -34,25 +38,44 @@ import { stopServersUnder } from './dev-servers.js';
 import { processesStandingIn } from './standing.js';
 
 /**
- * `PLAN_HOME` — `~/mc/plan/` — is skipped, because it is not a work area and
- * holds none: what is under it are programmes, each with its own checkouts one
- * level down (`paths.js`). Listed as an area it read as a directory called
- * `plan` whose "repositories" were programme names, which is the same nonsense
- * a role home's filing is already kept out of. `mc plan` opens what is under
- * there; nothing else has business listing it. `STEP_HOME` — `~/mc/step/`,
- * the runner's areas — is skipped for the same reason (`listStepAreas`).
+ * The areas `mc work` made: every directory under `~/mc/work/`, named
+ * `work/<n>` — their path below the work root, which is what `inspectWorkArea`
+ * and every verb take. Nothing directly under `~/mc` is listed: an `mc work`
+ * area from before `work/` should not exist any more (Martin, 2026-10-11), and
+ * one that does shows as a stray (`listStrays`).
  */
 export function listWorkAreas(env = process.env, options = {}) {
   const root = workRoot(env);
   let names = [];
   try {
-    names = readdirSync(root, { withFileTypes: true })
+    names = readdirSync(join(root, WORK_HOME), { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-      .map((entry) => entry.name)
-      .filter((name) => name !== PLAN_HOME && name !== STEP_HOME)
+      .map((entry) => `${WORK_HOME}/${entry.name}`)
       .sort();
   } catch { return []; }
   return names.map((name) => inspectWorkArea(name, env, options));
+}
+
+/**
+ * The directories directly under `~/mc` that are none of the kinds mc knows:
+ * not one of `STATE_HOMES` (paths.js), not a dot-directory, not a role home
+ * (`mc worker`'s, marked `.mc-role`), and not a legacy runner area — one that
+ * holds a checkout and whose name is a project in the register. `{ name,
+ * path }`, sorted. Read-only: nothing removes a stray.
+ */
+export function listStrays({
+  root = workRoot(),
+  repoNames = ['memoro', 'memoro-cli'],
+  list = (path) => { try { return readdirSync(path, { withFileTypes: true }); } catch { return []; } },
+  exists = existsSync,
+} = {}) {
+  return list(root)
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !STATE_HOMES.has(entry.name))
+    .map((entry) => ({ name: entry.name, path: join(root, entry.name) }))
+    .filter((dir) => !areaRoleName(dir.path))
+    .filter((dir) => !(exists(registerPath(root, dir.name))
+      && repoNames.some((repo) => exists(join(dir.path, repo, '.git')))))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
@@ -214,7 +237,7 @@ export function createWorkArea(name, env = process.env) {
  * Undo an area that was made for a checkout that never arrived.
  *
  * The area comes first — `git worktree add` wants its parent to exist — so a
- * failed add left `~/mc/<name>/` behind, empty. `mc plan mc` failing on a
+ * failed add left `~/mc/work/<name>/` behind, empty. `mc plan mc` failing on a
  * branch name git would not take still made `~/mc/mc/`, and the next `mc`
  * counted it among the workareas nobody is working on. A directory that only
  * exists because something went wrong is not a piece of work.

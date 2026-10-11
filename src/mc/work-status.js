@@ -32,7 +32,7 @@ import { promisify } from 'node:util';
 
 import { contextUsage, lastModel, listConversations, readTailEntries } from './conversations.js';
 import { readMenu } from './menu-read.js';
-import { mcHome, workRoot } from './paths.js';
+import { mcHome, sessionName, workAreaName, workRoot } from './paths.js';
 import { backgroundTarget } from './work-open.js';
 import { processesStandingIn } from './standing.js';
 import { dependencyTree } from './dependency-tree.js';
@@ -305,8 +305,8 @@ function describeConversation(item, live) {
  * Is the area's running pane in a menu? One tmux capture, read by the same
  * rule the wake guard uses, so the board and the guard cannot disagree.
  */
-export function menuFor(name, env = process.env) {
-  const target = backgroundTarget(name, { env });
+export function menuFor(name, env = process.env, path = null) {
+  const target = backgroundTarget(name, { env, path });
   if (!target) return null;
   const captured = spawnSync('tmux', ['capture-pane', '-t', target, '-p'], { encoding: 'utf8' });
   if (captured.status !== 0) return null;
@@ -318,7 +318,9 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
   // The area's own listing is asked without conversations and without git:
   // both are gathered below for every area at once.
   const areas = (names?.length
-    ? names.map((name) => inspectWorkArea(name, env, { conversations: false, git: false }))
+    // A holder's name is the name without its kind; the area is the one
+    // `mc work <name>` would open (`workAreaName`).
+    ? names.map((name) => inspectWorkArea(workAreaName(name, { root: workRoot(env) }).name, env, { conversations: false, git: false }))
     : listWorkAreas(env, { conversations: false, git: false })).filter((area) => area.exists);
 
   // Every directory in one question, so the cost does not grow with the
@@ -353,7 +355,7 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
       const liveIds = markLive(found, running, now);
       const conversations = found.map((item) => describeConversation(item, liveIds.has(item.id)));
       return {
-        name: area.name,
+        name: sessionName(area.name),
         path: area.path,
         // The role the area carries, or null. A field added beside the
         // others, never one of them changed: every reader of this page keeps
@@ -381,7 +383,7 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
         // can sit there all night (2026-08-23). One capture per running area;
         // the question, when the drawing carries one, so it can be answered
         // without going to look.
-        menu: running.length > 0 ? (menu || menuFor)(area.name, env) : null,
+        menu: running.length > 0 ? (menu || menuFor)(sessionName(area.name), env, area.path) : null,
         // What a person scanning the page is looking for: is anything here
         // stopped and waiting for them?
         waiting: conversations.some((item) => item.state === 'waiting'),

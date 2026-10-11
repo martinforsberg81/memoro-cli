@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 const root = mkdtempSync(join(tmpdir(), 'mc-occupied-'));
-process.env.MC_WORK_ROOT = join(root, 'work');
+process.env.MC_WORK_ROOT = join(root, 'mc');
 process.env.MC_HOME = join(root, 'home');
 process.env.PATH = '/usr/bin:/bin';
 mkdirSync(join(root, 'home'), { recursive: true, mode: 0o700 });
@@ -33,21 +33,21 @@ describe('a workplace somebody is sitting in is not opened twice', () => {
     const stdout = sink();
     const stderr = sink();
     const asked = [];
-    const occupants = (paths) => { asked.push(paths); return [{ pid: 4242, name: 'claude', directory: join(root, 'work', 'alpha') }]; };
+    const occupants = (paths) => { asked.push(paths); return [{ pid: 4242, name: 'claude', directory: join(root, 'mc', 'work', 'alpha') }]; };
     const code = await openArea('alpha', { pick: 'new' }, { stdout, stderr, occupants });
     assert.equal(code, 1, stderr.text);
     assert.match(stderr.text, /alpha is occupied — claude \(pid 4242\) is working in .*alpha, started outside mc/u);
     assert.match(stderr.text, /one session per workplace \(D-0154\)/u);
     assert.match(stderr.text, /mc work alpha --anyway/u);
     // The area and everything under it was asked about, not just the worktree.
-    assert.deepEqual(asked, [[join(root, 'work', 'alpha')]]);
+    assert.deepEqual(asked, [[join(root, 'mc', 'work', 'alpha')]]);
   });
 
   it('says how many more when there are several', async () => {
     const stderr = sink();
     const occupants = () => [
-      { pid: 1, name: 'claude', directory: join(root, 'work', 'alpha') },
-      { pid: 2, name: 'codex', directory: join(root, 'work', 'alpha') },
+      { pid: 1, name: 'claude', directory: join(root, 'mc', 'work', 'alpha') },
+      { pid: 2, name: 'codex', directory: join(root, 'mc', 'work', 'alpha') },
     ];
     await openArea('alpha', { pick: 'new' }, { stdout: sink(), stderr, occupants });
     assert.match(stderr.text, /and 1 more/u);
@@ -57,7 +57,7 @@ describe('a workplace somebody is sitting in is not opened twice', () => {
     assert.equal(parseArgs(['alpha', '--anyway']).anyway, true);
     assert.equal(parseArgs(['alpha']).anyway, false);
     const stderr = sink();
-    const occupants = () => [{ pid: 4242, name: 'claude', directory: join(root, 'work', 'alpha') }];
+    const occupants = () => [{ pid: 4242, name: 'claude', directory: join(root, 'mc', 'work', 'alpha') }];
     // With no tool on the PATH the open fails later, on its own terms — the
     // point is that it got past the occupancy question.
     await openArea('alpha', { pick: 'new', anyway: true }, { stdout: sink(), stderr, occupants });

@@ -4,7 +4,7 @@
 him: the runner takes `ready` steps, opens PRs and merges them, archives what
 is done and closes the workarea behind it. None of that asks a question. The
 questions pile up anyway — a failed step, a project archived with no note, a
-folder under `~/mc` no plan explains, a proposal the helper wrote — and until
+folder under `~/mc` no plan explains or that is no area mc knows, a proposal the helper wrote — and until
 they are put to the one person who can answer them, they are invisible.
 
 This verb opens the session Martin puts them to. That is the whole of it: **the

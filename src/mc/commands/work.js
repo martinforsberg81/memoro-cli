@@ -19,9 +19,11 @@
  *   mc work discard <name> [repo] [--apply]
  *   mc work tidy [--apply] [--days <n>]
  *
- * The directory is the session name, always: `~/mc/<name>`, with a worktree
- * under it per repository, on a branch of that same name. There is no second
- * naming scheme to learn and nothing derived from a branch.
+ * The directory is the session name, always: `~/mc/work/<name>`, with a
+ * worktree under it per repository, on a branch of that same name. There is
+ * no second naming scheme to learn and nothing derived from a branch. A name
+ * that is only a runner area — `~/mc/step/<project>` — opens that area, and
+ * says so (`workAreaName`, paths.js).
  *
  * Nothing here is stored. Nothing here refuses: opening a name that does not
  * exist yet makes it, release removes what git says can go and reports what it
@@ -45,7 +47,7 @@ import { currentHolder } from '../work-identity.js';
 import { toolProcesses } from '../work-status.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
-import { workRoot } from '../paths.js';
+import { workAreaName, workAreaPath } from '../paths.js';
 import {
   areaRole, areaRoleName, reservedRoleHint, reservedRoleName, roleSourceOf,
 } from '../roles.js';
@@ -104,13 +106,23 @@ export async function run(argv, deps = {}) {
  * had run and done nothing.
  */
 export async function runVerb(opts, { stdout, stderr }) {
+  // Every verb with a name resolves it the one way (`workAreaName`): the
+  // `mc work` area of that name, else the runner's area for a project of it.
+  const target = opts.name ? workAreaName(opts.name) : null;
+  if (target?.runner) {
+    if (opts.verb === 'release' || opts.verb === 'discard') {
+      stderr.write(`mc: ${opts.name} is a runner area — it closes with its project\n`);
+      return 2;
+    }
+    stderr.write(`mc: ${opts.name} is the runner's area — ${workAreaPath(target.name)}\n`);
+  }
   if (opts.verb === 'add') {
     // The reserved names never become areas, so there is nothing to add to —
     // and letting `add` conjure one up would be the back door the open-path
     // guard just closed. An area that predates the reservation keeps working
     // (same carve-out as opening it).
     if (reservedRoleName(opts.name)) {
-      const area = inspectWorkArea(opts.name, undefined, { conversations: false, git: false });
+      const area = inspectWorkArea(target.name, undefined, { conversations: false, git: false });
       if (!area.exists || areaRoleName(area.path)) {
         stderr.write(`mc: ${reservedRoleHint(opts.name)}\n`);
         return 1;
@@ -125,7 +137,7 @@ export async function runVerb(opts, { stdout, stderr }) {
     // Without a branch the work's own name is the branch: one name for the
     // piece of work, the directory it lives in, and the branch it is on.
     const result = addWorktree({
-      name: opts.name, repo: found.path, branch: opts.branch || opts.name, from: opts.from,
+      name: target.name, repo: found.path, branch: opts.branch || opts.name, from: opts.from,
     });
     if (!result.ok) {
       stderr.write(`mc: could not add ${found.path} to ${opts.name} (${result.reason})\n`);
@@ -145,12 +157,12 @@ export async function runVerb(opts, { stdout, stderr }) {
   }
 
   if (opts.verb === 'discard') {
-    const area = inspectWorkArea(opts.name);
+    const area = inspectWorkArea(target.name);
     if (!area.exists) {
-      stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
+      stderr.write(`mc: nothing called "${opts.name}" — no ${area.path}\n`);
       return 1;
     }
-    const result = discardWorkArea(opts.name, { repo: opts.repo, dryRun: !opts.apply });
+    const result = discardWorkArea(target.name, { repo: opts.repo, dryRun: !opts.apply });
     if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`); return 0; }
     stdout.write(`mc work discard ${opts.name}${opts.apply ? '' : ' — dry run'}\n`);
     for (const item of result.discarded) {
@@ -182,9 +194,9 @@ export async function runVerb(opts, { stdout, stderr }) {
   }
 
   if (opts.verb === 'stop') {
-    const area = inspectWorkArea(opts.name);
+    const area = inspectWorkArea(target.name);
     if (!area.exists) {
-      stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
+      stderr.write(`mc: nothing called "${opts.name}" — no ${area.path}\n`);
       return 1;
     }
     const result = stopWork(area);
@@ -210,7 +222,7 @@ export async function runVerb(opts, { stdout, stderr }) {
   }
 
   if (opts.verb === 'remove') {
-    const result = removeWorktree({ name: opts.name, repo: opts.repo });
+    const result = removeWorktree({ name: target.name, repo: opts.repo });
     if (result.servers_stopped?.length) stdout.write(`mc: stopped dev server${result.servers_stopped.length === 1 ? '' : 's'} ${result.servers_stopped.join(', ')}\n`);
     if (!result.ok) {
       stderr.write(`mc: kept ${opts.repo} in ${opts.name} — ${result.reason}\n`);
@@ -224,12 +236,12 @@ export async function runVerb(opts, { stdout, stderr }) {
   if (opts.verb === 'tidy') return tidy(opts, { stdout });
 
   if (opts.verb === 'release') {
-    const area = inspectWorkArea(opts.name);
+    const area = inspectWorkArea(target.name);
     if (!area.exists) {
-      stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
+      stderr.write(`mc: nothing called "${opts.name}" — no ${area.path}\n`);
       return 1;
     }
-    const result = releaseWorkArea(opts.name, { dryRun: !opts.apply });
+    const result = releaseWorkArea(target.name, { dryRun: !opts.apply });
     if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`); return 0; }
     stdout.write(`mc work release ${opts.name}${opts.apply ? '' : ' — dry run'}\n`);
     for (const item of result.removed) {
@@ -341,11 +353,13 @@ export async function startSomething({ stdout, stderr }) {
   }
   // The same guard the shell path has: without it, the menu would create the
   // area first and then refuse to open it forever.
-  if (reservedRoleName(name) && !inspectWorkArea(name).exists) {
+  const target = workAreaName(name);
+  const exists = inspectWorkArea(target.name, undefined, { conversations: false, git: false }).exists;
+  if (reservedRoleName(name) && !exists) {
     stderr.write(`mc: ${reservedRoleHint(name)}\n`);
     return 1;
   }
-  if (inspectWorkArea(name).exists) {
+  if (exists) {
     stderr.write(`mc: ${name} already exists — opening it\n`);
     return openArea(name, {}, { stdout, stderr });
   }
@@ -354,7 +368,7 @@ export async function startSomething({ stdout, stderr }) {
   if (repo === null) return 0;
 
   if (repo !== 'none') {
-    const result = addWorktree({ name, repo, branch: name });
+    const result = addWorktree({ name: target.name, repo, branch: name });
     if (!result.ok) {
       stderr.write(`mc: could not add ${repo} to ${name} (${result.reason})\n`);
       return 1;
@@ -364,7 +378,7 @@ export async function startSomething({ stdout, stderr }) {
     if (result.push_guard && !result.push_guard.ok) stderr.write(`mc: pre-push guard not installed — ${result.push_guard.reason}\n`);
     sayDependencies(result, { stdout, stderr });
   } else {
-    stdout.write(`\nmc: ${createWorkArea(name)}\n`);
+    stdout.write(`\nmc: ${createWorkArea(target.name)}\n`);
   }
   return openArea(name, {}, { stdout, stderr });
 }
@@ -384,7 +398,13 @@ export async function openArea(name, opts, deps) {
   // carve-out is an area that already existed before the names were
   // reserved: refusing it would strand real work behind its own name, so it
   // opens as the ordinary area it is, with a note to rename it.
-  let area = inspectWorkArea(name);
+  //
+  // The name resolves the one way every verb resolves it (`workAreaName`),
+  // unless the caller hands the area itself — `mc worker`, whose role homes
+  // are neither kind.
+  const target = opts.area ? { name: opts.area, runner: false } : workAreaName(name);
+  let area = inspectWorkArea(target.name);
+  if (target.runner) stderr.write(`mc: opening the runner's area for ${name} — ${area.path}\n`);
   if (reservedRoleName(name)) {
     if (!area.exists || areaRoleName(area.path)) {
       stderr.write(`mc: ${reservedRoleHint(name)}\n`);
@@ -399,12 +419,12 @@ export async function openArea(name, opts, deps) {
     // reported "the directory is empty — no repo, no files" and could do
     // nothing at all with what it was asked. The menu asked; the shortcut
     // everyone uses did not.
-    createWorkArea(name);
+    createWorkArea(target.name);
     stderr.write(`mc: ${name} is new\n`);
     const repo = interactive() ? chooseRepository({ stdout }) : 'none';
     if (repo === null) return 0;
     if (repo !== 'none') {
-      const added = addWorktree({ name, repo, branch: name });
+      const added = addWorktree({ name: target.name, repo, branch: name });
       if (!added.ok) {
         stderr.write(`mc: could not add ${repo} to ${name} (${added.reason})\n`);
         return 1;
@@ -413,9 +433,9 @@ export async function openArea(name, opts, deps) {
       if (added.base) stdout.write(`mc: from ${added.base}\n`);
       if (added.push_guard && !added.push_guard.ok) stderr.write(`mc: pre-push guard not installed — ${added.push_guard.reason}\n`);
     } else {
-      stdout.write(`mc: ${workRoot()}/${name} — no repository, so nothing to read here\n`);
+      stdout.write(`mc: ${area.path} — no repository, so nothing to read here\n`);
     }
-    area = inspectWorkArea(name);
+    area = inspectWorkArea(target.name);
   }
 
   // The tool opens where the work is. One worktree and the work is that
@@ -450,7 +470,8 @@ export async function openArea(name, opts, deps) {
   // occupant. mc's own background session is not one: it is what `mc work
   // <name>` joins, and `new` replaces it in place, knowingly. Refused, with
   // the way through named, unless `--anyway` says the person knows.
-  if (!opts.anyway && !backgroundTarget(name)) {
+  const background = () => backgroundTarget(name, { path: area.path });
+  if (!opts.anyway && !background()) {
     const here = [area.path, ...area.worktrees.map((item) => item.path)];
     const occupants = (deps.occupants || toolProcesses)(here);
     if (occupants.length > 0) {
@@ -471,7 +492,7 @@ export async function openArea(name, opts, deps) {
   // answer either (it stores nothing about which one the session holds) —
   // a person picked one, was refused as #361 requires, and stood outside a
   // live session with an answer waiting in its inbox (2026-08-22).
-  if (!pick && area.conversations.length > 1 && interactive() && !backgroundTarget(name)) {
+  if (!pick && area.conversations.length > 1 && interactive() && !background()) {
     const items = area.conversations.map((item, index) => ({
       key: index + 1,
       name: item.id.slice(0, 8),
@@ -587,7 +608,7 @@ export async function openArea(name, opts, deps) {
 
   // Already running in the background? Then joining means going to it, not
   // starting a second process on the same conversation.
-  const running = backgroundTarget(name);
+  const running = background();
   if (running) {
     // Unless a new conversation is what was asked for. This branch used to
     // return before `pick` was ever looked at: `mc work <name> new` against a

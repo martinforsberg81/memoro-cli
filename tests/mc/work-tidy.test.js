@@ -227,12 +227,17 @@ describe('gather and apply on a real tree', () => {
     try {
       m.write(join(m.work, 'runner', 'log', 'x'));
       m.write(join(m.work, 'proposals', 'p.md'));
+      m.write(join(m.work, 'work', 'notes', 'x'));
       const plan = tidyPlan(gatherTidyFacts({ env: m.env, now: NOW }));
       assert.deepEqual(plan.worktrees, []);
       applyTidy(plan, { env: m.env });
       assert.ok(existsSync(join(m.work, 'runner', 'log', 'x')));
       assert.ok(existsSync(join(m.work, 'proposals', 'p.md')));
-      assert.equal(keptWhy(plan, join(m.work, 'runner')), 'holds something that is not a git worktree');
+      assert.ok(existsSync(join(m.work, 'work', 'notes', 'x')));
+      // runner/ is no kind of area, so tidy never walks it; an area under
+      // work/ holding something else is walked and kept.
+      assert.equal(keptWhy(plan, join(m.work, 'runner')), undefined);
+      assert.equal(keptWhy(plan, join(m.work, 'work', 'notes')), 'holds something that is not a git worktree');
     } finally { m.cleanup(); }
   });
 

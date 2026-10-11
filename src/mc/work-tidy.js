@@ -30,12 +30,12 @@ import {
   SESSION_ID, claudeHome, deleteConversation, listConversations, readHead, treeBytes,
 } from './conversations.js';
 import { log } from './logger.js';
-import { PLAN_HOME, workRoot } from './paths.js';
+import { PLAN_HOME, STEP_HOME, WORK_HOME, workRoot } from './paths.js';
 import { listEntries } from './register.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import {
-  OWN_MARKS, inspectWorktree, listWorkAreas, releaseVerdict, releaseWorkArea,
+  OWN_MARKS, inspectWorktree, listStepAreas, listWorkAreas, releaseVerdict, releaseWorkArea,
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
@@ -54,22 +54,24 @@ export function areaSkip(area, stepsLeft = new Map()) {
     const detail = [first, second, third].filter(Boolean).join(', ') + (more.length ? ` and ${more.length} more` : '');
     return { why: 'holds something that is not a git worktree', detail, rule: 'foreign' };
   }
-  if (stepsLeft.get(area.name)) {
-    return { why: `project ${area.name} has steps left`, reason: 'a register project with steps left', rule: 'project' };
+  const project = area.project || area.name;
+  if (stepsLeft.get(project)) {
+    return { why: `project ${project} has steps left`, reason: 'a register project with steps left', rule: 'project' };
   }
   return null;
 }
 
 /**
- * The area a transcript's cwd belongs to: the first segment below the work
- * root, or `plan/<programme>` under `PLAN_HOME`. Null outside the work root,
- * and for the root itself.
+ * The area a transcript's cwd belongs to: `step/<project>`, `work/<name>` or
+ * `plan/<programme>` under those roots, else the first segment below the work
+ * root (a legacy area). Null outside the work root, and for the root and the
+ * kinds' own roots themselves.
  */
 export function areaOf(cwd, root) {
   if (typeof cwd !== 'string' || !cwd.startsWith(`${root}/`)) return null;
   const [first, second] = cwd.slice(root.length + 1).split('/');
   if (!first) return null;
-  if (first === PLAN_HOME) return second ? `${PLAN_HOME}/${second}` : null;
+  if (first === PLAN_HOME || first === STEP_HOME || first === WORK_HOME) return second ? `${first}/${second}` : null;
   return first;
 }
 
@@ -108,10 +110,16 @@ export function gatherTidyFacts({ env = process.env, now = Date.now(), gh = null
   };
   const pullAtTip = (wt) => mergedPullAtTip(wt.path, wt.branch, gh ? { gh } : {});
 
-  // `git: false`: the areas that are skipped (`node_modules` among them, with
-  // hundreds of subdirectories) are never asked of git.
-  for (const listed of listWorkAreas(env, { conversations: false, git: false })) {
-    const area = { name: listed.name, path: listed.path, role_home: false, foreign: [], worktrees: [], conversations: [] };
+  // `git: false`: the areas that are skipped are never asked of git. The
+  // runner's areas are named by their path below the work root, as `mc work`'s
+  // are — `step/<p>`, or `<p>` for one from before `step/` — and carry the
+  // project their register row is under.
+  const stepAreas = listStepAreas({ root }).map((area) => {
+    const name = area.path.slice(root.length + 1);
+    return { name, path: area.path, project: area.name };
+  });
+  for (const listed of [...listWorkAreas(env, { conversations: false, git: false }), ...stepAreas]) {
+    const area = { name: listed.name, path: listed.path, project: listed.project || null, role_home: false, foreign: [], worktrees: [], conversations: [] };
     facts.areas.push(area);
     try {
       area.role_home = reservedRoleName(listed.name) && Boolean(areaRoleName(listed.path));

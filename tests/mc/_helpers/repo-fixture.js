@@ -67,7 +67,7 @@ export function fixture({ gh = false, prs = [], name = 'repo-view' } = {}) {
 
 /** Put a worktree of the fixture repository under a piece of work. */
 export function addArea(fx, name, branch) {
-  const area = join(fx.workRoot, name);
+  const area = join(fx.workRoot, 'work', name);
   mkdirSync(area, { recursive: true });
   git(fx.dir, `worktree add -q -b ${branch} "${join(area, 'repo')}" main`);
   return join(area, 'repo');
