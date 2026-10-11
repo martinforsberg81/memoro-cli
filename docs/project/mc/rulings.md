@@ -1218,3 +1218,18 @@ merger. The watch is read-only. It prints a line only when the state changes,
 and it asks GitHub once, when the job has left the queue. Nothing starts it
 except a session that chooses to. Carried by `merge-watch`
 (`docs/project/mc/merge-watch/PLAN.json`).
+
+## 37 · A dead Memoro token signs in again, and the vault key cache is encoded
+
+`ruling · 2026-10-11` · raised by Martin at the brief
+
+> "Ja, landa hos runner." (Martin, 2026-10-11, approving the brief's
+> recommendations A1–A4)
+
+The vault key cache stores its JSON value base64-encoded (`b64:` prefix) and
+still reads plain-JSON entries; `macSet`'s refusal of `"`, `\` and line breaks
+stays. A Memoro 401 that is the server's generic token rejection — not a vault
+password 401 — clears the token and runs the device flow when `mc vault` runs
+at a terminal, and fails loud naming `mc vault status` anywhere else; a
+headless session never signs in by itself. No new verb. Carried by
+`vault-repair` (`docs/project/mc/vault-repair/PLAN.json`).
