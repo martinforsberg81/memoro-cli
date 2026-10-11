@@ -844,6 +844,16 @@ jobs `landing`, and the next one takes all of them again. Four, because about
 of the time and then pays its fallback rounds, and a larger batch makes the
 fallback cost more than the batch saves.
 
+Measured at close-out (2026-10-10 18:01 – 2026-10-11 07:16 UTC, the first
+merger with all four steps): 87 landings in 71 rounds, 8 of them batches of
+2–4. Seconds per landed pull request, a batch's shared among those it landed,
+were 219.5 s at the median over the first 40, against 176 s for 104 landings
+on 2026-10-09/10 by the same parse — slower, not faster. A batch selects the
+union of its pull requests' reach: memoro's median round selected 560 test
+files, against 236 before, and its suite took 179 s at the median against 91.
+Batches mostly formed while the queue was long; most rounds were still one
+pull request.
+
 **And it serves two lanes at once.** The merger is one process with one loop
 per gate lane (`GATE_LANES`: `heavy` — memoro and any repository that
 declares nothing — and `light`, memoro-cli by its `gate_lane`). Each loop

@@ -347,6 +347,8 @@ becomes the `npm ci` it replaced; the cache never stops a round. At most
 `PREPARE_CACHE_KEEP` (2) entries are kept per repository, oldest evicted: one
 for main's lockfile and one for a pull request that changed it — the disk was
 98 % full on 2026-10-09 and memoro's tree is about 500 MB as a copy.
+Measured at close-out (74 memoro rounds, 2026-10-10 18:01 – 2026-10-11 08:11
+UTC): 72 hits at 6.8 s median (7.4 s mean), 2 misses at 22.7 s median.
 
 ## What the round measures
 
@@ -391,7 +393,14 @@ was sequentially: every gate runs and is judged and is reported in
 `selected-gate` with every failure named; a suite that could not be measured
 is the suite's stop, with the gates that ran listed; and a half that throws is
 waited out with the other and then thrown, so nothing turns green because one
-half threw.
+half threw. Measured at close-out over 60 memoro rounds (2026-10-10 18:01 –
+2026-10-11 07:19 UTC): within a round the two together took 320 s mean where
+suite plus gates add up to 546 s, so the overlap saves 226 s a round — but
+beside the suite the gates are slower, 161 s at the median against 36 s when
+they ran alone on 2026-10-09/10, and the suite itself 179 s against 91 s (it
+also selects more files now, see batches in [`mc-run.md`](mc-run.md)
+§ *The merge*). The wall time of suite and gates was 236 s at the median
+against 155 s for the same pair run one after the other before.
 
 **`mc test <repo> --full`** is the other reading, and the only one that is about
 the code rather than about a change: the repository's declared suite command,
