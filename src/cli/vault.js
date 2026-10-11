@@ -57,7 +57,8 @@ import * as VaultApi from '../vault/engine/api.js';
 import { readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
-import { getSecret as keychainGet } from '../lib/keychain.js';
+import { getSecret as keychainGet, deleteSecret as keychainDelete } from '../lib/keychain.js';
+import { runDeviceFlow, shouldTriggerDeviceFlow } from '../lib/device-flow.js';
 import { ACCOUNTS } from '../lib/auth-accounts.js';
 import { readConfig, getApiUrl } from '../lib/config.js';
 import { promptSecret, confirm } from '../lib/prompt.js';
@@ -125,6 +126,9 @@ export async function run(argv, opts = {}) {
   try {
     return await v.handler(argv.slice(1), opts);
   } catch (err) {
+    if (err?.code === 'MEMORO_TOKEN_REJECTED') {
+      return await handleRejectedToken(argv, opts);
+    }
     // Friendly error wrapping. Specific errors (vault locked, token
     // missing, etc.) are handled in-line; this catches the long tail.
     const json = argv.includes('--json');
@@ -135,6 +139,41 @@ export async function run(argv, opts = {}) {
     }
     return 1;
   }
+}
+
+// Memoro rejected the stored token (expired after its 90 days, or
+// revoked). At a terminal the dead token is deleted and the device flow
+// signs in again, under the same gate bin-mc.js uses for a missing token;
+// anywhere else the keychain is left as it is and the message names the
+// command that signs in. The verb itself did not run, so this returns 1
+// either way — re-running it is the person's.
+async function handleRejectedToken(argv, opts = {}) {
+  const env = opts.env || process.env;
+  const verb = argv[0];
+  const json = argv.includes('--json');
+  const interactive = !json && shouldTriggerDeviceFlow({
+    hasToken: false,
+    isTty: opts.isTty ?? process.stdout?.isTTY === true,
+    mcTestMode: env.MC_TEST_MODE,
+    memoroTokenEnv: env.MEMORO_TOKEN,
+    argv: ['vault', ...argv],
+  });
+  const rejected = 'Memoro rejected the stored sign-in (expired or revoked).';
+  if (!interactive) {
+    emit(json, {
+      ok: false,
+      error: json ? rejected : `${rejected} Sign in again by running \`mc vault status\` in a terminal.`,
+      code: 'MEMORO_TOKEN_REJECTED',
+    });
+    return 1;
+  }
+  console.error(`${rejected} Signing in again…`);
+  const deleteToken = opts.deleteToken || keychainDelete;
+  const deviceFlow = opts.deviceFlow || runDeviceFlow;
+  await deleteToken(ACCOUNTS.TOKEN);
+  const apiUrl = opts.portal?.apiUrl || getApiUrl([]) || (await readConfig()).apiUrl;
+  await deviceFlow({ apiUrl, nextMessage: `Next: run \`mc vault ${verb}\` again.` });
+  return 1;
 }
 
 function printHelp() {
@@ -166,7 +205,7 @@ MASTER PASSWORD
   a 15-minute TTL so subsequent commands don't re-prompt.
 
 PRECONDITIONS
-  - Run \`mc\` first to sign in and store your Memoro API token.
+  - Run \`mc vault status\` in a terminal first to sign in and store your Memoro API token.
   - Run \`mc vault setup\` once per Memoro account to create the vault.
 `);
 }
@@ -1365,7 +1404,7 @@ async function loadPortal(opts = {}) {
   const apiUrl = getApiUrl([]) || config.apiUrl;
   const token = await keychainGet(ACCOUNTS.TOKEN);
   if (!token) {
-    throw new Error('no Memoro token. Run `mc` to sign in first.');
+    throw new Error('no Memoro token. Run `mc vault status` in a terminal to sign in.');
   }
   return { apiUrl, token };
 }

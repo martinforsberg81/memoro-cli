@@ -13,6 +13,44 @@ function dnsFailure() {
 }
 
 describe('memoro HTTP client', () => {
+  function respond(status, body) {
+    return {
+      fetchImpl: async () => new Response(JSON.stringify(body), { status }),
+      curlFallback: false,
+    };
+  }
+
+  test('classes the session guard 401 as MEMORO_TOKEN_REJECTED', async () => {
+    await assert.rejects(
+      memoroFetch('https://meetmemoro.app', '/api/vault/status', {
+        token: 't',
+        ...respond(401, { ok: false, error: 'Not logged in or session has expired.' }),
+      }),
+      (err) => {
+        assert.equal(err.code, 'MEMORO_TOKEN_REJECTED');
+        assert.equal(err.status, 401);
+        assert.match(err.message, /^Memoro 401: Not logged in or session has expired\.$/);
+        return true;
+      },
+    );
+  });
+
+  for (const body of [
+    { ok: false, error: 'Invalid master password', code: 'INVALID_PASSWORD' },
+    { ok: false, error: 'Invalid current password' },
+  ]) {
+    test(`does not class a wrong-password 401 as a rejected token (${body.error})`, async () => {
+      await assert.rejects(
+        memoroFetch('https://meetmemoro.app', '/api/vault/unlock', { token: 't', ...respond(401, body) }),
+        (err) => {
+          assert.equal(err.status, 401);
+          assert.notEqual(err.code, 'MEMORO_TOKEN_REJECTED');
+          return true;
+        },
+      );
+    });
+  }
+
   test('uses fetch response when fetch succeeds', async () => {
     let curlCalled = false;
     const result = await memoroFetchAnon('https://meetmemoro.app', '/api/version', {

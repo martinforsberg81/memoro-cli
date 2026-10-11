@@ -51,8 +51,9 @@ import { ACCOUNTS } from './auth-accounts.js';
 const DEFAULT_API_URL = 'https://meetmemoro.app';
 
 // Commands that should NEVER auto-trigger the device flow when no token is
-// stored. `--help` / `--version` are diagnostic; `memoro-cli login` and
-// `mc auth memoro` are the explicit (token-installing) escape hatches.
+// stored. `--help` / `--version` are diagnostic. There is no explicit
+// login verb since #543: `mc vault <verb>` at a terminal with no token
+// is the sign-in.
 // We allow-list the bypass set rather than try to enumerate the trigger
 // set, because the trigger surface is "every other mc invocation".
 const AUTH_BYPASS_FIRST_ARGS = new Set([
@@ -60,8 +61,10 @@ const AUTH_BYPASS_FIRST_ARGS = new Set([
   '--version', '-v',
 ]);
 
-// `mc auth memoro <...>` should also bypass: the user is opting into the
-// memoro-cli login path explicitly. We match on argv[0]==='auth' && argv[1]==='memoro'.
+// `mc auth memoro <...>` also bypasses. It was the explicit login path
+// until #543 removed it; there is no explicit login verb now — `mc vault
+// <verb>` at a terminal with no token is the sign-in. We match on
+// argv[0]==='auth' && argv[1]==='memoro'.
 // Same for `mc auth devices ...` — managing devices requires a token, but
 // if you're hitting this path without one we want the friendly
 // "no token" error from the verb itself, not a forced device-flow loop.
@@ -281,7 +284,7 @@ export async function runDeviceFlow(deps = {}) {
     audience = null,
     client = null,
     successLabel = 'Device',
-    nextMessage = 'Next: run `mc setup` to finish local setup.',
+    nextMessage = 'Next: run your command again.',
     initPath = '/api/auth/device/init',
     pollPath = '/api/auth/device/poll',
     // For tests: a pre-set AbortController-style flag to interrupt the loop.

@@ -32,17 +32,17 @@
       "check": "`tests/vault/engine/key-cache.test.js`: a store seeded with `JSON.stringify({ vaultKeyB64, authHash, expiresAt: null })` reads as present and is not deleted; a store seeded with `b64:` followed by non-base64 or non-JSON reads as `null`, `inspectCachedVaultKey` reports `invalid-json`, and the entry is deleted."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Only the server's token rejection is classed as a rejected token; a wrong master password is not.",
       "check": "`tests/lib/api.test.js`: a 401 with body `{ ok: false, error: 'Not logged in or session has expired.' }` throws with `err.code === 'MEMORO_TOKEN_REJECTED'`; a 401 with `{ ok: false, error: 'Invalid master password', code: 'INVALID_PASSWORD' }` and a 401 with `{ ok: false, error: 'Invalid current password' }` throw without that code."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "At a terminal, a rejected token is deleted and the device flow runs; elsewhere the token stays and the message names `mc vault status`.",
       "check": "`tests/vault/engine/vault-commands.test.js`: with a portal whose `memoroFetch` throws `MEMORO_TOKEN_REJECTED`, `isTty: true` deletes the token account through the injected `deleteSecret` and calls the injected device flow once with the configured `apiUrl`, exit code 1; `isTty: false`, `--json`, and `MEMORO_TOKEN` set each call neither, keep the token, and print (or emit as JSON with `code: 'MEMORO_TOKEN_REJECTED'`) a message containing `mc vault status`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No sign-in hint names a command that does not exist.",
       "check": "`git grep -nE 'memoro-cli login|run .mc setup.|Run .mc. to sign in' src tests` prints nothing."
     }
