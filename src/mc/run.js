@@ -130,6 +130,8 @@ import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './ru
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick } from './nightly-loop.js';
+import { rotateIfLarge } from './logger.js';
+import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import {
   RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
@@ -155,7 +157,7 @@ import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree, listStepAreas } from './work-area.js';
 import { checkpoint } from './checkpoint.js';
 import {
-  DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
+  DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
   initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
@@ -194,6 +196,16 @@ export const DISK_MIN_BYTES = 5 * 2 ** 30;
  * 8 GB). Sessions already running go on.
  */
 export const MEMORY_MIN_FREE_PERCENT = 20;
+
+/**
+ * After a lane skipped a step for disk (`diskRoom`), the next chore pass runs
+ * `mc tidy --apply` — at most this often, so a disk tidy cannot free stays
+ * full without the runner tidying every pass.
+ */
+export const TIDY_DISK_MIN_INTERVAL_MS = 60 * 60 * 1000;
+
+/** `runner.log` moves to `runner.log.1` past this size; one generation is kept. */
+export const RUNNER_LOG_MAX_BYTES = 32 * 2 ** 20;
 
 /**
  * How often a running step session's uncommitted work is snapshotted to
@@ -517,6 +529,12 @@ export function realDeps(env = process.env) {
     // `mc deps <repo>`'s reading, saved where `mc deps` and the page read it.
     // A dependency so a test drives the chore without npm or a remote.
     readDeps: (options) => readDeps({ env, refresh: true, ...options }),
+    // `mc tidy --apply` (tidy.js): its list written, then removed from. A
+    // dependency so a fixture without it removes nothing on the machine
+    // running the suite.
+    tidy: () => runTidy({ apply: true, env }),
+    // runner.log to runner.log.1 past the limit (logger.js).
+    rotate: (path, maxBytes) => rotateIfLarge(path, maxBytes),
     // The one door work lands through: the merger's queue (ruling 30), the
     // same call `mc merge` makes, in process because the runner is mc — and
     // `mc merge --docs`' round for the archive pull request. The plan
@@ -624,6 +642,9 @@ export function createRunner({
   const pid = deps.pid ?? process.pid;
   const repos = defaultRepos(deps.env);
   const stamp = () => deps.now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
+  // When a lane last skipped for disk, and when that last ran a tidy.
+  let diskSkippedAt = null;
+  let lastDiskTidyAt = null;
   const say = (text) => {
     const line = `${stamp()}  ${text}`;
     deps.append(paths.runnerLog, `${line}\n`);
@@ -1802,6 +1823,38 @@ export function createRunner({
   }
 
   /**
+   * `mc tidy --apply` (tidy.js), once a day by its own runs.tsv row, and in
+   * the first chore pass after a lane skipped for disk — that one at most
+   * once per `TIDY_DISK_MIN_INTERVAL_MS`, remembered in memory. Shaped like
+   * `runDepsDaily`: the row is written however it went. Returns 'ran',
+   * 'failed' or null when it was not due.
+   */
+  async function runTidyDaily() {
+    const now = deps.now().getTime();
+    const due = nightlyDue({ tsv: deps.read(paths.runs) || '', now: deps.now(), kind: TIDY_KIND });
+    const forDisk = diskSkippedAt !== null && (lastDiskTidyAt === null || now - lastDiskTidyAt >= TIDY_DISK_MIN_INTERVAL_MS);
+    if ((!due.due && !forDisk) || !deps.tidy) return null;
+    if (forDisk) { lastDiskTidyAt = now; diskSkippedAt = null; }
+    const took = () => Math.round((deps.now().getTime() - now) / 1000);
+    let outcome = null;
+    let failure = null;
+    try { outcome = (await deps.tidy())?.outcome || null; } catch (error) { failure = error?.message || String(error); }
+    const freed = outcome?.freed || 0;
+    const items = outcome?.removed || 0;
+    const kept = outcome?.kept || 0;
+    logRun({
+      ts: stamp(), name: TIDY_KIND, kind: TIDY_KIND, exit: failure ? 1 : 0, seconds: took(), pr: '-',
+      ...dashes,
+      note: `freed=${freed},items=${items},kept=${kept}`,
+    });
+    const why = forDisk ? 'a lane skipped for disk' : 'daily';
+    say(failure
+      ? `tidy (${why}): failed — ${failure}`
+      : `tidy (${why}): freed ${(freed / 1e9).toFixed(2)} GB in ${items} items, kept ${kept} on re-check`);
+    return failure ? 'failed' : 'ran';
+  }
+
+  /**
    * The deps of every repository mc knows, read once a day: `mc deps <repo>`
    * with no reuse, saved where `mc deps` and the page find it. Returns 'ran',
    * 'failed' (a repository could not be read; the others were) or null when
@@ -2873,7 +2926,10 @@ export function createRunner({
     // which is how a test drives a lane over a whole queue without a clock.
     const passed = new Set(already);
     const stepOf = (name) => known.plans.find((item) => item.project === name)?.step ?? null;
-    if (!diskRoom()) return { ran: 0, waited: 'skipped:disk' };
+    if (!diskRoom()) {
+      diskSkippedAt = deps.now().getTime();
+      return { ran: 0, waited: 'skipped:disk' };
+    }
     if (!memoryRoom()) return { ran: 0, waited: 'skipped:memory' };
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
@@ -2968,6 +3024,8 @@ export function createRunner({
    */
   async function chores() {
     if (stopRequested()) return;
+    // runner.log to runner.log.1 past RUNNER_LOG_MAX_BYTES, before this pass says anything.
+    try { deps.rotate?.(paths.runnerLog, RUNNER_LOG_MAX_BYTES); } catch { /* the log goes on growing */ }
     dropPredecessor();
     await runHelperDay();
     await runIntakeDrain();
@@ -2979,6 +3037,7 @@ export function createRunner({
     closeWorkareas(plans, archives.flatMap((a) => a.landed), archivedProjects());
     await reapOrphans();
     sweepScratch();
+    await runTidyDaily();
     // Last, and not beside the two chores above: it is the long one, and the
     // archive and the tidying should not wait twenty minutes behind it. The
     // deps reading goes first: a minute a repository, and not to be left a
@@ -3063,7 +3122,7 @@ export function createRunner({
   };
 
   return {
-    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runNightly, archiveDone, queue, stopRequested,
+    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, archiveDone, queue, stopRequested,
     writeUnreadable,
     blockStep,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, syncMain, freshBranch, landDocsPr, planOf, repoOf, markRunner, dropPredecessor, clearRunner, closeWorkareas,

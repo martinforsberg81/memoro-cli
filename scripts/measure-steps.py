@@ -14,7 +14,9 @@ Sources (all local, see docs/technical/mc-run.md):
   ~/mc/runner/log/runs.tsv              one row per step/reconcile session
   ~/mc/runner/log/<project>-<ts>.json   the session's own result (claude -p --output-format json)
   ~/.claude/projects/<cwd>/<sid>.jsonl  the transcript, for what the turns were spent on
-  ~/mc/runner/log/runner.log            the runner's narration: starts, ends, landings, skips
+  ~/mc/runner/log/runner.log            the runner's narration: starts, ends, landings, skips —
+  ~/mc/runner/log/runner.log.1          and its older generation: runner.log rotates past 32 MiB
+                                        (RUNNER_LOG_MAX_BYTES, run.js); runner_log_lines reads both
 """
 import argparse
 import collections
@@ -27,6 +29,13 @@ import statistics as st
 
 HOME = os.path.expanduser('~')
 LOG = f'{HOME}/mc/runner/log'
+
+
+def runner_log_lines():
+    """runner.log's lines, oldest first: runner.log.1 when it exists, then runner.log."""
+    for path in (f'{LOG}/runner.log.1', f'{LOG}/runner.log'):
+        if os.path.exists(path):
+            yield from open(path, errors='replace')
 
 
 def parse_ts(s):

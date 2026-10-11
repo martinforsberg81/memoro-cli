@@ -568,6 +568,9 @@ export const NIGHTLY_NAME = 'nightly';
 export const DEPS_KIND = 'deps';
 export const DEPS_NAME = 'deps';
 
+/** The daily `mc tidy --apply` (tidy.js), gated by its own row like the deps reading. */
+export const TIDY_KIND = 'tidy';
+
 /**
  * Once a day.
  *

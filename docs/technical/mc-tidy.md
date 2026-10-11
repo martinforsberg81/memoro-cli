@@ -224,6 +224,97 @@ own work, and not in `~/mc/intake/` where they were until 2026-09-04: the
 inbox is drained one file per turn, and a table rewritten whole every pass is
 back in it the next pass however carefully it was read.
 
+## mc tidy
+
+`mc tidy [--apply] [--json] [--days <n>]` (`src/mc/tidy.js`, the verb in
+`src/mc/commands/tidy.js`; `mc work tidy` is the same command) removes what
+the chores above leave behind, per root of
+[Ruling 39](../project/mc/rulings.md) § 39. It exists because of 2026-09-26: the
+data volume had 2.6 GB free, and a shell loop meant to remove orphaned
+transcripts read a `find` that errored as "nothing here" and deleted nearly all
+of `~/.claude/projects`, every `memory/` with it. So most of it is about what
+stays.
+
+| Root | What lives there | What tidy may remove |
+|---|---|---|
+| `~/mc/plan/<programme>/` | a planning area: `memoro/`, `memoro-cli/`, extra worktrees | an extra worktree whose content is on main (X) |
+| `~/mc/step/<project>/` | a step area the runner made | nothing (S) |
+| `~/mc/work/<name>/` | a work area `mc work` made | nothing (W) |
+| `~/mc/runner/` (state) | `projects/`, `log/`, `log/closed/`, `scratch/` | an archived project's files (P) |
+| `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (P, G, L) |
+
+**P — an archived project.** A register entry under `runner/projects/` whose
+repository's origin/main has its row in `project_log.md`, no plan directory,
+and its closeout (`docs/project/<programme>/closeout/<project>.json`), and
+which has no area on this machine — neither `step/<project>` nor a legacy
+`~/mc/<project>`. Its session logs (`<project>-<stamp>.{jsonl,json,json.err}`,
+gzipped or not), `log/closed/<project>/`, its scratch directories, the
+transcripts of its step area, and last its register file, so a run cut short
+finds the project again. Names are matched exactly: `ui-faults` never takes
+`ui-faults-2`'s files. A repository git cannot answer for stops every purge
+that run.
+
+**G — planning transcripts.** Per `~/.claude/projects/<dir>`, the transcripts
+whose cwd is in `plan/<programme>`: the newest stays at any age, and so does
+anything touched within `PROGRAMME_TRANSCRIPT_KEEP_MS` (72 hours). Martin,
+2026-10-11: "alltid behålla den aktuella; gamla kan städas efter 72h". One
+transcript in that directory that cannot be read keeps the whole group: it may
+be the newest.
+
+**X — a planning area's extra worktree.** Anything under `plan/<programme>/`
+but `memoro/` and `memoro-cli/`, judged by `releaseVerdict` as `mc work
+release` judges it: no process stands in it, nothing uncommitted, and its
+content on main (or its tip a merged pull request's head). Removed with
+`git worktree remove` without `--force`, then `branch -D`. One `lsof` answers
+for all of them; an lsof that fails keeps every one.
+
+**W — work areas** are listed with the rule `work-area` and never removed:
+only `mc work release` or `mc work discard` removes one. **S — step areas**
+are the runner's, closed by `closeWorkareas` when the project is done.
+
+**L — loose transcripts and leftovers.** What P and G leave, by T1–T5, first
+match wins: no cwd, kept; touched within `--days`, kept; its cwd gone,
+removed; its cwd in an area, removed unless it is that area's latest; outside
+the work root, kept. A `<uuid>/` with no transcript beside it and nothing
+inside touched within `--days` is a leftover and goes.
+
+**R — foreign worktrees.** Worktrees git knows of outside the work root
+(`/private/tmp/claude-*`, `memoro/.claude/worktrees/agent-*`) are listed with
+the rule `foreign-worktree` and never removed. After an apply,
+`git worktree prune` runs on both repositories.
+
+### The list file
+
+Every run, the dry run too, writes `~/mc/runner/tidy/<yyyymmddThhmmssZ>.json`
+with `writeJsonAtomic` before anything is removed:
+`{ at, rules_version, days, targets: [{ path, kind, rule, why, bytes }], kept: [{ path, rule, why }] }`.
+`--apply` reads that file back and acts on its `targets` only. Each one is
+asked again: its realpath must lie under the root its kind allows, in the
+shape that kind has, and its rule must still say so on facts read now. A
+target that fails either, or whose check throws, is kept with the reason.
+What happened is appended to the same file as `applied: [{ path, ok, why }]`,
+and logged as `tidy` with counts. The newest 30 list files are kept.
+
+### When it runs
+
+`mc tidy` by hand prints the counts and bytes per rule, the first ten targets,
+every keep worth reading, and the list file; `--json` prints the list. The
+runner runs `mc tidy --apply` once a day by its own `runs.tsv` row (kind
+`tidy`, note `freed=<bytes>,items=<n>,kept=<k>`). It also runs it in the first
+chore pass after a lane skipped for disk, at most once per hour
+(`TIDY_DISK_MIN_INTERVAL_MS`, remembered in memory). In the same pass
+`runner.log` moves to `runner.log.1` once it passes 32 MiB
+(`RUNNER_LOG_MAX_BYTES`).
+
+### Never touched
+
+A work area; a planning area's `memoro/` and `memoro-cli/`; a worktree with
+uncommitted changes or commits main lacks; any `memory/` under
+`~/.claude/projects`; `runs.tsv`; `~/.memoro/mc/gate-rounds.jsonl`;
+`project_log.md`; anything outside the roots above. No `git worktree move`
+and no `--force`. Deletion goes through node `fs`, with no shell, no `find`
+and no globbing.
+
 ## How it is tested
 
 `tests/mc/archive-plan.test.js` and `tests/mc/close-workarea.test.js` cover
@@ -239,3 +330,7 @@ last project is seen to go with it: `git rm -r` and `git worktree remove` are
 the two calls whose behaviour a fake would only assert back at itself.
 `tests/mc/brief-collect.test.js` covers the two sections that raise the
 intake files, including the absent-versus-empty answer.
+`tests/mc/tidy.test.js` runs `mc tidy` over a temp home with git faked: each
+rule's targets and keeps, the list written before the first removal, a rule
+that flips between the list and the apply, and a hand-edited list that names
+a path outside the roots.

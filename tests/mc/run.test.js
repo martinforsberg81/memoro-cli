@@ -4,10 +4,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, SCRATCH_KEEP_MS, createRunner, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, SCRATCH_KEEP_MS, TIDY_DISK_MIN_INTERVAL_MS, createRunner, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { rotateIfLarge } from '../../src/mc/logger.js';
 import { checkpoint } from '../../src/mc/checkpoint.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
-import { RUN_REFUSALS, WORKAREA_BLOCKS, initSource } from '../../src/mc/run-plan.js';
+import { RUN_REFUSALS, TIDY_KIND, WORKAREA_BLOCKS, initSource } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { unauthorisedChanges } from '../../src/mc/plan-schema.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
@@ -2569,6 +2570,77 @@ test('the deps are read once a day, every repository, before the nightly tick', 
   recent.deps.readDeps = async () => { throw new Error('read 2 h after the last'); };
   await createRunner({ deps: recent.deps }).chores();
   assert.equal(runRows(recent.files).filter((r) => r.kind === 'deps').length, 1, 'no second row');
+});
+
+/* ------------------------------------------------------------- mc tidy */
+
+/**
+ * `mc tidy --apply` once a day by its own `TIDY_KIND` row, and after a lane
+ * skipped for disk at most once an hour. A fixture without `tidy` runs none.
+ */
+const tidyRowAt = (ts) => `${ts}\t${TIDY_KIND}\t${TIDY_KIND}\t0\t3\t-\t-\t-\t-\t-\t-\t-\tfreed=0,items=0,kept=0\n`;
+const tidied = (outcome) => async () => ({ outcome });
+
+test('tidy runs once a day by its own row, and notes what it freed', async () => {
+  const f = fixture({ now: '2026-08-29T10:00:00Z', runs: DEPS_HEADER + tidyRowAt('2026-08-28T09:00:00Z') });
+  let calls = 0;
+  f.deps.tidy = async () => { calls += 1; return tidied({ freed: 2.5e9, removed: 40, kept: 1 })(); };
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.equal(calls, 1, 'the second pass finds today\'s row');
+  const rows = runRows(f.files).filter((r) => r.kind === TIDY_KIND);
+  assert.equal(rows.length, 2, 'the old row and the new one');
+  assert.deepEqual({ exit: rows[1].exit, note: rows[1].note }, { exit: '0', note: 'freed=2500000000,items=40,kept=1' });
+  assert.match(f.files['/w/runner/log/runner.log'], /tidy \(daily\): freed 2\.50 GB in 40 items, kept 1 on re-check/u);
+});
+
+test('a lane skipped for disk runs tidy in the next chore pass, at most once an hour', async () => {
+  let clock = Date.parse('2026-08-29T10:00:00Z');
+  const f = fixture({ plans: { memoro: { alpha: ready } }, runs: DEPS_HEADER + tidyRowAt('2026-08-29T09:00:00Z') });
+  f.deps.now = () => new Date(clock);
+  f.deps.freeBytes = () => DISK_MIN_BYTES - 1;
+  let calls = 0;
+  f.deps.tidy = async () => { calls += 1; return tidied({ freed: 1e9, removed: 3, kept: 0 })(); };
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  assert.equal(calls, 0, 'today\'s row stands and no lane has skipped');
+  assert.equal((await runner.pass()).waited, 'skipped:disk');
+  await runner.chores();
+  assert.equal(calls, 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /tidy \(a lane skipped for disk\): freed 1\.00 GB in 3 items/u);
+  await runner.chores();
+  assert.equal(calls, 1, 'one skip, one tidy');
+  clock += TIDY_DISK_MIN_INTERVAL_MS - 60_000;
+  await runner.pass();
+  await runner.chores();
+  assert.equal(calls, 1, 'within the hour a second skip waits');
+  clock += 60_000;
+  await runner.chores();
+  assert.equal(calls, 2, 'the skip within the hour is acted on once the hour is up');
+});
+
+test('runner.log is rotated once per chore pass, at RUNNER_LOG_MAX_BYTES', async () => {
+  const f = fixture({});
+  const asked = [];
+  f.deps.rotate = (path, maxBytes) => { asked.push({ path, maxBytes }); return false; };
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  assert.deepEqual(asked, [{ path: '/w/runner/log/runner.log', maxBytes: RUNNER_LOG_MAX_BYTES }]);
+  assert.equal(RUNNER_LOG_MAX_BYTES, 32 * 1024 * 1024);
+});
+
+test('rotateIfLarge moves a file over the limit to .1 and leaves a smaller one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-rotate-'));
+  try {
+    const path = join(dir, 'runner.log');
+    writeFileSync(path, 'x'.repeat(10));
+    assert.equal(rotateIfLarge(path, 11), false);
+    assert.equal(readFileSync(path, 'utf8').length, 10);
+    assert.equal(rotateIfLarge(path, 10), true);
+    assert.equal(readFileSync(`${path}.1`, 'utf8').length, 10);
+    assert.equal(rotateIfLarge(path, 10), false, 'nothing there is nothing to rotate');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a repository whose deps cannot be read is named in the row, and the others are read', async () => {

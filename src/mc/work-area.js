@@ -441,6 +441,21 @@ export function releaseVerdict(worktree, { inUse = null, pullAtTip = () => null 
   return { remove: true, what: 'worktree and branch', landed_by: null };
 }
 
+/**
+ * Hand one inspected worktree back to its repository and delete its branch:
+ * `git worktree remove` without `--force`, so git itself refuses a worktree
+ * that changed since it was inspected. False when the remove failed.
+ */
+export function releaseWorktree(worktree) {
+  const common = worktree.git_common_dir;
+  const removed = run(['--git-dir', common, 'worktree', 'remove', '--', worktree.path]);
+  // -D, not -d: a squash-merged branch is never ancestor-merged, so git's
+  // own safety check would refuse the exact branches this exists to
+  // clean. The content check above is the safety.
+  if (removed && worktree.branch) run(['--git-dir', common, 'branch', '-D', worktree.branch]);
+  return removed;
+}
+
 export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = null } = {}) {
   const area = inspectWorkArea(name, env);
   const removed = [];
@@ -460,14 +475,7 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = 
       removed.push({ ...worktree, what: 'directory' });
       continue;
     }
-    if (!dryRun) {
-      const common = worktree.git_common_dir;
-      run(['--git-dir', common, 'worktree', 'remove', '--', worktree.path]);
-      // -D, not -d: a squash-merged branch is never ancestor-merged, so git's
-      // own safety check would refuse the exact branches this exists to
-      // clean. The content check above is the safety.
-      if (worktree.branch) run(['--git-dir', common, 'branch', '-D', worktree.branch]);
-    }
+    if (!dryRun) releaseWorktree(worktree);
     removed.push({ ...worktree, what: 'worktree and branch', ...(verdict.landed_by ? { landed_by: verdict.landed_by } : {}) });
   }
   // A directory removed outside mc leaves git holding a registration for it.
