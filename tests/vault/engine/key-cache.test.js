@@ -23,6 +23,7 @@ import {
   VAULT_CACHE_ACCOUNT,
   TTL_MS,
 } from '../../../src/vault/engine/key-cache.js';
+import { macSet } from '../../../src/lib/keychain.js';
 
 function makeMemDeps({ initialNow = 1_000_000 } = {}) {
   const store = new Map();
@@ -95,6 +96,48 @@ describe('cacheVaultKey + readCachedVaultKey round-trip', () => {
   });
 });
 
+describe('through the real macSet guard (#843)', () => {
+  it('a durable entry with authHash and deviceId is written and reads back', async () => {
+    const lines = [];
+    const exec = async (_cmd, _args, stdinData) => { lines.push(stdinData); return { stdout: '', stderr: '' }; };
+    const deps = {
+      async setSecret(account, value) { return macSet(account, value, { exec }); },
+      async getSecret() {
+        const m = lines.length ? /-w "([^"]*)"/.exec(lines[lines.length - 1]) : null;
+        return m ? m[1] : null;
+      },
+      async deleteSecret() {},
+      now: () => 1_000_000,
+    };
+    const bytes = makeKeyBytes(11);
+    const ok = await cacheVaultKey(bytes, { durable: true, authHash: 'ah_123', deviceId: 'dev_456', deps });
+    assert.equal(ok, true, 'macSet must accept the cache value');
+    assert.equal(lines.length, 1);
+    const got = await readCachedVaultKey({ deps });
+    assert.ok(got, 'should hit cache');
+    assert.deepEqual([...got.vaultKeyBytes], [...bytes]);
+    assert.equal(got.durable, true);
+    assert.equal(got.authHash, 'ah_123');
+    assert.equal(got.deviceId, 'dev_456');
+  });
+});
+
+describe('pre-2026-10-10 plain-JSON entry', () => {
+  it('reads as present and is not deleted', async () => {
+    const { deps, inspectStore } = makeMemDeps();
+    const bytes = makeKeyBytes(12);
+    const vaultKeyB64 = Buffer.from(bytes).toString('base64');
+    await deps.setSecret(VAULT_CACHE_ACCOUNT, JSON.stringify({ vaultKeyB64, authHash: 'ah_old', expiresAt: null }));
+    const got = await readCachedVaultKey({ deps });
+    assert.ok(got, 'old shape must still read');
+    assert.deepEqual([...got.vaultKeyBytes], [...bytes]);
+    assert.equal(got.authHash, 'ah_old');
+    assert.equal(got.durable, true);
+    assert.equal((await inspectCachedVaultKey({ deps })).present, true);
+    assert.equal(inspectStore().size, 1, 'old entry must not be deleted');
+  });
+});
+
 describe('expiry', () => {
   it('returns null and clears when past expiresAt', async () => {
     const { deps, advance, inspectStore } = makeMemDeps();
@@ -128,6 +171,21 @@ describe('malformed entry handling', () => {
     const got = await readCachedVaultKey({ deps });
     assert.equal(got, null);
   });
+
+  for (const [label, value] of [
+    ['non-base64', 'b64:%%%'],
+    ['base64 of non-JSON', `b64:${Buffer.from('not json', 'utf8').toString('base64')}`],
+  ]) {
+    it(`b64: entry with ${label} reads as null, is invalid-json, and is deleted`, async () => {
+      const { deps, inspectStore } = makeMemDeps();
+      await deps.setSecret(VAULT_CACHE_ACCOUNT, value);
+      const info = await inspectCachedVaultKey({ deps });
+      assert.equal(info.present, false);
+      assert.equal(info.reason, 'invalid-json');
+      assert.equal(await readCachedVaultKey({ deps }), null);
+      assert.equal(inspectStore().size, 0, 'corrupt entry must be deleted');
+    });
+  }
 
   it('missing fields returns null', async () => {
     const store = new Map();
