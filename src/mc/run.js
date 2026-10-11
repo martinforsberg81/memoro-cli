@@ -149,7 +149,7 @@ import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
 import { CREDITS_RETRY_MS, billingFor, patchBillingState, planWindows, readBillingMode, readBillingState } from './billing.js';
 import { readStepCreditKey } from '../vault/engine/step-credit-key.js';
-import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
+import { instructionsFor, readCanonRole, roleRecord, roleSourceOf, withWorkers } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import { checkpoint } from './checkpoint.js';
@@ -2136,8 +2136,10 @@ export function createRunner({
     const prompt = resuming
       ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
       : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, retry, interrupted, stacked, now });
-    const instructions = instructionsFor(launch.id, role.overlay);
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
+    // Haiku workers (`runner.subagents: on`): the role is told how to use
+    // them through the same include the role files use for a shared passage.
+    const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt, profileArgs });
 
     // Who pays for a launch, chosen at each launch and never during one
     // (step-credits, ruling 38): `billingFor` over the mode and the plan's
@@ -2211,7 +2213,7 @@ export function createRunner({
       // `drainLine`): a lane waited on is named by project and step.
       name, step: choice.index == null ? null : choice.index + 1,
       kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
-      effort: settings.effort, advisor: settings.advisor, billing: picked.billing,
+      effort: settings.effort, advisor: settings.advisor, ...(settings.subagents ? { subagents: true } : {}), billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
@@ -2224,6 +2226,7 @@ export function createRunner({
         source: roleSourceOf(role) || 'canon',
         overlay: role.overlay,
         instructions,
+        workers: settings.subagents,
       }),
     };
     writeJson(currentPath, current);
@@ -2263,7 +2266,7 @@ export function createRunner({
       const { billing } = picked;
       const running = deps.session({
         bin: launch.spec.bin,
-        args: resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt: text, profileArgs, resume }) : args,
+        args: resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt: text, profileArgs, resume }) : args,
         cwd: worktree,
         // The stream reaches disk as it arrives; a resume appends to the same
         // file, which is the joined stream the logs keep.

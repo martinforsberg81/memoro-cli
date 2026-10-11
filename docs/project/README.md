@@ -37,12 +37,14 @@ the door.
   for anything with a surface, the measurement *in the running app*. "Done" is
   never the session's judgement of its own work.
 - `documents` — `{ label, path }`.
-- `runner` — optional: `tool`, `model`, `effort`, `advisor`, `check_in_minutes`,
-  `stall_minutes`.
+- `runner` — optional: `tool`, `model`, `effort`, `advisor`, `subagents`,
+  `check_in_minutes`, `stall_minutes`.
   Only what the runner actually reads; there is no field here that nothing
   enforces. `effort` is one of `low`, `medium`, `high`, `xhigh`, `max`;
   `advisor` is a model name, or `off` for none, and an advisor that is the
-  model itself is none. What a key leaves unsaid is the runner's default for
+  model itself is none. `subagents` is `on` or `off` (the default): on, a
+  claude step may hand reading and exactly specified edits to Haiku workers
+  (`canon/roles/_step-workers.md`). What a key leaves unsaid is the runner's default for
   the session's kind — a step runs on `opus` at `medium` with no advisor,
   and a plan session (`mc plan`) on `opus` (ruling 18, [`docs/technical/mc-run.md`](../technical/mc-run.md)
   § *The session*).
@@ -79,7 +81,7 @@ carries:
   says why. A transition is `mc step <status>`, never a pull request. The
   fields stay in the file for now so a plan written today still reads; they go
   from the schema when the last reader of them does.
-- `runner` — optional: `model`, `effort`, `advisor`, for a step that needs
+- `runner` — optional: `model`, `effort`, `advisor`, `subagents`, for a step that needs
   something other than the plan's. Each key overrides the plan's `runner` on
   its own, and a step that names only its effort keeps the plan's model.
   `tool`, `check_in_minutes` and `stall_minutes` are the plan's alone and
