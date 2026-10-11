@@ -307,6 +307,7 @@ export function nowBlock({
       model: current.model || null,
       effort: current.effort || null,
       advisor: current.advisor || null,
+      billing: current.billing || null,
       worktree: current.worktree || null,
       pid: current.pid ?? null,
       started: current.started || null,

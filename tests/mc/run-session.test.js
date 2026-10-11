@@ -75,6 +75,15 @@ describe('streamSession', () => {
     assert.deepEqual(texts(), ['do the step']);
   });
 
+  it('takes the names in unsetEnv out of the environment the child gets, and nothing else', () => {
+    const env = { ANTHROPIC_API_KEY: 'k', ANTHROPIC_AUTH_TOKEN: 't', PATH: '/bin' };
+    const { spawned } = start({ env, unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] });
+    assert.deepEqual(spawned[0][2].env, { PATH: '/bin' });
+    assert.equal(env.ANTHROPIC_API_KEY, 'k', 'the caller\'s object is not touched');
+    const kept = start({ env });
+    assert.equal(kept.spawned[0][2].env, env);
+  });
+
   it('checks in at the interval with the elapsed minutes and the count, and again at twice it', () => {
     const { child, checkIns, texts } = start();
     run(child, 59, 5);

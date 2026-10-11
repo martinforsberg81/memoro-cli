@@ -221,7 +221,7 @@ const MARK = { done: '✓', ready: '▸', running: '●', failed: '✗', blocked
 function interruptedLine(record, nowMs) {
   const id = record.session_id ? String(record.session_id).slice(0, 8) : '?';
   const tokens = record.context_tokens == null ? '?' : String(record.context_tokens);
-  return `interrupted ${record.at || '?'} · ${record.tool || '?'} session ${id} · last activity ${ago(record.last_activity, nowMs)} · ${tokens} tokens`;
+  return `interrupted ${record.at || '?'} · ${record.tool || '?'} session ${id}${record.billing === 'credits' ? ' on credits' : ''} · last activity ${ago(record.last_activity, nowMs)} · ${tokens} tokens`;
 }
 
 function entryLines(entry, only = null, nowMs = Date.now(), context = null) {
@@ -235,6 +235,7 @@ function entryLines(entry, only = null, nowMs = Date.now(), context = null) {
       bits.push(context && waitsByItself(step) ? describeWait(step, context) : `on ${step.blocked_by.kind} ${step.blocked_by.name}`);
     }
     if (step.status === 'running' && step.session?.pid) bits.push(`pid ${step.session.pid} since ${step.session.started || '?'}`);
+    if (step.status === 'running' && step.session?.billing === 'credits') bits.push('on credits');
     if (step.status === 'ready' && step.interrupted) bits.push(interruptedLine(step.interrupted, nowMs));
     if (step.attempts) bits.push(`${step.attempts} merge attempt${step.attempts === 1 ? '' : 's'}`);
     lines.push(`  ${MARK[step.status] || '·'} ${String(index + 1).padStart(2)}  ${step.status.padEnd(8)} ${bits.join(' · ')}`);

@@ -247,6 +247,28 @@ describe('RUNNER', () => {
     assert.match(strip(rowWith(lines, 'RUNNER')), /RUNNER {2}2 in flight · 3 lanes/u);
   });
 
+  // step-credits: a lane on the API credit says so beside tool and model; one
+  // on the plan, or a lane file from before billing was recorded, says nothing.
+  it('shows credits beside tool and model for a lane on credits, and nothing for plan', () => {
+    const lane = (billing) => ({
+      name: 'docx-editor', kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'claude', model: 'sonnet',
+      check_in_minutes: 60, check_ins: 0, started: '2026-08-29T11:50:00Z', pid: 4242, worktree: '/w/docx-editor/memoro-cli',
+      ...(billing === undefined ? {} : { billing }),
+    });
+    const rowFor = (billing) => {
+      const runner = runnerSection({ runner: RUNNER, currents: [lane(billing)], repos: ['memoro-cli'], now: NOW, alive: live });
+      return { runner, row: strip(rowWith(paintedPage(pageData({ runner })), 'docx-editor')) };
+    };
+    const credits = rowFor('credits');
+    assert.equal(credits.runner.steps[0].billing, 'credits');
+    assert.match(credits.row, /claude sonnet credits · 0 check-ins$/u);
+    for (const billing of ['plan', undefined]) {
+      const plain = rowFor(billing);
+      assert.equal(plain.runner.steps[0].billing, billing ?? null);
+      assert.match(plain.row, /claude sonnet · 0 check-ins$/u, String(billing));
+    }
+  });
+
   /**
    * The pid on a lane row was the runner's own: `current-memoro.json` and
    * `current-memoro-cli.json` both carry the pid of the one process that drives

@@ -55,6 +55,23 @@ test('mc step <project> prints an interrupted ready step\'s record', async () =>
   assert.match(f.out.join(''), /ready +interrupted 2026-09-18T09:30:00Z · claude session c1a2b3c4 · last activity 40m ago · 5320 tokens/u);
 });
 
+test('mc step <project> says a running step and an interrupted one were on credits', async () => {
+  const f = fixture();
+  f.deps.write(registerPath(ROOT, 'p'), {
+    project: 'p', repo: 'memoro',
+    steps: [
+      { key: 'A', status: 'running', session: { pid: 4321, started: '2026-09-18T09:00:00Z', tool: 'claude', billing: 'credits' } },
+      { key: 'B', status: 'ready', interrupted: { at: '2026-09-18T09:30:00Z', session_id: 'c1a2b3c4-dead', tool: 'claude', billing: 'credits', last_activity: '2026-09-18T09:20:00Z', context_tokens: 5320, count: 1 } },
+      { key: 'C', status: 'running', session: { pid: 4322, started: '2026-09-18T09:00:00Z', tool: 'claude', billing: 'plan' } },
+    ],
+  });
+  assert.equal(await run(['p'], f.deps), 0);
+  const out = f.out.join('');
+  assert.match(out, /running +pid 4321 since 2026-09-18T09:00:00Z · on credits/u);
+  assert.match(out, /claude session c1a2b3c4 on credits · last activity/u);
+  assert.match(out, /running +pid 4322 since 2026-09-18T09:00:00Z\n/u);
+});
+
 test('note appends a paragraph to the step and moves nothing else', async () => {
   const f = fixture();
   assert.equal(await run(['note', '14 admissions still to write; the list is in the pull request'], f.deps), 0);

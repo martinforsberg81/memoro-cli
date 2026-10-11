@@ -1328,6 +1328,24 @@ function readCodexEvents(stdout) {
 }
 
 /**
+ * What claude says it is paid by: `apiKeySource` off the first
+ * `{"type":"system","subtype":"init"}` line of a stream-json run, or null when
+ * there is none. `ANTHROPIC_API_KEY` is the environment's key — measured
+ * 2026-10-11 with claude 2.1.296, which also warns that the key takes
+ * precedence over the claude.ai login.
+ */
+export function initSource(stdout) {
+  for (const line of String(stdout || '').split('\n')) {
+    if (!line.includes('"init"')) continue;
+    let event = null;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type !== 'system' || event.subtype !== 'init') continue;
+    return typeof event.apiKeySource === 'string' && event.apiKeySource ? event.apiKeySource : null;
+  }
+  return null;
+}
+
+/**
  * The last `rate_limit_event` in a stream-json run that was a refusal:
  * `{ status, resetsAt }` with `resetsAt` a Date (or null), or null when every
  * event said `allowed` (or there was none). claude writes one of these on
