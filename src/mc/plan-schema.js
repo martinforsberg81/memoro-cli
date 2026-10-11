@@ -112,13 +112,16 @@ export const PLAN_FROZEN_FIELDS = Object.freeze(['goal', 'contract', 'out_of_sco
 
 const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
 const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
-const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'check_in_minutes', 'stall_minutes']);
+const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'subagents', 'check_in_minutes', 'stall_minutes']);
 /**
  * What a step may say for itself in its own `runner`: which model does the
- * work, at what effort, advised by what. The tool and the interval stay the
- * plan's — a step on another tool is not planned (step-cost, ruling 18).
+ * work, at what effort, advised by what, with Haiku workers or without. The
+ * tool and the interval stay the plan's — a step on another tool is not
+ * planned (step-cost, ruling 18).
  */
-const STEP_RUNNER_KEYS = Object.freeze(['model', 'effort', 'advisor']);
+const STEP_RUNNER_KEYS = Object.freeze(['model', 'effort', 'advisor', 'subagents']);
+/** `runner.subagents`: whether a claude step may hand work to Haiku workers. */
+export const SUBAGENT_SETTINGS = Object.freeze(['on', 'off']);
 /** claude's `--effort` levels, as `claude --help` lists them (2.1.268). */
 export const EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const BLOCKER_KEYS = Object.freeze(['kind', 'name', 'at', 'step', 'hours']);
@@ -198,6 +201,9 @@ function validateRunner(runner, problems, { at = 'runner', keys = RUNNER_KEYS } 
   // `off` is a name by MODEL_RE too; it is spelled out so the message says it.
   if (runner.advisor !== undefined && runner.advisor !== null && !MODEL_RE.test(String(runner.advisor))) {
     problems.push(`${at}.advisor: a model name, or off`);
+  }
+  if (runner.subagents !== undefined && runner.subagents !== null && !SUBAGENT_SETTINGS.includes(runner.subagents)) {
+    problems.push(`${at}.subagents: on or off`);
   }
   // The two intervals a session is watched with (ruling 18): how often it is
   // asked about its step, and how long it may say nothing before it is killed.

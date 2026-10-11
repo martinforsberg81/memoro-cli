@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { runMcCli } from '../_helpers/mc-cli.js';
+import { instructionsFor, readRole, textDigest, withWorkers } from '../../../src/mc/roles.js';
 
 const WORKER_MD = `---
 name: worker
@@ -127,6 +128,19 @@ describe('mc roles check', () => {
     assert.equal(payload.drifting, 0);
     assert.equal(payload.sessions.length, 1);
     assert.equal(payload.sessions[0].verdict, 'ok');
+  });
+
+  it('holds a session with Haiku workers against the text with workers', () => {
+    const { env } = fixtureWithWork();
+    const today = checked(env, ['worker']).role;
+    const overlay = readRole('worker', env).overlay;
+    registered(env, {
+      name: 'worker', source: 'catalogue', workers: true, text_digest: today.text_digest,
+      digest: textDigest(instructionsFor('claude', withWorkers(overlay, true))),
+    });
+    const payload = checked(env, ['worker']);
+    assert.equal(payload.sessions[0].verdict, 'ok');
+    assert.notEqual(today.digest, textDigest(instructionsFor('claude', withWorkers(overlay, true))));
   });
 
   it('names the session, by pid, when the role file has moved under it', () => {

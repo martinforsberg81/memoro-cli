@@ -910,11 +910,40 @@ function stackedPreamble(stacked) {
  * Bash (2 866 such calls against 466 native reads, 2026-09-15..25).
  * `--strict-mcp-config` keeps a user-level MCP server, with its own tool
  * definitions, out of the lane. Whatever any repository's files say, the
- * session has these tools and no others.
+ * session has these tools and no others — except a step whose plan says
+ * `subagents: on`, which also gets `Agent` and mc's own `STEP_WORKER_AGENTS`
+ * and nothing a repository defines.
  */
 export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
 
-export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null }) {
+/**
+ * The one subagent a step with `runner.subagents: on` may call, passed whole
+ * on `--agents` so no repository's `.claude/agents/` decides what it is. The
+ * model is named outright — a subagent otherwise inherits the session's, and
+ * the point is that it does not. Its brief comes from the step session
+ * (`canon/roles/_step-workers.md` tells it how to write one); it answers once
+ * and only that answer enters the step's context — its own events reach mc's
+ * stream marked with `parent_tool_use_id`, and `sessionStanding` and
+ * `sessionSpoke` read past them. A trial (Martin, 2026-10-11: two steps with
+ * it on, then read them), so off unless a plan or step says otherwise.
+ */
+export const STEP_WORKER_AGENTS = Object.freeze({
+  'step-worker': Object.freeze({
+    description: 'Haiku worker for reading, searching and exactly specified edits. Answers once, when done.',
+    model: 'claude-haiku-5-5',
+    effort: 'high',
+    tools: ['Bash', 'Read', 'Grep', 'Glob', 'Edit', 'Write'],
+    prompt: [
+      'You are a worker for a step session in mc, headless, in its workarea.',
+      'Do exactly the brief: read, search, or make the edits it names, and nothing else.',
+      'Never edit a test or the plan file, never run `mc`, `git commit`, `git push` or `gh`.',
+      'Answer once, at the end: what you found or changed, with file:line, and what you could not do.',
+      'Say when you are unsure; never guess.',
+    ].join('\n'),
+  }),
+});
+
+export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, subagents = false, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const instr = profileArgs(toolId, instructions);
   // `codex exec resume` takes no `--sandbox` (codex-cli 0.151.0): the same
@@ -929,7 +958,8 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   // `--resume` keeps the session's id and its whole history; the message on
   // stdin is the next turn of that conversation.
   const resumed = resume ? ['--resume', resume] : [];
-  return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, '--tools', CLAUDE_TOOLS, '--strict-mcp-config', ...instr, ...io];
+  const tools = subagents ? ['--tools', `${CLAUDE_TOOLS},Agent`, '--agents', JSON.stringify(STEP_WORKER_AGENTS)] : ['--tools', CLAUDE_TOOLS];
+  return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...tools, '--strict-mcp-config', ...instr, ...io];
 }
 
 /** One stream-json user message, as `deps.session` writes it on claude's stdin. */
@@ -1027,7 +1057,7 @@ export function sessionSpoke({ toolId, stdout }) {
     if (!event || typeof event !== 'object') continue;
     if (toolId === 'codex') {
       if (event.type === 'item.completed' || event.type === 'turn.completed') return true;
-    } else if (event.type === 'assistant' && event.message?.model !== '<synthetic>') {
+    } else if (event.type === 'assistant' && event.message?.model !== '<synthetic>' && !event.parent_tool_use_id) {
       return true;
     }
   }
@@ -1181,7 +1211,9 @@ export function sessionStanding({ toolId, stdout }) {
       continue;
     }
     if (typeof event.session_id === 'string' && event.session_id) out.session_id = event.session_id;
-    if (event.type !== 'assistant' || event.message?.model === '<synthetic>') continue;
+    // A subagent's events carry the tool call they answer; the session's own
+    // context and words are the ones without.
+    if (event.type !== 'assistant' || event.message?.model === '<synthetic>' || event.parent_tool_use_id) continue;
     const usage = event.message?.usage;
     if (usage) {
       out.context_tokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
@@ -1500,6 +1532,9 @@ export function tsvHeader() {
  * of nothing is `[]`, and the tool's own default is a better answer than
  * mc's guess at what that tool calls its best model. Effort and advisor are
  * claude's flags, so another tool gets neither, named or not.
+ *
+ * `subagents` resolves step over plan too, and is `on` only where it says
+ * so: off by default, and off on any tool but claude (`STEP_WORKER_AGENTS`).
  */
 export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'step' } = {}) {
   const plan = planRunner || {};
@@ -1517,6 +1552,7 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
     model,
     effort: claude && EFFORT_LEVELS.includes(effort) ? effort : null,
     advisor: claude && advisor !== 'off' && advisor !== model ? advisor : null,
+    subagents: claude && named('subagents') === 'on',
     checkInMinutes: minutes(plan.check_in_minutes, DEFAULT_CHECK_IN_MINUTES),
     stallMinutes: minutes(plan.stall_minutes, DEFAULT_STALL_MINUTES),
   };
@@ -1534,6 +1570,7 @@ export function describeSettings(shortName, settings) {
     `${shortName} ${settings.model || 'own default model'}`,
     settings.effort ? `effort ${settings.effort}` : null,
     settings.advisor ? `advisor ${settings.advisor}` : null,
+    settings.subagents ? 'haiku workers' : null,
   ].filter(Boolean).join(' · ');
 }
 

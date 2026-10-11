@@ -251,6 +251,17 @@ export function areaRole(areaPath, env = process.env) {
  * expanded — see `expandRoleIncludes`. It is the same door because a second
  * one is how a kind of session quietly stops being told something.
  */
+/**
+ * A step role with Haiku workers (`runner.subagents: on`): the overlay with
+ * `_step-workers.md` included after it, through the same `@include` a role
+ * file uses for a shared passage. The launch and `mc roles check` both
+ * assemble it here, so a worker session's digest is compared with the text it
+ * was actually given.
+ */
+export function withWorkers(overlay, workers) {
+  return workers && overlay ? `${overlay}\n\n@include _step-workers.md` : overlay;
+}
+
 export function instructionsFor(toolId, overlay) {
   const shared = overlay ? sharedRoleText() : null;
   const body = expandRoleIncludes(overlay);
@@ -299,13 +310,14 @@ export function roleSourceOf(role) {
  * session is running is not knowable from here, and a digest of today's file
  * would be a claim about it that nobody checked.
  */
-export function roleRecord({ name = null, source = null, overlay = null, instructions = null } = {}) {
+export function roleRecord({ name = null, source = null, overlay = null, instructions = null, workers = false } = {}) {
   if (!name) return null;
   return {
     name,
     source: source || 'canon',
     digest: textDigest(instructions),
     text_digest: textDigest(expandRoleIncludes(overlay)),
+    ...(workers ? { workers: true } : {}),
   };
 }
 
