@@ -763,8 +763,11 @@ The three numbers are constants with their reasons beside them, not settings:
 - **`MEND_AT_ONCE`** = 1 — an 8 GB M1 already runs a memoro suite of seven
   lanes; a second session with its own suite beside it makes the round's own
   timings lie. Further mends wait in memory, in answer order (`mendLine`).
-- **`MEND_MINUTES`** = 20 — rounds took 3-15 minutes on 2026-10-09/10, and a
-  mend that needs longer than that is the step's work, not a mend.
+- **`MEND_MINUTES`** = 120 — a ceiling for a hung session, not a budget. At
+  20 the #13409 mend (2026-10-10) was cut off mid re-record of the SQL
+  baselines and the step went red as before: the cut cost the session and
+  bought nothing. Step sessions have no wall clock (ruling 18); a mend's
+  output is buffered, so it cannot be judged stalled as they are.
 
 ## The full run nobody asks for
 

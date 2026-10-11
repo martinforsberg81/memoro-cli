@@ -45,10 +45,14 @@ export const MEND_STOPS = Object.freeze([
 export const MEND_AT_ONCE = 1;
 
 /**
- * A mend's wall clock. Rounds were 3-15 min (2026-10-09/10), and a mend that
- * takes longer than a step session is the step's work, not a mend.
+ * A mend's wall clock: a ceiling for a hung session, not a budget. At 20 the
+ * #13409 mend (2026-10-10) was cut off mid re-record of the SQL baselines
+ * while other gates ran, and the step went red as before; the cut cost the
+ * session and bought nothing. Step sessions have no wall clock at all
+ * (ruling 18) and ran p90 47.6 min; a mend's output is buffered, so it cannot
+ * be judged stalled the way they are, and this stands in for that.
  */
-export const MEND_MINUTES = 20;
+export const MEND_MINUTES = 120;
 
 export const MEND_ROLE = 'mend';
 
