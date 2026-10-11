@@ -25,7 +25,7 @@ import { writeSnapshot } from '../../src/mc/repo-snapshot.js';
 
 /** A shell standing in one of the work areas — that is who holds a lease. */
 function inArea(fx, name) {
-  const path = join(fx.workRoot, name);
+  const path = join(fx.workRoot, 'work', name);
   mkdirSync(path, { recursive: true });
   return { cwd: path };
 }

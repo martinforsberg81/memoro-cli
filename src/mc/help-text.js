@@ -57,7 +57,7 @@ THE PAGE
   mc step <project>                Where each step stands, from the register
   mc step failed|blocked|ready|done  Move one step: a session gives up, a
                                     person starts it again
-  mc work <name>                   Open that workarea
+  mc work <name>                   Open that workarea, ~/mc/work/<name>
 
 IN FULL
   mc status <name>                 One project: its PLAN.md frontmatter and
@@ -67,7 +67,10 @@ IN FULL
                                     as above. Without a name it says where
                                     the page went: mc is the page
   mc work                          The page — mc by another name
-  mc work <name>                   Open it — the name is enough, new or not
+  mc work <name>                   Open ~/mc/work/<name> — the name is enough,
+                                    new or not. A name that is only the
+                                    runner's area for a project opens
+                                    ~/mc/step/<name>, and says so
   mc work <name> --tmux [task]     Start it in the background, for another
                                     session to talk to; mc work <name> joins
                                     it, and ctrl-b d leaves it running
@@ -92,7 +95,9 @@ IN FULL
                                     Add a repository's worktree to that work
   mc work stop <name>              Stop what is running there; keep the work
   mc work remove <name> <repo>     Take one repository out of that work
-  mc work release <name> [--apply] Remove what git says can go; keep the rest
+  mc work release <name> [--apply] Remove what git says can go; keep the rest.
+                                    A runner area is refused: it closes with
+                                    its project
   mc work discard <name> [--apply] Throw it away — worktrees, branches, and the
                                     conversations, which nothing brings back
   mc work tidy [--apply] [--days <n>]

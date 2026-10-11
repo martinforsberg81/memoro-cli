@@ -309,8 +309,8 @@ export function readScriptOutput(text) {
  * and never removed.
  *
  * Under `mcHome()` and deliberately not under `~/mc/`: a checkout there is a
- * workarea to `listWorkAreas` (`work-area.js`) and to the runner's
- * `closeWorkareas`, and a deploy checkout is neither a project nor something
+ * runner area to `listStepAreas` (`work-area.js`) and to the runner's
+ * `closeWorkareas`, or a stray to `listStrays`, and a deploy checkout is neither a project nor something
  * the board should draw. `env` rather than `mcHome()` alone so the seam every
  * other process boundary in this file goes through covers this one too.
  */

@@ -89,7 +89,9 @@ export async function run(argv, deps = {}) {
   }
   // Ordinary `mc work` mechanics from here, under its own name: NOW says
   // "mc worker", because that is what was typed.
-  return openArea(opts.name, { ...opts, opener: 'worker' }, { stdout, stderr });
+  // The area is handed over rather than resolved: a role home stands
+  // directly under `~/mc`, and `mc work`'s own resolution looks in `work/`.
+  return openArea(opts.name, { ...opts, opener: 'worker', area: opts.name }, { stdout, stderr });
 }
 
 export function parseArgs(argv) {

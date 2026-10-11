@@ -710,14 +710,34 @@ function workLines(lines, c, wide, sessions, unplanned) {
   // with the one fact the page could not have, whether the branch has landed —
   // to `~/mc/runner/unplanned-workareas.md` once a round. It is raised at every
   // brief besides.
-  if (!folders.count) return;
   const room = wide - 7;
+  strayLines(lines, c, folders.strays || [], room);
+  if (!folders.count) return;
   const numbers = numberRanges((folders.shown || []).map((area) => area.number));
   lines.push(`       ${paint(c, fitting([
     { text: numbers, styles: ['grey'] },
     { text: `${numbers ? '  ·  ' : ''}~/mc/runner/unplanned-workareas.md`, styles: ['grey'] },
     { text: '  has them all', styles: ['grey'] },
   ], room), room)}`);
+}
+
+/**
+ * The directories under `~/mc` that are none of the kinds mc knows
+ * (`listStrays`): one line each, with whether it holds a checkout and how much
+ * is uncommitted there — the two facts that say whether somebody's work is in
+ * it. Nothing removes one, so nothing here offers to.
+ */
+function strayLines(lines, c, strays, room) {
+  if (!strays.length) return;
+  lines.push(`       ${c('not an area mc knows', 'yellow')}`);
+  for (const stray of strays) {
+    const facts = [stray.checkout ? 'checkout yes' : 'checkout no'];
+    if (stray.checkout) facts.push(`${stray.uncommitted} uncommitted`);
+    lines.push(`       ${paint(c, fitting([
+      { text: pad(clip(stray.name, 21), 22), styles: ['bold'] },
+      { text: facts.join(' · '), styles: ['grey'] },
+    ], room), room)}`);
+  }
 }
 
 /**

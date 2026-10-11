@@ -52,7 +52,7 @@ const plain = (text) => text;
 
 /** A shell standing in one of the work areas — that is who holds a lease. */
 function inArea(fx, name) {
-  return { cwd: join(fx.workRoot, name) };
+  return { cwd: join(fx.workRoot, 'work', name) };
 }
 
 describe('a holder\'s liveness comes from the board', () => {

@@ -24,7 +24,7 @@ import { spawnSync } from 'node:child_process';
 import { resolveLaunch } from '../adapters/index.js';
 import { conversationModel, listConversations } from './conversations.js';
 import { log } from './logger.js';
-import { workAreaPath } from './paths.js';
+import { workAreaName, workAreaPath, workRoot } from './paths.js';
 import { instructionsFor, roleRecord, textDigest } from './roles.js';
 import { profileArgs } from './portrait.js';
 import { askToolToLeave } from './work-stop.js';
@@ -209,11 +209,11 @@ export async function openInWorkArea({
  * running. Resuming it a second time starts another process on the same
  * transcript, which is two writers on one file and one of them is wrong.
  */
-export function backgroundTarget(name, { run = null, env = process.env } = {}) {
+export function backgroundTarget(name, { run = null, env = process.env, path = null } = {}) {
   const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
   const target = `mc-${name}`;
   if (tmux(['has-session', '-t', target]).status === 0) return target;
-  return discoveredTarget(name, { tmux, env });
+  return discoveredTarget(name, { tmux, env, path });
 }
 
 /**
@@ -231,9 +231,13 @@ export function backgroundTarget(name, { run = null, env = process.env } = {}) {
  *
  * The pane is addressed by its id (`%7`) unless it is the single active pane
  * of its session, where the session's own name reads better in a message.
+ *
+ * `name` is the name without its kind (`foo`, not `work/foo`); the area it
+ * stands for is the one `mc work <name>` opens (`workAreaName`), unless the
+ * caller already knows the `path` — a role home, which is neither.
  */
-export function discoveredTarget(name, { tmux, env = process.env } = {}) {
-  const area = workAreaPath(name, env);
+export function discoveredTarget(name, { tmux, env = process.env, path: known = null } = {}) {
+  const area = known || workAreaPath(workAreaName(name, { root: workRoot(env) }).name, env);
   const listed = tmux(['list-panes', '-a', '-F', '#{session_name}\t#{pane_id}\t#{pane_active}\t#{session_windows}\t#{window_panes}\t#{pane_current_path}']);
   if (listed?.status !== 0) return null;
   for (const line of String(listed.stdout || '').split('\n')) {

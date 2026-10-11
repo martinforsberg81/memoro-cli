@@ -1,8 +1,9 @@
 # mc work — a workarea, and what its tests can import
 
-A piece of work is a directory under `~/mc`. `mc work add <name> <repo>
-[branch] [--from <ref>]` makes it and puts a git worktree in it at
-`~/mc/<name>/<repo>`, on a branch cut from the repository's base; it installs
+A piece of work is a directory under `~/mc/work/` (ruling 39: the path says
+what an area is). `mc work add <name> <repo> [branch] [--from <ref>]` makes
+`~/mc/work/<name>/` and puts a git worktree in it at
+`~/mc/work/<name>/<repo>`, on a branch cut from the repository's base; it installs
 the pre-push guard into the repository's common hooks, and it makes sure the
 dependency tree that checkout's tests will resolve is there. The worktree is
 the deliverable — the guard and the tree are reported and never fatal, because
@@ -10,11 +11,22 @@ a session with a checkout and no tree can still work, and it is told which
 packages it will not find
 ([`src/mc/work-area.js`](../../src/mc/work-area.js), `addWorktree`).
 
+Every verb resolves the name one way, `workAreaName` in
+[`src/mc/paths.js`](../../src/mc/paths.js): `~/mc/work/<name>/` when it
+exists; else the runner's area for a project of that name
+(`~/mc/step/<name>/`, or one left at `~/mc/<name>/`), which opens with
+*opening the runner's area for <name>* and which `release` and `discard`
+refuse — it closes with its project; else `~/mc/work/<name>/`, to be made.
+The tmux session stays `mc-<name>`, the name without its kind. A directory
+directly under `~/mc` that is none of the kinds (`STATE_HOMES`, a role home,
+a legacy runner area of a project in the register) is a stray: the page lists
+it under *not an area mc knows*, and nothing removes it (`listStrays`).
+
 ## Where a workarea's dependencies come from
 
 **`~/mc/node_modules`. One directory, above every workarea and inside none of
 them.** Node resolves a bare specifier by walking `node_modules` up every
-parent of the importing file, so a checkout at `~/mc/<area>/<repo>/src/…`
+parent of the importing file, so a checkout at `~/mc/work/<name>/<repo>/src/…`
 reaches this one with nothing in the checkout at all. The name lives in
 [`src/mc/paths.js`](../../src/mc/paths.js) (`WORK_DEPS`) with the rest of the
 work root's shape; [`src/mc/work-deps.js`](../../src/mc/work-deps.js) builds it.

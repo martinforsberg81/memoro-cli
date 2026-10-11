@@ -85,7 +85,7 @@ From the page's menu, `s <name>` runs this same verb and redraws
 | fact | file | written by |
 |---|---|---|
 | the plan, its state and its steps | `docs/project/<programme>/<name>/PLAN.json` on `origin/main`, after a `git fetch` | the step sessions, through `mc run` |
-| the workarea exists | `~/mc/<name>/` holding a checkout with a `.git` | `mc run`, `mc work` — never `mc plan`, whose session lives under `~/mc/plan/` and is not a workarea |
+| the workarea exists | `~/mc/step/<name>/` (or, from before `step/`, `~/mc/<name>/`) holding a checkout with a `.git` | `mc run` — never `mc plan`, whose session lives under `~/mc/plan/`, nor `mc work`, whose areas are under `~/mc/work/` |
 | the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
 | whether that pull request is the round landing right now | `~/.memoro/mc/gate-running.json`, joined to a name and a holder (`runningMerge`, `merges-collect.js`) | `mc merge`/`mc test`, for the length of the round |
@@ -129,7 +129,7 @@ questions and until 2026-09-05 only the first was answered here: on that day
 reader to stop at the first one:
 
 ```
-  status      ready · uncommitted work in ~/mc/connections-section/memoro: hop-measure.mjs,
+  status      ready · uncommitted work in ~/mc/step/connections-section/memoro: hop-measure.mjs,
               probe.mjs (since 09-05 10:03Z)
   status      ready
 ```

@@ -108,8 +108,8 @@ describe('mc worker', () => {
     // area exists and its work must stay reachable; openArea warns that the
     // overlay is not being delivered.
     const { workRoot, env } = fixture({ withWorkerRole: false });
-    mkdirSync(join(workRoot, 'w5'), { recursive: true });
-    writeFileSync(join(workRoot, 'w5', '.mc-role'), 'ghost\n');
+    mkdirSync(join(workRoot, 'work', 'w5'), { recursive: true });
+    writeFileSync(join(workRoot, 'work', 'w5', '.mc-role'), 'ghost\n');
     const result = runMcCli(['work', 'w5', '--tmux', 'task'], env);
     assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
     assert.match(result.stderr, /no definition was found/u);
