@@ -10,6 +10,7 @@
 export const VERB_MODULES = {
   status: './cli/status.js',
   work: './mc/commands/work.js',
+  tidy: './mc/commands/tidy.js',
   repo: './mc/commands/repo.js',
   merge: './mc/commands/merge.js',
   test: './mc/commands/test.js',

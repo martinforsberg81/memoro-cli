@@ -101,8 +101,11 @@ IN FULL
   mc work discard <name> [--apply] Throw it away — worktrees, branches, and the
                                     conversations, which nothing brings back
   mc work tidy [--apply] [--days <n>]
-                                    Every finished workarea and every transcript
-                                    nothing will open again — dry run first
+                                    The same as mc tidy
+  mc tidy [--apply] [--json] [--days <n>]
+                                    What mc may remove, per root, written to a
+                                    list under ~/mc/runner/tidy/ first; --apply
+                                    removes from that list after asking again
   mc repo status [repo]            One repository seen whole: main, what the
                                     last full run found on it and since when,
                                     the open pull requests and how far behind

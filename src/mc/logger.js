@@ -167,9 +167,14 @@ function bounded(fields) {
   return out;
 }
 
-function rotateIfLarge(path) {
+/**
+ * Move `path` to `<path>.1` once it reaches `maxBytes`, replacing the older
+ * generation: one is kept. True when it rotated.
+ */
+export function rotateIfLarge(path, maxBytes = MAX_LOG_BYTES) {
   try {
-    if (statSync(path).size < MAX_LOG_BYTES) return;
+    if (statSync(path).size < maxBytes) return false;
     renameSync(path, `${path}.1`);
-  } catch { /* absent or unrotatable is fine */ }
+    return true;
+  } catch { return false; /* absent or unrotatable is fine */ }
 }
