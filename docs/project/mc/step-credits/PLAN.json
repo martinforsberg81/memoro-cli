@@ -33,7 +33,7 @@
       "check": "`tests/mc/commands/run-billing.test.js` and `tests/mc/billing.test.js`: absent, broken and unknown files read `plan`; each mode round-trips; a write clears `credits.unusable_until`; the printed lines for a state with `seven_day.utilization` 0.83 in `auto` say the next session runs on credits. On the machine after landing: `mc run --billing` prints `plan`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A claude step session gets `ANTHROPIC_API_KEY` from the vault label `mc-api-key` exactly when its billing is `credits`, and a `plan` session never gets one even if the runner's environment has it.",
       "check": "`tests/mc/run.test.js`: with `deps.creditKey` stubbed and `deps.session` capturing its options, mode `credits` gives `env.ANTHROPIC_API_KEY` equal to the stub's key and `session.billing: 'credits'` in the register; mode `plan` with `ANTHROPIC_API_KEY` in the runner env passes both names in `unsetEnv`; a codex plan in mode `credits` gets no key. `tests/vault/engine/step-credit-key.test.js`: the record is found by label in envelope and legacy rows, a missing or duplicated label and a missing cache are `{ ok: false }`, and no export takes a label."
     },
@@ -48,7 +48,7 @@
       "check": "`tests/mc/run.test.js`: a claude stream ending in a 429 refusal in `auto` leaves the step `ready` with an `interrupted` record whose `billing` is `plan` and whose `count` is unchanged, no `quotaPause` sleep, and `refused_until` written; a result `Your credit balance is too low to access the Anthropic API. …` on a credits session writes `credits.unusable_until` now + 24 h and the same hand-back. `tests/mc/run-plan.test.js`: `apiInterruption` returns `credits` and `key` for the two texts, and `recoveryFor` with a billing change is never `warm`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Which billing a session runs on is visible.",
       "check": "`tests/mc/page.test.js`: a lane whose current file says `billing: 'credits'` shows `credits` beside tool and model, and a `plan` one shows nothing new. `tests/mc/commands/step.test.js`: a running step on credits prints `on credits`."
     }
