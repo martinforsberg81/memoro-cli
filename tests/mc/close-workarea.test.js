@@ -117,3 +117,31 @@ test('a pipe in a cell never breaks the table', () => {
   assert.match(unplannedRow({ name: 'a|b', repo: 'memoro', uncommitted: 1, lastCommit: '-', branch: 'unknown' }),
     /\| a\\\|b \| memoro \| 1 \| - \| unknown \|/u);
 });
+
+/**
+ * Ruling 39: only the runner makes areas under `step/`, so a hand-made folder
+ * sharing a name — the reason for the last-run rule — cannot be one. There the
+ * register decides: every step `done`. On 2026-10-11 the last-run rule kept
+ * done areas open for 106 rounds on `success,blocked` and `success,failed`.
+ */
+test('an area under step/ closes on every register step done, whatever the last run says', () => {
+  for (const lastRun of [null, { note: 'success,blocked' }, { note: 'success,failed' }, merged]) {
+    const verdict = closable({ plan: null, archived: true, lastRun, legacy: false, stepsDone: true });
+    assert.equal(verdict.close, true, `last run ${lastRun?.note ?? 'none'}`);
+    assert.equal(verdict.why, 'project archived in an earlier round, worktree clean, every step done');
+  }
+  assert.equal(closable({ plan: donePlan, legacy: false, stepsDone: true }).why, 'plan done, worktree clean, every step done');
+});
+
+test('an area under step/ with a step not done is kept, and the other refusals still come first', () => {
+  assert.equal(closable({ plan: null, archived: true, lastRun: merged, legacy: false, stepsDone: false }).why, 'not every step is done in the register');
+  assert.equal(closable({ plan: null, archived: true, dirty: true, legacy: false, stepsDone: true }).why, 'an uncommitted change');
+  assert.equal(closable({ plan: null, archived: true, live: true, legacy: false, stepsDone: true }).why, 'a live tmux session');
+  assert.equal(closable({ plan: null, archived: false, legacy: false, stepsDone: true }).unplanned, true);
+});
+
+test('a legacy area keeps the last-run rule, whatever the register says', () => {
+  assert.equal(closable({ plan: null, archived: true, lastRun: { note: 'success,blocked' }, legacy: true, stepsDone: true }).why,
+    'the last run says success,blocked');
+  assert.equal(closable({ plan: null, archived: true, lastRun: merged, legacy: true, stepsDone: false }).close, true);
+});

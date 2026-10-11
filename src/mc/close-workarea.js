@@ -64,19 +64,32 @@ export function lastRunFor(tsv, name) {
  * same refusal `runStep` already makes. Removing the worktree somebody is
  * sitting in would be the one irreversible thing here.
  */
-export function closable({ plan = null, archived = false, dirty = false, live = false, lastRun = null } = {}) {
+export function closable({
+  plan = null, archived = false, dirty = false, live = false, lastRun = null, legacy = true, stepsDone = false,
+} = {}) {
   if (!plan && !archived) return { close: false, unplanned: true, why: 'no project on main' };
   if (plan && plan.status !== 'done') return { close: false, unplanned: false, why: `the plan is ${plan.status || 'unreadable'}` };
   if (live) return { close: false, unplanned: false, why: 'a live tmux session' };
   if (dirty) return { close: false, unplanned: false, why: 'an uncommitted change' };
-  if (!lastRun) return { close: false, unplanned: false, why: 'no runner step to point at' };
-  if (!MERGED.test(String(lastRun.note || ''))) return { close: false, unplanned: false, why: `the last run says ${lastRun.note || '-'}` };
+  // Only the runner makes areas under `step/` (ruling 39), so a hand-made area
+  // sharing a project's name cannot be one — and that was the whole reason for
+  // the last-run rule. There the register says it: every step `done`. On
+  // 2026-10-11 the last-run rule had kept done areas open for 106 rounds on
+  // `the last run says success,blocked|success,failed`. An area left directly
+  // under `~/mc` keeps the last-run rule.
+  if (!legacy) {
+    if (!stepsDone) return { close: false, unplanned: false, why: 'not every step is done in the register' };
+  } else {
+    if (!lastRun) return { close: false, unplanned: false, why: 'no runner step to point at' };
+    if (!MERGED.test(String(lastRun.note || ''))) return { close: false, unplanned: false, why: `the last run says ${lastRun.note || '-'}` };
+  }
+  const last = legacy ? 'last run merged' : 'every step done';
   return {
     close: true,
     unplanned: false,
     why: plan
-      ? 'plan done, worktree clean, last run merged'
-      : 'project archived in an earlier round, worktree clean, last run merged',
+      ? `plan done, worktree clean, ${last}`
+      : `project archived in an earlier round, worktree clean, ${last}`,
   };
 }
 

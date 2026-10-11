@@ -388,9 +388,11 @@ this GitHub at this moment, in this order (`runStepClaimed`):
 
 1. **STOP**, and the quota: a lane that another lane's quota answer has put to
    sleep waits it out here, before a worktree is touched.
-2. **No workarea** is not a refusal: one is created with `git worktree add`
-   from `origin/main` — the call `mc work add <name> <repo> <name> --from
-   origin/main` makes.
+2. **No workarea** is not a refusal: one is created at
+   `~/mc/step/<project>/<repo>` with `git worktree add` from `origin/main` on
+   branch `<project>` (ruling 39: the path says what an area is). An area left
+   at `~/mc/<project>/` from before `step/` is stepped and closed where it
+   stands and drains away; it is never moved (`stepAreaName`, `paths.js`).
 3. **A merge of `origin/main` left in progress** — `MERGE_HEAD` present — is
    aborted: `git merge --abort`, and `<name>: a merge of origin/main was left in
    progress — aborted`. That is what a session killed mid-merge leaves (rc 143,

@@ -162,7 +162,8 @@ describe('mc deps bump: the change', () => {
 
     assert.equal(calls.addWorktree.length, 1);
     const [made] = calls.addWorktree;
-    assert.equal(made.name, 'deps-memoro-security-20261009');
+    // The runner's own kind of area (ruling 39); the branch keeps the name.
+    assert.equal(made.name, 'step/deps-memoro-security-20261009');
     assert.equal(made.branch, 'deps-memoro-security-20261009');
     assert.equal(made.from, 'origin/main');
     assert.equal(made.repo, join(root, 'memoro'));
@@ -194,7 +195,7 @@ describe('mc deps bump: the change', () => {
     assert.equal(code, 0);
     assert.equal(calls.publish.length, 1);
     assert.deepEqual(calls.publish[0].argv, ['--json']);
-    assert.equal(calls.publish[0].cwd, join(env.MC_WORK_ROOT, 'deps-memoro-minor-20261009', 'memoro'));
+    assert.equal(calls.publish[0].cwd, join(env.MC_WORK_ROOT, 'step', 'deps-memoro-minor-20261009', 'memoro'));
     assert.deepEqual(calls.merge, [['memoro', '4242']]);
     const printed = JSON.parse(stdout.text);
     assert.equal(printed.pr, 4242);
@@ -208,7 +209,7 @@ describe('mc deps bump: the change', () => {
     const code = await run(['bump', 'memoro', 'minor'], deps);
     assert.equal(code, 1);
     assert.match(stderr.text, /#4242 did not land — the pull request stays open and .*deps-memoro-minor-20261009 stays/u);
-    assert.ok(existsSync(join(env.MC_WORK_ROOT, 'deps-memoro-minor-20261009')));
+    assert.ok(existsSync(join(env.MC_WORK_ROOT, 'step', 'deps-memoro-minor-20261009')));
   });
 
   it('nothing to change makes no workarea and exits 0', async () => {
@@ -255,6 +256,6 @@ describe('mc deps bump: the change', () => {
     assert.deepEqual(printed.changes.map((item) => [item.name, item.from, item.to]), [['tiny', '0.20.2', '0.28.2']]);
     assert.equal(printed.pr, null);
     assert.equal(printed.merged, null);
-    assert.equal(printed.workarea, join(env.MC_WORK_ROOT, 'deps-memoro-tiny-0.28.2-20261009'));
+    assert.equal(printed.workarea, join(env.MC_WORK_ROOT, 'step', 'deps-memoro-tiny-0.28.2-20261009'));
   });
 });

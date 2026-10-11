@@ -24,7 +24,7 @@ import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { deleteConversations, listConversations } from './conversations.js';
-import { PLAN_HOME, workAreaPath, workAreaStatePath, workRoot } from './paths.js';
+import { PLAN_HOME, STEP_HOME, WORK_HOME, workAreaPath, workAreaStatePath, workRoot } from './paths.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
@@ -39,7 +39,8 @@ import { processesStandingIn } from './standing.js';
  * level down (`paths.js`). Listed as an area it read as a directory called
  * `plan` whose "repositories" were programme names, which is the same nonsense
  * a role home's filing is already kept out of. `mc plan` opens what is under
- * there; nothing else has business listing it.
+ * there; nothing else has business listing it. `STEP_HOME` — `~/mc/step/`,
+ * the runner's areas — is skipped for the same reason (`listStepAreas`).
  */
 export function listWorkAreas(env = process.env, options = {}) {
   const root = workRoot(env);
@@ -48,10 +49,38 @@ export function listWorkAreas(env = process.env, options = {}) {
     names = readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
-      .filter((name) => name !== PLAN_HOME)
+      .filter((name) => name !== PLAN_HOME && name !== STEP_HOME)
       .sort();
   } catch { return []; }
   return names.map((name) => inspectWorkArea(name, env, options));
+}
+
+/**
+ * The runner's areas, one per project: `{ name, path, repos }`, sorted by
+ * name. `name` is the project, `path` where its checkouts are, `repos` which of
+ * `repoNames` it holds a checkout of.
+ *
+ * The union of the directories under `~/mc/step/` that hold a checkout and the
+ * ones directly under `~/mc` that do — areas from before `step/`, draining in
+ * place (`stepAreaName`, paths.js). A project with both is read where
+ * `stepAreaName` puts it: the legacy one. `step/`, `work/`, `plan/` and the
+ * dot-directories are never an area themselves.
+ */
+export function listStepAreas({
+  root = workRoot(),
+  repoNames = ['memoro', 'memoro-cli'],
+  list = (path) => { try { return readdirSync(path); } catch { return []; } },
+  exists = existsSync,
+} = {}) {
+  const homes = new Set([STEP_HOME, WORK_HOME, PLAN_HOME]);
+  const under = (dir, skip = () => false) => list(dir)
+    .filter((name) => !name.startsWith('.') && !skip(name))
+    .map((name) => ({ name, path: join(dir, name), repos: repoNames.filter((repo) => exists(join(dir, name, repo, '.git'))) }))
+    .filter((area) => area.repos.length);
+  const byName = new Map();
+  for (const area of under(join(root, STEP_HOME))) byName.set(area.name, area);
+  for (const area of under(root, (name) => homes.has(name))) byName.set(area.name, area);
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**

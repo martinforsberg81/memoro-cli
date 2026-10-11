@@ -27,7 +27,7 @@ import { mergesPath, parseQueue, queueOrder } from './merge-queue.js';
 import { runningMerges } from './merges-collect.js';
 import { ageWords } from './page-cache.js';
 import { planSummary, readPlanText } from './plan-schema.js';
-import { workRoot } from './paths.js';
+import { stepAreaName, workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { overlayPlans } from './register.js';
 import { machineDetail, machineState } from './status-collect.js';
@@ -261,8 +261,8 @@ export async function collectProject(name, {
       .then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — origin/main may be stale`); })));
   }
 
-  const dir = join(root, name);
-  const workarea = existsSync(dir) ? dir : null;
+  // A folder directly under the root with no checkout yet is still the area asked about.
+  const workarea = [join(root, stepAreaName(name, { root })), join(root, name)].find((dir) => existsSync(dir)) || null;
   const main = findMainPlan(present, name, { git });
   if (!main && !workarea) return null;
 
