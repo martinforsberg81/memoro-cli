@@ -221,6 +221,14 @@ be about, the question goes in the pull request with one recommendation, and
 the session stops. A plan comes back to the runner by its first unfinished step
 being `ready`, and by nothing else.
 
+**`closeout/` under a programme is the archive's.** It holds one JSON file per
+archived project, `docs/project/<programme>/closeout/<project>.json`, written by
+the runner in the same pull request that removes the plan: the goal, the steps
+with the pull request, sha and date each landed with, and time, tokens and cost
+per session. `closeout` is never a project name, nobody edits the files, and
+nothing reads them but people
+([`docs/technical/mc-tidy.md`](../technical/mc-tidy.md) § *The closeout*).
+
 ## Citing a decision
 
 Decisions are raised as files under a `decisions/` directory at the root of the

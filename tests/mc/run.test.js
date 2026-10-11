@@ -2860,7 +2860,7 @@ test('a file under the plan that a test reads is kept in place, and the archive 
   assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro prog\/over removed — row added/u, 'the row is written as for any archive');
 });
 
-test('a programme left empty by its last project goes with it; the log and the prose beside it stay', async () => {
+test('a programme whose last project is archived keeps only its closeouts; the log and the prose beside it stay', async () => {
   const f = fixture({
     plans: { memoro: { one: done(), two: done() } },
     projectLog: { memoro: LOG_HEAD },
@@ -2869,8 +2869,10 @@ test('a programme left empty by its last project goes with it; the log and the p
   await round(createRunner({ deps: f.deps }));
   const wt = '/w/runner/archive/memoro';
   assert.deepEqual(f.calls.rm.sort(), ['docs/project/prog/one', 'docs/project/prog/two']);
-  assert.deepEqual(Object.keys(f.files).filter((p) => p.startsWith(`${wt}/docs/project/prog/`)), [],
-    'nothing of the programme is left, so the directory is gone with its last project');
+  assert.deepEqual(Object.keys(f.files).filter((p) => p.startsWith(`${wt}/docs/project/prog/`)).sort(), [
+    `${wt}/docs/project/prog/closeout/one.json`,
+    `${wt}/docs/project/prog/closeout/two.json`,
+  ], 'the plans are gone and each project left its closeout in their place');
   assert.equal(`${wt}/docs/project/project_log.md` in f.files, true);
   assert.equal(f.files[`${wt}/docs/project/project_log.md`].split('\n').filter((l) => l.startsWith('| 2026-08-29')).length, 2);
   assert.ok(f.calls.gh.some((c) => c[2] === 'create' && c.includes('Archive 2 done projects: one, two')), 'one PR for the repository');

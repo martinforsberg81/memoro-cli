@@ -123,6 +123,7 @@ import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from '.
 import { deploysPath, parseDeploys } from './deploys.js';
 import { releaseDue } from './step-release.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
+import { buildCloseout, closeoutPath, closeoutText, readSessionResults } from './closeout.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -162,6 +163,14 @@ import {
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
+
+/**
+ * Archived projects given their missing closeout in one archive PR, at most.
+ * The first archive after the closeout landed finds every project archived
+ * before it; forty files is still one pull request a person can read through,
+ * and the rest follow in the next ones.
+ */
+export const CLOSEOUT_BACKFILL_MAX = 40;
 
 /**
  * A session's scratch directory is kept this long after it was last touched.
@@ -425,6 +434,8 @@ export function realDeps(env = process.env) {
     // to every reader of it.
     alive: pidAlive,
     read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
+    // The bytes, for a file that is not text: a gzipped session result.
+    readBytes: (path) => { try { return readFileSync(path); } catch { return null; } },
     // When a file was last written, ISO, or null: a dead session's last
     // activity is its stream log's mtime.
     mtime: (path) => { try { return statSync(path).mtime.toISOString(); } catch { return null; } },
@@ -1278,11 +1289,16 @@ export function createRunner({
    * archived in the one PR, and the workarea is removed later in the same
    * round — the plan goes first, then the workarea, so a workarea is never
    * removed while the plan that explains it is still on main.
+   *
+   * Each archived project's closeout goes into the same commit, and archived
+   * projects that never had one get theirs in the same PR
+   * (`closeoutBackfill`) — a PR of only those when nothing is done.
    */
   async function archiveDone(repo, plans) {
     const none = { archived: [], landed: [] };
     const done = donePlans(plans, repo.name);
-    if (!done.length) return none;
+    const backfill = closeoutBackfill(repo, done);
+    if (!done.length && !backfill.length) return none;
     const open = openArchivePr(repo);
     if (open) { say(`archive: ${repo.name} #${open} is still open from an earlier round — not opening another`); return none; }
 
@@ -1294,20 +1310,103 @@ export function createRunner({
       return none;
     }
     try {
-      return await archiveIn({ repo, worktree, branch, done });
+      return await archiveIn({ repo, worktree, branch, done, backfill });
     } finally {
       deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
       deps.git(repo.path, ['branch', '-D', branch]);
     }
   }
 
+  /**
+   * Archived projects of this repository that have no closeout yet: a row in
+   * its `project_log.md` on origin/main, a register file naming this
+   * repository, no closeout and no plan directory on origin/main. At most
+   * `CLOSEOUT_BACKFILL_MAX`, in the log's order. A project archived in this
+   * same round is the archive's own and not one of these.
+   *
+   * Until the closeout exists `mc tidy` keeps the register file, and the
+   * register file is what this is written from — so it has to come first.
+   */
+  function closeoutBackfill(repo, done) {
+    if (!deps.exists(join(repo.path, '.git'))) return [];
+    const text = gitOut(repo.path, ['show', 'origin/main:docs/project/project_log.md']);
+    // One listing for every question below. A git that cannot answer is a
+    // backfill that waits, never one that writes over a closeout.
+    const listing = gitOut(repo.path, ['ls-tree', '-r', '--name-only', 'origin/main', '--', 'docs/project']);
+    if (!text || listing == null) return [];
+    const tree = listing.split('\n').filter(Boolean);
+    const files = new Set(tree);
+    const dirs = new Set(tree.flatMap((path) => path.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('/'))));
+    const doneNow = new Set(done.map((plan) => plan.project));
+    const seen = new Set();
+    const out = [];
+    for (const row of logRows(text)) {
+      if (out.length >= CLOSEOUT_BACKFILL_MAX) break;
+      const project = row.project;
+      if (!project || seen.has(project) || doneNow.has(project)) continue;
+      seen.add(project);
+      const entry = readEntry(root, project, { read: deps.read });
+      if (!entry || entry.repo !== repo.name || !entry.plan) continue;
+      const programme = entry.programme || row.programme;
+      if (!programme) continue;
+      if (files.has(closeoutPath(programme, project))) continue;
+      if (dirs.has(dirname(entry.plan))) continue;
+      out.push({ project, programme, entry, date: row.date });
+    }
+    return out;
+  }
+
+  /**
+   * The plan as it stood before the commit that removed it from main, parsed,
+   * or null — a plan file that was markdown, or a history that does not have
+   * it, gives a closeout that says `plan: null`.
+   */
+  function planFromHistory(cwd, path) {
+    const sha = gitOut(cwd, ['log', '-1', '--format=%H', '--diff-filter=D', 'origin/main', '--', path]);
+    if (!sha) return null;
+    return parsedPlan(gitOut(cwd, ['show', `${sha.trim()}^:${path}`]));
+  }
+
+  /** A plan's text as an object, or null. Not validated: the closeout records, it does not judge. */
+  function parsedPlan(text) {
+    try {
+      const value = JSON.parse(String(text ?? ''));
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    } catch { return null; }
+  }
+
+  /**
+   * One closeout written into the archive worktree and added, or a say line
+   * naming the project and why not. A closeout that fails does not stop the
+   * archive; `mc tidy` keeps that project's data, because the file is missing.
+   */
+  function writeCloseout(worktree, { project, programme, plan, planPath, archivedAt, tsv }) {
+    try {
+      const entry = readEntry(root, project, { read: deps.read });
+      const closeout = buildCloseout({
+        plan, entry, runs: tsv, archivedAt,
+        sessions: readSessionResults({ dir: paths.log, project, list: deps.list, read: deps.read, readBytes: deps.readBytes }),
+        project, programme, repo: entry?.repo ?? null, planPath: planPath ?? entry?.plan ?? null,
+      });
+      const path = closeoutPath(programme, project);
+      deps.write(join(worktree, path), closeoutText(closeout));
+      if (!deps.git(worktree, ['add', '--', path]).ok) throw new Error('git add failed');
+      return true;
+    } catch (error) {
+      say(`archive: ${project} — no closeout written: ${error?.message || error}`);
+      return false;
+    }
+  }
+
   /** The archive itself, inside the worktree that was made for it. */
-  async function archiveIn({ repo, worktree, branch, done }) {
+  async function archiveIn({ repo, worktree, branch, done, backfill = [] }) {
     const logPath = join(worktree, 'docs', 'project', 'project_log.md');
     const slug = remoteSlug(gitOut(repo.path, ['remote', 'get-url', 'origin']));
     const date = stamp().slice(0, 10);
+    const tsv = deps.read(paths.runs) || '';
     let logText = deps.read(logPath) ?? '';
     const archived = [];
+    const closedOut = [];
     const undocumented = [];
     const keptAll = [];
 
@@ -1354,11 +1453,26 @@ export function createRunner({
         undocumented.push(undocumentedRow({ date, repo: repo.name, programme: plan.programme, project: plan.project, pointer: row.pointer }));
         say(`archive: ${plan.project} names no docs/technical/ note — recorded for mc brief`);
       }
+      writeCloseout(worktree, {
+        project: plan.project, programme: plan.programme, plan: parsedPlan(planText),
+        planPath: plan.path ?? null, archivedAt: date, tsv,
+      });
     }
-    if (!archived.length) return { archived: [], landed: [] };
+    // Projects archived before the closeout existed, given theirs now — from
+    // the register and the plan as git history last had it.
+    for (const item of backfill) {
+      const plan = planFromHistory(worktree, item.entry.plan);
+      if (writeCloseout(worktree, { project: item.project, programme: item.programme, plan, planPath: item.entry.plan, archivedAt: item.date, tsv })) {
+        closedOut.push(item.project);
+        say(`archive: ${repo.name} ${item.programme}/${item.project} — closeout written for an archived project${plan ? '' : ' (no plan in history)'}`);
+      }
+    }
+    if (!archived.length && !closedOut.length) return { archived: [], landed: [] };
 
     deps.write(logPath, logText);
-    const title = `Archive ${archived.length} done project${archived.length === 1 ? '' : 's'}: ${archived.join(', ')}`;
+    const title = archived.length
+      ? `Archive ${archived.length} done project${archived.length === 1 ? '' : 's'}: ${archived.join(', ')}`
+      : `Closeout ${closedOut.length} archived project${closedOut.length === 1 ? '' : 's'}: ${closedOut.join(', ')}`;
     const body = [
       'A plan that reaches `done` is archived in the round the runner reads it:',
       'the project directory is removed and `docs/project/project_log.md` carries',
@@ -1366,7 +1480,10 @@ export function createRunner({
       'answers every question the removed directory could.',
       '',
       ...archived.map((project) => `- ${project}`),
+      ...(closedOut.length ? ['', 'Archived earlier, given their closeout now:', '', ...closedOut.map((project) => `- ${project}`)] : []),
       ...keptParagraph(keptAll),
+      '',
+      'Each project\'s closeout is in docs/project/<programme>/closeout/.',
     ].join('\n');
     deps.git(worktree, ['add', '-A']);
     if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok
