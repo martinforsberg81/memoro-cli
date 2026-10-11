@@ -716,3 +716,68 @@ describe('mc vault — pure error paths (no portal needed)', () => {
       `error should be prefixed with "mc vault: ", got: ${stderr}`);
   });
 });
+
+describe('mc vault — a token Memoro rejects', () => {
+  function rejectingPortal() {
+    return {
+      apiUrl: 'https://memoro.test',
+      token: 'dead',
+      memoroFetch: async () => {
+        const err = new Error('Memoro 401: Not logged in or session has expired.');
+        err.status = 401;
+        err.code = 'MEMORO_TOKEN_REJECTED';
+        throw err;
+      },
+    };
+  }
+  function seams() {
+    const calls = { deleted: [], flows: [] };
+    return {
+      calls,
+      deleteToken: async (account) => { calls.deleted.push(account); },
+      deviceFlow: async (deps) => { calls.flows.push(deps); return 0; },
+    };
+  }
+
+  it('at a terminal deletes the token and runs the device flow', async () => {
+    const s = seams();
+    const cap = captureConsole();
+    const rc = await vaultRun(['status'], {
+      portal: rejectingPortal(), isTty: true, env: {},
+      deleteToken: s.deleteToken, deviceFlow: s.deviceFlow,
+    });
+    cap.restore();
+    assert.equal(rc, 1);
+    assert.deepEqual(s.calls.deleted, ['memoro-api-token']);
+    assert.equal(s.calls.flows.length, 1);
+    assert.equal(s.calls.flows[0].apiUrl, 'https://memoro.test');
+    assert.match(s.calls.flows[0].nextMessage, /`mc vault status`/);
+    assert.match(cap.err.join('\n'), /Memoro rejected the stored sign-in/);
+  });
+
+  for (const [name, argv, extra] of [
+    ['not a terminal', ['status'], { isTty: false, env: {} }],
+    ['--json', ['status', '--json'], { isTty: true, env: {} }],
+    ['MEMORO_TOKEN set', ['status'], { isTty: true, env: { MEMORO_TOKEN: 'x' } }],
+  ]) {
+    it(`${name}: keeps the token and names mc vault status`, async () => {
+      const s = seams();
+      const cap = captureConsole();
+      const rc = await vaultRun(argv, {
+        portal: rejectingPortal(), ...extra,
+        deleteToken: s.deleteToken, deviceFlow: s.deviceFlow,
+      });
+      cap.restore();
+      assert.equal(rc, 1);
+      assert.equal(s.calls.deleted.length, 0);
+      assert.equal(s.calls.flows.length, 0);
+      if (argv.includes('--json')) {
+        const out = JSON.parse(cap.out.join('\n'));
+        assert.equal(out.ok, false);
+        assert.equal(out.code, 'MEMORO_TOKEN_REJECTED');
+      } else {
+        assert.match(cap.err.join('\n'), /`mc vault status`/);
+      }
+    });
+  }
+});

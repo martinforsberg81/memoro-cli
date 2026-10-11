@@ -7,6 +7,11 @@ import { spawn } from 'node:child_process';
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
+// The body Memoro's session guard answers with when it rejects a bearer
+// token (expired or revoked). It carries no `code`; vault routes that
+// answer 401 for a wrong password do, or use other text.
+export const MEMORO_AUTH_REJECTED = 'Not logged in or session has expired.';
+
 export async function memoroFetch(apiUrl, path, {
   token,
   method = 'GET',
@@ -19,7 +24,7 @@ export async function memoroFetch(apiUrl, path, {
   curlFallback = process.env.MEMORO_CURL_FALLBACK !== '0',
 } = {}) {
   if (!apiUrl) throw new Error('apiUrl missing');
-  if (!token) throw new Error('Not logged in. Run `memoro-cli login` first.');
+  if (!token) throw new Error('Not signed in to Memoro. Run `mc vault status` in a terminal to sign in.');
 
   const url = `${apiUrl.replace(/\/$/, '')}${path}`;
   const headers = {
@@ -114,6 +119,9 @@ function parseMemoroResponse(status, text) {
     const err = new Error(`Memoro ${status}: ${msg}`);
     err.status = status;
     err.data = data;
+    if (status === 401 && data?.error === MEMORO_AUTH_REJECTED && !data?.code) {
+      err.code = 'MEMORO_TOKEN_REJECTED';
+    }
     throw err;
   }
 

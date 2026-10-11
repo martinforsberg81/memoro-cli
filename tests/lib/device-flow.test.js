@@ -372,7 +372,7 @@ describe('runDeviceFlow — happy path', () => {
     assert.equal(stored['memoro-api-token'], 'mem_secrettokenvaluethatshouldneverechoexceptprefix');
     // Success message printed
     assert.match(stderr.text, /✓ Device authorized/);
-    assert.match(stderr.text, /Next: run `mc setup` to finish local setup\./);
+    assert.match(stderr.text, /Next: run your command again\./);
     assert.match(stderr.text, /Keep this terminal open until the token is saved\./);
     // Token prefix shown — but NOT the full token
     assert.match(stderr.text, /mem_a1b2…/);

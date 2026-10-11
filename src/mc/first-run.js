@@ -24,7 +24,7 @@ import { getSecret } from '../lib/keychain.js';
 import { ACCOUNTS } from '../lib/auth-accounts.js';
 
 const SENTINEL_NAME = '.setup-done-v1';
-const HINT_TEXT = 'New to mc? Run `mc` to sign in.';
+const HINT_TEXT = 'New to mc? Run `mc vault status` to sign in.';
 
 export function sentinelPath() {
   return join(mcHome(), SENTINEL_NAME);
