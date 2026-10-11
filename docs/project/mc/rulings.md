@@ -1233,3 +1233,32 @@ password 401 — clears the token and runs the device flow when `mc vault` runs
 at a terminal, and fails loud naming `mc vault status` anywhere else; a
 headless session never signs in by itself. No new verb. Carried by
 `vault-repair` (`docs/project/mc/vault-repair/PLAN.json`).
+
+## 38 · Runner step sessions can run on the Max plan's API credit
+
+`ruling · 2026-10-11` · raised by Martin at the brief
+
+> "Låt oss fokusera just nu på mc step. Jag tänker så här: vi skulle kunna ha
+> en check där weekly budget <20% så aktiveras krediter eller med en manuell
+> toggle." … "Ja, landa hos runner." … "Godtas." (Martin, 2026-10-11,
+> approving the brief's recommendations B5–B14 and the two points the plan
+> raised)
+
+A runner-wide billing mode `plan | credits | auto` in `~/mc/runner/billing.json`,
+set with `mc run --billing`, read at each new session; default `plan`. `auto`
+moves new claude step sessions to the API credit at ≥ 80 % seven-day
+utilization, and hands a step over on any plan refusal (5-hour or 7-day)
+instead of sleeping. Same tool, model, effort and advisor on either billing;
+billing changes only at a session boundary, and a resume across billings is
+cold. An exhausted or rejected credit marks credits unusable for 24 h, not
+until the next grant, which mc cannot see.
+
+This overrides, for one label only, two stances: that mc never turns a vault
+secret into an environment variable (`src/adapters/claude-code.js`), and that
+the vault never hands a plaintext secret back to its caller (`mc vault get`
+disabled; `c1-claude-lease`). The vault label `mc-api-key` is read by the
+runner and given to the step session as `ANTHROPIC_API_KEY` when its billing is
+credits, and to nothing else. The key is then visible to the commands that
+session runs; Martin accepted that, with the spend cap Martin sets on the
+Console workspace `mc` as the bound. Carried by `step-credits`
+(`docs/project/mc/step-credits/PLAN.json`).
