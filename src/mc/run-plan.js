@@ -268,14 +268,23 @@ export function inFlight(openPrs = []) {
  * The open pull requests that hold a project back, without the project's own
  * steps' (ruling 30). A step `landing` has its pull request in the merger's
  * queue, and the next step starts on top of it; a red the merger sent back is
- * the step `ready` with its `pr` kept, the next session's work. Neither is
+ * the step `ready` with its `pr` kept, the next session's work. A step
+ * `blocked` with its `pr` is parked on a question a person answers (ruling
+ * 21), and nobody's session is on it either (ruling 39). None of the three is
  * somebody's in flight. Any other open pull request still ends the round
  * (`inFlight`).
+ *
+ * Dropping a blocked step's pull request starts nothing past it: the runner
+ * hands out the first unfinished step and no other (`planState`), so a blocked
+ * step that is first still answers `blocked` (`deliverableStep`). What it no
+ * longer does is hold back an earlier step the merger sent back `ready` — on
+ * 2026-10-10 one such step sat seven hours behind a later step parked on a
+ * decision.
  */
 export function holdingPrs(openPrs = [], record = null) {
   const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
   const own = new Set(steps
-    .filter((step) => step?.pr && (step.status === 'landing' || step.status === 'ready'))
+    .filter((step) => step?.pr && (step.status === 'landing' || step.status === 'ready' || step.status === 'blocked'))
     .map((step) => Number(step.pr)));
   return own.size ? openPrs.filter((pr) => !own.has(Number(pr.number))) : openPrs;
 }
