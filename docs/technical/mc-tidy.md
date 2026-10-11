@@ -54,7 +54,8 @@ archived, so a pass cut short is finished by the next one.
 ## What archiving does
 
 `docs/project/<programme>/<project>/` is `git rm -r`'d and one row is
-appended to that repository's `docs/project/project_log.md`. Nothing else in
+appended to that repository's `docs/project/project_log.md`, and the
+project's closeout is added (§ *The closeout*). Nothing else in
 the repository is touched, and `docs/plans/` is out of it entirely.
 
 **The row is preferred, never waited for.** If the project's own close-out
@@ -83,6 +84,38 @@ Two things about the mechanics are worth knowing:
   would otherwise be joined by a second one next pass removing the same
   directories again. The runner looks for an open PR whose head starts with
   `mc-archive-` and holds off while one exists.
+
+## The closeout
+
+A finished project leaves one file in git:
+`docs/project/<programme>/closeout/<project>.json` (`src/mc/closeout.js`).
+The archive writes it into the same commit and pull request that removes the
+plan, so the plan never leaves main without it. It holds:
+
+- `goal` and `success_criteria`, from the plan as it stood at the archive;
+- `steps`: each step's `title` and `done_when` from the plan, and from the
+  register its `status`, `pr`, `landed` (`sha`, `into`, `at`), `attempts`,
+  `reason` and `comments`, with `sessions`, `seconds` and `cost_usd` summed
+  over the sessions whose `pr` is the step's;
+- `sessions`: every runs.tsv row of the project that is not the merger's
+  (`merge`, `mend`), with `cost_usd` the `total_cost_usd` of the session's own
+  result file under `runner/log/` (plain or `.json.gz`), or `null` — runs.tsv
+  has no cost column, and a cost is never estimated;
+- `totals`: sessions, seconds, land seconds, tokens, the known cost with
+  `cost_unknown` counting the sessions without one, the first session and the
+  last landing.
+
+A closeout that fails to build is skipped and named in `runner.log`; the
+archive goes on. Projects archived before the closeout existed get theirs in a
+later archive PR, at most 40 a PR (`CLOSEOUT_BACKFILL_MAX`), when their
+register file is still there and neither the closeout nor the plan directory
+is on main. The plan is then read from git history, from the commit before the
+one that removed it; when that fails the file says `plan: null`. A batch of
+only those is titled `Closeout N archived project(s): …` and lands like any
+archive, one open `mc-archive-*` PR at a time.
+
+The closeout is what lets a project's local data go: the register file is
+removed only once the closeout is on `origin/main`.
 
 ## What closing a workarea does
 

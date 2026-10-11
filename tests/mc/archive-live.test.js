@@ -136,11 +136,25 @@ describe('archiving a done plan, for real', () => {
 
     const tree = fx.mainTree();
     assert.deepEqual(tree.filter((path) => path.startsWith('docs/project/')).sort(), [
+      'docs/project/mc/closeout/closed-out.json',
+      'docs/project/mc/closeout/documented.json',
       'docs/project/mc/still-going/PLAN.md',
+      'docs/project/prog-two/closeout/alone.json',
       'docs/project/project_log.md',
-    ], 'the three done projects are gone from main, the ready one and the log are not');
-    assert.ok(!tree.some((path) => path.startsWith('docs/project/prog-two/')),
-      'a programme left empty by its last project goes with it');
+    ], 'the three done projects are gone from main, each with its closeout; the ready one and the log are not');
+
+    // One commit holds both: the plan removed and the closeout added.
+    const create = fx.ghCalls.find((call) => call[1] === 'create');
+    const branch = create[create.indexOf('--head') + 1];
+    const changed = git(fx.repo, ['show', '--name-status', '--format=', `origin/${branch}`]).split('\n').filter(Boolean);
+    assert.ok(changed.includes('D\tdocs/project/mc/documented/PLAN.md'), changed.join('\n'));
+    assert.ok(changed.includes('A\tdocs/project/mc/closeout/documented.json'), changed.join('\n'));
+    assert.match(create[create.indexOf('--body') + 1], /Each project's closeout is in docs\/project\/<programme>\/closeout\/\./u);
+    const closeout = JSON.parse(fx.mainFile('docs/project/mc/closeout/documented.json'));
+    assert.equal(closeout.schema, 'mc-closeout');
+    assert.equal(closeout.project, 'documented');
+    assert.equal(closeout.programme, 'mc');
+    assert.equal(closeout.plan, null, 'a PLAN.md is not a plan the closeout can read');
 
     const log = fx.mainFile('docs/project/project_log.md');
     const rows = log.split('\n').filter((line) => /^\| \d{4}-/u.test(line));
@@ -176,5 +190,52 @@ describe('archiving a done plan, for real', () => {
     assert.deepEqual(archived, []);
     assert.deepEqual(landed, []);
     assert.equal(existsSync(join(fx.work, 'runner', 'archive', 'memoro-cli')), false);
+  });
+});
+
+describe('a closeout for a project archived before closeouts existed', () => {
+  const fx = repository();
+  after(() => fx.cleanup());
+
+  it('is written from the register and the plan in history, in a PR of its own', async () => {
+    const plan = { goal: 'The goal it had.', success_criteria: [{ criterion: 'C.', check: 'K.', met: true }], steps: [{ title: '1. Only', done_when: 'Done.' }] };
+    const planPath = 'docs/project/mc/gone/PLAN.json';
+    mkdirSync(dirname(join(fx.repo, planPath)), { recursive: true });
+    writeFileSync(join(fx.repo, planPath), `${JSON.stringify(plan, null, 2)}\n`);
+    git(fx.repo, ['add', '-A']);
+    git(fx.repo, ['commit', '-q', '-m', 'gone: plan']);
+    git(fx.repo, ['rm', '-q', '-r', 'docs/project/mc/gone']);
+    writeFileSync(join(fx.repo, 'docs/project/project_log.md'),
+      `${LOG.trimEnd()}\n| 2026-09-30 | mc | gone | delivered | Gone. | none | [#5](https://github.com/o/r/pull/5) |\n`);
+    git(fx.repo, ['add', '-A']);
+    git(fx.repo, ['commit', '-q', '-m', 'Archive 1 done project: gone']);
+    git(fx.repo, ['push', '-q', 'origin', 'HEAD:main']);
+    git(fx.repo, ['fetch', '-q', 'origin']);
+
+    const register = join(fx.work, 'runner', 'projects', 'gone.json');
+    mkdirSync(dirname(register), { recursive: true });
+    writeFileSync(register, JSON.stringify({
+      project: 'gone', repo: 'memoro-cli', programme: 'mc', plan: planPath,
+      steps: [{ status: 'done', pr: 5, landed: { sha: 'abc', into: 'main', at: '2026-09-30T10:00:00Z' } }],
+    }));
+
+    const runner = createRunner({ deps: fx.deps });
+    const { archived } = await runner.archiveDone({ name: 'memoro-cli', path: fx.repo }, []);
+    assert.deepEqual(archived, [], 'nothing was archived; one closeout was written');
+
+    const create = fx.ghCalls.find((call) => call[1] === 'create');
+    assert.equal(create[create.indexOf('--title') + 1], 'Closeout 1 archived project: gone');
+    const closeout = JSON.parse(fx.mainFile('docs/project/mc/closeout/gone.json'));
+    assert.equal(closeout.goal, 'The goal it had.');
+    assert.equal('plan' in closeout, false);
+    assert.equal(closeout.archived, '2026-09-30');
+    assert.equal(closeout.steps[0].title, '1. Only');
+    assert.equal(closeout.steps[0].pr, 5);
+
+    // On main now, so the next round has nothing to backfill.
+    const calls = fx.ghCalls.length;
+    const again = await createRunner({ deps: fx.deps }).archiveDone({ name: 'memoro-cli', path: fx.repo }, []);
+    assert.deepEqual(again, { archived: [], landed: [] });
+    assert.equal(fx.ghCalls.length, calls, 'no PR opened');
   });
 });
