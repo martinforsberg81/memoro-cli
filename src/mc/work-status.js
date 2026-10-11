@@ -198,7 +198,7 @@ function processesIn(paths, { elapsed = false } = {}) {
 }
 
 /** Claude: `{type:'assistant'|'user', message:{content}}`, plus UI noise. */
-function claudeTail(entries) {
+export function claudeTail(entries) {
   let said = null;
   let turn = null;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
@@ -215,7 +215,7 @@ function claudeTail(entries) {
 }
 
 /** Codex: messages live under `payload`, and `task_complete` ends a turn. */
-function codexTail(entries) {
+export function codexTail(entries) {
   let said = null;
   let turn = null;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
