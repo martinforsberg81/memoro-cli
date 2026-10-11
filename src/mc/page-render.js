@@ -388,7 +388,9 @@ function laneLine(c, wide, lane) {
     + (open ? `${c(open, ...PR_TONE)}  ` : '');
   const room = Math.max(0, wide - width(left));
   const meta = paint(c, fitting(trailing([
-    { text: [s.tool, s.model].filter(Boolean).join(' '), styles: ['grey'] },
+    // `credits` when the step runs on the API credit (step-credits); the plan
+    // is the ordinary case and says nothing.
+    { text: [s.tool, s.model, s.billing === 'credits' ? 'credits' : null].filter(Boolean).join(' '), styles: ['grey'] },
     s.advisor ? { text: `${s.advisor} advisor`, styles: ['grey'] } : null,
     checkIns ? { text: checkIns, styles: s.check_ins ? ['yellow'] : ['grey'] } : null,
   ]), room), room);

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, SCRATCH_KEEP_MS, createRunner, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { checkpoint } from '../../src/mc/checkpoint.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
-import { RUN_REFUSALS, WORKAREA_BLOCKS } from '../../src/mc/run-plan.js';
+import { RUN_REFUSALS, WORKAREA_BLOCKS, initSource } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { unauthorisedChanges } from '../../src/mc/plan-schema.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
@@ -2018,7 +2018,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
 
   const during = f.duringSession[0];
   assert.deepEqual(JSON.parse(during['/w/runner/current-memoro.json']), {
-    name: 'alpha', step: 1, kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', effort: 'medium', advisor: null, check_in_minutes: 60, check_ins: 0,
+    name: 'alpha', step: 1, kind: 'step', repo: 'memoro', lane: 0, tool: 'claude', model: 'opus', effort: 'medium', advisor: null, billing: 'plan', check_in_minutes: 60, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro', role: stepRole,
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z', args: [], takeover: true });
@@ -2050,7 +2050,7 @@ test('the current file carries the project frontmatter, and is removed even when
   const runner = createRunner({ deps: f.deps });
   await assert.rejects(runner.pass(), /boom/u);
   assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current-memoro-cli.json']), {
-    name: 'cx', step: 1, kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', effort: null, advisor: null, check_in_minutes: null, check_ins: 0,
+    name: 'cx', step: 1, kind: 'step', repo: 'memoro-cli', lane: 0, tool: 'codex', model: 'o3', effort: null, advisor: null, billing: 'plan', check_in_minutes: null, check_ins: 0,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
     // The same text whichever tool it is handed to: `instructionsFor` assembles
     // one body and only the flag that carries it differs (portrait.js).
@@ -4149,7 +4149,7 @@ test('register: a running step whose claude session is gone is ready again with 
   assert.equal(step.reason, null);
   assert.deepEqual(step.interrupted, {
     at: '2026-08-29T10:00:00Z', session_id: 'c1a2b3c4-dead-4bee-8000-000000000001', tool: 'claude', model: 'm-1',
-    log: '/w/runner/log/alpha-20260829T090000Z', last_activity: '2026-08-29T09:55:00Z', context_tokens: 5320, branch: 'alpha', count: 1,
+    log: '/w/runner/log/alpha-20260829T090000Z', last_activity: '2026-08-29T09:55:00Z', context_tokens: 5320, branch: 'alpha', count: 1, billing: 'plan',
   });
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: step 1 was running under pid 99999, which is gone — interrupted/u);
   assert.match(f.files['/w/runner/log/runner.log'], /step 1 interrupted — claude session c1a2b3c4-dead-4bee-8000-000000000001 died under it/u);
@@ -4495,4 +4495,98 @@ test('realDeps carries the billing files the runner reads and writes', () => {
   assert.equal(typeof deps.billing.readMode, 'function');
   assert.equal(typeof deps.billing.readState, 'function');
   assert.equal(typeof deps.billing.patchState, 'function');
+});
+
+/** A runner on `mode`, its key reader stubbed and counted, its session capturing its options. */
+function onBilling(mode, { runner, key = { ok: true, key: 'sk-ant-test-key' }, stdout = '' } = {}) {
+  const f = fixture({ plans: { memoro: { r: plan(runner ? { runner } : {}) } }, session: () => null });
+  f.deps.billing = { readMode: () => mode, readState: () => ({}), patchState: () => {} };
+  const reads = [];
+  f.deps.creditKey = async () => { reads.push(1); return key; };
+  const calls = [];
+  const lands = landsItself(f, 'r', 63, okSession({ type: 'result' }));
+  f.deps.session = (call) => {
+    calls.push({ call, register: registerOf(f, 'r').steps[0], current: JSON.parse(f.files['/w/runner/current-memoro.json']) });
+    const answer = lands(call);
+    return { ...answer, stdout: `${stdout}${answer.stdout}` };
+  };
+  return { f, reads, calls };
+}
+
+const INIT = (apiKeySource) => `${JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sid', apiKeySource })}\n`;
+
+test('billing credits: the session gets the key from the vault, and the register and the lane file say credits', async () => {
+  const { f, reads, calls } = onBilling('credits', { stdout: INIT('ANTHROPIC_API_KEY') });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(reads.length, 1);
+  assert.equal(calls.length, 1);
+  const [{ call, register, current }] = calls;
+  assert.equal(call.env.ANTHROPIC_API_KEY, 'sk-ant-test-key');
+  assert.equal(call.unsetEnv, undefined);
+  assert.equal(register.session.billing, 'credits');
+  assert.equal(current.billing, 'credits');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /r: step starting \([^\n]*\) · on credits \(mode credits\)/u);
+  assert.doesNotMatch(log, /sk-ant-test-key/u, 'the key is never said');
+  assert.doesNotMatch(log, /session ran on/u);
+  assert.doesNotMatch(JSON.stringify(f.files), /sk-ant-test-key/u, 'the key is in no file');
+});
+
+test('billing plan: no key, both Anthropic credentials unset, and the vault is never asked', async () => {
+  const { f, reads, calls } = onBilling('plan');
+  f.deps.env = { ...f.deps.env, ANTHROPIC_API_KEY: 'from-the-runner' };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(reads.length, 0);
+  const [{ call, register, current }] = calls;
+  assert.equal('ANTHROPIC_API_KEY' in call.env, false);
+  assert.deepEqual(call.unsetEnv, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+  assert.equal(register.session.billing, 'plan');
+  assert.equal(current.billing, 'plan');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /on credits/u);
+});
+
+test('billing credits with a key that cannot be read is a plan launch, and the runner says why', async () => {
+  const { f, reads, calls } = onBilling('credits', { key: { ok: false, reason: 'vault-locked' } });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(reads.length, 1);
+  const [{ call, register }] = calls;
+  assert.equal('ANTHROPIC_API_KEY' in call.env, false);
+  assert.deepEqual(call.unsetEnv, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+  assert.equal(register.session.billing, 'plan');
+  assert.match(f.files['/w/runner/log/runner.log'], /r: credits wanted \(mode credits\) but the key could not be read \(vault-locked\) — plan/u);
+});
+
+test('billing credits on a codex plan never reads the key', async () => {
+  const { f, reads, calls } = onBilling('credits', { runner: { tool: 'codex' } });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(reads.length, 0);
+  assert.equal('ANTHROPIC_API_KEY' in calls[0].call.env, false);
+  assert.equal(calls[0].register.session.billing, 'plan');
+});
+
+test('a session whose init line names another key source than its billing is said', async () => {
+  const credits = onBilling('credits', { stdout: INIT('none') });
+  await createRunner({ deps: credits.f.deps }).pass();
+  assert.match(credits.f.files['/w/runner/log/runner.log'], /r: session ran on none, not credits/u);
+  const plan_ = onBilling('plan', { stdout: INIT('ANTHROPIC_API_KEY') });
+  await createRunner({ deps: plan_.f.deps }).pass();
+  assert.match(plan_.f.files['/w/runner/log/runner.log'], /r: session ran on ANTHROPIC_API_KEY, not plan/u);
+  const fine = onBilling('plan', { stdout: INIT('none') });
+  await createRunner({ deps: fine.f.deps }).pass();
+  assert.doesNotMatch(fine.f.files['/w/runner/log/runner.log'], /session ran on/u);
+});
+
+test('a running step on credits whose session is gone is interrupted with billing credits', () => {
+  const f = deadSession();
+  const entry = JSON.parse(f.files['/w/runner/projects/alpha.json']);
+  entry.steps[0].session.billing = 'credits';
+  f.files['/w/runner/projects/alpha.json'] = JSON.stringify(entry);
+  createRunner({ deps: f.deps }).queue();
+  assert.equal(registerOf(f, 'alpha').steps[0].interrupted.billing, 'credits');
+});
+
+test('initSource reads apiKeySource off the first init line only', () => {
+  assert.equal(initSource(`${INIT('ANTHROPIC_API_KEY')}${INIT('none')}`), 'ANTHROPIC_API_KEY');
+  assert.equal(initSource('{"type":"assistant"}\n'), null);
+  assert.equal(initSource(''), null);
 });

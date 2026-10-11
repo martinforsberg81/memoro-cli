@@ -147,7 +147,8 @@ import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
-import { patchBillingState, planWindows, readBillingMode, readBillingState } from './billing.js';
+import { billingFor, patchBillingState, planWindows, readBillingMode, readBillingState } from './billing.js';
+import { readStepCreditKey } from '../vault/engine/step-credit-key.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
@@ -156,7 +157,7 @@ import {
   DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
-  queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
+  initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -256,11 +257,21 @@ function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
  * (`sweepRunning`, ruling 33). The log is a record, not the session: a write
  * that fails is dropped and the session goes on. The resolved object carries
  * the `signal` the process ended on, if it did.
+ *
+ * `unsetEnv` names variables taken out of `env` before the child sees it: a
+ * step session on the plan is started without `ANTHROPIC_API_KEY` and
+ * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
+ * its billing follows the mode and nothing else (step-credits, ruling 38).
  */
-export function streamSession({ bin, args, cwd, env, prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn }) {
+export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn }) {
   return new Promise((resolve) => {
     const piped = prompt != null;
-    const child = spawnFn(bin, args, { cwd, stdio: [piped ? 'pipe' : 'ignore', 'pipe', 'pipe'], env });
+    let childEnv = env;
+    if (env && unsetEnv.length) {
+      childEnv = { ...env };
+      for (const name of unsetEnv) delete childEnv[name];
+    }
+    const child = spawnFn(bin, args, { cwd, stdio: [piped ? 'pipe' : 'ignore', 'pipe', 'pipe'], env: childEnv });
     // The register records the pid as the step's session (ruling 21); a
     // record, not the session, so a throwing recorder must not end the run.
     if (child.pid && onSpawn) { try { onSpawn(child.pid); } catch { /* recorded elsewhere */ } }
@@ -473,6 +484,10 @@ export function realDeps(env = process.env) {
       readState: () => readBillingState(),
       patchState: (patch) => patchBillingState(patch),
     },
+    // The step-credit key (`mc-api-key` in the vault), read for one launch on
+    // credits and dropped once the session has it. A dependency so a test
+    // never opens the vault.
+    creditKey: () => readStepCreditKey(),
     addWorktree,
     role: readCanonRole,
     launch: resolveLaunch,
@@ -513,7 +528,8 @@ export function realDeps(env = process.env) {
     // `MC_SCRATCH`, a directory outside the worktree for its probes — and
     // `onSpawn` gets the child's pid the moment there is one: the register
     // records it as the step's session, which is how `mc merge` finds the
-    // process to end when the step has landed (ruling 21).
+    // process to end when the step has landed (ruling 21). `options.unsetEnv`
+    // is taken out of the merged environment by `streamSession`.
     session: (options) => streamSession({
       ...options,
       env: { ...env, BASH_DEFAULT_TIMEOUT_MS: '600000', BASH_MAX_TIMEOUT_MS: '600000', ...(options.env || {}) },
@@ -643,9 +659,10 @@ export function createRunner({
    * off the session's stream log (`<log>.jsonl`, written as it streamed), so
    * the next session can be handed what this one left. Never `failed` for
    * that alone: only the `INTERRUPT_LIMIT`th interruption in a row is, since
-   * a step that keeps dying is a person's. Returns the entry as written.
+   * a step that keeps dying is a person's. `billing` is what the session ran
+   * on, `plan` or `credits`. Returns the entry as written.
    */
-  function recordInterrupted({ name, index, was, log, tool, model, branch }) {
+  function recordInterrupted({ name, index, was, log, tool, model, branch, billing = 'plan' }) {
     const stdout = log ? deps.read(`${log}.jsonl`) : null;
     const standing = sessionStanding({ toolId: tool === 'codex' ? 'codex' : 'claude', stdout: stdout ?? '' });
     const lastActivity = log && stdout != null && deps.mtime ? deps.mtime(`${log}.jsonl`) : null;
@@ -661,7 +678,7 @@ export function createRunner({
       status: 'ready', reason: null, session: null,
       interrupted: {
         at: stamp(), session_id: standing.session_id, tool: tool ?? null, model: model ?? null, log: log ?? null,
-        last_activity: lastActivity, context_tokens: standing.context_tokens, branch: branch ?? null, count,
+        last_activity: lastActivity, context_tokens: standing.context_tokens, branch: branch ?? null, count, billing,
       },
     });
   }
@@ -758,7 +775,7 @@ export function createRunner({
         if (pid && alive(pid)) return;
         say(`${record.project}: step ${index + 1} was running under pid ${pid ?? 'none'}, which is gone — interrupted`);
         const session = state?.session || {};
-        const written = recordInterrupted({ name: record.project, index, was: state, log: session.log, tool: session.tool, model: session.model, branch: state?.branch });
+        const written = recordInterrupted({ name: record.project, index, was: state, log: session.log, tool: session.tool, model: session.model, branch: state?.branch, billing: session.billing ?? 'plan' });
         if (written) out = applyEntry(out, written);
       });
       return out;
@@ -2117,12 +2134,31 @@ export function createRunner({
     const instructions = instructionsFor(launch.id, role.overlay);
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs });
 
+    // Who pays for a launch, chosen at each launch and never during one
+    // (step-credits, ruling 38): `billingFor` over the mode and the plan's
+    // windows. Credits carries the key read from the vault for this launch
+    // alone; a key that cannot be read is a plan launch. codex is plan before
+    // the vault is asked.
+    const pickBilling = async () => {
+      const chosen = billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: launch.id, now: deps.now() });
+      if (chosen.billing !== 'credits') return { billing: 'plan', why: chosen.why, key: null };
+      let got = null;
+      try { got = deps.creditKey ? await deps.creditKey() : { ok: false, reason: 'no key reader' }; } catch { got = { ok: false, reason: 'key-unreadable' }; }
+      if (!got?.ok || !got.key) {
+        say(`${name}: credits wanted (${chosen.why}) but the key could not be read (${got?.reason || 'key-unreadable'}) — plan`);
+        return { billing: 'plan', why: chosen.why, key: null };
+      }
+      return { billing: 'credits', why: chosen.why, key: got.key };
+    };
+    // The billing of the launch in hand, and of the last one once it is over.
+    let picked = await pickBilling();
+
     const ts = stamp().replace(/[-:]/gu, '');
     const out = join(paths.log, `${name}-${ts}`);
     // A plan that names no model on a tool that is not claude gets none, and
     // the line says so rather than printing `null`: the tool picks.
     if (resuming) say(`${name}: resuming ${settings.tool} session ${resuming.interrupted.session_id} (${resuming.why})`);
-    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})`);
+    say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''}`);
     const t0 = deps.now().getTime();
     // The lane's current file exists exactly as long as the session does —
     // written before the call that blocks, removed however that call
@@ -2138,7 +2174,7 @@ export function createRunner({
       // `drainLine`): a lane waited on is named by project and step.
       name, step: choice.index == null ? null : choice.index + 1,
       kind, repo: repo.name, lane, tool: settings.tool, model: settings.model,
-      effort: settings.effort, advisor: settings.advisor,
+      effort: settings.effort, advisor: settings.advisor, billing: picked.billing,
       check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
       started: stamp(), pid, worktree,
       // Which role text this session is actually running on. `kind` already
@@ -2162,7 +2198,7 @@ export function createRunner({
     if (stepIndex != null) {
       recordStep(name, stepIndex, {
         status: 'running', branch: stepBranch, pr: retry ? retry.pr : (resuming ? standingBefore?.pr ?? null : null), reason: null, stacked_on: stacked,
-        session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool, log: out },
+        session: { pid: null, started: stamp(), model: settings.model, lane, tool: settings.tool, log: out, billing: picked.billing },
       });
     }
     // A directory outside the worktree for whatever the session measures with:
@@ -2182,26 +2218,41 @@ export function createRunner({
     // the session left uncommitted is still there when it goes on. The row,
     // the logs and the register see one session — the streams joined, the
     // results summed by `sessionResult` as a check-in's already are.
-    const launchOnce = (resume, text) => deps.session({
-      bin: launch.spec.bin,
-      args: resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt: text, profileArgs, resume }) : args,
-      cwd: worktree,
-      // The stream reaches disk as it arrives; a resume appends to the same
-      // file, which is the joined stream the logs keep.
-      logPath: `${out}.jsonl`,
-      ...watchFor(launch, settings, {
-        prompt: text, name,
-        onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
-      }),
-      env: {
-        ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
-        ...scratchEnv,
-      },
-      onSpawn: (childPid) => {
-        if (stepIndex == null) return;
-        recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool, log: out } });
-      },
-    });
+    //
+    // Each launch runs on `picked`: credits puts the key in the session's
+    // environment, plan takes both Anthropic credentials out of it. The key
+    // is let go of as soon as the session has been handed it.
+    const launchOnce = async (resume, text) => {
+      const { billing } = picked;
+      const running = deps.session({
+        bin: launch.spec.bin,
+        args: resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt: text, profileArgs, resume }) : args,
+        cwd: worktree,
+        // The stream reaches disk as it arrives; a resume appends to the same
+        // file, which is the joined stream the logs keep.
+        logPath: `${out}.jsonl`,
+        ...watchFor(launch, settings, {
+          prompt: text, name,
+          onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
+        }),
+        env: {
+          ...(stepIndex == null ? {} : { MC_STEP: `${name}:${stepIndex}`, MC_PROJECT: name, MC_REPO: repo.name, MC_WORKAREA: worktree }),
+          ...scratchEnv,
+          ...(billing === 'credits' ? { ANTHROPIC_API_KEY: picked.key } : {}),
+        },
+        ...(billing === 'credits' ? {} : { unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] }),
+        onSpawn: (childPid) => {
+          if (stepIndex == null) return;
+          recordStep(name, stepIndex, { session: { pid: childPid, started: stamp(), model: settings.model, lane, tool: settings.tool, log: out, billing } });
+        },
+      });
+      picked = { ...picked, key: null };
+      const attempt = await running;
+      // What claude says it was paid by, against what it was started on.
+      const source = launch.id === 'claude-code' ? initSource(attempt?.stdout) : null;
+      if (source && (billing === 'credits') !== (source === 'ANTHROPIC_API_KEY')) say(`${name}: session ran on ${source}, not ${billing}`);
+      return attempt;
+    };
     let result;
     // Whether the last interruption has already been waited out here, so the
     // quota pause after the row is not a second sleep on the same refusal.
@@ -2230,6 +2281,15 @@ export function createRunner({
         if (stopRequested() || updateRequested()) {
           say(`${name}: ${stopRequested() ? 'STOP' : 'an UPDATE'} came during the wait — ${last.session} is not resumed`);
           break;
+        }
+        // A resume is a session boundary: its billing is chosen again, and the
+        // lane's file and the register say what it is now.
+        picked = await pickBilling();
+        current.billing = picked.billing;
+        writeJson(currentPath, current);
+        if (stepIndex != null) {
+          const was = readEntry(root, name, { read: deps.read })?.steps?.[stepIndex]?.session;
+          if (was) recordStep(name, stepIndex, { session: { ...was, billing: picked.billing } });
         }
         attempt = await launchOnce(last.session, resumePrompt({ said: last.said || last.interrupted }));
         waited = false;
@@ -2347,7 +2407,7 @@ export function createRunner({
       // Killed by a signal this runner did not send — macOS taking memory
       // back, a person's `kill` — with no answer written: the same death as
       // a restart, while the runner lives (ruling 33).
-      const written = recordInterrupted({ name, index: choice.index, was: after, log: out, tool: settings.tool, model: settings.model, branch });
+      const written = recordInterrupted({ name, index: choice.index, was: after, log: out, tool: settings.tool, model: settings.model, branch, billing: picked.billing });
       note = written?.steps?.[choice.index]?.status === 'failed' ? 'interrupted,failed' : 'interrupted';
     } else {
       const said = read.said ? ` — the API said "${read.said}"` : '';
