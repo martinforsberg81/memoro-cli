@@ -147,14 +147,14 @@ import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
-import { billingFor, patchBillingState, planWindows, readBillingMode, readBillingState } from './billing.js';
+import { CREDITS_RETRY_MS, billingFor, patchBillingState, planWindows, readBillingMode, readBillingState } from './billing.js';
 import { readStepCreditKey } from '../vault/engine/step-credit-key.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import { checkpoint } from './checkpoint.js';
 import {
-  DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
+  DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
   initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
@@ -660,20 +660,22 @@ export function createRunner({
    * the next session can be handed what this one left. Never `failed` for
    * that alone: only the `INTERRUPT_LIMIT`th interruption in a row is, since
    * a step that keeps dying is a person's. `billing` is what the session ran
-   * on, `plan` or `credits`. Returns the entry as written.
+   * on, `plan` or `credits`. A hand-over between billings is written the
+   * same way with `counted` false: it is not a death, so the count stays and
+   * `INTERRUPT_LIMIT` is not reached by it. Returns the entry as written.
    */
-  function recordInterrupted({ name, index, was, log, tool, model, branch, billing = 'plan' }) {
+  function recordInterrupted({ name, index, was, log, tool, model, branch, billing = 'plan', counted = true }) {
     const stdout = log ? deps.read(`${log}.jsonl`) : null;
     const standing = sessionStanding({ toolId: tool === 'codex' ? 'codex' : 'claude', stdout: stdout ?? '' });
     const lastActivity = log && stdout != null && deps.mtime ? deps.mtime(`${log}.jsonl`) : null;
-    const count = (Number(was?.interrupted?.count) || 0) + 1;
+    const count = (Number(was?.interrupted?.count) || 0) + (counted ? 1 : 0);
     const id = standing.session_id || 'unknown';
-    if (count >= INTERRUPT_LIMIT) {
+    if (counted && count >= INTERRUPT_LIMIT) {
       const reason = `interrupted ${count} times in a row — last session ${id}`;
       say(`${name}: step ${index + 1} ${reason} — failed`);
       return recordStep(name, index, { status: 'failed', reason, session: null });
     }
-    say(`${name}: step ${index + 1} interrupted — ${tool || 'the'} session ${id} died under it (${count} in a row), ready again`);
+    if (counted) say(`${name}: step ${index + 1} interrupted — ${tool || 'the'} session ${id} died under it (${count} in a row), ready again`);
     return recordStep(name, index, {
       status: 'ready', reason: null, session: null,
       interrupted: {
@@ -698,7 +700,10 @@ export function createRunner({
     const interrupted = choice.kind === 'step' ? entry.steps?.[choice.index]?.interrupted : null;
     if (!interrupted) return null;
     const { tool } = sessionSettings(found.plan.runner, choice.step?.runner, { kind: 'step' });
-    const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? CODEX_CACHE_TTL_MS : CLAUDE_CACHE_TTL_MS, now: deps.now() });
+    // The billing the next launch would get: a session moving between the
+    // plan's login and the key's workspace never finds its cache.
+    const billingNow = billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: tool === DEFAULT_TOOL ? 'claude-code' : tool, now: deps.now() }).billing;
+    const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? CODEX_CACHE_TTL_MS : CLAUDE_CACHE_TTL_MS, now: deps.now(), billingNow });
     return { ...decided, interrupted, index: choice.index };
   }
 
@@ -2152,6 +2157,38 @@ export function createRunner({
     };
     // The billing of the launch in hand, and of the last one once it is over.
     let picked = await pickBilling();
+    // What a refusal says about the billing it came on: a plan refusal is
+    // `plan.refused_until` — its reset, or `QUOTA_SLEEP_MS` from now when it
+    // named none — which `auto` reads to move to the credit; an exhausted or
+    // rejected credit is unusable for `CREDITS_RETRY_MS`. A 429 on a credits
+    // session is the API's own rate limit and touches neither. Returns
+    // `{ from, to }` when the next launch would get another billing than this
+    // one ran on — a hand-over instead of a sleep — or null.
+    const noteRefusal = ({ interrupted: kind, quota, quotaReset }, billing) => {
+      if (launch.id !== 'claude-code' || !deps.billing?.patchState) return null;
+      const nowMs = deps.now().getTime();
+      try {
+        if (quota && billing === 'plan') {
+          const until = quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset : new Date(nowMs + QUOTA_SLEEP_MS);
+          deps.billing.patchState({ plan: { refused_until: until.toISOString() } });
+        } else if ((kind === 'credits' || kind === 'key') && billing === 'credits') {
+          const until = new Date(nowMs + CREDITS_RETRY_MS).toISOString();
+          const why = kind === 'credits' ? 'credit balance too low' : 'API key rejected';
+          deps.billing.patchState({ credits: { unusable_until: until, why } });
+          say(`${name}: the step credit is unusable until ${until} (${why}) — \`mc run --billing ${deps.billing.readMode?.() || 'plan'}\` clears it sooner`);
+        } else {
+          return null;
+        }
+      } catch (error) {
+        say(`${name}: the refusal was not recorded (${error.message})`);
+      }
+      const next = billingFor({ mode: deps.billing.readMode?.(), state: deps.billing.readState?.(), toolId: launch.id, now: deps.now() });
+      return next.billing === billing ? null : { from: billing, to: next.billing };
+    };
+    // Set when a refusal hands the step to the other billing; `noted` when the
+    // last attempt's refusal has been written already.
+    let handOver = null;
+    let noted = false;
 
     const ts = stamp().replace(/[-:]/gu, '');
     const out = join(paths.log, `${name}-${ts}`);
@@ -2266,10 +2303,18 @@ export function createRunner({
       for (let resumes = 0; ; resumes += 1) {
         const last = readSessionOutput({ toolId: launch.id, stdout: attempt.stdout, stderr: attempt.stderr, exitCode: attempt.status, timedOut: attempt.timedOut, stalled: attempt.stalled, now: deps.now() });
         if (!last.interrupted || last.session === '-') break;
+        handOver = noteRefusal(last, picked.billing);
+        noted = true;
         // A session that wrote its own end before the API cut it off has
         // ended; only one the register still calls `running` is resumed.
         const standing = stepIndex == null ? null : readEntry(root, name, { read: deps.read })?.steps?.[stepIndex]?.status;
         if (standing && standing !== 'running') break;
+        // The other billing would take the next launch: the step is handed to
+        // it rather than slept on, and the next pick resumes or restarts it.
+        if (handOver) {
+          say(`${name}: the API ended the session (${last.said || last.interrupted}) — handed from ${handOver.from} to ${handOver.to}, not waited on`);
+          break;
+        }
         if (resumes >= RESUME_LIMIT) {
           say(`${name}: the API ended the session ${resumes + 1} times in a row — not resumed again (${last.said || last.interrupted})`);
           break;
@@ -2293,6 +2338,7 @@ export function createRunner({
         }
         attempt = await launchOnce(last.session, resumePrompt({ said: last.said || last.interrupted }));
         waited = false;
+        noted = false;
         const joined = result.stdout && !result.stdout.endsWith('\n') ? `${result.stdout}\n` : result.stdout;
         result = { ...attempt, stdout: `${joined}${attempt.stdout}`, stderr: `${result.stderr}${attempt.stderr}` };
       }
@@ -2352,6 +2398,9 @@ export function createRunner({
     const pr = String(openNow.find((item) => item.headRefName === branch)?.number ?? '-');
     const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
     let { note } = read;
+    // A refusal the resume loop did not see — no session id, or a quota
+    // read off the stream of a session that wrote no result.
+    if (!noted) handOver = noteRefusal(read, picked.billing);
     if (result.lingered) say(`${name}: the process did not exit within ${Math.round(RESULT_GRACE_MS / 60_000)}m of its result — killed, the result stands`);
 
     // Where the step stands now is the register's word, not this process's
@@ -2392,6 +2441,13 @@ export function createRunner({
     } else if (after?.status === 'blocked') {
       note = `${note},blocked`;
       say(`${name}: step ${choice.index + 1} is blocked by the session on ${after.blocked_by?.kind} ${after.blocked_by?.name}`);
+    } else if (handOver && after?.status === 'running' && choice.index != null) {
+      // A hand-over between billings (step-credits): interrupted, so the next
+      // pick resumes or restarts it on the other billing, and not counted —
+      // a refusal is not a death.
+      recordInterrupted({ name, index: choice.index, was: after, log: out, tool: settings.tool, model: settings.model, branch, billing: handOver.from, counted: false });
+      say(`${name}: step ${choice.index + 1} handed from ${handOver.from} to ${handOver.to} — ready for the next pick`);
+      note = `${note},handed-to-${handOver.to}`;
     } else if (read.quota) {
       recordStep(name, choice.index, { status: 'ready', session: null });
     } else if (note === 'success' && pr !== '-') {
@@ -2421,7 +2477,7 @@ export function createRunner({
 
     logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds, model: settings.model });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
-    if (read.quota && !waited) await quotaPause(read.quotaReset);
+    if (read.quota && !waited && !handOver) await quotaPause(read.quotaReset);
     // `merged` and `ran` are both *a step ran*, and the lane picks again on
     // either. They are still told apart because the row and the log line are
     // read by a person, and because a merged step is the one that leaves the

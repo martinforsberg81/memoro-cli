@@ -991,21 +991,27 @@ const groupDigits = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g
  * last resume of it did not start, or when the plan's tool is not the one
  * the session ran on. Resume while the prompt cache is warm; past it, resume
  * a conversation small enough to be worth writing to the cache again.
+ *
+ * A resume onto another billing than the session ran on (`billingNow`,
+ * step-credits) is never warm: the prompt cache is per organisation and
+ * workspace, and the plan's login and the key's workspace do not share one.
  */
-export function recoveryFor({ interrupted, toolNow, ttlMs, now }) {
+export function recoveryFor({ interrupted, toolNow, ttlMs, now, billingNow = null }) {
   const record = interrupted || {};
   if (!record.session_id) return { mode: 'fresh', why: 'no session id — fresh' };
   if (record.resume_failed) return { mode: 'fresh', why: 'the last resume did not start — fresh' };
   if (toolNow !== record.tool) return { mode: 'fresh', why: `the tool is ${toolNow} now, the session ran on ${record.tool || 'an unknown tool'} — fresh` };
+  const ran = record.billing || 'plan';
+  const changed = billingNow != null && ran !== billingNow ? `billing changed ${ran}→${billingNow}, ` : '';
   const last = record.last_activity ? Date.parse(record.last_activity) : NaN;
   const nowMs = now instanceof Date ? now.getTime() : Number(now);
-  if (Number.isFinite(last) && nowMs - last < ttlMs - WARM_MARGIN_MS) {
+  if (!changed && Number.isFinite(last) && nowMs - last < ttlMs - WARM_MARGIN_MS) {
     return { mode: 'resume', why: `warm, ${Math.max(0, Math.round((nowMs - last) / 60_000))} min since last request` };
   }
   const tokens = record.context_tokens;
-  if (tokens == null) return { mode: 'resume', why: 'cold, context size unknown' };
-  if (tokens <= COLD_RESUME_MAX_TOKENS) return { mode: 'resume', why: `cold, ${groupDigits(tokens)} tokens` };
-  return { mode: 'fresh', why: `cold, ${groupDigits(tokens)} tokens — fresh` };
+  if (tokens == null) return { mode: 'resume', why: `${changed}cold, context size unknown` };
+  if (tokens <= COLD_RESUME_MAX_TOKENS) return { mode: 'resume', why: `${changed}cold, ${groupDigits(tokens)} tokens` };
+  return { mode: 'fresh', why: `${changed}cold, ${groupDigits(tokens)} tokens — fresh` };
 }
 
 /**
@@ -1384,10 +1390,19 @@ export function quotaSeen(text) {
  * `API Error: 500` / `529 Overloaded` (2). `kind` is what waits it out:
  * `quota` until the reset the refusal names, `login` until somebody logs in,
  * `server` a few minutes.
+ *
+ * On the step credit (step-credits) two more come before the quota test, since
+ * neither is waited out but handed back to the plan: `credits` for `Your
+ * credit balance is too low to access the Anthropic API. …` (Anthropic's docs
+ * for an exhausted credit), and `key` for `Invalid API key · Fix external API
+ * key` (measured 2026-10-11: `terminal_reason: 'api_error'`, `subtype:
+ * 'success'`, exit 1).
  */
 export function apiInterruption(json) {
   if (!json || json.terminal_reason !== 'api_error') return null;
   const said = String(json.result ?? '').trim().split('\n')[0].slice(0, 200);
+  if (/credit balance is too low/iu.test(said)) return { kind: 'credits', said };
+  if (/invalid api key/iu.test(said)) return { kind: 'key', said };
   if (json.api_error_status === 429 || quotaSeen(said)) return { kind: 'quota', said };
   if (/not logged in|\/login/iu.test(said)) return { kind: 'login', said };
   return { kind: 'server', said };
