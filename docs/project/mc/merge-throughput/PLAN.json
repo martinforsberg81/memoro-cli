@@ -21,22 +21,22 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "With two or more jobs for one repository that may go, the merger lands them in one round of up to `MERGE_BATCH_MAX` (4), and each job gets its own answer in the queue and the register.",
       "check": "`tests/mc/merger.test.js`: three queued memoro jobs and one memoro-cli job; `serve` hands `mergeRound` `prs: [a, b, c]` once; a green batch report dequeues all three and writes three `done` steps; a fallback report with one red round leaves that job `red` with its own reason and its step `ready` with `attempts` 1, and dequeues the other two. Live: the close-out quotes one `merger.log` line `landing a batch of N`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A memoro-cli round runs while a memoro round is in flight; two memoro rounds never run at once.",
       "check": "`tests/mc/gate-lock.test.js` for the two lock files; `tests/mc/merger.test.js`: one memoro and one memoro-cli job, the memoro round held open by a stub promise, and the memoro-cli round starts and finishes before it resolves. Live: the close-out quotes two `merger.log` lines from different repositories whose rounds overlap in time."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Command gates no longer add their full time to a round: they run beside the suite, and the round's verdict is unchanged.",
       "check": "`tests/mc/repo-gate.test.js`: with a stub suite and two stub gates that each take a measurable delay, the round's wall time is below suite plus gates, a failed gate still makes `selected-gate` with every failure named, and the gates are reported in the selector's order. Live: the close-out compares suite and gate seconds over at least 20 memoro rounds against the 2026-10-09/10 figures in the goal."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A memoro round whose lockfile matches a cached tree takes no `npm ci`.",
       "check": "`tests/mc/repo-gate.test.js` (or a new `tests/mc/prepare-cache.test.js`) with stubbed clone and shell: same key, no prepare shell call and the line `prepare: cloned node_modules from the cache (<key>)`; changed lockfile, `npm ci` runs and the cache is written; at most `PREPARE_CACHE_KEEP` entries remain. Live: the close-out quotes a `merger.log` line with the cached prepare and its seconds."
     },

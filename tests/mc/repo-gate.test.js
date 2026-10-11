@@ -1250,21 +1250,23 @@ describe('a repository that selects by diff', () => {
     it('starts the gates with the suite, one at a time in the selector\'s order, and awaits both', async () => {
       const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
       const gates = stubShell();
-      let suiteFrom = null;
+      let suiteTo = null;
       const tests = async ({ files: ran }) => {
-        suiteFrom = Date.now();
         await wait(200);
+        suiteTo = Date.now();
         return { code: 0, tap: tapWith([], { tests: ran.length * 3 }) };
       };
       try {
         const report = await fx.report({ tests, shell: gates.run });
         assert.equal(report.ok, true, report.reason);
         // 200 + 150 + 150 sequentially; beside, the suite hides under the gates.
-        // Read from suite start to both done, so the round's setup (a real
-        // selector shell, the worktree) does not count against a loaded machine.
+        // Compared with the halves' own measured times rather than fixed
+        // milliseconds: the light lane runs this suite beside a memoro round,
+        // and on that loaded machine every timer fires late (#872, 2026-10-11).
         const wall = report.timings.gates_beside_suite_ms;
-        assert.ok(wall < 450, `suite and gates took ${wall} ms, which is one after another`);
-        assert.ok(gates.ran[0].from - suiteFrom < 100, 'the first gate waited for the suite');
+        const sequential = report.timings.suite + report.timings['selected gates'];
+        assert.ok(wall < sequential, `suite and gates took ${wall} ms of ${sequential}, which is one after another`);
+        assert.ok(gates.ran[0].from < suiteTo, 'the first gate waited for the suite');
         assert.ok(gates.ran[1].from >= gates.ran[0].to, 'the gates ran at once rather than one after another');
         assert.deepEqual(report.extra_gates.map((gate) => gate.name), ['sql:pr-ci', 'css:lint'], 'in the order the selector gave');
         assert.equal(gates.ran[0].command, 'npm run sql:pr-ci -- --base-ref base1111');

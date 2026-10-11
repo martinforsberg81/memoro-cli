@@ -919,15 +919,27 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
   const MEMORO = { ...JOB, repo: 'memoro', repo_path: '/repos/memoro', step: null };
   const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
-  it('a light job queued while the heavy round is pending for 300 ms starts and is answered inside that time', async () => {
+  it('a light job queued while the heavy round is held open starts and is answered before it resolves', async () => {
     mkdirSync(join(root, 'runner'), { recursive: true });
     writeFileSync(mergesPath(root), JSON.stringify([{ ...MEMORO, pr: 1, since: 'a' }]));
     const events = [];
     const lanesAsked = [];
     const signals = [];
     let lightGoneAtHeavyEnd = null;
-    const started = Date.now();
-    let lightAnswered = null;
+    // The heavy round is held open until the light job is answered and
+    // dequeued, not for a fixed time: the light lane runs this suite beside a
+    // memoro round, and on that loaded machine a fixed 300 ms ran out first
+    // (#872, 2026-10-11). The deadline only keeps a light lane that never
+    // comes from hanging the test.
+    let lightAnswered = false;
+    const lightGone = async (deadline) => {
+      while (Date.now() < deadline) {
+        if (lightAnswered && !queue().some((e) => e.pr === 2)) return true;
+        await pause(5);
+      }
+      return false;
+    };
+    let lightInTime = false;
     const m = machine([], {
       readRunningRound: ({ lane }) => { lanesAsked.push(lane); return null; },
       mergeRound: async (options) => {
@@ -935,7 +947,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
         if (options.repoPath === '/repos/memoro') {
           events.push('heavy start');
           queueMerge({ root, repo: 'memoro-cli', repoPath: '/repos/memoro-cli', pr: 2, lock, start: () => ({ pid: process.pid, started: false }) });
-          await pause(300);
+          lightInTime = await lightGone(Date.now() + 5000);
           lightGoneAtHeavyEnd = !queue().some((e) => e.pr === 2);
           events.push('heavy end');
         } else {
@@ -946,7 +958,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
     });
     const say = (line) => {
       m.said.push(line);
-      if (/^memoro-cli #2: merged/u.test(line)) lightAnswered = Date.now() - started;
+      if (/^memoro-cli #2: merged/u.test(line)) lightAnswered = true;
     };
     const code = await serve({
       root, lock, take, release, laneOf: LANE_OF, say, now: m.deps.now,
@@ -956,7 +968,7 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
     assert.equal(code, 0);
     assert.deepEqual(events, ['heavy start', 'light', 'heavy end']);
     assert.equal(lightGoneAtHeavyEnd, true, 'the light job was answered and dequeued before the heavy round resolved');
-    assert.ok(lightAnswered !== null && lightAnswered < 300, `answered at ${lightAnswered} ms`);
+    assert.equal(lightInTime, true, 'the light job was answered while the heavy round was held open');
     assert.deepEqual(lanesAsked, ['heavy', 'light'], 'each job reads the round in its own lane');
     assert.deepEqual(signals, [false, false], 'the gate installs no signal handler in the merger');
     assert.deepEqual(queue(), []);
