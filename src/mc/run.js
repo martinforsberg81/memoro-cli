@@ -147,6 +147,7 @@ import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { readLaneCount } from './lane-count.js';
+import { patchBillingState, planWindows, readBillingMode, readBillingState } from './billing.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
@@ -464,6 +465,14 @@ export function realDeps(env = process.env) {
     freeMemoryPercent: () => freeMemoryPercent(),
     rmTree:(path) => { try { rmSync(path, { recursive: true, force: true }); return true; } catch { return false; } },
     pid: process.pid,
+    // `~/mc/runner/billing.json` and `billing-state.json` (billing.js): the
+    // mode Martin set and the plan's windows the runner has seen. A dependency
+    // so a test never reads or writes the machine's own.
+    billing: {
+      readMode: () => readBillingMode(),
+      readState: () => readBillingState(),
+      patchState: (patch) => patchBillingState(patch),
+    },
     addWorktree,
     role: readCanonRole,
     launch: resolveLaunch,
@@ -2234,6 +2243,16 @@ export function createRunner({
     }
     const seconds = Math.round((deps.now().getTime() - t0) / 1000);
     writeSessionLogs(out, result);
+    // The plan's 5-hour and seven-day windows, as the stream last carried
+    // them: what `auto` reads to move to the credit (billing.js).
+    if (launch.id === 'claude-code' && deps.billing?.patchState) {
+      const windows = planWindows(result.stdout);
+      try {
+        if (windows) deps.billing.patchState({ plan: { ...windows, seen: stamp() } });
+      } catch (error) {
+        say(`${name}: the plan's windows were not recorded (${error.message})`);
+      }
+    }
 
     // The abort survives the kind it was written for, and for the reason it
     // was written: a merge the session did not commit leaves unmerged paths,

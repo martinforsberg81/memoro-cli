@@ -4448,3 +4448,51 @@ test('recovery: interrupted projects go first in the queue, the most recent last
   f.files['/w/runner/projects/gamma.json'] = entry('gamma', '2026-08-29T09:50:00Z');
   assert.deepEqual(createRunner({ deps: f.deps }).queue().names, ['gamma', 'beta', 'alpha']);
 });
+
+/** The `rate_limit_event` as it stood in `~/mc/runner/log/*.jsonl` on 2026-10-11. */
+const WINDOWS_EVENT = JSON.stringify({
+  type: 'rate_limit_event',
+  rate_limit_info: {
+    status: 'allowed_warning', resetsAt: 1792155600, rateLimitType: 'seven_day', utilization: 0.59,
+    unifiedWindows: { five_hour: { utilization: 0.08, resetsAt: 1791721200 }, seven_day: { utilization: 0.59, resetsAt: 1792155600 } },
+  },
+});
+
+test('a claude session whose stream carries the plan windows records them in the billing state', async () => {
+  const f = fixture({ plans: { memoro: { r: ready } }, session: () => null });
+  const patches = [];
+  f.deps.billing = { readMode: () => 'plan', readState: () => ({}), patchState: (patch) => { patches.push(patch); } };
+  const lands = landsItself(f, 'r', 61, okSession({ type: 'result' }));
+  f.deps.session = (call) => {
+    const answer = lands(call);
+    return { ...answer, stdout: `${WINDOWS_EVENT}\n${answer.stdout}` };
+  };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(patches.length, 1);
+  assert.equal(patches[0].plan.seven_day.utilization, 0.59);
+  assert.equal(patches[0].plan.seven_day.resets_at, new Date(1792155600 * 1000).toISOString());
+  assert.equal(patches[0].plan.five_hour.utilization, 0.08);
+  assert.equal(patches[0].plan.seen, '2026-08-29T10:00:00Z');
+});
+
+test('a codex session records no plan windows, and neither does a claude stream without them', async () => {
+  for (const runner of [{ tool: 'codex' }, undefined]) {
+    const f = fixture({ plans: { memoro: { r: plan({ runner }) } }, session: () => null });
+    const patches = [];
+    f.deps.billing = { readMode: () => 'plan', readState: () => ({}), patchState: (patch) => { patches.push(patch); } };
+    const lands = landsItself(f, 'r', 62, okSession({ type: 'result' }));
+    f.deps.session = (call) => {
+      const answer = lands(call);
+      return runner ? { ...answer, stdout: `${WINDOWS_EVENT}\n${answer.stdout}` } : answer;
+    };
+    await createRunner({ deps: f.deps }).pass();
+    assert.deepEqual(patches, [], runner ? 'codex' : 'no event');
+  }
+});
+
+test('realDeps carries the billing files the runner reads and writes', () => {
+  const deps = realDeps({});
+  assert.equal(typeof deps.billing.readMode, 'function');
+  assert.equal(typeof deps.billing.readState, 'function');
+  assert.equal(typeof deps.billing.patchState, 'function');
+});

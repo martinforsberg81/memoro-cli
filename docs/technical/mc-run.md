@@ -1487,6 +1487,35 @@ step set ready over an open pull request would be run again on top of it.
   four of them past 280 turns, and every one was a failed step with its work
   left uncommitted in the worktree.)
 
+### Billing
+
+Who pays for a claude step session is a mode Martin sets with
+`mc run --billing plan|credits|auto` (project step-credits, ruling 38):
+
+- **`plan`** — the default, and today's behaviour: the Max plan's weekly and
+  5-hour budget. An absent, unreadable or unknown file reads as `plan`.
+- **`credits`** — every new claude step session on the plan's monthly API
+  credit.
+- **`auto`** — the credit when the last seen seven-day utilization is at or
+  above 80 % (`CREDITS_AT_UTILIZATION`) or the plan has refused a session, and
+  the plan again once the seven-day window has reset. The last fifth of the
+  week is left for Martin's own interactive work, which the credit does not
+  cover.
+
+Two files under `~/mc/runner/` (`src/mc/billing.js`): **`billing.json`** is
+Martin's — `{ mode, set }`, written by the verb, which also clears any credit
+mark — and **`billing-state.json`** is the runner's: the 5-hour and seven-day
+windows (`utilization`, `resets_at`) from the last `rate_limit_event` that
+carried `unifiedWindows` in a claude session's stream, recorded after every
+claude step session, with `refused_until` and the credit's `unusable_until`.
+`billingFor` is the one answer to which billing a launch would get; codex is
+always `plan`. The mode is read at every new session, so a running runner
+needs no restart. `mc run --billing` with no mode prints the mode, the
+windows, any refusal or credit mark, and what the next claude step session
+would run on.
+
+So far this only records: no session is launched differently by it yet.
+
 ## What runs beside it
 
 Nothing of its own, and that is the point. The runner's chore pass — the

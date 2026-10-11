@@ -28,7 +28,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc run --billing` prints the mode, the last seen 5-hour and seven-day utilization with their resets, any plan refusal and any credit mark, and what the next claude step session would run on; `mc run --billing plan|credits|auto` writes the mode and clears the credit mark; nothing else reads as anything but `plan`.",
       "check": "`tests/mc/commands/run-billing.test.js` and `tests/mc/billing.test.js`: absent, broken and unknown files read `plan`; each mode round-trips; a write clears `credits.unusable_until`; the printed lines for a state with `seven_day.utilization` 0.83 in `auto` say the next session runs on credits. On the machine after landing: `mc run --billing` prints `plan`."
     },

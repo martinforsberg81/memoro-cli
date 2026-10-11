@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
+import { CREDITS_AT_UTILIZATION } from '../../src/mc/billing.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
 import { STEP_STATUSES } from '../../src/mc/plan-schema.js';
 import { LANES_MAX, LANES_MIN } from '../../src/mc/lane-count.js';
@@ -30,6 +31,12 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     const match = /every lane sleeping (\d+)m/u.exec(DOC);
     assert.ok(match, 'the doc no longer states the quota sleep');
     assert.equal(Number(match[1]) * 60_000, QUOTA_SLEEP_MS);
+  });
+
+  it('states the seven-day utilization at which auto moves to the credit', () => {
+    const match = /at or\s+above (\d+) % \(`CREDITS_AT_UTILIZATION`\)/u.exec(DOC);
+    assert.ok(match, 'the doc no longer states where auto moves to the credit');
+    assert.equal(Number(match[1]), CREDITS_AT_UTILIZATION * 100);
   });
 
   it('states the poll a lane held back by the total sleeps, and the bounds both numbers take', () => {
