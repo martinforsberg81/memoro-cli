@@ -1218,38 +1218,3 @@ merger. The watch is read-only. It prints a line only when the state changes,
 and it asks GitHub once, when the job has left the queue. Nothing starts it
 except a session that chooses to. Carried by `merge-watch`
 (`docs/project/mc/merge-watch/PLAN.json`).
-
-
-## 39 · A red someone is fixing is drawn yellow, and a blocked later step holds nothing
-
-`ruling · 2026-10-11` · raised by Martin at the brief
-
-On 2026-10-11 the page drew memoro #13457 (scoped-chat-d1 step 5) as a red
-row for forty minutes while a runner session was resolving its restack
-conflict and running the gate. And #13409 (accounting-model step 2) had stayed
-red for seven hours after its mend timed out: the merger set the step
-`ready` again, "the next session fixes it on the same pull request", but no
-session started. Step 4's #13415 was open and `blocked` on a decision, and
-`holdingPrs` (`src/mc/run-plan.js`) counts only `landing` and `ready` steps'
-pull requests as the project's own. So the runner answered the whole project
-"not starting a step", which contradicts ruling 30: "When the one below comes
-back red, it is the next session's first".
-
-> "Vi behöver uppdatera mc ui så att det framgår att en röd merge såsom
-> #13457 tas om hand om; kanske bli gulmarkerad när en runner är igång med
-> den med status-uppdateringar." … "Fundera på varför en runner inte kan
-> lösa #13409 på egen hand?" (Martin, 2026-10-11)
-
-> "Gränsen för mend-sessionen behöver alltså förlängas; inget vits att kapa
-> sessionen för tidiget - ger bara kostnad utan värde." … "Ja, skriv ihop
-> planer även för detta: en mc-plan för den gula raden i mc-sidan (#2) och
-> för att ett blockerat steg 4 inte ska hindra att ett rött steg 2 lagas."
-> (Martin, 2026-10-11)
-
-So a project's own `blocked` step does not hold the project back: its pull
-request is parked on a question, and it is not somebody's work in flight. An
-earlier step that came back red is started as ruling 30 says. And a red row
-whose step a live runner session holds is drawn yellow, as the mend row is,
-with the session's last sentence as its status. The mend's wall clock went
-from 20 to 120 minutes in memoro-cli #867, outside this plan. Carried by
-`red-in-hand` (`docs/project/mc/red-in-hand/PLAN.json`).

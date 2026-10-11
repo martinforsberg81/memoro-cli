@@ -791,7 +791,14 @@ asking — and the step is `landing` until the merger writes `done`, or sends a
 red back as `ready` (*The register*). A `landing` step does not hold the
 project: the next step starts at once on a branch on top of it (`placeBranch`,
 `stacked_on`), and the merger lands the two in order
-([`mc-merge.md`](mc-merge.md) § *One round at a time*). The round the merger
+([`mc-merge.md`](mc-merge.md) § *One round at a time*). Nor does a `blocked`
+step (ruling 39, 2026-10-11): its pull request is parked on a question, not
+work in flight, so `holdingPrs` (`run-plan.js`) drops a pull request recorded
+on any of the project's own `landing`, `ready` or `blocked` steps, and an
+earlier step the merger sent back red is started even while a later one waits
+on a decision. A pull request on none of the project's steps still ends the
+pick (`inFlight`), and a `blocked` step that is the first unfinished one still
+starts nothing (`planState`). The round the merger
 runs is the one below, and so is everything said about what it reads back. A
 session that wants to wait for the answer runs `mc merge watch <repo> <pr>`
 or `mc merge <repo> <pr> --watch`, opt-in and read-only
