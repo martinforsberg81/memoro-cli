@@ -46,8 +46,15 @@ export const PLAN_VERSION = 1;
 // `mc step ready` (ruling 21). `landing` (ruling 30, 2026-10-09) is the
 // register's too: the step's pull request is in the merger's queue, and the
 // merger writes `done` or sends it back.
+//
+// `time` and `deploy` (ruling 35, 2026-10-10) are waits nobody has to judge:
+// `time` carries `at`, an ISO instant, and `deploy` carries `step`, an earlier
+// step of the same plan, and `hours` after that step's deploy. Those two and
+// `project` release by themselves — the runner sets the step `ready` when
+// `blockerDue` (`step-release.js`) says the wait is over. `decision` and
+// `workarea` stay a person's.
 export const STEP_STATUSES = Object.freeze(['ready', 'running', 'landing', 'done', 'failed', 'blocked']);
-export const BLOCKER_KINDS = Object.freeze(['decision', 'project', 'workarea']);
+export const BLOCKER_KINDS = Object.freeze(['decision', 'project', 'workarea', 'time', 'deploy']);
 
 const STATUSES = new Set(STEP_STATUSES);
 const KINDS = new Set(BLOCKER_KINDS);
@@ -114,7 +121,38 @@ const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'check_
 const STEP_RUNNER_KEYS = Object.freeze(['model', 'effort', 'advisor']);
 /** claude's `--effort` levels, as `claude --help` lists them (2.1.268). */
 export const EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-const BLOCKER_KEYS = Object.freeze(['kind', 'name']);
+const BLOCKER_KEYS = Object.freeze(['kind', 'name', 'at', 'step', 'hours']);
+
+/** The field a blocker carries beyond its name, and the one kind that may carry it. */
+const BLOCKER_FIELDS = Object.freeze({ at: 'time', step: 'deploy', hours: 'deploy' });
+
+/**
+ * What is wrong with a `time` or `deploy` blocker's own fields, as
+ * `<field>: <problem>` — and any of those fields on a kind that has none.
+ * `number` is the blocked step's own 1-based number: a deploy waits on a step
+ * before it. Shared by the schema and the register's `patchStep`, so a blocker
+ * `mc step blocked` writes is one a plan could carry.
+ */
+export function blockerFieldProblems(blocker, number) {
+  const problems = [];
+  for (const [field, kind] of Object.entries(BLOCKER_FIELDS)) {
+    if (blocker[field] !== undefined && blocker[field] !== null && blocker.kind !== kind) {
+      problems.push(`${field}: only a ${kind} blocker has one`);
+    }
+  }
+  if (blocker.kind === 'time' && !(typeof blocker.at === 'string' && Number.isFinite(Date.parse(blocker.at)))) {
+    problems.push('at: the ISO instant the step waits until');
+  }
+  if (blocker.kind === 'deploy') {
+    if (!(positiveInteger(blocker.step) && (!Number.isInteger(number) || blocker.step < number))) {
+      problems.push(`step: the number of an earlier step of this plan${Number.isInteger(number) ? `, below ${number}` : ''}`);
+    }
+    if (blocker.hours !== undefined && blocker.hours !== null && !(Number.isFinite(blocker.hours) && blocker.hours >= 0)) {
+      problems.push('hours: a number of 0 or more');
+    }
+  }
+  return problems;
+}
 
 function plain(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -198,7 +236,7 @@ function validateDocuments(list, problems) {
   });
 }
 
-function validateBlocker(step, at, problems) {
+function validateBlocker(step, at, problems, number) {
   const blocker = step.blocked_by;
   if (STOPPED.has(step.status)) {
     if (!plain(blocker)) {
@@ -207,6 +245,7 @@ function validateBlocker(step, at, problems) {
     }
     for (const key of unknownKeys(blocker, BLOCKER_KEYS)) problems.push(`${at}.blocked_by.${key}: unknown key`);
     if (!KINDS.has(blocker.kind)) problems.push(`${at}.blocked_by.kind: one of ${BLOCKER_KINDS.join(', ')}`);
+    for (const problem of blockerFieldProblems(blocker, number)) problems.push(`${at}.blocked_by.${problem}`);
     if (!text(blocker.name)) problems.push(`${at}.blocked_by.name: the decision, the project or the workarea fault it waits for`);
     // A name, and the same shape as a project directory — because that is what
     // it is matched against. Three plans wrote a whole sentence here instead:
@@ -269,7 +308,7 @@ function validateSteps(steps, problems) {
     if (step.pr !== null && step.pr !== undefined && !positiveInteger(step.pr)) {
       problems.push(`${at}.pr: a pull request number, or null`);
     }
-    validateBlocker(step, at, problems);
+    validateBlocker(step, at, problems, index + 1);
     validateRunner(step.runner, problems, { at: `${at}.runner`, keys: STEP_RUNNER_KEYS });
   });
 }

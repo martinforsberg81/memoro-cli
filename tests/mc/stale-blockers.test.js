@@ -51,11 +51,10 @@ describe('stale blockers', () => {
     assert.equal(staleBlockers(PLANS).some((item) => item.project === 'web-renderer-close'), false);
   });
 
-  it('reports a blocker whose plan is still on main and says done', () => {
-    // The `done` arm has no specimen on main and cannot have one: `mc run`
-    // archives a plan the round it says done, which is how the two above lost
-    // theirs. So it is built by finishing a real plan's steps rather than by
-    // writing a plan, and it is the same fault either way.
+  it('leaves a blocker whose plan is on main and done to the runner, which releases it', () => {
+    // Ruling 35: the runner sets such a step `ready` itself (`releaseDue`), so
+    // a line asking a person to would be asking for what is already done.
+    // Built by finishing a real plan's steps rather than by writing a plan.
     const blocker = PLANS.find((p) => p.project === 'time-axis');
     const finished = {
       ...blocker,
@@ -63,7 +62,7 @@ describe('stale blockers', () => {
       plan: { ...blocker.plan, steps: blocker.plan.steps.map((step) => ({ ...step, status: 'done', blocked_by: null })) },
     };
     const found = staleBlockers([PLANS.find((p) => p.project === 'web-renderer-close'), finished]);
-    assert.deepEqual(found.map(describeStale), ['web-renderer-close step 1 waits on time-axis, which is done']);
+    assert.deepEqual(found, []);
   });
 
   it('never reports a decision blocker — there is no artefact to read it against', () => {

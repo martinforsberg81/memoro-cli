@@ -1,0 +1,81 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A red pull request somebody is fixing looks like it on the page, and a red nobody is fixing gets a session. A project's own `blocked` step no longer holds the project back, so a step the merger sent back red is started by the runner even when a later step of the same plan is parked on a decision. A red row whose step a live runner session holds is drawn yellow, with the session's last sentence and how long it has been on it, rather than red.",
+    "Seen on 2026-10-11. #13409 (accounting-model step 2) went red at 22:59:48Z on 2026-10-10 when its mend timed out, and `merger.log` said \"accounting-model step 2 is ready again (attempt 1) — the next session fixes it on the same pull request\". No session started for seven hours, because #13415 (step 4) was open and `blocked` on `accounting-repository-reachability`, and `mc status accounting-model` read \"#13415 is open … — not starting a step\". Meanwhile #13457 (scoped-chat-d1 step 5) showed as `✗` red on the page for forty minutes while the session `scoped-chat-d1-20261011T060501Z` was resolving its restack conflict and running `mc gate`."
+  ],
+  "contract": [
+    "A pull request that is not one of the project's own steps' still ends the round (`inFlight`). That covers a session that timed out with commits pushed and no step naming its pull request, and `plan-trespass`. Only a step the register says is `blocked`, with that pull request recorded on it, stops counting.",
+    "The runner still hands out the first unfinished step and no other (`planState`). A `blocked` step that is the first unfinished one still starts nothing.",
+    "The page reads files and starts nothing. The yellow row comes from files mc already keeps (`current-*.json`, the register, the session's `.jsonl`). The page reads them, never GitHub and never a process table.",
+    "Every step runs `npm test` and lands through `mc merge memoro-cli <pr>`. Code under `src/` takes effect in the runner and the merger when each next starts."
+  ],
+  "out_of_scope": [
+    "The mend session's own status line. A mend's output is buffered (`stream: false`, `src/mc/mend.js`), so there is no file to read. Its yellow row stays as it is. Its wall clock went from 20 to 120 minutes in memoro-cli #867, outside this plan.",
+    "`mc status <project>`. Its OPEN PR line keeps saying \"came back red from the merger\". The page is what Martin asked about.",
+    "A `failed` step's pull request. It still holds the project, as today."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A project whose first unfinished step is `ready` with its pull request kept, and whose later step is `blocked` with an open pull request of its own, is runnable: `holdingPrs` drops both pull requests, and `pickState`, `runStepClaimed` and `mc status` all agree.",
+      "check": "`tests/mc/run-plan.test.js`: `holdingPrs` with a record whose steps are `[done, ready pr 2, landing pr 3, blocked pr 4]` and open PRs 2, 3, 4 and 9 (9 on no step) returns only 9. With 9 removed, `inFlight` of the result is null and `nextFor` picks the project. A record whose first unfinished step is `blocked` still yields no step (`chooseKind` → `blocked`). Live: the close-out quotes the first `runner/log/runner.log` line where a project with a `blocked` later step starts its red earlier step, or says none occurred in the window."
+    },
+    {
+      "met": false,
+      "criterion": "A red row in MERGES whose step a live runner session holds is drawn yellow with the running mark, the word `fixing`, the session's last assistant sentence and the session's age. The heading counts it as `N fixing` and no longer as red. A red nobody holds stays red, as today.",
+      "check": "`tests/mc/page.test.js`: a `merges.json` red entry `{ step: { project: 'card-views', index: 2 } }` with a lane file `{ name: 'card-views', step: 3, pid: <alive> }` and a register step 2 with `session.log` pointing at a fixture `.jsonl` whose last assistant text is \"Running the gate.\" draws `  ● memoro      #13370  card-views step 3  fixing — Running the gate.  6 min`. The heading reads `1 fixing`. With the pid dead, or the lane on step 4, the same entry is the red row. Live: the close-out quotes a page frame (`mc | cat`) with a `fixing` row, or says no red was being fixed in the window."
+    }
+  ],
+  "documents": [
+    { "label": "mc rulings (ruling 39, ruling 30)", "path": "../rulings.md" },
+    { "label": "The page", "path": "../../../technical/mc-ui.md" },
+    { "label": "mc run", "path": "../../../technical/mc-run.md" }
+  ],
+  "steps": [
+    {
+      "title": "1. A project's own blocked step holds nothing",
+      "status": "ready",
+      "done_when": "`holdingPrs` (`src/mc/run-plan.js`) treats a pull request recorded on one of the project's own steps with status `landing`, `ready` or `blocked` as the project's own and drops it. The test in `tests/mc/run-plan.test.js` from the first criterion passes, and `npm test` is green.",
+      "instruction": [
+        "Today `holdingPrs(openPrs, record)` (`src/mc/run-plan.js:275`) builds `own` from `record.plan.steps` filtered to `step.pr && (step.status === 'landing' || step.status === 'ready')`. Every other open pull request goes to `inFlight` (`:255`), which ends the project's round with `<pr> — not starting a step`. A step session that stops on a question sets its step `blocked` and leaves its pull request open, as ruling 21 asks. So one such step stops the project, including the earlier step the merger sent back `ready` (ruling 30: \"When the one below comes back red, it is the next session's first\"). The steps it reads are the register's laid over the plan's, which is why `landing`, `ready` and `running` can be seen there at all.",
+        "**The change.** Add `'blocked'` to the statuses in that filter, and nothing else. Rewrite the doc comment above it to say why. A `blocked` step's pull request is parked on a question a person answers, and nobody's session is on it. The runner never hands out a step past the first unfinished one (`planState`, `src/mc/plan-schema.js:401`), so a blocked step that is first still starts nothing (`deliverableStep` answers `blocked`). A blocked step after a ready one no longer stops that one. Cite ruling 39.",
+        "**What already follows.** All three callers go through `holdingPrs`: `pickState` (`run-plan.js:387`), the runner's own check before a step (`src/mc/run.js:1985`) and `mc status` (`src/mc/status-collect.js:139`). None of them needs a change. Moving the workarea onto the red step's branch is already `placeBranch` (`run.js:1084`): \"a step the merger sent back (`ready` with its `pr` and `branch`) goes back to its own branch\". Confirm this by reading, and do not change it.",
+        "**Tests.** In `tests/mc/run-plan.test.js`, add one test for `holdingPrs` itself. The record's `plan.steps` is `[{status:'done',pr:1},{status:'ready',pr:2},{status:'landing',pr:3},{status:'blocked',pr:4}]` and the open PRs are `[2,3,4,9]` as `{ number }`, so the result is `[9]`. Add one test that `nextFor` picks the project when the open PRs are `[2,3,4]`, and one that a record whose first unfinished step is `blocked` gets no step from `chooseKind`. Follow the fixtures the file's `nextFor` tests already build (`:95`)."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "2. A red a runner session is fixing is a yellow row with the session's last sentence",
+      "status": "ready",
+      "done_when": "`mergesSection` returns `fixing: { count, items }`. Each item is a red whose `step` a live lane holds, with `said` and `age_seconds`, and it is no longer in `red`. `page-render.js` draws it with `fixingLine` in yellow, and the heading counts `N fixing`. The tests in the second criterion pass, `docs/technical/mc-ui.md` describes the row, and `npm test` is green.",
+      "instruction": [
+        "Today a red row comes from `~/mc/runner/merges.json` (`mergesPath`, `src/mc/merge-queue.js`) through `mergesSection` in `src/mc/page-collect.js:584`. The red items are built at about `:660`, and each keeps the queue entry's `step: { project, index }` (0-based). `redLine` (`src/mc/page-render.js:836`) draws them red. The yellow row already exists for a merger mend: `mendingItems` (`page-collect.js`, entries with `state === 'mending'`), drawn by `mendLine` (`page-render.js:854`) and counted `N mending` in `mergesLines` (`:877`). Note: `page-collect.js` holds non-UTF-8 bytes, so plain `grep` skips it. Use `grep -a`.",
+        "**Who is on it.** A runner session's lane file is `~/mc/runner/current-<repo>[-<lane>].json`, read by `readCurrents` (`src/mc/status-collect.js:247`) and already read once in `collectPage` for RUNNER (`page-collect.js`, `runnerSection({ currents: readCurrents(...) })`). It holds `name`, `step` (1-based), `kind`, `pid` and `started`. A red is being fixed when some current has `kind === 'step'`, `name === red.step.project`, `step === red.step.index + 1` and a live `pid` (the page's `alive`, as `runnerSection` uses it). Read the currents once and pass them to `mergesSection` as a new `currents` argument (default `[]`), together with `alive` and a `readEntry`-shaped reader (default: none, meaning no status line), so the function stays pure for its tests.",
+        "**What it is doing.** The register step (`~/mc/runner/projects/<project>.json`, `readEntry` from `src/mc/register.js`, already imported in `page-collect.js`) has `session.log`, a path without extension. The session's transcript is `<log>.jsonl`, written as it streams. Read only its last 64 KiB, parse the whole lines, and take the last assistant text with `claudeTail` (`src/mc/work-status.js:201`), exported for this. A codex session uses `codexTail` by the current's `tool`. A missing or unreadable file means `said: null`, never an error.",
+        "**The item and the row.** Move a red that is being fixed from `red.items` to `fixing.items` as `{ ...redItem, said, age_seconds: <seconds since the current's started>, lane }`. The `fixing` key also goes in the returned object. In `page-render.js`, add `fixingLine(c, wide, item)` beside `mendLine` and shaped like it: `  ${MARK.running} <repo> #<pr>  <name> step <n>  fixing — <said or the red reason>  <age>`, in yellow, where the said text gives way first and the number and the name never do. In `mergesLines`, draw fixing rows after the mend rows and before the reds, and put `N fixing` in yellow on the heading between `mending` and `red`. Write the doc comment on `fixingLine` in the style of `mendLine`'s, quoting Martin's words from ruling 39.",
+        "**Tests.** In `tests/mc/page.test.js`, beside the mending test (`:994-1012`), use the fixture from the second criterion. Cover: yellow row and `1 fixing` heading, with no red row for that PR. A dead pid gives the red row. A current on another step gives the red row. A missing `.jsonl` gives the row with the red reason in place of `said`. Unit-test `claudeTail` on a three-entry transcript if `work-status` has a test file. Otherwise rely on the page test.",
+        "**Docs.** `docs/technical/mc-ui.md`: in MERGES, the fixing row, what joins it to the lane (the rule above) and where `said` comes from. In the colour table, rows for red, mending and fixing."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "3. Close-out",
+      "status": "ready",
+      "done_when": "Every criterion is marked with what was seen, `docs/technical/mc-run.md` says a blocked step holds nothing, `docs/project/project_log.md` has the row, ruling 39 is deleted from `rulings.md`, and every step is `done` with its PR.",
+      "instruction": [
+        "**Live.** Once both steps have landed and the runner has restarted on the new code (`runner.json` `commit` at or after step 2's merge), read `~/mc/runner/log/runner.log` and `merger.log` for 2 hours. Quote any line where a project with a `blocked` later step starts a step the merger sent back. Capture `mc | cat` while a red is being fixed and quote the `fixing` row. Mark each criterion met with what was seen, or not met with why (for example, no such red occurred in the window).",
+        "**Docs.** `docs/technical/mc-run.md`, where it describes what holds a project back (search for `in-flight` / `holdingPrs`): a `blocked` step's pull request is the project's own, with ruling 39.",
+        "**Log.** Add the row to `docs/project/project_log.md` in its format: programme `mc`, project `red-in-hand`, delivered, one paragraph, the PRs. Delete ruling 39 from `docs/project/mc/rulings.md`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}

@@ -474,6 +474,58 @@ function deployLines(lines, c, wide, production) {
   heading(lines, c, wide, 'DEPLOY', fitting(parts, room), verb);
 }
 
+/** A language reading older than this is one worth taking again. */
+export const LANGUAGE_STALE_S = 7 * 24 * 60 * 60;
+
+/** A language run's outcome, one colour each: what stopped waits on a person. */
+const RUN_TONE = { running: ['green'], stopped: ['yellow'], refused: ['yellow'], failed: ['red'], done: ['grey'] };
+
+/**
+ * LANGUAGE — what `mc language` last read and last ran, right after DEPLOY
+ * because it is the other door to production. Only the languages with
+ * something to say are drawn — unresolved selectors, rows waiting, a reading a
+ * week old — and the last run rides on the heading. With neither the section
+ * is not drawn at all: the empty page gains no line.
+ */
+function languageLines(lines, c, wide, language, at) {
+  const ageOf = (iso) => {
+    const ms = at - Date.parse(iso);
+    return Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000)) : null;
+  };
+  const rows = (language?.languages || []).map((entry) => {
+    const age = entry.read_at ? ageOf(entry.read_at) : null;
+    const stale = age === null || age >= LANGUAGE_STALE_S;
+    const parts = [];
+    if (entry.unresolved) parts.push({ text: `${entry.unresolved} unresolved selector${entry.unresolved === 1 ? '' : 's'}`, styles: ['yellow'] });
+    if (entry.waiting_rows) parts.push({ text: `${entry.waiting_rows} rows waiting · mc language promote`, styles: ['yellow'] });
+    if (!parts.length && !stale) return null;
+    parts.push({ text: entry.read_at ? `read ${ageWords(age)} ago` : 'never read', styles: stale ? ['yellow'] : ['grey'] });
+    return { lang: entry.lang, parts };
+  }).filter(Boolean);
+  const last = language?.last_run;
+  if (!rows.length && !last) return false;
+  const counts = last
+    ? [
+      { text: `last run ${last.manifest}${last.dry_run ? ' (dry run)' : ''} · ` },
+      { text: last.outcome, styles: RUN_TONE[last.outcome] || ['grey'] },
+      { text: ` · ${ageWords(ageOf(last.ended || last.started))} ago`, styles: ['grey'] },
+    ]
+    : 'no run recorded';
+  heading(lines, c, wide, 'LANGUAGE', counts, 'mc language');
+  for (const { lang, parts } of rows) {
+    const left = `    ${c(pad(lang, 4), 'bold')}`;
+    lines.push(`${left}${paint(c, between(parts, ' · '), wide - width(left))}`);
+  }
+  return true;
+}
+
+/** The red line above every section while a run is stopped inside a gap. */
+function openGapLine(lines, c, wide, gap) {
+  if (!gap) return;
+  say(lines, c, wide, 2, `language: ${gap.manifest} stopped after ${gap.act} — ${gap.says} · mc language resume`, ['red', 'bold']);
+  lines.push('');
+}
+
 /** A daily reading older than this missed a day: its age is drawn yellow. */
 const CHECK_STALE_S = 36 * 60 * 60;
 
@@ -718,12 +770,13 @@ export const QUEUED_DRAWN = 6;
 /**
  * The queue's numbers for the MERGES heading, in landing order: `#N` while
  * the queue is one repository, `repo#N` with two, `→#M` on one built on
- * another. Numbers that do not fit in `room` become `… N more`, never a
- * clipped half.
+ * another, `⏸` on one whose plan's earlier step is not done (`waits_for`),
+ * `↻` on one back in line after its mend (`mended`).
+ * Numbers that do not fit in `room` become `… N more`, never a clipped half.
  */
 function waitingNumbers(items, room) {
   const repos = new Set(items.map((item) => item.repo));
-  const label = (item) => `${repos.size > 1 ? `${item.repo}` : ''}#${item.pr}${item.parent ? `→#${item.parent.pr}` : ''}`;
+  const label = (item) => `${repos.size > 1 ? `${item.repo}` : ''}#${item.pr}${item.mended ? '↻' : ''}${item.parent ? `→#${item.parent.pr}` : ''}${item.waits_for ? '⏸' : ''}`;
   let shown = '';
   for (const [index, item] of items.entries()) {
     const text = `${shown ? ' ' : ''}${label(item)}`;
@@ -746,13 +799,17 @@ function waitingNumbers(items, room) {
  *
  * The title is what gives way on a narrow terminal, and after it the tail from
  * the end; the number and the name never do.
+ *
+ * A batch member after the round's first (`batch_of`) has the same green head
+ * and, where the tail would be, `same round as #<first>` in grey: the phase
+ * and the clock are the round's, and are on the first row.
  */
 function landingLine(c, wide, landing) {
   const where = pad(clip(landing.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
   const number = landing.pr != null ? `#${landing.pr}  ` : '';
   const name = landing.name ? `${clip(landing.name, nameWidth(wide) - 1)}${landing.step ? ` step ${landing.step}` : ''}  ` : '';
   const head = `  ${MARK.running} ${where} ${number}${name}`;
-  const tail = trailing([
+  const tail = landing.batch_of != null ? [{ text: `same round as #${landing.batch_of}`, styles: ['grey'] }] : trailing([
     { text: landing.mode === 'check' ? 'measuring, not landing' : 'landing' },
     landing.lane ? { text: `${landing.lane} lane`, styles: ['grey'] } : null,
     landing.phase ? { text: landing.phase } : null,
@@ -790,6 +847,45 @@ function redLine(c, wide, item) {
 }
 
 /**
+ * A red getting its one mend (mend.js): drawn as `redLine` is, in yellow with
+ * the running mark — a session has the branch and nobody has to do anything
+ * yet. The reason gives way first; the number and the name never do.
+ */
+function mendLine(c, wide, item) {
+  const where = pad(clip(item.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
+  const name = item.name ? `${clip(item.name, nameWidth(wide) - 1)}${item.step_number ? ` step ${item.step_number}` : ''}  ` : '';
+  const head = `  ${MARK.running} ${where} #${item.pr}  ${name}mending — `;
+  const age = `  ${item.waiting ? 'waiting' : ageWords(item.age_seconds)}`;
+  const room = Math.max(8, wide - head.length - age.length - 2);
+  return paint(c, [
+    { text: head, styles: ['yellow'] },
+    { text: clip(one(item.reason || 'red'), room), styles: ['yellow'] },
+    { text: age, styles: ['grey'] },
+  ]).replace(/[ ]+$/u, '');
+}
+
+/**
+ * A red a runner session is on (ruling 39, Martin, 2026-10-11: *"bli
+ * gulmarkerad när en runner är igång med den med status-uppdateringar"*):
+ * drawn as `mendLine` is, in yellow with the running mark, with the session's
+ * last sentence in place of the reason (the reason when it has said nothing
+ * yet) and how long the session has run. The sentence gives way first; the
+ * number and the name never do.
+ */
+function fixingLine(c, wide, item) {
+  const where = pad(clip(item.repo || 'unknown', LANE_REPO - 1), LANE_REPO);
+  const name = item.name ? `${clip(item.name, nameWidth(wide) - 1)}${item.step_number ? ` step ${item.step_number}` : ''}  ` : '';
+  const head = `  ${MARK.running} ${where} #${item.pr}  ${name}fixing — `;
+  const age = item.age_seconds != null ? `  ${ageWords(item.age_seconds)}` : '';
+  const room = Math.max(8, wide - head.length - age.length - 2);
+  return paint(c, [
+    { text: head, styles: ['yellow'] },
+    { text: clip(one(item.said || item.reason || 'red'), room), styles: ['yellow'] },
+    { text: age, styles: ['grey'] },
+  ]).replace(/[ ]+$/u, '');
+}
+
+/**
  * MERGES — the gate rounds landing now (one per lane, ruling 34), and the
  * waiters behind them.
  *
@@ -805,9 +901,13 @@ function mergesLines(lines, c, wide, merges) {
   // the rows below are only the round in flight and the reds.
   const verb = 'mc merge <repo> <pr>';
   const reds = merges.red?.items || [];
+  const mends = merges.mending?.items || [];
+  const fixing = merges.fixing?.items || [];
   const parts = [];
   const landings = merges.landings || [].concat(merges.landing || []);
   if (landings.length) parts.push({ text: `${landings.length} landing`, styles: ['grey'] });
+  if (mends.length) parts.push({ text: `${mends.length} mending`, styles: ['yellow'] });
+  if (fixing.length) parts.push({ text: `${fixing.length} fixing`, styles: ['yellow'] });
   if (reds.length) parts.push({ text: `${reds.length} red`, styles: ['red', 'bold'] });
   const items = merges.queued.items || [];
   if (merges.queued.count) {
@@ -824,6 +924,8 @@ function mergesLines(lines, c, wide, merges) {
   // The heading has already said *nothing landing*; a row that says it again
   // is a row.
   for (const landing of landings) lines.push(landingLine(c, wide, landing));
+  for (const item of mends) lines.push(mendLine(c, wide, item));
+  for (const item of fixing) lines.push(fixingLine(c, wide, item));
   for (const item of reds) lines.push(redLine(c, wide, item));
 }
 
@@ -935,8 +1037,10 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
 }
 
 /**
- * The one line for a plan that has been waiting for nothing: a step blocked
- * on a project that is finished or gone from main (stale-blockers.js).
+ * The one line for a plan that may have been waiting for nothing: a step
+ * blocked on a project that is gone from main (stale-blockers.js). One whose
+ * project is done on main is released by the runner (ruling 35) and never
+ * reaches this line.
  * Yellow, because the palette's yellow is what waits on a person and this is
  * the page asking for one — nothing flips a blocker but a human with a plan
  * edit.
@@ -945,10 +1049,10 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
  * for staleness, because RUNNER two sections up already spends that word on a
  * lane file whose process is gone. One word, one meaning, on one page.
  *
- * It says *done or no longer on main* and not *not coming*, because those are
- * the only two things the check can know — `stale-blockers.js` computes `why`
- * as `is done` or `is not on main` and its docstring is careful about the
- * difference, since a project also leaves main when it is abandoned. The
+ * It says *no longer on main* and not *not coming*, because that is the one
+ * thing the check can know — `stale-blockers.js` computes `why` as `is not on
+ * main` and its docstring is careful about it, since a project also leaves
+ * main when it is abandoned. The
  * header said *not coming*, which is a prediction neither the module nor
  * anything else on this page is entitled to make.
  *
@@ -964,7 +1068,7 @@ function staleLine(lines, c, wide, stale) {
   // terminal to see is one the page has not really reported.
   lines.push(`       ${paint(c, [
     { text: `blocker finished ${stale.count}`, styles: ['yellow', 'bold'] },
-    { text: ' — a blocked step names a project that is done or no longer on main', styles: ['yellow'] },
+    { text: ' — a blocked step names a project no longer on main', styles: ['yellow'] },
   ], wide - 7)}`);
   for (const item of stale.items) {
     lines.push(`       ${paint(c, [
@@ -1350,6 +1454,9 @@ export function renderPageLines(data, {
   lines.push('');
   lines.push(`  ${brand} ${c('─'.repeat(Math.max(2, rule)), 'grey')} ${counts}`);
   lines.push('');
+  // A language run stopped inside a gap is production half-way between two
+  // states: above every section, until `mc language resume` closes it.
+  openGapLine(lines, c, wide, data.language?.open_gap);
 
   const sessions = data.sessions || { desks: {}, others: [] };
   // The order is Martin's (2026-09-19), and it still keeps the rule the page
@@ -1357,8 +1464,8 @@ export function renderPageLines(data, {
   // rows where they stand (page-live.js), and a row near the prompt is one it
   // can always reach. PROGRAMMES and WORK are the page as a listing; the two
   // desks change when somebody sits down; NEXT changes every round and RUNNER
-  // every frame; MERGES, DEPLOY, CHECKS and the MC line are the short end of
-  // the page.
+  // every frame; MERGES, DEPLOY, LANGUAGE, CHECKS and the MC line are the
+  // short end of the page.
   programmesLines(lines, c, wide, data.programmes, expand);
   lines.push('');
   workLines(lines, c, wide, sessions, data.programmes?.unplanned);
@@ -1379,6 +1486,7 @@ export function renderPageLines(data, {
   }
   deployLines(lines, c, wide, data.runner?.production);
   lines.push('');
+  if (languageLines(lines, c, wide, data.language, at)) lines.push('');
   checksLines(lines, c, wide, data.checks);
   lines.push('');
   mcLine(lines, c, wide, data.mc, data.caches, version);

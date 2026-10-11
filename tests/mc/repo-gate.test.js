@@ -1579,6 +1579,58 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
+    /** TAP with `killed` ended by SIGTERM and a located failure in each of `red`, the way node 24.10 writes both. */
+    function withKilled({ killed = [], red = [] }) {
+      const lines = ['TAP version 13'];
+      let index = 0;
+      for (const file of killed) {
+        index += 1;
+        lines.push(`# Subtest: ${file}`, `not ok ${index} - ${file}`, '  ---', `  location: '/somewhere/candidate/${file}:1:1'`,
+          "  failureType: 'testCodeFailure'", '  exitCode: ~', "  signal: 'SIGTERM'", "  error: 'test failed'", '  ...');
+      }
+      for (const file of red) {
+        index += 1;
+        lines.push(`not ok ${index} - a test in ${file}`, '  ---', `  location: '/somewhere/candidate/${file}:3:1'`, '  ...');
+      }
+      lines.push(`1..${index}`, '# tests 6', `# pass ${6 - index}`, `# fail ${index}`);
+      return lines.join('\n');
+    }
+
+    it('the only red file was killed: file-killed, and the main-red probe is never asked', async () => {
+      const fx = selecting({ files: [scanner, own] });
+      const probed = [];
+      try {
+        const report = await fx.report({
+          tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner] }) }),
+          probeMain: async (args) => { probed.push(args); return null; },
+        });
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'file-killed');
+        assert.equal(report.verdict, 'stopped');
+        assert.equal(report.reason, `${scanner} ended by SIGTERM from outside the round — not a verdict on this change`);
+        assert.deepEqual(report.killed_files, [{ file: scanner, signal: 'SIGTERM' }]);
+        assert.deepEqual(probed, [], 'a killed file is not asked of the base');
+      } finally { fx.cleanup(); }
+    });
+
+    it('one killed and one red: red over the second alone, the killed one listed beside it', async () => {
+      const fx = selecting({ files: [scanner, own] });
+      const probed = [];
+      try {
+        const report = await fx.report({
+          tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner], red: [own] }) }),
+          probeMain: async (args) => { probed.push(args.files); return { red_on_main: [], breaks: [] }; },
+        });
+        assert.equal(report.stopped_at, 'red');
+        assert.equal(report.verdict, 'red');
+        assert.deepEqual(report.candidate.red, [`a test in ${own}`]);
+        assert.deepEqual(report.candidate.red_files, [own]);
+        assert.deepEqual(report.killed_files, [{ file: scanner, signal: 'SIGTERM' }]);
+        assert.deepEqual(probed, [[own]], 'only the change\'s red is asked of the base');
+        assert.doesNotMatch(report.reason, /scan\.test\.js/u);
+      } finally { fx.cleanup(); }
+    });
+
     it('a green round runs nothing more, and keeps the files it selected', async () => {
       const { gitAlso, tests } = onMain({ redAt: {} });
       const fx = selecting({ files: [own, scanner], gitAlso });
@@ -1788,6 +1840,39 @@ describe('derived artifacts are regenerated after the base is merged in', () => 
       const result = await fx.run();
       assert.equal(result.derived, null);
       assert.equal(fx.calls.some((call) => call.args?.[0] === 'status'), false);
+    } finally { fx.cleanup(); }
+  });
+});
+
+describe('the round awaits its children (merger-hardening step 4)', () => {
+  it('a git and gh that answer with promises give the same round as sync ones', async () => {
+    const fx = fixture({ changed: ['tests/a.test.js'] });
+    try {
+      const later = (fn) => (args, opts) => new Promise((resolve) => { setImmediate(() => resolve(fn(args, opts))); });
+      const report = await fx.run({ git: later(fx.git), gh: later(fx.gh) });
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.pr.head_sha, 'abc1234');
+      assert.equal(report.base.commit, 'base1111');
+      assert.equal(report.candidate.commit, 'cand2222');
+      assert.deepEqual(report.pr_tests.files, ['tests/a.test.js']);
+      assert.ok(fx.ran('git').some((call) => call.args[0] === 'worktree' && call.args[1] === 'prune'), 'the workspace was cleared');
+    } finally { fx.cleanup(); }
+  });
+
+  it('with signals: false the round installs no SIGINT or SIGTERM handler', async () => {
+    const fx = fixture();
+    try {
+      const before = { SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') };
+      const seen = [];
+      const suite = (options) => {
+        seen.push({ SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') });
+        return fx.suite(options);
+      };
+      assert.equal((await fx.run({ suite, signals: false })).ok, true);
+      assert.equal((await fx.run({ suite })).ok, true);
+      assert.deepEqual(seen[0], before, 'signals: false added a handler');
+      assert.deepEqual(seen[1], { SIGINT: before.SIGINT + 1, SIGTERM: before.SIGTERM + 1 }, 'the default still installs one');
+      assert.deepEqual({ SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') }, before, 'and takes it off again');
     } finally { fx.cleanup(); }
   });
 });

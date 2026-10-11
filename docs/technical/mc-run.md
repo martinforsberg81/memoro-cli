@@ -402,7 +402,13 @@ this GitHub at this moment, in this order (`runStepClaimed`):
    person's work.
 4. **The worktree is dirty** — uncommitted changes that are not a merge in
    progress, usually somebody's unfinished work about to be stepped on. The
-   runner never commits, stashes or discards it.
+   runner never stashes or discards it, and commits it in one case only: the
+   step it is about to run carries an `interrupted` record (*The register*).
+   A resume does not look at the tree at all — its conversation knows those
+   files. A fresh session gets them committed first as one WIP commit
+   (`commitLeftovers`), when the tree stands on the branch the session ran on
+   or on one named after the project. Dirt in any other workarea, or on any
+   other branch, is blocked as before.
 5. **What is open on GitHub could not be read** for this repository.
 6. *(Until 2026-09-12 a held pull request was here: a `repair` session, then
    the brief's. Ruling 21 removed it; a step that did not land is `failed` in
@@ -785,8 +791,42 @@ asking — and the step is `landing` until the merger writes `done`, or sends a
 red back as `ready` (*The register*). A `landing` step does not hold the
 project: the next step starts at once on a branch on top of it (`placeBranch`,
 `stacked_on`), and the merger lands the two in order
-([`mc-merge.md`](mc-merge.md) § *One round at a time*). The round the merger
-runs is the one below, and so is everything said about what it reads back.
+([`mc-merge.md`](mc-merge.md) § *One round at a time*). Nor does a `blocked`
+step (ruling 39, 2026-10-11): its pull request is parked on a question, not
+work in flight, so `holdingPrs` (`run-plan.js`) drops a pull request recorded
+on any of the project's own `landing`, `ready` or `blocked` steps, and an
+earlier step the merger sent back red is started even while a later one waits
+on a decision. A pull request on none of the project's steps still ends the
+pick (`inFlight`), and a `blocked` step that is the first unfinished one still
+starts nothing (`planState`). The round the merger
+runs is the one below, and so is everything said about what it reads back. A
+session that wants to wait for the answer runs `mc merge watch <repo> <pr>`
+or `mc merge <repo> <pr> --watch`, opt-in and read-only
+([`mc-merge.md`](mc-merge.md) § *Watching a merge*).
+
+Four answers the merger gives without a person (ruling 37,
+[`mc-merge.md`](mc-merge.md) § *The async round, SIGTERM and the mend*):
+
+- **Already merged.** A pull request somebody merged on GitHub — before its
+  round, or after it came back red — is answered landed with GitHub's merge
+  commit: dequeued, its step `done`, and the rest of its batch measured
+  without it. One closed on GitHub is red by itself and nobody else's reason.
+- **Step order.** A step's job does not go until every earlier step of its
+  plan is `done` in the register, with or without `stacked_on`, and a
+  restarted merger does not resume a `landing` job whose earlier step is not.
+  The page's queue row and `mc merge watch` say `waits for <project> step
+  <n>`.
+- **`mending` in the queue.** A red the change caused gets one mend session
+  first. The entry is `mending` and the step stays `landing`, so the runner
+  starts nothing for it. A push puts the job back in line at its old place
+  with `mended` set; anything else is red as before, and the step goes
+  through `redPatch` with the round's reason and what the mend said.
+- **The page.** MERGES draws one landing row per pull request in a round: the
+  round's phase and age on the first, and no batch member counted as
+  waiting. A mend is a yellow row of its own under the landing rows, with the
+  red's reason and how long the session has run (`waiting` before it has a
+  pid). The heading counts it: `1 landing · 1 mending · 2 red · 3 waiting:
+  …`. `mc status <project>` says the same for a step's pull request.
 
 **Several steps land in one round** (merge-throughput, ruling 34). The merger
 takes up to `MERGE_BATCH_MAX` (4) queued jobs for one repository that may go
@@ -1217,8 +1257,9 @@ went with it.
 and nothing else.** The brief lists these steps in its *Blocked* section under
 *Waiting on a workarea*, with the comment the runner wrote, and puts them as
 *fix the workarea, then set the step ready* rather than as a decision. The
-runner never writes `ready` and never retries on its own, because the retry
-was the fault:
+runner never writes `ready` over a `workarea` block and never retries on its
+own, because the retry was the fault (the waits it does release are under
+*Blockers that release themselves*):
 
 > "Hela upplägget med 'runda' är fel. Allt ska inte provas. Runner ska ta next
 > step. Punkt." … "Vägen tillbaka är via brief eller en plan-session. Om det var
@@ -1230,6 +1271,48 @@ was the fault:
 What the runner *can* settle by itself it settles at the first attempt instead
 of blocking: `main`'s copy of a `PLAN.json` the plan's rule cannot merge, and
 the abort of a merge a killed session left.
+
+### Blockers that release themselves
+
+A `blocked_by` has one of five kinds (`BLOCKER_KINDS`, `plan-schema.js`).
+Two are a person's and come back only by `mc step ready`: `decision` (what
+`mc brief` answers) and `workarea` (the runner's own, above). Three are waits
+nobody has to judge, and since ruling 35 (2026-10-10, the `step-release`
+project) the runner releases them by itself:
+
+| kind | fields | due when | set by |
+|---|---|---|---|
+| `time` | `at`, an ISO instant | the clock has passed `at` | `mc step blocked --until <iso>` — a time already past is refused |
+| `deploy` | `step` (1-based, an earlier step of the same plan), `hours` (0 or more, default 0) | that step is `done` with a `landed.sha` in the register, a `deployed` row in `~/mc/runner/log/deploys.tsv` has a `sha` that contains it (`git merge-base --is-ancestor` in memoro's checkout), and `hours` have passed since the earliest such row's `ended` | `mc step blocked --after-deploy [<n>] [--hours <h>]` — `<n>` defaults to the step before; the step itself or a later one is refused, and so is any step outside memoro, because `mc deploy` deploys memoro's main and nothing else |
+| `project` | `name`, the project | that project's plan on `origin/main` is `done` | `mc step blocked --on-project <project>` |
+
+A `project` that is not on main is never due by itself: it may have been
+abandoned rather than delivered, and only a person can tell which
+(`stale-blockers.js`, which no longer reports a `project` blocker that is
+done — the runner has released it). A step waits on a whole project, never on
+one step of another, and on one thing at a time. A deploy made from another
+machine is not in this machine's `deploys.tsv`; the step waits, and says so.
+
+The verb makes the `name` from the other fields, so it stays a name
+(`NAME_RE`): `until-20261014-0800`, `deploy-step-3-24h`. What the step waits
+for in more words goes in `--reason` and the comments.
+
+**The release is a register write, never a plan edit.** In `queue()`, after
+both repositories' plans are read and memoro's checkout fetched,
+`releaseDue` (`step-release.js`) asks `blockerDue` of every project's current
+step that is `blocked` in the register. One that is due becomes `ready`, its
+`blocked_by` and `reason` are cleared, a comment `Released <now>: <why>` is
+appended, and `runner.log` says `<project> step <n>: released — <why>`. The
+step comes out of the same `queue()` as `ready`, so the pick may start it in
+that pass. Nothing is written to the plan on main and no pull request is
+made. A record that cannot be read or written is said (`not released — …`)
+and left as it was; a git that cannot answer the ancestor question releases
+no `deploy` blocker.
+
+While they wait, `mc step <project>` and the page's blocked line say how long
+is left, from `describeWait`: `until 2026-10-14 08:00Z — 3d left`,
+`on deploy of step 3 + 24h — 7h40m left`, `on deploy of step 3 — not
+deployed yet`.
 
 ### The register
 
@@ -1267,14 +1350,58 @@ stands at when the landing landed — the step's own fields as the session left
 them in the plan it landed, so a session that set its step `blocked` on a
 decision is `blocked` in the register too; `failed` with the gate's reason when
 the landing held it, or with the session's exit when it left no pull request
-at all; `ready` again after a quota answer, which is no session. A `running`
-step whose session is gone — a runner killed under it — is failed on the next
-reading of the world (`sweepRunning`). A failed step is never picked again:
-`kindFor` answers `skip:failed`, and `mc step ready` is the way back. And
-`blocked` for a fault it met before the session, as above.
+at all; `ready` again after a quota answer, which is no session. A failed step
+is never picked again: `kindFor` answers `skip:failed`, and `mc step ready` is
+the way back. And `blocked` for a fault it met before the session, as above.
+And `ready` for a `time`, `deploy` or `project` blocker whose wait is over,
+with `Released <now>: <why>` in the comments (*Blockers that release
+themselves*). The register keeps a blocker's own fields — `at`, `step`,
+`hours` — beside its `kind` and `name`.
 
-**What a person writes there** is `mc step`: `failed --reason`, `blocked --on`,
-`ready`, `done`. `ready` is refused while the step's pull request is open — a
+**An interrupted step** is one whose session died under it — the machine
+restarted, the runner was killed, macOS killed the process — rather than one
+that gave up (ruling 33). Until 2026-10-10 it was `failed`, and waited on a
+person for a death that was nobody's decision. Now `sweepRunning`, on the next
+reading of the world, and the post-session path, for a session killed by a
+signal the runner did not send with no answer written, call
+`recordInterrupted`. The step is `ready` again and carries an
+`interrupted` record read off the session's stream log. That log is
+`<stem>.jsonl`, written as the session streams, so a killed session has one.
+The record holds `session_id`, `tool`, `model`, `log`, `last_activity` (the
+log's mtime), `context_tokens`, `branch`, `count` and `at`. No state is added
+to `STEP_STATES`: every reader that draws `ready` draws it unchanged, and the
+page and `mc step <project>` print `interrupted <at> · <tool> session <id> ·
+last activity <ago> · <n> tokens` from the record. Any state but `ready` or
+`running` clears it. Interrupted steps are picked first, warmest first
+(`interruptedFirst`). `recoveryOf` asks `recoveryFor` (`run-plan.js`) and gets
+one of three outcomes:
+
+- **Resume** — the same session id, through the tool's own resume
+  (`claude -p --resume <id>`; for codex, the adapter's `resumeArgs`), with
+  `restartPrompt`.
+  It resumes while the prompt cache is warm: the last activity is within the
+  tool's cache lifetime minus `WARM_MARGIN_MS` (five minutes). Past that, it
+  still resumes when the conversation is at most `COLD_RESUME_MAX_TOKENS`
+  (half the compaction window), or when its size is unknown. The workarea is
+  left exactly as it is: no dirty block, no branch move, no merge of
+  `origin/main`. The log says `<project>: resuming <tool> session <id>
+  (<why>)`. A resume that exits non-zero without a word is marked
+  `resume_failed`, and the next pick starts the step fresh.
+- **Fresh** — no session id, a resume that did not start, a plan whose
+  `runner.tool` is no longer the one the session ran on, or a cold
+  conversation larger than the cap. The leftover files are committed as one
+  `<project>: WIP left by an interrupted session` commit with `--no-verify`
+  (*What the worktree decides*, fault 4). The branch is kept, and
+  `stepPrompt` opens with the handover (`interruptedPreamble`): when and why
+  the session was cut off, the branch's commits past main, the WIP commit,
+  its last assistant text, and `refs/mc/checkpoint/<project>` when there is
+  one.
+- **Failed** — the `INTERRUPT_LIMIT`th (3) interruption in a row:
+  `interrupted 3 times in a row — last session <id>`. A step that keeps
+  dying is a person's.
+
+**What a person writes there** is `mc step`: `failed --reason`, `blocked --on`
+(or `--on-project`, `--until`, `--after-deploy`), `ready`, `done`. `ready` is refused while the step's pull request is open — a
 step set ready over an open pull request would be run again on top of it.
 
 ## Sleeping and stopping
@@ -1288,6 +1415,25 @@ step set ready over an open pull request would be run again on top of it.
   finishes; `runner exit on STOP` is written once, when the process ends. The nightly tick (see *What runs beside it*) is asked the
   same question before each repository it measures, so it starts no further
   suite once STOP is there; the suite in flight is not killed.
+- **A restart, end to end** (ruling 33). The machine goes down with sessions
+  running and no `STOP`. At login the agent (*The switch*) runs
+  `mc run start --if-was-running`. `runner.json` names a pid that is gone, so
+  a runner starts with the flags the dead one had. Its first reading of the
+  world finds every `running` step's pid dead, and `sweepRunning` turns each
+  into an interrupted step. The picks take those first. Each is resumed where
+  it stopped when its cache is warm or its conversation small, and otherwise
+  is handed to a fresh session on the same branch, its leftovers committed
+  and a handover in the prompt (*The register*). What a session had not
+  committed is in its checkpoint ref as well, up to ten minutes old. A runner
+  Martin stopped has `STOP` written, and the agent leaves it stopped.
+- **The holds.** A pass starts no step while the scratch volume has under
+  `DISK_MIN_BYTES` (5 GiB) free, or while `kern.memorystatus_level` is under
+  `MEMORY_MIN_FREE_PERCENT` (20). It says `disk: <n> GiB free, below 5 GiB —
+  no step started` or `memory: <n>% free, below 20% — no step started` once
+  per pass and writes `disk.json` or `memory.json`. The file is removed when
+  there is room again. `nowBlock` reads both, so the page's RUNNER block shows
+  either hold. Sessions already running, their check-ins and landings, go on.
+  No reading is room: a guess must not stop the runner.
 - **`~/mc/runner/UPDATE`** — read between picks only, and answered by a
   handover rather than an exit. Written by `mc run --update`; see *The switch*.
 - **An idle lane** sleeps `--idle-sleep` — 600 s unless it is given — and then

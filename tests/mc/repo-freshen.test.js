@@ -64,10 +64,10 @@ function fixture({ conflicts = [], addFails = false, pushFails = false } = {}) {
 }
 
 describe('freshening the branch that is landing next in a batch', () => {
-  it('merges the base in and pushes it plainly', () => {
+  it('merges the base in and pushes it plainly', async () => {
     const fx = fixture();
     try {
-      const out = fx.run();
+      const out = await fx.run();
       assert.equal(out.ok, true, out.reason || '');
       assert.equal(out.at, 'abc1234');
       const merged = fx.calls.find((c) => c.args[0] === 'merge');
@@ -77,19 +77,19 @@ describe('freshening the branch that is landing next in a batch', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('never rebases — the convention is merge in, no force-push', () => {
+  it('never rebases — the convention is merge in, no force-push', async () => {
     const fx = fixture();
     try {
-      fx.run();
+      await fx.run();
       assert.equal(fx.calls.some((c) => c.args[0] === 'rebase'), false);
       assert.equal(fx.calls.some((c) => c.args.includes('--force') || c.args.includes('-f')), false);
     } finally { fx.cleanup(); }
   });
 
-  it('a conflict aborts and leaves the branch exactly as it was', () => {
+  it('a conflict aborts and leaves the branch exactly as it was', async () => {
     const fx = fixture({ conflicts: ['src/x.js', 'src/y.js'] });
     try {
-      const out = fx.run();
+      const out = await fx.run();
       assert.equal(out.ok, false);
       assert.match(out.reason, /conflicts with main in src\/x\.js, src\/y\.js/u);
       assert.match(out.reason, /left exactly as it was/u);
@@ -98,30 +98,30 @@ describe('freshening the branch that is landing next in a batch', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('a refused push is reported and nothing is retried', () => {
+  it('a refused push is reported and nothing is retried', async () => {
     const fx = fixture({ pushFails: true });
     try {
-      const out = fx.run();
+      const out = await fx.run();
       assert.equal(out.ok, false);
       assert.match(out.reason, /non-fast-forward/u);
       assert.equal(fx.calls.filter((c) => c.args[0] === 'push').length, 1);
     } finally { fx.cleanup(); }
   });
 
-  it('a branch it cannot check out is a reason, never an exception', () => {
+  it('a branch it cannot check out is a reason, never an exception', async () => {
     const fx = fixture({ addFails: true });
     try {
-      const out = fx.run();
+      const out = await fx.run();
       assert.equal(out.ok, false);
       assert.match(out.reason, /invalid reference/u);
     } finally { fx.cleanup(); }
   });
 
-  it('prunes its throwaway worktree whatever happened', () => {
+  it('prunes its throwaway worktree whatever happened', async () => {
     for (const conflicts of [[], ['src/x.js']]) {
       const fx = fixture({ conflicts });
       try {
-        fx.run();
+        await fx.run();
         assert.ok(
           fx.calls.filter((c) => c.args[0] === 'worktree' && c.args[1] === 'prune').length >= 1,
           'the worktree is pruned on both paths',
@@ -130,13 +130,13 @@ describe('freshening the branch that is landing next in a batch', () => {
     }
   });
 
-  it('touches exactly one branch: the one it was given', () => {
+  it('touches exactly one branch: the one it was given', async () => {
     // The property the removed sweep did not have. Every ref this names is
     // `track-two` or the base it merges in; nothing enumerates open pull
     // requests, and nothing pushes anywhere it was not told to.
     const fx = fixture();
     try {
-      fx.run();
+      await fx.run();
       const refs = fx.calls.flatMap((c) => c.args).filter((a) => /^origin\/|refs\/heads\//u.test(String(a)));
       for (const ref of refs) {
         assert.match(String(ref), /track-two|^origin\/main$/u, `touched an unrelated ref: ${ref}`);
@@ -153,13 +153,13 @@ describe('the branch carries the regeneration the gate made', () => {
     return fx.git(args, opts);
   };
 
-  it('prepares, regenerates after the merge, commits, then pushes', () => {
+  it('prepares, regenerates after the merge, commits, then pushes', async () => {
     const fx = fixture();
     const shelled = [];
     try {
       const git = (args, opts) => { fx.calls.push({ args, cwd: opts?.cwd }); return { status: 0, stdout: args[0] === 'rev-parse' ? 'abc1234def\n' : '', stderr: '' }; };
       fx.git = git;
-      const out = fx.run({
+      const out = await fx.run({
         declaration,
         git: withStatus(fx, ' M docs/sql/snapshot.json\n'),
         shell: (command) => { shelled.push(command); return { status: 0, stdout: '', stderr: '' }; },
@@ -172,11 +172,11 @@ describe('the branch carries the regeneration the gate made', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('dirt outside the declared paths pushes nothing', () => {
+  it('dirt outside the declared paths pushes nothing', async () => {
     const fx = fixture();
     try {
       fx.git = (args, opts) => { fx.calls.push({ args, cwd: opts?.cwd }); return { status: 0, stdout: '', stderr: '' }; };
-      const out = fx.run({
+      const out = await fx.run({
         declaration,
         git: withStatus(fx, ' M src/app.js\n'),
         shell: () => ({ status: 0, stdout: '', stderr: '' }),

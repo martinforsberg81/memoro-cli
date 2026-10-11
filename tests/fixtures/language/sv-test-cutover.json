@@ -1,0 +1,70 @@
+{
+  "schema": "memoro-language-cutover",
+  "version": 1,
+  "name": "sv-test-cutover",
+  "lang": "sv",
+  "title": "A cutover of four acts, for the tests",
+  "closes": ["language_form"],
+  "acts": [
+    {
+      "id": "ingest-local",
+      "title": "Ingest the forms into the local D1",
+      "target": "local",
+      "check": ["node", "scripts/ingest.js", "--verify", "--json"],
+      "execute": ["node", "scripts/ingest.js", "--all", "--json"],
+      "credentials": [],
+      "requires_runnable": [],
+      "expect": {
+        "check": [{ "path": "source.present", "exact": true }],
+        "execute": [{ "path": "counts.forms", "exact": 100 }]
+      },
+      "if_not": "Fetch the source first."
+    },
+    {
+      "id": "forms-read",
+      "title": "Production has the old forms",
+      "target": "production",
+      "check": ["node", "scripts/readiness.mjs", "--json"],
+      "execute": null,
+      "credentials": [],
+      "requires_runnable": [],
+      "expect": {
+        "check": [
+          { "path": "forms", "exact": 100 },
+          { "path": "rows", "advisory": "about fifty" }
+        ],
+        "execute": []
+      },
+      "if_not": "Production is not what this manifest was written against."
+    },
+    {
+      "id": "purge-forms",
+      "title": "Purge the old forms from production",
+      "target": "production",
+      "check": ["node", "scripts/purge.mjs", "--check", "--json"],
+      "execute": ["node", "scripts/purge.mjs", "--execute", "--json"],
+      "credentials": ["cloudflare-d1-edit"],
+      "requires_runnable": ["ingest-local"],
+      "expect": {
+        "check": [{ "path": "remaining", "exact": 40 }],
+        "execute": [{ "path": "remaining", "exact": 0 }]
+      },
+      "if_not": "Run the purge again; it deletes until empty.",
+      "opens_gap": { "until": "sync-forms", "says": "production has no forms until sync-forms writes them" }
+    },
+    {
+      "id": "sync-forms",
+      "title": "Sync the new forms to production",
+      "target": "production",
+      "check": ["node", "scripts/sync.mjs", "--check", "--json"],
+      "execute": ["node", "scripts/sync.mjs", "--execute", "--json"],
+      "credentials": ["cloudflare-d1-edit"],
+      "requires_runnable": [],
+      "expect": {
+        "check": [{ "path": "pending", "advisory": "all of them" }],
+        "execute": [{ "path": "pending", "exact": 0 }]
+      },
+      "if_not": "Sync again; it is INSERT OR REPLACE."
+    }
+  ]
+}

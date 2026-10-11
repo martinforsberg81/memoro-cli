@@ -45,11 +45,15 @@ reading the plans as they were last fetched rather than as they are now.
 ## The sections
 
 In this order (Martin, 2026-09-19): PROGRAMMES, WORK, HELPER, BRIEF, NEXT,
-RUNNER, MERGES, DEPLOY, and one line for mc itself. It still keeps the rule the
-page had — **what does not move above what does**. PROGRAMMES and WORK are the
-page as a listing; the two desks change when somebody sits down; NEXT changes
-with every pick and RUNNER every frame; MERGES, DEPLOY and the MC line are the
-short end of the page, a few rows that are always within reach of the prompt.
+RUNNER, MERGES, DEPLOY, LANGUAGE (2026-10-10), and one line for mc itself. It
+still keeps the rule the page had — **what does not move above what does**.
+PROGRAMMES and WORK are the page as a listing; the two desks change when
+somebody sits down; NEXT changes with every pick and RUNNER every frame;
+MERGES, DEPLOY, LANGUAGE and the MC line are the short end of the page, a few
+rows that are always within reach of the prompt. One line can come above all
+of them: while a language run has stopped inside an `opens_gap` window it
+reads, in red, `language: <manifest> stopped after <act> — <says> · mc language
+resume`. It goes there because while it shows, production is missing data.
 The live loop rewrites rows where they stand (`page-frame.js`), and a row that
 has scrolled off the top cannot be written to — which is what
 [*a status that changed out of reach*](#a-status-that-changed-out-of-reach)
@@ -161,7 +165,7 @@ below is about.
   ([**ruling 20**](#the-surfaces) put a round on the page; the section itself
   is `mergesSection`, `page-collect.js`, and `runningMerge`,
   `merges-collect.js`, joins the gate lock to a name). The heading's count is
-  `N landing · N waiting`, each part shown only when it is not zero,
+  `N landing · N mending · N fixing · N red · N waiting`, each part shown only when it is not zero,
   and `nothing landing, nothing waiting` — the literal phrase, not per missing
   part — when both are. Under it, in order: the round itself, laid out like
   a running RUNNER lane — the `●` in the gutter, then the repository — and
@@ -175,8 +179,24 @@ below is about.
   `· waiting     #13255 #13250 #13248  (longest 4 min)`: the numbers from
   `~/mc/runner/merges.json` in the order the merger takes them, green, with
   the repository on each only when the queue spans two, `… N more` for what
-  does not fit, and how long the oldest has waited (Martin, 2026-10-09). The
-  held rows that stood under it went with `held.json` (ruling 21): a step that
+  does not fit, and how long the oldest has waited (Martin, 2026-10-09).
+  Under the round, three kinds of row for what came back red. A red getting
+  its one mend (`state: 'mending'`, `mend.js`) is yellow with the running
+  mark: `● memoro      #13370  card-views step 3  mending — <reason>  6 min`.
+  A red a runner session is fixing (ruling 39) is yellow the same way:
+  `● memoro      #13370  card-views step 3  fixing — Running the gate.  6 min`.
+  It is a red whose queue entry's `step: { project, index }` some lane file
+  (`current-*.json`) holds: `kind` is `step`, `name` is the project, `step` is
+  `index + 1`, and its `pid` is alive. The sentence after `fixing —` is the
+  session's last assistant text, read from the last 64 KiB of
+  `<session.log>.jsonl` — `session.log` is that step's in the register
+  (`~/mc/runner/projects/<project>.json`) — with `claudeTail`, or `codexTail`
+  for a codex lane (`work-status.js`). With no transcript yet it is the red's
+  reason. The time is how long the session has run. The sentence gives way
+  first on a narrow terminal; the number and the name never do. A fixing red
+  is in `merges.fixing` in `mc --json` and not in `merges.red`. A red nobody
+  holds is the red row, `✗ memoro      #13301  main-chat-d1 step 3  <reason>
+  13 min ago`, until `mc merge` queues it again. The held rows that stood under it went with `held.json` (ruling 21): a step that
   did not land is `failed` in the register and is
   drawn where every other plan state is. `mc --json` carries `merges.queued`
   whole, and `mc status <name>` says `#N is landing now — <phase>
@@ -213,6 +233,19 @@ below is about.
   **on the shorter of them**: `deploys.tsv` records the whole 40-character sha
   and `/api/version` answers seven. Where neither source knows anything the
   heading says `nothing deployed yet`.
+- **LANGUAGE** — what `mc language` left behind, read from its files only:
+  the cached `status-<lang>.json` readings and the run records under
+  `~/mc/runner/log/language/` ([`mc-language.md`](mc-language.md)).
+  - **The heading:** the last run — its manifest, its outcome (green
+    running, yellow stopped or refused, red failed, grey done) and how long
+    ago it was.
+  - **The rows:** a row only for a language with something to say:
+    - unresolved selectors;
+    - grammar rows waiting, in yellow with `· mc language promote`;
+    - a reading at least seven days old.
+
+  With nothing to say and no run recorded, the section is not drawn at all, so
+  an empty page gains no line.
 - **MC** — mc itself, in one line: the version, **whether there is newer code
   than the runner is running**, how long the runner has been up, and the
   commit it is on. `mc run` writes the commit it started on into
@@ -456,7 +489,7 @@ person set it to.
 | header | `MEMORO·CLI` | bold |
 | header | `N in flight · N ready · N blocked` | plain |
 | header | version, rule, cost today | grey |
-| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `NEXT` `RUNNER` `MERGES` `PULL REQUESTS` `DEPLOY` `MC` | bold cyan |
+| section titles | `PROGRAMMES` `WORK` `HELPER` `BRIEF` `NEXT` `RUNNER` `MERGES` `PULL REQUESTS` `DEPLOY` `LANGUAGE` `MC` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | RUNNER | the heading's `N in flight`: not zero, zero, no runner | bold green, grey, bold yellow |
 | RUNNER | the heading's lane setting and uptime | grey |
@@ -489,6 +522,10 @@ person set it to.
 | MERGES | the round landing now: `● repo #pr name title` | green |
 | MERGES | the round's `landing` (or `measuring, not landing`), phase, age | plain, plain, grey |
 | MERGES | the queue line: `· waiting`, the numbers in landing order, `(longest …)` | grey, green, grey |
+| MERGES | a red nobody is fixing: `✗ repo #pr name` and its reason; how long ago | bold red, red; grey |
+| MERGES | a red getting its mend: `● repo #pr name mending —` and its reason; the session's age | yellow; grey |
+| MERGES | a red a runner session is fixing: `● repo #pr name fixing —` and what it last said; the session's age | yellow; grey |
+| MERGES | the heading's `N mending`, `N fixing`; `N red` | yellow; bold red |
 | RUNNER | a lane's project's open pull request, after the clock | bold cyan |
 | PULL REQUESTS | the heading's counts; `N nobody's`; a cache over 15 min old | grey, bold yellow, yellow |
 | PULL REQUESTS | a row: its mark, repository, `#pr`, title, whose, quiet time | grey, grey, bold cyan, plain, grey, grey |

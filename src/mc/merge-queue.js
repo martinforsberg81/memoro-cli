@@ -40,7 +40,10 @@ export function mergesPath(root) {
   return join(root, 'runner', 'merges.json');
 }
 
-export const JOB_STATES = Object.freeze(['queued', 'landing', 'red']);
+// `mending`: answered red, and a mend session has the branch (ruling 37,
+// mend.js). In line, so the page and `placeOf` count it, but not work the
+// merger may take until the mend puts it back as `queued`.
+export const JOB_STATES = Object.freeze(['queued', 'landing', 'red', 'mending']);
 
 const plain = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -67,6 +70,18 @@ function normalise(entry) {
     // A red answer's words and when it came (`markRed`).
     reason: entry.state === 'red' && typeof entry.reason === 'string' ? entry.reason : null,
     answered: entry.state === 'red' ? entry.answered ?? null : null,
+    // The one mend a job gets (mend.js): `{ at, outcome }` once it has had
+    // it, and `{ pid, started, reason, stopped_at }` while it runs. Read and
+    // written only by the merger that mends; an older mc drops them.
+    mended: plain(entry.mended) ? { at: entry.mended.at ?? null, outcome: entry.mended.outcome ?? null } : null,
+    mend: entry.state === 'mending' && plain(entry.mend)
+      ? {
+        pid: Number.isInteger(entry.mend.pid) ? entry.mend.pid : null,
+        started: entry.mend.started ?? null,
+        reason: entry.mend.reason ?? null,
+        stopped_at: entry.mend.stopped_at ?? null,
+      }
+      : null,
   };
 }
 
@@ -96,8 +111,10 @@ export function enqueue(entries, entry) {
   const at = entries.findIndex((item) => samePr(item, next));
   if (at < 0) return [...entries, next];
   const was = entries[at];
-  if (was.state === 'landing') return entries;
-  return entries.map((item, index) => (index === at ? { ...next, since: was.since || next.since } : item));
+  // A mend session has the branch: what it pushes is measured next.
+  if (was.state === 'landing' || was.state === 'mending') return entries;
+  // Queued again, a job keeps its one mend spent: a job gets at most one.
+  return entries.map((item, index) => (index === at ? { ...next, since: was.since || next.since, mended: was.mended } : item));
 }
 
 /** The entries without it: landed, or nothing left to land. */
@@ -114,9 +131,31 @@ export function queuedFor(entries, repo, pr) {
  * The entry kept with the round's red answer: `state: 'red'`, the reason and
  * when — no longer work for the merger, still a row on the page.
  */
-export function markRed(entries, job, { reason = null, answered = null } = {}) {
-  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'red', reason, answered } : entry));
+export function markRed(entries, job, { reason = null, answered = null, mended = undefined } = {}) {
+  return entries.map((entry) => (samePr(entry, job)
+    ? { ...entry, state: 'red', reason, answered, mend: null, ...(mended !== undefined ? { mended } : {}) }
+    : entry));
 }
+
+/**
+ * The entry set aside for its one mend (mend.js): `state: 'mending'` with
+ * the round's stop and reason, until `markMended` or `markRed` answers it.
+ */
+export function markMending(entries, job, { reason = null, stopped_at = null, started = null, pid = null } = {}) {
+  return entries.map((entry) => (samePr(entry, job)
+    ? { ...entry, state: 'mending', mend: { pid, started, reason, stopped_at } }
+    : entry));
+}
+
+/** The mend pushed: back in line as `queued`, at its old place (`since`), its mend spent. */
+export function markMended(entries, job, { outcome = 'pushed', at = null } = {}) {
+  return entries.map((entry) => (samePr(entry, job)
+    ? { ...entry, state: 'queued', started: null, mend: null, mended: { at, outcome } }
+    : entry));
+}
+
+/** The jobs the merger may take: `queued`, or `landing` under a merger that died. */
+const takeable = (entry) => entry.state === 'queued' || entry.state === 'landing';
 
 /** The entries the merger still has to land: everything not answered red. */
 export function inLine(entries) {
@@ -144,18 +183,44 @@ export function queueOrder(entries) {
  * (`parent`) may go once that one has landed — it is not in the queue and
  * `landed(parent)` says so. One whose parent is still queued waits behind
  * it; one whose parent came back red waits until that one is queued again
- * and lands. Null when there is nothing the merger may take.
+ * and lands. A job for step n of a plan goes only once every earlier step is
+ * `done` (`ordered`, merger.js `stepsBeforeDone`), parent or none — and that
+ * holds for a `landing` one too. Null when there is nothing the merger may take.
  */
-export function nextJob(entries, { landed = () => true } = {}) {
-  const ordered = queueOrder(inLine(entries));
-  const mayGo = mayGoIn(entries, landed);
-  return ordered.find((entry) => entry.state === 'landing')
-    || ordered.find(mayGo)
+export function nextJob(entries, { landed = () => true, ordered = () => true } = {}) {
+  const line = queueOrder(inLine(entries).filter(takeable));
+  const mayGo = mayGoIn(entries, landed, ordered);
+  return line.find((entry) => entry.state === 'landing' && ordered(entry))
+    || line.find(mayGo)
     || null;
 }
 
-const mayGoIn = (entries, landed) => (entry) => !entry.parent
+const parentFree = (entries, landed) => (entry) => !entry.parent
   || (!queuedFor(entries, entry.repo, entry.parent.pr) && landed(entry.parent));
+
+const mayGoIn = (entries, landed, ordered) => {
+  const free = parentFree(entries, landed);
+  return (entry) => free(entry) && ordered(entry);
+};
+
+/**
+ * Whether every earlier step of a job's plan is `done`, from `stepsOf(project)`
+ * — the steps as the register has them, or null when it cannot be read, which
+ * is taken as done (the rule `parentLanded` has). A job with no step, or for a
+ * plan's first step, has nothing before it (Martin, 2026-10-10: *"step n+1 ska
+ * inte kunna bli mergad om inte step n i ett projekt blivit mergad"*).
+ */
+export function stepsDone(stepsOf) {
+  return (job) => {
+    if (!job?.step || !(job.step.index > 0)) return true;
+    const steps = stepsOf(job.step.project);
+    if (!Array.isArray(steps)) return true;
+    for (let index = 0; index < job.step.index; index += 1) {
+      if (steps[index]?.status !== 'done') return false;
+    }
+    return true;
+  };
+}
 
 /**
  * The most jobs one round lands (merge-throughput, ruling 34). About 11 % of
@@ -178,27 +243,52 @@ export const MERGE_BATCH_MAX = 4;
  * A job's parent is in its own repository, so in its own lane.
  */
 export function nextBatch(entries, {
-  landed = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = () => 'heavy',
+  landed = () => true, ordered = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = () => 'heavy',
 } = {}) {
   const mine = lane ? entries.filter((entry) => (laneOf(entry) || 'heavy') === lane) : entries;
-  const ordered = queueOrder(inLine(mine));
-  const landing = ordered.filter((entry) => entry.state === 'landing');
+  const line = queueOrder(inLine(mine).filter(takeable));
+  // A resumed member whose earlier step is no longer `done` is not landed:
+  // the merger puts it back in line (`heldLanding`).
+  const landing = line.filter((entry) => entry.state === 'landing' && ordered(entry));
   if (landing.length) return landing.filter((entry) => entry.repo === landing[0].repo);
-  const first = nextJob(mine, { landed });
+  const first = nextJob(mine, { landed, ordered });
   if (!first) return [];
-  const mayGo = mayGoIn(mine, landed);
+  const mayGo = mayGoIn(mine, landed, ordered);
   const batch = [first];
-  for (const entry of ordered) {
+  for (const entry of line) {
     if (batch.length >= max) break;
     if (entry !== first && entry.repo === first.repo && entry.state === 'queued' && mayGo(entry)) batch.push(entry);
   }
   return batch;
 }
 
-/** Jobs waiting on a parent that has not landed, for the page: `{ entry, parent }`. */
-export function waitingOnParent(entries, { landed = () => true } = {}) {
-  return inLine(entries).filter((entry) => entry.parent && entry.state !== 'landing'
-    && (queuedFor(entries, entry.repo, entry.parent.pr) || !landed(entry.parent)));
+/**
+ * Jobs in line that may not go yet, for the page and `mc merge watch`:
+ * `{ entry, parent, step }`. `parent` is the number of the pull request it is
+ * built on while that one has not landed; `step` is `{ project, number }` of
+ * the step just before its own while the earlier steps are not all `done`.
+ * Either may be null, never both.
+ */
+export function waitingOn(entries, { landed = () => true, ordered = () => true } = {}) {
+  const free = parentFree(entries, landed);
+  return inLine(entries).filter((entry) => entry.state === 'queued').flatMap((entry) => {
+    const parent = free(entry) ? null : entry.parent.pr;
+    const step = ordered(entry) ? null : { project: entry.step.project, number: entry.step.index };
+    return parent == null && !step ? [] : [{ entry, parent, step }];
+  });
+}
+
+/**
+ * `landing` entries a restarted merger may not resume — an earlier step of
+ * their plan is no longer `done` — to be put back in line with `markQueued`.
+ */
+export function heldLanding(entries, { ordered = () => true } = {}) {
+  return inLine(entries).filter((entry) => entry.state === 'landing' && !ordered(entry));
+}
+
+/** The entry back in line, as `queued`, its place (`since`) kept. */
+export function markQueued(entries, job) {
+  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'queued', started: null } : entry));
 }
 
 /** The entry with `state` and `started` moved. */

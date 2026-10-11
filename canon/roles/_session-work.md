@@ -10,8 +10,8 @@ Everything else is done here, with Martin:
 - anything he is to review — code, structure, UI, design, wording — before it
   lands or before the next part is built;
 - investigation, measurement, prototypes, "find out whether";
-- anything gated on his act: `mc deploy`, production data, remote migrations,
-  credentials.
+- anything gated on his act: `mc deploy`, `mc language`, production data,
+  remote migrations, credentials. Those are his verbs; no session drives them.
 
 Never put work in the runner to get a review between steps. If step 3 waits on
 Martin seeing step 2, do step 2 here; the plan starts after it, or not at all.

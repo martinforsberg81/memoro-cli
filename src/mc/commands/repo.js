@@ -21,6 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { basename } from 'node:path';
 
 import { planBoundary } from '../merge-boundary.js';
+import { followMerge } from '../merge-watch.js';
 import { stepForMerge } from '../merge-step.js';
 import { mergerLogPath, queueMerge } from '../merger.js';
 import { listEntries } from '../register.js';
@@ -306,7 +307,18 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
   // man kan skicka flera pr till merge samtidigt"*). A `--check` only
   // measures and was never asked to land anything.
   if (!opts.check && opts.pr != null) {
-    if (!opts.prs?.length) return queueForMerger({ repoPath, opts, holder, mode, root, stdout, stderr, deps });
+    if (!opts.prs?.length) {
+      const queue = deps.queueForMerger || queueForMerger;
+      if (!opts.watch) return queue({ repoPath, opts, holder, mode, root, stdout, stderr, deps });
+      // `--watch` (ruling 36): queue through the ordinary door, then follow
+      // the job read-only until the merger has answered. A queueing that
+      // failed is its own answer, and there is nothing to watch. With
+      // `--json` the one object is the watch's, so the queue says nothing.
+      const silent = { write: () => {} };
+      const queued = await queue({ repoPath, opts: { ...opts, json: false }, holder, mode, root, stdout: opts.json ? silent : stdout, stderr, deps });
+      if (queued !== 0) return queued;
+      return (deps.followMerge || followMerge)({ repoPath, pr: opts.pr, json: opts.json, stdout, deps: { ...deps, root } });
+    }
     // `MC_STEP` names one step; with several pull requests each is the step
     // its own branch says, or none.
     const env = { ...(deps.env || process.env) };
@@ -837,9 +849,9 @@ export function parseArgs(argv) {
  * `mc merge <repo> <pr> [<pr>...] [--check] [--json] [--docs]` — the
  * arguments of the landing verb, in one place for both of its forms.
  */
-export function parseMergeArgs(argv, { docs = false, full = false } = {}) {
-  const scanned = scanArgs(argv, { booleans: ['--json', '--check', ...(docs ? ['--docs'] : []), ...(full ? ['--full'] : [])] });
-  const opts = { verb: 'merge', repo: null, pr: null, prs: null, check: scanned.flags.check, json: scanned.flags.json, docs: Boolean(scanned.flags.docs), full: Boolean(scanned.flags.full) };
+export function parseMergeArgs(argv, { docs = false, full = false, watch = false } = {}) {
+  const scanned = scanArgs(argv, { booleans: ['--json', '--check', ...(docs ? ['--docs'] : []), ...(full ? ['--full'] : []), ...(watch ? ['--watch'] : [])] });
+  const opts = { verb: 'merge', repo: null, pr: null, prs: null, check: scanned.flags.check, json: scanned.flags.json, docs: Boolean(scanned.flags.docs), full: Boolean(scanned.flags.full), watch: Boolean(scanned.flags.watch) };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
   opts.repo = positional.shift() || null;
@@ -859,6 +871,11 @@ export function parseMergeArgs(argv, { docs = false, full = false } = {}) {
   // measures them as one candidate (A3).
   opts.prs = numbers.length > 1 ? numbers.map(Number) : null;
   if (opts.prs && new Set(opts.prs).size !== opts.prs.length) return { ...opts, error: 'the same pull request is named twice' };
+  // `--watch` follows what this call queued (ruling 36): one job, and only
+  // one that goes to the merger.
+  if (opts.watch && opts.docs) return { ...opts, error: '--docs lands in the call — there is nothing to watch' };
+  if (opts.watch && opts.check) return { ...opts, error: '--check lands nothing — there is nothing to watch' };
+  if (opts.watch && opts.prs) return { ...opts, error: '--watch follows one pull request — one mc merge watch per pull request' };
   // `--check` runs the gate and stops there; without it the same round also
   // lands the change. There is no third mode, and in particular nothing that
   // merges a red gate: overruling one is the human's call and should cost a

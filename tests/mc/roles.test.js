@@ -201,6 +201,13 @@ describe('the text every role session shares', () => {
     }
   });
 
+  // 2026-10-10: a step session ran `kill` on the merger's test process,
+  // taking it for its own hung test. The rule reaches every session.
+  it('tells a step session never to signal a process it did not start', () => {
+    const told = instructionsFor('claude-code', readCanonRole('step').overlay);
+    assert.match(told, /Never signal a process you did not start/u);
+  });
+
   // A file named `_common.md` in a catalogue directory is text, not a role:
   // `listRoles` would otherwise hand `mc roles list` a role named `_common`.
   it('is not mistaken for a role, even sitting in the catalogue', () => {
@@ -346,7 +353,7 @@ describe('the role catalogue', () => {
   // had it stayed.
   it('is exactly the roles mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      '_common.md', '_plan-writing.md', '_session-work.md', 'brief.md', 'helper.md', 'intake.md', 'plan.md', 'step.md', 'worker.md',
+      '_common.md', '_plan-writing.md', '_session-work.md', 'brief.md', 'helper.md', 'intake.md', 'mend.md', 'plan.md', 'step.md', 'worker.md',
     ]);
   });
 });

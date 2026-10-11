@@ -120,6 +120,8 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { deliverableStep, readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
+import { deploysPath, parseDeploys } from './deploys.js';
+import { releaseDue } from './step-release.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
@@ -138,7 +140,7 @@ import {
 import { planBoundary } from './merge-boundary.js';
 import { redPatch } from './merge-step.js';
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
-import { parentLanded, queueMerge, readMerger, startMerger } from './merger.js';
+import { parentLanded, queueMerge, readMerger, startMerger, stepsBeforeDone } from './merger.js';
 import { pidAlive } from './status-collect.js';
 import { currentHolder } from './work-identity.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
@@ -765,7 +767,9 @@ export function createRunner({
    */
   function sweepLanding(plans) {
     const pending = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
-    const mayGo = pending.length && nextJob(pending, { landed: parentLanded(root, { read: deps.read }) });
+    const mayGo = pending.length && nextJob(pending, {
+      landed: parentLanded(root, { read: deps.read }), ordered: stepsBeforeDone(root, { read: deps.read }),
+    });
     if (mayGo && deps.startMerger && !readMerger({ root, alive })) {
       const started = deps.startMerger({ root });
       say(`merger: ${pending.length} pull request${pending.length === 1 ? '' : 's'} queued and no merger running — ${started.pid ? `started pid ${started.pid}` : `could not start one (${started.error || 'no pid'})`}`);
@@ -2412,7 +2416,7 @@ export function createRunner({
   }
 
   function queue({ only = null } = {}) {
-    const plans = [];
+    let plans = [];
     const prs = [];
     const prsFailed = [];
     const askedRepos = [];
@@ -2458,6 +2462,22 @@ export function createRunner({
         say(`${repo.name}: GitHub could not be asked what is open (${error?.message || error})${cause ? ` — ${cause.label}, run: ${cause.fix}` : ''} — no step starts in this repository this round, next ask at ${github[repo.name].next_ask}`);
       }
     }
+    // A blocked step whose wait is over — a time, an earlier step's deploy
+    // plus a delay, another project done — is `ready` again, written by the
+    // runner and said (ruling 35). After the loop, because a `project`
+    // blocker may name a project in the other repository. A deploy counts
+    // when its sha contains the landed one, asked of memoro's checkout, which
+    // was fetched just above; a git that cannot answer releases nothing.
+    const memoro = repos.find((repo) => repo.name === 'memoro');
+    plans = releaseDue(plans, {
+      root,
+      now: deps.now(),
+      deploys: parseDeploys(deps.read(deploysPath(deps.env)) || ''),
+      contains: (sha, rowSha) => Boolean(memoro) && deps.git(memoro.path, ['merge-base', '--is-ancestor', sha, rowSha]).ok === true,
+      update: (project, index, patch) => updateStep({ root, project, index, patch, read: deps.read, write: writeJson, lock: register.lock, now: stamp() }),
+      read: deps.read,
+      say,
+    });
     // What GitHub just said is what the page draws, rather than whatever the
     // last `mc --fresh` heard (page-cache.js `mergePrs`). A cache that cannot
     // be written costs the page its freshness and the round nothing.

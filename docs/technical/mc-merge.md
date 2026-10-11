@@ -48,6 +48,8 @@ mc test  <repo> <pr> [<pr>...] [--json]            measure it; merge nothing
 mc test  <repo> --full [--json]                    the whole suite, on the default branch
 mc merge <repo> <pr> [<pr>...] [--check] [--json]   the same round, then squash
 mc merge <repo> <pr> --docs [--json]                docs-only: no suite, squash
+mc merge <repo> <pr> --watch [--json]               queue it, then follow it to the answer
+mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a job already queued
 ```
 
 `--docs` with several pull requests is refused (it lands one at a time), and so
@@ -121,6 +123,57 @@ only for a genuine trespass or a head plan that no longer parses.
 **Known gap:** the door checks one pull request. `mc merge <repo> <pr1>
 <pr2>` — a batch — does not run it; a batch is out of this step's scope, not a
 believed-safe case.
+
+### Watching a merge
+
+Past the door the pull request is the merger's, and `mc merge` returns at once
+(ruling 30). A session that wants the answer — a hand session, a close-out that
+needs its predecessors on main, a session about to `mc deploy` what it landed —
+asks for it (ruling 36):
+
+```
+mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a job that is queued
+mc merge <repo> <pr> --watch [--json]                   queue it through the door, then the same
+```
+
+[`src/mc/merge-watch.js`](../../src/mc/merge-watch.js) is both. `watchState`
+reads one job out of `merges.json` — queued with its place and the numbers
+ahead of it, waiting for the parent it is stacked on, landing (with the other
+jobs of the same batch, the entries sharing its `started`), red with
+`markRed`'s reason, or gone — and `watch` prints one line each time that state
+changes and nothing in between. The exit code is the answer:
+
+| code | outcome |
+|---|---|
+| 0 | merged — the last line names the merge commit |
+| 1 | red — the reason the merger recorded |
+| 2 | usage, or a pull request neither in the queue nor merged (open, closed, unknown) |
+| 3 | `--timeout` elapsed (30 minutes by default); the job stays in the queue |
+| 4 | no merger alive for two polls while the job waits; the job stays in the queue |
+
+`--json` prints no lines and one object at the end: `{ repo, pr, outcome,
+merge_commit, reason, place, seconds }`. With `--watch` the queueing's own
+lines come first, and with `--watch --json` the queueing says nothing, so the
+watch's object is the only output.
+
+**Opt-in and read-only.** Nothing starts a watch, and the step-session prompt
+does not mention it: a step session queues and ends, because the next step
+stacks on top. The watch never writes `merges.json`, the register or
+`merger.json`, never starts a merger and never cancels or re-queues a job — a
+3 or a 4 leaves everything where it was. `--watch` is refused with `--docs`
+(it lands in the call; there is nothing to watch), with `--check`, with several
+numbers (one call per pull request), and by `mc test`. A queueing that fails —
+a plan-trespass, say — is returned as it is, with no watch.
+
+**GitHub is asked once.** The queue is a local file, read every
+`WATCH_POLL_MS` (10 s) for nothing. A job that leaves the queue has either
+landed or been dropped, and only GitHub knows which, so `gh pr view --json
+state,mergeCommit` is asked then — once, at the end — or at once for a pull
+request that was never queued. There are no GitHub calls in the loop.
+
+**In a Claude session**, run it with Bash's `run_in_background`: the session is
+woken when the command exits, reads the few lines and the exit code, and spends
+nothing on a queue that has not moved while it waits.
 
 ## The docs form
 
@@ -473,6 +526,24 @@ recorded, is left in the probe's `unresolved`, and the reason ends `— N flaky
 under load`. A landing whose paths could not be read is named as before,
 without the second measure.
 
+**A file killed from outside the round is no verdict** (ruling 38, since
+deleted). When something outside the round ends a test file's process,
+`node --test` writes one failing entry for that file with `signal: 'SIGTERM'`
+(or another signal) and `exitCode: ~` in its TAP block. `killedFiles(tap,
+files)` in [`src/mc/tap-red.js`](../../src/mc/tap-red.js) names every file
+whose failing block has a non-null `signal:`. Before the base probe,
+`runGate` takes those files' red names out of the red set: when nothing is
+left the round stops `stopped_at: 'file-killed'`, `<files> ended by <signal>
+from outside the round — not a verdict on this change`, and the base probe
+does not run — the base would pass the file and the probe would say the change
+broke it, which is what memoro #13337 was told on 2026-10-10 after a session's
+`kill 75754`. With other reds beside it the round is `red` over those alone,
+and `report.killed_files` lists the killed ones; they are never counted green.
+The merger (`landJob`) runs a round that stopped `file-killed` once more,
+saying `<files> was killed from outside the round — measuring again`. A second
+`file-killed` is answered red with that reason. It is not a mend stop: there is
+nothing in the change to mend.
+
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,
 `archive-plan.js`) and, when two rows share date, programme and project, stops
@@ -633,12 +704,23 @@ on top of the landing step's (`placeBranch` in `run.js`) and writes
 `stacked_on: { index, pr, sha }` on it. Its `mc merge` queues it with that as
 `parent`, and the door reads the plan from the parent's tip. The merger takes a
 job with a parent only once the parent is out of the queue and its step is
-`done` (`nextJob`), then moves the branch onto main past `sha` (`restack`:
-`rebase --onto origin/main <sha>` in a temporary worktree, pushed with a lease
-on the tip it had) — the one below was squash-merged, so its commits are in the
-branch under other names. A move that conflicts is a red, `stopped_at:
-restack`. When the one below comes back red the job on top stays in the queue
-and waits; that step is the project's next session's first, on its own branch.
+`done` (`nextJob`), then moves the branch onto main past `sha` (`restack` in
+[`src/mc/merger.js`](../../src/mc/merger.js), in a temporary worktree, pushed
+with a lease on the tip it had) — the one below was squash-merged, so its
+commits are in the branch under other names. The move replays only the
+branch's own commits: `git rev-list --reverse --no-merges <tip> ^<sha>
+^origin/main`, cherry-picked one by one onto `origin/main`; a pick that comes
+out empty, because main already has it as a squash, is skipped. Until
+2026-10-10 it was `rebase --onto origin/main <sha>`, which also replays the
+main commits a session had merged into its branch — already on main, they
+conflicted with themselves, and #857 and memoro #13375 came back `restack: …
+conflicts` though their own commit picked clean (ruling 38, since deleted). When
+a pick conflicts, the move starts again from the tip and runs `git merge
+--no-edit origin/main`; the log line then reads `moved onto main past #<n>
+(merged main in)`. Only when that merge conflicts too is it a red,
+`stopped_at: restack`, naming the conflicted paths. When the one below comes
+back red the job on top stays in the queue and waits; that step is the
+project's next session's first, on its own branch.
 
 **The runner queues what the session published and did not** (ruling 25,
 2026-10-07). When a step session's process is gone, the register still says
@@ -648,6 +730,103 @@ step's branch, the runner asks for that merge itself (`landForSession` in
 boundary, then `queueMerge` as the step's workarea. The row's note is
 `success,queued-by-runner`; a trespass at the door is a red like any other,
 note `success,red`.
+
+**The merger is the installed mc** (ruling 37, 2026-10-10). `startMerger`
+spawns `merger-run.js` from the checkout the `mc` on PATH resolves to
+(`installedMergerRun`), never from the caller's own tree, and the first line
+of every merger reads `merger <pid> started — ~/memoro-cli at <sha>`. On
+2026-10-10 the merger that served 17:47-18:00 had been started by a step
+session from its workarea and ran that branch's code, with batches and
+without lanes.
+
+## The async round, SIGTERM and the mend
+
+**Nothing the merger starts holds its event loop** (ruling 37). Every child
+of the gate and the merge round — git, gh, `npm ci`, the derived commands, the
+selector — goes through [`src/mc/child-async.js`](../../src/mc/child-async.js):
+`runTool` (no shell) and `runShell` (a declaration as written, `npm ci`).
+Both resolve to the result shape the synchronous spawn gave, `{ status,
+signal, stdout, stderr, error }`, and never reject, so callers read it as
+before and a test's sync stub still works (`await` of an object is the
+object). `maxBuffer` is 256 MiB per stream, stated because Node's 1 MiB
+default killed memoro's selector at 1.3 MB (#12720); a timeout kills with
+SIGTERM and says `ETIMEDOUT`. A `grep` test fails if `spawnSync`,
+`execFileSync` or `execSync` appears in `repo-gate.js`, `repo-merge.js`,
+`repo-freshen.js`, `repo-derived.js`, `prepare-cache.js`, `selector-miss.js`,
+`merger.js` or `merger-run.js`. What it replaced: on 2026-10-10 the merger was
+blocked from 17:40 to 17:47 through `npm ci` (268 s), derived (33 s) and the
+selector (107 s), and the light lane stood still beside the heavy one.
+`merger-run.js` now passes the lane it is handed to `landJob`, so a light job
+starts and lands while a heavy round is in any phase. `mc test`, `mc merge
+--check` and the nightly run go through the same `runGate`, only awaited.
+
+**`signals`.** `runGate` installs its own SIGINT/SIGTERM handler, which ends
+the round and leaves, unless it is called with `signals: false`. The merger
+always passes `false`. Its own handler in `merger-run.js` only sets
+`stopping`: the loops take no new job, say `asked to stop — waiting for <n>
+job(s) in flight`, answer the rounds in flight as usual (no `killed`), and
+`serve` returns — `left` — within a second of the last answer. What is still
+queued waits for the next start. The gate's handler had cut the 17:47 round
+short (`repo-gate.js:318-341` then).
+
+**Already merged on GitHub.** Before a round, `landJob` asks GitHub for each
+job's state (`prStateOf`). A MERGED one is answered landed by itself with
+GitHub's merge commit (`memoro #13372: already merged on GitHub as <sha> —
+answered landed`), dequeued and its step `done`; a CLOSED one is red by itself
+(`closed on GitHub`). Both leave the batch, and the rest are measured without
+them. Red rows are looked at too, at start and then every `SWEEP_MS` by an
+idle loop (`sweepMergedReds`): a red whose pull request has since merged is
+dequeued and its step `done`; a closed one leaves the queue. On 2026-10-10 a
+hand-merged #13372 turned #13373 and #13374 red with its reason, and #13370
+stayed red in `merges.json` after its `--admin` merge.
+
+**A plan's steps land in order.** A job for step n goes only once every
+earlier step of its plan is `done` in the register (`stepsDone` in
+[`src/mc/merge-queue.js`](../../src/mc/merge-queue.js), read by `nextJob` and
+`nextBatch`), whether or not it names a `parent`. A `landing` job a restarted
+merger would resume while an earlier step is no longer `done` is put back in
+line (`heldLanding`). `waitingOn` says what each held job waits for; the page
+and `mc merge watch` read it as `waits for <project> step <n>`.
+
+**The mend** (ruling 37, amending rulings 21 and 30 in one point: one mend,
+then red). A red the change itself caused — `stopped_at` in `MEND_STOPS`, on a
+job with a branch and no `mended` — is not answered red at once. The entry
+becomes `mending` (`{ pid, started, reason, stopped_at }`), the step stays
+`landing`, the lane goes on with its next job, and a session of role `mend`
+([`canon/roles/mend.md`](../../canon/roles/mend.md)) starts in a worktree of
+its own on the branch (`runMend` in [`src/mc/mend.js`](../../src/mc/mend.js),
+under the work root, never the step's workarea). The prompt carries the
+round's reason, its red files or conflicted paths, the step's title and
+`done_when`, and the job's last lines of `merger.log`. When the session ends:
+
+| the branch on origin | the entry | the step |
+| --- | --- | --- |
+| moved past the head the round measured | `queued`, its old `since`, `mended: { at, outcome: 'pushed' }` — measured by a full round like any other job | still `landing` |
+| did not move, the session failed or timed out | `red` with `<reason> — the mend pushed nothing: <its last line>` (or `timed out`, `failed`) | through `redPatch`, as any red |
+
+A job that comes back red after its mend is red at once, and so is a red
+outside `MEND_STOPS` or one that is main's own (every red file red on the base
+too). The mend never merges, never runs `gh pr merge`, never force-pushes,
+never touches `main` and edits no `PLAN.json`; whatever it pushes is measured
+by the same round. One runs.tsv row of kind `mend` per mend. A `mending` entry
+a merger finds at start belonged to a mend that died with the merger before
+it: it goes back in line unmended. A SIGTERM drops the mends waiting (their
+entries stay `mending`) and waits for the one running.
+
+The three numbers are constants with their reasons beside them, not settings:
+
+- **`MEND_STOPS`** — `merge`, `restack`, `red`, `selected-gate`, `pr-tests`,
+  `extra-gate`, `derived-outside`, `project-log`: where the fault is in the
+  change. `fetch`, `pr`, `killed`, `threw`, `busy`, `drift` and the deploy
+  wait are the machine's, and a session on the branch cannot fix them.
+- **`MEND_AT_ONCE`** = 1 — an 8 GB M1 already runs a memoro suite of seven
+  lanes; a second session with its own suite beside it makes the round's own
+  timings lie. Further mends wait in memory, in answer order (`mendLine`).
+- **`MEND_MINUTES`** = 120 — a ceiling for a hung session, not a budget. At
+  20 the #13409 mend (2026-10-10) was cut off mid re-record of the SQL
+  baselines and the step went red as before: the cut cost the session and
+  bought nothing. Step sessions have no wall clock (ruling 18); a mend's
+  output is buffered, so it cannot be judged stalled as they are.
 
 ## The full run nobody asks for
 

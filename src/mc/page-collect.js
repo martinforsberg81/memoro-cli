@@ -31,6 +31,9 @@
  *              opens, whether or not a row is drawn for it. The workareas no
  *              project explains are counted here too, numbered after the
  *              projects.
+ * language   — the language side, from files `mc language` leaves: each
+ *              cached reading's numbers, the newest run, and the gap a stopped
+ *              run left open (`languageState`, language-runs.js).
  *
  * Plus `caches` (what the two read-through caches did) and `notes` (whatever
  * could not be read).
@@ -55,8 +58,11 @@ import {
 import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
+import { languageState } from './language-runs.js';
 import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-collect.js';
-import { inLine, mergesPath, queueEntries, queueOrder, redEntries } from './merge-queue.js';
+import {
+  inLine, mergesPath, queueEntries, queueOrder, redEntries, samePr, stepsDone, waitingOn,
+} from './merge-queue.js';
 import { runningMerges } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
@@ -66,8 +72,11 @@ import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
 import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, workRoot } from './paths.js';
-import { overlayPlans } from './register.js';
+import { overlayPlans, readEntry } from './register.js';
+import { readTailEntries } from './conversations.js';
+import { claudeTail, codexTail } from './work-status.js';
 import { planState } from './plan-schema.js';
+import { describeWait } from './step-release.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import {
   PR_LIST_ARGS, openPrsFor, parseWorktrees, prOwner, stepForPr,
@@ -565,39 +574,95 @@ function lanesOf({ order, plans, items, deep, perRepo }) {
  * until `mc merge` puts it back in line (Martin, 2026-10-10). One whose pull
  * request is no longer open is nobody's to fix and is not drawn — when the
  * open pull requests are known at all.
+ *
+ * A queued job whose plan's earlier step is not `done` (`ordered`, the
+ * merger's own rule) carries `waits_for: '<project> step <n>'`.
+ *
+ * `landings` is one item per pull request in a round: the first carries the
+ * round's phase, age and lane, the rest `batch_of: <first pr>`. `mending` is
+ * what is getting its one mend, each with the red's reason and how long the
+ * session has run (`waiting` before it has a pid).
+ *
+ * `fixing` is a red whose step a live runner session holds (ruling 39): a
+ * lane file (`currents`, `current-*.json`) of kind `step` on the red's project
+ * and step, with a pid `alive` says is running. It leaves `red` and carries
+ * the session's last assistant sentence (`said`, from `<session.log>.jsonl`
+ * of the register step `entry(project)` returns; null when there is no
+ * reader or no transcript), how long the session has run, and its lane.
  */
 export function mergesSection({
-  landing = null, queued = [], prs = [], now = new Date(),
+  landing = null, queued = [], prs = [], now = new Date(), ordered = () => true,
+  currents = [], alive = pidAlive, entry = null,
 } = {}) {
   const all = queueEntries(queued);
   const entries = queueOrder(inLine(all));
   const rounds = [].concat(landing || []).filter(Boolean);
-  const landingFor = (round) => (item) => Number(round.pr) === item.pr && item.state === 'landing'
-    && (!round.repo || !item.repo || round.repo === item.repo);
-  const isLanding = (item) => rounds.some((round) => landingFor(round)(item));
+  const ofRepo = (round, item) => !round.repo || !item.repo || round.repo === item.repo;
+  const landingFor = (round) => (item) => Number(round.pr) === item.pr && item.state === 'landing' && ofRepo(round, item);
   // The one a round is landing is drawn as the round, not twice — but its
   // queue entry is where its branch and its step are, and the open pull
   // requests are where its title is: the row names what is landing, not only
   // its number (Martin, 2026-10-09).
   const titled = (repo, number) => prs.find((pr) => pr.repo === repo && Number(pr.number) === Number(number)) || null;
-  const landings = rounds.map((round) => {
-    const own = entries.find(landingFor(round)) || null;
-    const pr = titled(round.repo, round.pr);
-    const branch = own?.branch || pr?.headRefName || null;
+  const named = (repo, number, entry) => {
+    const pr = titled(repo, number);
+    const branch = entry?.branch || pr?.headRefName || null;
     return {
-      ...round,
       branch,
-      name: own?.step ? own.step.project : branch,
-      step: own?.step ? own.step.index + 1 : null,
+      name: entry?.step ? entry.step.project : branch,
+      step: entry?.step ? entry.step.index + 1 : null,
       title: pr?.title || null,
     };
+  };
+  // A batch is one round, but every pull request in it keeps its own row
+  // (Martin, 2026-10-10: *"den pr som mergas genom en session får behålla sin
+  // rad"*). The lock names only the first; the others are the `landing`
+  // entries of its repository that `markLanding` gave the same `started`.
+  const members = new Set();
+  const landings = rounds.flatMap((round) => {
+    const own = entries.find(landingFor(round)) || null;
+    if (own) members.add(own);
+    const rest = own?.started
+      ? entries.filter((item) => item !== own && item.state === 'landing' && item.started === own.started && ofRepo(round, item))
+      : [];
+    for (const item of rest) members.add(item);
+    return [
+      { ...round, ...named(round.repo, round.pr, own) },
+      ...rest.map((item) => ({
+        repo: item.repo || round.repo || null, pr: item.pr, mode: round.mode || null, batch_of: Number(round.pr),
+        ...named(item.repo || round.repo, item.pr, item),
+      })),
+    ];
   });
+  const isLanding = (item) => members.has(item);
   const at = now instanceof Date ? now.getTime() : Number(now);
-  const queuedItems = entries.filter((item) => !isLanding(item)).map((item) => {
+  const ageOf = (when) => {
+    const ms = Date.parse(when || '');
+    return Number.isFinite(ms) ? Math.max(0, Math.round((at - ms) / 1000)) : null;
+  };
+  // A red getting its one mend (mend.js): a row of its own, not a waiter —
+  // the merger cannot take it until the mend puts it back as `queued`.
+  const mendingItems = entries.filter((item) => item.state === 'mending').map((item) => {
+    const { name, title } = named(item.repo, item.pr, item);
+    const started = item.mend?.pid != null;
+    return {
+      ...item,
+      name,
+      step_number: item.step ? item.step.index + 1 : null,
+      title,
+      reason: item.mend?.reason || null,
+      waiting: !started,
+      age_seconds: started ? ageOf(item.mend?.started) : null,
+    };
+  });
+  const waits = waitingOn(all, { ordered }).filter((one) => one.step);
+  const queuedItems = entries.filter((item) => !isLanding(item) && item.state !== 'mending').map((item) => {
     const since = Date.parse(item.since || '');
+    const step = waits.find((one) => samePr(one.entry, item))?.step || null;
     return {
       ...item,
       title: titled(item.repo, item.pr)?.title || null,
+      waits_for: step ? `${step.project} step ${step.number}` : null,
       wait_seconds: Number.isFinite(since) ? Math.max(0, Math.round((at - since) / 1000)) : null,
     };
   });
@@ -613,13 +678,50 @@ export function mergesSection({
       age_seconds: Number.isFinite(answered) ? Math.max(0, Math.round((at - answered) / 1000)) : null,
     };
   });
+  // A red the runner has handed a session (ruling 30: the next session's
+  // first) is somebody's work, not a row asking for one (Martin, 2026-10-11).
+  const holder = (item) => (item.step ? currents.find((current) => current?.kind === 'step'
+    && current.name === item.step.project && Number(current.step) === item.step.index + 1
+    && current.pid != null && alive(current.pid)) : null) || null;
+  const fixingItems = [];
+  const reds = [];
+  for (const item of redItems) {
+    const current = holder(item);
+    if (!current) { reds.push(item); continue; }
+    fixingItems.push({
+      ...item,
+      said: saidBy(entry, item.step, current.tool),
+      age_seconds: ageOf(current.started),
+      lane: current.lane ?? null,
+    });
+  }
   return {
     landing: landings[0] || null,
     landings,
     queued: { count: queuedItems.length, items: queuedItems },
-    red: { count: redItems.length, items: redItems },
+    mending: { count: mendingItems.length, items: mendingItems },
+    fixing: { count: fixingItems.length, items: fixingItems },
+    red: { count: reds.length, items: reds },
     count: landings.length + queuedItems.length,
   };
+}
+
+/** How much of a session's transcript the fixing row reads: its last sentence is near the end. */
+export const SAID_TAIL_BYTES = 64 * 1024;
+
+/**
+ * The last thing a runner session said, from the transcript its register step
+ * names (`session.log` + `.jsonl`, written as it streams). Null when there is
+ * no reader, no step, no log or nothing readable — never an error.
+ */
+function saidBy(entry, step, tool) {
+  if (!entry) return null;
+  try {
+    const log = entry(step.project)?.steps?.[step.index]?.session?.log;
+    if (!log) return null;
+    const entries = readTailEntries(`${log}.jsonl`, SAID_TAIL_BYTES);
+    return (tool === 'codex' ? codexTail(entries) : claudeTail(entries)).said || null;
+  } catch { return null; }
 }
 
 /**
@@ -679,7 +781,8 @@ export function prsSection({
   const at = now instanceof Date ? now.getTime() : Number(now);
   const landings = merges?.landings || [].concat(merges?.landing || []);
   const queued = merges?.queued?.items || [];
-  const reds = merges?.red?.items || [];
+  // A red being fixed is still red from the merger, and still drawn in MERGES.
+  const reds = [...(merges?.red?.items || []), ...(merges?.fixing?.items || [])];
   const items = prs.map((pr) => {
     const names = plans.filter((plan) => plan.repo === pr.repo).map((plan) => plan.project);
     const owner = prOwner(pr, { names, worktrees: worktrees[pr.repo] || [], root });
@@ -933,6 +1036,26 @@ function blockerOf(record) {
   return by?.name ? { kind: by.kind || null, name: by.name } : null;
 }
 
+/**
+ * A blocked row's sentence when its step waits on a time or a deploy (ruling
+ * 35): `step 2 is blocked until 2026-10-14 08:00Z — 3d left`, by
+ * `describeWait`. A deploy wait is said without what it has left: that needs
+ * the landed sha's ancestry in memoro's checkout, which is a git call per
+ * paint, so the row says what it waits for and `mc step` says how long. Null
+ * for every other row, which keeps the plan's own sentence.
+ */
+function waitNext(record, now) {
+  if (record.status !== 'blocked') return null;
+  const { step, index } = planState(record.plan);
+  const by = step?.status === 'blocked' ? step.blocked_by : null;
+  if (by?.kind === 'time') return `step ${index + 1} is blocked ${describeWait(step, { now })}`;
+  if (by?.kind === 'deploy' && Number.isInteger(by.step)) {
+    const hours = Number.isFinite(by.hours) && by.hours > 0 ? ` + ${by.hours}h` : '';
+    return `step ${index + 1} is blocked on deploy of step ${by.step}${hours}`;
+  }
+  return null;
+}
+
 /** How many of each plan status a set of projects holds. */
 function statusesOf(projects) {
   const out = {};
@@ -1042,7 +1165,7 @@ function collapsedOf(projects) {
  */
 export function programmesSection({
   plans = [], areas = [], rows = [], openPrs = [], live = [],
-  planning = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN,
+  planning = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN, now = new Date(),
 } = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
@@ -1067,7 +1190,7 @@ export function programmesSection({
       repo: plan.repo,
       programme: plan.programme,
       status: plan.status || null,
-      next: plan.next || null,
+      next: waitNext(plan, now) || plan.next || null,
       // What would move it, for a project that is stopped. Null for every other
       // project, and for a blocked plan too old to carry the field.
       blocked_by: blockerOf(plan),
@@ -1372,9 +1495,11 @@ export async function collectPage({
   // one head per lane.
   const laneSetting = laneCount();
   const runnerFile = readJson(join(root, 'runner', 'runner.json'));
+  // Read once, for RUNNER's lanes and for MERGES's fixing rows both.
+  const currents = readCurrents(join(root, 'runner'));
   const runner = runnerSection({
     runner: runnerFile,
-    currents: readCurrents(join(root, 'runner')),
+    currents,
     stop,
     stopText: stop ? readText(join(root, 'runner', 'STOP')) : null,
     rows,
@@ -1404,12 +1529,15 @@ export async function collectPage({
 
   const mergesNow = mergesSection({
     landing: merges({ repos: present, alive }), queued: queuedForMerge, prs: prs.prs, now,
+    ordered: stepsDone((project) => readEntry(root, project)?.steps ?? null),
+    currents, alive, entry: (project) => readEntry(root, project),
   });
   const programmes = programmesSection({
     plans, areas, rows, openPrs: prs.prs, live: liveNames,
     planning: sessions.planning,
     running: runner.steps.map((step) => step.name).filter(Boolean),
     programmes: present.flatMap((repo) => listProgrammes(repo)),
+    now,
   });
   const worktrees = Object.fromEntries(present.map((repo) => [
     repo.name, parseWorktrees(git(repo.path, ['worktree', 'list', '--porcelain'])),
@@ -1450,6 +1578,8 @@ export async function collectPage({
     }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes,
+    // File reads only, as DEPLOY's are: the page never runs a read.
+    language: languageState(env),
     mc: mcSection({
       process: runner.process,
       commit: runnerFile?.commit ?? null,

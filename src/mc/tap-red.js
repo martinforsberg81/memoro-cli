@@ -167,3 +167,88 @@ export function redFiles(tap, files) {
   }
   return wanted.filter((file) => red.has(file));
 }
+
+/** A failing entry's YAML block says when its process was ended by a signal: `signal: 'SIGTERM'`; `~` when it was not. */
+const SIGNAL = /^\s*signal:\s*'?([A-Z][A-Z0-9]*)'?\s*$/u;
+
+/**
+ * Every failing entry of a run with what its YAML block says about it: the full
+ * name (as `redNames` gives it), its own name, the locations under it and the
+ * signal that ended it, if one did. The walk `redFiles` makes, kept whole.
+ */
+function failingBlocks(tap) {
+  const blocks = [];
+  const path = [];
+  let open = null;
+  for (const line of String(tap ?? '').split('\n')) {
+    const announced = SUBTEST.exec(line);
+    if (announced) {
+      open = null;
+      const level = Math.floor(announced[1].length / INDENT);
+      path.length = level;
+      path[level] = announced[2].trim();
+      continue;
+    }
+    const failed = RESULT.exec(line);
+    if (failed) {
+      open = null;
+      if (DIRECTIVE.test(failed[2])) continue;
+      const level = Math.floor(failed[1].length / INDENT);
+      const own = failed[2].trim();
+      open = { name: [...path.slice(0, level), own].join(' › '), own, top: level ? path[0] : own, locations: [], signal: null };
+      blocks.push(open);
+      continue;
+    }
+    if (/^\s*ok \d+ - /u.test(line)) { open = null; continue; }
+    if (!open) continue;
+    if (BLOCK_END.test(line)) { open = null; continue; }
+    const located = LOCATION.exec(line);
+    if (located) { open.locations.push(located[1]); continue; }
+    const signalled = SIGNAL.exec(line);
+    if (signalled) open.signal = signalled[1];
+  }
+  return blocks;
+}
+
+/** Which of `files` a path is in, matched by its tail as `redFiles` does; `files` null takes the path as it is. */
+function ownerIn(files) {
+  if (files == null) return (path) => path || null;
+  const wanted = [...new Set(files.map(String).filter(Boolean))];
+  return (path) => wanted.find((file) => path === file || path.endsWith(`/${file}`)) || null;
+}
+
+/**
+ * Which of `files` were ended by a signal in this run: `[{ file, signal }]`.
+ *
+ * node's test runner gives a file whose process was killed one failing entry
+ * with `exitCode: ~` and `signal: 'SIGTERM'` in its block (node 24.10). That is
+ * not something the change did — on 2026-10-10 a session's `kill 75754` ended
+ * memoro's `build-bundle.test.js` mid-round, and the round said the change had
+ * broken it. So such a file is named here and measured again rather than read
+ * as red. With `files` null every killed location is named as it was written.
+ */
+export function killedFiles(tap, files) {
+  const owner = ownerIn(files);
+  const killed = new Map();
+  for (const block of failingBlocks(tap)) {
+    if (!block.signal) continue;
+    const file = [...block.locations, block.own].map(owner).find(Boolean);
+    if (file && !killed.has(file)) killed.set(file, block.signal);
+  }
+  return [...killed].map(([file, signal]) => ({ file, signal }));
+}
+
+/**
+ * The red names of a run that sit in `files` — by a location in one of them,
+ * or under a top-level entry named for one. What a killed file contributed to
+ * the red set, so it can be taken out of it.
+ */
+export function redNamesIn(tap, files) {
+  if (!files?.length) return [];
+  const owner = ownerIn(files);
+  const names = new Set();
+  for (const block of failingBlocks(tap)) {
+    if ([...block.locations, block.own, block.top].some((path) => owner(path))) names.add(block.name);
+  }
+  return [...names];
+}
