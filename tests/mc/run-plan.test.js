@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   RUN_REFUSALS, WORKAREA_BLOCKS, WORKAREA_BLOCK_NAMES,
   AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, quietPrompt, chooseKind, collectNote,
-  describeSettings, describeWatch, headlessArgs, helperDue,
+  describeSettings, describeWatch, headlessArgs, helperDue, holdingPrs,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
   queueFileText, quotaResetAt, quotaSeen, apiInterruption, resumePrompt,
   COLD_RESUME_MAX_TOKENS, INTERRUPT_LIMIT, WARM_MARGIN_MS, readSessionOutput, recoveryFor, restartPrompt, sessionStanding, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
@@ -116,6 +116,35 @@ test('nextFor: a project with a pull request open is not picked, and the next na
   const plans = [planRow('alpha'), planRow('beta')];
   const open = [{ repo: 'memoro', number: 9, headRefName: 'alpha-2', baseRefName: 'main', isDraft: false, title: 'Step' }];
   assert.equal(nextFor({ repo: 'memoro', world: world(plans, { prs: open }) }).name, 'beta');
+});
+
+/**
+ * A project's own steps' pull requests hold nothing (ruling 39): a red the
+ * merger sent back (`ready`), one in the merger's queue (`landing`) and one
+ * parked on a question (`blocked`). A pull request on no step still does.
+ */
+const OWN_STEPS = [
+  { title: 'One', status: 'done', done_when: 'x', instruction: [], pr: 1, blocked_by: null },
+  { title: 'Two', status: 'ready', done_when: 'x', instruction: ['do'], pr: 2, blocked_by: null },
+  { title: 'Three', status: 'landing', done_when: 'x', instruction: ['do'], pr: 3, blocked_by: null },
+  { title: 'Four', status: 'blocked', done_when: 'x', instruction: ['do'], pr: 4, blocked_by: { kind: 'decision', name: 'prog-1' } },
+];
+
+test('holdingPrs: a ready, a landing and a blocked step\'s pull requests are the project\'s own', () => {
+  const held = holdingPrs([2, 3, 4, 9].map((number) => ({ number })), { plan: { steps: OWN_STEPS } });
+  assert.deepEqual(held.map((pr) => pr.number), [9]);
+});
+
+test('nextFor: a blocked later step with its pull request open does not hold the red step before it', () => {
+  const plans = [planRow('alpha', { plan: READY(OWN_STEPS) })];
+  const open = [2, 3, 4].map((number) => ({ repo: 'memoro', number, headRefName: `alpha-${number}`, baseRefName: 'main', isDraft: false, title: 'Step' }));
+  assert.equal(inFlight(holdingPrs(open, plans[0])), null);
+  assert.deepEqual(nextFor({ repo: 'memoro', world: world(plans, { prs: open }) }), { name: 'alpha', kind: 'step', repo: 'memoro' });
+});
+
+test('chooseKind: a blocked first unfinished step still starts nothing', () => {
+  const steps = [OWN_STEPS[0], OWN_STEPS[3], { ...OWN_STEPS[1], pr: null }];
+  assert.equal(chooseKind({ plan: record({ steps }), openPrs: [] }).reason, 'blocked');
 });
 
 /** The page passes its own reading, which has seen a worktree this cannot. */
