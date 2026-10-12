@@ -170,11 +170,15 @@ export function redFiles(tap, files) {
 
 /** A failing entry's YAML block says when its process was ended by a signal: `signal: 'SIGTERM'`; `~` when it was not. */
 const SIGNAL = /^\s*signal:\s*'?([A-Z][A-Z0-9]*)'?\s*$/u;
+/** And what kind of entry failed, and how: `type: 'suite'`, `failureType: 'cancelledByParent'`. */
+const TYPE = /^\s*type:\s*'?(\w+)'?\s*$/u;
+const FAILURE_TYPE = /^\s*failureType:\s*'?(\w+)'?\s*$/u;
 
 /**
  * Every failing entry of a run with what its YAML block says about it: the full
  * name (as `redNames` gives it), its own name, the locations under it and the
- * signal that ended it, if one did. The walk `redFiles` makes, kept whole.
+ * signal that ended it, if one did, and its `type` and `failureType`. The walk
+ * `redFiles` makes, kept whole.
  */
 function failingBlocks(tap) {
   const blocks = [];
@@ -195,7 +199,7 @@ function failingBlocks(tap) {
       if (DIRECTIVE.test(failed[2])) continue;
       const level = Math.floor(failed[1].length / INDENT);
       const own = failed[2].trim();
-      open = { name: [...path.slice(0, level), own].join(' › '), own, top: level ? path[0] : own, locations: [], signal: null };
+      open = { name: [...path.slice(0, level), own].join(' › '), own, top: level ? path[0] : own, locations: [], signal: null, type: null, failureType: null };
       blocks.push(open);
       continue;
     }
@@ -205,7 +209,11 @@ function failingBlocks(tap) {
     const located = LOCATION.exec(line);
     if (located) { open.locations.push(located[1]); continue; }
     const signalled = SIGNAL.exec(line);
-    if (signalled) open.signal = signalled[1];
+    if (signalled) { open.signal = signalled[1]; continue; }
+    const typed = TYPE.exec(line);
+    if (typed) { open.type = typed[1]; continue; }
+    const failure = FAILURE_TYPE.exec(line);
+    if (failure) open.failureType = failure[1];
   }
   return blocks;
 }
@@ -236,6 +244,31 @@ export function killedFiles(tap, files) {
     if (file && !killed.has(file)) killed.set(file, block.signal);
   }
   return [...killed].map(([file, signal]) => ({ file, signal }));
+}
+
+/**
+ * Which of `files` had tests cancelled and none failed in this run.
+ *
+ * A `before` hook that runs past its timeout fails its suite with
+ * `failureType: 'hookFailed'` and cancels every test under it
+ * (`cancelledByParent`); node's totals then say `# cancelled 19`, `# fail 0`.
+ * That is what memoro's `build-bundle.test.js` did on #13470 at load ~38: the
+ * machine's, not the change's. So a file is named here when it has at least one
+ * cancelled test and no other failing entry — a suite failing because of its
+ * hook or its children is not one. A file with any test that failed stays red
+ * whatever else it has.
+ */
+export function cancelledFiles(tap, files) {
+  const owner = ownerIn(files);
+  const cancelled = new Set();
+  const failed = new Set();
+  for (const block of failingBlocks(tap)) {
+    const file = [...block.locations, block.own].map(owner).find(Boolean);
+    if (!file) continue;
+    if (block.failureType === 'cancelledByParent') cancelled.add(file);
+    else if (!(block.type === 'suite' && ['hookFailed', 'subtestsFailed'].includes(block.failureType))) failed.add(file);
+  }
+  return [...cancelled].filter((file) => !failed.has(file));
 }
 
 /**

@@ -553,6 +553,24 @@ saying `<files> was killed from outside the round — measuring again`. A second
 `file-killed` is answered red with that reason. It is not a mend stop: there is
 nothing in the change to mend.
 
+**A red that passes alone is measured again** (`red-under-load`). When the
+base probe finds every red file green on the base, `runGate` runs the same
+files alone on the candidate head (`redAt` in
+[`src/mc/selector-miss.js`](../../src/mc/selector-miss.js), with the round's
+own runner and flags). Red there, and the round is `red` as before, with the
+line `red alone on the candidate too — this change broke them`. Green there
+too, and the round stops `stopped_at: 'red-under-load'`, `<files> red in the
+round, green alone on the base and on the candidate — measured again`, with
+`report.under_load_files` naming them. A red file whose own entries are
+cancelled tests and none failed (`cancelledFiles` in `tap-red.js`: a `before`
+hook that ran out of time, as memoro's `build-bundle.test.js` on #13470) is
+taken out of the red without any re-run, as if it had passed alone; with
+nothing else red the round is `red-under-load`. A file with a failed test stays
+red whatever else it has. The merger runs a `red-under-load` round once more,
+saying `<files> red only under load — measuring again`; a second one is
+answered red with its reason and `red under load in two rounds running`. It is
+never counted green, and it is not a mend stop.
+
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,
 `archive-plan.js`) and, when two rows share date, programme and project, stops
