@@ -1168,10 +1168,15 @@ export function streamSummary(stdout) {
     into.outputTokens += u.output_tokens || 0;
     into.cacheReadInputTokens += u.cache_read_input_tokens || 0;
     into.cacheCreationInputTokens += u.cache_creation_input_tokens || 0;
+    // The write's TTL split, priced at its own rate; absent, the total is the 1h default.
+    if (u.cache_creation) {
+      into.cacheWrite5mTokens = (into.cacheWrite5mTokens || 0) + (u.cache_creation.ephemeral_5m_input_tokens || 0);
+      into.cacheWrite1hTokens = (into.cacheWrite1hTokens || 0) + (u.cache_creation.ephemeral_1h_input_tokens || 0);
+    }
   }
   let cost = 0;
   for (const [m, u] of Object.entries(modelUsage)) {
-    const c = estimateCost({ input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheReadInputTokens, cacheWrite: u.cacheCreationInputTokens }, m);
+    const c = estimateCost({ input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheReadInputTokens, cacheWrite: u.cacheCreationInputTokens, cacheWrite5m: u.cacheWrite5mTokens, cacheWrite1h: u.cacheWrite1hTokens }, m);
     if (c != null) { u.costUSD = c; cost += c; }
   }
   return { type: 'result', subtype: 'killed', is_error: false, session_id: session, num_turns: messages.size, usage, modelUsage, total_cost_usd: cost, model, last_usage: last };

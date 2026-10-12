@@ -2,14 +2,16 @@
  * List prices, $ per million tokens, as published 2026-06 (sonnet-5 corrected
  * 2026-09-25 to its listed 2/10) and used by the investigation's `usage48h.py`.
  * An estimate for the eye, never what Martin pays: the subscription's quota
- * is the real limit. Cache reads are billed at 0.1× input. Cache writes are
- * 1.25× input for the 5-minute TTL and 2× for the 1-hour TTL — and Claude
- * Code writes the 1-hour one (a step session's result line carries
- * `ephemeral_1h_input_tokens`, never the 5m counter; measured 2026-09-25 on
- * 2.1.280), so 2× is what a session's cache_write costs.
+ * is the real limit. Cache reads are billed at 0.1× input. A cache write's
+ * factor follows the TTL it carried: 1.25× input for 5 minutes, 2× for 1
+ * hour. Since ruling 40 the TTL is the session's role (`step` and `mend` 5m,
+ * every other role 1h), and a message's `usage.cache_creation` splits the
+ * write into `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`. A
+ * usage line without the split is priced at 2×: the 1-hour claude default.
  */
 export const PRICES_DATED = '2026-06';
-export const CACHE_WRITE_FACTOR = 2;
+export const CACHE_WRITE_5M_FACTOR = 1.25;
+export const CACHE_WRITE_1H_FACTOR = 2;
 export const CACHE_READ_FACTOR = 0.1;
 
 export const PRICES = Object.freeze({
@@ -35,9 +37,16 @@ export function priceFor(model) {
   return best?.price || null;
 }
 
-/** Dollars for one usage line, or null when the model is not in the table. */
-export function estimateCost({ input = 0, output = 0, cacheRead = 0, cacheWrite = 0 } = {}, model) {
+/**
+ * Dollars for one usage line, or null when the model is not in the table.
+ * `cacheWrite5m`/`cacheWrite1h`, when either is given, replace `cacheWrite`.
+ */
+export function estimateCost({ input = 0, output = 0, cacheRead = 0, cacheWrite = 0, cacheWrite5m, cacheWrite1h } = {}, model) {
   const p = priceFor(model);
   if (!p) return null;
-  return (input * p.input + output * p.output + cacheWrite * p.input * CACHE_WRITE_FACTOR + cacheRead * p.input * CACHE_READ_FACTOR) / 1e6;
+  const split = cacheWrite5m != null || cacheWrite1h != null;
+  const writes = split
+    ? (cacheWrite5m || 0) * CACHE_WRITE_5M_FACTOR + (cacheWrite1h || 0) * CACHE_WRITE_1H_FACTOR
+    : cacheWrite * CACHE_WRITE_1H_FACTOR;
+  return (input * p.input + output * p.output + writes * p.input + cacheRead * p.input * CACHE_READ_FACTOR) / 1e6;
 }

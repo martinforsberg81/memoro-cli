@@ -591,6 +591,24 @@ test('streamSummary: a stream mc merge ended before its result still gives turns
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: '', exitCode: 142, timedOut: true, stalled: true }).note, 'stalled');
 });
 
+/** Ruling 40: a cache write is priced at the TTL it carried — 5m at 1.25×, 1h at 2× input. */
+test('streamSummary: cache writes split by TTL are priced at 1.25× (5m) and 2× (1h)', () => {
+  const ev = (id, usage) => JSON.stringify({ type: 'assistant', session_id: 's', message: { id, model: 'claude-opus-5', usage } });
+  const stdout = [
+    ev('m1', { cache_creation_input_tokens: 1_000, cache_creation: { ephemeral_5m_input_tokens: 1_000, ephemeral_1h_input_tokens: 0 } }),
+    ev('m2', { cache_creation_input_tokens: 1_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1_000 } }),
+  ].join('\n');
+  const summary = streamSummary(stdout);
+  const entry = summary.modelUsage['claude-opus-5'];
+  assert.deepEqual([entry.cacheCreationInputTokens, entry.cacheWrite5mTokens, entry.cacheWrite1hTokens], [2_000, 1_000, 1_000]);
+  // opus-5 input is 5 $/M: 1k at 1.25× plus 1k at 2×.
+  const expected = (1_000 * 5 * 1.25 + 1_000 * 5 * 2) / 1e6;
+  assert.ok(Math.abs(summary.total_cost_usd - expected) < 1e-12);
+  // No split on the line: the total is the 1-hour default, 2×.
+  const plain = streamSummary(ev('m3', { cache_creation_input_tokens: 1_000 }));
+  assert.ok(Math.abs(plain.total_cost_usd - (1_000 * 5 * 2) / 1e6) < 1e-12);
+});
+
 /**
  * Stream-json: one event per line, the `result` line the session's answer.
  * Proven live 2026-09-11 (step-cost step 3's comments): a check-in written
