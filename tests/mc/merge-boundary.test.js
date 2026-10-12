@@ -175,3 +175,45 @@ it('a plan absent at the merge base falls back to main as it is now', async () =
   const result = await planBoundary({ repoPath: '/x', pr: 671, git, gh });
   assert.deepEqual(result, { checked: true, ok: true, problems: [] });
 });
+
+/** `tools`, with the stacked step's tip readable at `tip`. */
+function stackedTools(options, tipPlan) {
+  const { git: inner, gh } = tools(options);
+  const git = (args) => (args[0] === 'show' && args[1] === `tip:${PATH}` ? { status: 0, stdout: JSON.stringify(tipPlan) } : inner(args));
+  return { git, gh };
+}
+
+it('stacked: main\'s plan edit, brought in after the tip was recorded, is not the session\'s', async () => {
+  const tip = started();
+  const p1 = started();
+  p1.steps[3].instruction = ['Rewritten on main while the step below landed.'];
+  const head = started();
+  head.steps[3].instruction = p1.steps[3].instruction;
+  const { git, gh } = stackedTools({ main: p1, mergeBase: p1, head }, tip);
+  const result = await planBoundary({ repoPath: '/x', pr: 671, git, gh, from: 'tip' });
+  assert.deepEqual(result, { checked: true, ok: true, problems: [] });
+});
+
+it('stacked: the step below\'s own plan edit, not yet on main, is not the session\'s', async () => {
+  const tip = started();
+  tip.steps[0].comments = ['Landed below.'];
+  tip.steps[3].instruction = ['Rewritten by the step below.'];
+  const head = started();
+  head.steps[0].comments = tip.steps[0].comments;
+  head.steps[3].instruction = tip.steps[3].instruction;
+  head.steps[1].status = 'done';
+  head.steps[1].pr = 671;
+  const { git, gh } = stackedTools({ head }, tip);
+  const result = await planBoundary({ repoPath: '/x', pr: 671, git, gh, from: 'tip' });
+  assert.deepEqual(result, { checked: true, ok: true, problems: [] });
+});
+
+it('stacked: an edit neither the tip nor main has is still a trespass, named against the tip', async () => {
+  const tip = started();
+  const head = started();
+  head.steps[3].instruction = ['Rewritten by the session.'];
+  const { git, gh } = stackedTools({ head }, tip);
+  const result = await planBoundary({ repoPath: '/x', pr: 671, git, gh, from: 'tip' });
+  assert.equal(result.ok, false);
+  assert.match(result.problems.join('\n'), /steps\[3\]: changed by the session/u);
+});
