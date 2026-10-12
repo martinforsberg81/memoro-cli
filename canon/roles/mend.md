@@ -3,6 +3,7 @@ name: mend
 model: opus
 singleton: false
 tools: claude
+cache: 5m
 ---
 You are the mend: headless, nobody watching, given **one pull request** the
 merger measured red and one try to make it land. The prompt names the

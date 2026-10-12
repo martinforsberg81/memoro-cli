@@ -128,12 +128,34 @@ export function resumeArgs({ sessionId, model = null } = {}) {
   return ['--resume', sessionId, ...modelArgs(model)];
 }
 
-// How long the prompt cache keeps a session's prefix: the runner's step
-// sessions write `ephemeral_1h_input_tokens` and nothing in `ephemeral_5m`
-// (measured in ~/mc/runner/log/*.jsonl, 2026-10-10). Inside it a resumed
+// How long the prompt cache keeps a session's prefix: the TTL the session was
+// launched with, which is its role's (`cache:` in the role's frontmatter,
+// ruling 40) and reaches claude through `sessionArgs`. Inside it a resumed
 // session's first request reads its conversation from the cache
 // (`recoveryFor`, run-plan.js).
-export const CACHE_TTL_MS = 60 * 60_000;
+export function cacheTtlMs(cache) {
+  return cache === '5m' ? 5 * 60_000 : 60 * 60_000;
+}
+
+/**
+ * What every session mc launches is handed beside its role text: no
+ * CLAUDE.md, no auto-memory, and the role's prompt-cache TTL for the session
+ * and its subagents. Through `--settings` rather than the spawned process's
+ * environment, so a foreground or tmux launch carries them exactly as a
+ * headless one does (verified on claude 2.1.296: the request then carries no
+ * CLAUDE.md, no MEMORY.md and no memory section, and writes
+ * `ephemeral_5m_input_tokens` for `5m`).
+ */
+export function sessionArgs({ cache = '1h' } = {}) {
+  return ['--settings', JSON.stringify({
+    env: {
+      CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+      CLAUDE_CODE_PROMPT_CACHE_TTL: cache,
+      CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: cache,
+    },
+  })];
+}
 
 /**
  * The model to run on, passed through as given. mc does not validate model

@@ -248,9 +248,22 @@ export function resumeArgs({ sessionId, model = null } = {}) {
 }
 
 // How long the prompt cache keeps a session's prefix: OpenAI's prompt cache
-// keeps one minutes, not an hour. The conservative figure only makes a cold
-// resume more likely, never a wrong warm one (`recoveryFor`, run-plan.js).
-export const CACHE_TTL_MS = 5 * 60_000;
+// keeps one minutes, not an hour, and codex has no TTL to choose — so the
+// role's `cache` is ignored and the figure is OpenAI's whatever it says. The
+// conservative figure only makes a cold resume more likely, never a wrong warm
+// one (`recoveryFor`, run-plan.js).
+export function cacheTtlMs() {
+  return 5 * 60_000;
+}
+
+/**
+ * What every session mc launches is handed beside its role text: no
+ * AGENTS.md (codex-cli 0.151.0 reads `project_doc_max_bytes`; 0 loads none).
+ * Codex has no cache TTL to choose and ignores `cache`.
+ */
+export function sessionArgs() {
+  return ['-c', 'project_doc_max_bytes=0'];
+}
 
 /**
  * The model to run on, passed through as given. mc does not validate model

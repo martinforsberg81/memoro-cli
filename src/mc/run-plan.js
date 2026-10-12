@@ -948,13 +948,15 @@ export const STEP_WORKER_AGENTS = Object.freeze({
   }),
 });
 
-export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, subagents = false, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null }) {
+export function headlessArgs({ toolId, adapter, model, effort = null, advisor = null, subagents = false, instructions, prompt, profileArgs, autocompact = AUTOCOMPACT_TOKENS, stream = true, resume = null, cache = '1h' }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
+  // No CLAUDE.md, AGENTS.md or memory, and the role's TTL — new and resumed.
+  const session = adapter?.sessionArgs?.({ cache }) ?? [];
   const instr = profileArgs(toolId, instructions);
   // `codex exec resume` takes no `--sandbox` (codex-cli 0.151.0): the same
   // setting goes through `-c`, and the session id is the first positional.
-  if (toolId === 'codex' && resume) return ['exec', 'resume', '--json', ...modelArgs, '-c', 'sandbox_mode="danger-full-access"', ...instr, resume, prompt];
-  if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...instr, prompt];
+  if (toolId === 'codex' && resume) return ['exec', 'resume', '--json', ...modelArgs, '-c', 'sandbox_mode="danger-full-access"', ...session, ...instr, resume, prompt];
+  if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...session, ...instr, prompt];
   const tuning = [...(adapter?.effortArgs?.(effort) ?? []), ...(adapter?.advisorArgs?.(advisor) ?? [])];
   const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
   const io = stream
@@ -964,7 +966,7 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   // stdin is the next turn of that conversation.
   const resumed = resume ? ['--resume', resume] : [];
   const tools = subagents ? ['--tools', `${CLAUDE_TOOLS},Agent`, '--agents', JSON.stringify(STEP_WORKER_AGENTS)] : ['--tools', CLAUDE_TOOLS];
-  return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...tools, '--strict-mcp-config', ...instr, ...io];
+  return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...tools, '--strict-mcp-config', ...session, ...instr, ...io];
 }
 
 /** One stream-json user message, as `deps.session` writes it on claude's stdin. */

@@ -154,6 +154,7 @@ export async function run(argv, deps = {}) {
     areaName: planArea(programme),
     roleName: role.name || 'plan',
     roleSource: roleSourceOf(role),
+    cache: role.cache,
     model: opts.model,
     overlay: launch.overlay,
     prompt: launch.prompt,

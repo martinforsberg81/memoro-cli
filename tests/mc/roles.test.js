@@ -69,6 +69,19 @@ describe('role files', () => {
     assert.equal(parseRole(null), null);
   });
 
+  it('cache is 5m only when the role says exactly that, an hour otherwise (ruling 40)', () => {
+    assert.equal(parseRole('---\nname: a\ncache: 5m\n---\nBody.').cache, '5m');
+    assert.equal(parseRole('---\nname: a\n---\nBody.').cache, '1h');
+    assert.equal(parseRole('---\nname: a\ncache: 10m\n---\nBody.').cache, '1h');
+    assert.equal(parseRole(WORKER_MD).cache, '1h');
+  });
+
+  it('the canon step and mend roles run on 5m and plan on an hour', () => {
+    assert.equal(readCanonRole('step').cache, '5m');
+    assert.equal(readCanonRole('mend').cache, '5m');
+    assert.equal(readCanonRole('plan').cache, '1h');
+  });
+
   it('a CRLF checkout is still a role', () => {
     const role = parseRole(WORKER_MD.replace(/\n/gu, '\r\n'));
     assert.equal(role.name, 'worker');

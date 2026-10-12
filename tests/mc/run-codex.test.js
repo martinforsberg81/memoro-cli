@@ -166,7 +166,11 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   assert.equal(argv.includes('opus'), false);
   // The shared text and the role overlay ride on codex's own instructions
   // channel, and the prompt is the last positional.
-  const instructions = argv[argv.indexOf('-c') + 1];
+  // `-c project_doc_max_bytes=0` comes first: the session loads no AGENTS.md.
+  const at = argv.indexOf('project_doc_max_bytes=0');
+  assert.equal(argv[at - 1], '-c');
+  const instructions = argv.find((arg, i) => argv[i - 1] === '-c' && arg.startsWith('instructions='));
+  assert.ok(at < argv.indexOf(instructions), 'the switch rides before the instructions');
   assert.match(instructions, /^instructions="/u);
   assert.match(instructions, /A turn is the unit of cost/u);
   assert.match(argv.at(-1), /You are working in the `cx` workarea of memoro-cli/u);

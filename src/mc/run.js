@@ -107,8 +107,8 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { CACHE_TTL_MS as CLAUDE_CACHE_TTL_MS } from '../adapters/claude-code.js';
-import { CACHE_TTL_MS as CODEX_CACHE_TTL_MS } from '../adapters/codex.js';
+import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
+import { cacheTtlMs as codexCacheTtlMs } from '../adapters/codex.js';
 import {
   ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, keptFiles,
   keptParagraph, logRows, mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
@@ -742,7 +742,9 @@ export function createRunner({
     // The billing the next launch would get: a session moving between the
     // plan's login and the key's workspace never finds its cache.
     const billingNow = billingFor({ mode: deps.billing?.readMode?.(), state: deps.billing?.readState?.(), toolId: tool === DEFAULT_TOOL ? 'claude-code' : tool, now: deps.now() }).billing;
-    const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? CODEX_CACHE_TTL_MS : CLAUDE_CACHE_TTL_MS, now: deps.now(), billingNow });
+    // The TTL the step was launched with is its role's (ruling 40).
+    const cache = deps.role('step')?.cache || '1h';
+    const decided = recoveryFor({ interrupted, toolNow: tool, ttlMs: tool === 'codex' ? codexCacheTtlMs(cache) : claudeCacheTtlMs(cache), now: deps.now(), billingNow });
     return { ...decided, interrupted, index: choice.index };
   }
 
@@ -2333,7 +2335,7 @@ export function createRunner({
     // Haiku workers (`runner.subagents: on`): the role is told how to use
     // them through the same include the role files use for a shared passage.
     const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));
-    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt, profileArgs });
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt, profileArgs, cache: role.cache });
 
     // Who pays for a launch, chosen at each launch and never during one
     // (step-credits, ruling 38): `billingFor` over the mode and the plan's
@@ -2460,7 +2462,7 @@ export function createRunner({
       const { billing } = picked;
       const running = deps.session({
         bin: launch.spec.bin,
-        args: resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt: text, profileArgs, resume }) : args,
+        args: resume ? headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, subagents: settings.subagents, instructions, prompt: text, profileArgs, resume, cache: role.cache }) : args,
         cwd: worktree,
         // The stream reaches disk as it arrives; a resume appends to the same
         // file, which is the joined stream the logs keep.

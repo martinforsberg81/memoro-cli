@@ -22,12 +22,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A claude step launch, new and resumed, carries `--settings` with CLAUDE_CODE_DISABLE_CLAUDE_MDS=1, CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 and CLAUDE_CODE_PROMPT_CACHE_TTL=5m; a codex one carries `-c project_doc_max_bytes=0`.",
       "check": "Unit tests on `headlessArgs` in tests/mc/run-plan.test.js assert the exact argument pairs for both tools, new and resume."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A plan, brief, worker or work launch carries the same claude settings with TTL 1h, new and resumed, in both the foreground and the tmux launch.",
       "check": "Unit tests on `openInWorkArea` and `launchCommand` (through `startInBackground`) in `src/mc/work-open.js` assert the `--settings` argument and its TTL."
     },

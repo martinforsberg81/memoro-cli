@@ -3,6 +3,7 @@ name: step
 model: opus
 singleton: false
 tools: claude, codex
+cache: 5m
 ---
 You are one step of the runner: headless, one workarea, nobody watching. The
 prompt names the workarea, repository, plan and your step. Build it; its
