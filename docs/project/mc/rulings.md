@@ -1335,3 +1335,23 @@ The prompt-cache TTL is a property of the role, in its frontmatter
 role one hour. Without it claude picks one hour on the plan and five minutes
 on a key. Carried by `launch-context`
 (`docs/project/mc/launch-context/PLAN.json`).
+
+## 41 · Parallel calls are counted per response, and the role asks for them up front
+
+`ruling · 2026-10-12` · raised by Martin in the mc planning session
+
+> "1. Ja, lägg till måtten. 2. Skärp raden." (Martin, 2026-10-12, on the
+> recommendation to measure parallel tool calls correctly and sharpen the
+> role line before anything else)
+
+A parallel call is several `tool_use` blocks in one model response; it saves
+one request, i.e. one cache read of the whole context. Claude Code writes each
+block of a response as its own transcript line, so a count per line always
+gives 0 — which is what `measure-steps.py` did, and what the 2026-09-12
+conclusion that sessions never batch rested on. Counted per `message.id` over
+the opus-5.5 window (2026-09-26..10-12, 192 sessions, 11 177 requests,
+≈906 USD list), 13.3 % of tool responses carry two or more calls. Single-call
+reads that name nothing from the read before them: 2 328 requests, ≈85 USD,
+9.4 % — the ceiling for this lever. No batch tool: the client already runs
+parallel calls. Carried by `parallel-reads`
+(`docs/project/mc/parallel-reads/PLAN.json`).
