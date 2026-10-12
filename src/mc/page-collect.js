@@ -71,7 +71,7 @@ import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.j
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
-import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, workRoot } from './paths.js';
+import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, mcHome, workRoot } from './paths.js';
 import { listStrays } from './work-area.js';
 import { overlayPlans, readEntry } from './register.js';
 import { readTailEntries } from './conversations.js';
@@ -1439,6 +1439,11 @@ export async function collectPage({
   checkout = mcCheckout(),
 } = {}) {
   const root = workRoot(env);
+  // mc's own home — the gate locks, lanes.json, the dependency and nightly
+  // readings — from the same `env`: a reader left on its default read the
+  // machine's real home, and a test saw a live merge round as its own
+  // (2026-10-10, 2026-10-11).
+  const home = mcHome(env);
   const notes = [];
   const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
 
@@ -1522,7 +1527,7 @@ export async function collectPage({
 
   // Read once for both sections: RUNNER draws one row per lane, NEXT bolds
   // one head per lane.
-  const laneSetting = laneCount();
+  const laneSetting = laneCount({ root: home });
   const runnerFile = readJson(join(root, 'runner', 'runner.json'));
   // Read once, for RUNNER's lanes and for MERGES's fixing rows both.
   const currents = readCurrents(join(root, 'runner'));
@@ -1557,7 +1562,7 @@ export async function collectPage({
   });
 
   const mergesNow = mergesSection({
-    landing: merges({ repos: present, alive }), queued: queuedForMerge, prs: prs.prs, now,
+    landing: merges({ root: home, repos: present, alive }), queued: queuedForMerge, prs: prs.prs, now,
     ordered: stepsDone((project) => readEntry(root, project)?.steps ?? null),
     currents, alive, entry: (project) => readEntry(root, project),
   });
@@ -1601,8 +1606,8 @@ export async function collectPage({
     checks: checksSection({
       repos: present.map((repo) => {
         let nightly = null;
-        try { nightly = nightlyReading(repo.path); } catch { notes.push(`${repo.name}: nightly history unreadable`); }
-        return { name: repo.name, nightly, deps: loadSaved(repo.name) };
+        try { nightly = nightlyReading(repo.path, { root: home }); } catch { notes.push(`${repo.name}: nightly history unreadable`); }
+        return { name: repo.name, nightly, deps: loadSaved(repo.name, home) };
       }),
       now,
     }),

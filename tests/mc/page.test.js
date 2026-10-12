@@ -4,12 +4,14 @@
  * made of real files with no git, no gh and no tmux.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { parseRuns } from '../../src/mc/brief-collect.js';
+import { gateLockPath } from '../../src/mc/gate-lock.js';
+import { mcHome } from '../../src/mc/paths.js';
 import {
   attachPrs, checksSection, collectPage, countNewErrors, intakeSection, mergesSection, newErrorLines, nextSection,
   prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
@@ -560,7 +562,7 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
 
   it('is gathered from the cache and the run records, offline', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-page-language-'));
-    const env = { MC_WORK_ROOT: root };
+    const env = { MC_WORK_ROOT: root, MC_HOME: root };
     const dir = join(root, 'runner', 'log', 'language');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'status-sv.json'), JSON.stringify({
@@ -1850,7 +1852,9 @@ describe('the page', () => {
 
   it('--json is the object the renderer takes, one key per section', async () => {
     let out = '';
-    const code = await page(['--json'], { collect: async () => DATA, stdout: { write: (s) => { out += s; } } });
+    const code = await page(['--json'], {
+      collect: async () => DATA, stdout: { write: (s) => { out += s; } }, checkAndPrintFreshInstall: async () => {},
+    });
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
     assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'next', 'merges', 'intake', 'programmes', 'language', 'caches', 'notes']);
@@ -1927,7 +1931,7 @@ describe('collectPage', () => {
       const gh = [];
       const merged = [];
       const run = (over = {}) => collectPage({
-        env: { MC_WORK_ROOT: root },
+        env: { MC_WORK_ROOT: root, MC_HOME: root },
         now: NOW,
         repos,
         fresh: 'stale',
@@ -1991,12 +1995,29 @@ describe('collectPage', () => {
     });
   });
 
-  it('builds every section from the files, offline, without git, gh or tmux', async () => {
+  it('builds every section from the files, offline, without git, gh or tmux', async (t) => {
     const root = workRootFixture();
+    // A merge round running on the machine while the suite runs: a live lock
+    // under the process's own mc home, which is the real one whenever the
+    // merger's MC_HOME reaches the suite. The page reads the home its `env`
+    // names and sees none of it (2026-10-10 #13390, 2026-10-11 #13467). A
+    // lock already there is a real round — the same case — and stays theirs.
+    const lock = gateLockPath(mcHome());
+    let wrote = false;
+    try {
+      mkdirSync(mcHome(), { recursive: true });
+      writeFileSync(lock, JSON.stringify({
+        repo: `page-test-${process.pid}-${Date.now()}`, pr: 13467, pid: process.pid, since: '2026-08-29T11:50:00Z',
+      }), { flag: 'wx' });
+      wrote = true;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    t.after(() => { if (wrote) rmSync(lock, { force: true }); });
     const asked = [];
     const gitArgs = [];
     const data = await collectPage({
-      env: { MC_WORK_ROOT: root },
+      env: { MC_WORK_ROOT: root, MC_HOME: root },
       now: NOW,
       repos: [],
       exec: async (cmd) => { asked.push(cmd); return { ok: false, stdout: '' }; },
@@ -2044,8 +2065,10 @@ describe('collectPage', () => {
     // And beside it, `merges.json`: the merger's queue (ruling 30).
     assert.deepEqual(data.merges.queued.items.map((item) => [item.repo, item.pr, item.state]),
       [['memoro-cli', 674, 'queued']]);
-    // No gate lock in the isolated test home, so nothing is landing.
+    // No gate lock in the home `env` names, so nothing is landing — whatever
+    // the process's own home holds.
     assert.equal(data.merges.landing, null);
+    assert.equal(data.merges.landings.length, 0);
     assert.equal(data.intake.repos[0].new_errors, 1);
     assert.deepEqual(data.intake.repos[0].loud_lines, [{ message: 'loud', fingerprint: 'abc', count: '41x 500' }]);
     assert.equal(data.intake.proposals, 1);
@@ -2064,7 +2087,7 @@ describe('collectPage', () => {
     let saved = null;
     let fields = null;
     const data = await collectPage({
-      env: { MC_WORK_ROOT: root },
+      env: { MC_WORK_ROOT: root, MC_HOME: root },
       now: NOW,
       repos: [{ name: 'memoro-cli', path: process.cwd() }],
       fresh: true,
@@ -2102,7 +2125,7 @@ describe('collectPage', () => {
       { name: 'memoro', path: join(root, 'docx-editor', 'memoro-cli') },
     ];
     const data = await collectPage({
-      env: { MC_WORK_ROOT: root },
+      env: { MC_WORK_ROOT: root, MC_HOME: root },
       now: NOW,
       repos,
       exec: async (cmd, args) => { calls.push([cmd, ...args].join(' ')); return { ok: true, stdout: '' }; },
@@ -2125,7 +2148,7 @@ describe('collectPage', () => {
     const calls = [];
     const repos = [{ name: 'memoro-cli', path: join(root, 'mc-ui', 'memoro-cli') }];
     const data = await collectPage({
-      env: { MC_WORK_ROOT: root },
+      env: { MC_WORK_ROOT: root, MC_HOME: root },
       now: NOW,
       repos,
       offline: true,
@@ -2195,7 +2218,7 @@ describe('MC', () => {
     writeFileSync(join(root, 'runner', 'UPDATE'), '2026-08-29T11:48:00.000Z\n');
     const asked = [];
     const data = await collectPage({
-      env: { MC_WORK_ROOT: root }, now: NOW, repos: [], offline: true, alive: live,
+      env: { MC_WORK_ROOT: root, MC_HOME: root }, now: NOW, repos: [], offline: true, alive: live,
       run: () => ({ status: 1, stdout: '' }),
       checkout: '/code/memoro-cli',
       git: (cwd, args) => {
@@ -2365,6 +2388,7 @@ describe('the palette', () => {
       collect: async () => DATA,
       stdout: { isTTY: true, columns: 120, write: (s) => { out += s; } },
       env: {},
+      checkAndPrintFreshInstall: async () => {},
     });
     assert.equal(code, 0);
     assert.ok(!out.includes(ESC), '--json is bytes for a program, never for an eye');
