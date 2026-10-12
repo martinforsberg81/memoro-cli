@@ -17,7 +17,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A round whose red files pass on the base is not answered \"this change broke them\" until the same files have also been run alone on the candidate and stayed red there. Red files that pass alone on both, and a file whose tests were cancelled with none failed, stop the round as `red-under-load`, which the merger measures again once, as it does `file-killed`.",
       "check": "`tests/mc/repo-gate.test.js` and `tests/mc/merger.test.js` on fake tests: red in the round, green alone on base and head → `red-under-load` and a second round; red alone on the head → today's red and wording; cancelled > 0 with fail 0 → `red-under-load`; a second `red-under-load` → answered red with the reason naming both quiet passes. Live: the close-out quotes a merger.log `measuring again` line for a `red-under-load`, or says none occurred."
     },
