@@ -18,8 +18,8 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
 
-export function mcHome() {
-  return process.env.MC_HOME || join(homedir(), '.memoro', 'mc');
+export function mcHome(env = process.env) {
+  return env.MC_HOME || join(homedir(), '.memoro', 'mc');
 }
 
 export function registryPath() {

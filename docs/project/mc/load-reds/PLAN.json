@@ -27,7 +27,7 @@
       "check": "Each of those files run 10 times in a row while a full `npm test` runs beside it in another shell: 10/10 green. The tests still fail on the fault they guard (shown by breaking the code under test once, in the PR body)."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No test in `tests/mc/` reads the machine's real gate lock or mc home: `collectPage` reaches `runningMerges` with the root its `env` names.",
       "check": "`tests/mc/page.test.js` \"builds every section from the files…\" passes while a fake gate lock is written under the real `mcHome()` by the test itself (and removed after); `npm test` is green."
     }
