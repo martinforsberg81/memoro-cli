@@ -11,8 +11,10 @@
  * do with, and nothing said so.
  *
  * So when a round goes red, the red files are run once more on the base the
- * candidate was built on. Green there, and the change broke them: that is the
- * round doing its job and nothing more is asked. Red there too, and `main` is
+ * candidate was built on. Green there, and they are run alone on the candidate
+ * too (repo-gate.js): red there, and the change broke them; green there as well,
+ * and the red was the machine's load — the round stops `red-under-load` and the
+ * merger measures it again. Red there too, and `main` is
  * red, and a pull request that already landed broke it without its round
  * running the test. The files are walked back along `main`'s first parents,
  * one landing at a time, to the first commit where they pass; the landing
@@ -83,7 +85,10 @@ export async function probeMainRed({
     return { ...probe, stopped: onBase.reason };
   }
   if (!onBase.red.length) {
-    say('the red files pass on the base — this change broke them');
+    // One quiet run on the base is not enough to blame the change: #891 (a
+    // role text) and #872 (docs only) were red under load and green unchanged.
+    // The round runs the same files alone on the candidate next (repo-gate.js).
+    say('the red files pass on the base — running them alone on the candidate');
     return probe;
   }
   probe.red_on_main = onBase.red;
@@ -173,7 +178,7 @@ export function docsOnly(paths) {
 }
 
 /** Check out one commit and run `files` there; which of them came back red. */
-async function redAt({ git, tests, cwd, commit, files, flags }) {
+export async function redAt({ git, tests, cwd, commit, files, flags }) {
   const moved = await git(['checkout', '--detach', '--force', commit], { cwd });
   if (moved?.status !== 0) return { ok: false, reason: `could not check out ${commit.slice(0, 7)}` };
   const run = await tests({ cwd, files, flags });

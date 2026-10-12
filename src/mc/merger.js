@@ -458,6 +458,10 @@ export async function landJob(batch, {
   // A test file killed from outside the round is measured once more; a second
   // `file-killed` is answered red with its reason (ruling 38).
   let killedOnce = false;
+  // So is a red that passed alone on the base and on the candidate, or a file
+  // whose tests were all cancelled (`red-under-load`): the second is answered
+  // red, saying the files passed alone and the round twice did not.
+  let underLoadOnce = false;
   for (; !report;) {
     // Waited for before the round rather than inside it, so a busy gate is
     // not a round-log line every fifteen seconds. An orphaned lease is in
@@ -492,12 +496,19 @@ export async function landJob(batch, {
       killedOnce = true;
       const files = (report.killed_files || []).map((one) => one.file).join(', ') || 'a test file';
       say(`${label}: ${files} was killed from outside the round — measuring again`);
+    } else if (report?.stopped_at === 'red-under-load' && !underLoadOnce) {
+      underLoadOnce = true;
+      const files = (report.under_load_files || []).join(', ') || 'the red files';
+      say(`${label}: ${files} red only under load — measuring again`);
     } else if (!shouldWait(report)) {
       // Lost the race between "both free" and the round's own lock otherwise.
       break;
     }
     report = null;
     await sleep(MERGER_POLL_MS);
+  }
+  if (report?.stopped_at === 'red-under-load' && underLoadOnce) {
+    report = { ...report, reason: `${report.reason}; red under load in two rounds running` };
   }
 
   for (const one of answersFor(jobs, report)) await answer(one.job, one.landed, one.report);

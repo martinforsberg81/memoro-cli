@@ -186,6 +186,35 @@ describe('landJob — one job, landed or answered', () => {
     assert.equal(m.said.filter((line) => /mend/u.test(line)).length, 0);
   });
 
+  const underLoad = {
+    ok: false, merged: false, stopped_at: 'red-under-load', verdict: 'stopped',
+    reason: 'tests/b.test.js red in the round, green alone on the base and on the candidate — measured again',
+    under_load_files: ['tests/b.test.js'],
+  };
+
+  it('a red that passes alone on the base and the candidate is measured once more, and then lands', async () => {
+    register();
+    const m = machine([underLoad, green]);
+    await landJob(JOB, m.deps);
+    assert.equal(m.rounds.length, 2);
+    assert.ok(m.said.includes('memoro-cli #671: tests/b.test.js red only under load — measuring again'));
+    assert.equal(stepNow().status, 'done');
+  });
+
+  it('red under load twice is answered red, saying the files passed alone on base and head', async () => {
+    register();
+    const m = machine([underLoad, underLoad, green]);
+    const answers = await landJob(JOB, m.deps);
+    assert.equal(m.rounds.length, 2, 'once more, not on and on');
+    assert.equal(answers[0].landed, false);
+    assert.equal(answers[0].report.stopped_at, 'red-under-load');
+    const step = stepNow();
+    assert.equal(step.status, 'ready', 'the next session\'s, as any red is — no mend');
+    assert.match(step.reason, /green alone on the base and on the candidate/u);
+    assert.match(step.reason, /red under load in two rounds running/u);
+    assert.equal(m.said.filter((line) => /mend/u.test(line)).length, 0);
+  });
+
   it('a step somebody marked done or blocked meanwhile is left as it is', async () => {
     register({ status: 'blocked', blocked_by: { kind: 'decision', name: 'x' } });
     await landJob(JOB, machine([red]).deps);

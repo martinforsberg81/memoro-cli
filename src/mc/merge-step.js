@@ -121,10 +121,11 @@ export function redPatch({ step, report }) {
   };
 }
 
-// `file-killed` (a test file ended by a signal from outside the round) must
-// stay out of `MEND_STOPS` when mend.js lands (merger-hardening step 6): the
-// merger measures it once more, and a second one is answered red as it stands,
-// with nothing in the change to mend.
+// `file-killed` (a test file ended by a signal from outside the round) and
+// `red-under-load` (red files green alone on the base and the candidate, or
+// cancelled with none failed) stay out of `MEND_STOPS` (mend.js): the merger
+// measures each once more without counting it as the step's red, and a second
+// one is answered red as it stands, with nothing in the change to mend.
 
 /** The stop is one the merger waits out, not one it answers. */
 export function shouldWait(report) {

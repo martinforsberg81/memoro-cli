@@ -1529,10 +1529,14 @@ describe('a repository that selects by diff', () => {
     // main's first parents, newest first: base1111 is the landing that broke
     // the scanner, and the one before it was green.
     const history = ['base1111full', 'good0000full'];
-    function onMain({ redAt }) {
+    // `round`, when given, is what the round's own run finds red; every run
+    // after it reads `redAt` — the files alone, on the base or the candidate
+    // (`cand2222`, what the fixture's `rev-parse HEAD` names).
+    function onMain({ redAt, round = null }) {
       let at = 'candidate';
+      let first = true;
       const gitAlso = (args) => {
-        if (args[0] === 'checkout') { [at] = args.slice(-1); return { status: 0, stdout: '', stderr: '' }; }
+        if (args[0] === 'checkout') { [at] = args.slice(-1); if (at === 'cand2222') at = 'candidate'; return { status: 0, stdout: '', stderr: '' }; }
         if (args[0] === 'rev-list') return { status: 0, stdout: `${history.join('\n')}\n`, stderr: '' };
         if (args[0] === 'cat-file') return { status: 0, stdout: '', stderr: '' };
         if (args[0] === 'log') return { status: 0, stdout: 'suggestion-is-a-record 2: the row\'s own verbs (#12106)\n', stderr: '' };
@@ -1540,7 +1544,9 @@ describe('a repository that selects by diff', () => {
         return undefined;
       };
       const tests = ({ files: ran }) => {
-        const red = (redAt[at] || []).filter((file) => ran.includes(file));
+        const now = first && round ? round : (redAt[at] || []);
+        first = false;
+        const red = now.filter((file) => ran.includes(file));
         return Promise.resolve({ code: red.length ? 1 : 0, tap: located(red) });
       };
       return { gitAlso, tests };
@@ -1578,6 +1584,84 @@ describe('a repository that selects by diff', () => {
         assert.deepEqual(report.main_red.red_on_main, []);
         assert.doesNotMatch(report.reason, /red on main/u);
         assert.equal(existsSync(join(fx.mcHome, 'selector-misses.jsonl')), false);
+      } finally { fx.cleanup(); }
+    });
+
+    /**
+     * #891 on 2026-10-12 (a role text) and #872 on 2026-10-11 (docs only):
+     * red in the round, green on the base, blamed — and green unchanged. One
+     * quiet run on the base is not enough; the files run alone on the
+     * candidate too.
+     */
+    it('red in the round, green alone on the base and on the candidate: red-under-load', async () => {
+      const { gitAlso, tests } = onMain({ redAt: {}, round: [own] });
+      const fx = selecting({ files: [own, scanner], gitAlso });
+      const said = [];
+      try {
+        const report = await fx.report({ tests, onProgress: (line) => said.push(line) });
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'red-under-load');
+        assert.equal(report.verdict, 'stopped', 'never counted green, never the change\'s red');
+        assert.deepEqual(report.under_load_files, [own]);
+        assert.equal(report.reason, `${own} red in the round, green alone on the base and on the candidate — measured again`);
+        assert.deepEqual(report.head_alone, { red: [] });
+        assert.ok(said.some((line) => /the red files pass on the base — running them alone on the candidate/u.test(line)));
+        assert.ok(!said.some((line) => /this change broke them/u.test(line)));
+      } finally { fx.cleanup(); }
+    });
+
+    it('red alone on the candidate too: today\'s red, and the line says the change broke them', async () => {
+      const { gitAlso, tests } = onMain({ redAt: { candidate: [own] } });
+      const fx = selecting({ files: [own, scanner], gitAlso });
+      const said = [];
+      try {
+        const report = await fx.report({ tests, onProgress: (line) => said.push(line) });
+        assert.equal(report.stopped_at, 'red');
+        assert.equal(report.verdict, 'red');
+        assert.equal(report.reason, `1 test red: a test in ${own}`);
+        assert.deepEqual(report.head_alone, { red: [own] });
+        assert.ok(said.some((line) => /red alone on the candidate too — this change broke them/u.test(line)));
+      } finally { fx.cleanup(); }
+    });
+
+    /** TAP for a file whose `before` hook timed out, the way node 24.10 writes it: the suite hookFailed, its tests cancelled. */
+    function hookTimedOut(file, { failing = false } = {}) {
+      const at = (line) => `      location: '/somewhere/candidate/${file}:${line}:3'`;
+      const lines = ['TAP version 13', '# Subtest: bundle',
+        '    # Subtest: one', '    not ok 1 - one', '      ---', "      type: 'test'", at(4), "      failureType: 'cancelledByParent'", '      ...',
+        '    # Subtest: two', '    not ok 2 - two', '      ---', "      type: 'test'", at(5), "      failureType: 'cancelledByParent'", '      ...'];
+      if (failing) lines.push('    # Subtest: three', '    not ok 3 - three', '      ---', "      type: 'test'", at(6), "      failureType: 'testCodeFailure'", '      ...');
+      lines.push('    1..2', 'not ok 1 - bundle', '  ---', "  type: 'suite'", `  location: '/somewhere/candidate/${file}:2:1'`,
+        "  failureType: 'hookFailed'", "  error: 'failed running before hook'", '  ...', '1..1',
+        `# tests ${failing ? 3 : 2}`, '# pass 0', `# fail ${failing ? 1 : 0}`, '# cancelled 2');
+      return lines.join('\n');
+    }
+
+    it('a file with tests cancelled and none failed is red-under-load, without running anything again', async () => {
+      const fx = selecting({ files: [scanner, own] });
+      const probed = [];
+      try {
+        const report = await fx.report({
+          tests: () => Promise.resolve({ code: 1, tap: hookTimedOut(scanner) }),
+          probeMain: async (args) => { probed.push(args); return { red_on_main: [], breaks: [] }; },
+        });
+        assert.equal(report.stopped_at, 'red-under-load');
+        assert.equal(report.verdict, 'stopped');
+        assert.deepEqual(report.under_load_files, [scanner]);
+        assert.equal(report.reason, `${scanner} had tests cancelled and none failed — measured again`);
+        assert.deepEqual(probed, [], 'a cancelled file is not asked of the base');
+      } finally { fx.cleanup(); }
+    });
+
+    it('a file with a failed test beside its cancelled ones stays red', async () => {
+      const fx = selecting({ files: [scanner, own] });
+      try {
+        const report = await fx.report({
+          tests: () => Promise.resolve({ code: 1, tap: hookTimedOut(scanner, { failing: true }) }),
+          probeMain: async () => ({ red_on_main: [], breaks: [] }),
+        });
+        assert.equal(report.stopped_at, 'red');
+        assert.deepEqual(report.cancelled_files, undefined);
       } finally { fx.cleanup(); }
     });
 
