@@ -210,6 +210,15 @@ describe('mc merge makes the step landing', () => {
     assert.doesNotMatch(d.out.out, /landing —/u);
   });
 
+  it('a branch named after a project but no step\'s is queued, books no step, and says so', async () => {
+    register();
+    const d = deps({ head: 'merge-queue-direct-fix' });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
+    assert.equal(entryNow().steps[1].status, 'running');
+    assert.equal(queue()[0].step, null);
+    assert.match(d.out.out, /merge-queue-direct-fix is named after a project but is none of its steps' branches — landing it marks no step done/u);
+  });
+
   it('a step stacked on one still landing: the job names that one, and the door reads the plan from its tip', async () => {
     register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } }, { status: 'landing' });
     const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
@@ -253,6 +262,14 @@ describe('stepForMerge', () => {
     assert.equal(named.index, 1, 'the running step, not the done one');
     assert.equal(stepForMerge({ env: {}, head: 'plan/mc', entries }), null);
     assert.equal(stepForMerge({ env: { MC_STEP: 'ghost:0' }, head: 'x', entries }), null, 'a project the register does not have');
+  });
+
+  it('a branch merely named after a project is no step of it, and a blocked step is never taken by name (#13549)', () => {
+    const blocked = [{ project: 'photo-analysis', steps: [{ status: 'done', branch: 'photo-analysis' }, { status: 'blocked', branch: 'photo-analysis-6' }] }];
+    assert.equal(stepForMerge({ env: {}, head: 'photo-analysis-direct-envelope', entries: blocked }), null);
+    assert.equal(stepForMerge({ env: {}, head: 'photo-analysis-7', entries: blocked }), null, 'numbered, but the step it would be is blocked');
+    assert.equal(stepForMerge({ env: {}, head: 'photo-analysis-6', entries: blocked }).index, 1, 'the step\'s own branch still finds it');
+    assert.equal(stepForMerge({ env: {}, head: 'mc-cut-fix', entries }), null);
   });
 });
 

@@ -279,11 +279,23 @@ describe('the plan has no status of its own', () => {
     const [done, ready] = plan().steps;
     const landing = { ...ready, status: 'landing', pr: 9 };
     const later = { ...ready, title: 'Later', status: 'ready' };
-    assert.equal(deliverableStep(plan({ steps: [done, landing, later] })).step.title, 'Later');
-    assert.equal(deliverableStep(plan({ steps: [done, landing, later] })).index, 2);
+    const close = { ...ready, title: 'The close', status: 'ready' };
+    assert.equal(deliverableStep(plan({ steps: [done, landing, later, close] })).step.title, 'Later');
+    assert.equal(deliverableStep(plan({ steps: [done, landing, later, close] })).index, 2);
     const state = planState({ steps: [done, landing] });
     assert.equal(state.status, 'landing');
     assert.match(deliverableStep(plan({ steps: [done, landing] })).why, /step 2 is landing — #9 is in the merge queue/u);
+  });
+
+  it('a close-out waits for the steps before it to land rather than stacking on them (2026-10-10, step-recovery)', () => {
+    const [done, ready] = plan().steps;
+    const landing = { ...ready, status: 'landing', pr: 9 };
+    const close = { ...ready, title: 'The close', status: 'ready' };
+    assert.match(deliverableStep(plan({ steps: [done, landing, close] })).why, /step 2 is landing — #9 is in the merge queue/u, 'the last step waits');
+    const measures = { ...ready, title: 'Measure', status: 'ready', done_when: 'Steps 1–2 are `done` with their PRs; the gauge reads green.' };
+    const after = { ...ready, title: 'After', status: 'ready' };
+    assert.equal(deliverableStep(plan({ steps: [done, landing, measures, after] })).step, null, 'a done_when that asks for the steps done waits too');
+    assert.equal(deliverableStep(plan({ steps: [done, { ...landing, status: 'done' }, close] })).step.title, 'The close', 'once landed it starts');
   });
 
   it('hands out the first ready step, and refuses a plan that does not parse', () => {
