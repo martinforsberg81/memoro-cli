@@ -793,7 +793,10 @@ asking — and the step is `landing` until the merger writes `done`, or sends a
 red back as `ready` (*The register*). A `landing` step does not hold the
 project: the next step starts at once on a branch on top of it (`placeBranch`,
 `stacked_on`), and the merger lands the two in order
-([`mc-merge.md`](mc-merge.md) § *One round at a time*). Nor does a `blocked`
+([`mc-merge.md`](mc-merge.md) § *One round at a time*). The exception is a
+close-out (2026-10-12): the plan's last step, or one whose `done_when` asks
+for the steps `done`, waits until every step before it has landed
+(`planState`, `plan-schema.js`), because what it measures is what landed. Nor does a `blocked`
 step (ruling 39, 2026-10-11): its pull request is parked on a question, not
 work in flight, so `holdingPrs` (`run-plan.js`) drops a pull request recorded
 on any of the project's own `landing`, `ready` or `blocked` steps, and an

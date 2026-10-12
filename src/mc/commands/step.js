@@ -17,7 +17,12 @@
  *
  * `ready` is refused while the step's pull request is still open: the way
  * back from a failed step is to land or close that pull request first, and
- * a step set ready over an open one would be run again on top of it.
+ * a step set ready over an open one would be run again on top of it. An open
+ * pull request on the step's branch that changes no file — a blocked
+ * session's placeholder for its question — is closed instead: the runner
+ * starts nothing while a project has one open, so it held settings-polish
+ * step 6 twice after its decision was ruled (#13442, #13599). One that does
+ * change files is refused by number.
  *
  * `--until` and `--after-deploy` (ruling 35) block a step on a wait the
  * runner releases by itself (`step-release.js`): a moment, or an earlier
@@ -118,6 +123,20 @@ export async function run(argv, deps = {}) {
       stderr.write(`mc: #${step.pr} is still open — land it or close it first; a step set ready over an open pull request is run again on top of it\n`);
       return 1;
     }
+    const held = step.branch ? (deps.branchPrs || branchPrs)(entry.repo, step.branch, env) : [];
+    const working = held.filter((pr) => pr.changedFiles !== 0);
+    if (working.length) {
+      stderr.write(`mc: ${working.map((pr) => `#${pr.number}`).join(', ')} on ${step.branch} ${working.length === 1 ? 'is' : 'are'} open and change${working.length === 1 ? 's' : ''} files — land or close ${working.length === 1 ? 'it' : 'them'} first\n`);
+      return 1;
+    }
+    for (const pr of held) {
+      const why = `Closed by mc step ready: ${target.project} step ${index + 1} starts again from main, and this pull request changes no file.`;
+      if (!(deps.closePr || closePr)(entry.repo, pr.number, step.branch, why, env)) {
+        stderr.write(`mc: #${pr.number} on ${step.branch} changes no file but could not be closed — close it, then mc step ready again\n`);
+        return 1;
+      }
+      stdout.write(`mc: closed #${pr.number} — it changed no file, and an open pull request keeps the runner from starting the step\n`);
+    }
     patch.reason = null;
     patch.pr = null;
     if (flags.reason) patch.comment = `Set ready on ${now}: ${flags.reason}`;
@@ -213,6 +232,25 @@ function prState(repo, pr, env) {
   if (!path) return null;
   const r = spawnSync('gh', ['pr', 'view', String(pr), '--json', 'state', '-q', '.state'], { cwd: path, encoding: 'utf8', env });
   return r.status === 0 ? String(r.stdout || '').trim() || null : null;
+}
+
+/** The open pull requests on a branch, each with how many files it changes; [] when gh cannot say. */
+function branchPrs(repo, branch, env) {
+  const path = defaultRepos(env).find((item) => item.name === repo)?.path;
+  if (!path) return [];
+  const r = spawnSync('gh', ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,changedFiles'], { cwd: path, encoding: 'utf8', env });
+  if (r.status !== 0) return [];
+  try { return JSON.parse(r.stdout || '[]'); } catch { return []; }
+}
+
+/** Close a pull request and delete its branch; true when the close went through. */
+function closePr(repo, pr, branch, comment, env) {
+  const path = defaultRepos(env).find((item) => item.name === repo)?.path;
+  if (!path) return false;
+  const closed = spawnSync('gh', ['pr', 'close', String(pr), '--comment', comment], { cwd: path, encoding: 'utf8', env });
+  if (closed.status !== 0) return false;
+  spawnSync('git', ['push', '--quiet', 'origin', '--delete', branch], { cwd: path, encoding: 'utf8', env });
+  return true;
 }
 
 const MARK = { done: '✓', ready: '▸', running: '●', failed: '✗', blocked: '■' };

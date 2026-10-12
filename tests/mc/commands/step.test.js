@@ -157,3 +157,37 @@ test('mc step <project> prints how long a time or deploy wait has left', async (
   assert.equal(await run(['p'], f.deps), 0);
   assert.match(f.out.join(''), /on deploy of step 3 \+ 24h — not deployed yet/u);
 });
+
+/** A step blocked on a decision, its branch holding whatever `prs` says is open on it. */
+function heldBy(prs, { close = true } = {}) {
+  const f = fixture();
+  const entry = { project: 'p', repo: 'memoro', steps: [{ key: 'A', status: 'done', pr: 3 }, { key: 'B', status: 'blocked', branch: 'p-2', blocked_by: { kind: 'decision', name: 'marks' } }] };
+  f.deps.write(registerPath(ROOT, 'p'), entry);
+  const closed = [];
+  f.deps.branchPrs = (repo, branch) => (repo === 'memoro' && branch === 'p-2' ? prs : []);
+  f.deps.closePr = (repo, pr, branch) => { closed.push([repo, pr, branch]); return close; };
+  return { ...f, closed };
+}
+
+test('ready closes a blocked session\'s placeholder pull request — it changes no file and would hold the step (#13442, #13599)', async () => {
+  const f = heldBy([{ number: 13599, changedFiles: 0 }]);
+  assert.equal(await run(['ready', 'p', '2'], f.deps), 0);
+  assert.deepEqual(f.closed, [['memoro', 13599, 'p-2']]);
+  assert.match(f.out.join(''), /closed #13599 — it changed no file/u);
+  assert.equal(f.step(1).status, 'ready');
+});
+
+test('ready refuses over an open pull request on the step\'s branch that changes files, and closes nothing', async () => {
+  const f = heldBy([{ number: 13599, changedFiles: 0 }, { number: 13600, changedFiles: 4 }]);
+  assert.equal(await run(['ready', 'p', '2'], f.deps), 1);
+  assert.deepEqual(f.closed, []);
+  assert.match(f.err.join(''), /#13600 on p-2 is open and changes files/u);
+  assert.equal(f.step(1).status, 'blocked');
+});
+
+test('ready stays blocked when the placeholder could not be closed', async () => {
+  const f = heldBy([{ number: 13599, changedFiles: 0 }], { close: false });
+  assert.equal(await run(['ready', 'p', '2'], f.deps), 1);
+  assert.match(f.err.join(''), /could not be closed/u);
+  assert.equal(f.step(1).status, 'blocked');
+});

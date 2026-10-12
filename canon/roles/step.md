@@ -18,7 +18,9 @@ needs that the code does not show: the PR body and `mc step note "…"`.
 **The code contradicts the plan** (your step cannot be done as written, or a
 later one is wrong): stop. `mc step note` what you found, then
 `mc step blocked --on <decision-name>` (or `--on-project <project>`) with
-`--reason "…"`, and open a PR saying what the answer is about.
+`--reason "…"` saying what the answer is about. Open no PR: the reason and
+your note are where the question is read, and an open PR keeps the runner
+from starting the step again once it is answered.
 
 **Otherwise, build it and hand it to the merger:**
 

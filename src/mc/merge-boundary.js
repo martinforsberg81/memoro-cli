@@ -77,7 +77,7 @@ const notChecked = { checked: false, ok: true, problems: [] };
  * asked (no project branch, or something could not be read); `ok: false`
  * means it was asked and the answer was a trespass.
  */
-export async function planBoundary({ repoPath, pr, git, gh, from = null } = {}) {
+export async function planBoundary({ repoPath, pr, git, gh, from = null, index = null } = {}) {
   const askGit = git || run('git');
   const askGh = gh || run('gh');
 
@@ -111,6 +111,10 @@ export async function planBoundary({ repoPath, pr, git, gh, from = null } = {}) 
   if (befores.some((show) => show.stdout === headShow.stdout)) return { checked: true, ok: true, problems: [] };
 
   const after = readPlanText(headShow.stdout);
+  // The register knows which step this is; the plan on main often does not,
+  // since a step's `pr` lives in the register, and `stepOfPr` then names the
+  // first unfinished step — "changed by the session that ran step 1" (#13554).
+  const step = Number.isInteger(index) ? index : (after.plan ? stepOfPr(after.plan, Number(pr)) : null);
   let verdict = null;
   for (const show of befores) {
     const before = readPlanText(show.stdout);
@@ -118,7 +122,7 @@ export async function planBoundary({ repoPath, pr, git, gh, from = null } = {}) 
     if (!after.plan) {
       return { checked: true, ok: false, problems: [`the plan no longer parses: ${after.problems[0]}`] };
     }
-    const { ok, problems } = unauthorisedChanges(before.plan, after.plan, stepOfPr(after.plan, Number(pr)));
+    const { ok, problems } = unauthorisedChanges(before.plan, after.plan, step);
     if (ok) return { checked: true, ok, problems };
     verdict ||= { checked: true, ok, problems };
   }

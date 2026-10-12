@@ -23,6 +23,7 @@ import { basename } from 'node:path';
 import { planBoundary } from '../merge-boundary.js';
 import { followMerge } from '../merge-watch.js';
 import { stepForMerge } from '../merge-step.js';
+import { projectForBranch } from '../project-prs.js';
 import { mergerLogPath, queueMerge } from '../merger.js';
 import { listEntries } from '../register.js';
 import { workRoot } from '../paths.js';
@@ -377,7 +378,7 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   const stacked = recorded && step.entry.steps[recorded.index]?.status !== 'done' ? recorded : null;
   const parent = stacked ? { project: step.project, index: stacked.index, pr: stacked.pr, sha: stacked.sha } : null;
 
-  const boundary = await (deps.planBoundary || planBoundary)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, from: stacked?.sha || null });
+  const boundary = await (deps.planBoundary || planBoundary)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, from: stacked?.sha || null, index: step ? step.index : null });
   if (boundary.checked && !boundary.ok) {
     const now = deps.now ? deps.now() : new Date();
     recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
@@ -420,6 +421,9 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   if (merger?.pid) stdout.write(`mc: the merger (pid ${merger.pid}${merger.started ? ', just started' : ''}) lands it; follow it in ${mergerLogPath(root)}\n`);
   else stdout.write(`mc: no merger could be started${merger?.error ? ` (${merger.error})` : ''} — the job waits in the queue for the next mc merge or runner round\n`);
   if (step) stdout.write(`mc: ${step.project} step ${step.index + 1} is landing — green makes it done; red sends it back to the step's next session\n`);
+  else if (head && projectForBranch(head, listEntries(root, io).map((entry) => entry.project))) {
+    stdout.write(`mc: ${head} is named after a project but is none of its steps' branches — landing it marks no step done\n`);
+  }
   if (parent) stdout.write(`mc: it lands after #${parent.pr} (step ${parent.index + 1}), which it is built on\n`);
   return 0;
 }
