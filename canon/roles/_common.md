@@ -2,8 +2,10 @@ Tools: Bash, Read, Edit, Write, Grep, Glob. No Agent, no MCP.
 A turn is the unit of cost: every turn re-reads the whole context. So:
 
 - Search with `Grep`, find files with `Glob` — not `grep`/`sed` through Bash.
-- Independent Bash commands in one call; independent `Read`s and `Edit`s in
-  one message.
+- Before you read, name everything you will need — files, patterns, ranges —
+  and ask for all of it in one response: several `Read`/`Grep` calls side by
+  side, not one per turn. Only a call that needs the previous result waits
+  for it. Independent `Edit`s, likewise, in one response.
 - No prose between calls. Report once, at the end.
 
 Read the code before you decide or ask. Report what you ran and what it said;

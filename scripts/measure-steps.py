@@ -156,11 +156,47 @@ def result_chars(part):
     return 0
 
 
+def result_text(part):
+    """A tool result's text blocks (or its string content), joined."""
+    content = part.get('content')
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return '\n'.join(c.get('text', '') for c in content if isinstance(c, dict) and c.get('type') == 'text')
+    return ''
+
+
+def is_read(uses):
+    """One call, and it only reads: native Read/Grep/Glob, or a Bash command classify puts in read/search."""
+    if len(uses) != 1:
+        return False
+    name = uses[0].get('name')
+    if name in ('Read', 'Grep', 'Glob'):
+        return True
+    return name == 'Bash' and classify((uses[0].get('input') or {}).get('command', '')) == 'read/search'
+
+
+def named(value):
+    """The path-like tokens in a call's input: string values' words of ≥6 characters with a '/' or '.'."""
+    if isinstance(value, str):
+        return [t for t in re.findall(r'[\w./-]{6,}', value) if '/' in t or '.' in t]
+    if isinstance(value, dict):
+        return [t for v in value.values() for t in named(v)]
+    if isinstance(value, list):
+        return [t for v in value for t in named(v)]
+    return []
+
+
 def walk(transcript):
-    """Tool calls from a transcript: (tool, class, call→result seconds, result characters, think seconds before it)."""
+    """Tool calls from a transcript: (tool, class, call→result seconds, result characters, think seconds before it),
+    and per model response: responses with a call, those with two or more, foldable reads and their USD."""
     calls, order, results, sizes, think = {}, [], {}, {}, []
     last_result = None
-    multi = 0   # assistant turns that carried more than one tool call — the batching the prompt asks for
+    # Claude Code writes each content block of one model response as its own
+    # transcript line, all carrying the same message.id — so a response with two
+    # tool calls is two lines with one call each. Counted per line (before
+    # 2026-10-12) that was always 0; the batching the prompt asks for is per id.
+    responses, texts = {}, {}
     for line in open(transcript):
         try:
             event = json.loads(line)
@@ -171,8 +207,12 @@ def walk(transcript):
         if event.get('type') == 'assistant':
             content = message.get('content') or []
             uses = [c for c in content if isinstance(c, dict) and c.get('type') == 'tool_use']
-            if len(uses) > 1:
-                multi += 1
+            mid = message.get('id')
+            if mid and message.get('model') != '<synthetic>' and not event.get('isSidechain'):
+                response = responses.setdefault(mid, {'uses': [], 'usage': {}, 'model': ''})
+                response['uses'].extend(uses)
+                response['usage'] = message.get('usage') or response['usage']
+                response['model'] = message.get('model') or response['model']
             if uses and last_result:
                 think.append(seconds(last_result, ts))
                 last_result = None
@@ -188,11 +228,28 @@ def walk(transcript):
                     if part.get('tool_use_id') in calls:
                         results[part['tool_use_id']] = ts
                         sizes[part['tool_use_id']] = result_chars(part)
+                        texts[part['tool_use_id']] = result_text(part)
     rows = []
     for cid in order:
         name, kind, started = calls[cid]
         rows.append((name, kind, seconds(started, results[cid]) if cid in results else 0.0, sizes.get(cid, 0)))
-    return rows, think, multi
+    # A foldable read: a single-call read right after another single-call read
+    # whose result names nothing it asks for — it could have gone in the same
+    # response. Its saving is the context that response re-read, at cache price.
+    with_calls = multi = foldable = 0
+    foldable_usd, previous = 0.0, None
+    for response in responses.values():
+        uses = response['uses']
+        with_calls += bool(uses)
+        multi += len(uses) > 1
+        read = is_read(uses)
+        if read and previous:
+            seen = texts.get(previous.get('id'), '')
+            if not any(t in seen for t in named(uses[0].get('input') or {})):
+                foldable += 1
+                foldable_usd += price(response['model'], {'cache_read_input_tokens': response['usage'].get('cache_read_input_tokens', 0)})
+        previous = uses[0] if read else None
+    return rows, think, with_calls, multi, foldable, foldable_usd
 
 
 def quantiles(label, xs, unit=1.0, fmt='{:6.1f}'):
@@ -321,14 +378,20 @@ def main():
 
     by_class = collections.defaultdict(lambda: [0, 0.0, 0])
     tool_calls = collections.Counter()
-    tests_per, think_all, timeouts, multi_per = [], [], 0, []
+    tests_per, think_all, timeouts = [], [], 0
+    responses = multi = foldable = 0
+    foldable_usd = window_usd = 0.0
     repeats, test_commands = 0, 0
-    for _, _, transcript in found:
+    for _, result, transcript in found:
         if not transcript:
             continue
-        rows, think, multi = walk(transcript)
+        rows, think, r_calls, r_multi, r_fold, r_fold_usd = walk(transcript)
         think_all.extend(think)
-        multi_per.append(multi)
+        responses += r_calls
+        multi += r_multi
+        foldable += r_fold
+        foldable_usd += r_fold_usd
+        window_usd += result.get('total_cost_usd') or 0.0
         seen = collections.Counter()
         n_tests = 0
         for name, kind, secs, chars in rows:
@@ -352,7 +415,9 @@ def main():
     print()
     print(quantiles('test-class calls per session', tests_per, 1, '{:6.0f}'))
     print(quantiles('model think time per turn (s)', think_all, 1))
-    print(quantiles('turns with more than one tool call', multi_per, 1, '{:6.0f}'))
+    print(f'{"responses with ≥2 tool calls":44s} {multi}/{responses} ({multi / max(responses, 1) * 100:.1f} %)')
+    print(f'{"foldable single reads":44s} {foldable} requests, {foldable_usd:.2f} USD = '
+          f'{foldable_usd / window_usd * 100 if window_usd else 0:.1f} % of the window\'s cost')
     bash = tool_calls['Bash']
     native = sum(v for k, v in tool_calls.items() if k in ('Read', 'Grep', 'Glob', 'Edit', 'Write'))
     print(f'Bash calls {bash} vs native Read/Grep/Glob/Edit/Write {native}; Bash calls killed at the 120 s timeout: {timeouts}')
