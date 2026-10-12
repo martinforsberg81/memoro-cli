@@ -32,7 +32,7 @@
       "check": "Unit tests on `openInWorkArea` and `launchCommand` (through `startInBackground`) in `src/mc/work-open.js` assert the `--settings` argument and its TTL."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`streamSummary` prices 5-minute cache writes at 1.25× input and 1-hour writes at 2×.",
       "check": "A unit test feeds `streamSummary` assistant events whose usage splits `cache_creation` between `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens` and asserts the cost."
     }

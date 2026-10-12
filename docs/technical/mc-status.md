@@ -176,11 +176,14 @@ person's or a session's, survives the abort, and keeps `dirty`. Without
 ## The cost estimate
 
 `prices.js` is a dated list-price table — `PRICES_DATED = '2026-06'` — with
-cache writes at 2× input and cache reads at 0.1× input — 2× is the 1-hour
-cache TTL's rate, and the 1-hour cache is what Claude Code writes (a
-session's usage carries `ephemeral_1h_input_tokens`, never the 5-minute
-counter; until 2026-09-25 this used the 5-minute rate, 1.25×). `estimateCost`
-returns dollars for one usage line, or `null` for a model not in the table.
+cache writes at 2× input and cache reads at 0.1× input when a usage line
+does not say which TTL it wrote (2× is the 1-hour rate, the claude default).
+A write is priced at the TTL it carried — 1.25× input for 5 minutes, 2× for
+1 hour — and since ruling 40 that TTL is the role's (`step` and `mend` 5m,
+the rest 1h). `streamSummary` sums each message's `usage.cache_creation`
+split (`ephemeral_5m_input_tokens`, `ephemeral_1h_input_tokens`) and hands
+it to `estimateCost`, which returns dollars for one usage line, or `null`
+for a model not in the table.
 
 Two things are true about the number and both are printed with it:
 
