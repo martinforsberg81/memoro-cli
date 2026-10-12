@@ -134,8 +134,9 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import {
-  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
+  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
+import { freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
@@ -2147,6 +2148,10 @@ export function createRunner({
     if (!deps.exists(worktree)) {
       say(`${name}: no workarea — creating ${repo.name} worktree from origin/main`);
       deps.git(repo.path, ['fetch', '-q', 'origin']);
+      // The plan directory that wrote this project's plan may still stand on
+      // the project's branch after its pull request landed (plan-branch.js).
+      const plan = freePlanBranch({ repo: repo.path, branch: name, planRoot: planHome(deps.env), git: deps.git, gh: deps.gh });
+      if (plan.freed) say(`${name}: ${plan.holder} still held ${name}, which has landed — detached there and the branch deleted`);
       const added = deps.addWorktree({ name: areaName(name), repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
       if (!added.ok) return block(REFUSAL.worktree, `git worktree add failed (${added.reason})`);
     }
