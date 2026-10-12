@@ -1,0 +1,118 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "dev-server-lifecycle",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/dev-server-lifecycle/PLAN.json",
+  "archived": "2026-09-26",
+  "goal": [
+    "A local dev server does not outlive the work that wanted it. mc stops a workarea's servers when it closes or removes the workarea, and a reaper removes what nobody owns any more, every chores pass.",
+    "Measured 12–26 Sep 2026 on this 8 GB M1: 141 of 571 local memoro dev-server starts died unexpectedly, and on 2026-09-26 the machine held seven registered servers across worktrees plus unregistered orphans — a static-server six days old, another four days old whose registration had been swept, an esbuild `--service` four days old with ppid 1 — with swap at 6.8–8.2 GB. Martin, 2026-09-26: \"se till så att de inte äter upp all datorkapacitet.\" Nothing in mc stops a server except `mc test dev --stop` and a moved `built_from` (`src/mc/test-environment.js`); `closeWorkarea` (`src/mc/run.js`) and `removeWorktree` (`src/mc/work-area.js`) never look at the dev-server registry, and `listServers` only ever sweeps registrations, never processes.",
+    "The memoro half — servers exiting by themselves after a period with no requests — is the memoro project `dev-server-idle-exit`. The admission cap is the memoro-cli project `dev-server-admission`. This project stands on its own."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`mc dev stop <instance_id>` stops a registered server through its own stop command.",
+      "check": "Start one with `mc test dev --here --url` in a memoro worktree; `mc dev stop <id>`; paste the output and `mc dev list` after."
+    },
+    {
+      "met": true,
+      "criterion": "`mc work remove` of a worktree with a running server stops the server and removes the worktree, where it used to refuse with `in use by node`.",
+      "check": "In a scratch workarea (`mc work add`), start a server there, run `mc work remove`, paste the output and `mc log --all --limit 5` showing `dev-server-stopped` with `reason: worktree-removed`."
+    },
+    {
+      "met": true,
+      "criterion": "`mc dev reap` removes an orphaned static-server, measure-server and esbuild service, and leaves a registered live server and a server started a minute ago alone.",
+      "check": "In a memoro worktree: (a) `sh -c 'node scripts/testing/static-server.mjs >/dev/null 2>&1 &'` (parent becomes pid 1), then `mc dev unregister .wrangler/dev-server/run/mc-static.json` so it is registered nowhere; (b) `node scripts/testing/measure-server.mjs &`, then `kill -9` that node pid, leaving its workerd and esbuild with ppid 1; (c) `mc test dev --here --url` for a registered live server. Run `mc dev reap --dry-run --min-age-seconds 0`, then `mc dev reap --min-age-seconds 0` (rule 2's 120 s floor still applies — wait it out); paste both and `ps -axo pid,ppid,command | grep -E 'static-server|workerd|esbuild'` after, showing (c) still running."
+    }
+  ],
+  "steps": [
+    {
+      "title": "Stop a workarea's servers when it closes or is removed; `mc dev stop`",
+      "done_when": "`mc dev stop <instance_id>` exists; `closeWorkarea` and `removeWorktree` stop every registered server whose `worktree_path` is inside the worktree before removing it and log `dev-server-stopped`; tests cover all three; the first two success criteria are in the pull request with a changelog fragment.",
+      "status": "done",
+      "pr": 752,
+      "landed": {
+        "sha": "8912a00ebb862a8be329c1090993a4a6834aba68",
+        "into": "main",
+        "at": "2026-09-26T09:55:01Z"
+      },
+      "attempts": 1,
+      "reason": null,
+      "comments": [
+        "Step 1 landed as #752. stopServer now lives in dev-servers.js (re-exported from test-environment.js). mc log cannot display non-command events like dev-server-stopped (runsFrom in log-read.js keeps only start/end/gate lines) — step 2's dev-server-reaped will hit the same wall; grep ~/.memoro/mc/logs/mc.log for the check. Measure tier failed to register within 3 min on this machine on 2026-09-26, so only the static tier was verified live."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The reaper: `mc dev reap`, every chores pass",
+      "done_when": "`mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]` removes processes the rules below prove orphaned and registrations whose worktree is gone, logs each as `dev-server-reaped`, and the runner's `chores()` runs it every pass; tests cover every rule both ways; the third success criterion is in the pull request.",
+      "status": "done",
+      "pr": 756,
+      "landed": {
+        "sha": "cb38f82452a59f3f16df456a10c89fec516fb698",
+        "into": "main",
+        "at": "2026-09-26T10:45:21Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc dev reap landed with three rules in src/mc/dev-reap.js; chores() runs it via deps.reapDevServers (fixtures without it reap nothing). Live check: the esbuild orphan died with its parent so only the workerd rule was seen live; (c) used an existing registered server because mc test dev waited silently in admission (cap full) — proposal written."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-09-26T09:55:03Z",
+      "kind": "step",
+      "seconds": 1022,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 51,
+      "input": 102,
+      "output": 745,
+      "cache_read": 3276416,
+      "cache_write": 93667,
+      "model": null,
+      "note": "success,merged",
+      "session": "310d3657-d8b7-4925-81ee-63064356770d",
+      "cost_usd": 2.594013
+    },
+    {
+      "ts": "2026-09-26T10:45:25Z",
+      "kind": "step",
+      "seconds": 1346,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 43,
+      "input": 86,
+      "output": 662,
+      "cache_read": 2821397,
+      "cache_write": 87014,
+      "model": null,
+      "note": "success,merged",
+      "session": "3bb5918c-f70e-43cf-b0ac-5a80805fd8b0",
+      "cost_usd": 2.2978185
+    }
+  ],
+  "totals": {
+    "sessions": 2,
+    "seconds": 2368,
+    "land_seconds": 0,
+    "cost_usd": 4.891832,
+    "cost_unknown": 0,
+    "input": 188,
+    "output": 1407,
+    "cache_read": 6097813,
+    "cache_write": 180681,
+    "first": "2026-09-26T09:55:03Z",
+    "landed": "2026-09-26T10:45:21Z"
+  }
+}

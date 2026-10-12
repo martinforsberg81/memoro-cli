@@ -1,0 +1,235 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "runner-hygiene",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/runner-hygiene/PLAN.json",
+  "archived": "2026-10-10",
+  "goal": [
+    "Four ways the runner hurt its own rounds in the week of 2026-10-06 are closed: a step no longer starts on a disk with no room, and scratch is swept after two days rather than seven; archiving a project no longer deletes a file that code or a test outside `docs/` reads; the merger's main-red walk measures a docs-only landing instead of ruling it out by path; a `project_log.md` that carries the same row twice is refused at the gate, and the archive never appends a row that is already there."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A step does not start under 5 GiB free, and the page says why.",
+      "check": "`tests/mc/run-plan.test.js` (or `run.test.js`) with the free-space reader stubbed under the threshold: no session is launched and the line is logged; `mc --fresh` shows the line while the condition holds."
+    },
+    {
+      "met": true,
+      "criterion": "Archiving a project whose skill texts a test reads keeps those files.",
+      "check": "`tests/mc/archive-plan.test.js` and `archive-programme.test.js`: a worktree where `tests/x.test.js` names `docs/project/p/q/skills/a.md` archives `q` with `a.md` kept and the PR body naming it."
+    },
+    {
+      "met": true,
+      "criterion": "Two identical rows in `project_log.md` turn the gate red with a reason naming the row, and the archive's `appendRow` is idempotent.",
+      "check": "`tests/mc/archive-plan.test.js` for `appendRow`; the gate's tests for the red reason."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. No step on a full disk, and scratch kept two days",
+      "done_when": "`mc run` reads the free space of the volume under `~/mc` before launching a step session and, under 5 GiB, launches none, logs `disk: <n> GiB free, below 5 GiB — no step started` once per pass and shows it on the page; `SCRATCH_KEEP_MS` is 48 hours; tests cover both; `npm test` is green.",
+      "status": "done",
+      "pr": 824,
+      "landed": {
+        "sha": "6cac21833f8941aedbfcbe5e86302ae0c687e2c0",
+        "into": "main",
+        "at": "2026-10-10T09:25:52Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Disk hold lives in run.js diskRoom(), called once at the top of pass(); page reads ~/mc/runner/disk.json (RUNNER_DISK in paths.js). This machine read 5.1 GiB free at build time — right at the line, so the runner may hold starts soon."
+      ],
+      "sessions": 1,
+      "seconds": 240,
+      "cost_usd": 1.106633
+    },
+    {
+      "title": "2. The archive keeps what the code reads",
+      "done_when": "Both archives (`archiveIn` in `run.js`, `archiveOnMain` in `archive-programme.js`) run `git grep -l` for the directory path over `src`, `tests`, `scripts`, `config`, `package.json` in the worktree before `git rm`, keep every file under the directory that a match names, and the PR body lists the kept files with the path that names each; tests cover a kept file; `npm test` is green.",
+      "status": "done",
+      "pr": 825,
+      "landed": {
+        "sha": "44e4632cd86fe25f600d04a22b3840b962acd7d9",
+        "into": "main",
+        "at": "2026-10-10T13:15:27Z"
+      },
+      "attempts": 1,
+      "reason": null,
+      "comments": [
+        "Step 2 built in #825. npm test has one red: run-codex.test.js 'a codex step runs through the adapter'. It belongs to step 1 (#824): that test uses realDeps.freeBytes, and this machine has 2 GiB free, so the disk hold refuses the step. It fails identically on step 1's commit without step 2. Fix: stub freeBytes in run-codex.test.js."
+      ],
+      "sessions": 1,
+      "seconds": 484,
+      "cost_usd": 1.060782
+    },
+    {
+      "title": "3. The main-red walk measures a docs-only landing",
+      "done_when": "When `probeMainRed` finds the red file passes before a landing that changed only `docs/`, it measures the file once more at the landing and once more at its parent; stable (red at the landing, green at the parent, both times) is reported as `docs-only-landing` (\"landed without the suite\") and recorded as a selector miss of that kind; unstable is `flaky` and blames nobody; `mainRedClause` says each; tests cover both; `npm test` is green.",
+      "status": "done",
+      "pr": 826,
+      "landed": {
+        "sha": "75c96989cdff21e6ce9c770273bd2fdb81530c1b",
+        "into": "main",
+        "at": "2026-10-10T13:16:09Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "run-codex.test.js read the host's real free space through realDeps; with 1.7 GiB free on 2026-10-10 step 1's disk guard refused its step and the gate went red. This PR stubs freeBytes there. The host disk is below 5 GiB, so the live runner will refuse to start steps until space is freed."
+      ],
+      "sessions": 1,
+      "seconds": 818,
+      "cost_usd": 0.840156
+    },
+    {
+      "title": "4. A duplicated project_log row is refused, and never appended twice",
+      "done_when": "The gate round reads the candidate's `docs/project/project_log.md` and, when any row occurs twice, the round is red with reason `project_log.md carries the same row twice: <date> <programme> <project> — delete the copy and push`; `appendRow` returns the text unchanged when the row is already present; tests cover both; `npm test` is green.",
+      "status": "done",
+      "pr": 829,
+      "landed": {
+        "sha": "c615867461c08cdf55f7a4278c826a1b841a0f2f",
+        "into": "main",
+        "at": "2026-10-10T14:33:57Z"
+      },
+      "attempts": 1,
+      "reason": null,
+      "comments": [],
+      "sessions": 2,
+      "seconds": 1400,
+      "cost_usd": 0.85506
+    },
+    {
+      "title": "5. Close-out",
+      "done_when": "The criteria are measured and marked; `docs/project/project_log.md` has the row; `docs/technical/mc-merge.md` (or the runner's technical note) says the three new behaviours; every step is `done` with its PR.",
+      "status": "done",
+      "pr": 831,
+      "landed": {
+        "sha": "cd0277b5c2e36b6ee68d5cd339447cfd64bc0d34",
+        "into": "main",
+        "at": "2026-10-10T14:38:05Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Close-out PR #831: project_log row, mc-merge.md (re-measure, duplicate-row red) and mc-run.md (free-space hold, kept files, 2-day scratch) paragraphs, criterion 1 met. Steps 2–4 (#825 #826 #829) were still landing when queued. page.test.js collectPage fails while the live merger holds ~/.memoro/mc/gate-running.json — environmental, proposal filed."
+      ],
+      "sessions": 1,
+      "seconds": 1465,
+      "cost_usd": 0.976806
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-10T09:22:31Z",
+      "kind": "step",
+      "seconds": 240,
+      "land_seconds": null,
+      "pr": 824,
+      "turns": 45,
+      "input": 56,
+      "output": 15765,
+      "cache_read": 1358104,
+      "cache_write": 64936,
+      "model": null,
+      "note": "success,queued",
+      "session": "aca2d958-f996-4ad7-a88b-f8d7d5ec04d6",
+      "cost_usd": 1.1066328000000003
+    },
+    {
+      "ts": "2026-10-10T09:30:42Z",
+      "kind": "step",
+      "seconds": 484,
+      "land_seconds": null,
+      "pr": 825,
+      "turns": 26,
+      "input": 48,
+      "output": 19019,
+      "cache_read": 1139972,
+      "cache_write": 56527,
+      "model": null,
+      "note": "success,queued",
+      "session": "daed7cb9-480d-45f2-9ee9-7163d4bd9348",
+      "cost_usd": 1.0607824000000001
+    },
+    {
+      "ts": "2026-10-10T09:44:27Z",
+      "kind": "step",
+      "seconds": 818,
+      "land_seconds": null,
+      "pr": 826,
+      "turns": 35,
+      "input": 42,
+      "output": 16094,
+      "cache_read": 844979,
+      "cache_write": 43639,
+      "model": null,
+      "note": "success,queued",
+      "session": "91884e00-25eb-4c05-b080-99c34f3642e5",
+      "cost_usd": 0.8401558000000001
+    },
+    {
+      "ts": "2026-10-10T12:43:41Z",
+      "kind": "step",
+      "seconds": 1144,
+      "land_seconds": null,
+      "pr": 829,
+      "turns": 38,
+      "input": 50,
+      "output": 10522,
+      "cache_read": 888575,
+      "cache_write": 42362,
+      "model": null,
+      "note": "success,queued",
+      "session": "8bc41ad5-95d6-49d3-a561-95ab17026791",
+      "cost_usd": 0.7272510000000001
+    },
+    {
+      "ts": "2026-10-10T13:08:23Z",
+      "kind": "step",
+      "seconds": 1465,
+      "land_seconds": null,
+      "pr": 831,
+      "turns": 40,
+      "input": 70,
+      "output": 12824,
+      "cache_read": 1498229,
+      "cache_write": 52550,
+      "model": null,
+      "note": "success,queued",
+      "session": "d4c01fe9-f6ce-422e-a126-2ee4ae0a4e45",
+      "cost_usd": 0.9768058
+    },
+    {
+      "ts": "2026-10-10T14:28:18Z",
+      "kind": "step",
+      "seconds": 256,
+      "land_seconds": null,
+      "pr": 829,
+      "turns": 5,
+      "input": 10,
+      "output": 1485,
+      "cache_read": 77187,
+      "cache_write": 10329,
+      "model": null,
+      "note": "success,queued",
+      "session": "4c1893ef-d643-49be-a6d4-3b28ee537054",
+      "cost_usd": 0.12780940000000002
+    }
+  ],
+  "totals": {
+    "sessions": 6,
+    "seconds": 4407,
+    "land_seconds": 0,
+    "cost_usd": 4.839437,
+    "cost_unknown": 0,
+    "input": 276,
+    "output": 75709,
+    "cache_read": 5807046,
+    "cache_write": 270343,
+    "first": "2026-10-10T09:22:31Z",
+    "landed": "2026-10-10T14:38:05Z"
+  }
+}

@@ -1,0 +1,123 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "vault-repair",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/vault-repair/PLAN.json",
+  "archived": "2026-10-12",
+  "goal": [
+    "`mc vault unlock` on macOS stores its durable key cache again, so later processes — headless ones included — read the vault without a prompt, and cache entries written before 2026-10-10 keep reading.",
+    "A Memoro token the server rejects (expired after its 90 days, or revoked) no longer strands `mc vault`: at a terminal mc deletes the dead token and runs the device flow; anywhere else it fails with a message naming the command that signs in. No sign-in hint in mc names a command that does not exist."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "The vault key cache is written through the real macOS keychain guard and read back.",
+      "check": "`tests/vault/engine/key-cache.test.js`: `cacheVaultKey` with `deps.setSecret` calling the real `macSet` (only its `exec` stubbed, capturing the `security -i` stdin line) returns `true`, and `readCachedVaultKey` with `deps.getSecret` returning the captured `-w` value yields the same 32 key bytes, `durable: true`, and the `authHash` and `deviceId` that were written."
+    },
+    {
+      "met": true,
+      "criterion": "A cache entry in the pre-2026-10-10 shape still reads, and a corrupt encoded entry is cleared rather than thrown.",
+      "check": "`tests/vault/engine/key-cache.test.js`: a store seeded with `JSON.stringify({ vaultKeyB64, authHash, expiresAt: null })` reads as present and is not deleted; a store seeded with `b64:` followed by non-base64 or non-JSON reads as `null`, `inspectCachedVaultKey` reports `invalid-json`, and the entry is deleted."
+    },
+    {
+      "met": true,
+      "criterion": "Only the server's token rejection is classed as a rejected token; a wrong master password is not.",
+      "check": "`tests/lib/api.test.js`: a 401 with body `{ ok: false, error: 'Not logged in or session has expired.' }` throws with `err.code === 'MEMORO_TOKEN_REJECTED'`; a 401 with `{ ok: false, error: 'Invalid master password', code: 'INVALID_PASSWORD' }` and a 401 with `{ ok: false, error: 'Invalid current password' }` throw without that code."
+    },
+    {
+      "met": true,
+      "criterion": "At a terminal, a rejected token is deleted and the device flow runs; elsewhere the token stays and the message names `mc vault status`.",
+      "check": "`tests/vault/engine/vault-commands.test.js`: with a portal whose `memoroFetch` throws `MEMORO_TOKEN_REJECTED`, `isTty: true` deletes the token account through the injected `deleteSecret` and calls the injected device flow once with the configured `apiUrl`, exit code 1; `isTty: false`, `--json`, and `MEMORO_TOKEN` set each call neither, keep the token, and print (or emit as JSON with `code: 'MEMORO_TOKEN_REJECTED'`) a message containing `mc vault status`."
+    },
+    {
+      "met": true,
+      "criterion": "No sign-in hint names a command that does not exist.",
+      "check": "`git grep -nE 'memoro-cli login|run .mc setup.|Run .mc. to sign in' src tests` prints nothing."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The vault key cache writes on macOS again",
+      "done_when": "`cacheVaultKey` returns true through the real `macSet` guard, the entry reads back with the same key bytes, and a pre-2026-10-10 plain-JSON entry still reads.",
+      "status": "done",
+      "pr": 875,
+      "landed": {
+        "sha": "49c75243db14011f42e21990a2fcfc68946af0a4",
+        "into": "main",
+        "at": "2026-10-11T11:27:18Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 143,
+      "cost_usd": 0.458918
+    },
+    {
+      "title": "A rejected Memoro token signs in again at a terminal, and sign-in hints name what works",
+      "done_when": "A token rejection from Memoro carries `MEMORO_TOKEN_REJECTED`; `mc vault` deletes the token and runs the device flow at a terminal and otherwise names `mc vault status`; no hint names `memoro-cli login`, `mc setup` or bare `mc` as the way to sign in.",
+      "status": "done",
+      "pr": 876,
+      "landed": {
+        "sha": "e1c6709ac360c3399222844ca43b7c9d66f25900",
+        "into": "main",
+        "at": "2026-10-11T11:34:46Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 401,
+      "cost_usd": 0.531968
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-11T11:26:16Z",
+      "kind": "step",
+      "seconds": 143,
+      "land_seconds": null,
+      "pr": 875,
+      "turns": 23,
+      "input": 28,
+      "output": 6704,
+      "cache_read": 394350,
+      "cache_write": 30732,
+      "model": null,
+      "note": "success,queued",
+      "session": "0803a12a-8a09-4258-8934-7f74a3ee318a",
+      "cost_usd": 0.45891799999999994
+    },
+    {
+      "ts": "2026-10-11T11:33:02Z",
+      "kind": "step",
+      "seconds": 401,
+      "land_seconds": null,
+      "pr": 876,
+      "turns": 18,
+      "input": 30,
+      "output": 8458,
+      "cache_read": 490281,
+      "cache_write": 33079,
+      "model": null,
+      "note": "success,queued",
+      "session": "a1e38736-0d1f-4e7b-b769-488bb6c6903f",
+      "cost_usd": 0.5319681999999999
+    }
+  ],
+  "totals": {
+    "sessions": 2,
+    "seconds": 544,
+    "land_seconds": 0,
+    "cost_usd": 0.990886,
+    "cost_unknown": 0,
+    "input": 58,
+    "output": 15162,
+    "cache_read": 884631,
+    "cache_write": 63811,
+    "first": "2026-10-11T11:26:16Z",
+    "landed": "2026-10-11T11:34:46Z"
+  }
+}

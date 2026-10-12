@@ -1,0 +1,118 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "merge-watch",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/merge-watch/PLAN.json",
+  "archived": "2026-10-10",
+  "goal": [
+    "A session that wants to know how its pull request's merge ends can run `mc merge watch <repo> <pr>`. The command follows the job through the merge queue and exits with the answer: merged, red with the reason, timed out, or no merger. It prints one line each time the state changes.",
+    "Since ruling 30, `mc merge` queues and returns (`queueForMerger`, `src/mc/commands/repo.js:349-407`). That is right for a step session, whose next step stacks on top. A hand session, a close-out that needs its predecessors on main, or a session that wants to deploy what it just landed has no way to wait except reading `merges.json`, tailing `merger.log` or polling `gh` by itself."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`mc merge watch <repo> <pr>` follows a job from queued through landing to merged or red, prints one line per change, and exits with the contract's codes.",
+      "check": "`tests/mc/merge-watch.test.js` with injected `readQueue`, `readMerger`, `prView`, `now` and `sleep`: queued at place 3 then landing then gone and MERGED gives three lines and exit 0, with the merge commit in the last; landing then `red` gives exit 1 with `markRed`'s reason; a job never queued and CLOSED gives exit 2; an unchanged queued state past `--timeout` gives exit 3; a queued job with `readMerger` null for two polls gives exit 4; a waiting-on-parent job prints `waits for #<parent> (stacked on it)`. `prView` is called only after the job leaves the queue."
+    },
+    {
+      "met": true,
+      "criterion": "`mc merge <repo> <pr> --watch` queues and then watches, and `--json` prints the final state as one object.",
+      "check": "`tests/mc/merge-command.test.js` (or the test beside `commands/merge.js`): with a stub `queueForMerger` and a stub watch, `--watch` calls both in order and returns the watch's code; `--watch --docs` is refused; `--json` gives `{ repo, pr, outcome, merge_commit, reason, place, seconds }`."
+    },
+    {
+      "met": false,
+      "criterion": "Live: a pull request's landing is watched end to end.",
+      "check": "The close-out lands its own pull request with `mc merge memoro-cli <pr> --watch` and records the printed lines and the exit code with `mc step note` once it has merged."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. mc merge watch <repo> <pr>: the pure state machine and the verb",
+      "done_when": "A new `src/mc/merge-watch.js` exports a pure `watchState(entries, { repo, pr, merger, prView })`, `watchLine(prev, next)` and an async `watch({ repo, pr, timeoutMs, ... })` loop. `mc merge watch <repo> <pr> [--timeout <minutes>] [--json]` runs it from `commands/merge.js`. The tests in success criterion 1 are green, and so is `npm test`.",
+      "status": "done",
+      "pr": 848,
+      "landed": {
+        "sha": "c9d18dd2f044602b7519c19ee14fb006e9b98ede",
+        "into": "main",
+        "at": "2026-10-10T17:51:28Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "watch() returns { code, result } where result is the --json object; step 2's --watch can call it after queueForMerger. A gh failure (prView null) exits 2 with outcome 'unknown' — not in the plan's enum, it is neither open, closed nor merged."
+      ],
+      "sessions": 1,
+      "seconds": 631,
+      "cost_usd": 0.852241
+    },
+    {
+      "title": "2. mc merge --watch, the docs, and the close-out",
+      "done_when": "`mc merge <repo> <pr> --watch` queues and then watches. `docs/technical/mc-merge.md` describes the watch. The criteria are marked, this step's own pull request was landed with `--watch` and its lines noted, `docs/project/project_log.md` has the row, and every step is `done` with its PR.",
+      "status": "done",
+      "pr": 850,
+      "landed": {
+        "sha": "1dd3cbf6ade97fdffa1a95fd79ea0d79ba578644",
+        "into": "main",
+        "at": "2026-10-10T17:54:32Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Live watch, first run: node src/mc-cli.js merge memoro-cli 850 --watch printed: '#850 is queued for the merger — 16 ahead of it' / 'the merger (pid 65377) lands it' / 'merge-watch step 2 is landing' / 'it lands after #848 (step 1)' / '#850 waits for #848 (stacked on it) to land' / '#850 waits for #848 (stacked on it) to land — no merger is running' / 'no merger is running and the job waits — the next mc merge or runner pass starts one'; exit 4. The merger (pid 65377) exited while #850 still waited for #848. Re-running mc merge 850 --watch to start one and follow it to the end.",
+        "Live watch, second run (criterion 3): node src/mc-cli.js merge memoro-cli 850 --watch printed: '#850 is queued for the merger — 12 ahead of it' / 'the merger (pid 14366, just started) lands it' / 'merge-watch step 2 is landing' / 'it lands after #848 (step 1)' / '#850 waits for #848 (stacked on it) to land — no merger is running' / '#850 waits for #848 (stacked on it) to land' / '#850 queued — place 8, behind #844 #845 #847 #849' / '#850 landing in a batch with #844 #849 (pid 14366)' / '#850 merged into main as 1dd3cbf (6m52s)'; exit 0. Criterion 3 met. The first poll after a just-started merger reads it as absent (merger.json not yet written); the two-poll rule kept that from ending the watch."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-10T17:19:21Z",
+      "kind": "step",
+      "seconds": 631,
+      "land_seconds": null,
+      "pr": 848,
+      "turns": 29,
+      "input": 32,
+      "output": 17762,
+      "cache_read": 647043,
+      "cache_write": 45933,
+      "model": null,
+      "note": "success,queued",
+      "session": "1de609aa-d91f-4a94-85ae-fcf02f00300f",
+      "cost_usd": 0.8522406
+    },
+    {
+      "ts": "2026-10-10T17:55:05Z",
+      "kind": "step",
+      "seconds": 2123,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 32,
+      "input": 58,
+      "output": 16507,
+      "cache_read": 1776151,
+      "cache_write": 72757,
+      "model": null,
+      "note": "success,merged",
+      "session": "4f8d6d06-5273-4d4d-80de-a8020a994068",
+      "cost_usd": 2.368049
+    }
+  ],
+  "totals": {
+    "sessions": 2,
+    "seconds": 2754,
+    "land_seconds": 0,
+    "cost_usd": 3.22029,
+    "cost_unknown": 0,
+    "input": 90,
+    "output": 34269,
+    "cache_read": 2423194,
+    "cache_write": 118690,
+    "first": "2026-10-10T17:19:21Z",
+    "landed": "2026-10-10T17:54:32Z"
+  }
+}

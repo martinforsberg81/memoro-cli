@@ -1,0 +1,95 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "nightly-is-a-chore",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/nightly-is-a-chore/PLAN.json",
+  "archived": "2026-09-19",
+  "goal": [
+    "The nightly has no process of its own. Its tick is a chore of the runner, beside `runHelperDay` and `runIntakeDrain` in `src/mc/run.js`, due when 24 h have passed since the last tick. A running runner means the tick can happen; `mc run stop` means no background suite runs at all, because `chores()` returns at its first line while `~/mc/runner/STOP` exists.",
+    "Nothing starts the nightly and nothing restarts it. `mc test nightly start` and `mc test nightly stop` are gone, with the detached spawn, the pid file and the liveness check that read it. `mc test nightly status` stays, because the reading — red, and since when — is the question the meter exists for, and it answers from the runner's state rather than from a pid file of its own."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A running runner performs the tick when it is due, and records it in runs.tsv.",
+      "check": "In `tests/mc/run.test.js`, a chore pass over a fake runs.tsv whose newest `nightly` row is 25 h old calls the injected tick once and appends a row whose `kind` is `nightly`."
+    },
+    {
+      "met": true,
+      "criterion": "A tick that is not yet due is not performed.",
+      "check": "Same test: a `nightly` row 2 h old leaves the injected tick uncalled and writes no row."
+    },
+    {
+      "met": true,
+      "criterion": "`mc run stop` means no background suite runs.",
+      "check": "Two assertions in `tests/mc/run.test.js`. A chore pass with the STOP file present never calls the tick, even when it is due. And a tick already under way, driven through the injected per-repository seam with STOP appearing after the first repository, does not start the second repository's suite."
+    },
+    {
+      "met": true,
+      "criterion": "Nothing can start a nightly process any more.",
+      "check": "`mc test nightly start` and `mc test nightly stop` exit 2 with the usage text. `grep -rn 'startNightly\\|stopNightly\\|nightlyStatePath' src/` returns nothing. No file is written at `~/.memoro/mc/nightly/nightly.json` by any code path."
+    },
+    {
+      "met": false,
+      "criterion": "`mc test nightly status` still answers the question the meter exists for, and says where the tick now comes from.",
+      "check": "Run `mc test nightly status` on this machine with the runner running and again with it stopped. Both print the per-repository readings — last measurement, commit, count and every red name with the date it went red. The first says the tick is the runner's chore and when it is next due; the second says the runner is stopped and that no tick will happen until it is started."
+    },
+    {
+      "met": false,
+      "criterion": "The reading survives the move unchanged.",
+      "check": "After the first chore-driven tick on this machine, `mc test nightly status --json` reports the same shape it does today — `runs`, `last`, `measured`, `red` with `since`, `since_commit`, `runs` and `bounded` per name — and the red-since dates carried over from the history written before the move are not re-dated."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The tick becomes a chore of the runner, and the detached scheduler is deleted",
+      "done_when": "`chores()` in `src/mc/run.js` performs the nightly tick when 24 h have passed since the last one and never while the STOP file exists; `src/mc/nightly.js`'s process control, the pid file and the `start` and `stop` verbs of `mc test nightly` are gone; `mc test nightly status` still prints every repository's reading and says where the tick now comes from; `npm test` is green.",
+      "status": "done",
+      "pr": 739,
+      "landed": {
+        "sha": "6aa882b33f71959c2de7de282f0518ab076ca890",
+        "into": "main",
+        "at": "2026-09-19T19:36:22Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-09-19T19:36:24Z",
+      "kind": "step",
+      "seconds": 835,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    }
+  ],
+  "totals": {
+    "sessions": 1,
+    "seconds": 835,
+    "land_seconds": 0,
+    "cost_usd": 0,
+    "cost_unknown": 1,
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "cache_write": 0,
+    "first": "2026-09-19T19:36:24Z",
+    "landed": "2026-09-19T19:36:22Z"
+  }
+}

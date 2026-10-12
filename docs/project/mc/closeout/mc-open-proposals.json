@@ -1,0 +1,353 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-open-proposals",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-open-proposals/PLAN.json",
+  "archived": "2026-09-19",
+  "goal": [
+    "The mc proposals left open after the triage of 2026-09-18 are built: every verb answers --help, the plan door judges a pull request against the plan its branch started from, a landed branch whose merge conflicts is read as landed, the quota pause lasts until the reset the refusal names, a session has a scratch directory outside its worktree, a hung process after a result is not a stalled step, mc status reads a killed merge the way the runner does, the brief gathers no document, and the documentation no longer describes the repair session."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "Every verb the dispatcher routes answers --help with its usage on stdout and exit 0.",
+      "check": "`for v in status work repo merge test dev deploy worker brief helper plan run roles log step; do mc $v --help >/dev/null || echo $v; done` prints nothing; `mc test dev --help` exits 0."
+    },
+    {
+      "met": false,
+      "criterion": "A plan edit that lands on main while a step runs is not attributed to the step's pull request.",
+      "check": "The new case in tests/mc/merge-boundary.test.js: base moved steps[3] after the merge base, head edits only its own step — `ok: true`."
+    },
+    {
+      "met": true,
+      "criterion": "A quota refusal that names its reset holds every lane until then.",
+      "check": "The new test in tests/mc/run.test.js: a result text `resets Sep 11 at 3pm (Europe/Stockholm)` makes the lanes sleep until 2026-09-11T13:01:00Z in slices, and starts no session before it."
+    },
+    {
+      "met": true,
+      "criterion": "`mc brief` opens the session with no gathered document, and `--collect` is an unknown flag.",
+      "check": "`mc brief --collect` exits 2; `grep -rn \"renderBrief\\|collectBrief\" src` is empty; `npm test` is green."
+    },
+    {
+      "met": true,
+      "criterion": "No document or comment describes a repair session, `held.json` or `stalled,open` as something mc does.",
+      "check": "`grep -rniE \"repair session|a repair on|stalled,open\" docs/technical docs/project/README.md src/mc` finds only dated history sentences."
+    }
+  ],
+  "steps": [
+    {
+      "title": "--help on every verb",
+      "done_when": "`mc <verb> --help` and `mc <verb> -h` print that verb's usage on stdout and exit 0 for every verb in `routeV1Command`'s table, and tests/mc/help.test.js walks the table to prove it.",
+      "status": "done",
+      "pr": 725,
+      "landed": {
+        "sha": "3055798564bfb6feaba995b5efc6433adac74b8e",
+        "into": "main",
+        "at": "2026-09-19T08:40:41Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The plan door compares against the merge base",
+      "done_when": "`planBoundary` reads its `before` plan from `git merge-base origin/<base> origin/<head>` and falls back to `origin/<base>` only when that cannot be read, with a test for a plan edit that landed on main after the branch started.",
+      "status": "done",
+      "pr": 727,
+      "landed": {
+        "sha": "4647058ea6170ea272d902ba11bb106673c59f62",
+        "into": "main",
+        "at": "2026-09-19T10:33:12Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "A landed branch whose merge conflicts reads landed",
+      "done_when": "`branchLanded` answers `landed` for a branch with no commit after its merged pull request even when `git merge-tree` conflicts, and `freshBranch` moves such a workarea to `<name>-<n>`.",
+      "status": "done",
+      "pr": 728,
+      "landed": {
+        "sha": "373c9b22c1dcb58dd4e58cd4a08c8bc31493273d",
+        "into": "main",
+        "at": "2026-09-19T11:08:52Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The quota pause lasts until the reset the refusal names",
+      "done_when": "A quota answer whose text carries `resets …` holds every lane until one minute after that time, in slices that end on STOP or UPDATE; one without a readable time keeps the thirty minutes.",
+      "status": "done",
+      "pr": 729,
+      "landed": {
+        "sha": "24b4465fd9f3c01b8d8c0da48f36b2e12c1d37c9",
+        "into": "main",
+        "at": "2026-09-19T12:45:05Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "A scratch directory per run",
+      "done_when": "Every step session is started with `MC_SCRATCH` naming an existing directory `~/mc/runner/scratch/<project>-<stamp>/`, `canon/roles/_common.md` tells a session to put probes there, and the chore pass removes scratch directories older than seven days.",
+      "status": "done",
+      "pr": 730,
+      "landed": {
+        "sha": "55f111f55741cabb49792044f78c608c745be018",
+        "into": "main",
+        "at": "2026-09-19T14:38:14Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "A process that hangs after its result is not a stalled step",
+      "done_when": "Once `streamSession` has seen the `result` line, the process gets `RESULT_GRACE_MS` (two minutes) to exit and is then killed with the result standing: status 0, `stalled: false`, and the `runs.tsv` note is the session's own word.",
+      "status": "done",
+      "pr": 732,
+      "landed": {
+        "sha": "405705ab4bbd0e4a9c14e0bf0726e91e355a32d7",
+        "into": "main",
+        "at": "2026-09-19T16:20:16Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "mc status reads a killed merge the way the runner does",
+      "done_when": "`machineState` answers runnable for a worktree whose only dirt is a merge of origin/main left in progress, keeps `dirty` when there is other work beside it, and the `RUN_REFUSALS` agreement table has both cases.",
+      "status": "done",
+      "pr": 734,
+      "landed": {
+        "sha": "9221985e7c042333a8ea474ce118d3daaa1b72ff",
+        "into": "main",
+        "at": "2026-09-19T17:36:36Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The documentation no longer describes the repair session",
+      "done_when": "No sentence in docs/technical, docs/project/README.md or a comment in src/mc describes a repair session, a repair kind, `held.json` or a merge lane as something mc does today, and `checkInPrompt` has no `repair` branch.",
+      "status": "done",
+      "pr": 736,
+      "landed": {
+        "sha": "7b8ccd057aefbdc24bc4ddb25713fe4d0f27113b",
+        "into": "main",
+        "at": "2026-09-19T17:47:35Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The brief gathers no document",
+      "done_when": "`mc brief` opens or resumes the brief session with the role and no gathered document; `--collect`, `--offline`, `collectBrief`, `renderBrief` and everything only they used are gone; `canon/roles/brief.md` tells the session where the ground is read.",
+      "status": "done",
+      "pr": 738,
+      "landed": {
+        "sha": "fcc890e572efd1a003d41a4a6512917ab9b4daf4",
+        "into": "main",
+        "at": "2026-09-19T18:52:10Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-09-19T08:40:43Z",
+      "kind": "step",
+      "seconds": 202,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    },
+    {
+      "ts": "2026-09-19T10:33:13Z",
+      "kind": "step",
+      "seconds": 172,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    },
+    {
+      "ts": "2026-09-19T11:08:53Z",
+      "kind": "step",
+      "seconds": 184,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    },
+    {
+      "ts": "2026-09-19T12:45:07Z",
+      "kind": "step",
+      "seconds": 474,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    },
+    {
+      "ts": "2026-09-19T14:38:16Z",
+      "kind": "step",
+      "seconds": 1220,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    },
+    {
+      "ts": "2026-09-19T16:20:19Z",
+      "kind": "step",
+      "seconds": 177,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    },
+    {
+      "ts": "2026-09-19T17:36:39Z",
+      "kind": "step",
+      "seconds": 343,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    },
+    {
+      "ts": "2026-09-19T17:47:39Z",
+      "kind": "step",
+      "seconds": 496,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    },
+    {
+      "ts": "2026-09-19T18:52:15Z",
+      "kind": "step",
+      "seconds": 787,
+      "land_seconds": null,
+      "pr": null,
+      "turns": null,
+      "input": null,
+      "output": null,
+      "cache_read": null,
+      "cache_write": null,
+      "model": null,
+      "note": "success,merged",
+      "session": null,
+      "cost_usd": null
+    }
+  ],
+  "totals": {
+    "sessions": 9,
+    "seconds": 4055,
+    "land_seconds": 0,
+    "cost_usd": 0,
+    "cost_unknown": 9,
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "cache_write": 0,
+    "first": "2026-09-19T08:40:43Z",
+    "landed": "2026-09-19T18:52:10Z"
+  }
+}

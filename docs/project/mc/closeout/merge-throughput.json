@@ -1,0 +1,265 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "merge-throughput",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/merge-throughput/PLAN.json",
+  "archived": "2026-10-11",
+  "goal": [
+    "The merger lands the queue in fewer and shorter rounds. Several queued pull requests to one repository are measured as one candidate and landed in order, memoro-cli's short rounds no longer wait behind memoro's, and the parts of a round that are not the suite (command gates and `npm ci`) stop adding their full time to every round.",
+    "Measured on 2026-10-09/10 from `~/mc/runner/log/merger.log`: 96 landed rounds, 178 s median and 281 s mean, so about 13 pull requests an hour at most. The merger was busy 100 % of 12:00-15:00 UTC on 2026-10-10 with ten or more jobs in line. Per round the suite took 159 s mean (57 % of the total), command gates 65 s mean where they ran (`sql:pr-ci` 36 s median, 55 times), `npm ci` 26 s mean (15 s median), and derived plus selection 19 s."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "With two or more jobs for one repository that may go, the merger lands them in one round of up to `MERGE_BATCH_MAX` (4), and each job gets its own answer in the queue and the register.",
+      "check": "`tests/mc/merger.test.js`: three queued memoro jobs and one memoro-cli job; `serve` hands `mergeRound` `prs: [a, b, c]` once; a green batch report dequeues all three and writes three `done` steps; a fallback report with one red round leaves that job `red` with its own reason and its step `ready` with `attempts` 1, and dequeues the other two. Live: the close-out quotes one `merger.log` line `landing a batch of N`."
+    },
+    {
+      "met": true,
+      "criterion": "A memoro-cli round runs while a memoro round is in flight; two memoro rounds never run at once.",
+      "check": "`tests/mc/gate-lock.test.js` for the two lock files; `tests/mc/merger.test.js`: one memoro and one memoro-cli job, the memoro round held open by a stub promise, and the memoro-cli round starts and finishes before it resolves. Live: the close-out quotes two `merger.log` lines from different repositories whose rounds overlap in time."
+    },
+    {
+      "met": true,
+      "criterion": "Command gates no longer add their full time to a round: they run beside the suite, and the round's verdict is unchanged.",
+      "check": "`tests/mc/repo-gate.test.js`: with a stub suite and two stub gates that each take a measurable delay, the round's wall time is below suite plus gates, a failed gate still makes `selected-gate` with every failure named, and the gates are reported in the selector's order. Live: the close-out compares suite and gate seconds over at least 20 memoro rounds against the 2026-10-09/10 figures in the goal."
+    },
+    {
+      "met": true,
+      "criterion": "A memoro round whose lockfile matches a cached tree takes no `npm ci`.",
+      "check": "`tests/mc/repo-gate.test.js` (or a new `tests/mc/prepare-cache.test.js`) with stubbed clone and shell: same key, no prepare shell call and the line `prepare: cloned node_modules from the cache (<key>)`; changed lockfile, `npm ci` runs and the cache is written; at most `PREPARE_CACHE_KEEP` entries remain. Live: the close-out quotes a `merger.log` line with the cached prepare and its seconds."
+    },
+    {
+      "met": false,
+      "criterion": "The merger's median round per landed pull request is below 120 s over the first 40 landings after the last step, against 178 s on 2026-10-09/10.",
+      "check": "The close-out runs the same parse as the brief, over `merger.log` from the first landing on the updated merger: seconds per landed pull request, where a batch's seconds are shared among the pull requests it landed. The figure is quoted in the close-out's comments whether or not it is met."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. The merger lands a batch of queued pull requests to one repository in one round",
+      "done_when": "`serve` takes up to `MERGE_BATCH_MAX` (4) jobs for the same repository that may go, marks them all `landing`, and `landJob` hands them to `runMergeRound` as `prs`. Every job is answered by itself in `merges.json` and the register. A merger that died under a batch takes the whole batch again. Tests cover green, fallback with one red, restack refusal of one member, and resume; `npm test` is green.",
+      "status": "done",
+      "pr": 838,
+      "landed": {
+        "sha": "ba413e8fc33e72c1b10fbd1a62f3d3629aca096b",
+        "into": "main",
+        "at": "2026-10-10T17:05:22Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "landJob now returns answers [{ job, landed, report }], not a report; serve accepts either (a report is split with answersFor). A batch job that merged before a later stop (drift, merge) gets merged_into from report.pr.base, since runMergeRound sets merged_into only on full success. Step 2's per-lane loops should call nextBatch with a lane filter — nextBatch's resume takes the landing entries of the first one's repository only."
+      ],
+      "sessions": 1,
+      "seconds": 463,
+      "cost_usd": 1.266533
+    },
+    {
+      "title": "2. memoro-cli has a gate lane of its own, and the merger serves both lanes at once",
+      "done_when": "The gate lock is per lane (`heavy`, `light`). memoro-cli's declaration says `gate_lane: 'light'`. `serve` runs one loop per lane, each taking only its own lane's jobs, and the deploy waits for both lanes. The page and `mc test` name the lane they wait on. Tests cover the overlap and the refusal within a lane; `npm test` is green.",
+      "status": "done",
+      "pr": 839,
+      "landed": {
+        "sha": "d905b7bbd9ff3be9ab2821cafa1d15a01c417f5f",
+        "into": "main",
+        "at": "2026-10-10T17:36:36Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 1665,
+      "cost_usd": 3.473111
+    },
+    {
+      "title": "3. The command gates the selection named run beside the suite",
+      "done_when": "In `runGate` the selected command gates start when the suite starts, one at a time and in the selector's order, and the round awaits both. The verdict, its stops and `extra_gates` are what they would have been sequentially. Tests cover the overlap, a failed gate beside a green suite, and a red suite beside a failed gate; `npm test` is green.",
+      "status": "done",
+      "pr": 840,
+      "landed": {
+        "sha": "687b81a869cca8a498483bbc9532d87cc5bea9d7",
+        "into": "main",
+        "at": "2026-10-10T17:38:39Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Gates now run beside the suite via an async commandShell (spawnSync would block the suite's pipes). A suite that cannot be measured now lists the gates that ran beside it in extra_gates; stop/verdict unchanged. timings.gates_beside_suite_ms is the overlap figure for the close-out."
+      ],
+      "sessions": 1,
+      "seconds": 519,
+      "cost_usd": 1.028007
+    },
+    {
+      "title": "4. A round whose lockfile matches a cached tree clones node_modules instead of running npm ci",
+      "done_when": "When the declaration's `prepare` is `npm ci`, the gate keys a cache on sha256 of `package-lock.json`, `package.json` and `process.version`. On a hit it clones the cached `node_modules` into the candidate with `cp -cR` (APFS clonefile) and skips the shell. On a miss it runs `npm ci` and then stores the result. At most `PREPARE_CACHE_KEEP` (2) entries are kept per repository. Every failure falls back to `npm ci`. Tests cover hit, miss, eviction and a failed clone; `npm test` is green.",
+      "status": "done",
+      "pr": 841,
+      "landed": {
+        "sha": "304e6b0d94a2dba783443debad7cddebe2ecda61",
+        "into": "main",
+        "at": "2026-10-10T17:51:24Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 199,
+      "cost_usd": 0.548968
+    },
+    {
+      "title": "5. Close-out",
+      "done_when": "The merger runs the new code, every criterion is measured and marked with the figures quoted in this step's comments, `docs/technical/mc-run.md` and `docs/technical/mc-merge.md` describe batches, lanes, gates beside the suite and the prepare cache, `docs/project/project_log.md` has the row, and every step is `done` with its PR.",
+      "status": "done",
+      "pr": 872,
+      "landed": {
+        "sha": "1fa50fbccbb2499f82f9830bd1212dc21c8af1f5",
+        "into": "main",
+        "at": "2026-10-11T08:47:20Z"
+      },
+      "attempts": 1,
+      "reason": null,
+      "comments": [
+        "Session 2026-10-10 ~16:05 UTC: dispatched too early. Steps 1-4 (#838-#841) were still queued behind 10 jobs and none had landed; the merger (pid 65377, started 11:41 UTC) runs the old code. The docs half is done and pushed on merge-throughput-6 (b16ba1d7, no PR): mc-run.md § The merge (batches, answer per job, two lanes) and mc-merge.md (lane in § The gate form, gates beside the suite in § What the round measures, prepare cache in § Where the candidate's dependencies come from, pointer in § One round at a time). Left: once #841 has landed and a merger started after it has made 40 landings, parse merger.log from its 'merger <pid> started' line, quote the four lines, mark met, add the project_log row with before/after figures, then mc publish + mc merge.",
+        "Failed on 2026-10-10T16:04:07Z: Close-out needs steps 1-4 landed and 40 landings on a restarted merger; none had landed (10 jobs ahead), so nothing could be measured. Docs are pushed on merge-throughput-6; set ready once 40 landings exist on the new merger.",
+        "Blocked on 2026-10-10T18:15:02Z: Waits for 40 landings on a merger started after #841 (17:51Z). Count from 'merger 39397 started' (2026-10-10T18:09:50Z), the first merger started from ~/memoro-cli after #841; mergers 94647 and 3264 before it are unverified (14366 ran a workarea's code, see ruling 37). Docs are pushed on merge-throughput-6.",
+        "Released 2026-10-11T08:10:35Z: time 2026-10-11T08:00Z passed",
+        "Close-out measured 2026-10-10 18:01 – 2026-10-11 07:19 UTC on gate-rounds.jsonl and merger.log (first merger after #841: 18:01:04Z). Per landed PR, batch seconds shared, first 40: median 219.5 s vs 176 s for 2026-10-09/10 by the same parse (brief: 178 s) — criterion 4 NOT met. 8 batches in 71 landed rounds. memoro: suite median 179 s vs 91 (median selection 560 files vs 236 — batches select the union), gates beside the suite 161 s vs 36, suite+gates wall 236 s vs 155 sequential before; overlap saves 226 s mean within a round. Prepare cache: 72 hits at 6.8 s median, 2 misses 22.7 s. Lanes overlap live (memoro #13388 / memoro-cli #859, 19:21–19:28Z).",
+        "Attempt 1 red: two timing tests (light-lane overlap in merger.test.js, gates beside the suite in repo-gate.test.js) failed with fixed ms margins while the light lane ran beside a memoro round. Rewritten to hold on structure (heavy held until the light job is dequeued; wall vs measured suite+gates). Docs/close-out unchanged."
+      ],
+      "sessions": 2,
+      "seconds": 1458,
+      "cost_usd": 1.632861
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-10T15:22:08Z",
+      "kind": "step",
+      "seconds": 463,
+      "land_seconds": null,
+      "pr": 838,
+      "turns": 32,
+      "input": 40,
+      "output": 22388,
+      "cache_read": 1196904,
+      "cache_write": 72404,
+      "model": null,
+      "note": "success,queued",
+      "session": "e8d55bf5-4dd3-4bba-b4b8-8d5af9868fd5",
+      "cost_usd": 1.2665328
+    },
+    {
+      "ts": "2026-10-10T15:49:58Z",
+      "kind": "step",
+      "seconds": 1665,
+      "land_seconds": null,
+      "pr": 839,
+      "turns": 76,
+      "input": 136,
+      "output": 49929,
+      "cache_read": 4357371,
+      "cache_write": 178025,
+      "model": null,
+      "note": "success,queued",
+      "session": "c82b596f-a834-4c00-96ca-f2a2dc25e085",
+      "cost_usd": 3.4731114000000005
+    },
+    {
+      "ts": "2026-10-10T15:58:43Z",
+      "kind": "step",
+      "seconds": 519,
+      "land_seconds": null,
+      "pr": 840,
+      "turns": 38,
+      "input": 56,
+      "output": 18982,
+      "cache_read": 1178357,
+      "cache_write": 51559,
+      "model": null,
+      "note": "success,queued",
+      "session": "1e428158-fb41-44f8-bc89-f99f942e8ebc",
+      "cost_usd": 1.0280074
+    },
+    {
+      "ts": "2026-10-10T16:02:06Z",
+      "kind": "step",
+      "seconds": 199,
+      "land_seconds": null,
+      "pr": 841,
+      "turns": 16,
+      "input": 26,
+      "output": 11500,
+      "cache_read": 362480,
+      "cache_write": 30796,
+      "model": null,
+      "note": "success,queued",
+      "session": "7a94e8a2-463d-46cf-9e14-5f96aa36e4cd",
+      "cost_usd": 0.548968
+    },
+    {
+      "ts": "2026-10-10T16:04:17Z",
+      "kind": "step",
+      "seconds": 125,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 25,
+      "input": 32,
+      "output": 9979,
+      "cache_read": 612038,
+      "cache_write": 54233,
+      "model": null,
+      "note": "success,failed",
+      "session": "f8888348-cfbc-4699-8f57-991dd16afe45",
+      "cost_usd": 0.7559796
+    },
+    {
+      "ts": "2026-10-11T08:28:54Z",
+      "kind": "step",
+      "seconds": 1091,
+      "land_seconds": null,
+      "pr": 872,
+      "turns": 35,
+      "input": 64,
+      "output": 17967,
+      "cache_read": 1279111,
+      "cache_write": 60241,
+      "model": null,
+      "note": "success,queued",
+      "session": "130c65ca-dc81-43f6-a57f-7f5602906af2",
+      "cost_usd": 1.0973462
+    },
+    {
+      "ts": "2026-10-11T08:44:44Z",
+      "kind": "step",
+      "seconds": 367,
+      "land_seconds": null,
+      "pr": 872,
+      "turns": 19,
+      "input": 36,
+      "output": 9367,
+      "cache_read": 500996,
+      "cache_write": 30979,
+      "model": null,
+      "note": "success,queued",
+      "session": "f9364a2e-0055-4785-bcff-8ca9bbf6b76a",
+      "cost_usd": 0.5355152000000001
+    }
+  ],
+  "totals": {
+    "sessions": 7,
+    "seconds": 4429,
+    "land_seconds": 0,
+    "cost_usd": 8.705461,
+    "cost_unknown": 0,
+    "input": 390,
+    "output": 140112,
+    "cache_read": 9487257,
+    "cache_write": 478237,
+    "first": "2026-10-10T15:22:08Z",
+    "landed": "2026-10-11T08:47:20Z"
+  }
+}

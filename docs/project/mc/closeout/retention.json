@@ -1,0 +1,186 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "retention",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/retention/PLAN.json",
+  "archived": "2026-10-12",
+  "goal": [
+    "Each kind of area has its own root under `~/mc`: `plan/<programme>/` (unchanged), `step/<project>/` for the runner's areas, `work/<name>/` for `mc work`. What an area is follows from its path. There is no marker file, and no lookup in the register decides it.",
+    "A finished project leaves a closeout in git, `docs/project/<programme>/closeout/<project>.json`, written in the same archive PR that removes its plan. It holds the goal, the steps with PR, sha and date, and time, tokens and cost per session. After that, mc removes the project's local data: register file, session logs, `runner/log/closed/<project>`, scratch and transcripts.",
+    "`mc tidy` applies the retention rules per root. The runner runs it once a day, and again when lanes are skipping for low disk. A programme keeps its current conversation, and the others go after 72 h. A planning area keeps its two checkouts, and extra worktrees go once they are finished. A work area stays until `mc work release`/`discard`. Before deleting, `mc tidy` writes the list of what it will delete to a file, and it deletes only from that list."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A step area made by the runner after landing is at `~/mc/step/<project>/<repo>`, and `mc work <name>` makes `~/mc/work/<name>/`. A project whose area is still at `~/mc/<project>/` keeps stepping there and is closed there.",
+      "check": "`tests/mc/run.test.js`: a project with no area gets `addWorktree({ name: 'step/<p>' … })`; a project with `<root>/<p>/memoro/.git` present steps in it and `closeWorkarea` removes it. `tests/mc/work-area-add.test.js`/`work-open.test.js`: `mc work foo` creates `<root>/work/foo`. On the machine after landing: the next new project's area appears under `~/mc/step/`."
+    },
+    {
+      "met": false,
+      "criterion": "Archiving a done project adds `docs/project/<programme>/closeout/<project>.json` in the archive PR, and archived projects without one get theirs in a later archive PR. Each file carries goal, steps and per-session time, tokens and cost.",
+      "check": "`tests/mc/closeout.test.js` on a fixture register, runs.tsv and session json (plain and `.json.gz`): totals and per-step attribution exactly as listed in step 3. `tests/mc/archive-live.test.js`: the archive commit holds both the `git rm` and the closeout. On main after landing: `git ls-tree origin/main docs/project/mc/closeout/` lists files."
+    },
+    {
+      "met": false,
+      "criterion": "`mc tidy` prints what it would remove per rule and root, and with `--apply` removes exactly the entries of the list file it wrote. The runner runs it daily and when lanes skip for disk.",
+      "check": "`tests/mc/tidy.test.js` over a temp home with every kind of target and every kind of keep listed in step 4; an injected failing check keeps the item; an entry whose rule no longer holds at apply is kept. `tests/mc/run.test.js`: `TIDY_KIND` row once per 24 h, and a `skipped:disk` lane triggers a tidy at most hourly. On the machine: `mc tidy` dry run lists the 8 done-project areas' data and the programme transcripts older than 72 h."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. The runner's areas live under `~/mc/step/`",
+      "done_when": "The runner creates a new project's area as `~/mc/step/<project>/<repo>`. It still finds, steps in and closes an area left at `~/mc/<project>/<repo>`. The deps-bump area is under `step/`, the holder name stays the project name, and `npm test` is green.",
+      "status": "done",
+      "pr": 884,
+      "landed": {
+        "sha": "26d7c961c91452f53cc8442a70490b3f7bedf34c",
+        "into": "main",
+        "at": "2026-10-11T21:21:31Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 1473,
+      "cost_usd": 2.711996
+    },
+    {
+      "title": "2. `mc work` areas live under `~/mc/work/`",
+      "done_when": "`mc work <name>` opens or creates `~/mc/work/<name>/`. Opening a name that exists only as a runner area opens that area and says so. `listWorkAreas` enumerates `work/`, `mc work tidy` sees the new layout, a directory under `~/mc` that is none of the known kinds shows as a stray on the page, and `npm test` is green.",
+      "status": "done",
+      "pr": 885,
+      "landed": {
+        "sha": "355ff29696dbc5071f51efac7412bcea1fb4c36d",
+        "into": "main",
+        "at": "2026-10-11T21:44:11Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "step 2 PR #885 queued; strays page render (strayLines) has no test of its own"
+      ],
+      "sessions": 1,
+      "seconds": 1403,
+      "cost_usd": 3.073676
+    },
+    {
+      "title": "3. The closeout: written by the archive, in git",
+      "done_when": "The archive commit for a done project also adds `docs/project/<programme>/closeout/<project>.json`. Archived projects that still have a register file and no closeout get one in the next archive PR, at most 40 per PR. `npm test` is green.",
+      "status": "done",
+      "pr": 886,
+      "landed": {
+        "sha": "9faa864deff275032db769852806253f61167947",
+        "into": "main",
+        "at": "2026-10-11T21:53:33Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Closeout PR #886. The 40-per-PR backfill runs in archiveDone on every round and needs a register file whose repo field names the repository; tidy (step 4) must treat a missing closeout on origin/main as keep. A closeout's plan key appears (as null) only when the plan could not be read, and a legacy PLAN.md gives plan: null."
+      ],
+      "sessions": 1,
+      "seconds": 572,
+      "cost_usd": 1.580758
+    },
+    {
+      "title": "4. `mc tidy`: list first, then remove, per root; the runner runs it",
+      "done_when": "`mc tidy [--apply] [--json]` writes `~/mc/runner/tidy/<stamp>.json` with every target and every keep and the rule for each, and with `--apply` removes only that file's targets after re-checking each. `mc work tidy` is the same command. The runner runs it daily (`TIDY_KIND`) and at most hourly while a lane skips for disk, `runner.log` rotates at 32 MiB, and `npm test` is green.",
+      "status": "done",
+      "pr": 887,
+      "landed": {
+        "sha": "7616dbe723ffb6c3468e53f4faabf5da6414169e",
+        "into": "main",
+        "at": "2026-10-11T22:13:46Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc tidy landed in #887. success_criteria[2] is left met:false: its on-machine check (the dry run lists the done projects' data and the programme transcripts older than 72 h) needs #886's closeout backfill on origin/main. Today's dry run lists 0 targets: 203 P keeps 'no closeout on origin/main', and no G transcript is both past 72 h and not its directory's newest. Re-run 'mc tidy' after #886 lands."
+      ],
+      "sessions": 1,
+      "seconds": 1277,
+      "cost_usd": 5.855928
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-11T21:18:51Z",
+      "kind": "step",
+      "seconds": 1473,
+      "land_seconds": null,
+      "pr": 884,
+      "turns": 71,
+      "input": 116,
+      "output": 35558,
+      "cache_read": 3770924,
+      "cache_write": 136731,
+      "model": null,
+      "note": "success,queued",
+      "session": "69b3ec00-a6e2-4fb6-acb7-d7450eb56da2",
+      "cost_usd": 2.7119958000000013
+    },
+    {
+      "ts": "2026-10-11T21:42:27Z",
+      "kind": "step",
+      "seconds": 1403,
+      "land_seconds": null,
+      "pr": 885,
+      "turns": 77,
+      "input": 134,
+      "output": 40625,
+      "cache_read": 4253422,
+      "cache_write": 157657,
+      "model": null,
+      "note": "success,queued",
+      "session": "0ca20a16-e43b-4435-87a7-094020e4b210",
+      "cost_usd": 3.0736756
+    },
+    {
+      "ts": "2026-10-11T21:52:06Z",
+      "kind": "step",
+      "seconds": 572,
+      "land_seconds": null,
+      "pr": 886,
+      "turns": 36,
+      "input": 54,
+      "output": 30847,
+      "cache_read": 1621652,
+      "cache_write": 79909,
+      "model": null,
+      "note": "success,queued",
+      "session": "9088f0e9-2311-4a43-a1c9-4ebef5b58958",
+      "cost_usd": 1.5807584000000003
+    },
+    {
+      "ts": "2026-10-11T22:13:28Z",
+      "kind": "step",
+      "seconds": 1277,
+      "land_seconds": null,
+      "pr": 887,
+      "turns": 104,
+      "input": 154,
+      "output": 86247,
+      "cache_read": 5896488,
+      "cache_write": 310139,
+      "model": null,
+      "note": "success,queued",
+      "session": "f03b6d35-38eb-422f-a8e5-2bd8894a0b83",
+      "cost_usd": 5.8559284
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 4725,
+    "land_seconds": 0,
+    "cost_usd": 13.222358,
+    "cost_unknown": 0,
+    "input": 458,
+    "output": 193277,
+    "cache_read": 15542486,
+    "cache_write": 684436,
+    "first": "2026-10-11T21:18:51Z",
+    "landed": "2026-10-11T22:13:46Z"
+  }
+}

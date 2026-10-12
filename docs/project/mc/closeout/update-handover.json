@@ -1,0 +1,144 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "update-handover",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/update-handover/PLAN.json",
+  "archived": "2026-10-08",
+  "goal": [
+    "`mc run --update` is something a person can trust: it says at once whether there is anything to update, what the runner is waiting on and for how long while it drains, and the same on the page and in the refusal `mc run start` gives; a drain is never silent for an hour; and a handover that fails leaves a runner running, never a dead process behind a live `runner.json`."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`mc run --update` on a runner already running origin/main's commit writes nothing and says so; on a draining runner it prints the drain — since when, which lanes are done and which are in a step with the project, step and elapsed time — instead of rewriting UPDATE; the page's MC line and `mc run start`'s refusal carry the same drain line.",
+      "check": "`tests/mc/run-control.test.js`: the three answers of `requestUpdate` (nothing to update; UPDATE written; already draining, with the lanes listed from `current-*.json` fixtures); `tests/mc/page.test.js`: the MC line with a drain in progress names the lane it waits on and its elapsed time."
+    },
+    {
+      "met": true,
+      "criterion": "A draining runner writes a line to runner.log every ten minutes naming what it still waits on, a handover that cannot respawn keeps the runner running, and the quota pause ends the moment the runner is quiet under an UPDATE.",
+      "check": "`tests/mc/run.test.js`: a drain across a step longer than ten minutes (fake clock) logs the waiting line with the step's name; a `handOver` that returns `{ ok: false }` leaves the loop running and the next pick happens; `quotaPause` with UPDATE and no current files returns before its sleep is over."
+    }
+  ],
+  "steps": [
+    {
+      "title": "`mc run --update` answers with the state, and writes nothing twice",
+      "done_when": "`requestUpdate` in `src/mc/run-control.js` has three answers — nothing to update (the runner's `commit` equals `origin/main` after a fetch), UPDATE written, already draining with the lanes listed — the drain line is one function shared by `requestUpdate`, `startRunner`'s refusal and the page's MC line, and `tests/mc/run-control.test.js` and `tests/mc/page.test.js` pin all of it.",
+      "status": "done",
+      "pr": 798,
+      "landed": {
+        "sha": "06190751e89cd2154295331e2cf7a3c80c7ced8b",
+        "into": "main",
+        "at": "2026-10-07T20:42:32Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The drain is never silent, a failed handover never exits, and the quota pause ends when quiet",
+      "done_when": "A draining lane loop writes `update: still waiting on …` every ten minutes with the in-flight steps (one line for the runner, not one per lane); `runLoop` keeps running when `update()` returns false and says why; `quotaPause` returns as soon as UPDATE is present and no `current-*.json` exists; `tests/mc/run.test.js` pins the three.",
+      "status": "done",
+      "pr": 801,
+      "landed": {
+        "sha": "5c57e781451163374a050171ef433efb1aff19fc",
+        "into": "main",
+        "at": "2026-10-07T21:50:45Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "quotaPause now always polls in UPDATE_POLL_MS slices (not only under an update): the measured 18:41 UPDATE arrived mid-slice, which only polling sees. It still returns on UPDATE when not quiet (the run.js:1807 resume wait holds its own current file). Step 3 (two runners overlapping) should keep drainTick's shared clock and the for(;;) re-entry in runLoop in mind."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The successor starts at once and the old runner only finishes what it holds",
+      "done_when": "On UPDATE the runner respawns its successor at once (after the fast-forward); the successor starts every lane whose `current-<repo>-<lane>.json` is not held by a live predecessor and treats the predecessor's in-flight projects as claimed; the old runner takes no new step, finishes the passes it is in and exits without clearing the successor's files; `runner.json` names the successor with the predecessor's pid while they overlap and the page shows both; `tests/mc/run.test.js` and `tests/mc/run-control.test.js` pin the overlap, the lane wait, the claim and the exit.",
+      "status": "done",
+      "pr": 803,
+      "landed": {
+        "sha": "a1cd7cc7577f7c3bc31ab7aa758fb5c9db09b4aa",
+        "into": "main",
+        "at": "2026-10-07T22:36:55Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "UPDATE now hands over at once (ruling 28). The --total cap is per process during the overlap; the claim union covers sessions, not the old runner's landing (landPr serialises at the gate)."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-07T20:42:34Z",
+      "kind": "step",
+      "seconds": 1592,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 36,
+      "input": 72,
+      "output": 405,
+      "cache_read": 2149447,
+      "cache_write": 76883,
+      "model": null,
+      "note": "success,merged",
+      "session": "47d491cf-9f3a-416c-bb69-af66bb22fe7a",
+      "cost_usd": 1.8540385
+    },
+    {
+      "ts": "2026-10-07T21:50:46Z",
+      "kind": "step",
+      "seconds": 2317,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 33,
+      "input": 66,
+      "output": 434,
+      "cache_read": 1976821,
+      "cache_write": 73238,
+      "model": null,
+      "note": "success,merged",
+      "session": "9b74f6f0-b76f-4b61-a847-b4991214f5a9",
+      "cost_usd": 1.7319705
+    },
+    {
+      "ts": "2026-10-07T22:36:56Z",
+      "kind": "step",
+      "seconds": 1898,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 79,
+      "input": 158,
+      "output": 951,
+      "cache_read": 5261458,
+      "cache_write": 191597,
+      "model": null,
+      "note": "success,merged",
+      "session": "6e3b577f-7be7-49c8-99a2-9471ab91e75c",
+      "cost_usd": 4.571264
+    }
+  ],
+  "totals": {
+    "sessions": 3,
+    "seconds": 5807,
+    "land_seconds": 0,
+    "cost_usd": 8.157273,
+    "cost_unknown": 0,
+    "input": 296,
+    "output": 1790,
+    "cache_read": 9387726,
+    "cache_write": 341718,
+    "first": "2026-10-07T20:42:34Z",
+    "landed": "2026-10-07T22:36:55Z"
+  }
+}

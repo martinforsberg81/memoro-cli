@@ -1,0 +1,143 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "red-in-hand",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/red-in-hand/PLAN.json",
+  "archived": "2026-10-11",
+  "goal": [
+    "A red pull request somebody is fixing looks like it on the page, and a red nobody is fixing gets a session. A project's own `blocked` step no longer holds the project back, so a step the merger sent back red is started by the runner even when a later step of the same plan is parked on a decision. A red row whose step a live runner session holds is drawn yellow, with the session's last sentence and how long it has been on it, rather than red.",
+    "Seen on 2026-10-11. #13409 (accounting-model step 2) went red at 22:59:48Z on 2026-10-10 when its mend timed out, and `merger.log` said \"accounting-model step 2 is ready again (attempt 1) — the next session fixes it on the same pull request\". No session started for seven hours, because #13415 (step 4) was open and `blocked` on `accounting-repository-reachability`, and `mc status accounting-model` read \"#13415 is open … — not starting a step\". Meanwhile #13457 (scoped-chat-d1 step 5) showed as `✗` red on the page for forty minutes while the session `scoped-chat-d1-20261011T060501Z` was resolving its restack conflict and running `mc gate`."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A project whose first unfinished step is `ready` with its pull request kept, and whose later step is `blocked` with an open pull request of its own, is runnable: `holdingPrs` drops both pull requests, and `pickState`, `runStepClaimed` and `mc status` all agree.",
+      "check": "`tests/mc/run-plan.test.js`: `holdingPrs` with a record whose steps are `[done, ready pr 2, landing pr 3, blocked pr 4]` and open PRs 2, 3, 4 and 9 (9 on no step) returns only 9. With 9 removed, `inFlight` of the result is null and `nextFor` picks the project. A record whose first unfinished step is `blocked` still yields no step (`chooseKind` → `blocked`). Live: the close-out quotes the first `runner/log/runner.log` line where a project with a `blocked` later step starts its red earlier step, or says none occurred in the window."
+    },
+    {
+      "met": false,
+      "criterion": "A red row in MERGES whose step a live runner session holds is drawn yellow with the running mark, the word `fixing`, the session's last assistant sentence and the session's age. The heading counts it as `N fixing` and no longer as red. A red nobody holds stays red, as today.",
+      "check": "`tests/mc/page.test.js`: a `merges.json` red entry `{ step: { project: 'card-views', index: 2 } }` with a lane file `{ name: 'card-views', step: 3, pid: <alive> }` and a register step 2 with `session.log` pointing at a fixture `.jsonl` whose last assistant text is \"Running the gate.\" draws `  ● memoro      #13370  card-views step 3  fixing — Running the gate.  6 min`. The heading reads `1 fixing`. With the pid dead, or the lane on step 4, the same entry is the red row. Live: the close-out quotes a page frame (`mc | cat`) with a `fixing` row, or says no red was being fixed in the window."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. A project's own blocked step holds nothing",
+      "done_when": "`holdingPrs` (`src/mc/run-plan.js`) treats a pull request recorded on one of the project's own steps with status `landing`, `ready` or `blocked` as the project's own and drops it. The test in `tests/mc/run-plan.test.js` from the first criterion passes, and `npm test` is green.",
+      "status": "done",
+      "pr": 869,
+      "landed": {
+        "sha": "9a59f305f7562fbf1c2552b29e986672c21acca8",
+        "into": "main",
+        "at": "2026-10-11T06:54:17Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 165,
+      "cost_usd": 0.374428
+    },
+    {
+      "title": "2. A red a runner session is fixing is a yellow row with the session's last sentence",
+      "done_when": "`mergesSection` returns `fixing: { count, items }`. Each item is a red whose `step` a live lane holds, with `said` and `age_seconds`, and it is no longer in `red`. `page-render.js` draws it with `fixingLine` in yellow, and the heading counts `N fixing`. The tests in the second criterion pass, `docs/technical/mc-ui.md` describes the row, and `npm test` is green.",
+      "status": "done",
+      "pr": 870,
+      "landed": {
+        "sha": "b4b12f6d6bd8b5e7752338cc47c77ba7bb538611",
+        "into": "main",
+        "at": "2026-10-11T06:59:55Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 293,
+      "cost_usd": 0.876554
+    },
+    {
+      "title": "3. Close-out",
+      "done_when": "Every criterion is marked with what was seen, `docs/technical/mc-run.md` says a blocked step holds nothing, `docs/project/project_log.md` has the row, ruling 39 is deleted from `rulings.md`, and every step is `done` with its PR.",
+      "status": "done",
+      "pr": 871,
+      "landed": {
+        "sha": "8d7611acba81131d44b266a3f40f0a469c8f7ef2",
+        "into": "main",
+        "at": "2026-10-11T07:10:54Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Close-out: both criteria left met:false — runner still ran 0bacd27d (pre-step-1) at close-out and no red was being fixed on the page (MERGES 4 landing, no red), so the live halves were not seen; unit halves pass. Capture runner.log / mc | cat evidence once the runner runs >= #870."
+      ],
+      "sessions": 1,
+      "seconds": 552,
+      "cost_usd": 0.56078
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-11T06:52:33Z",
+      "kind": "step",
+      "seconds": 165,
+      "land_seconds": null,
+      "pr": 869,
+      "turns": 14,
+      "input": 22,
+      "output": 4835,
+      "cache_read": 284122,
+      "cache_write": 27602,
+      "model": null,
+      "note": "success,queued",
+      "session": "08ccf879-154d-4dcd-a8c9-79d56990db44",
+      "cost_usd": 0.37442839999999994
+    },
+    {
+      "ts": "2026-10-11T06:57:31Z",
+      "kind": "step",
+      "seconds": 293,
+      "land_seconds": null,
+      "pr": 870,
+      "turns": 26,
+      "input": 48,
+      "output": 13978,
+      "cache_read": 1024412,
+      "cache_write": 48990,
+      "model": null,
+      "note": "success,queued",
+      "session": "638463a3-661e-4521-96bf-2e7b0f61aa45",
+      "cost_usd": 0.8765544000000003
+    },
+    {
+      "ts": "2026-10-11T07:06:54Z",
+      "kind": "step",
+      "seconds": 552,
+      "land_seconds": null,
+      "pr": 871,
+      "turns": 24,
+      "input": 46,
+      "output": 9537,
+      "cache_read": 628638,
+      "cache_write": 30516,
+      "model": null,
+      "note": "success,queued",
+      "session": "f2cee754-4901-47cf-8061-9b14fe764e2b",
+      "cost_usd": 0.5607795999999999
+    }
+  ],
+  "totals": {
+    "sessions": 3,
+    "seconds": 1010,
+    "land_seconds": 0,
+    "cost_usd": 1.811762,
+    "cost_unknown": 0,
+    "input": 116,
+    "output": 28350,
+    "cache_read": 1937172,
+    "cache_write": 107108,
+    "first": "2026-10-11T06:52:33Z",
+    "landed": "2026-10-11T07:10:54Z"
+  }
+}

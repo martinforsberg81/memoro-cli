@@ -1,0 +1,204 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "merge-false-reds",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/merge-false-reds/PLAN.json",
+  "archived": "2026-10-11",
+  "goal": [
+    "The merger stops answering red for reds that are not the change's. A stacked branch is moved onto main without replaying commits main already has. A test file that something outside the round killed is measured again, not blamed on the pull request. A session never kills a process it did not start.",
+    "Seen on 2026-10-10. #857 (merger-hardening step 4, 18:41:47) and #13375 (leftovers-sweep step 4) came back `restack: … conflicts`. Replaying only #857's own commit onto the same main was clean (checked by hand). At 12:14:08 a mail-data-hygiene session ran `kill 75754`, the merger's `build-bundle.test.js` process for memoro #13337. The round answered `red: 1 test red: tests/scripts/build-bundle.test.js` with \"the red files pass on the base — this change broke them\" (merger.log, 12:19:56), and #13337 went green unchanged at 13:16."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A stacked branch whose parent was moved, or which has main merged into it, is restacked by replaying only its own non-merge commits that are not on main, and it falls back to merging main in before it gives up.",
+      "check": "`tests/mc/merger.test.js` (restack) on a fixture repository: parent squashed onto main, child with `git merge origin/main` in its history. The old rebase conflicts on that fixture and the new restack is clean. A child whose own commit truly conflicts is still `ok: false` with the conflicted path. Live: the close-out quotes a `moved onto main past` line for a branch whose history has a merge from main, or says none occurred."
+    },
+    {
+      "met": true,
+      "criterion": "A red file that `node --test` reports ended by a signal is not answered as the change's red: the round runs once more, and then it is a `file-killed` stop.",
+      "check": "`tests/mc/tap-red.test.js`: `killedFiles` on TAP with `signal: 'SIGTERM'` and `exitCode: ~` names that file and not an ordinary red. `tests/mc/repo-gate.test.js`: a stub suite whose only red file was killed finishes `file-killed` without running `probeMainRed`. With one killed and one red file it is `red`, naming only the red one and listing the killed one in `report.killed_files`. `tests/mc/merger.test.js`: `file-killed` makes `landJob` run the round once more, and a second `file-killed` answers red with that reason and starts no mend."
+    },
+    {
+      "met": true,
+      "criterion": "Every session's role says it never signals a process it did not start.",
+      "check": "`canon/roles/_common.md` carries the rule. A test in `tests/mc/canon-roles.test.js` (or beside the role loader's test) asserts the sentence is in the text every role is built from."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. Restack replays only the branch's own commits, and merges main in before it gives up",
+      "done_when": "`restack` cherry-picks `git rev-list --reverse --no-merges <tip> ^<parent.sha> ^origin/main` onto `origin/main`. On a conflict it starts again from the tip and runs `git merge --no-edit origin/main`, and only if that conflicts too is it `ok: false` with the conflicted paths. Tests per the first criterion; `npm test` is green.",
+      "status": "done",
+      "pr": 861,
+      "landed": {
+        "sha": "b0cd5abdef16f9225e3ee326ade85f2e58b4e37b",
+        "into": "main",
+        "at": "2026-10-10T19:35:41Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "restack now cherry-picks the branch's own non-merge commits (not on parent.sha, not on origin/main) onto origin/main and skips empty picks. On a pick conflict it merges origin/main into the tip, and only a conflicting merge is ok:false. The success message gets ' (merged main in)' when the fallback was used, so the close-out can grep for it. criteria[0] met is left false: its live part is step 4's."
+      ],
+      "sessions": 1,
+      "seconds": 357,
+      "cost_usd": 0.471082
+    },
+    {
+      "title": "2. A test file killed by a signal is measured again, not answered as the change's red",
+      "done_when": "`killedFiles(tap, files)` in `tap-red.js` names the files whose TAP block has a non-null `signal:`. `runGate` finishes `file-killed`, without the main-red probe, when every red file was killed. With other reds, the round is `red` over those alone, and `report.killed_files` lists the killed ones. `landJob` runs a round that stopped `file-killed` once more. A second `file-killed` is answered red with that reason, and it is not a mend stop. Tests per the second criterion; `npm test` is green.",
+      "status": "done",
+      "pr": 862,
+      "landed": {
+        "sha": "ecf56628b94d31cd3372e07a927abb75387e4f13",
+        "into": "main",
+        "at": "2026-10-10T19:52:46Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "file-killed is decided on red names, not red_files: measureSelected and measure both carry killed_files and killed_red (the red names the killed files account for, via redNamesIn), so the full-suite path is covered too; there killed_files carries locations as node wrote them. mend.js / MEND_STOPS does not exist yet — the comment saying file-killed must stay out of it is in src/mc/merge-step.js above shouldWait. runGate takes an injectable probeMain (default probeMainRed) for the tests."
+      ],
+      "sessions": 1,
+      "seconds": 548,
+      "cost_usd": 1.194524
+    },
+    {
+      "title": "3. No session signals a process it did not start",
+      "done_when": "`canon/roles/_common.md` has the rule in its own paragraph, a test pins it, and `npm test` is green.",
+      "status": "done",
+      "pr": 864,
+      "landed": {
+        "sha": "c25972e9fcbaae13c19f9f7c2e1b103ffb326939",
+        "into": "main",
+        "at": "2026-10-10T19:56:19Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 381,
+      "cost_usd": 0.274574
+    },
+    {
+      "title": "4. Close-out",
+      "done_when": "Every criterion is marked with what was seen, `docs/technical/mc-merge.md` describes the restack and `file-killed`, `docs/project/project_log.md` has the row, ruling 38 is deleted from `rulings.md`, and every step is `done` with its PR.",
+      "status": "done",
+      "pr": 866,
+      "landed": {
+        "sha": "0bacd27d684487f1290365c1bd32bb46b7cafc34",
+        "into": "main",
+        "at": "2026-10-10T23:09:00Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Started 19:50Z on 2026-10-10 while #862 (step 2) and #864 (step 3) were still in the merge queue, so the live read (2 hours of merger.log from the first 'merger <pid> started' after step 3 lands) could not begin. Done and pushed on branch merge-false-reds-5 (e236170d, no PR yet): docs/technical/mc-merge.md describes the restack (replay set, merge fallback) and file-killed; ruling 38 deleted from rulings.md. Left: the live read (one data point already: 19:46:03 'memoro-cli #862: moved onto main past #861', but that merger ran b0cd5abd, before step 2's code), marking success_criteria[0] met with what was seen, the project_log.md row (PRs #861 #862 #864 + this one), npm test/mc gate, mc publish, mc merge. If step 3 has not landed when this resumes, block again with --until.",
+        "Blocked on 2026-10-10T19:52:06Z: the live read needs 2 hours of merger.log after step 3 (#864) lands; #862 and #864 are still in the merge queue",
+        "Released 2026-10-10T23:02:28Z: time 2026-10-10T23:00Z passed",
+        "Live window 21:01:52Z–23:01:52Z on 2026-10-10: eleven 'moved onto main past' lines, two '(merged main in)' (memoro #13397, history with merges from main, and #13399); one real restack conflict (memoro #13409, after the merge fallback); no killed file and no file-killed answer."
+      ],
+      "sessions": 1,
+      "seconds": 236,
+      "cost_usd": 0.643517
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-10T19:34:58Z",
+      "kind": "step",
+      "seconds": 357,
+      "land_seconds": null,
+      "pr": 861,
+      "turns": 12,
+      "input": 18,
+      "output": 10969,
+      "cache_read": 223112,
+      "cache_write": 25876,
+      "model": null,
+      "note": "success,queued",
+      "session": "25f1cb19-f2ca-4d71-af2b-74fd193d25ef",
+      "cost_usd": 0.4710824
+    },
+    {
+      "ts": "2026-10-10T19:44:14Z",
+      "kind": "step",
+      "seconds": 548,
+      "land_seconds": null,
+      "pr": 862,
+      "turns": 43,
+      "input": 54,
+      "output": 19524,
+      "cache_read": 1410258,
+      "cache_write": 65222,
+      "model": null,
+      "note": "success,queued",
+      "session": "3a64726d-2cc8-4c85-8fa5-1c0f204cd6c9",
+      "cost_usd": 1.1945236000000004
+    },
+    {
+      "ts": "2026-10-10T19:50:41Z",
+      "kind": "step",
+      "seconds": 381,
+      "land_seconds": null,
+      "pr": 864,
+      "turns": 16,
+      "input": 26,
+      "output": 3549,
+      "cache_read": 278651,
+      "cache_write": 18470,
+      "model": null,
+      "note": "success,queued",
+      "session": "6e98938f-6eee-4458-8809-0d952136d67b",
+      "cost_usd": 0.2745742
+    },
+    {
+      "ts": "2026-10-10T19:52:15Z",
+      "kind": "step",
+      "seconds": 89,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 16,
+      "input": 28,
+      "output": 6723,
+      "cache_read": 373124,
+      "cache_write": 30695,
+      "model": null,
+      "note": "success,blocked",
+      "session": "8b9c1c6a-bb9c-4dba-abe7-9935eb459175",
+      "cost_usd": 0.45475680000000007
+    },
+    {
+      "ts": "2026-10-10T23:06:27Z",
+      "kind": "step",
+      "seconds": 236,
+      "land_seconds": null,
+      "pr": 866,
+      "turns": 21,
+      "input": 32,
+      "output": 7390,
+      "cache_read": 544824,
+      "cache_write": 48328,
+      "model": null,
+      "note": "success,queued",
+      "session": "7ecd3c33-a32f-4e98-8e5c-badb3a262ed8",
+      "cost_usd": 0.6435168
+    }
+  ],
+  "totals": {
+    "sessions": 5,
+    "seconds": 1611,
+    "land_seconds": 0,
+    "cost_usd": 3.038454,
+    "cost_unknown": 0,
+    "input": 158,
+    "output": 48155,
+    "cache_read": 2829969,
+    "cache_write": 188591,
+    "first": "2026-10-10T19:34:58Z",
+    "landed": "2026-10-10T23:09:00Z"
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-shot",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-shot/PLAN.json",
+  "archived": "2026-09-26",
+  "goal": [
+    "`mc shot dev|prod <target>` gives back a PNG of the running app, a local dev server or https://meetmemoro.app. The picture can be the whole page, one element picked by `--el <css>`, or one shell picked by `--shell base|immersive|window`, and the command prints the file's path. It signs in as the seeded test account by default. On production, `--me` signs in as Martin, from a session he gave mc once with `mc shot login prod`. Martin, 2026-09-26: \"smidiga smarta sätt att generera screenshots från dev-server eller live prod … antingen av enskilda element eller av sidor (base shell eller window shell)\". Asked which account production uses, he answered: \"Båda, testkonto som standard\".",
+    "mc owns the environment: which worktree, which server (started the way `mc test dev` starts one), the base URL, the token and the session in the keychain, and where the file goes. memoro owns the app: `.mc/shot.json` and the capture script it names, built by the memoro project `shot-capture` (`docs/project/test-architecture/shot-capture/PLAN.json` in memoro). The two sides meet only through the request file and the result line below. The memoro plan carries the same text word for word."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`mc shot dev home`, `mc shot dev home --shell base`, `mc shot dev notifications --shell window` and `mc shot dev /app/people --el '.base-view__header'` each print the path of a PNG that shows what it names.",
+      "check": "Once memoro's `shot-capture` has landed: run the four commands and open the four files. The step session checks the same paths against a fake capture script in the tests (see the step). A person checks the running app."
+    },
+    {
+      "met": false,
+      "criterion": "`mc shot prod home --viewport iphone` works on the test token alone. `mc shot prod home --me` works after one `mc shot login prod`, or after `mc shot login prod --paste` if Google refuses the automated browser.",
+      "check": "Run it on this machine and look at the pictures. `mc shot prod home --me` without a stored session says `mc shot login prod` in one line and exits 1."
+    },
+    {
+      "met": true,
+      "criterion": "No secret leaks.",
+      "check": "A test runs a fake capture script that dumps its argv and environment. The token and the cookie are found only in the request file, which is mode 0600 and gone afterwards, and never in mc's stdout or stderr."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The `mc shot` verb",
+      "done_when": "`mc shot` is routed, has `--help` and a section in `mc help`, builds the request and runs memoro's declared capture script with the dev, prod and `--me` sign-ins, stores and forgets the session with `mc shot login|logout prod`, and is tested against a fake capture script; docs/technical/mc-shot.md, the changelog entry and the project_log row are in the same pull request.",
+      "status": "done",
+      "pr": 748,
+      "landed": {
+        "sha": "f7d94487e1bbfe024f0e5ef63c6ac6db5a2357b0",
+        "into": "main",
+        "at": "2026-09-26T08:02:42Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc shot is built and tested against a fake capture script only. memoro's shot-capture (.mc/shot.json) had not landed on 2026-09-26, so criteria 0 and 1 are unmarked: once it lands, run mc shot dev home / --shell base / notifications --shell window / /app/people --el '.base-view__header', and mc shot prod home --viewport iphone, then look at the files. mc shot's dev progress goes to stderr (not stdout), so the path is always the first stdout line."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-09-26T08:02:44Z",
+      "kind": "step",
+      "seconds": 444,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 21,
+      "input": 42,
+      "output": 228,
+      "cache_read": 1256260,
+      "cache_write": 84840,
+      "model": null,
+      "note": "success,merged",
+      "session": "2bc23de2-f5a0-4668-84bf-5d3ca4eaa497",
+      "cost_usd": 1.48244
+    }
+  ],
+  "totals": {
+    "sessions": 1,
+    "seconds": 444,
+    "land_seconds": 0,
+    "cost_usd": 1.48244,
+    "cost_unknown": 0,
+    "input": 42,
+    "output": 228,
+    "cache_read": 1256260,
+    "cache_write": 84840,
+    "first": "2026-09-26T08:02:44Z",
+    "landed": "2026-09-26T08:02:42Z"
+  }
+}
