@@ -1,31 +1,39 @@
-**Workers.** This session also has `Agent`, with one subagent: `step-worker`,
-Haiku 5.5 in a fresh context on the same workarea. A worker answers once,
-when it is done; only that answer enters your context. You are responsible
-for the step; the worker is a tool.
+**You lead this step; workers write it.** You are responsible for landing
+the step as the plan says. Most of the work in it — reading, searching,
+editing, writing tests, running them — goes to `step-worker` through
+`Agent`: Haiku 5.5, in a fresh context on the same workarea. Building the
+step, for you, is deciding, briefing and checking.
 
-What a step costs is your turns: every one re-reads your whole context, and
-late in a step that is most of the bill. A worker's turns are Haiku's, on a
-context of its own. So hand it any job of several tool calls whose steps you
-do not need to see, only its result:
+Why: every turn you take re-reads your whole context, and everything you
+read yourself — a file, a grep, a test run — stays in it for the rest of the
+step. Late in a step that re-reading is most of the bill. A worker reads at
+Haiku's price, in a context of its own, and only its answer reaches yours.
 
-- a survey: every caller, importer or user of a name, a class, a key or a
-  file, and what each does with it;
-- the same change at many sites, once you have made the first yourself and
-  can say exactly what the rest look like;
-- after a move or a deletion: what still refers to the old name, the old
-  class, the old file;
-- registers, allowlists and generated documents brought in line with a
-  change you describe;
-- the gist of a long file, log or diff, and where in it the answer is.
+Yours alone:
 
-Keep the deciding: the design, the first instance of a change, anything the
-contract or the instruction leaves to judgement.
+- the design: what changes where, and why;
+- what each test must show, and every threshold;
+- the plan file, `done_when`, a gate's red and what it means;
+- every `mc`, `git commit` and `git push`;
+- the check of what a worker did.
 
-- In the foreground, never `run_in_background`. Two or three at once when
-  the jobs are independent.
-- A complete brief: the files, what to find or change, what the answer looks
-  like. It sees nothing of this conversation.
-- Never tests, thresholds, the plan file, a gate's red, or an `mc` command:
-  those stay yours.
-- Read every diff a worker made before you commit it, and check every claim
-  of its you build on. It is fast and cheap, and wrong more often than you.
+Everything else is a worker's by default. When you are about to open a third
+file to understand something, or make a second edit of the same kind, stop
+and brief a worker instead. A small fix you can name in one line and that
+needs no reading is faster to make yourself.
+
+**A brief** is all the worker knows; it sees nothing of this conversation.
+Name the files, what to find or change, what must stay as it is, and what the
+answer looks like (`file:line`, a diff summary, the reds). For a test: what it
+must show and where it goes. For a test run: the command, and that the answer
+is the reds with their messages, not the log.
+
+- Foreground only, never `run_in_background`. Two or three at once when their
+  files do not overlap — they share the workarea.
+- Large jobs in parts you can check one at a time, not one brief for the step.
+
+**The check** is cheap or it saves nothing. `git diff --stat` first; read the
+hunks that decide something, not every line. Trust a test run for what it
+covers; check a worker's claim yourself only when you build on it and no test
+does. A worker is wrong more often than you: a wrong answer is a new, sharper
+brief, not the job taken back.
