@@ -17,6 +17,16 @@ const MC_CLI = join(HERE, '..', '..', '..', 'src', 'mc-cli.js');
 const SINGLETON = join(HERE, 'role-singleton-entry.js');
 
 /**
+ * A guard against a command that never ends, not a measurement of one that is
+ * slow. At 60 s it was a margin load could eat: on 2026-10-12, right after a
+ * deploy, one test each in repo-status, repo-watch and work-resume went red in
+ * the same round (the selection took 693 s instead of 130 s) and passed alone.
+ * A child the guard kills comes back as `status: null` with `signal`
+ * SIGTERM and `error.code` ETIMEDOUT, which `repo-fixture.js`'s `json` says.
+ */
+const HANG_MS = 10 * 60_000;
+
+/**
  * `cwd` matters for the commands that read who is asking from where they are
  * standing — a lease is held by the work area the shell is in, so a test that
  * cannot choose a directory cannot test a second holder at all.
@@ -24,7 +34,7 @@ const SINGLETON = join(HERE, 'role-singleton-entry.js');
 export function runMcCli(args, env = {}, { cwd } = {}) {
   return spawnSync(process.execPath, [MC_CLI, ...args], {
     encoding: 'utf8',
-    timeout: 60_000,
+    timeout: HANG_MS,
     cwd,
     env: { ...process.env, MC_TEST_MODE: '1', MEMORO_API_URL: 'http://127.0.0.1:1', ...env },
   });
@@ -39,7 +49,7 @@ export function runMcCli(args, env = {}, { cwd } = {}) {
 export function runRoleSingletonCli(args, env = {}, { cwd } = {}) {
   return spawnSync(process.execPath, [SINGLETON, ...args], {
     encoding: 'utf8',
-    timeout: 60_000,
+    timeout: HANG_MS,
     cwd,
     env: { ...process.env, MC_TEST_MODE: '1', MEMORO_API_URL: 'http://127.0.0.1:1', ...env },
   });

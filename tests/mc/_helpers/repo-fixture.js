@@ -85,7 +85,7 @@ export function moveOriginMain(fx, message = 'Moved on') {
 }
 
 export function json(result) {
-  assert.equal(result.status, 0, `exit ${result.status}\n${result.stderr}`);
+  assert.equal(result.status, 0, `exit ${result.status}${result.signal ? ` (${result.signal}${result.error?.code ? `, ${result.error.code}` : ''})` : ''}\n${result.stderr}`);
   return JSON.parse(result.stdout);
 }
 

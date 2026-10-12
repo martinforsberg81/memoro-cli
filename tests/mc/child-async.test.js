@@ -4,7 +4,8 @@
  * that must not use the synchronous one.
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
@@ -52,11 +53,18 @@ describe('runTool and runShell resolve what spawnSync returns', () => {
   });
 
   it('two children started together run side by side', async () => {
-    const from = Date.now();
-    const both = await Promise.all([runTool('sleep', ['0.2']), runShell('sleep 0.2')]);
-    const took = Date.now() - from;
-    assert.deepEqual(both.map((ran) => ran.status), [0, 0]);
-    assert.ok(took < 350, `two 200 ms children took ${took} ms`);
+    // Each child marks that it is running and then waits for the other's
+    // mark, so both exit 0 only if they were alive at the same time; run one
+    // after the other, the first gives up and exits 1. A fixed 350 ms against
+    // two 200 ms sleeps went red at 365 ms in a full gate (2026-10-10). The
+    // 400 tries are a guard against a hang, not a measurement.
+    const dir = mkdtempSync(join(tmpdir(), 'mc-child-async-'));
+    const meetAt = (mine, theirs) => `touch "${dir}/${mine}"; i=0; `
+      + `while [ ! -e "${dir}/${theirs}" ]; do i=$((i+1)); [ $i -gt 400 ] && exit 1; sleep 0.05; done`;
+    try {
+      const both = await Promise.all([runTool('sh', ['-c', meetAt('a', 'b')]), runShell(meetAt('b', 'a'))]);
+      assert.deepEqual(both.map((ran) => ran.status), [0, 0], 'each child saw the other running');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
 

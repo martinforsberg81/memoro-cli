@@ -22,7 +22,7 @@
       "check": "`tests/mc/repo-gate.test.js` and `tests/mc/merger.test.js` on fake tests: red in the round, green alone on base and head → `red-under-load` and a second round; red alone on the head → today's red and wording; cancelled > 0 with fail 0 → `red-under-load`; a second `red-under-load` → answered red with the reason naming both quiet passes. Live: the close-out quotes a merger.log `measuring again` line for a `red-under-load`, or says none occurred."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "memoro-cli's timing tests assert order and overlap, not a wall-clock window: `child-async.test.js` \"two children started together run side by side\", `merger.test.js` around the 300 ms light-job window (~line 931), `repo-gate.test.js` \"starts the gates with the suite…\", `repo-status.test.js` \"one repository by name…\", `repo-watch.test.js` \"within three rounds…\", `work-resume.test.js` \"it is the resume that is refused…\".",
       "check": "Each of those files run 10 times in a row while a full `npm test` runs beside it in another shell: 10/10 green. The tests still fail on the fault they guard (shown by breaking the code under test once, in the PR body)."
     },

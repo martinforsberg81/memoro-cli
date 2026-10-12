@@ -1250,23 +1250,23 @@ describe('a repository that selects by diff', () => {
     it('starts the gates with the suite, one at a time in the selector\'s order, and awaits both', async () => {
       const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
       const gates = stubShell();
-      let suiteTo = null;
+      // The suite does not end until a gate has started, so a gate that waited
+      // for the suite is seen as one rather than raced against a timer: the
+      // light lane runs this suite beside a memoro round, and on that loaded
+      // machine every timer fires late (#872, 2026-10-11). The ten seconds
+      // only keep a gate that never starts from hanging the test.
+      let gateStartedInSuite = null;
       const tests = async ({ files: ran }) => {
-        await wait(200);
-        suiteTo = Date.now();
+        const deadline = Date.now() + 10_000;
+        while (gates.ran.length === 0 && Date.now() < deadline) await wait(5);
+        gateStartedInSuite = gates.ran.length > 0;
         return { code: 0, tap: tapWith([], { tests: ran.length * 3 }) };
       };
       try {
         const report = await fx.report({ tests, shell: gates.run });
         assert.equal(report.ok, true, report.reason);
-        // 200 + 150 + 150 sequentially; beside, the suite hides under the gates.
-        // Compared with the halves' own measured times rather than fixed
-        // milliseconds: the light lane runs this suite beside a memoro round,
-        // and on that loaded machine every timer fires late (#872, 2026-10-11).
         const wall = report.timings.gates_beside_suite_ms;
-        const sequential = report.timings.suite + report.timings['selected gates'];
-        assert.ok(wall < sequential, `suite and gates took ${wall} ms of ${sequential}, which is one after another`);
-        assert.ok(gates.ran[0].from < suiteTo, 'the first gate waited for the suite');
+        assert.equal(gateStartedInSuite, true, 'the first gate waited for the suite');
         assert.ok(gates.ran[1].from >= gates.ran[0].to, 'the gates ran at once rather than one after another');
         assert.deepEqual(report.extra_gates.map((gate) => gate.name), ['sql:pr-ci', 'css:lint'], 'in the order the selector gave');
         assert.equal(gates.ran[0].command, 'npm run sql:pr-ci -- --base-ref base1111');
