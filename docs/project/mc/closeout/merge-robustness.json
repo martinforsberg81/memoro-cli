@@ -1,0 +1,223 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "merge-robustness",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/merge-robustness/PLAN.json",
+  "archived": "2026-10-08",
+  "goal": [
+    "Three ways `mc merge` and the runner mislead a person are closed: the docs door refuses a `.js`/`.mjs` file that a tree-wide lint of the repository would fail, so a plan's instrument cannot turn `main` red through the door that runs no gate; a red on the base is blamed on a landing only when that landing could have broken the test, and otherwise reported as red on the base with no landing explaining it; and when GitHub cannot be asked, the runner backs off per repository instead of retrying every round, and the page carries one line saying what failed, since when, and the command that fixes it. And `mc publish` retries a push GitHub rejected with `Internal Server Error` once with `--no-thin`, saying it did. And a step whose session published its pull request but ended before `mc merge` finished is measured and landed by the runner, not recorded as failed."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`mc merge <repo> <pr> --docs` refuses a pull request whose files include a `.js`, `.mjs`, `.cjs` or `.ts` file anywhere, naming the file, and lands one that does not.",
+      "check": "`tests/mc/docs-merge.test.js` cases: a PR with `docs/project/x/instruments/probe.mjs` is refused with `stopped_at: 'script'` and the path; a PR with only `.md` and `.json` under `docs/` lands."
+    },
+    {
+      "met": true,
+      "criterion": "When the red files are red on the base and the landing the walk found changed no file under the repository's source, test or configuration roots (only `docs/`), the verdict says the files are red on the base and that no landing explains it, and names no pull request.",
+      "check": "A test on `selector-miss.js`'s report and `mainRedClause` with a fixture landing whose `git diff-tree --name-only` lists only `docs/` paths asserts the clause reads `… red on main too — no landing explains it (the walk reached #N, which changed only docs/)`."
+    },
+    {
+      "met": true,
+      "criterion": "After `gh pr list` fails for a repository, the runner does not ask GitHub for that repository again for 1, 2, 5 and then 15 minutes, resets on the first success, and the page shows one line naming the failure, its start and the command that fixes it.",
+      "check": "A test on `run.js`'s round with a fake `gh` failing N times asserts the schedule; a page test asserts the RUNNER section carries the line while `prsFailed` is non-empty and drops it after; the line distinguishes a locked keychain (`security show-keychain-info` hangs or fails within two seconds) from a bad token (`gh auth status` says so)."
+    },
+    {
+      "met": true,
+      "criterion": "`mc publish` retries once with `git push --no-thin` when the first push is rejected with `Internal Server Error`, prints that it did, and fails as before when the retry is rejected too.",
+      "check": "`tests/mc/publish.test.js` (or the nearest publish test) with a fake git whose first push answers `! [remote rejected] … (Internal Server Error)` and whose second succeeds asserts the two calls and the line; a fake that rejects both asserts the original error."
+    },
+    {
+      "met": true,
+      "criterion": "A step session that ends `success` with an open pull request on the step's branch is followed by the runner running `mc merge` on that pull request; green lands and the step is `done`, red records `failed` with the gate's reason; the register's reason distinguishes \"the gate was still running when the session ended\" from a refusal.",
+      "check": "A runner test with a fake session that ends `success` leaving an open PR and a fake merge that answers green asserts the merge call and `done`; one answering red asserts `failed` with the gate's reason."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The docs door refuses a script",
+      "done_when": "`runDocsMerge` stops at `script` naming the first `.js`/`.mjs`/`.cjs`/`.ts` file in the pull request's file list, `docsMergeLines` says what to do instead (land it through the gate), and `tests/mc/docs-merge.test.js` covers both the refusal and an all-documents landing.",
+      "status": "done",
+      "pr": 787,
+      "landed": {
+        "sha": "5308c9f98ad1bb45c8347411e3e85b740ea33442",
+        "into": "main",
+        "at": "2026-10-07T17:04:51Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "A red on the base is blamed only on a landing that could have broken it",
+      "done_when": "`selector-miss.js` records, for each landing it finds, the paths that landing changed, and `mainRedClause` names the landing only when at least one of those paths is outside `docs/`; otherwise the clause says the files are red on the base and no landing explains it; tests cover both.",
+      "status": "done",
+      "pr": 789,
+      "landed": {
+        "sha": "035b16591dbefa9d10176fe522b06fc7602ee49b",
+        "into": "main",
+        "at": "2026-10-07T17:19:10Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "When GitHub cannot be asked, the runner backs off and the page says why",
+      "done_when": "After a failed `gh pr list` the runner skips that repository's GitHub call for 1, 2, 5 and then 15 minutes (reset on success), the page's RUNNER section shows one line with what failed, since when, and the fixing command — `security unlock-keychain` when the keychain does not answer, `gh auth login` when gh says the token is bad — and tests pin the schedule and the line.",
+      "status": "done",
+      "pr": 790,
+      "landed": {
+        "sha": "d47a9a6ac2a282ed7e883778b6053f2c3343ff60",
+        "into": "main",
+        "at": "2026-10-07T17:25:04Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "`mc publish` retries a thin-pack rejection with `--no-thin`",
+      "done_when": "`src/mc/commands/publish.js`'s push (:114) retries once with `--no-thin` when stderr carries `Internal Server Error`, says `mc: GitHub rejected the thin pack; pushed again with --no-thin`, and a test pins both outcomes.",
+      "status": "done",
+      "pr": 791,
+      "landed": {
+        "sha": "03c6184a4da3e900831c59564a3c7d0e329c02dc",
+        "into": "main",
+        "at": "2026-10-07T18:19:44Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The runner lands what the session published and did not finish",
+      "done_when": "`src/mc/run.js`'s session-end classification (around :1830–1868) runs the merge measurement for a session that ended `success` with an open pull request on the step's branch, writes `done` with the PR on green and `failed` with the gate's reason on red, and a test pins both; `docs/technical/mc-merge.md` and the step role text say so.",
+      "status": "done",
+      "pr": 793,
+      "landed": {
+        "sha": "ad056b396597457319ab438eb43a01680cce16c2",
+        "into": "main",
+        "at": "2026-10-07T18:30:57Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "The runner's merge of a session's PR is landForSession in src/mc/run.js; it uses deps.mergeRound (now logging rounds) and deps.planBoundary. The reason text 'the gate was still running when the session ended; measured by the runner: …' marks a runner-measured red."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-07T17:05:45Z",
+      "kind": "step",
+      "seconds": 887,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 19,
+      "input": 38,
+      "output": 229,
+      "cache_read": 516105,
+      "cache_write": 28846,
+      "model": null,
+      "note": "success,merged",
+      "session": "57a42b9e-da6c-4d24-afc7-aadcada3cb8b",
+      "cost_usd": 0.5524275
+    },
+    {
+      "ts": "2026-10-07T17:19:12Z",
+      "kind": "step",
+      "seconds": 733,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 15,
+      "input": 30,
+      "output": 210,
+      "cache_read": 480218,
+      "cache_write": 34648,
+      "model": null,
+      "note": "success,merged",
+      "session": "2369321d-70d0-4acb-8891-cbebf01153f7",
+      "cost_usd": 0.591989
+    },
+    {
+      "ts": "2026-10-07T17:25:05Z",
+      "kind": "step",
+      "seconds": 348,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 33,
+      "input": 66,
+      "output": 479,
+      "cache_read": 2602788,
+      "cache_write": 106523,
+      "model": null,
+      "note": "success,merged",
+      "session": "84632eda-5666-4be1-9806-b11296ec28ee",
+      "cost_usd": 2.378929
+    },
+    {
+      "ts": "2026-10-07T18:19:46Z",
+      "kind": "step",
+      "seconds": 1487,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 11,
+      "input": 22,
+      "output": 199,
+      "cache_read": 242832,
+      "cache_write": 19623,
+      "model": null,
+      "note": "success,merged",
+      "session": "508e1271-70c6-4de8-8be6-3af5e7fbd36a",
+      "cost_usd": 0.322731
+    },
+    {
+      "ts": "2026-10-07T18:30:58Z",
+      "kind": "step",
+      "seconds": 667,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 27,
+      "input": 54,
+      "output": 293,
+      "cache_read": 1472166,
+      "cache_write": 75724,
+      "model": null,
+      "note": "success,merged",
+      "session": "54dfc235-bce2-4d76-981c-8e0d0b5189fe",
+      "cost_usd": 1.500918
+    }
+  ],
+  "totals": {
+    "sessions": 5,
+    "seconds": 4122,
+    "land_seconds": 0,
+    "cost_usd": 5.346994,
+    "cost_unknown": 0,
+    "input": 210,
+    "output": 1410,
+    "cache_read": 5314109,
+    "cache_write": 265364,
+    "first": "2026-10-07T17:05:45Z",
+    "landed": "2026-10-07T18:30:57Z"
+  }
+}

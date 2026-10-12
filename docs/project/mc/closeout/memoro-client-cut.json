@@ -1,0 +1,127 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "memoro-client-cut",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/memoro-client-cut/PLAN.json",
+  "archived": "2026-10-03",
+  "goal": [
+    "memoro-cli reads nothing from memoro but the admin surface, and ships one command, `mc`. The Coding Profile is no longer fetched or handed to sessions; the one rule in it that nothing else says — what is written in English — is a sentence in `canon/roles/_common.md`. The `memoro` and `memoro-cli` binaries, the package `main`, and everything only they reach — heartbeat loop, session upload, hook install, provider-artifact, the transcript distiller, the session projector — are gone, and the package can no longer be published to npm by accident.",
+    "This is the client half of ruling 24 (`docs/project/mc/rulings.md` § 24): memoro holds nothing about mc, so nothing on this machine reports sessions into it or reads a profile from it. The server half is `mc-in-memoro-cut` and `mc-in-memoro-decommission` in memoro, under `docs/project/mc/`."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "No session is handed a Coding Profile, and nothing in mc calls memoro for one.",
+      "check": "`grep -rn \"coding-profile\\|loadProfile\\|readCached\" src` finds nothing; `mc roles` (the assembled-instructions report in `src/mc/commands/roles.js`) shows `_common.md + overlay` with no profile part; `tests/mc/run.test.js` and `tests/mc/work-open.test.js` are green."
+    },
+    {
+      "met": true,
+      "criterion": "Only `mc` ships, and the package is private.",
+      "check": "`node -e \"const p=require('./package.json');console.log(Object.keys(p.bin), p.main, p.private)\"` prints `[ 'mc' ] undefined true`."
+    },
+    {
+      "met": true,
+      "criterion": "Nothing in `src/` is unreached, and nothing is kept alive only by the package seed.",
+      "check": "`npm run reach` ends with `0 filer  0 rader  NOT reached — 0% of src/`, and `scripts/reach.mjs` no longer names `src/bin.js`, `src/index.js` or `lib/update-check-worker.js`."
+    },
+    {
+      "met": true,
+      "criterion": "mc still works.",
+      "check": "`npm test` is green, including `tests/mc/first-run.test.js`, `tests/mc/run.test.js` and `tests/mc/work-open.test.js`; `node src/mc-cli.js --help` exits 0."
+    },
+    {
+      "met": true,
+      "criterion": "Nothing on Martin's machine calls the binary.",
+      "check": "`grep -c memoro-cli ~/.claude/settings.json` prints 0 and `pgrep -f heartbeat-loop` prints nothing — checked 2026-10-03 after the hooks were removed."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The Coding Profile leaves mc's launches",
+      "done_when": "`src/mc/portrait.js` no longer fetches, caches or returns a profile; every launch path assembles role instructions without one; `canon/roles/_common.md` carries the English sentence and no longer says the runner lands what a session pushes; `npm test` is green.",
+      "status": "done",
+      "pr": 775,
+      "landed": {
+        "sha": "ee8ee3aa34912af84c206f1f8bc57f338d885209",
+        "into": "main",
+        "at": "2026-10-03T15:43:02Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 1 landed the profile removal. success_criteria[0]'s grep still matches readCachedVaultKey (vault, out of scope), the removed-verb lists in src/mc/help-text.js:372 and src/bin-mc.js:32 (history of 2026-09-03), and src/lib/annotate.js:7-8 (session upload, deleted by step 2). Re-check [0] after step 2; the literal grep can never be empty while vault keeps readCachedVaultKey."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The memoro binary goes",
+      "done_when": "`package.json` has only the `mc` bin, no `main`, and `\"private\": true`; the 22 files below and their tests are deleted; `npm test` is green and `npm run reach` reports 0 % unreached.",
+      "status": "done",
+      "pr": 776,
+      "landed": {
+        "sha": "8d19b3dcb31d5d3fa7f119143a36067e2e251823",
+        "into": "main",
+        "at": "2026-10-03T15:54:15Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "success_criteria[0] is left met:false: its literal check, grep -rn 'coding-profile\\|loadProfile\\|readCached' src, still matches readCachedVaultKey across src/vault and src/cli/vault.js (vault is out of scope) and the removed-verb lists in src/bin-mc.js:32 and src/mc/help-text.js:372. No profile is fetched; the check's pattern is wider than its criterion. Also: nothing in src/ calls uninstallCommands (claude-code.js) or codex uninstallHooks any more; NATIVE_LAUNCH_HOOKS was their only caller and src never read it. Both kept as the step said; their comments over-claim."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-03T15:43:03Z",
+      "kind": "step",
+      "seconds": 796,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 21,
+      "input": 42,
+      "output": 329,
+      "cache_read": 1300110,
+      "cache_write": 87552,
+      "model": null,
+      "note": "success,merged",
+      "session": "bfc11e0d-496e-495f-b4fd-d6d7e86324b6",
+      "cost_usd": 1.53401
+    },
+    {
+      "ts": "2026-10-03T15:54:16Z",
+      "kind": "step",
+      "seconds": 661,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 27,
+      "input": 54,
+      "output": 293,
+      "cache_read": 1390246,
+      "cache_write": 73343,
+      "model": null,
+      "note": "success,merged",
+      "session": "02a47b7f-e14d-4104-8c91-135912ddc643",
+      "cost_usd": 1.436148
+    }
+  ],
+  "totals": {
+    "sessions": 2,
+    "seconds": 1457,
+    "land_seconds": 0,
+    "cost_usd": 2.970158,
+    "cost_unknown": 0,
+    "input": 96,
+    "output": 622,
+    "cache_read": 2690356,
+    "cache_write": 160895,
+    "first": "2026-10-03T15:43:03Z",
+    "landed": "2026-10-03T15:54:15Z"
+  }
+}

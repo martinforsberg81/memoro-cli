@@ -1,0 +1,356 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "step-recovery",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/step-recovery/PLAN.json",
+  "archived": "2026-10-10",
+  "goal": [
+    "A step whose session dies because the machine restarted, the runner was killed, or macOS killed the session is never `failed` and never waits on a person. The runner itself resumes the same session when its prompt cache is warm or its conversation is small, and otherwise starts a fresh session on the same branch with the earlier session's work committed and a handover in its prompt.",
+    "After a restart the runner starts by itself at login when it was running when the machine went down, and it starts no new step while memory is short. The work a running session has not committed is snapshotted to a ref while it runs."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A step whose session pid is gone becomes `ready` with an `interrupted` record holding the session id, tool, log, last activity and context size, and is not `failed`.",
+      "check": "`tests/mc/run.test.js`: a register with a `running` step whose pid is dead and a partial claude stream log, and one with a codex log; after `queue()` the step is `ready`, `interrupted.session_id` is the stream's id, `last_activity` is the log's mtime, `count` is 1. A third interruption in a row makes it `failed` with the reason naming three interruptions."
+    },
+    {
+      "met": true,
+      "criterion": "A warm or small interrupted session is resumed: the same session id continues, in the same worktree, with its uncommitted files untouched and without origin/main merged in first.",
+      "check": "Live, once, in the close-out: while a step session runs, `mc run stop --force`, then `mc run start`; the step's next row in `~/mc/runner/log/runs.tsv` has the same `session` value as the killed one, and `git status --porcelain` in its workarea was not emptied by the runner. Also `tests/mc/run.test.js` for claude and `tests/mc/run-codex.test.js` for codex argument lists."
+    },
+    {
+      "met": true,
+      "criterion": "A cold, large interrupted session gets a fresh session on the same branch with the leftover files committed as one WIP commit and a handover paragraph in its prompt.",
+      "check": "`tests/mc/run.test.js`: an interrupted record with `last_activity` two hours old and `context_tokens` 120 000 over a dirty worktree; the launch is not a resume, one commit `<project>: WIP left by an interrupted session` is made with `--no-verify`, and the prompt carries the handover with the commits and the last assistant text."
+    },
+    {
+      "met": true,
+      "criterion": "The runner starts at login when it was running when the machine went down, and not otherwise.",
+      "check": "`tests/mc/run-control.test.js` for `--if-was-running` in the three states; `plutil -lint ~/Library/LaunchAgents/se.memoro.mc-runner.plist` passes after a `mc run start` on this machine."
+    },
+    {
+      "met": true,
+      "criterion": "No step starts while `kern.memorystatus_level` is under the floor, and the page says so, as it says the disk hold.",
+      "check": "`tests/mc/run.test.js` with the memory reader stubbed under and at the floor; `tests/mc/status-collect.test.js` (or the test beside `nowBlock`) shows `disk` and `memory` in the RUNNER block's data."
+    },
+    {
+      "met": true,
+      "criterion": "While a step session runs, its uncommitted work is snapshotted to `refs/mc/checkpoint/<project>` without touching the worktree or its index, and before every `merge --abort` the runner makes.",
+      "check": "`tests/mc/run.test.js` against a real temporary git repository: after a snapshot the ref's tree holds a modified and an untracked file, `git status --porcelain` is unchanged, and `git diff --cached` is empty."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. The session log is written as it streams, and a dead session is interrupted, not failed",
+      "done_when": "A session's stdout reaches `<stem>.jsonl` as it arrives; the register's `session` carries `log`; `sweepRunning` and the post-session path turn a session that died under the step into `ready` with an `interrupted` record (session id, tool, model, log, last activity, context tokens, branch, count, at), `failed` only on the third in a row; `mc step <project>` prints the record; tests cover claude and codex logs; `npm test` is green.",
+      "status": "done",
+      "pr": 828,
+      "landed": {
+        "sha": "660591171dea5f531d37b2d7828ce73bf3acf117",
+        "into": "main",
+        "at": "2026-10-10T14:22:18Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Interrupted record lives on the register step as `interrupted` (kept on ready/running, cleared otherwise); one helper `recordInterrupted` in run.js writes it for both sweepRunning and the signal case, and counts from the previous record. Live log: streamSession logPath = `${out}.jsonl`; session.log is the stem. docs/technical/mc-run.md still describes the old failed sweep — left for the close-out."
+      ],
+      "sessions": 1,
+      "seconds": 1079,
+      "cost_usd": 1.891406
+    },
+    {
+      "title": "2. A warm or small interrupted session is resumed where it stopped",
+      "done_when": "`recoveryFor` decides resume or fresh from the record, the adapter's cache TTL and the context size; a resume launches the same session id through the tool's own resume with the workarea untouched (no dirty block, no branch move, no merge of main); a resume that cannot start falls back to fresh on the next pick; interrupted steps are picked first, warmest first; tests cover claude and codex; `npm test` is green.",
+      "status": "done",
+      "pr": 830,
+      "landed": {
+        "sha": "452abb271eba8a92385922bca929e13cbd20c64b",
+        "into": "main",
+        "at": "2026-10-10T14:36:27Z"
+      },
+      "attempts": 1,
+      "reason": null,
+      "comments": [
+        "Resume path lives in run.js resumable() + recoveryFor (run-plan.js). When recoveryFor says fresh, resumable() returns null and the normal flow runs — a dirty interrupted workarea is still blocked dirty-worktree; step 3 hooks its WIP commit + handover there. resume_failed records go fresh; count is not bumped. Codex TTL 5 min equals WARM_MARGIN_MS, so codex is never warm — only cold-small resumes."
+      ],
+      "sessions": 2,
+      "seconds": 1578,
+      "cost_usd": 2.149399
+    },
+    {
+      "title": "3. A cold, large interrupted session gets a fresh session with its leftovers committed and a handover",
+      "done_when": "When `recoveryFor` says fresh, the step's own leftover files are committed as one WIP commit on the step's branch before the usual flow, and `stepPrompt` carries a handover (why, the commits on the branch, the WIP commit, the last assistant text, the checkpoint ref if any); foreign dirt still blocks; tests cover it; `npm test` is green.",
+      "status": "done",
+      "pr": 832,
+      "landed": {
+        "sha": "649643737acc2d26075baf856131acdf89a4c451",
+        "into": "main",
+        "at": "2026-10-10T14:48:58Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 3 (#832): fresh recovery commits the interrupted session's own dirt (current branch = interrupted.branch, the project name, or <project>-*) as one --no-verify WIP commit, and the handover is built by handoverOf in run.js. The checkpoint ref is named only when rev-parse --verify finds refs/mc/checkpoint/<project>, so once step 6 writes that ref the handover names it with no further change. placeBranch's keepLocal stops a merger-returned branch being reset to origin over the unpushed WIP commit."
+      ],
+      "sessions": 1,
+      "seconds": 489,
+      "cost_usd": 1.192675
+    },
+    {
+      "title": "4. The runner starts at login when it was running when the machine went down",
+      "done_when": "`mc run start --if-was-running` starts a runner only when `runner.json` names a dead pid and no `STOP` is present, and otherwise prints why not and exits 0; every `mc run start` writes `~/Library/LaunchAgents/se.memoro.mc-runner.plist` (RunAtLoad, no KeepAlive) when its content differs; `mc run` help names the flag; tests cover the three states and the plist text; `npm test` is green.",
+      "status": "done",
+      "pr": 833,
+      "landed": {
+        "sha": "512166ccbf7da0eabff160fb0dce0e2983232e01",
+        "into": "main",
+        "at": "2026-10-10T14:59:17Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Login agent: plist written by every spawning start via deps.writeAgent (darwin only, on change). --if-was-running restarts with the dead runner's args from runner.json. Criterion 3's live half (plutil -lint on the real plist after a real mc run start) is left for the close-out; met stays false."
+      ],
+      "sessions": 1,
+      "seconds": 264,
+      "cost_usd": 0.953368
+    },
+    {
+      "title": "5. No step starts while memory is short, and the page shows both holds",
+      "done_when": "A pass starts no step while `kern.memorystatus_level` is under `MEMORY_MIN_FREE_PERCENT` (20), says `memory: <n>% free, below 20% — no step started` once per pass and writes `memory.json`; `nowBlock` reads `disk.json` and `memory.json` so the RUNNER block shows either hold; tests cover both; `npm test` is green.",
+      "status": "done",
+      "pr": 834,
+      "landed": {
+        "sha": "3f95c4c97142ece61fb390274cb57c173ac4e641",
+        "into": "main",
+        "at": "2026-10-10T15:09:00Z"
+      },
+      "attempts": 1,
+      "reason": null,
+      "comments": [],
+      "sessions": 2,
+      "seconds": 510,
+      "cost_usd": 1.277353
+    },
+    {
+      "title": "6. A running session's uncommitted work is snapshotted to a ref",
+      "done_when": "Every `CHECKPOINT_MS` (10 min) while a step session runs, and before each `merge --abort` the runner makes in a step's workarea, a dirty worktree is snapshotted to `refs/mc/checkpoint/<project>` through a temporary index, with the worktree, the real index and HEAD untouched; the handover names the ref; tests against a real git repository; `npm test` is green.",
+      "status": "done",
+      "pr": 835,
+      "landed": {
+        "sha": "6c92c9180eb78098b6bba20a68a852ca2d6f93eb",
+        "into": "main",
+        "at": "2026-10-10T15:09:58Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Snapshots go through checkpoint() in src/mc/checkpoint.js with GIT_OPTIONAL_LOCKS=0 and a temporary index at ~/mc/runner/scratch/checkpoint-<project>-<runner pid>.index. The runner snapshots every CHECKPOINT_MS and before all four merge --abort calls in runStepClaimed. The 10-minute timer itself was not run live."
+      ],
+      "sessions": 1,
+      "seconds": 397,
+      "cost_usd": 1.166973
+    },
+    {
+      "title": "7. Close-out",
+      "done_when": "The live resume check has been run and its runs.tsv rows quoted in this step's comments; every criterion is measured and marked; `docs/technical/mc-run.md` describes interrupted steps, resume and fresh recovery, the login agent, the memory hold and checkpoints; `docs/project/project_log.md` has the row; every step is `done` with its PR.",
+      "status": "done",
+      "pr": 842,
+      "landed": {
+        "sha": "fc6104149a466f8d7adc3d2b30253b6bcd5b0c93",
+        "into": "main",
+        "at": "2026-10-10T17:51:26Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Close-out started 2026-10-10 13:32Z stacked on #835 with none of #828 #830 #832 #833 #834 #835 landed; the runner runs 75c96989 (old code). The docs half is committed on step-recovery-8 (dabf550b, pushed, no PR): mc-run.md fault 4 (the dirty-worktree exception), The register (the interrupted record and its three outcomes), Sleeping and stopping (the restart end to end, the disk and memory holds). Not done: the live resume check, the project_log row (needs the last PR), criteria 1 and 3 (plutil -lint needs a mc run start on the new code). No PR was opened on purpose: an open PR on this step would make mc step ready refuse to unblock it.",
+        "Blocked on 2026-10-10T13:35:20Z: The live check cannot be run by this session: mc run stop --force kills every step session, this one included, so nothing is left to run mc run start; and it needs steps 1-6 landed and the runner updated, none of which has happened. Recommendation: once #828-#835 have landed, Martin runs mc run --update, then mc step ready step-recovery 7; while that close-out session runs, Martin runs mc run stop --force and mc run start; the resumed close-out is itself the resumed session, and quotes its own runs.tsv rows.",
+        "Live resume check run in the plan/mc session 2026-10-10: close-out session 03f425de-2a5a-45c2-886a-060de94e83e6 started 16:17:45Z (pid 70226); mc run stop --force at 16:19:34Z, mc run start 16:19:41Z (pid 73227, commit 687087c7). runner.log: '16:20:01Z step-recovery: step 7 interrupted — claude session 03f425de-2a5a-45c2-886a-060de94e83e6 died under it (1 in a row), ready again' / '16:20:12Z step-recovery: resuming claude session 03f425de-2a5a-45c2-886a-060de94e83e6 (warm, 1 min since last request)'. corpus-repin (af4403ce…) and email-icons (2bf88af7…) resumed the same way, worktrees not committed by the runner; video-window and trip-project-detail (session unknown, old runner pid 12180) got WIP commit + fresh session. The killed run wrote no runs.tsv row; the resumed run's row carries session 03f425de. plutil -lint se.memoro.mc-runner.plist: OK after mc run start.",
+        "Live resume check, 2026-10-10: Martin ran mc run stop --force and mc run start while this close-out ran (cut off 16:19:33Z). runner.log: '2026-10-10T16:20:01Z  step-recovery: step 7 interrupted — claude session 03f425de-2a5a-45c2-886a-060de94e83e6 died under it (1 in a row), ready again' and '2026-10-10T16:20:12Z  step-recovery: resuming claude session 03f425de-2a5a-45c2-886a-060de94e83e6 (warm, 1 min since last request)'. Both stream logs, step-recovery-20261010T161744Z.jsonl (killed) and step-recovery-20261010T162012Z.jsonl (resumed), carry session_id 03f425de-2a5a-45c2-886a-060de94e83e6. The killed session wrote no runs.tsv row (its runner was killed); the next step-recovery row in runs.tsv is this resumed session's own and is written when it ends, so it cannot be quoted from inside it. The workarea was untouched: HEAD stayed ab30910a, no WIP commit, no merge of origin/main, git status unchanged. The same pass resumed corpus-repin (af4403ce…) and email-icons (2bf88af7…) warm and gave video-window a fresh session with its leftovers committed as WIP (4cbc174). plutil -lint ~/Library/LaunchAgents/se.memoro.mc-runner.plist: OK."
+      ],
+      "sessions": 1,
+      "seconds": 180,
+      "cost_usd": 0.56006
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-10T12:42:51Z",
+      "kind": "step",
+      "seconds": 1079,
+      "land_seconds": null,
+      "pr": 828,
+      "turns": 63,
+      "input": 66,
+      "output": 28673,
+      "cache_read": 2602411,
+      "cache_write": 99650,
+      "model": null,
+      "note": "success,queued",
+      "session": "258c2392-a142-42f0-adec-e699602610b7",
+      "cost_usd": 1.8914062000000003
+    },
+    {
+      "ts": "2026-10-10T13:05:06Z",
+      "kind": "step",
+      "seconds": 1318,
+      "land_seconds": null,
+      "pr": 830,
+      "turns": 42,
+      "input": 62,
+      "output": 29008,
+      "cache_read": 2239196,
+      "cache_write": 100331,
+      "model": null,
+      "note": "success,queued",
+      "session": "5d977175-9e9e-439d-80e6-b1b251358cd5",
+      "cost_usd": 1.8308952
+    },
+    {
+      "ts": "2026-10-10T13:13:26Z",
+      "kind": "step",
+      "seconds": 489,
+      "land_seconds": null,
+      "pr": 832,
+      "turns": 35,
+      "input": 46,
+      "output": 18983,
+      "cache_read": 1295955,
+      "cache_write": 69205,
+      "model": null,
+      "note": "success,queued",
+      "session": "3839f78a-9515-4153-ae79-3e9ff30954cd",
+      "cost_usd": 1.192675
+    },
+    {
+      "ts": "2026-10-10T13:19:46Z",
+      "kind": "step",
+      "seconds": 264,
+      "land_seconds": null,
+      "pr": 833,
+      "turns": 33,
+      "input": 32,
+      "output": 15046,
+      "cache_read": 822199,
+      "cache_write": 60985,
+      "model": null,
+      "note": "success,queued",
+      "session": "d0fe891a-6128-4a8a-b403-3094467576ef",
+      "cost_usd": 0.9533678000000001
+    },
+    {
+      "ts": "2026-10-10T13:25:48Z",
+      "kind": "step",
+      "seconds": 355,
+      "land_seconds": null,
+      "pr": 834,
+      "turns": 61,
+      "input": 66,
+      "output": 17252,
+      "cache_read": 1520233,
+      "cache_write": 61747,
+      "model": null,
+      "note": "success,queued",
+      "session": "762f93cd-f45a-441d-aa05-814e2b71afd4",
+      "cost_usd": 1.1433266000000002
+    },
+    {
+      "ts": "2026-10-10T13:32:32Z",
+      "kind": "step",
+      "seconds": 397,
+      "land_seconds": null,
+      "pr": 835,
+      "turns": 48,
+      "input": 52,
+      "output": 21246,
+      "cache_read": 1298665,
+      "cache_write": 60264,
+      "model": null,
+      "note": "success,queued",
+      "session": "c7327396-fab3-4097-84c5-f7d5a321f5c3",
+      "cost_usd": 1.1669729999999998
+    },
+    {
+      "ts": "2026-10-10T13:35:40Z",
+      "kind": "step",
+      "seconds": 173,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 29,
+      "input": 38,
+      "output": 11285,
+      "cache_read": 722777,
+      "cache_write": 47361,
+      "model": null,
+      "note": "success,blocked",
+      "session": "d6f9b4b4-4d7a-4d01-b8e0-67f4bcf650af",
+      "cost_usd": 0.7492954000000002
+    },
+    {
+      "ts": "2026-10-10T14:28:27Z",
+      "kind": "step",
+      "seconds": 260,
+      "land_seconds": null,
+      "pr": 830,
+      "turns": 12,
+      "input": 24,
+      "output": 3943,
+      "cache_read": 298819,
+      "cache_write": 22473,
+      "model": null,
+      "note": "success,queued",
+      "session": "dd13c5a2-fe14-474e-9444-8b9151aa1d11",
+      "cost_usd": 0.3185038
+    },
+    {
+      "ts": "2026-10-10T15:02:05Z",
+      "kind": "step",
+      "seconds": 155,
+      "land_seconds": null,
+      "pr": 834,
+      "turns": 5,
+      "input": 10,
+      "output": 1087,
+      "cache_read": 84510,
+      "cache_write": 11918,
+      "model": null,
+      "note": "success,queued",
+      "session": "3bb92bd0-e15a-4094-a03a-d79f2c90647d",
+      "cost_usd": 0.134026
+    },
+    {
+      "ts": "2026-10-10T16:23:14Z",
+      "kind": "step",
+      "seconds": 180,
+      "land_seconds": null,
+      "pr": 842,
+      "turns": 9,
+      "input": 18,
+      "output": 4952,
+      "cache_read": 348276,
+      "cache_write": 8931,
+      "model": null,
+      "note": "success,queued",
+      "session": "03f425de-2a5a-45c2-886a-060de94e83e6",
+      "cost_usd": 0.5600602
+    }
+  ],
+  "totals": {
+    "sessions": 10,
+    "seconds": 4670,
+    "land_seconds": 0,
+    "cost_usd": 9.940529,
+    "cost_unknown": 0,
+    "input": 414,
+    "output": 151475,
+    "cache_read": 11233041,
+    "cache_write": 542865,
+    "first": "2026-10-10T12:42:51Z",
+    "landed": "2026-10-10T17:51:26Z"
+  }
+}

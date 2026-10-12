@@ -1,0 +1,197 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "step-credits",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/step-credits/PLAN.json",
+  "archived": "2026-10-12",
+  "goal": [
+    "Runner step sessions on claude can run on the Max plan's monthly API credit instead of the plan's weekly and 5-hour budget. Martin picks the mode with `mc run --billing plan|credits|auto`: `plan` is today's behaviour, `credits` runs every new claude step session on the API key, and `auto` moves to the key when the last seen seven-day utilization is at or above 80 % (`CREDITS_AT_UTILIZATION`) or when the plan has refused a session, and back to the plan after the plan's reset.",
+    "A refusal no longer only sleeps: in `auto` a plan refusal hands the step to the credit, and an exhausted or rejected credit hands it back to the plan. Which billing a session ran on is in the register, on the page and in `mc step`."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`mc run --billing` prints the mode, the last seen 5-hour and seven-day utilization with their resets, any plan refusal and any credit mark, and what the next claude step session would run on; `mc run --billing plan|credits|auto` writes the mode and clears the credit mark; nothing else reads as anything but `plan`.",
+      "check": "`tests/mc/commands/run-billing.test.js` and `tests/mc/billing.test.js`: absent, broken and unknown files read `plan`; each mode round-trips; a write clears `credits.unusable_until`; the printed lines for a state with `seven_day.utilization` 0.83 in `auto` say the next session runs on credits. On the machine after landing: `mc run --billing` prints `plan`."
+    },
+    {
+      "met": true,
+      "criterion": "A claude step session gets `ANTHROPIC_API_KEY` from the vault label `mc-api-key` exactly when its billing is `credits`, and a `plan` session never gets one even if the runner's environment has it.",
+      "check": "`tests/mc/run.test.js`: with `deps.creditKey` stubbed and `deps.session` capturing its options, mode `credits` gives `env.ANTHROPIC_API_KEY` equal to the stub's key and `session.billing: 'credits'` in the register; mode `plan` with `ANTHROPIC_API_KEY` in the runner env passes both names in `unsetEnv`; a codex plan in mode `credits` gets no key. `tests/vault/engine/step-credit-key.test.js`: the record is found by label in envelope and legacy rows, a missing or duplicated label and a missing cache are `{ ok: false }`, and no export takes a label."
+    },
+    {
+      "met": false,
+      "criterion": "`auto` moves to the credit at 80 % seven-day utilization or after a plan refusal, and back to the plan after the plan's reset.",
+      "check": "`tests/mc/billing.test.js` on `billingFor`: 0.79 → plan, 0.80 → credits, 0.95 with `resets_at` in the past → plan, `refused_until` in the future → credits, `credits.unusable_until` in the future → plan in every mode, a codex tool → plan."
+    },
+    {
+      "met": true,
+      "criterion": "A plan refusal in `auto` does not sleep: the step is handed to the next pick on credits as an interrupted step that does not count towards `INTERRUPT_LIMIT`; an exhausted or invalid credit marks the credit unusable for 24 h and hands the step back the same way.",
+      "check": "`tests/mc/run.test.js`: a claude stream ending in a 429 refusal in `auto` leaves the step `ready` with an `interrupted` record whose `billing` is `plan` and whose `count` is unchanged, no `quotaPause` sleep, and `refused_until` written; a result `Your credit balance is too low to access the Anthropic API. …` on a credits session writes `credits.unusable_until` now + 24 h and the same hand-back. `tests/mc/run-plan.test.js`: `apiInterruption` returns `credits` and `key` for the two texts, and `recoveryFor` with a billing change is never `warm`."
+    },
+    {
+      "met": true,
+      "criterion": "Which billing a session runs on is visible.",
+      "check": "`tests/mc/page.test.js`: a lane whose current file says `billing: 'credits'` shows `credits` beside tool and model, and a `plan` one shows nothing new. `tests/mc/commands/step.test.js`: a running step on credits prints `on credits`."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. The billing mode and the plan's windows: `mc run --billing`, `billing.json`, `billing-state.json`",
+      "done_when": "`mc run --billing [plan|credits|auto]` reads and writes `~/mc/runner/billing.json`, the runner records the 5-hour and seven-day windows from every claude plan session's stream into `~/mc/runner/billing-state.json`, `billingFor` answers which billing a launch would get, no session is launched differently yet, and `npm test` is green.",
+      "status": "done",
+      "pr": 878,
+      "landed": {
+        "sha": "8bb4b8b13b5df0a604c206a7f2412b24159dac78",
+        "into": "main",
+        "at": "2026-10-11T12:17:59Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Released 2026-10-11T12:05:00Z: project vault-repair is done"
+      ],
+      "sessions": 1,
+      "seconds": 699,
+      "cost_usd": 1.322598
+    },
+    {
+      "title": "2. The key, read from the vault for one purpose: `readStepCreditKey`",
+      "done_when": "`src/vault/engine/step-credit-key.js` exports `readStepCreditKey()` that returns `{ ok: true, key }` for the single vault record labelled `mc-api-key` using only the cached vault key, or `{ ok: false, reason }`, with no parameter that names a label, path or destination; the claude-code adapter's stance comment names the exception; tests cover envelope and legacy rows; `npm test` is green.",
+      "status": "done",
+      "pr": 879,
+      "landed": {
+        "sha": "24edbc13fcf92671a5eddb4250fb220e75194f9e",
+        "into": "main",
+        "at": "2026-10-11T12:49:44Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "readStepCreditKey landed in src/vault/engine/step-credit-key.js. Reasons it returns: vault-locked, not-logged-in, vault-refused, vault-unreachable, no-key, key-ambiguous, key-unreadable. Step 3 should call it with no arguments at launch time and must not keep the key after the launch."
+      ],
+      "sessions": 1,
+      "seconds": 554,
+      "cost_usd": 0.646497
+    },
+    {
+      "title": "3. A claude step session runs on the billing `billingFor` gives it",
+      "done_when": "Every claude step session `runStep` launches is started on the billing `billingFor` returns for that launch — with `ANTHROPIC_API_KEY` from `readStepCreditKey` on credits, and with `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` removed on plan — the register, the current file, the page and `mc step` show it, and `npm test` is green.",
+      "status": "done",
+      "pr": 880,
+      "landed": {
+        "sha": "f62beb01c53d643ba076af12d06ac87a90d31183",
+        "into": "main",
+        "at": "2026-10-11T12:51:24Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Billing is chosen per launch in runStep (pickBilling, src/mc/run.js); the key is held only until deps.session is called. initSource(stdout) in run-plan.js reads apiKeySource from the init line — step 4 can reuse it. recordInterrupted takes billing; step 4's hand-over should pass the billing of the refused launch (picked.billing after the loop)."
+      ],
+      "sessions": 1,
+      "seconds": 883,
+      "cost_usd": 2.152707
+    },
+    {
+      "title": "4. Refusals hand the step over instead of sleeping",
+      "done_when": "In `auto`, a plan refusal writes `plan.refused_until` and hands the step to the next pick on credits without a quota sleep; on any mode, an exhausted or rejected credit writes `credits.unusable_until` (now + 24 h) and hands the step back to the plan; a hand-over is an `interrupted` record that does not count towards `INTERRUPT_LIMIT`; a resume across billings is never warm; `npm test` is green.",
+      "status": "done",
+      "pr": 881,
+      "landed": {
+        "sha": "c8dff6e4f7c4ea8623d845572fcca8d5d73be3c7",
+        "into": "main",
+        "at": "2026-10-11T12:53:13Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Hand-over lives in runStep's noteRefusal (src/mc/run.js): it writes plan.refused_until / credits.unusable_until and returns {from,to} when billingFor changes; the outcome chain records an uncounted interrupted. Fixture sessions need an init line with session_id (sessionStanding drops the last unterminated line) — see streamed() in tests/mc/run.test.js."
+      ],
+      "sessions": 1,
+      "seconds": 504,
+      "cost_usd": 1.772865
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-11T12:16:45Z",
+      "kind": "step",
+      "seconds": 699,
+      "land_seconds": null,
+      "pr": 878,
+      "turns": 27,
+      "input": 50,
+      "output": 23060,
+      "cache_read": 1432068,
+      "cache_write": 71848,
+      "model": null,
+      "note": "success,queued",
+      "session": "66020990-5995-41f7-8da4-0c0eac21dded",
+      "cost_usd": 1.3225976
+    },
+    {
+      "ts": "2026-10-11T12:26:31Z",
+      "kind": "step",
+      "seconds": 554,
+      "land_seconds": null,
+      "pr": 879,
+      "turns": 22,
+      "input": 24,
+      "output": 11156,
+      "cache_read": 442203,
+      "cache_write": 41855,
+      "model": null,
+      "note": "success,queued",
+      "session": "6920fcb8-cbef-459f-8895-73e36a489670",
+      "cost_usd": 0.6464966
+    },
+    {
+      "ts": "2026-10-11T12:43:55Z",
+      "kind": "step",
+      "seconds": 883,
+      "land_seconds": null,
+      "pr": 880,
+      "turns": 78,
+      "input": 98,
+      "output": 28666,
+      "cache_read": 3857255,
+      "cache_write": 100943,
+      "model": null,
+      "note": "success,queued",
+      "session": "8f54b9f8-abec-4874-81e3-56a602d5006b",
+      "cost_usd": 2.1527069999999995
+    },
+    {
+      "ts": "2026-10-11T12:52:29Z",
+      "kind": "step",
+      "seconds": 504,
+      "land_seconds": null,
+      "pr": 881,
+      "turns": 57,
+      "input": 74,
+      "output": 29100,
+      "cache_read": 2512407,
+      "cache_write": 86011,
+      "model": null,
+      "note": "success,queued",
+      "session": "b5aee8a7-449f-4774-8ea7-3913a0827825",
+      "cost_usd": 1.7728654000000006
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 2640,
+    "land_seconds": 0,
+    "cost_usd": 5.894667,
+    "cost_unknown": 0,
+    "input": 246,
+    "output": 91982,
+    "cache_read": 8243933,
+    "cache_write": 300657,
+    "first": "2026-10-11T12:16:45Z",
+    "landed": "2026-10-11T12:53:13Z"
+  }
+}

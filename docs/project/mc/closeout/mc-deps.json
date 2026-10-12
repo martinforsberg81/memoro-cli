@@ -1,0 +1,149 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-deps",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-deps/PLAN.json",
+  "archived": "2026-10-09",
+  "goal": [
+    "`mc deps [<repo>]` answers, in one screen, which of a repository's dependencies need updating and how urgently: npm's outdated and audit readings of the lockfile on `origin/main`, merged per direct dependency into three groups — security fixable within the dependency's major, patch/minor behind, and major behind — each row marked runtime or tool, with the repository's own declared one-line notes (memoro: the wrangler release tally) as their own lines.",
+    "`mc deps bump <repo> security|minor|<package>[@<version>]` turns one of those groups into a pull request without anybody touching a checkout: a fresh workarea on `origin/main`, `package.json` and `package-lock.json` changed by npm with `--package-lock-only`, one commit, `mc publish`, then the ordinary `mc merge <repo> <pr>` gate round.",
+    "`mc deploy` says the reading in one line before its question — `mc: deps — 2 critical, 24 high; wrangler 4.116.0 → 4.149.0 (33 minor behind; D=2 S=1)` — from what `mc deps` last saved, with its age."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`mc deps memoro` prints the three groups, the audit counts and the wrangler line for memoro's `origin/main`, and its counts agree with npm's own.",
+      "check": "Run `mc deps memoro --json --refresh`; its `audit.counts` equals `metadata.vulnerabilities` from `npm audit --json --package-lock-only` run by hand in a directory holding `git -C ~/memoro show origin/main:package.json` and `…:package-lock.json`; `wrangler` appears in `security` (fix `4.149.0` or later) with `kind: \"tool\"` and `@capacitor/ios` with `kind: \"runtime\"`; `notes[0].text` starts with `wrangler `. `tests/mc/deps.test.js` green."
+    },
+    {
+      "met": false,
+      "criterion": "`mc deps bump` makes exactly the lockfile change a group names, in a fresh workarea, and nothing else.",
+      "check": "`mc deps bump memoro minor --dry-run` prints each `<name> <from> → <to>` it would write and the workarea and branch it would make, and creates neither (`ls ~/mc` and `git -C ~/memoro branch --list 'deps-*'` unchanged). `tests/mc/commands/deps.test.js`: with injected git/npm/publish/merge, a bump calls npm only with `--package-lock-only`, commits only `package.json` and `package-lock.json`, and hands `mc merge` the number `mc publish` returned."
+    },
+    {
+      "met": true,
+      "criterion": "`mc deploy` shows the deps line from the saved reading, with its age, and says so when there is none.",
+      "check": "`mc deploy --dry-run` after `mc deps memoro` prints a line starting `mc: deps — ` with the critical and high counts and the wrangler note; with `~/.memoro/mc/deps/memoro.json` moved away it prints `mc: deps not read — mc deps memoro`. `tests/mc/commands/deploy.test.js` green, including a test that `deployPlan` makes no npm or network call for it."
+    }
+  ],
+  "steps": [
+    {
+      "title": "`mc deps [<repo>]`: the reading, saved and printed",
+      "done_when": "`src/mc/deps.js` and `src/mc/commands/deps.js` exist, `deps` is in `VERB_MODULES` and in both help listings in `src/mc/help-text.js`, the memoro entry in `SHIPPED` declares the wrangler note, `normalise` carries `deps_notes`, `mc deps memoro --json --refresh` prints the reading described in the instruction and writes `~/.memoro/mc/deps/memoro.json`, and `tests/mc/deps.test.js` plus `tests/mc/help.test.js` and `tests/mc/repo-gate-table.test.js` are green.",
+      "status": "done",
+      "pr": 808,
+      "landed": {
+        "sha": "25999352c79e6a620ba51d48521dda0f1dfe37e4",
+        "into": "main",
+        "at": "2026-10-09T05:05:09Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 1 (#808): ~/.memoro/mc/repo-gates.json replaces memoro's entry whole, so deps_notes was restated there by hand (with deps_notes_why). For step 3: the reading has an extra 'unread' array (rows whose npm view failed). A major row's 'target' is the newest within its major, and a security row's target is the audit's named fix version (wrangler 4.149.0). sharp is a direct tool dep whose audit fix is wrangler's, so its security target is just in_major."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "`mc deploy` says the deps line from the saved reading",
+      "done_when": "`deployPlan` in `src/mc/commands/deploy.js` returns a `deps` field read from `~/.memoro/mc/deps/memoro.json` with no npm or network call, `planLines` prints it as the last line of the reading, `mc deploy --dry-run` shows it, and `tests/mc/commands/deploy.test.js` pins the three cases in the instruction.",
+      "status": "done",
+      "pr": 809,
+      "landed": {
+        "sha": "13c923c02669deef565c9ec5dc18e36015261cb6",
+        "into": "main",
+        "at": "2026-10-09T05:19:10Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "`mc deps bump <repo> security|minor|<package>[@<version>]`: a lockfile PR through the gate",
+      "done_when": "`mc deps bump` makes a workarea `deps-<repo>-<what>-<yyyymmdd>` on `origin/main`, changes `package.json`/`package-lock.json` with `--package-lock-only` only, commits, publishes and runs `mc merge <repo> <pr>`; `--dry-run` prints the change and the workarea and makes neither; the help text lists it; and `tests/mc/commands/deps.test.js` pins the cases in the instruction.",
+      "status": "done",
+      "pr": 13177,
+      "landed": {
+        "sha": "b3ceaa1e4c60a8e34cfd8f34bec8bbc91699781c",
+        "into": "main",
+        "at": "2026-10-09T05:29:50Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-09T05:05:11Z",
+      "kind": "step",
+      "seconds": 852,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 23,
+      "input": 46,
+      "output": 215,
+      "cache_read": 1368194,
+      "cache_write": 80181,
+      "model": null,
+      "note": "success,merged",
+      "session": "703cade1-c541-4dd7-99ec-4af5972bbde3",
+      "cost_usd": 1.491512
+    },
+    {
+      "ts": "2026-10-09T05:19:11Z",
+      "kind": "step",
+      "seconds": 836,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 20,
+      "input": 40,
+      "output": 322,
+      "cache_read": 884841,
+      "cache_write": 47925,
+      "model": null,
+      "note": "success,merged",
+      "session": "4f47eaea-5aa2-4569-9ec9-916cfb6502ee",
+      "cost_usd": 0.9299205
+    },
+    {
+      "ts": "2026-10-09T05:29:51Z",
+      "kind": "step",
+      "seconds": 636,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 16,
+      "input": 32,
+      "output": 151,
+      "cache_read": 722756,
+      "cache_write": 63030,
+      "model": null,
+      "note": "success,merged",
+      "session": "eb45154c-ca73-40e8-a68f-76b39113772c",
+      "cost_usd": 0.995613
+    }
+  ],
+  "totals": {
+    "sessions": 3,
+    "seconds": 2324,
+    "land_seconds": 0,
+    "cost_usd": 3.417046,
+    "cost_unknown": 0,
+    "input": 118,
+    "output": 688,
+    "cache_read": 2975791,
+    "cache_write": 191136,
+    "first": "2026-10-09T05:05:11Z",
+    "landed": "2026-10-09T05:29:50Z"
+  }
+}

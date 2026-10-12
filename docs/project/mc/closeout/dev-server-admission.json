@@ -1,0 +1,83 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "dev-server-admission",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/dev-server-admission/PLAN.json",
+  "archived": "2026-09-26",
+  "goal": [
+    "At most two app servers (a workerd each) run on this machine at once, and none starts while memory is already short. A third waits its turn, says for whom, and gives up with the list of holders instead of pushing the machine into swap.",
+    "Measured 12–26 Sep 2026 on this 8 GB M1: 141 of 571 local memoro dev-server starts died unexpectedly, and on 2026-09-26 the machine held seven registered servers across worktrees plus unregistered orphans — a static-server six days old, another four days old whose registration had been swept, an esbuild `--service` four days old with ppid 1 — with swap at 6.8–8.2 GB. Martin, 2026-09-26: \"se till så att de inte äter upp all datorkapacitet.\" A JetsamEvent of 2026-09-25 shows three esbuild processes at 700–850 MB beside Chrome renderers. `resource_class` is carried in every manifest and read by nothing (`src/mc/dev-servers.js`, `docs/dev-server-protocol.md` says the heavy-server limit went with `mc-cut`, #561).",
+    "The decision is mc's, in one place: `mc dev admit`. mc asks it before `ensureDevServer` starts a server; memoro's agent server asks it when started by hand (memoro project `agent-server-admission`, which waits for this one)."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "With two app servers live, `mc dev admit` for a third worktree refuses with both holders named; with one live it admits at once.",
+      "check": "Two memoro worktrees each `mc test dev --here --url`; from a third, `mc dev admit memoro-measure --worktree <third> --wait 0 --json`; stop one; ask again. Paste both."
+    },
+    {
+      "met": true,
+      "criterion": "`mc test dev --here` in a third worktree waits while two are live, prints who holds the slots once a minute, and starts as soon as one stops.",
+      "check": "As above, run it with two live; stop one after ~70 s; paste the output with the waiting lines and the start."
+    },
+    {
+      "met": true,
+      "criterion": "Low memory refuses with reason `memory`.",
+      "check": "`MC_DEV_MIN_FREE_PERCENT=101 mc dev admit memoro-measure --worktree <any> --wait 0 --json`; paste it."
+    }
+  ],
+  "steps": [
+    {
+      "title": "`mc dev admit` and admission in `ensureDevServer`",
+      "done_when": "`mc dev admit` answers as the contract fixes, waits with `--wait`, is used by `ensureDevServer` before it spawns (passing `MC_DEV_ADMITTED=1` to the child), is documented in `docs/dev-server-protocol.md` and the help, is tested, and the three success criteria are in the pull request with a changelog fragment.",
+      "status": "done",
+      "pr": 751,
+      "landed": {
+        "sha": "636d9cf73d46610fc873e90524c49e702d80696d",
+        "into": "main",
+        "at": "2026-09-26T09:44:53Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc dev admit landed in #751. On this machine the real registry holds 8 non-light servers, three of them memoro-static declared resource_class standard in memoro's .mc/dev.json — so they count. memoro should declare the static profile light (proposal 2026-09-26-memoro-static-resource-class-light). The refusal sentence names 'mc test dev --stop in its worktree' because mc dev stop does not exist; a light profile skips admission in ensureDevServer."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-09-26T09:44:55Z",
+      "kind": "step",
+      "seconds": 413,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 30,
+      "input": 60,
+      "output": 311,
+      "cache_read": 1787576,
+      "cache_write": 79981,
+      "model": null,
+      "note": "success,merged",
+      "session": "b1e40f02-2807-4b14-8f44-a0373cd70ea3",
+      "cost_usd": 1.701673
+    }
+  ],
+  "totals": {
+    "sessions": 1,
+    "seconds": 413,
+    "land_seconds": 0,
+    "cost_usd": 1.701673,
+    "cost_unknown": 0,
+    "input": 60,
+    "output": 311,
+    "cache_read": 1787576,
+    "cache_write": 79981,
+    "first": "2026-09-26T09:44:55Z",
+    "landed": "2026-09-26T09:44:53Z"
+  }
+}

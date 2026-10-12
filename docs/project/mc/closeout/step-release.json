@@ -1,0 +1,174 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "step-release",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/step-release/PLAN.json",
+  "archived": "2026-10-10",
+  "goal": [
+    "A blocked step that waits for a time, for an earlier step's deploy plus a delay, or for another project to be done becomes `ready` by itself. Nobody has to notice and run `mc step ready`.",
+    "Today `blocked_by` is `{ kind, name }` with `kind` one of `decision | project | workarea` (`src/mc/plan-schema.js:50`). A blocked step is a person's (ruling 21), and the runner never reads `deploys.tsv` when it decides what is ready. `staleBlockers` (`src/mc/stale-blockers.js:58`) notices that a `project` blocker is done, but by design it writes nothing, so the step still waits for a person."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "The plan schema, the register and `mc step blocked` accept `time` and `deploy` blockers with their fields, and refuse a malformed one.",
+      "check": "`tests/mc/plan-schema.test.js`, `tests/mc/register.test.js` (the fields survive `normaliseEntry` and `patchStep`) and `tests/mc/step-command.test.js` (or the test beside `commands/step.js`): `--until`, `--after-deploy`, `--hours`; a past `--until` is refused, as is `--after-deploy` on a memoro-cli step and `--after-deploy` naming the step itself or a later one."
+    },
+    {
+      "met": true,
+      "criterion": "A due blocker is released by the runner's `queue()` into `ready` with a comment, and one that is not due is left blocked.",
+      "check": "`tests/mc/step-release.test.js`: `time` before and after `at`; `deploy` with no deployed row, a row that does not contain the sha, a row that contains it but is younger than `hours`, and one that is old enough; `project` done, not done, and not on main. `tests/mc/run.test.js` (or the runner test that drives `queue()`): a due step comes out of `queue()` as `ready`, and its register entry carries the comment."
+    },
+    {
+      "met": true,
+      "criterion": "`mc step <project>` and the page say how long a time or deploy wait has left.",
+      "check": "The `mc step` test: `on deploy of step 3 + 24h — 7h40m left`, `on deploy of step 3 — not deployed yet`, `until 2026-10-14 08:00Z — 3d left`. The page test for the blocked line shows the same words."
+    },
+    {
+      "met": false,
+      "criterion": "Live: a step is released by the runner on the new code.",
+      "check": "The close-out quotes the `runner.log` line for the first release after the runner runs step 2's code, together with that step's register comment. If no release has happened by then, the close-out says so in its comments instead of inventing one."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. time and deploy blockers in the schema, the register and mc step blocked, and the pure rule for when one is due",
+      "done_when": "`BLOCKER_KINDS` holds `time` and `deploy`. The schema, `normaliseStep` and `patchStep` accept and keep `at`, `step` and `hours`. `mc step blocked` takes `--until <iso>` and `--after-deploy [<n>] [--hours <h>]`. A new `src/mc/step-release.js` exports a pure `blockerDue(step, context)` and `describeWait(step, context)`. `mc step <project>` prints the wait. The tests in success criteria 1 and 3 are green, and so is `npm test`.",
+      "status": "done",
+      "pr": 849,
+      "landed": {
+        "sha": "6547d652bc41cb84dcfd1cff1bacf8e5d743cffe",
+        "into": "main",
+        "at": "2026-10-10T17:54:31Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "For step 2: in step-release.js, stepsOf() takes no argument and returns this project's register steps; the deploy step is stepsOf()[step-1]. contains(sha, rowSha) means sha is an ancestor of rowSha. describeWait gives 'on project y — not done / not on main' only when context.plans is passed. mc step <project> (commands/step.js waitContext) shows how much time is left only for time and deploy blockers."
+      ],
+      "sessions": 1,
+      "seconds": 773,
+      "cost_usd": 1.274606
+    },
+    {
+      "title": "2. The runner releases due blockers in queue(), and the page shows the wait",
+      "done_when": "The runner's `queue()` (`src/mc/run.js:2414`) releases every current blocked step whose blocker is due: the register step becomes `ready` with the comment `Released <now>: <why>` and a `runner.log` line. Released steps come out of `queue()` as `ready` the same call. `staleBlockers` no longer reports a `project` blocker that is done. The page's blocked line uses `describeWait`. The tests in success criterion 2 are green, and so is `npm test`.",
+      "status": "done",
+      "pr": 851,
+      "landed": {
+        "sha": "4d97188279edc37f6900b7b1b87f336dd64804db",
+        "into": "main",
+        "at": "2026-10-10T17:57:33Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "The page shows a deploy wait without its time left (on deploy of step N + Hh): working it out needs git ancestry in memoro's checkout, and that would be a git call per paint. mc step <project> shows the time left. The release takes effect only after mc run --update, and criterion 4 (live) is the close-out's to quote."
+      ],
+      "sessions": 1,
+      "seconds": 608,
+      "cost_usd": 2.135697
+    },
+    {
+      "title": "3. Close-out",
+      "done_when": "The runner runs step 2's code, every criterion is marked with what was measured, `docs/technical/mc-run.md` describes the self-releasing blockers, `docs/project/project_log.md` has the row, and every step is `done` with its PR.",
+      "status": "done",
+      "pr": 852,
+      "landed": {
+        "sha": "c2ad40e44c050c6781eb5f6e3215f3da2958bc2d",
+        "into": "main",
+        "at": "2026-10-10T18:36:08Z"
+      },
+      "attempts": 1,
+      "reason": null,
+      "comments": [
+        "Live (criterion 4): at close-out (2026-10-10T17:3xZ) ~/mc/runner/runner.json had commit ba413e8f, started 2026-10-10T17:07:55Z — it does not contain step 2's code (#851 was still in the merge queue, as was #849). runner.log has no ': released — ' line. No release was seen yet; criterion 4 stays met: false. The runner was not stopped: Martin updates it with mc run --update once #849 and #851 have landed.",
+        "Close-out landed as #852 (the merger merged origin/main itself, the same mc-run.md resolution as this session's). runner.json at close-out: commit 687b81a8, started 2026-10-10T17:45:41Z, which does not contain step 2's merge 4d971882 (#851); runner.log has no ': released — ' line, so criterion 4 stays met: false. One detail did not reach main: the project_log row says the runner ran ba413e8f, but after its 17:45Z restart it ran 687b81a8 (also before step 2's code)."
+      ],
+      "sessions": 1,
+      "seconds": 234,
+      "cost_usd": 0.506567
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-10T17:21:37Z",
+      "kind": "step",
+      "seconds": 773,
+      "land_seconds": null,
+      "pr": 849,
+      "turns": 26,
+      "input": 38,
+      "output": 24607,
+      "cache_read": 1085251,
+      "cache_write": 70658,
+      "model": null,
+      "note": "success,queued",
+      "session": "d70b0192-d408-4c9c-8e5d-046e46d4b867",
+      "cost_usd": 1.2746062000000002
+    },
+    {
+      "ts": "2026-10-10T17:31:53Z",
+      "kind": "step",
+      "seconds": 608,
+      "land_seconds": null,
+      "pr": 851,
+      "turns": 54,
+      "input": 94,
+      "output": 25846,
+      "cache_read": 3813085,
+      "cache_write": 106973,
+      "model": null,
+      "note": "success,queued",
+      "session": "d80bccb1-9d3f-43a4-b833-2781cc874dac",
+      "cost_usd": 2.135697000000001
+    },
+    {
+      "ts": "2026-10-10T17:35:53Z",
+      "kind": "step",
+      "seconds": 234,
+      "land_seconds": null,
+      "pr": 852,
+      "turns": 20,
+      "input": 32,
+      "output": 8715,
+      "cache_read": 455897,
+      "cache_write": 30120,
+      "model": null,
+      "note": "success,queued",
+      "session": "10929350-38f9-4579-87fe-6d68cb12a7c4",
+      "cost_usd": 0.5065673999999999
+    },
+    {
+      "ts": "2026-10-10T18:09:01Z",
+      "kind": "step",
+      "seconds": 180,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 15,
+      "input": 30,
+      "output": 5221,
+      "cache_read": 320635,
+      "cache_write": 18811,
+      "model": null,
+      "note": "success,failed",
+      "session": "9230b501-74b3-4f92-be88-4ce40de7341a",
+      "cost_usd": 0.319155
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 1795,
+    "land_seconds": 0,
+    "cost_usd": 4.236026,
+    "cost_unknown": 0,
+    "input": 194,
+    "output": 64389,
+    "cache_read": 5674868,
+    "cache_write": 226562,
+    "first": "2026-10-10T17:21:37Z",
+    "landed": "2026-10-10T18:36:08Z"
+  }
+}

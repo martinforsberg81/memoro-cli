@@ -1,0 +1,118 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "dev-server-supervision",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/dev-server-supervision/PLAN.json",
+  "archived": "2026-09-26",
+  "goal": [
+    "mc stops reusing dead or hung local servers, records every one it finds gone, and a `mc test dev` round survives its server leaving once. Martin, 2026-09-26: \"Det händer alldeles för ofta att dev servrar kopplar ner/låser sig vilket kostar både tid och tokens … se till så att de inte äter upp all datorkapacitet.\"",
+    "Measured 12–26 Sep 2026: 141 of 571 local memoro dev-server starts died unexpectedly (median 4.9 minutes after READY), 61 agent sessions spent about 1 100 tool calls restarting servers, and neither `~/.memoro/mc/logs/mc.log` nor the runner's logs record a single one of those deaths. On the mc side: `listServers` (`src/mc/dev-servers.js`) sweeps a dead registration without a word; `ensureDevServer` (`src/mc/test-environment.js`) reuses any server whose pid is alive (`servingWorktree`), answering or not; and when a tier leaves mid-round (`runSuites`) every later suite of that tier is reported never-run and the command exits 1, though starting it again takes under a minute.",
+    "memoro's half — the agent server supervising its own workerd, `dev.mjs` restarting a dead worker, `--restart` accepted by all three servers — is the memoro project `agent-dev-server` (`docs/project/test-architecture/agent-dev-server/PLAN.json` in memoro). Nothing here waits for it: this project uses only the manifest protocol that exists today, and stops and starts servers through `stopServer` and `ensureDevServer` as mc already does."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A registered server whose process is gone produces one `dev-server-gone` event in `mc.log` when mc next lists servers.",
+      "check": "Start a server (`mc test dev --here --url`), `kill -9` its registered pid, run `mc dev list`, then `mc log --all --limit 5`; paste the event line in the pull request."
+    },
+    {
+      "met": true,
+      "criterion": "A server that is alive but does not answer is replaced, not reused.",
+      "check": "Start `mc test dev --here --url`; `kill -STOP` the registered pid; run `mc test dev --here --url` again and paste its output (the `was alive but not answering` line and a new instance id) and the `dev-server-hung` event; `kill -CONT` / clean up afterwards."
+    },
+    {
+      "met": true,
+      "criterion": "A `mc test dev` round whose app server dies once mid-round finishes every suite, reports the one that was running as unmeasured, and says the server was revived.",
+      "check": "Start `mc test dev --here`; during the second app-tier suite `kill -9` the server's registered pid; paste the round's output (one `unmeasured`, a `revived` line, the rest measured) and the `dev-server-revived` event."
+    }
+  ],
+  "steps": [
+    {
+      "title": "Record deaths, replace hung servers",
+      "done_when": "`listServers` logs `dev-server-gone` for each record it sweeps, `ensureDevServer` asks a live server whether it answers before reusing it and replaces one that does not (logging `dev-server-hung`), `docs/dev-server-protocol.md` says what mc stops and when, tests cover both, and the first two success criteria are pasted in the pull request with a changelog fragment.",
+      "status": "done",
+      "pr": 754,
+      "landed": {
+        "sha": "eba6f570518103142cf204e831163f5edbe234c0",
+        "into": "main",
+        "at": "2026-09-26T10:31:10Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "dev-server-gone/-hung log the server's pid as server_pid, not pid: logger.log spreads fields over its own pid. memoro-measure's registered pid is the node parent; workerd (the listener) is a child in the same process group — kill -STOP must target the group (-pgid) to hang it, and kill -9 of the parent leaves workerd orphaned on its port. ensureDevServer now skips the just-stopped instance_id while waiting for the fresh registration."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "Revive a tier that leaves mid-round",
+      "done_when": "`runSuites` takes a `revive(tier)` callback and, the first time a tier is found gone in a round, calls it and carries on against the url it returns; `mc test dev` supplies it through `ensureDevServer`, prints a `revived` line and logs `dev-server-revived`; a second loss in the same round behaves as today; tests cover both; the third success criterion is pasted in the pull request.",
+      "status": "done",
+      "pr": 760,
+      "landed": {
+        "sha": "0de6cbc6c4be50e8f132a59598f14edbc9a8091f",
+        "into": "main",
+        "at": "2026-09-26T12:53:29Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Verified the revive against real memoro: killing only the registered measure-server.mjs pid leaves the orphaned workerd serving, so mc sees the server as still there. Kill the port listener too to reproduce a server leaving. msr-affordance hangs in memoro (0% CPU after 'Execution context was destroyed'), which stalls full rounds; proposal written. The machine sits at the admission cap of 2, so verification needed MC_DEV_MAX_SERVERS=6."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-09-26T10:31:11Z",
+      "kind": "step",
+      "seconds": 493,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 44,
+      "input": 88,
+      "output": 548,
+      "cache_read": 2454579,
+      "cache_write": 72838,
+      "model": null,
+      "note": "success,merged",
+      "session": "4109a6dc-dcf5-4e51-9f45-b417237c4e5e",
+      "cost_usd": 1.9698095
+    },
+    {
+      "ts": "2026-09-26T12:53:30Z",
+      "kind": "step",
+      "seconds": 6724,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 57,
+      "input": 114,
+      "output": 634,
+      "cache_read": 3708336,
+      "cache_write": 84616,
+      "model": null,
+      "note": "success,merged",
+      "session": "a9ee0550-3488-4d25-aa76-838b62ef00ba",
+      "cost_usd": 2.716748
+    }
+  ],
+  "totals": {
+    "sessions": 2,
+    "seconds": 7217,
+    "land_seconds": 0,
+    "cost_usd": 4.686558,
+    "cost_unknown": 0,
+    "input": 202,
+    "output": 1182,
+    "cache_read": 6162915,
+    "cache_write": 157454,
+    "first": "2026-09-26T10:31:11Z",
+    "landed": "2026-09-26T12:53:29Z"
+  }
+}

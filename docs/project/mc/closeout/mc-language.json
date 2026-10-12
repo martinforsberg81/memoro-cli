@@ -1,0 +1,187 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-language",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-language/PLAN.json",
+  "archived": "2026-10-11",
+  "goal": [
+    "`mc language` is the one door through which language data reaches production, the way `mc deploy` is for code: it reads memoro's cutover manifests, runs each act's read, compares the numbers with the manifest, asks Martin before every write, hands the Cloudflare key from the keychain to the child process alone, records every act, and picks up where a run stopped. `mc language promote` is the grammar promotion `mc deploy` no longer does.",
+    "Martin sees the language side without asking: `mc language` shows each language's last reading and last run, the `mc` page carries a LANGUAGE section and an interrupted run at the top, and `mc deploy --dry-run` says what is waiting.",
+    "This is the memoro-cli half of ruling 31 (`docs/project/mc/rulings.md`); the memoro half is memoro's project `language-manifest` (memoro `docs/project/mc/language-manifest/PLAN.json`), which builds the manifests, the `--json` outputs and the credential helper this verb runs against."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A run stops at the first exact deviation and asks nothing before it.",
+      "check": "Martin runs `mc language run sv-forms-cutover --dry-run` after both projects land: it stops at the first exact check that differs from the 2026-10-09 numbers (act `ingest-saldo` or `purge-wiktionary-forms`), prints the act's `if_not`, asks nothing, and the run record shows no execute."
+    },
+    {
+      "met": false,
+      "criterion": "The key never leaves the keychain except into the child that needs it.",
+      "check": "`tests/mc/commands/language.test.js` asserts the fake spawn's argv never contains the token, only credentialed acts' child env carries `CLOUDFLARE_API_TOKEN`, the parent's `CLOUDFLARE_*` are stripped, and `mc.log` lines written during the test do not contain the token; `mc language key set` reads the token from stdin."
+    },
+    {
+      "met": false,
+      "criterion": "Grammar promotion is `mc language promote`, with one question.",
+      "check": "With nothing waiting, `mc language promote` prints the check's `unchanged` and exits 0 without asking; with rows waiting it shows the count and asks once. Asserted in tests; seen by Martin at the first promotion after `language-manifest` lands."
+    },
+    {
+      "met": false,
+      "criterion": "The language side is visible without asking.",
+      "check": "`mc` shows a LANGUAGE section from the cached reading and the last run, and a red line above every section while a run is stopped inside an `opens_gap` window; `mc deploy --dry-run` prints the language line. Asserted in `tests/mc/page.test.js` and `tests/mc/commands/deploy.test.js`; seen on `mc` in a terminal."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The key, the manifests read, and `mc language` / `mc language status <lang>`",
+      "done_when": "`mc language key set` stores the Cloudflare token (from stdin) and account id in the keychain without either in any argv; `mc language status <lang>` runs the language's reads in the memoro deploy worktree and writes the cache; `mc language` prints every language from the cache; `src/lib/keychain.js` writes secrets through stdin; the tests named here and `mc gate` are green.",
+      "status": "done",
+      "pr": 843,
+      "landed": {
+        "sha": "b9c9fff82a4545b55afb8c83f90b5b72c1cbfb9f",
+        "into": "main",
+        "at": "2026-10-10T17:51:27Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 237,
+      "cost_usd": 1.895859
+    },
+    {
+      "title": "`mc language run` and `resume`: preflight, the question, the run record, the deploy exclusion",
+      "done_when": "`mc language run <manifest> [--dry-run]` and `mc language resume` behave as this step describes, every rule in the plan's contract has a test in `tests/mc/commands/language.test.js` or `tests/mc/language-runs.test.js`, `mc deploy` refuses while a language run is alive (with its test), and `mc gate` is green.",
+      "status": "done",
+      "pr": 844,
+      "landed": {
+        "sha": "9de875ae9e6a6a9ff0409c94ae4dfc587cf55cd9",
+        "into": "main",
+        "at": "2026-10-10T17:54:30Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 715,
+      "cost_usd": 2.649322
+    },
+    {
+      "title": "`mc language promote`",
+      "done_when": "`mc language promote [--langs <list>]` checks, shows what waits, asks once, executes with the key, and records the run in the same record as `run`; its tests are green and `mc gate` is green.",
+      "status": "done",
+      "pr": 845,
+      "landed": {
+        "sha": "fe91ce83ed87fad34237376e3e30fd9271002fac",
+        "into": "main",
+        "at": "2026-10-10T17:57:32Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "promote is a built-in one-act manifest (promoteManifest) run through conduct; its act carries in-code hooks assess/question/confirm/after and check_without_key (the check reads on wrangler's login, the key goes to the execute child only, so the preflight key read is skipped for it). Records are manifest grammar-promote, lang = --langs value or 'all'; resume rebuilds from that. Step 4's page should read record.lang 'all'/'sv,fr' for grammar-promote runs."
+      ],
+      "sessions": 1,
+      "seconds": 719,
+      "cost_usd": 1.33706
+    },
+    {
+      "title": "The page, `mc deploy --dry-run`, and the documents",
+      "done_when": "The `mc` page has a LANGUAGE section and the open-gap line, `mc deploy --dry-run` prints the language line, the documents and canon lines this step names are updated, the page, deploy and help tests are green, and `mc gate` is green.",
+      "status": "done",
+      "pr": 847,
+      "landed": {
+        "sha": "8da7f7c3d9ff60d52e903eb482ad0d0907b43ca8",
+        "into": "main",
+        "at": "2026-10-10T18:00:12Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 1041,
+      "cost_usd": 2.949383
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-10T16:27:25Z",
+      "kind": "step",
+      "seconds": 237,
+      "land_seconds": null,
+      "pr": 843,
+      "turns": 9,
+      "input": 16,
+      "output": 11303,
+      "cache_read": 756046,
+      "cache_write": 11875,
+      "model": null,
+      "note": "success,queued",
+      "session": "913b203c-7ab3-4def-b097-b8e7cdddfb83",
+      "cost_usd": 1.8958588
+    },
+    {
+      "ts": "2026-10-10T16:39:28Z",
+      "kind": "step",
+      "seconds": 715,
+      "land_seconds": null,
+      "pr": 844,
+      "turns": 48,
+      "input": 68,
+      "output": 52379,
+      "cache_read": 2448062,
+      "cache_write": 123999,
+      "model": null,
+      "note": "success,queued",
+      "session": "86bcab82-0990-447d-8988-ded9b043aad6",
+      "cost_usd": 2.6493223999999995
+    },
+    {
+      "ts": "2026-10-10T16:51:37Z",
+      "kind": "step",
+      "seconds": 719,
+      "land_seconds": null,
+      "pr": 845,
+      "turns": 35,
+      "input": 34,
+      "output": 23545,
+      "cache_read": 1102400,
+      "cache_write": 80693,
+      "model": null,
+      "note": "success,queued",
+      "session": "7fd1d9e1-4509-4cbf-93d4-61c05f2bc634",
+      "cost_usd": 1.33706
+    },
+    {
+      "ts": "2026-10-10T17:09:07Z",
+      "kind": "step",
+      "seconds": 1041,
+      "land_seconds": null,
+      "pr": 847,
+      "turns": 86,
+      "input": 108,
+      "output": 38063,
+      "cache_read": 3676499,
+      "cache_write": 166309,
+      "model": null,
+      "note": "success,queued",
+      "session": "6c4430c6-aa12-4552-a5ba-ffb6e46adead",
+      "cost_usd": 2.9493834000000008
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 2712,
+    "land_seconds": 0,
+    "cost_usd": 8.831625,
+    "cost_unknown": 0,
+    "input": 226,
+    "output": 125290,
+    "cache_read": 7983007,
+    "cache_write": 382876,
+    "first": "2026-10-10T16:27:25Z",
+    "landed": "2026-10-10T18:00:12Z"
+  }
+}

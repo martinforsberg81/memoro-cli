@@ -1,0 +1,116 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "step-lands-itself",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/step-lands-itself/PLAN.json",
+  "archived": "2026-09-12",
+  "goal": [
+    "A step session lands its own pull request. It writes `done` and `pr` into its step, commits that with the code, opens the pull request and runs `mc merge <repo> <pr>` itself; a red gate comes back to the same session, which fixes it with the diff already in its context and runs `mc merge` again on the same pull request; a green gate is the merge, and nothing measures that tree a second time. There is no repair session, no `held.json`, no merge lane and no second round: the gate runs once per green, and a pull request a session could not land is a person's through the brief, with nothing in between (ruling 21, Martin 2026-09-12: \"Det borde inte finnas något utrymmet för en 'repair'\"; \"runner step kör direkt 'mc merge #'. Då körs direkt rätt tester. Om fel, fås svaret tillbaka och kan fixas. Om grönt, så sker merge direkt och inga tester behöver köras ytterligare en gång.\").",
+    "Measured 2026-09-05..12 over 235 step and repair sessions in `~/mc/runner/log/runs.tsv`: 184 landed; 21 were `success,open,gate-red` or another gate stop, each costing a fresh repair session that re-read everything (22 repair rows, 156 minutes, median 33 turns) and a second gate round on the same pull request; the gate's red names reached that session through `held.json` and `repairPrompt`, never the session that wrote the code. The step role (`canon/roles/step.md` line 28) says \"Do not merge: the runner lands it after you\", and the prompt (`stepPrompt`, `src/mc/run-plan.js` line 793) ends \"Do not merge. Do not ask questions. Stop when the PR exists.\" — so the session that could fix a red in a few turns is gone before the gate speaks.",
+    "`mc merge` today refuses rather than waits: the gate lock (`takeGateLock`, `src/mc/gate-lock.js`) answers `busy` and the lease (`claimLease` in `runMergeRound`, `src/mc/repo-merge.js` line 163) answers `lease`, and the verb then writes the pull request into `~/mc/runner/merges.json` for the runner's merge lane (`queueRefusal`, `src/mc/commands/repo.js` line 300) and exits 0. The waiting is the runner's, in `landPr` (`src/mc/run.js` line 697, `BUSY_STOPS`, `LAND_RETRY_MS` 30 s, `LAND_WAIT_MS`). With two lanes whose sessions both end in `mc merge`, the waiting has to be the verb's, in order of arrival, and the next waiter takes the gate the moment the round before it releases it."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`mc merge <repo> <pr>` typed while another gate round holds the machine waits for its turn in order of arrival and runs the round when the lock is free, rather than exiting with `queued`.",
+      "check": "`tests/mc/merge-command.test.js` (or a new `tests/mc/merge-wait.test.js`): with a fake lock held by a live pid and fake timers, the verb polls, prints one `waiting behind …` line, and runs the round after the lock is released; two waiters started in order run in that order; a waiter whose 8 minutes pass exits with the `run this again` line, its entry still in `merges.json`. Live: `~/.memoro/mc/gate-rounds.jsonl` shows no `stopped_at: \"busy\"` end line for a runner session's `mc merge` after step 2 lands."
+    },
+    {
+      "met": false,
+      "criterion": "`mc merge` refuses a plan trespass at the door: a pull request from a project branch whose `PLAN.json` differs from `origin/main`'s outside that step's own writable fields stops at `plan-trespass` before the gate runs, naming every problem.",
+      "check": "`tests/mc/merge-command.test.js`: a fixture pull request whose head edits `steps[2].instruction` while carrying `steps[1].pr` stops at `plan-trespass` with `steps[2].instruction: a step session does not change it`, and the gate was not called; one that edits only `steps[1].status`, `pr`, `comments` and `met` runs the gate. Live: `gate-rounds.jsonl` carries `stopped_at: \"plan-trespass\"` for the first such pull request, and `runner.log` no longer contains `left open — the session changed more of the plan than its step`."
+    },
+    {
+      "met": false,
+      "criterion": "A step session lands its own pull request: the runs.tsv row for a step whose `mc merge` went green says `success,merged` with `land_seconds` `-`, and no repair row and no runner landing follow it.",
+      "check": "`tests/mc/run.test.js`: a step session fixture that leaves its branch's pull request merged is logged `success,merged`, one that leaves it open `success,open`, and `deps.mergeRound` is never called from `runStep`. Live, over the first 20 step sessions after step 2 lands: `runs.tsv` has no `success,open,gate-red` row, `runner.log` has no `merge #N —` line from a lane, and the transcripts under `~/.claude/projects/` show `mc merge` as a Bash call in each session that landed."
+    },
+    {
+      "met": false,
+      "criterion": "Nothing of the repair path remains: no `repair` role, no `held.json`, no merge lane, no `held-after-repair`, and the page and the brief show open unlanded pull requests instead of held ones.",
+      "check": "`grep -rn \"repair\\|held\\.json\\|heldRepair\\|laneRepair\\|mergeQueued\" src canon docs/technical` finds only history sections; `canon/roles/repair.md` is deleted; `ls ~/mc/runner/` after one round has no `held.json`; `npm test` is green; the page's MERGES section draws the round landing now and the waiters from `merges.json`, and `mc brief` has a section for open pull requests on project branches with no session running."
+    }
+  ],
+  "steps": [
+    {
+      "title": "`mc merge` waits for its turn, in order of arrival, and refuses a plan trespass at the door",
+      "done_when": "`mc merge <repo> <pr>` against a held gate lock or lease waits in `merges.json` order, up to `MERGE_WAIT_MS`, and runs the round when it is the oldest live waiter and both are free; past the limit it prints one `run this again` line, keeps its entry and exits 3; a pull request from a project branch whose `PLAN.json` changed outside its step's writable fields stops at `plan-trespass` before the gate, with every problem printed; `docs/technical/mc-merge.md` describes both; the suite is green.",
+      "status": "done",
+      "pr": 711,
+      "landed": null,
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Built as specified: waitTurn() in src/mc/commands/repo.js owns the whole wait — the merges.json entry, the one-time \"waiting behind\" line, the \"waited Ns\" line, the MERGE_WAIT_MS timeout line and its exit 3, all in one function, called from gate()'s single-PR loop with a contended flag so a round that just reported busy/lease is forced through the full wait rather than re-reading a lock that already looks free. nextWaiter() in merge-queue.js takes the oldest live entry, across every repository, deferring to a waiter whose own repository lease is held. busy and lease are removed from QUEUEABLE_STOPS. The door is planBoundary() in the new src/mc/merge-boundary.js: gh pr view for the branch, projectForBranch to find the project (or skip the check entirely), unauthorisedChanges(mainPlan, headPlan, stepOfPr(...)) to find a trespass, fail-open on any gh/git/no-project-match failure, fail-closed only for a genuine trespass or an unparseable head plan.",
+        "Found and fixed a real bug along the way, not anticipated going in: merge-queue.js normalise() computed pid as Number.isFinite(Number(entry.pid)) ? Number(entry.pid) : null — but Number(null) is 0, a finite number, so a refusal-queue entry (pid: null, not a waiter) written to merges.json and read back a second time silently became pid: 0, which dropDeadEntries/nextWaiter would then treat as a live waiter with pid 0. Fixed by checking entry.pid == null first; regression test added to merge-queue.test.js covering the exact JSON round-trip.",
+        "Scoped to a single mc merge <repo> <pr>: the door does not run for a batch (mc merge <repo> <pr1> <pr2>), so a batch pull request from a project branch is not checked against its plan by this step. Said plainly in docs/technical/mc-merge.md § The door as a known gap, not hidden. Extending the door to batches, and the wait queue to more than the single-PR path, is out of this step’s instruction and left for whoever picks it up.",
+        "success_criteria[0] and [1] are left met: false. Both are verified against their check: (—the fake-lock/fake-lease wait behaviour, the ordering, the timeout, and each plan-trespass fixture all pass in tests/mc/merge-command.test.js and tests/mc/merge-boundary.test.js. But each criterion also has a Live: clause (no stopped_at: \"busy\" end line in gate-rounds.jsonl after a runner session's mc merge; a real stopped_at: \"plan-trespass\" round logged) that only a live runner round after this lands can produce — not something this session can produce or observe. Marking met: true on a live claim this session never measured would say something it does not know.",
+        "The MERGES page label changed from \"queued\" to \"waiting\" in src/mc/page-render.js (mergesLines): merges.json now holds both refusal-queue entries and this step's own live waiters, and the earlier label read as though nothing there was actually waiting on anything. tests/mc/page.test.js updated to match.",
+        "docs/technical/mc-merge.md § One round at a time rewritten for the wait, plus a new § The door; docs/technical/mc-run.md's § A hand mc merge that was refused becomes the runner's had its first paragraph rewritten to say busy/lease no longer queue there. changelog.d/mc-merge-waits-and-checks-the-plan-door.md added.",
+        "While finishing this step, origin/main gained #710 (ruling 21, the register: step state now lives in ~/mc/runner/projects/<project>.json, with the file's own status/pr/comments/blocked_by kept for backward compatibility per docs/project/README.md). canon/roles/step.md, which is this session's own contract, was not touched by that commit, so this PR still writes steps[0] directly and lets the merge carry the diff, as instructed. Merged origin/main into this branch cleanly (auto-merge, no conflicts) before finishing; npm test is green at 1982 tests, 1973 pass, 0 fail, 9 skipped, after the merge."
+      ],
+      "sessions": 1,
+      "seconds": 2964,
+      "cost_usd": 7.896253
+    },
+    {
+      "title": "The step session lands its own pull request, and the runner lands none of a session's",
+      "done_when": "`canon/roles/step.md` and `stepPrompt` tell the session to set `done` and `pr`, commit, push, open the pull request and run `mc merge <repo> <pr>` until it is merged, fixing a red in the same session; `runStep` in `src/mc/run.js` calls neither `landProject` nor `landPr` for a step's pull request and writes `success,merged` / `success,open` / `success` from GitHub's state of the branch's pull request; `docs/technical/mc-run.md` § *The session* and § *The merge* say so; the suite is green.",
+      "status": "done",
+      "pr": 713,
+      "landed": null,
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "The repair path is removed: no repair session, no `held.json`, no merge lane",
+      "done_when": "`canon/roles/repair.md`, `src/mc/held.js`, `heldRepair`, `repairPrompt`, `repairBaseline`, `stepOfPr`'s runner-side use, `laneRepair`, `mergeQueued`, the merge lane loop, `SESSION_DEFAULTS.repair`, `held-after-repair` in `WORKAREA_BLOCKS`, `queueRefusal`'s red stops and `REPAIRS_BEFORE_BRIEF` are gone; the page's MERGES section draws the round landing now and the waiters; the brief lists open pull requests on project branches with no session running; `docs/technical/mc-run.md`, `mc-ui.md`, `mc-brief.md`, `mc-roles.md` and `docs/project/README.md` no longer describe a repair; the suite is green.",
+      "status": "done",
+      "pr": 714,
+      "landed": null,
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-09-12T20:21:03Z",
+      "kind": "step",
+      "seconds": 2964,
+      "land_seconds": null,
+      "pr": 711,
+      "turns": 206,
+      "input": 386,
+      "output": 110383,
+      "cache_read": 15159306,
+      "cache_write": 435092,
+      "model": null,
+      "note": "success,merged",
+      "session": "8daac64c-8979-46c7-89c7-00ed18ce6964",
+      "cost_usd": 7.896252500000002
+    }
+  ],
+  "totals": {
+    "sessions": 1,
+    "seconds": 2964,
+    "land_seconds": 0,
+    "cost_usd": 7.896253,
+    "cost_unknown": 0,
+    "input": 386,
+    "output": 110383,
+    "cache_read": 15159306,
+    "cache_write": 435092,
+    "first": "2026-09-12T20:21:03Z",
+    "landed": null
+  }
+}

@@ -1,0 +1,180 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "step-cost",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/step-cost/PLAN.json",
+  "archived": "2026-09-12",
+  "goal": [
+    "A step session costs less quota and less wall-clock for the same work, and nothing that is doing work is killed. Measured 2026-09-05..12 over 155 step sessions (`scripts/measure-steps.py --since 2026-09-05 --until 2026-09-12 --min-turns 10`, and the per-session json under `~/mc/runner/log/`): every session ran on `claude-opus-5` at the machine's `effortLevel: high`, median 93 turns (p90 208), mean context per turn 112k tokens (cache_read / turns in `runs.tsv`; 36 sessions above 200k), median 7.7 USD at list price (p90 30.5, max 56.9), 258 sessions since 2026-09-04 at about 2 500 USD list. The Max 20x subscription includes every model, so the unit that matters is quota, and three sessions that week ended on `You've hit your weekly limit`.",
+    "Three things change, in this order. The prompt a step session gets carries its own step and the plan's frozen fields, not the whole `PLAN.json` (up to 115k characters today, `docs/project/sql-readiness/sql-w1-universe-closure/PLAN.json` in memoro), and the session runs with an auto-compact window so its context has a ceiling. The plan names the model, the effort and the advisor per step, with `sonnet` at `medium` effort advised by `opus` as the runner's default for a step (Martin, 2026-09-11: \"Låt oss testa sonnet 5 medium som default med opus advisor.\") — ruling 18 in `rulings.md`. And the wall-clock budget that killed a session at 90/120/180 minutes is gone: at a fixed interval the runner sends the running session a message asking it to judge whether the step can be finished, and only a session that has produced nothing at all for a long time is killed as stalled. (Martin, 2026-09-11: \"Vi vill inte döda ett step som faktiskt gör ett arbete bara för att datorn laggar, tester tar lång tid, etc. Det enda som önskas är att en session avslutar sig själv om den kört fast.\")",
+    "Since 2026-08-25 (`runs.tsv`): 15 step sessions were killed on the budget with no JSON and nothing landed (1 152 minutes), and 22 ended `plan-trespass`, each costing a repair session (1 027 minutes) — 18 % of all step minutes. The budget half is this project's; why trespass happens that often is not read yet and is not this project's."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A step session's prompt carries its own step in full and every other step as one line, and the plan's frozen fields, and no longer the whole `PLAN.json`.",
+      "check": "`tests/mc/run-plan.test.js`: `stepPrompt` for a three-step plan contains `steps[1]`'s `instruction` paragraphs and not `steps[0]`'s or `steps[2]`'s; the prompt for the largest plan on main today (`sql-w1-universe-closure`, memoro) is under 30k characters where it was 115k."
+    },
+    {
+      "met": false,
+      "criterion": "A step session runs on the model, effort and advisor its plan resolves to, and `runs.tsv` says which.",
+      "check": "`runner.log` `starting` line names model, effort and advisor; the `model` column in `runs.tsv` matches `modelUsage` in the session's json under `~/mc/runner/log/`; `tests/mc/run-plan.test.js` covers step-over-plan-over-default resolution and the argument list."
+    },
+    {
+      "met": false,
+      "criterion": "No session is killed on elapsed time. A session running past the check-in interval receives the check-in message and either goes on or ends itself with the step `blocked`; a session silent for the stall limit is killed and logged `stalled`.",
+      "check": "`tests/mc/run.test.js`: a session fixture that emits nothing for longer than the stall limit ends with exit 142 and note `stalled`; one that keeps emitting past the old 90 minutes is not killed and its check-in message is in what the fixture received on stdin. Live: `~/mc/runner/log/<name>-<ts>.json` of a real step that ran past the interval contains the check-in in the transcript under `~/.claude/projects/`, as a `user` entry or as a `queued_command` attachment."
+    },
+    {
+      "met": false,
+      "criterion": "The next twenty step sessions after step 2 lands can be compared with the twenty before it by one command.",
+      "check": "`scripts/measure-steps.py --since <landing day> --until <now>` prints cost, turns, wall and context-per-turn grouped by model; the planning session runs it and writes the numbers into this plan's `comments` on step 2 or into `rulings.md` under ruling 18."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The step prompt carries its own step, and the session's context has a ceiling",
+      "done_when": "`stepPrompt` in `src/mc/run-plan.js` renders the plan's `goal`, `contract`, `out_of_scope`, `success_criteria`, `documents` and `runner`, the session's own step in full, and every other step as one line (`steps[i] · status · title · done_when`), and no longer the whole file; `headlessArgs` passes `--autocompact` with the window named by one exported constant; `docs/technical/mc-run.md` describes both; `scripts/measure-steps.py` prints context per turn; the suite is green.",
+      "status": "done",
+      "pr": 693,
+      "landed": null,
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "`stepPrompt` takes the parsed `plan` and no longer `planText` — the parameter is dropped and the one caller (`run.js`, `plan: plan.plan`) fixed. The own step is rendered key by key from `Object.entries`, so the `runner` key step 2 adds to a step reaches the session with no change to the rendering. `headlessArgs` takes `autocompact` (default `AUTOCOMPACT_TOKENS`); `helper-turn.js` passes `autocompact: null`, because the contract leaves helper and intake sessions as they were. The repair session gets the window like a step.",
+        "Criterion 0 is left `met: false` on purpose. Measured 2026-09-11 against memoro's origin/main with the new `stepPrompt`: `sql-w1-universe-closure` has grown to 133 771 characters (the plan says 115k); the prompt for each of its 26 ready steps is 21.2k–23.8k characters, but its blocked `steps[7]` renders at 31.8k because that step's own `comments` are 10k, and the done steps 3 and 6 at 30.4k for the same reason. `msr-core/items-sweep` (133 965 characters) renders its ready `steps[7]` at 36.0k — 20k of that is the step's own comments. The floor of about 21k is the frozen fields and criteria (about 6.7k) plus 34 one-line steps (their `done_when` alone is 8.7k). Nothing more can be cut without dropping the own step's comments, which the instruction keeps in full. Whether that meets \"under 30k\" is the planning session's call.",
+        "Baseline for context per turn, the row `scripts/measure-steps.py` now prints, over `--since 2026-09-05 --until 2026-09-12 --min-turns 10` (159 sessions): median 108.7k tokens, p75 163.4k, p90 218.7k, max 297.3k."
+      ],
+      "sessions": 1,
+      "seconds": 1163,
+      "cost_usd": 2.58279
+    },
+    {
+      "title": "Model, effort and advisor per step, with sonnet at medium advised by opus as the default",
+      "done_when": "`PLAN.json` accepts `effort` and `advisor` in `runner` and a `runner` object with `model`, `effort` and `advisor` on a step; `sessionSettings` resolves step over plan over default, the defaults for a step being `sonnet`, `medium`, `opus` and for a repair `opus` with no effort and no advisor; `headlessArgs` passes `--model`, `--effort` and `--advisor` for claude; the `starting` line, `current-<repo>.json` and a new `model` column at the end of `runs.tsv` say what ran; `scripts/measure-steps.py` groups by model; `docs/project/README.md` and `docs/technical/mc-run.md` describe it; the suite is green.",
+      "status": "done",
+      "pr": 695,
+      "landed": null,
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "`sessionSettings(planRunner, stepRunner, { kind })` resolves `model`, `effort` and `advisor` one key at a time, step over plan over `SESSION_DEFAULTS[kind]` (`run-plan.js`); `DEFAULT_MODEL` is gone. A repair gets the plan's `runner` but never a step's — in the plan lane it is a session on a pull request, and in the merge lane there is no plan at all, so it is `sessionSettings({}, null, { kind: 'repair' })`. Because keys resolve separately, this plan's own `runner: { model: 'opus' }` makes step 3 run on opus at medium with an opus advisor, not on sonnet.",
+        "`unauthorisedChanges` no longer skips the session's own step whole: it compares every key of it except `status`, `pr`, `comments` and `blocked_by` (`SESSION_STEP_FIELDS`, `plan-schema.js`), so a changed `runner`, `instruction` or `done_when` on the own step is a `plan-trespass`. On a step `runner`, `tool` and `budget_minutes` are refused as `a plan-level key` rather than `unknown key`.",
+        "runs.tsv on this machine still has its original thirteen-column header, so a reader keyed by the header (`close-workarea.js`, `brief-collect.js`) sees neither `land_seconds` nor `model`; `archive-plan.js` reads by position and stops at `note`. `model` is the model the runner asked for; `measure-steps.py` groups by the `modelUsage` key with the most output in each session's json, which is what the session actually ran on. Run over `--since 2026-09-10 --until 2026-09-12` it printed 7 sessions, all `main model claude-opus-5`.",
+        "Criterion 1 is left `met: false`: its check is a live `starting` line and a runs.tsv `model` cell matched against `modelUsage`, and no session has run on this code yet. The tests cover the resolution, the argument list through the real claude adapter, the starting line and the row. `--advisor` is not in `claude --help` on 2.1.268; the plan records it accepted on a one-turn `claude -p`, and this session did not run one. If a later claude drops it, every step fails on its argument list, and `runner: { advisor: 'off' }` in a plan is the way around it.",
+        "The workarea was handed over on `step-cost-2`, which had already landed as #693: `branchLanded` answers `unknown` when `git merge-tree` conflicts, so `freshBranch` did not move it, and the push-guard refused the push. It was pushed with `MC_PUSH_ANYWAY=1` and #695 opened from the same head, since the runner finds a project's PR by `--head <branch> --state open`. Written up as a proposal (`~/mc/proposals/2026-09-11-landed-branch-that-conflicts-is-not-moved.md`)."
+      ],
+      "sessions": 1,
+      "seconds": 973,
+      "cost_usd": 7.43782
+    },
+    {
+      "title": "A check-in message replaces the budget kill, and only a stalled session is killed",
+      "done_when": "`deps.session` in `src/mc/run.js` runs claude with `--input-format stream-json --output-format stream-json --verbose`, writes the prompt as the first user message on stdin, writes the check-in message every `check_in_minutes` while the session runs, closes stdin when the `result` event arrives, and kills the child only after `stall_minutes` without a byte on stdout; `readSessionOutput` reads the `result` line; `budget_minutes` is gone from the schema and from every plan on main, `check_in_minutes` and `stall_minutes` replace it; the page's clock shows elapsed time and check-ins and no *over budget*; `docs/technical/mc-run.md` and `docs/project/README.md` say so; the suite is green.",
+      "status": "done",
+      "pr": 716,
+      "landed": {
+        "sha": "28897abb1c371b401fd5fd0ac7c0db233c9bfb4e",
+        "into": "main",
+        "at": "2026-09-12T21:25:56Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Blocked before any code, by the instruction's own gate: memoro's `origin/main` (8af3901) carries `runner.budget_minutes` in 14 plans, and in every one of them it is the whole `runner` object. `docs/project/language-voice/language-voice-do-alarms/PLAN.json` (150), `docs/project/msr-core/items-sweep/PLAN.json` (180), `docs/project/voice-chat/voice-audio-path/PLAN.json` (150), `docs/project/voice-chat/voice-session-report/PLAN.json` (150), and under `docs/project/sql-readiness/`: `sql-goal1-certification` (150), `sql-w1-universe-closure` (150), `sql-w2-search-closure` (120), `sql-w3-email-closure` (150), `sql-w4-automation-closure` (150), `sql-w5-relationship-closure` (150), `sql-w6-background-closure` (150), `sql-w7-operations-closure` (150), `sql-w9-account-closure` (150), `sql-w10-product-domains-closure` (150). Memoro's `docs/project/README.md:77` lists `budget_minutes` among the runner keys too. No memoro code reads the key; the grep outside the plans hits only that README line. Several of these plans have `ready` steps, so a schema that refuses the key stops them the round this step lands.",
+        "Recommendation for `step-cost-memoro-budget`: one docs-only memoro PR, landed before this step, that deletes the `runner` object from those 14 plans (it holds nothing else, and `runner` is optional, so dropping it is cleaner than leaving `{}`) and removes `budget_minutes` from memoro's `docs/project/README.md:77`. Then this step goes `ready` as written. Keeping the key accepted-but-ignored would break the contract's rule that every key the schema accepts is one the runner reads. In memoro-cli no plan on main carries the key: `runner-next-step` was archived in c781481, which removes the directory, so the schema never reads archived plans and the grep only needs the live tree; `step-cost`'s own plan mentions it only in prose.",
+        "Stream-json proven live, so build on stdin, not the `--resume` fallback. Claude 2.1.269, `claude -p --input-format stream-json --output-format stream-json --verbose --model haiku --effort low` in a scratch directory. (a) A user message written after a `result` starts a new turn with its own `result`; the process stays alive on open stdin after a result and exits when stdin closes. (b) A user message written mid-turn is not dropped: the transcript shows a `queue-operation` enqueue/remove and the message is folded into the running turn as an `attachment` of type `queued_command`, not as a plain `user` entry. The turn still ends in one `result` (`queued_turn_count: 0`). Delivery and compliance are separate: in one run haiku-at-low saw the message and did not act on it, in another it answered it inside the same result. That is model behaviour, not an unreliable pipe. The live check of success criterion 2 therefore has to look for the `queued_command` attachment, not only a `user` line.",
+        "One process can emit more than one `result` line, and each carries its own `num_turns`, `usage` and `total_cost_usd` for that turn group, not a running total (one run: two results, `num_turns` 2 each). The instruction's rule of taking the last line that parses as a result undercounts `runs.tsv` whenever a check-in write races the session's own finish, and closing stdin on the first `result` can still race a check-in written just before it. That needs a choice the plan does not make: sum across results, or stop writing check-ins once a result is seen. Result line keys seen: `type`, `subtype`, `is_error`, `result`, `session_id`, `num_turns`, `duration_ms`, `duration_api_ms`, `total_cost_usd`, `usage`, `modelUsage`, `permission_denials`, `stop_reason`, `terminal_reason`, `queued_turn_count`, `result_index`, `api_error_status`, `uuid`, plus timing fields (`ttft_ms`, `ttft_stream_ms`, `time_to_request_ms`, `first_content_frame_ms`, `fast_mode_*`, `subagent_stats`).",
+        "Set `ready` 2026-09-12 by the planning session. `step-cost-memoro-budget` is resolved the way the recommendation said: memoro #11640 (85d063e, docs only) set `runner` to `null` in the thirteen plans and fixed the README line; nothing on memoro-cli main carries the key. The multi-result choice the last comment left open is made in the instruction: stop writing check-ins once a `result` is seen, and sum turns, cost and usage across every result line. Between now and this step landing, the memoro plans run on the 90-minute default; `home-on-msr` step 5 had asked for 180.",
+        "Blocked again, by the instruction's own gate, after the code was built. Memoro's `origin/main` (acb556a, fetched 2026-09-12) carries the key again in two plans, both as the whole `runner` object: `docs/project/msr-core/mail-window-round-6/PLAN.json` and `docs/project/msr-core/organization-related-linked-read/PLAN.json`, each `\"runner\": { \"budget_minutes\": 150 }`. Both came in with memoro #11641 (527f350, 2026-09-12 06:48 +0200), eleven minutes after #11640 cleared the other thirteen; `mail-window-round-6`'s own comment says `runner.budget_minutes` 150 was set on purpose, so whatever writes memoro plans still writes the key. `home-on-msr` matches only in a comment string (its `runner` is `null`). memoro-cli has no live plan with the key. Landing this step as it stands would make the runner refuse both plans the round it lands.",
+        "Recommendation for `step-cost-memoro-budget`: the same docs-only memoro edit as #11640, `runner` to `null` in those two plans, and this step lands right after it, before a third plan picks the key up. After it lands the schema refuses the key, so it cannot come back unseen. Nothing in the built code changes for this.",
+        "The step is built and parked, not in this pull request: branch `step-cost-4-built` (b676282, pushed, no pull request) holds all of it on top of 208c59c. `streamSession` in `run.js` is the real `deps.session`: claude with `--input-format stream-json --output-format stream-json --verbose`, the prompt as the first user message on a piped stdin, a check-in every `check_in_minutes` (60 by default) that stops once a `result` line is seen, stdin closed on that line, and a SIGTERM only after `stall_minutes` (20 by default) without a byte on stdout, a timer that outlives the result. The row says `stalled` (exit 142) or `stalled,open`, which is held with its own reason and counted as timed out by the brief. `readSessionOutput` sums every `result` line. The `.jsonl` log is the stream and the `.json` beside it the summed result, so `measure-steps.py` reads what it read. Codex gets no check-in and no stall guard, so it is never killed at all; helper and intake keep their positional prompt, json output and their own timeout. `RUNNER_KEYS` drops `budget_minutes` for `check_in_minutes` and `stall_minutes`. The current file carries `check_in_minutes` and `check_ins`, rewritten at each check-in, and the page prints `10 min · 0 check-ins`, yellow from the first check-in and never red. `mc-run.md`, `mc-ui.md` and `docs/project/README.md` say so. New `tests/mc/run-session.test.js` drives a fake child through fake timers.",
+        "Verified on the parked branch: `npm test` in a detached worktree of b676282 gave 1937 tests, 1927 pass and 1 fail. The fail was `tests/mc/page-live.test.js`, which could not resolve `@xterm/headless` from `/tmp` (it resolves from `~/mc/node_modules`). The same page code passed that file in the step worktree's own full run. Not proven: criterion 3's live half, a real step past 60 minutes with the check-in in its transcript. So `met` stays false. To finish it, merge `origin/main` into `step-cost-4-built` (or cherry-pick b676282 onto the step branch), grep memoro's `origin/main` for `budget_minutes` again, run `npm test`, and open the pull request."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-09-11T17:37:39Z",
+      "kind": "step",
+      "seconds": 1163,
+      "land_seconds": null,
+      "pr": 693,
+      "turns": 56,
+      "input": 66,
+      "output": 27847,
+      "cache_read": 2246886,
+      "cache_write": 75331,
+      "model": null,
+      "note": "success,merged",
+      "session": "2490bf73-4dbc-4cec-9233-4707018f1301",
+      "cost_usd": 2.58279
+    },
+    {
+      "ts": "2026-09-11T18:46:12Z",
+      "kind": "step",
+      "seconds": 973,
+      "land_seconds": null,
+      "pr": 695,
+      "turns": 135,
+      "input": 168,
+      "output": 59480,
+      "cache_read": 6367092,
+      "cache_write": 226754,
+      "model": null,
+      "note": "success,merged",
+      "session": "131c2fbd-9155-4f67-8bf0-cfd10ca13ddd",
+      "cost_usd": 7.43782025
+    },
+    {
+      "ts": "2026-09-11T20:11:17Z",
+      "kind": "step",
+      "seconds": 650,
+      "land_seconds": null,
+      "pr": 696,
+      "turns": 33,
+      "input": 54,
+      "output": 17254,
+      "cache_read": 1245680,
+      "cache_write": 99249,
+      "model": null,
+      "note": "success,merged",
+      "session": "61bdd6ab-e897-46b2-9e84-94721abd53b4",
+      "cost_usd": 2.76949175
+    },
+    {
+      "ts": "2026-09-12T05:11:00Z",
+      "kind": "step",
+      "seconds": 1725,
+      "land_seconds": null,
+      "pr": 701,
+      "turns": 185,
+      "input": 190,
+      "output": 81747,
+      "cache_read": 6358352,
+      "cache_write": 337151,
+      "model": null,
+      "note": "success,merged",
+      "session": "d72e1198-6aa2-405b-989f-21a3ada8e37b",
+      "cost_usd": 10.676635250000007
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 4511,
+    "land_seconds": 0,
+    "cost_usd": 23.466737,
+    "cost_unknown": 0,
+    "input": 478,
+    "output": 186328,
+    "cache_read": 16218010,
+    "cache_write": 738485,
+    "first": "2026-09-11T17:37:39Z",
+    "landed": "2026-09-12T21:25:56Z"
+  }
+}
