@@ -1,0 +1,52 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`scripts/measure-steps.py` counts parallel tool calls per model response (one `message.id`), not per transcript line, and prints how many single-call read responses could have shared a response with the one before.",
+    "The role text asks a session to name what it will read up front and fetch it in one response."
+  ],
+  "contract": [
+    "Ruling 41 (`docs/project/mc/rulings.md` § 41).",
+    "measure-steps.py's existing rows, options and sources are unchanged apart from the row this plan replaces; it stays python3 with no dependencies.",
+    "No other line of `canon/roles/_common.md` changes."
+  ],
+  "out_of_scope": [
+    "A batch tool, an MCP server or any tool beyond the allowlist.",
+    "Measuring the effect of the new line — Martin's, after ~30 sessions.",
+    "How much of a file a session reads (whole files, long `sed -n` ranges)."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "Over the opus-5.5 window, measure-steps reports multi-call responses per message id (about 13 % of tool responses, where the old per-line count gives 0) and a foldable-read row with a request count and a USD share.",
+      "check": "`python3 scripts/measure-steps.py --since 2026-09-26 --until 2026-10-13` prints both rows; the multi-call share is above 5 %."
+    },
+    {
+      "met": false,
+      "criterion": "`canon/roles/_common.md` carries the sharpened line in place of the old one.",
+      "check": "`grep -n 'Before you read' canon/roles/_common.md` finds it; `grep -n 'Independent Bash commands in one call' canon/roles/_common.md` finds nothing."
+    }
+  ],
+  "documents": [
+    { "label": "Ruling 41", "path": "../rulings.md" },
+    { "label": "The runner's session", "path": "../../../technical/mc-run.md" }
+  ],
+  "steps": [
+    {
+      "title": "Count parallel calls per response, show the foldable reads, sharpen the role line",
+      "status": "ready",
+      "done_when": "`python3 scripts/measure-steps.py --since 2026-09-26 --until 2026-10-13` prints a multi-call share above 5 % and a foldable-read row, `_common.md` carries the new line in place of the old, and `mc gate` is green.",
+      "instruction": [
+        "The bug. Claude Code writes each content block of one model response as its own transcript line, all with the same `message.id`. `walk` in `scripts/measure-steps.py` counts `len(uses) > 1` per line, so it can never see a response with two calls. Rewrite `walk` to collect assistant lines into responses keyed by `message['id']` (skip lines without an id, `message['model'] == '<synthetic>'` and events with `isSidechain` true), keeping first-seen order; a response's calls are the `tool_use` blocks of all its lines, and its usage is the `usage` of its last line. Keep `think` and the per-call rows exactly as they are now.",
+        "Foldable reads. A response is a *read* when it carries exactly one call and that call is native `Read`, `Grep` or `Glob`, or a `Bash` call `classify` puts in `read/search`. A read is *foldable* when the response just before it in the same session is also a read and the call's input names nothing the previous call's result contains: take every token of the input's string values matching `[\\w./-]{6,}` that contains `/` or `.`, and the read is foldable when none of them occurs in the previous result's text (text blocks only). Its saving is that response's `cache_read_input_tokens` at 0.1× the input price of its model (the `PRICES` table already in the script). `walk` returns, beside `rows` and `think`: responses with at least one call, responses with two or more, foldable count, and foldable USD.",
+        "Output. Replace the `turns with more than one tool call` quantiles row in `main` with two lines: `responses with ≥2 tool calls  <multi>/<responses> (<pct>)` summed over the window, and `foldable single reads  <n> requests, <usd> USD = <pct> of the window's cost`, where the window's cost is the sum of `total_cost_usd` over the sessions that have a transcript. Note in a comment above the counting why it groups by message id.",
+        "Docs. In `docs/technical/mc-run.md` (the paragraph beginning '`scripts/measure-steps.py --since <day or instant> --until <day>` is the instrument'), replace 'the turns that carried more than one tool call, which is the number that says whether a session batches' with 'the responses (one `message.id`, however many transcript lines claude wrote for it) that carried more than one tool call, and the single-call reads that could have shared a response with the read before them, priced as the cache read they cost — counted per line before 2026-10-12, which always gave 0'.",
+        "The role line. In `canon/roles/_common.md` replace the line pair '- Independent Bash commands in one call; independent `Read`s and `Edit`s in\\n  one message.' with: '- Before you read, name everything you will need — files, patterns, ranges —\\n  and ask for all of it in one response: several `Read`/`Grep` calls side by\\n  side, not one per turn. Only a call that needs the previous result waits\\n  for it. Independent `Edit`s, likewise, in one response.' Keep the list's other two bullets. If a test pins the old wording (`grep -rn \"Independent Bash commands\" tests`), update it.",
+        "Check: run the command in done_when on this machine and paste its two new lines into the PR body."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
