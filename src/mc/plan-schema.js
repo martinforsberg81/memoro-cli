@@ -415,8 +415,19 @@ export function planState(plan) {
     return { status: 'landing', index: landing, step: steps[landing] };
   }
   const step = steps[index];
+  // A close-out measures what landed, so it is not stacked on what has not
+  // (2026-10-10: step-recovery's close-out started on six open PRs and could
+  // check nothing). The last step, or one whose `done_when` asks for the
+  // steps done, waits while one before it is still landing.
+  if (step?.status === 'ready' && (index === steps.length - 1 || ASKS_STEPS_DONE.test(String(step.done_when || '')))) {
+    const landing = steps.findIndex((one, at) => at < index && one?.status === 'landing');
+    if (landing >= 0) return { status: 'landing', index: landing, step: steps[landing] };
+  }
   return { status: STATUSES.has(step?.status) ? step.status : 'invalid', index, step };
 }
+
+/** "every step `done`", "all steps are done", "steps 1–3 are `done`". */
+const ASKS_STEPS_DONE = /\b(?:every|all) (?:the )?(?:other )?steps?\b[^.;]*\bdone\b|\bsteps \d+\s*[–-]\s*\d+\b[^.;]*\bdone\b/iu;
 
 /**
  * The step `mc run` would hand out, or the reason it would not — the whole

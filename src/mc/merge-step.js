@@ -13,8 +13,8 @@
  *
  * The step is found from `MC_STEP=<project>:<index>` in a runner session's
  * environment, and otherwise from the pull request's branch: the register
- * entry whose step stands on that branch, or the project the branch is named
- * after. A pull request that is nobody's step — a planning session's
+ * entry whose step stands on that branch, or a numbered run of the project
+ * (`<project>-<n>`) whose current step is not blocked. A pull request that is nobody's step — a planning session's
  * `plan/<programme>`, a hand-made branch — gets the round and nothing else.
  *
  * The door — the plan boundary checked before the queue — is `planBoundary`
@@ -45,9 +45,23 @@ export function stepForMerge({ env = {}, head = null, entries = [] } = {}) {
   }
   const project = projectForBranch(head, entries.map((entry) => entry.project));
   const entry = project ? entries.find((item) => item.project === project) : null;
-  if (!entry) return null;
+  if (!entry || !numberedRun(head, project)) return null;
   const index = currentIndex(entry);
-  return index >= 0 ? { project, index, entry, from: 'project' } : null;
+  // A blocked step waits on a person, and only `mc step ready` brings it
+  // back: a fix landed under a branch named after the project
+  // (`photo-analysis-direct-envelope`, #13549) once booked itself as the
+  // blocked close-out and archived the project (2026-10-11).
+  if (index < 0 || entry.steps[index].status === 'blocked') return null;
+  return { project, index, entry, from: 'project' };
+}
+
+/**
+ * `<project>` or `<project>-<n>`: the branches the runner names a project's
+ * steps (`nextBranch`). Anything else named after a project is somebody's
+ * own branch, not a step's.
+ */
+function numberedRun(head, project) {
+  return head === project || (head.startsWith(`${project}-`) && /^\d+$/u.test(head.slice(project.length + 1)));
 }
 
 /**

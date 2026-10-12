@@ -217,3 +217,13 @@ it('stacked: an edit neither the tip nor main has is still a trespass, named aga
   assert.equal(result.ok, false);
   assert.match(result.problems.join('\n'), /steps\[3\]: changed by the session/u);
 });
+
+it('the register\'s step index is the one judged, not the plan\'s first unfinished step', async () => {
+  const head = started();
+  head.steps[2].status = 'done';
+  head.steps[2].comments = ['Done.'];
+  const { git, gh } = tools({ main: started(), mergeBase: started(), head });
+  assert.deepEqual(await planBoundary({ repoPath: '/x', pr: 671, git, gh, index: 2 }), { checked: true, ok: true, problems: [] });
+  const guessed = await planBoundary({ repoPath: '/x', pr: 671, git, gh });
+  assert.equal(guessed.ok, false, 'without the index the plan names step 2 (index 1), and step 3\'s edit is a trespass');
+});

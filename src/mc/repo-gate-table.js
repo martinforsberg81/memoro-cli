@@ -209,7 +209,12 @@ export const SHIPPED = Object.freeze({
     // stale copy. The same holds for the generated session validator (ajv and
     // src/schemas/; mc deploy runs build:validators too, and check:validators
     // is not selected for a lockfile bump) and the TipTap bundle, whose build
-    // is deterministic since #13233.
+    // is deterministic since #13233. The design-token stylesheets and their
+    // document are written from `sdk/tokens/*.json` alone (2026-10-12: steps
+    // regenerated them by hand, one-window-path 8 among them). The SDK corpus
+    // results and `card-html-digests.json` are not here: memoro re-records
+    // them only as a decision that the output moved (`sdk/corpus/README.md`,
+    // `scripts/corpus-card-html-digests.mjs`), so a merge must not.
     derived: Object.freeze([
       Object.freeze({ command: 'npm run sql:inventory -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
       Object.freeze({ command: 'npm run sql:coverage -- --write', paths: Object.freeze(['docs/plans/sql/']) }),
@@ -222,6 +227,11 @@ export const SHIPPED = Object.freeze({
         command: 'npm run build:tiptap',
         paths: Object.freeze(['public/vendor/tiptap.bundle.js', 'public/vendor/tiptap.version.json']),
       }),
+      Object.freeze({
+        command: 'npm run tokens:build',
+        paths: Object.freeze(['public/css/tokens/', 'public/css/theme/theme-memoro-light.css', 'public/css/theme/theme-memoro-dark.css']),
+      }),
+      Object.freeze({ command: 'npm run tokens:docs', paths: Object.freeze(['docs/technical/design-tokens.md']) }),
     ]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro.md' }),
     // Measured 2026-08-23: memoro's runner (scripts/testing/runner.mjs) runs

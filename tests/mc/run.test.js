@@ -1601,6 +1601,8 @@ test('a step the merger sent back is handed out again, its own open pull request
 const twoSteps = plan({ steps: [
   { title: 'S1 — first', status: 'ready', done_when: 'one', instruction: ['One.'], pr: null, blocked_by: null },
   { title: 'S2 — second', status: 'ready', done_when: 'two', instruction: ['Two.'], pr: null, blocked_by: null },
+  // A last step waits for the steps before it to land (a close-out); S2 is not the last.
+  { title: 'S3 — the close', status: 'ready', done_when: 'three', instruction: ['Three.'], pr: null, blocked_by: null },
 ] });
 
 test('the step after a landing one starts at once, on a branch on top of it', async () => {
@@ -1613,6 +1615,7 @@ test('the step after a landing one starts at once, on a branch on top of it', as
     steps: [
       { key: 'S1', status: 'landing', pr: 9, branch: 'm', comments: [], attempts: 0 },
       { key: 'S2', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+      { key: 'S3', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
     ],
   });
   f.deps.pendingMerges = () => [{ repo: 'memoro', pr: 9, step: { project: 'm', index: 0 }, state: 'landing' }];
@@ -1644,6 +1647,7 @@ test('a step the merger sent back below a landing one is taken first, on its own
     steps: [
       { key: 'S1', status: 'ready', pr: 9, branch: 'm', reason: '1 test red: a', comments: [], attempts: 1 },
       { key: 'S2', status: 'landing', pr: 10, branch: 'm-2', comments: [], attempts: 0, stacked_on: { index: 0, pr: 9, sha: 'abc' } },
+      { key: 'S3', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
     ],
   });
   f.deps.pendingMerges = () => [{ repo: 'memoro', pr: 10, step: { project: 'm', index: 1 }, parent: { project: 'm', index: 0, pr: 9, sha: 'abc' } }];
