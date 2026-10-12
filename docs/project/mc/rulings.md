@@ -1303,3 +1303,35 @@ re-checked when it is removed, and a check that errors means keep (the
 2026-09-26 incident). `mc tidy` does it, and the runner runs it daily and when
 lanes skip for disk. Carried by `retention`
 (`docs/project/mc/retention/PLAN.json`).
+
+## 40 · What a session is handed at launch: its role, and no instruction files
+
+`ruling · 2026-10-12` · raised by Martin in the mc planning session
+
+> "Jag tror att cache ttl kan vara 5 min i step-sessionerna … men plan- och
+> work-sessioner får 1h. Det ska inte vara beroende av credit eller plan." …
+> "MEMORY.md är en soptipp som förmodligen inte ska läsas in i en enda
+> session. Kan eventuellt fungera som referens-bibliotek. Claude.md likaså:
+> står hur mycket som helst där som är irrelevant för vissa sessioner." …
+> "Ja. Ingen mätning - det blir ett senare bekymmer för mig." (Martin,
+> 2026-10-12, on the recommendation that followed)
+
+Every session mc launches, of either tool, new or resumed, is handed its role
+text and nothing the tool would load on its own: no `CLAUDE.md`, no
+`AGENTS.md`, no auto-memory index. Claude gets
+`CLAUDE_CODE_DISABLE_CLAUDE_MDS`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY` and its
+cache TTL through `--settings`; codex gets `project_doc_max_bytes=0`. The
+repositories' instruction files and the old memory notes stay on disk as a
+library `_common.md` points at, searched when the work touches them.
+
+Measured 2026-10-12 against the API on claude 2.1.296: a memoro step's fixed
+context is 20.3k tokens per request with the files loaded and 9.5k without;
+0 of 113 step transcripts wrote a memory and 7 read `AGENTS.md`. The role
+text already rides in the system block claude caches with a breakpoint, so it
+is shared by every session of one role.
+
+The prompt-cache TTL is a property of the role, in its frontmatter
+(`cache: 5m`), never of the billing: `step` and `mend` 5 minutes, every other
+role one hour. Without it claude picks one hour on the plan and five minutes
+on a key. Carried by `launch-context`
+(`docs/project/mc/launch-context/PLAN.json`).
