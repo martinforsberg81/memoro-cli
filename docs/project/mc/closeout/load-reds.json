@@ -1,0 +1,185 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "load-reds",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/load-reds/PLAN.json",
+  "archived": "2026-10-12",
+  "goal": [
+    "A red that only a loaded machine produces is measured again, not blamed on the pull request. memoro-cli's own tests assert order and overlap, not wall-clock windows, and no test reads the machine's live gate lock.",
+    "Seen 2026-10-10 to 2026-10-12. #891 (a role text and a changelog fragment) went red on `tests/mc/repo-status.test.js`, `repo-watch.test.js` and `work-resume.test.js` right after a deploy; the same files passed 32/32 alone and 1636/1636 in the round's own 74-file selection. #872 (docs only) went red on a 300 ms window in `merger.test.js` and an ordering test in `repo-gate.test.js`. memoro #13470 had all 19 tests of `build-bundle.test.js` cancelled when their `before` hook ran past 10 minutes at load ~38. Each time the round said \"the red files pass on the base — this change broke them\" from one quiet re-run of the base, and a mend session was spent finding nothing to fix. `tests/mc/page.test.js` is red whenever a real merge round holds a gate lock on the machine (three proposals, 2026-10-10 and 2026-10-11)."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A round whose red files pass on the base is not answered \"this change broke them\" until the same files have also been run alone on the candidate and stayed red there. Red files that pass alone on both, and a file whose tests were cancelled with none failed, stop the round as `red-under-load`, which the merger measures again once, as it does `file-killed`.",
+      "check": "`tests/mc/repo-gate.test.js` and `tests/mc/merger.test.js` on fake tests: red in the round, green alone on base and head → `red-under-load` and a second round; red alone on the head → today's red and wording; cancelled > 0 with fail 0 → `red-under-load`; a second `red-under-load` → answered red with the reason naming both quiet passes. Live: the close-out quotes a merger.log `measuring again` line for a `red-under-load`, or says none occurred."
+    },
+    {
+      "met": true,
+      "criterion": "memoro-cli's timing tests assert order and overlap, not a wall-clock window: `child-async.test.js` \"two children started together run side by side\", `merger.test.js` around the 300 ms light-job window (~line 931), `repo-gate.test.js` \"starts the gates with the suite…\", `repo-status.test.js` \"one repository by name…\", `repo-watch.test.js` \"within three rounds…\", `work-resume.test.js` \"it is the resume that is refused…\".",
+      "check": "Each of those files run 10 times in a row while a full `npm test` runs beside it in another shell: 10/10 green. The tests still fail on the fault they guard (shown by breaking the code under test once, in the PR body)."
+    },
+    {
+      "met": true,
+      "criterion": "No test in `tests/mc/` reads the machine's real gate lock or mc home: `collectPage` reaches `runningMerges` with the root its `env` names.",
+      "check": "`tests/mc/page.test.js` \"builds every section from the files…\" passes while a fake gate lock is written under the real `mcHome()` by the test itself (and removed after); `npm test` is green."
+    }
+  ],
+  "steps": [
+    {
+      "title": "1. A red that passes alone on the base and the head is measured again",
+      "done_when": "In a red round, after `probeMainRed` (`src/mc/selector-miss.js`) finds the red files green on the base, the round runs the same files alone on the candidate head; green there too stops the round `red-under-load`. A file whose TAP totals show cancelled > 0 and fail 0 is `red-under-load` without any re-run. The merger measures a `red-under-load` once more like `file-killed` (`src/mc/merger.js` ~491); a second one is answered red with a reason that says the files passed alone on base and head. Tests per the first criterion; `npm test` is green.",
+      "status": "done",
+      "pr": 893,
+      "landed": {
+        "sha": "15860503cfcf0a4caf136a04fd8ec45487947c74",
+        "into": "main",
+        "at": "2026-10-12T10:19:17Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "red-under-load: head re-run lives in repo-gate.js after probeMain (redAt exported from selector-miss.js); cancelled rule is cancelledFiles in tap-red.js, per file from TAP blocks (cancelledByParent, suites with hookFailed/subtestsFailed ignored). Merger: underLoadOnce beside killedOnce; second answer appends '; red under load in two rounds running'. Proposals for this step archived; the memoro halves (build-bundle, sandbox timeouts) remain memoro's."
+      ],
+      "sessions": 1,
+      "seconds": 1005,
+      "cost_usd": 1.237207
+    },
+    {
+      "title": "2. memoro-cli's timing tests assert order, not milliseconds",
+      "done_when": "The six tests named in the second criterion assert overlap, order or an answer within a bound measured against the test's own serial baseline, with no fixed wall-clock margin under one second; each file passes 10 of 10 runs beside a full `npm test`; `npm test` is green.",
+      "status": "done",
+      "pr": 896,
+      "landed": {
+        "sha": "de4ee180b29b5e2c86970748ccdfce3f4ff56e05",
+        "into": "main",
+        "at": "2026-10-12T10:59:37Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "The three synchronous reds of #891 (repo-status, repo-watch, work-resume) share only runMcCli's spawnSync timeout (60 s → HANG_MS 10 min); no TAP from that round survives, so the cause is inferred from the shape (one red per file, same moment, 693 s selection), not captured. json() in repo-fixture.js now prints signal/ETIMEDOUT so a recurrence names itself."
+      ],
+      "sessions": 1,
+      "seconds": 2558,
+      "cost_usd": 2.093362
+    },
+    {
+      "title": "3. No test reads the machine's live gate lock",
+      "done_when": "`collectPage` (`src/mc/page-collect.js`) passes the work root its `env` resolves to `runningMerges` (`src/mc/merges-collect.js:39`), so `root` no longer defaults to the real `mcHome()` there; `tests/mc/page.test.js` \"builds every section from the files…\" passes with a fake lock written under the real `mcHome()` during the test; no other `tests/mc/` file reads the real mc home (checked as in the instruction); `npm test` is green.",
+      "status": "done",
+      "pr": 897,
+      "landed": {
+        "sha": "eb043dbfbe6ee7b79a7cb62c94879aec121fd92c",
+        "into": "main",
+        "at": "2026-10-12T11:15:31Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Gate locks live under mcHome() (~/.memoro/mc), not workRoot (~/mc), so collectPage hands runningMerges mcHome(env) — mcHome now takes an env — rather than the work root the done_when names; the work root would hide every real round from the page. Page tests now pass MC_HOME: root in env. See #897."
+      ],
+      "sessions": 1,
+      "seconds": 421,
+      "cost_usd": 0.912391
+    },
+    {
+      "title": "4. The close",
+      "done_when": "Every criterion is `met` with its check quoted; steps 1–3 are `done` with their PRs; `docs/project/project_log.md` has the project's row; the merger has restarted on the new code and the close-out quotes merger.log for a `red-under-load` or says none has occurred since; `npm test` is green.",
+      "status": "done",
+      "pr": 898,
+      "landed": {
+        "sha": "0cd62a9e61c09c4394f949ae4f70d91ae4713728",
+        "into": "main",
+        "at": "2026-10-12T11:25:32Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 440,
+      "cost_usd": 0.371052
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-12T10:16:10Z",
+      "kind": "step",
+      "seconds": 1005,
+      "land_seconds": null,
+      "pr": 893,
+      "turns": 25,
+      "input": 44,
+      "output": 20839,
+      "cache_read": 1164337,
+      "cache_write": 73423,
+      "model": null,
+      "note": "success,queued",
+      "session": "5742bba0-5be3-472d-b279-3d496bd025a6",
+      "cost_usd": 1.2372074
+    },
+    {
+      "ts": "2026-10-12T10:59:01Z",
+      "kind": "step",
+      "seconds": 2558,
+      "land_seconds": null,
+      "pr": 896,
+      "turns": 67,
+      "input": 100,
+      "output": 31027,
+      "cache_read": 3484989,
+      "cache_write": 96928,
+      "model": null,
+      "note": "success,queued",
+      "session": "51f44f60-694e-41e9-8cfb-fcbcd8c17b8e",
+      "cost_usd": 2.0933618000000003
+    },
+    {
+      "ts": "2026-10-12T11:06:08Z",
+      "kind": "step",
+      "seconds": 421,
+      "land_seconds": null,
+      "pr": 897,
+      "turns": 35,
+      "input": 56,
+      "output": 14812,
+      "cache_read": 1108914,
+      "cache_write": 49268,
+      "model": null,
+      "note": "success,queued",
+      "session": "18d88e8e-97c3-423f-94f2-5015432a8682",
+      "cost_usd": 0.9123908000000001
+    },
+    {
+      "ts": "2026-10-12T11:23:52Z",
+      "kind": "step",
+      "seconds": 440,
+      "land_seconds": null,
+      "pr": 898,
+      "turns": 14,
+      "input": 28,
+      "output": 5514,
+      "cache_read": 354579,
+      "cache_write": 23718,
+      "model": null,
+      "note": "success,queued",
+      "session": "22d5a8d6-83d8-48cd-be38-a6d96190874c",
+      "cost_usd": 0.3710518
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 4424,
+    "land_seconds": 0,
+    "cost_usd": 4.614012,
+    "cost_unknown": 0,
+    "input": 228,
+    "output": 72192,
+    "cache_read": 6112819,
+    "cache_write": 243337,
+    "first": "2026-10-12T10:16:10Z",
+    "landed": "2026-10-12T11:25:32Z"
+  }
+}
