@@ -1035,20 +1035,34 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
     register();
     writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: 'a' }, { ...JOB, repo: 'other', pr: 672, since: 'b', step: null }]));
     const conflict = { ok: false, merged: false, stopped_at: 'merge', reason: 'CONFLICT (content): Merge conflict in a.js' };
+    // The mend is held open until the other job is answered, not for a fixed
+    // 300 ms that a loaded machine can spend before the other job is taken.
+    // The ten seconds only keep a lane that never answers from hanging the test.
     let release672 = null;
+    let otherAnswered = false;
     let otherAnsweredWhileMending = null;
     let mendDone = false;
     const m = machine([conflict, green]);
     const say = (line) => {
       m.said.push(line);
-      if (/^other #672: merged/u.test(line)) otherAnsweredWhileMending = !mendDone;
+      if (/^other #672: merged/u.test(line)) {
+        otherAnswered = true;
+        otherAnsweredWhileMending = !mendDone;
+        release672?.();
+      }
     };
     const code = await serve({
       root, lock, take, release, ...ONE_LANE, say, now: m.deps.now,
       sleep: () => pause(5),
       land: landerFor({ ...m.deps, say, mayMend: (job) => job.pr === 671 }),
       mend: async () => {
-        await new Promise((resolve) => { release672 = resolve; setTimeout(resolve, 300); });
+        let guard = null;
+        await new Promise((resolve) => {
+          release672 = resolve;
+          if (otherAnswered) resolve();
+          else guard = setTimeout(resolve, 10_000);
+        });
+        clearTimeout(guard);
         mendDone = true;
         return { outcome: 'nothing', line: 'gave up', status: 0, seconds: 0 };
       },

@@ -176,8 +176,12 @@ describe('the watcher', () => {
   it('within three rounds it is simply the answer', () => {
     const fx = fixture({ name: 'repo-watch' });
     try {
-      writeSnapshot(report(at(90_000), [REPO(fx.dir, 'repo')]), {
-        intervalMs: 60_000, root: fx.mcHome,
+      // One and a half rounds old, of an hour each: the picture is read by an
+      // mc process this test starts, and with one-minute rounds the margin to
+      // STALE was the ninety seconds that process has to start — a margin a
+      // loaded machine can spend. In hours, the clock is out of it.
+      writeSnapshot(report(at(90 * 60_000), [REPO(fx.dir, 'repo')]), {
+        intervalMs: 60 * 60_000, root: fx.mcHome,
       });
       const view = json(runMcCli(['repo', 'status', '--json'], fx.env));
       assert.equal(view.stale, false);
