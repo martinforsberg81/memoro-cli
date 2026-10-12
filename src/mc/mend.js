@@ -252,7 +252,7 @@ export async function runMend({ root, job, report, deps = {} }) {
       // `stream: false`: one short answer on its own wall clock, as the
       // intake turn has it.
       toolId: launch.id, adapter: launch.adapter, model: role.model, effort: 'medium',
-      instructions: instructionsFor(launch.id, role.overlay), prompt, profileArgs, autocompact: null, stream: false,
+      instructions: instructionsFor(launch.id, role.overlay), prompt, profileArgs, autocompact: null, stream: false, cache: role.cache,
     });
     const result = await (deps.session || realSession)({
       bin: launch.spec.bin, args, cwd: dir, timeoutMs: (deps.minutes ?? MEND_MINUTES) * 60_000, env, onPid: deps.onPid || (() => {}),

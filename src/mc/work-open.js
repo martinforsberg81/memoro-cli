@@ -52,6 +52,8 @@ export async function openInWorkArea({
   // outlives this launch has to (see `roleRecord`).
   roleName = null,
   roleSource = null,
+  // The role's prompt-cache TTL (ruling 40); a launch without a role is an hour.
+  cache = '1h',
   env = process.env,
   spawn = spawnSync,
   register = registerForeground,
@@ -97,9 +99,13 @@ export async function openInWorkArea({
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
   const instructions = resuming ? null : instructionsFor(toolId, overlay);
   const handed = resuming ? [] : profileArgs(toolId, instructions);
+  // No CLAUDE.md, AGENTS.md or memory, and the role's TTL: on a resume too,
+  // where only the role text is left off.
+  const session = launch.adapter?.sessionArgs?.({ cache }) ?? [];
+  const resumed = resuming ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || [] : [];
   const args = resuming
-    ? [...(launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || []), ...(resumePrompt ? [resumePrompt] : [])]
-    : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...handed, ...(prompt ? [prompt] : [])];
+    ? [...resumeWith(toolId, resumed, session), ...(resumePrompt ? [resumePrompt] : [])]
+    : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...handed, ...session, ...(prompt ? [prompt] : [])];
 
   log('work.open', {
     area: areaRoot,
@@ -293,6 +299,7 @@ export function startInBackground({
   defaultModel = null,
   defaultModelTool = null,
   conversation = null,
+  cache = '1h',
   env = process.env,
   run = null,
 } = {}) {
@@ -306,7 +313,7 @@ export function startInBackground({
   }
 
   const command = launchCommand(launch, {
-    task, model, overlay, defaultModel, defaultModelTool, conversation,
+    task, model, overlay, defaultModel, defaultModelTool, conversation, cache,
   });
 
   const created = tmux(['new-session', '-d', '-s', target, '-c', worktree.path, command]);
@@ -330,6 +337,17 @@ export function startInBackground({
 }
 
 /**
+ * A resume's argv with the session switches in it. Codex's `resume` takes its
+ * options before the session id it ends on (`codex resume [OPTIONS]
+ * [SESSION_ID]`, see `resumeArgs`); claude takes them anywhere.
+ */
+function resumeWith(toolId, resumed, session) {
+  if (!resumed.length || !session.length) return [...resumed, ...session];
+  if (toolId === 'codex') return [...resumed.slice(0, -1), ...session, resumed[resumed.length - 1]];
+  return [...resumed, ...session];
+}
+
+/**
  * The one command line a tool is started on, however the pane is made.
  *
  * Creating a session and replacing what runs in one are the same launch seen
@@ -343,6 +361,7 @@ function launchCommand(launch, {
   defaultModel = null,
   defaultModelTool = null,
   conversation = null,
+  cache = '1h',
 } = {}) {
   // The role default follows the role's tool here too (see openInWorkArea).
   const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
@@ -351,15 +370,17 @@ function launchCommand(launch, {
   // A conversation to resume changes everything about the argv: its history
   // already holds any overlay, and the model — resolved by
   // the caller, flag over transcript — rides on the resume flags.
+  const session = launch.adapter?.sessionArgs?.({ cache }) ?? [];
   const args = conversation
     ? [
       launch.spec.bin,
-      ...(launch.adapter?.resumeArgs?.({ sessionId: conversation.id, model: conversation.model || null }) || []),
+      ...resumeWith(launch.id, launch.adapter?.resumeArgs?.({ sessionId: conversation.id, model: conversation.model || null }) || [], session),
     ]
     : [
       launch.spec.bin,
       ...(launch.adapter?.modelArgs?.(model || roleDefault) ?? []),
       ...profileArgs(launch.id, instructionsFor(launch.id, overlay)),
+      ...session,
     ];
   // A task goes in either way. On a new conversation it is the opening words;
   // on a resumed one it lands as a reply to wherever that conversation
@@ -407,6 +428,7 @@ export function respawnInBackground({
   defaultModel = null,
   defaultModelTool = null,
   conversation = null,
+  cache = '1h',
   graceful = true,
   env = process.env,
   run = null,
@@ -425,7 +447,7 @@ export function respawnInBackground({
   }
   const window = `${target}:${index}`;
   const command = launchCommand(launch, {
-    task, model, overlay, defaultModel, defaultModelTool, conversation,
+    task, model, overlay, defaultModel, defaultModelTool, conversation, cache,
   });
 
   // Written before the respawn, not after: the abrupt path is mc replacing the

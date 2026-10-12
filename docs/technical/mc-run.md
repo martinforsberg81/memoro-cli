@@ -749,11 +749,22 @@ The two argument lists are the only place the tools differ:
 claude  -p [--model …] [--effort …] [--advisor …] \
         --permission-mode acceptEdits --autocompact 150000 \
         --tools Bash,Read,Edit,Write,Grep,Glob --strict-mcp-config \
-        --append-system-prompt <instructions> \
+        --settings <env> --append-system-prompt <instructions> \
         --input-format stream-json --output-format stream-json --verbose
 codex   exec --json --sandbox danger-full-access [-m …] \
-        -c instructions=<instructions> <prompt>
+        -c project_doc_max_bytes=0 -c instructions=<instructions> <prompt>
 ```
+
+`--settings <env>` is a JSON object whose `env` sets
+`CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` — the
+session loads no CLAUDE.md and no auto-memory — and
+`CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` to
+the role's TTL; `-c project_doc_max_bytes=0` keeps codex from loading any
+AGENTS.md. The TTL is the role's, never the billing's (ruling 40): `cache: 5m`
+in a role's frontmatter (`step`, `mend`) gives five minutes, and every other
+role an hour. Both come from the adapters' `sessionArgs`, and every launch
+carries them — headless, foreground and tmux, and a resumed launch too, where
+only the role text is left off.
 
 `danger-full-access` and not `--full-auto`, deliberately. `--full-auto` is
 codex's workspace-write sandbox: no network, so no `git push` and no `gh pr

@@ -10,6 +10,11 @@ Read the code before you decide or ask. Report what you ran and what it said;
 never call something verified that was not. Tests: once, at the end, in the
 foreground (`npm test` picks the affected ones).
 
+Nothing is loaded for you beyond this text — no CLAUDE.md, AGENTS.md or
+memory. A repository's `AGENTS.md`, `CLAUDE.md` and `docs/technical/`, and the
+notes under `~/.claude/projects/*/memory/`, are a library: `Grep` them when the
+work touches what they cover; never read one whole.
+
 Martin: Swedish. Everything in a repository — code, comments, commits, PRs,
 plans: English.
 

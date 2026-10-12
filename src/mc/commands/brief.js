@@ -60,6 +60,7 @@ export async function run(argv, deps = {}) {
     // one in `canon/roles/brief.md` today.
     roleName: role.name || 'brief',
     roleSource: roleSourceOf(role),
+    cache: role.cache,
     model: flags.model,
     overlay: launch.overlay,
     prompt: launch.prompt,

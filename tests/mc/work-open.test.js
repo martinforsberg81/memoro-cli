@@ -17,11 +17,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { sessionArgs } from '../../src/adapters/claude-code.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { openInWorkArea, startInBackground } from '../../src/mc/work-open.js';
 import { markStopped, readStopMark } from '../../src/mc/work-stop-marker.js';
 
 const CONVERSATION_ID = '3f9d2c81-0000-4000-8000-000000000001';
+
+// Every claude launch carries these: no CLAUDE.md, no auto-memory, and the
+// role's prompt-cache TTL — an hour unless the caller says otherwise.
+const SETTINGS = sessionArgs();
+const QUOTED_SETTINGS = SETTINGS.map((arg) => `'${arg}'`).join(' ');
 
 /** A work area plus a tool store, both throwaway. */
 function fixture({ entries = null } = {}) {
@@ -64,7 +70,7 @@ describe('openInWorkArea and --model', () => {
     const { calls, options } = opening();
     const result = await openInWorkArea({ areaRoot, worktree, env, model: 'opus', ...options });
     assert.equal(result.ok, true);
-    assert.deepEqual(calls[0].args, ['--model', 'opus']);
+    assert.deepEqual(calls[0].args, ['--model', 'opus', ...SETTINGS]);
   });
 
   it('without the flag a new conversation launches with nothing', async () => {
@@ -72,7 +78,7 @@ describe('openInWorkArea and --model', () => {
     const { calls, options } = opening();
     const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
     assert.equal(result.ok, true);
-    assert.deepEqual(calls[0].args, []);
+    assert.deepEqual(calls[0].args, SETTINGS);
   });
 
   it('resuming puts the conversation back on the model its transcript records', async () => {
@@ -86,7 +92,7 @@ describe('openInWorkArea and --model', () => {
     const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
     assert.equal(result.ok, true);
     assert.equal(result.resumed, true);
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'claude-fable-5']);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'claude-fable-5', ...SETTINGS]);
   });
 
   it('an explicit --model on resume outranks the transcript', async () => {
@@ -99,7 +105,7 @@ describe('openInWorkArea and --model', () => {
     await openInWorkArea({
       areaRoot, worktree, env, pick: CONVERSATION_ID.slice(0, 8), model: 'opus', ...options,
     });
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'opus']);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'opus', ...SETTINGS]);
   });
 
   it('a transcript that names no model resumes exactly as before', async () => {
@@ -111,7 +117,7 @@ describe('openInWorkArea and --model', () => {
     const { calls, options } = opening();
     const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
     assert.equal(result.resumed, true);
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID]);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, ...SETTINGS]);
   });
 
   // `prompt` is opening words and a resume is not an opening; `resumePrompt`
@@ -122,7 +128,43 @@ describe('openInWorkArea and --model', () => {
     });
     const { calls, options } = opening();
     await openInWorkArea({ areaRoot, worktree, env, ...options, prompt: 'INTRO', resumePrompt: 'TODAY' });
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, 'TODAY']);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, ...SETTINGS, 'TODAY']);
+  });
+});
+
+describe('openInWorkArea and the launch switches', () => {
+  /** The `--settings` argument's `env`, parsed back out of an argv. */
+  function settingsEnv(args) {
+    const at = args.indexOf('--settings');
+    assert.ok(at >= 0, 'expected --settings');
+    return JSON.parse(args[at + 1]).env;
+  }
+
+  it('a new claude launch carries the switches and the role TTL before the prompt', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, overlay: 'OVERLAY', prompt: 'GO', cache: '5m', ...options });
+    const { args } = calls[0];
+    assert.deepEqual(settingsEnv(args), {
+      CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+      CLAUDE_CODE_PROMPT_CACHE_TTL: '5m',
+      CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m',
+    });
+    assert.equal(args[args.length - 1], 'GO');
+  });
+
+  it('a resumed claude launch carries them too, with the TTL defaulting to an hour', async () => {
+    const { areaRoot, worktree, env } = fixture({ entries: [{ type: 'user', message: { content: 'first' } }] });
+    const { calls, options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, resumePrompt: 'TODAY', ...options });
+    const { args } = calls[0];
+    assert.equal(args[0], '--resume');
+    const parsed = settingsEnv(args);
+    assert.equal(parsed.CLAUDE_CODE_DISABLE_CLAUDE_MDS, '1');
+    assert.equal(parsed.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+    assert.equal(parsed.CLAUDE_CODE_PROMPT_CACHE_TTL, '1h');
+    assert.equal(args[args.length - 1], 'TODAY');
   });
 });
 
@@ -137,7 +179,7 @@ describe('openInWorkArea in a role area', () => {
     });
     assert.equal(result.ok, true);
     assert.deepEqual(calls[0].args, [
-      '--model', 'fable', '--append-system-prompt', `${sharedRoleText()}\n\n---\n\nOVERLAY`,
+      '--model', 'fable', '--append-system-prompt', `${sharedRoleText()}\n\n---\n\nOVERLAY`, ...SETTINGS,
     ]);
   });
 
@@ -161,7 +203,7 @@ describe('openInWorkArea in a role area', () => {
       areaRoot, worktree, env, overlay: 'OVERLAY', defaultModel: 'opus', ...options,
     });
     assert.equal(result.resumed, true);
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'claude-fable-5']);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'claude-fable-5', ...SETTINGS]);
   });
 
   it('the role default never rides into a resume', async () => {
@@ -175,7 +217,7 @@ describe('openInWorkArea in a role area', () => {
     });
     const { calls, options } = opening();
     await openInWorkArea({ areaRoot, worktree, env, defaultModel: 'fable', ...options });
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID]);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, ...SETTINGS]);
   });
 
   it('the role default follows the role tool, not every tool in the area', async () => {
@@ -186,7 +228,7 @@ describe('openInWorkArea in a role area', () => {
     await openInWorkArea({
       areaRoot, worktree, env, defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex', ...options,
     });
-    assert.deepEqual(calls[0].args, []);
+    assert.deepEqual(calls[0].args, SETTINGS);
   });
 });
 
@@ -310,7 +352,7 @@ describe('startInBackground and --model', () => {
     assert.equal(started.ok, true);
     // Single-quoted for the shell tmux runs the command through: an embedded
     // quote becomes '\'' and spaces stay inside one argument.
-    assert.equal(creation(calls), `'claude' '--model' 'o'\\''pus model' 'fix it'`);
+    assert.equal(creation(calls), `'claude' '--model' 'o'\\''pus model' ${QUOTED_SETTINGS} 'fix it'`);
   });
 
   it('the model rides in front of the instructions, both quoted', () => {
@@ -321,7 +363,7 @@ describe('startInBackground and --model', () => {
     });
     assert.equal(started.ok, true);
     const quoted = `${sharedRoleText()}\n\n---\n\nTHE\nOVERLAY`.replace(/'/gu, "'\\''");
-    assert.equal(creation(calls), `'claude' '--model' 'opus' '--append-system-prompt' '${quoted}'`);
+    assert.equal(creation(calls), `'claude' '--model' 'opus' '--append-system-prompt' '${quoted}' ${QUOTED_SETTINGS}`);
   });
 
   it('without the flag the command is exactly what it always was', () => {
@@ -331,7 +373,7 @@ describe('startInBackground and --model', () => {
       name: 'x', areaRoot, worktree, tool: 'claude', env, run,
     });
     assert.equal(started.ok, true);
-    assert.equal(creation(calls), `'claude'`);
+    assert.equal(creation(calls), `'claude' ${QUOTED_SETTINGS}`);
   });
 
   it('opening the area again removes the mark mc work stop left (KP-09)', async () => {
@@ -350,6 +392,22 @@ describe('startInBackground and --model', () => {
     assert.equal(readStopMark(areaRoot), null, 'the terminal open left the mark');
   });
 
+  it('a new and a resumed tmux launch carry the role TTL', () => {
+    const { areaRoot, worktree, env } = fixture();
+    const fresh = tmux();
+    startInBackground({ name: 'x', areaRoot, worktree, tool: 'claude', task: 'go', cache: '5m', env, run: fresh.run });
+    assert.equal(creation(fresh.calls), `'claude' ${sessionArgs({ cache: '5m' }).map((arg) => `'${arg}'`).join(' ')} 'go'`);
+    assert.match(creation(fresh.calls), /"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"/u);
+
+    const resumed = tmux();
+    startInBackground({
+      name: 'x', areaRoot, worktree, tool: 'claude', task: 'go', env, run: resumed.run,
+      conversation: { id: CONVERSATION_ID, model: null },
+    });
+    assert.equal(creation(resumed.calls), `'claude' '--resume' '${CONVERSATION_ID}' ${QUOTED_SETTINGS} 'go'`);
+    assert.match(creation(resumed.calls), /"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"/u);
+  });
+
   it('the role default follows the role tool here too', () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, run } = tmux();
@@ -358,6 +416,6 @@ describe('startInBackground and --model', () => {
       defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex',
     });
     assert.equal(started.ok, true);
-    assert.equal(creation(calls), `'claude'`);
+    assert.equal(creation(calls), `'claude' ${QUOTED_SETTINGS}`);
   });
 });

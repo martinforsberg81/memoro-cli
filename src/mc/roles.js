@@ -27,6 +27,7 @@
  *   model: fable
  *   singleton: false
  *   tools: claude, codex
+ *   cache: 5m
  *   ---
  *   You are a worker: …
  */
@@ -188,6 +189,9 @@ export function parseRole(text, fallbackName = null) {
     model: fields.model || null,
     singleton: fields.singleton === 'true',
     tools: fields.tools ? fields.tools.split(',').map((t) => t.trim()).filter(Boolean) : [],
+    // The prompt-cache TTL its sessions are launched with (ruling 40): five
+    // minutes only where the role says so, an hour for every other role.
+    cache: fields.cache === '5m' ? '5m' : '1h',
     overlay,
   };
 }

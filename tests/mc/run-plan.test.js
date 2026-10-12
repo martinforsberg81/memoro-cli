@@ -12,6 +12,8 @@ import {
 } from '../../src/mc/run-plan.js';
 import { NAME_RE } from '../../src/mc/plan-schema.js';
 import { profileArgs } from '../../src/mc/portrait.js';
+import * as claudeAdapter from '../../src/adapters/claude-code.js';
+import * as codexAdapter from '../../src/adapters/codex.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
 
 test('assembleQueue: queue.md order first, then plans on main it did not name, sorted', () => {
@@ -1166,4 +1168,41 @@ test('headlessArgs: a codex resume is `exec resume` with the sandbox through -c 
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: null, prompt: 'go on', profileArgs, resume: 'sid' });
   assert.deepEqual(claude.slice(0, 3), ['-p', '--resume', 'sid']);
   assert.match(restartPrompt({ at: '2026-10-10T11:48:00Z', why: 'warm, 12 min since last request' }), /cut off at 2026-10-10T11:48:00Z .*\n.*exactly as you left them/u);
+});
+
+test('headlessArgs: every launch carries the session switches, new and resumed, with the role TTL', () => {
+  const settingsEnv = (args) => {
+    const at = args.indexOf('--settings');
+    assert.ok(at >= 0, 'expected --settings');
+    return JSON.parse(args[at + 1]).env;
+  };
+  const switches = (cache) => ({
+    CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    CLAUDE_CODE_PROMPT_CACHE_TTL: cache,
+    CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: cache,
+  });
+  const claude = { toolId: 'claude-code', adapter: claudeAdapter, model: 'opus', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs };
+  assert.deepEqual(settingsEnv(headlessArgs({ ...claude, cache: '5m' })), switches('5m'));
+  assert.deepEqual(settingsEnv(headlessArgs({ ...claude, cache: '5m', resume: 'sid' })), switches('5m'));
+  assert.deepEqual(settingsEnv(headlessArgs(claude)), switches('1h'));
+  assert.deepEqual(settingsEnv(headlessArgs({ ...claude, resume: 'sid' })), switches('1h'));
+
+  const codex = { toolId: 'codex', adapter: codexAdapter, model: 'o3', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs, cache: '5m' };
+  for (const args of [headlessArgs(codex), headlessArgs({ ...codex, resume: 'thread-1' })]) {
+    const at = args.indexOf('project_doc_max_bytes=0');
+    assert.ok(at > 0, 'expected -c project_doc_max_bytes=0');
+    assert.equal(args[at - 1], '-c');
+    assert.ok(at < args.indexOf('do it'), 'before the prompt');
+    if (args.includes('thread-1')) assert.ok(at < args.indexOf('thread-1'), 'before the session id');
+    assert.equal(args.includes('--settings'), false);
+  }
+});
+
+test('cacheTtlMs: claude follows the role, codex keeps its five minutes', () => {
+  assert.equal(claudeAdapter.cacheTtlMs('5m'), 5 * 60_000);
+  assert.equal(claudeAdapter.cacheTtlMs('1h'), 60 * 60_000);
+  assert.equal(claudeAdapter.cacheTtlMs(undefined), 60 * 60_000);
+  assert.equal(codexAdapter.cacheTtlMs('1h'), 5 * 60_000);
+  assert.equal(codexAdapter.cacheTtlMs('5m'), 5 * 60_000);
 });
