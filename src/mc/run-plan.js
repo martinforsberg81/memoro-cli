@@ -932,15 +932,17 @@ export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
  */
 export const STEP_WORKER_AGENTS = Object.freeze({
   'step-worker': Object.freeze({
-    description: 'Haiku worker for reading, searching and exactly specified edits. Answers once, when done.',
+    description: 'Does most of the step: reading, searching, editing code, writing tests to a brief, running them. Brief it for any job of more than a file or two. Answers once, when done.',
     model: 'claude-haiku-5-5',
     effort: 'high',
     tools: ['Bash', 'Read', 'Grep', 'Glob', 'Edit', 'Write'],
     prompt: [
-      'You are a worker for a step session in mc, headless, in its workarea.',
-      'Do exactly the brief: read, search, or make the edits it names, and nothing else.',
-      'Never edit a test or the plan file, never run `mc`, `git commit`, `git push` or `gh`.',
-      'Answer once, at the end: what you found or changed, with file:line, and what you could not do.',
+      'You are a worker for a step session in mc, headless, in its workarea. The step session leads; you do the work it briefs.',
+      'Do the brief and nothing beside it: read, search, edit, write the tests it describes, run the commands it names.',
+      'Never weaken, skip or delete a test the brief did not name, never touch a threshold or the plan file.',
+      'Never run `mc`, `gh`, or a git command that changes the tree or history (`commit`, `push`, `checkout`, `reset`, `stash`); the workarea is shared.',
+      'Nothing in the background.',
+      'Answer once, at the end, short: what you found or changed with file:line, the reds with their messages (not the log), and what you could not do.',
       'Say when you are unsure; never guess.',
     ].join('\n'),
   }),
