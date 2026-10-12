@@ -17,12 +17,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "Over the opus-5.5 window, measure-steps reports multi-call responses per message id (about 13 % of tool responses, where the old per-line count gives 0) and a foldable-read row with a request count and a USD share.",
       "check": "`python3 scripts/measure-steps.py --since 2026-09-26 --until 2026-10-13` prints both rows; the multi-call share is above 5 %."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`canon/roles/_common.md` carries the sharpened line in place of the old one.",
       "check": "`grep -n 'Before you read' canon/roles/_common.md` finds it; `grep -n 'Independent Bash commands in one call' canon/roles/_common.md` finds nothing."
     }
