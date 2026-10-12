@@ -371,8 +371,10 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   const step = stepForMerge({ env, head, entries: listEntries(root, io) });
   // A step that started on top of one still landing (ruling 30, A): the
   // merger lands it after that one, and the door compares the plan with that
-  // one's tip rather than main, which does not have its edits yet.
-  const stacked = step ? step.entry.steps[step.index]?.stacked_on || null : null;
+  // one's tip rather than main, which does not have its edits yet. Once that
+  // one is done, its edits are on main and the pull request is main's alone.
+  const recorded = step ? step.entry.steps[step.index]?.stacked_on || null : null;
+  const stacked = recorded && step.entry.steps[recorded.index]?.status !== 'done' ? recorded : null;
   const parent = stacked ? { project: step.project, index: stacked.index, pr: stacked.pr, sha: stacked.sha } : null;
 
   const boundary = await (deps.planBoundary || planBoundary)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, from: stacked?.sha || null });

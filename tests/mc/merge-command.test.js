@@ -28,12 +28,12 @@ const queue = () => parseQueue(existsSync(mergesPath(root)) ? readFileSync(merge
 const PLAN_PATH = 'docs/project/mc/merge-queue/PLAN.json';
 
 /** A register entry for the project the fixture pull request belongs to. */
-function register(stepOver = {}) {
+function register(stepOver = {}, belowOver = {}) {
   mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
   const entry = {
     project: 'merge-queue', repo: 'memoro-cli', programme: 'mc', plan: PLAN_PATH,
     steps: [
-      { status: 'done', pr: 600, branch: 'merge-queue', comments: [], attempts: 0 },
+      { status: 'done', pr: 600, branch: 'merge-queue', comments: [], attempts: 0, ...belowOver },
       { status: 'running', pr: null, branch: 'merge-queue-2', comments: [], attempts: 0, session: { pid: 4242, started: '2026-09-12T10:00:00Z' }, ...stepOver },
     ],
   };
@@ -211,7 +211,7 @@ describe('mc merge makes the step landing', () => {
   });
 
   it('a step stacked on one still landing: the job names that one, and the door reads the plan from its tip', async () => {
-    register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } });
+    register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } }, { status: 'landing' });
     const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
     let asked = null;
     d.io.planBoundary = async (options) => { asked = options; return { checked: false }; };
@@ -219,6 +219,16 @@ describe('mc merge makes the step landing', () => {
     assert.equal(asked.from, 'deadbeef');
     assert.deepEqual(queue()[0].parent, { project: 'merge-queue', index: 0, pr: 600, sha: 'deadbeef' });
     assert.match(d.out.out, /^mc: it lands after #600 \(step 1\), which it is built on$/mu);
+  });
+
+  it('a step stacked on one that has since landed: the door reads main, and no parent is named', async () => {
+    register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } });
+    const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
+    let asked = null;
+    d.io.planBoundary = async (options) => { asked = options; return { checked: false }; };
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
+    assert.equal(asked.from, null);
+    assert.equal(queue()[0].parent, null);
   });
 
   it('remainderOf reads a `## Remainder` and nothing else', () => {

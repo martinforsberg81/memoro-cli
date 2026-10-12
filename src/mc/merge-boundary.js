@@ -24,6 +24,12 @@
  * in "before" and are not the session's — the intended reading. When the merge
  * base cannot be read, or the plan did not exist there, "before" falls back to
  * `origin/<base>`, main as it is now.
+ *
+ * A pull request stacked on a step still landing (ruling 30) is read against
+ * that step's tip as well, since main does not have its plan edits yet. Either
+ * reading passing is a pass: the recorded tip goes stale once the step below
+ * merges main into itself, and a plan edit main brought with it is no more the
+ * session's than one that landed on main directly.
  */
 import { spawnSync } from 'node:child_process';
 
@@ -44,24 +50,24 @@ function names(tree) {
 }
 
 /**
- * The plan text the branch started from: `path` at the merge base of the two
- * refs, else `path` on `origin/<base>`; `null` when neither will `git show`.
+ * The plan texts the branch may have started from, each a `git show` result:
+ * `path` at the stacked step's tip when there is one, then `path` at the merge
+ * base of the two refs, else on `origin/<base>`. Empty when none will show.
  */
-function beforeText({ askGit, repoPath, base, head, path, from = null }) {
-  // A pull request stacked on a step still landing (ruling 30) is judged
-  // against that step's tip: main does not have its plan edits yet.
+function beforeTexts({ askGit, repoPath, base, head, path, from = null }) {
+  const texts = [];
   if (from) {
     const atFrom = askGit(['show', `${from}:${path}`], { cwd: repoPath });
-    if (atFrom.status === 0) return atFrom;
+    if (atFrom.status === 0) texts.push(atFrom);
   }
   const mergeBase = askGit(['merge-base', `origin/${base}`, `origin/${head}`], { cwd: repoPath });
   const sha = mergeBase.status === 0 ? String(mergeBase.stdout || '').trim() : '';
   if (sha) {
     const atBase = askGit(['show', `${sha}:${path}`], { cwd: repoPath });
-    if (atBase.status === 0) return atBase;
+    if (atBase.status === 0) return [...texts, atBase];
   }
   const onMain = askGit(['show', `origin/${base}:${path}`], { cwd: repoPath });
-  return onMain.status === 0 ? onMain : null;
+  return onMain.status === 0 ? [...texts, onMain] : texts;
 }
 
 const notChecked = { checked: false, ok: true, problems: [] };
@@ -98,20 +104,23 @@ export async function planBoundary({ repoPath, pr, git, gh, from = null } = {}) 
   });
   if (!path) return notChecked;
 
-  const mainShow = beforeText({ askGit, repoPath, base, head, path, from });
-  if (!mainShow) return notChecked;
+  const befores = beforeTexts({ askGit, repoPath, base, head, path, from });
+  if (befores.length === 0) return notChecked;
   const headShow = askGit(['show', `origin/${head}:${path}`], { cwd: repoPath });
   if (headShow.status !== 0) return notChecked;
-  if (mainShow.stdout === headShow.stdout) return { checked: true, ok: true, problems: [] };
+  if (befores.some((show) => show.stdout === headShow.stdout)) return { checked: true, ok: true, problems: [] };
 
-  const before = readPlanText(mainShow.stdout);
-  if (!before.plan) return notChecked;
   const after = readPlanText(headShow.stdout);
-  if (!after.plan) {
-    return { checked: true, ok: false, problems: [`the plan no longer parses: ${after.problems[0]}`] };
+  let verdict = null;
+  for (const show of befores) {
+    const before = readPlanText(show.stdout);
+    if (!before.plan) continue;
+    if (!after.plan) {
+      return { checked: true, ok: false, problems: [`the plan no longer parses: ${after.problems[0]}`] };
+    }
+    const { ok, problems } = unauthorisedChanges(before.plan, after.plan, stepOfPr(after.plan, Number(pr)));
+    if (ok) return { checked: true, ok, problems };
+    verdict ||= { checked: true, ok, problems };
   }
-
-  const index = stepOfPr(after.plan, Number(pr));
-  const { ok, problems } = unauthorisedChanges(before.plan, after.plan, index);
-  return { checked: true, ok, problems };
+  return verdict || notChecked;
 }
