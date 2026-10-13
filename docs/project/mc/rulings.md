@@ -1355,3 +1355,38 @@ reads that name nothing from the read before them: 2 328 requests, ≈85 USD,
 9.4 % — the ceiling for this lever. No batch tool: the client already runs
 parallel calls. Carried by `parallel-reads`
 (`docs/project/mc/parallel-reads/PLAN.json`).
+
+## 42 · A step names its model, and the plan prefers narrow Haiku steps
+
+`ruling · 2026-10-13` · raised by Martin in the brief session, after the
+week-focus-rows trial
+
+> "Kostnadsbesparingen är så pass stor att vi behöver gå vidare med detta. […]
+> Vi behöver uppdatera sessionResult och instruktionen till plan-sessionen. Vi
+> bör också sluta nämna möjligheten att använda advisor och subagents. […]
+> Haiku respektive Opus steg med att föredragande till tydliga avgränsade
+> Haiku steg." (Martin, 2026-10-13) — and on the five recommendations below:
+> "Ok. Kör enligt dina rekommendationer."
+
+The trial: week-focus-rows steps 8–10 (`runner.model: haiku`, effort `high`,
+no workers) cost 0.29, 0.33 and 0.26 USD and landed green — one merge conflict
+in step 10, mended on Opus in 86 s. Opus steps 4–7 of the same project cost
+5.1–7.1 USD each with Haiku workers.
+
+1. `sessionResult` takes `total_cost_usd`, `duration_api_ms` and `modelUsage`
+   from the last `result` line, which claude now prints as running totals
+   (all 45 multi-result streams in `~/mc/runner/log/` on 2026-10-13); it still
+   adds `num_turns`, `duration_ms` and `usage`, which are per turn group.
+   Forward only: old logs are not rewritten.
+2. The step default stays `opus`. Every step a plan writes names
+   `runner.model`: `haiku` is the first choice; `opus` only for a step that
+   needs design or judgement, after the plan writer has tried to split it.
+3. A Haiku step runs at `effort: high`.
+4. Plan instructions and `docs/project/README.md` stop mentioning `advisor`
+   and `subagents`. The schema and the code keep accepting both, so the plans
+   on `main` that use `subagents: on` still run; the code goes in a later
+   clean-up once no plan uses them.
+5. Steps already planned elsewhere are not re-planned.
+
+Mend stays on Opus (Martin, 2026-10-13, at the trial). Carried by
+`haiku-steps` (`docs/project/mc/haiku-steps/PLAN.json`).
