@@ -1,0 +1,75 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "parallel-reads",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/parallel-reads/PLAN.json",
+  "archived": "2026-10-13",
+  "goal": [
+    "`scripts/measure-steps.py` counts parallel tool calls per model response (one `message.id`), not per transcript line, and prints how many single-call read responses could have shared a response with the one before.",
+    "The role text asks a session to name what it will read up front and fetch it in one response."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "Over the opus-5.5 window, measure-steps reports multi-call responses per message id (about 13 % of tool responses, where the old per-line count gives 0) and a foldable-read row with a request count and a USD share.",
+      "check": "`python3 scripts/measure-steps.py --since 2026-09-26 --until 2026-10-13` prints both rows; the multi-call share is above 5 %."
+    },
+    {
+      "met": true,
+      "criterion": "`canon/roles/_common.md` carries the sharpened line in place of the old one.",
+      "check": "`grep -n 'Before you read' canon/roles/_common.md` finds it; `grep -n 'Independent Bash commands in one call' canon/roles/_common.md` finds nothing."
+    }
+  ],
+  "steps": [
+    {
+      "title": "Count parallel calls per response, show the foldable reads, sharpen the role line",
+      "done_when": "`python3 scripts/measure-steps.py --since 2026-09-26 --until 2026-10-13` prints a multi-call share above 5 % and a foldable-read row, `_common.md` carries the new line in place of the old, and `mc gate` is green.",
+      "status": "done",
+      "pr": 906,
+      "landed": {
+        "sha": "c92ed45f14c47ba4a24b7d2a421b0a5ec6167296",
+        "into": "main",
+        "at": "2026-10-12T20:38:37Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 142,
+      "cost_usd": 0.26156
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-12T20:37:59Z",
+      "kind": "step",
+      "seconds": 142,
+      "land_seconds": null,
+      "pr": 906,
+      "turns": 13,
+      "input": 18,
+      "output": 5898,
+      "cache_read": 178615,
+      "cache_write": 21561,
+      "model": null,
+      "note": "success,queued",
+      "session": "8512bf87-ed2e-4fd5-95a8-4e74006c8526",
+      "cost_usd": 0.26156
+    }
+  ],
+  "totals": {
+    "sessions": 1,
+    "seconds": 142,
+    "land_seconds": 0,
+    "cost_usd": 0.26156,
+    "cost_unknown": 0,
+    "input": 18,
+    "output": 5898,
+    "cache_read": 178615,
+    "cache_write": 21561,
+    "first": "2026-10-12T20:37:59Z",
+    "landed": "2026-10-12T20:38:37Z"
+  }
+}
