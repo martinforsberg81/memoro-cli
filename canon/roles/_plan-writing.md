@@ -19,6 +19,14 @@ start to finish, and know when it is done? If not, it is not a step
 - **Each step:** `instruction` as long as the work needs — interface, order,
   edge cases, the trap. `done_when`: one checkable sentence. Name the file
   behind every claim, and only files you opened.
+- **Model per step (ruling 42):** every step names `runner.model`. Haiku is
+  the first choice: `{ "model": "haiku", "effort": "high" }` for a step
+  whose `instruction` says exactly what changes, where and in what order,
+  and whose `done_when` passes or fails on its own — a test, a grep, an
+  unchanged digest. `opus` only for a step that needs design or judgement no
+  instruction can settle beforehand, and only once you have tried to split
+  it: decide here, and let Haiku steps carry it out. Many narrow Haiku steps
+  beat one broad Opus step.
 - **Overall:** `goal`; `contract` (what may not change without Martin);
   `out_of_scope`, named; `success_criteria` with a `check` — for anything
   with a surface, measured in the running app. All frozen: a step session
