@@ -1,0 +1,112 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "haiku-steps",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/haiku-steps/PLAN.json",
+  "archived": "2026-10-13",
+  "goal": [
+    "A session's `.json` and `runs.tsv` row carry what the session actually cost: `sessionResult` takes the running totals from the last `result` line and adds only the per-turn-group amounts.",
+    "The plan-writing instruction tells every plan session and the brief to name `runner.model` on each step, preferring narrow, checkable Haiku steps at `effort: high`, and `docs/project/README.md` no longer offers `advisor` or `subagents`."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`sessionResult` over a stream with several `result` lines gives the last line's cost: step 11 of week-focus-rows reads 2.09 USD, not 6.44.",
+      "check": "`node --input-type=module -e \"import {sessionResult} from './src/mc/run-plan.js'; import {readFileSync} from 'node:fs'; console.log(sessionResult(readFileSync(process.env.HOME + '/mc/runner/log/week-focus-rows-20261013T075918Z.jsonl','utf8')).total_cost_usd.toFixed(2))\"` in memoro-cli prints `2.09`."
+    },
+    {
+      "met": true,
+      "criterion": "`canon/roles/_plan-writing.md` asks for `runner.model` on every step with Haiku preferred, and `docs/project/README.md` names neither `advisor` nor `subagents`.",
+      "check": "`grep -n 'Model per step' canon/roles/_plan-writing.md` finds the bullet; `grep -n -E 'advisor|subagents' docs/project/README.md` finds nothing."
+    }
+  ],
+  "steps": [
+    {
+      "title": "`sessionResult` takes the running totals from the last result line",
+      "done_when": "The success-criterion-0 command prints `2.09`, `node --test --import ./tests/_isolate-home.mjs tests/mc/run-plan.test.js` passes, and `mc gate` is green.",
+      "status": "done",
+      "pr": 909,
+      "landed": {
+        "sha": "3195e1501633ae7fc500ceb9c3f1341d2591158c",
+        "into": "main",
+        "at": "2026-10-13T12:49:11Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "sessionResult now sums only num_turns, duration_ms and the four usage counts across result lines; total_cost_usd, duration_api_ms and modelUsage are the last line's, since claude prints them as running totals (measured 2026-10-13, ruling 42). MODEL_USAGE_KEPT is gone. Verified: week-focus-rows criterion prints 2.09; tests/mc/run-plan.test.js 77/77; mc gate green. Nothing left for the next session in this step; step 2 (plan-writing and README) is independent."
+      ],
+      "sessions": 1,
+      "seconds": 103,
+      "cost_usd": 0.014492
+    },
+    {
+      "title": "The plan-writing instruction asks for a model on every step, Haiku first; README drops `advisor` and `subagents`",
+      "done_when": "Both success-criterion-1 greps give the stated result, `node --test --import ./tests/_isolate-home.mjs tests/mc/canon.test.js tests/mc/roles.test.js` passes, and `mc gate` is green.",
+      "status": "done",
+      "pr": 910,
+      "landed": {
+        "sha": "0648ca651b1f7dc398c378271be243763cef54a6",
+        "into": "main",
+        "at": "2026-10-13T12:59:20Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "steps[1] (ruling 42): canon/roles/_plan-writing.md has the 'Model per step (ruling 42)' bullet after 'Each step:' and before 'Overall:'; docs/project/README.md no longer names advisor or subagents in the plan-level or step-level runner bullets. No digest or text pin on _plan-writing.md exists in tests/mc/canon.test.js or tests/mc/roles.test.js, so no test was changed. The schema, sessionSettings, headlessArgs, SESSION_DEFAULTS and _step-workers.md are untouched; plans on main with advisor or subagents still validate. docs/technical/mc-run.md § The session still describes advisor and subagents on purpose (out of scope)."
+      ],
+      "sessions": 1,
+      "seconds": 101,
+      "cost_usd": 0.012488
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-13T12:48:37Z",
+      "kind": "step",
+      "seconds": 103,
+      "land_seconds": null,
+      "pr": 909,
+      "turns": 26,
+      "input": 20,
+      "output": 13140,
+      "cache_read": 281997,
+      "cache_write": 40799,
+      "model": null,
+      "note": "success,queued",
+      "session": "b1f95d49-9640-46ff-9e14-7294472404d1",
+      "cost_usd": 0.014491845
+    },
+    {
+      "ts": "2026-10-13T12:58:42Z",
+      "kind": "step",
+      "seconds": 101,
+      "land_seconds": null,
+      "pr": 910,
+      "turns": 22,
+      "input": 26,
+      "output": 9658,
+      "cache_read": 328067,
+      "cache_write": 35003,
+      "model": null,
+      "note": "success,queued",
+      "session": "5ac12cd7-d647-4d43-bd78-d5cce4e8a3ad",
+      "cost_usd": 0.012487645
+    }
+  ],
+  "totals": {
+    "sessions": 2,
+    "seconds": 204,
+    "land_seconds": 0,
+    "cost_usd": 0.026979,
+    "cost_unknown": 0,
+    "input": 46,
+    "output": 22798,
+    "cache_read": 610064,
+    "cache_write": 75802,
+    "first": "2026-10-13T12:48:37Z",
+    "landed": "2026-10-13T12:59:20Z"
+  }
+}
