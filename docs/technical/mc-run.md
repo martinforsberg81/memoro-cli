@@ -1113,8 +1113,7 @@ written after one. That is how claude behaves, measured live 2026-09-11
 (step-cost step 3's comments): a message written mid-turn is folded into the
 running turn, a message written after a `result` starts a new turn with its
 own `result`, and the process exits when stdin closes. So two `result` lines
-are possible — a check-in that crossed the first — and `sessionResult` adds
-their turns, cost, durations and usage up rather than taking the last.
+are possible — a check-in that crossed the first — and `sessionResult` adds up their turns, wall-clock and usage, which are per turn group, and takes cost, API time and `modelUsage` from the last, which claude prints as running totals (ruling 42; until 2026-10-13 it added the costs too, so an older `.json` with two results overstates its cost).
 
 A `result` is not the end while a **background task** runs. A command longer
 than Bash's ten minutes — memoro's G6 comparison, a full `npm test` — goes in
@@ -1177,7 +1176,7 @@ thing it writes into a repository: a blocked step (below).
   the last two; `archive-plan.js` reads by position and stops at `note`. What
   the session actually ran on is in its own json's `modelUsage`, which is what
   `scripts/measure-steps.py` groups by. The usage columns come from claude's
-  `result` event (summed when there were two, see *Why the session is spawned*)
+  `result` event (turns and usage summed when there were two, see *Why the session is spawned*)
   and from codex's `exec --json` event stream; a field the tool does not give
   is `-`, never a guess. `exit` and `note` are independent and are allowed to
   disagree — a process can fail after a session that reported success, and
@@ -1201,7 +1200,7 @@ thing it writes into a repository: a blocked step (below).
   a line too: `<name>: check-in 1 at 60 min`.
 - **`log/<name>-<ts>.jsonl`**, **`.json`** and **`.json.err`** — the stream
   the session actually printed, kept whole; the one result object read out of
-  it (summed when there were two), which is the file
+  it (turns and usage summed when there were two), which is the file
   `scripts/measure-steps.py` reads; and stderr. A session that printed no
   result — the ordinary end of a landed step, since `mc merge` ends the
   process on green (ruling 21) — gets a `.json` read from the stream instead

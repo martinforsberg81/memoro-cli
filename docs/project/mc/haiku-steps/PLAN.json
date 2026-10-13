@@ -20,7 +20,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`sessionResult` over a stream with several `result` lines gives the last line's cost: step 11 of week-focus-rows reads 2.09 USD, not 6.44.",
       "check": "`node --input-type=module -e \"import {sessionResult} from './src/mc/run-plan.js'; import {readFileSync} from 'node:fs'; console.log(sessionResult(readFileSync(process.env.HOME + '/mc/runner/log/week-focus-rows-20261013T075918Z.jsonl','utf8')).total_cost_usd.toFixed(2))\"` in memoro-cli prints `2.09`."
     },

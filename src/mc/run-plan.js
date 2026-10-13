@@ -1117,9 +1117,7 @@ export function quietPrompt({ minutes, tasks }) {
 }
 
 const USAGE_SUMS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
-const RESULT_SUMS = ['num_turns', 'total_cost_usd', 'duration_ms', 'duration_api_ms'];
-// Limits, not amounts: the last result's value is the value.
-const MODEL_USAGE_KEPT = new Set(['contextWindow', 'maxOutputTokens']);
+const RESULT_SUMS = ['num_turns', 'duration_ms'];
 
 const add = (a, b) => (typeof b === 'number' ? (typeof a === 'number' ? a + b : b) : a);
 
@@ -1247,14 +1245,16 @@ export function sessionStanding({ toolId, stdout }) {
 
 /**
  * The session's result, read from what claude printed: the last `result`
- * line of a stream-json run, with the amounts of every result line added up.
+ * line of a stream-json run, with the per-turn-group amounts of every result
+ * line added up.
  *
  * One process can print more than one (proven 2026-09-11, step-cost step 3):
  * a check-in written just as the session finished starts a new turn with its
- * own `result`, and each carries its own `num_turns`, `usage` and
- * `total_cost_usd` for that turn group, not a running total. So turns, cost,
- * durations, the four usage counts and `modelUsage` per model are summed;
- * `subtype`, `is_error`, `result` and `session_id` are the last one's.
+ * own `result`. `num_turns`, `duration_ms` and the four `usage` counts are
+ * that turn group's, so they are summed. `total_cost_usd`, `duration_api_ms`
+ * and `modelUsage` are running totals for the session (measured 2026-10-13,
+ * ruling 42), so they are the last line's, as are `subtype`, `is_error`,
+ * `result` and `session_id`.
  *
  * Output that is one JSON object and no `result` line — `--output-format
  * json`, which the helper still runs on — is read whole, as it always was.
@@ -1280,16 +1280,6 @@ export function sessionResult(stdout) {
   const usage = { ...(last.usage || {}) };
   for (const key of USAGE_SUMS) usage[key] = results.reduce((sum, r) => add(sum, r.usage?.[key]), undefined);
   out.usage = usage;
-  const models = {};
-  for (const r of results) {
-    for (const [model, counts] of Object.entries(r.modelUsage || {})) {
-      const into = models[model] || (models[model] = {});
-      for (const [key, value] of Object.entries(counts || {})) {
-        into[key] = MODEL_USAGE_KEPT.has(key) ? value : add(into[key], value);
-      }
-    }
-  }
-  if (results.some((r) => r.modelUsage)) out.modelUsage = models;
   return out;
 }
 

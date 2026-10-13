@@ -613,7 +613,8 @@ test('streamSummary: cache writes split by TTL are priced at 1.25× (5m) and 2×
  * Stream-json: one event per line, the `result` line the session's answer.
  * Proven live 2026-09-11 (step-cost step 3's comments): a check-in written
  * after a result starts a new turn with its own `result`, and each carries
- * the numbers of its own turn group — so two are added up, not the last taken.
+ * the numbers of its own turn group — so turns and usage are added up, and
+ * cost and modelUsage (running totals, ruling 42) are the last one's.
  */
 describe('readSessionOutput on a stream-json run', () => {
   const event = (value) => JSON.stringify(value);
@@ -642,15 +643,15 @@ describe('readSessionOutput on a stream-json run', () => {
     assert.equal(sessionResult([init, assistant].join('\n')), null);
   });
 
-  it('adds two results up, and takes the rest from the last', () => {
+  it('adds the turn group amounts, and takes the running totals from the last', () => {
     const first = result({
-      num_turns: 30, total_cost_usd: 1.5, duration_ms: 1000, duration_api_ms: 800, session_id: 'sid-1',
+      num_turns: 30, total_cost_usd: 1.5, duration_ms: 1000, duration_api_ms: 800, session_id: 'sid',
       modelUsage: { sonnet: { inputTokens: 5, outputTokens: 7, contextWindow: 200000 } },
     });
     const second = result({
-      num_turns: 2, total_cost_usd: 0.25, duration_ms: 200, duration_api_ms: 100, session_id: 'sid-2', subtype: 'error_during_execution', is_error: true, result: 'blocked',
+      num_turns: 2, total_cost_usd: 1.75, duration_ms: 200, duration_api_ms: 900, session_id: 'sid', subtype: 'error_during_execution', is_error: true, result: 'blocked',
       usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 },
-      modelUsage: { sonnet: { inputTokens: 1, outputTokens: 1, contextWindow: 200000 }, opus: { inputTokens: 9, outputTokens: 9 } },
+      modelUsage: { sonnet: { inputTokens: 6, outputTokens: 8, contextWindow: 200000 }, opus: { inputTokens: 9, outputTokens: 9 } },
     });
     const stdout = [init, first, assistant, second].join('\n');
     const summed = sessionResult(stdout);
@@ -660,11 +661,11 @@ describe('readSessionOutput on a stream-json run', () => {
     assert.equal(summed.duration_api_ms, 900);
     assert.deepEqual(summed.usage, { input_tokens: 11, output_tokens: 22, cache_read_input_tokens: 303, cache_creation_input_tokens: 44 });
     assert.deepEqual(summed.modelUsage, { sonnet: { inputTokens: 6, outputTokens: 8, contextWindow: 200000 }, opus: { inputTokens: 9, outputTokens: 9 } });
-    assert.equal(summed.session_id, 'sid-2');
+    assert.equal(summed.session_id, 'sid');
     assert.equal(summed.subtype, 'error_during_execution');
     assert.equal(summed.result, 'blocked');
     const r = readSessionOutput({ toolId: 'claude-code', stdout, exitCode: 0 });
-    assert.deepEqual(r, { turns: '32', session: 'sid-2', input: '11', output: '22', cacheRead: '303', cacheWrite: '44', note: 'failed', quota: false, quotaReset: null });
+    assert.deepEqual(r, { turns: '32', session: 'sid', input: '11', output: '22', cacheRead: '303', cacheWrite: '44', note: 'failed', quota: false, quotaReset: null });
   });
 
   it('keeps the quota rule: a short limit answer is quota', () => {
