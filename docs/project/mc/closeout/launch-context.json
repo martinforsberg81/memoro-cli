@@ -1,0 +1,116 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "launch-context",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/launch-context/PLAN.json",
+  "archived": "2026-10-13",
+  "goal": [
+    "Every session mc launches — claude or codex, step, mend, helper, intake, plan, brief, worker or work, new or resumed — is handed its role text and nothing the tool would load on its own: no CLAUDE.md, no AGENTS.md, no auto-memory.",
+    "Its prompt-cache TTL comes from its role: `step` and `mend` 5 minutes, every other role 1 hour, whatever the billing.",
+    "Cost estimates price cache writes at the TTL they were written with."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A claude step launch, new and resumed, carries `--settings` with CLAUDE_CODE_DISABLE_CLAUDE_MDS=1, CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 and CLAUDE_CODE_PROMPT_CACHE_TTL=5m; a codex one carries `-c project_doc_max_bytes=0`.",
+      "check": "Unit tests on `headlessArgs` in tests/mc/run-plan.test.js assert the exact argument pairs for both tools, new and resume."
+    },
+    {
+      "met": true,
+      "criterion": "A plan, brief, worker or work launch carries the same claude settings with TTL 1h, new and resumed, in both the foreground and the tmux launch.",
+      "check": "Unit tests on `openInWorkArea` and `launchCommand` (through `startInBackground`) in `src/mc/work-open.js` assert the `--settings` argument and its TTL."
+    },
+    {
+      "met": true,
+      "criterion": "`streamSummary` prices 5-minute cache writes at 1.25× input and 1-hour writes at 2×.",
+      "check": "A unit test feeds `streamSummary` assistant events whose usage splits `cache_creation` between `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens` and asserts the cost."
+    }
+  ],
+  "steps": [
+    {
+      "title": "Role TTL and the launch switches, for both tools, at every launch",
+      "done_when": "Every claude launch mc makes (headlessArgs, openInWorkArea, launchCommand; new and resumed) carries `--settings` with the two DISABLE switches and the role's TTL, every codex launch carries `-c project_doc_max_bytes=0`, `step`/`mend` resolve to 5m and other roles to 1h, and `mc gate` is green.",
+      "status": "done",
+      "pr": 903,
+      "landed": {
+        "sha": "2ebeda20e135ff49107c2afe17ada4cf3b554cfc",
+        "into": "main",
+        "at": "2026-10-12T20:29:23Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Every launch path now carries adapter.sessionArgs({cache}); role.cache comes from parseRole (step/mend 5m, else 1h). CACHE_TTL_MS is replaced by cacheTtlMs(cache) in both adapters. Step 2 (pricing by TTL) is untouched."
+      ],
+      "sessions": 1,
+      "seconds": 262,
+      "cost_usd": 0.890823
+    },
+    {
+      "title": "Price cache writes by their TTL",
+      "done_when": "`estimateCost` prices 5-minute writes at 1.25× and 1-hour writes at 2× input, `streamSummary` hands it the split from each message's `usage.cache_creation`, a test asserts both, and `mc gate` is green.",
+      "status": "done",
+      "pr": 905,
+      "landed": {
+        "sha": "6831c4c5ee35452f869a4fdff503a4f9f2786eb0",
+        "into": "main",
+        "at": "2026-10-12T20:37:45Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 144,
+      "cost_usd": 0.395783
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-12T20:28:39Z",
+      "kind": "step",
+      "seconds": 262,
+      "land_seconds": null,
+      "pr": 903,
+      "turns": 23,
+      "input": 44,
+      "output": 16824,
+      "cache_read": 1141060,
+      "cache_write": 65191,
+      "model": null,
+      "note": "success,queued",
+      "session": "dab193ee-211c-4624-9f79-34758f9460ff",
+      "cost_usd": 0.8908230000000001
+    },
+    {
+      "ts": "2026-10-12T20:37:02Z",
+      "kind": "step",
+      "seconds": 144,
+      "land_seconds": null,
+      "pr": 905,
+      "turns": 23,
+      "input": 30,
+      "output": 8356,
+      "cache_read": 388564,
+      "cache_write": 30166,
+      "model": null,
+      "note": "success,queued",
+      "session": "30f16d27-4c3c-44bc-93e2-03f8bceba171",
+      "cost_usd": 0.39578280000000005
+    }
+  ],
+  "totals": {
+    "sessions": 2,
+    "seconds": 406,
+    "land_seconds": 0,
+    "cost_usd": 1.286606,
+    "cost_unknown": 0,
+    "input": 74,
+    "output": 25180,
+    "cache_read": 1529624,
+    "cache_write": 95357,
+    "first": "2026-10-12T20:28:39Z",
+    "landed": "2026-10-12T20:37:45Z"
+  }
+}
