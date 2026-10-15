@@ -1,0 +1,109 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`mc dev open <surface> [--account <name>] [--onboarding] [--viewport <v>] [--open]` is one call that ends with the app where the work is: this worktree's server up (started, or restarted after edits), signed in as the asked account in the asked onboarding state, on the surface, and one line printed: the URL, account/state, branch @ commit. With `--open` a headed browser at that viewport is left open for a person.",
+    "`mc dev surfaces` lists the surfaces memoro declares, one line each, and the accounts with their onboarding states.",
+    "`mc shot` and `mc dev open` take accounts and onboarding states from memoro's `.mc/shot.json` `accounts` table instead of knowing `seeded`/`new` and `ready=1`/`reseed=1` themselves.",
+    "`mc shot dev <surface> --compare <ref>` pictures and measures the same surface on this worktree and on `<ref>` in one call, and prints both PNG paths and the measured numbers that differ."
+  ],
+  "contract": [
+    "The shot-capture request and result shapes are memoro's (`scripts/shot/request.mjs` in memoro); mc adds no field memoro's `mc-dev-door` plan does not define: `mode: \"open\"`, `measure: \"@<name>\"`, `scroll.selector: null`, and accounts from the table.",
+    "mc knows no selector: every selector, account and sign-in path comes from `.mc/shot.json`.",
+    "Every existing `mc shot` flag and output line keeps its meaning; the path stays alone on the first stdout line.",
+    "A token or session never reaches argv, stdout or `--json`."
+  ],
+  "out_of_scope": [
+    "Everything in memoro: the server's `--restart`, `/dev/login?next=`, the table and the registry themselves, `shot.mjs` mode `open` (memoro plan `mc-dev-door`).",
+    "Counting calls in session logs to show the proposal's measure of done; Martin reads that later.",
+    "`mc shot prod` with `--compare`, and comparing two refs neither of which is the worktree.",
+    "A browser for `mc dev open` other than the one `shot.mjs` launches."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "From a memoro worktree, `mc dev open assistant --account new --viewport iphone --open` returns within the server's start time, leaves a headed browser on the main chat at 390×844, and prints one line with the URL, `new/done` and the branch @ commit.",
+      "check": "`mc dev open assistant --account new --viewport iphone --open; echo exit $?` prints a line containing `/dev/login?account=new&ready=1&next=%2Fapp%2Fassistant` and `new/done`, then `exit 0`; `pgrep -f scripts/shot/shot.mjs` prints a pid until the window is closed, and nothing after."
+    },
+    {
+      "met": false,
+      "criterion": "`mc dev surfaces` lists every target memoro's `.mc/shot.json` declares, with its path and summary, and the accounts with their states.",
+      "check": "`mc dev surfaces` from a memoro worktree prints lines for `assistant`, `inbox`, `mail`, `library`, `reader`, `onboarding` with their summaries, and `accounts: seeded (done, fresh) · new (done, fresh)`."
+    },
+    {
+      "met": false,
+      "criterion": "Before and after in one call: `mc shot dev assistant --viewport iphone --scroll @end --measure @layout --compare origin/main` prints this tree's PNG path, origin/main's PNG path, and the differing numbers or that there are none.",
+      "check": "Run it from a memoro worktree with an edit to `public/css/features/assistant-window/_index.css` (e.g. the footer's bottom offset); lines 1 and 2 are existing `.png` files, and a `diff` line names `.assistant-layout__footer` with `ref → here` values. Revert the edit afterwards."
+    },
+    {
+      "met": false,
+      "criterion": "The account comes from the table: `mc shot dev home --account review` is refused with the declared names, and `mc shot dev onboarding --account new --viewport iphone` signs in through `/dev/login?account=new&reseed=1` because the surface declares `onboarding: fresh`.",
+      "check": "`mc shot dev home --account review` exits 2 with `--account is one of seeded, new`; `mc shot dev onboarding --account new --viewport iphone --json` exits 0 and its picture is the onboarding (`url` ends in `/app/`)."
+    }
+  ],
+  "documents": [
+    { "label": "mc shot", "path": "../../../technical/mc-shot.md" },
+    { "label": "The dev-server protocol", "path": "../../../dev-server-protocol.md" }
+  ],
+  "runner": { "tool": "claude", "model": "opus", "effort": "medium" },
+  "steps": [
+    {
+      "title": "mc shot reads accounts and onboarding states from .mc/shot.json; @end and @<name> without a selector",
+      "status": "ready",
+      "done_when": "`mc shot dev` builds its sign-in URL from the `accounts` table (falling back to today's behaviour when memoro declares none), `--scroll @end` passes a null selector, `tests/mc/shot.test.js` covers both, and `mc gate` is green.",
+      "runner": { "model": "claude-haiku-5-5" },
+      "instruction": [
+        "The table memoro declares in `.mc/shot.json` (memoro plan `mc-dev-door`, step 3): `\"default_account\": \"seeded\"` and `\"accounts\": { \"seeded\": { \"summary\": \"…\", \"onboarding\": { \"done\": \"/dev/login?account=seeded&ready=1\", \"fresh\": \"/dev/login?account=seeded&reseed=1\" } }, \"new\": { … the same with account=new … } }`. Each state's value is a sign-in path relative to the dev server's base URL. A `targets[]` entry may carry `\"onboarding\": \"fresh\"` or `\"done\"`: the state that surface needs when the caller says nothing.",
+        "In `src/mc/shot.js` add and export a pure `resolveAccount(declared, { account = null, onboarding = false, entry = null } = {})`. With `declared.accounts` a plain object: the name is `account ?? declared.default_account ?? 'seeded'`; a name that is not a key returns `{ ok: false, error: '--account is one of <keys joined by \", \">, not <name>' }`; the state is `'fresh'` when `onboarding` is true, else `entry?.onboarding ?? 'done'`; the path is `declared.accounts[name].onboarding?.[state]`, and a missing one returns `{ ok: false, error: '.mc/shot.json: account <name> declares no onboarding state <state>' }`. Without a table (an older memoro): names are `DEV_ACCOUNTS` (keep the constant), the same error text over them, and the path is `/dev/login?account=<name>&<reseed=1 if fresh else ready=1>`, which is exactly what `src/mc/commands/shot.js` builds today. Returns `{ ok: true, account, state, path }`.",
+        "In `src/mc/commands/shot.js`: drop the early `DEV_ACCOUNTS.includes(flags.account)` check (it moves into `resolveAccount`, after `.mc/shot.json` is read). After `resolveTarget`, find the declared entry (`declared.targets.find((item) => item.name === target.target.name)` for a name target, null for a path). In the `where === 'dev'` branch, replace the `state`/`signIn` lines (the comment about `reseed` and the two lines after it) with `resolveAccount(declared, { account: flags.account, onboarding: flags.onboarding, entry })`, exit 2 with its error, `who = resolved.account`, `signIn = { kind: 'url', url: baseUrl + resolved.path }`, and pass `onboarding: resolved.state === 'fresh'` to `buildRequest` instead of `flags.onboarding`. The `prod` refusal of `--account`/`--onboarding` stays. Call `resolveAccount` before `ensureAppServer`, so a wrong name is refused without starting a server.",
+        "`parseScroll` in `src/mc/shot.js`: an empty selector before `@end`, `@top` or `@<px>` is now valid and gives `{ selector: null, to }`, meaning 'the surface's declared scroller' (memoro resolves it). A value with no `@` and nothing in it, and `@middle`, stay errors. `--measure` needs no code: `@layout` already passes through as a string; memoro resolves it.",
+        "`--list` (`listing` in `src/mc/commands/shot.js`) gains a third block after the viewports: `accounts (default <default_account>):` and one line per account, `  <name>  <states joined by \", \">  <summary>`; nothing when there is no table.",
+        "Usage text: `[--scroll <css>[@end|@top|@<px>] | @end]` with the line 'a bare @end/@top scrolls the surface's declared scroller', `[--measure <css> | @<name>]` with 'a name is one of the surface's declared measurements (mc dev surfaces)', and `[--account <name>]  dev only: an account .mc/shot.json declares (seeded by default)`. Mirror these in `docs/technical/mc-shot.md` § *Measuring a layout*, in its `--account` bullet: the account and state come from the `accounts` table.",
+        "Tests in `tests/mc/shot.test.js`: `resolveAccount` with a table (default, explicit, unknown, fresh, the entry's own `onboarding`, a missing state) and without one (today's two URLs); `parseScroll('@end')` is now `{ ok: true, scroll: { selector: null, to: 'end' } }` (change the existing assertion that it fails), `parseScroll('@top')` likewise, `parseScroll('')` is still not ok; the existing 'signs in as the account asked for, reseeded for its onboarding' test still passes against a fixture `.mc/shot.json` without a table, and a copy of it with a table produces `sign_in.url` from the table.",
+        "Changelog: `changelog.d/mc-shot-account-table.md`, section Changed. The `mc shot` row in `docs/mc-command-matrix.md`: say accounts come from `.mc/shot.json`; in a final commit touching nothing else. Then `mc gate`."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "mc dev open <surface> and mc dev surfaces",
+      "status": "blocked",
+      "done_when": "`mc dev open` and `mc dev surfaces` exist as specified, `tests/mc/dev-open.test.js` covers them with injected server, git and spawn, success criteria 1 and 2 pass from a memoro worktree on this machine, and `mc gate` is green.",
+      "instruction": [
+        "Needs memoro's `mc-dev-door` plan on memoro's main: `/dev/login?next=`, the account table, the surface fields and `shot.mjs` mode `open`. Check before starting: memoro's `origin/main:.mc/shot.json` has `accounts` and a target with `summary`, and `git -C <memoro> grep -n \"'open'\" origin/main -- scripts/shot/request.mjs` finds the mode. If not, set this step `blocked` on `{ kind: \"project\", name: \"mc-dev-door\" }` again and stop.",
+        "Where. `src/mc/commands/dev.js` gains the verbs `open` and `surfaces` in `VERBS`, `parseArgs` and `usage`; the work is in a new `src/mc/dev-open.js`, so `dev.js` stays the index of the protocol verbs. `parseArgs` currently refuses `--worktree`/`--wait` outside `admit` and `--dry-run`/`--min-age-seconds` outside `reap`; give `open` and `surfaces` their own flag scan (`scanArgs` from `./flags.js`, booleans `--onboarding`, `--open`, `--here`, `--json`; strict values `--account`, `--viewport`, `--theme`, `--locale`, `--safe-area`). The worktree is chosen exactly as `src/mc/commands/shot.js` chooses it (the one you stand in when it has `.mc/shot.json`, else `sharedWorktree(env)`; `--here` forces the first): extract that into an exported `shotWorktree({ cwd, env, here, deps })` in `src/mc/shot.js` and use it from both.",
+        "`mc dev surfaces [--json]`: read `.mc/shot.json` (`readShotDeclaration`). Print one line per target, `<name padded to the longest>  <path padded>  <summary or ->`, then a blank line and `accounts: <name> (<states joined by \", \">) · <name> (…)` from the table, default first. `--json`: `{ schema_version: 1, worktree, surfaces: [{ name, path, summary, window, scroller, chrome, measure: [names], onboarding }], accounts: { name: [states] }, default_account }`. No server is started.",
+        "`mc dev open <surface> [--account <name>] [--onboarding] [--viewport <v>] [--theme light|dark] [--locale <code>] [--safe-area <t,r,b,l>|0] [--open] [--here] [--json]`. The surface is a declared name or a path under `/app` (`resolveTarget`). `--viewport`, `--theme`, `--locale` and `--safe-area` are only for `--open` (exit 2, `--viewport … are for --open: a URL has no viewport`). Order: resolve the target and the account (`resolveAccount` from step 1, with the declared entry) before any server, so a wrong word costs nothing; then `readDeclaration(worktree)` and `ensureAppServer(worktree, declaration, { json, stdout: stderr, deps })` from `src/mc/test-environment.js`, which starts the server, or restarts it when the tree was edited since it started; then `servedTree(worktree, app.server)` (exported from `src/mc/commands/shot.js`; move it to `src/mc/shot.js` if importing a command module from a library module is refused by the gate).",
+        "The URL: `new URL(resolved.path, baseUrl)` with `next` set by `searchParams.set('next', <entry.path or the given path>)`. Without `--open` print to stdout exactly one line, `<url>  <account>/<state>  <branch> @ <commit>`, and when the declared entry has `open` clicks, a second line `then click: <selector> → <selector>` (they are clicks a person or a browser tool makes after landing). When the state is `fresh`, add on stderr: `mc: opening this URL reseeds <account> each time`. `--json` instead prints `{ url, account, onboarding: state, surface, served, then: [selectors] }`.",
+        "`--open`: build `{ mode: 'open', base_url, account, sign_in: { kind: 'url', url: <the URL above> }, target: target.target, viewport, theme, locale, safe_area, onboarding: state === 'fresh' }` (viewport through `parseViewport`, defaulting to `.mc/shot.json`'s `default_viewport`; safe area through `parseSafeArea`) and hand it to a new `runOpen({ worktree, declaration: declared, request, env, deps })` in `src/mc/shot.js`. `runOpen` is `runCapture`'s sibling for a script that outlives mc: make the request directory and file exactly as `runCapture` does (mode 0600); open a log `join(mcHome(), 'shots', 'open-<YYYYMMDD-HHMMSS>.log')`; spawn the declared argv with `{ cwd: worktree, env: { ...env, MEMORO_SHOT_REQUEST: file }, detached: true, stdio: ['ignore', 'pipe', logFd] }`; read stdout by lines and take the first that parses as an object with a boolean `ok`. On it: `child.stdout.destroy()`, `child.unref()`, remove the request directory, and return `{ ok: true, result, log }`. If the child exits first, or 150 s pass (kill it), return `{ ok: false, error: '<what happened> — <log path>' }` and remove the directory. A `result.ok === false` is an error with its `code` and `error`, scrubbed like `mc shot` does. Then print the same one line as without `--open` and, on stderr, `mc: a browser is open on <surface> at <viewport> — close its window when you are done`.",
+        "`--open` is refused with exit 2 when there is no display to open on: `process.platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY`. On macOS it always opens.",
+        "Tests in a new `tests/mc/dev-open.test.js`, following `tests/mc/shot.test.js`'s fixtures (a temp worktree with `.mc/shot.json`, injected `ensureAppServer`, `servedTree`/git and `spawn`): `surfaces` text and JSON; `open` prints one line with `account=new&ready=1&next=%2Fapp%2Fassistant`; a path target; the `then click:` line for a target with `open`; `fresh` from the entry and from `--onboarding`, with the reseed warning; a wrong account is refused before `ensureAppServer` is called; `--viewport` without `--open` exits 2; `runOpen` with a fake child that writes the result line resolves and unrefs, one that exits first returns the log path, and the request directory is gone in every case.",
+        "Docs: a section `## mc dev open and mc dev surfaces` in `docs/technical/mc-shot.md` after *Measuring a layout* (they read the same `.mc/shot.json`): the forms, the one line, `--open`, and the two-call path for a layout question (`mc dev open <surface> --viewport iphone --open`, then `mc shot dev <surface> --viewport iphone --scroll @end --measure @layout`). In `docs/dev-server-protocol.md`, one sentence where the verbs are listed: `open` and `surfaces` read `.mc/shot.json`, not the dev-server protocol. The comment at the top of `src/mc/commands/dev.js` lists the verbs: add the two in its style. `changelog.d/mc-dev-open.md`, section Added. A row in `docs/mc-command-matrix.md` after the `mc shot` row, in a final commit touching nothing else.",
+        "Check by hand before the PR: success criteria 1 and 2 from `~/mc/plan/mc/memoro` or any memoro worktree on this machine; paste the printed lines into the PR body."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": { "kind": "project", "name": "mc-dev-door" }
+    },
+    {
+      "title": "mc shot dev --compare <ref>: both trees, both pictures, the numbers that moved",
+      "status": "ready",
+      "done_when": "`mc shot dev <target> --compare <ref>` captures this worktree and `<ref>` with one request, prints both paths and the measurement diff (or `--json` with both results and the diff), `tests/mc/shot-compare.test.js` covers the tree, the diff and the output, success criterion 3 passes from a memoro worktree, and `mc gate` is green.",
+      "instruction": [
+        "Flag: `--compare <ref>` on `mc shot dev` only (`prod` exits 2: `--compare is for dev — production has one tree`); refused with `--out` (two files need two names) and with `--json` it changes the JSON shape below. The work is in a new `src/mc/shot-compare.js`; `src/mc/commands/shot.js` calls it after it has built the request for this tree.",
+        "The other tree, `compareTree(worktree, ref, deps)`: `git -C <worktree> rev-parse --verify --quiet <ref>^{commit}`; none is `no commit <ref> in <worktree> (git fetch origin?)`. When the commit is this worktree's HEAD and `git status --porcelain` is empty, refuse: `<ref> is this tree's HEAD and nothing is edited — nothing to compare`. The tree lives at `join(mcHome(), 'compare', '<basename(worktree)>-<sha10>')`: reuse it when `git -C <dir> rev-parse HEAD` is that commit, else `git -C <worktree> worktree add --detach <dir> <sha>`. Before adding, prune: every directory under `join(mcHome(), 'compare')` whose mtime is over 24 h old and for which `serversFor(dir)` (`src/mc/test-environment.js`) lists no live server is removed with `git -C <worktree> worktree remove --force <dir>`, and only directories under that root, never anything else. A new tree without `node_modules` gets `npm run deps:prepare` run in it (`spawnSync('npm', ['run', 'deps:prepare'], { cwd: dir, stdio: ['ignore', 'inherit', 'inherit'] })`; memoro's script; its failure is the error), so a ref from before memoro's server attached its own dependencies still starts.",
+        "Its server: `readDeclaration(dir)` and `ensureAppServer(dir, declaration, …)` as for this tree. The two count against `mc dev admit`'s cap of two app servers; on a busy machine `ensureDevServer` waits for a slot with the lines it already prints. Say on stderr which tree each server is (`servedTree` for both, prefixed `here:` and `<ref>:`).",
+        "The captures: the same request (`buildRequest` with every flag the person gave) twice, with `base_url` and `sign_in.url` each tree's own (the same `resolveAccount` path on each base URL), run both times with **this** worktree's script and declaration (`runCapture({ worktree, declaration: declared, … })`): the script is only a browser client, and running the ref's own script would fail on any declared measurement or field the ref does not have yet. Here first, then the ref. The ref's file name is this tree's `outPath` with `-<sha7>` inserted before `.png`.",
+        "The diff, a pure exported `diffMeasure(refList, hereList)`: pair the two `measure` arrays by index; for each pair compare `element`, every key of `rect` and `scroll`, and `position`, `padding`, `margin`, `overflow_y`, `z_index`, `visible`; return `[{ index, element: here?.element ?? ref.element, field: 'rect.bottom', ref, here }]` for every value that differs (numbers compared after rounding to 0.1, as the script already rounds), plus `{ field: 'missing', ref|here: null }` for an index only one side has. No measure on either side gives `[]` and nothing is printed about it.",
+        "Output without `--json`: line 1 this tree's PNG path, line 2 the ref's, then one line per difference, `diff  <element>  <field>  <ref> → <here>`, or `mc: the measured numbers are the same on both trees` when the list is empty and a measure was asked for; each tree's warnings as `mc: warning — <here|ref>: …`. With `--json`: `{ here: <result + served>, ref: { ref, commit, result: <result + served> }, diff: [...] }`, scrubbed like today.",
+        "Tests in a new `tests/mc/shot-compare.test.js`: `diffMeasure` (same lists give `[]`; a moved `rect.bottom`; an element only on one side; `visible` flipping); `compareTree` with injected git (unknown ref; HEAD and clean refused; reuse at the same commit; add otherwise; prune removes only an old directory with no server and never one outside the root); the command with injected `ensureAppServer` and `runCapture` prints two paths then the diff lines, and `--compare` with `prod` or `--out` exits 2.",
+        "Docs: a `--compare <ref>` bullet in `docs/technical/mc-shot.md` § *Measuring a layout* and in the usage text (`[--compare <ref>]  dev only: the same picture and numbers on <ref>, and what moved`); `changelog.d/mc-shot-compare.md`, section Added; the `mc shot` row in `docs/mc-command-matrix.md` in a final commit touching nothing else.",
+        "Check by hand before the PR: success criterion 3 from a memoro worktree on this machine (`~/mc/plan/mc/memoro` will do; revert the CSS edit afterwards), and paste the output into the PR body."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
