@@ -6,7 +6,7 @@
  *           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
  *           [--scroll <css>[@end|@top|@<px>] | @end] [--measure <css> | @<name>]
  *           [--account <name>] [--onboarding] [--me] [--here]
- *           [--out <file.png>] [--open] [--json]
+ *           [--compare <ref>] [--out <file.png>] [--open] [--json]
  *   mc shot <dev|prod> --list
  *   mc shot login prod [--paste]
  *   mc shot logout prod
@@ -30,6 +30,7 @@ import { dirname, join, resolve } from 'node:path';
 import { deleteSecret, getSecret, setSecret } from '../../lib/keychain.js';
 import { openCommandFor } from '../../lib/device-flow.js';
 import { mcHome } from '../paths.js';
+import { runCompare } from '../shot-compare.js';
 import {
   SESSION_SECRET, SHELLS, THEMES, accountTable, buildLoginRequest, buildRequest, outPath, parseSafeArea,
   parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture, shotWorktree,
@@ -52,7 +53,7 @@ export async function run(argv, deps = {}) {
     booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding'],
     strictValues: [
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
-      '--safe-area', '--wait-for', '--scroll', '--measure', '--account',
+      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare',
     ],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
@@ -73,6 +74,14 @@ export async function run(argv, deps = {}) {
   }
   if ((flags.account || flags.onboarding) && where === 'prod') {
     stderr.write('mc: --account and --onboarding are for dev — production signs in as the test account or as you\n');
+    return 2;
+  }
+  if (flags.compare && where === 'prod') {
+    stderr.write('mc: --compare is for dev — production has one tree\n');
+    return 2;
+  }
+  if (flags.compare && flags.out) {
+    stderr.write('mc: --compare writes two files and --out names one — two files need two names\n');
     return 2;
   }
   const safeArea = parseSafeArea(flags['safe-area']);
@@ -132,11 +141,11 @@ export async function run(argv, deps = {}) {
     // Refused before a server is started, so a wrong name costs no server.
     resolved = resolveAccount(declared, { account: flags.account, onboarding: flags.onboarding, entry });
     if (!resolved.ok) { stderr.write(`mc: ${resolved.error}\n`); return 2; }
-    const app = await ensureAppServer(worktree, declaration, { json: flags.json, stdout: stderr, deps });
+    const app = await (deps.ensureAppServer || ensureAppServer)(worktree, declaration, { json: flags.json, stdout: stderr, deps });
     if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
     baseUrl = app.baseUrl;
     served = (deps.servedTree || servedTree)(worktree, app.server);
-    if (!flags.json) stderr.write(`mc: serving ${served.line}\n`);
+    if (!flags.json) stderr.write(`mc: ${flags.compare ? 'here: ' : ''}serving ${served.line}\n`);
     who = resolved.account;
     signIn = { kind: 'url', url: `${baseUrl}${resolved.path}` };
   } else {
@@ -189,8 +198,27 @@ export async function run(argv, deps = {}) {
     measure: flags.measure,
     onboarding: resolved?.state === 'fresh',
   });
-  const ran = runCapture({ worktree, declaration: declared, request, env: withoutToken(env, declaration), deps });
   const scrub = scrubber(secrets);
+  if (flags.compare) {
+    return runCompare({
+      worktree,
+      ref: flags.compare,
+      declared,
+      request,
+      signInPath: resolved.path,
+      served,
+      servedTree: deps.servedTree || servedTree,
+      env: withoutToken(env, declaration),
+      json: flags.json,
+      open: flags.open,
+      scrub,
+      stdout,
+      stderr,
+      openFile: (file) => openFile(file, deps),
+      deps,
+    });
+  }
+  const ran = (deps.runCapture || runCapture)({ worktree, declaration: declared, request, env: withoutToken(env, declaration), deps });
   if (!ran.ok) { stderr.write(`mc: ${scrub(ran.error)}\n`); return 1; }
   const { result } = ran;
   if (!result.ok) {
@@ -353,6 +381,7 @@ export function usage() {
     '          [--onboarding]              dev only: reseed the account and show its onboarding\n',
     '          [--me]                      prod only: signed in as you, from mc shot login prod\n',
     '          [--here]                    the worktree you stand in — the default inside a memoro worktree\n',
+    '          [--compare <ref>]           dev only: the same picture and numbers on <ref>, and what moved\n',
     '          [--out <file.png>] [--open] [--json]\n',
     '        mc shot <dev|prod> --list     the targets and viewports memoro declares\n',
     '        mc shot login prod            sign in once in a browser; mc keeps the session\n',

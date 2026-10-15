@@ -31,7 +31,7 @@
       "check": "`mc dev surfaces` from a memoro worktree prints lines for `assistant`, `inbox`, `mail`, `library`, `reader`, `onboarding` with their summaries, and `accounts: seeded (done, fresh) · new (done, fresh)`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Before and after in one call: `mc shot dev assistant --viewport iphone --scroll @end --measure @layout --compare origin/main` prints this tree's PNG path, origin/main's PNG path, and the differing numbers or that there are none.",
       "check": "Run it from a memoro worktree with an edit to `public/css/features/assistant-window/_index.css` (e.g. the footer's bottom offset); lines 1 and 2 are existing `.png` files, and a `diff` line names `.assistant-layout__footer` with `ref → here` values. Revert the edit afterwards."
     },
