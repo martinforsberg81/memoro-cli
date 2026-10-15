@@ -3,13 +3,17 @@
  *
  *   mc shot <dev|prod> <target> [--el <css>] [--shell base|immersive|window]
  *           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
- *           [--locale <code>] [--me] [--here] [--out <file.png>] [--open] [--json]
+ *           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
+ *           [--scroll <css>[@end|@top|@<px>]] [--measure <css>]
+ *           [--account seeded|new] [--onboarding] [--me] [--here]
+ *           [--out <file.png>] [--open] [--json]
  *   mc shot <dev|prod> --list
  *   mc shot login prod [--paste]
  *   mc shot logout prod
  *
- * The worktree and the server are found the way `mc test dev|prod` finds
- * them: the shared checkout unless `--here`, a dev server started through the
+ * The worktree is the one you stand in when it is a memoro worktree (it has
+ * `.mc/shot.json`), else the shared checkout — a session photographs its own
+ * change without having to remember `--here`. The server is started through the
  * same `ensureAppServer`, production's base URL from `.mc/test.json`. What is
  * pictured, and how, is memoro's: `.mc/shot.json` names the script, and mc
  * hands it one request file and reads back one result line (src/mc/shot.js).
@@ -18,8 +22,8 @@
  * `$(mc shot … | head -1)`; every progress line goes to stderr. A token or a
  * session is never printed, never in `--json`, never in argv.
  */
-import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
 import { platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -27,8 +31,8 @@ import { deleteSecret, getSecret, setSecret } from '../../lib/keychain.js';
 import { openCommandFor } from '../../lib/device-flow.js';
 import { mcHome } from '../paths.js';
 import {
-  SESSION_SECRET, SHELLS, THEMES, buildLoginRequest, buildRequest, outPath, parseViewport,
-  readShotDeclaration, resolveTarget, runCapture,
+  DEV_ACCOUNTS, SESSION_SECRET, SHELLS, THEMES, buildLoginRequest, buildRequest, outPath, parseSafeArea,
+  parseScroll, parseViewport, readShotDeclaration, resolveTarget, runCapture,
 } from '../shot.js';
 import {
   callerWorktree, ensureAppServer, readDeclaration, sharedWorktree, tokenFor,
@@ -45,8 +49,11 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'login' || argv[0] === 'logout') return account(argv[0], argv.slice(1), io);
 
   const scanned = scanArgs(argv, {
-    booleans: ['--full', '--me', '--here', '--open', '--json', '--list'],
-    strictValues: ['--el', '--shell', '--viewport', '--theme', '--locale', '--out'],
+    booleans: ['--full', '--me', '--here', '--open', '--json', '--list', '--onboarding'],
+    strictValues: [
+      '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
+      '--safe-area', '--wait-for', '--scroll', '--measure', '--account',
+    ],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
@@ -64,6 +71,18 @@ export async function run(argv, deps = {}) {
     stderr.write('mc: --here is for dev — production has one app, not one per worktree\n');
     return 2;
   }
+  if ((flags.account || flags.onboarding) && where === 'prod') {
+    stderr.write('mc: --account and --onboarding are for dev — production signs in as the test account or as you\n');
+    return 2;
+  }
+  if (flags.account && !DEV_ACCOUNTS.includes(flags.account)) {
+    stderr.write(`mc: --account is ${DEV_ACCOUNTS.join(' or ')}, not ${flags.account}\n`);
+    return 2;
+  }
+  const safeArea = parseSafeArea(flags['safe-area']);
+  if (!safeArea.ok) { stderr.write(`mc: ${safeArea.error}\n`); return 2; }
+  const scroll = parseScroll(flags.scroll);
+  if (!scroll.ok) { stderr.write(`mc: ${scroll.error}\n`); return 2; }
   if (flags.shell && !SHELLS.includes(flags.shell)) {
     stderr.write(`mc: --shell is ${SHELLS.join(', ')}, not ${flags.shell}\n`);
     return 2;
@@ -87,9 +106,9 @@ export async function run(argv, deps = {}) {
 
   const env = deps.env || process.env;
   const cwd = deps.cwd || process.cwd();
-  const worktree = flags.here
-    ? (deps.callerWorktree || callerWorktree)(cwd)
-    : sharedWorktree(env);
+  const here = (deps.callerWorktree || callerWorktree)(cwd);
+  const standsInMemoro = Boolean(here && (deps.existsSync || existsSync)(join(here, '.mc', 'shot.json')));
+  const worktree = flags.here || standsInMemoro ? here : sharedWorktree(env);
   if (!worktree) {
     stderr.write(flags.here
       ? 'mc: --here needs a git worktree, and this is not one\n'
@@ -114,13 +133,20 @@ export async function run(argv, deps = {}) {
   // Where the app is, and who signs in. Three cases and no fourth.
   let baseUrl = null;
   let signIn = null;
-  let who = 'seeded';
+  let who = flags.account || 'seeded';
+  let served = null;
   const secrets = [];
   if (where === 'dev') {
     const app = await ensureAppServer(worktree, declaration, { json: flags.json, stdout: stderr, deps });
     if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
     baseUrl = app.baseUrl;
-    signIn = { kind: 'url', url: `${baseUrl}/dev/login?account=seeded&ready=1` };
+    served = (deps.servedTree || servedTree)(worktree, app.server);
+    if (!flags.json) stderr.write(`mc: serving ${served.line}\n`);
+    // `reseed` puts the managed account back to its seed — onboarding not yet
+    // done — so `--onboarding` is the same picture every time; `ready=1` is
+    // onboarding done, which every other picture wants.
+    const state = flags.onboarding ? 'reseed=1' : 'ready=1';
+    signIn = { kind: 'url', url: `${baseUrl}/dev/login?account=${who}&${state}` };
   } else {
     baseUrl = prodBase(declaration);
     if (!baseUrl) { stderr.write(`mc: ${worktree} declares no production base_url\n`); return 1; }
@@ -165,6 +191,11 @@ export async function run(argv, deps = {}) {
     theme: flags.theme,
     locale: flags.locale,
     out,
+    safeArea: safeArea.safeArea,
+    waitFor: flags['wait-for'],
+    scroll: scroll.scroll,
+    measure: flags.measure,
+    onboarding: flags.onboarding,
   });
   const ran = runCapture({ worktree, declaration: declared, request, env: withoutToken(env, declaration), deps });
   const scrub = scrubber(secrets);
@@ -180,10 +211,12 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   if (flags.json) {
-    stdout.write(`${scrub(JSON.stringify(result, null, 2))}\n`);
+    stdout.write(`${scrub(JSON.stringify(served ? { ...result, served } : result, null, 2))}\n`);
   } else {
     stdout.write(`${result.file}\n`);
     if (result.url) stdout.write(`${scrub(result.url)}\n`);
+    // The numbers, one line, after the path: what a layout question turns on.
+    if (result.measure) stdout.write(`${scrub(JSON.stringify({ measure: result.measure, safe_area: result.safe_area ?? null }))}\n`);
     for (const warning of result.warnings || []) stdout.write(`mc: warning — ${scrub(warning)}\n`);
   }
   if (flags.open) openFile(result.file, deps);
@@ -236,6 +269,20 @@ async function account(verb, argv, { stdout, stderr, deps }) {
   await (deps.setSecret || setSecret)(SESSION_SECRET, session);
   stdout.write('mc: your session is stored — mc shot prod <target> --me\n');
   return 0;
+}
+
+/**
+ * Which tree the server is serving, said rather than assumed: the branch and
+ * commit it was built from, and the files edited since it started — none
+ * after `ensureAppServer`, which starts a fresh one when there are. A port is
+ * the server's opinion of itself; this is the evidence.
+ */
+export function servedTree(worktree, server, deps = {}) {
+  const git = deps.git || ((args) => spawnSync('git', args, { cwd: worktree, encoding: 'utf8' }));
+  const branch = String(git(['branch', '--show-current']).stdout || '').trim() || '(detached)';
+  const commit = String(server?.built_from?.commit || git(['rev-parse', 'HEAD']).stdout || '').trim().slice(0, 10);
+  const url = server?.url || null;
+  return { worktree, branch, commit, url, line: `${worktree} — ${branch} @ ${commit}${url ? ` on ${url}` : ''}` };
 }
 
 /**
@@ -295,8 +342,15 @@ export function usage() {
     '          [--full]                    the whole scrolled page\n',
     '          [--viewport <name|WxH[@dpr]>]    a declared viewport or a size (dpr 2)\n',
     '          [--theme light|dark] [--locale <code>]\n',
+    '          [--safe-area <t,r,b,l>|0]    insets as a phone reports them; iphone carries 47,0,34,0\n',
+    '          [--wait-for <css>]          wait until it is visible\n',
+    '          [--scroll <css>[@end|@top|@<px>]]  scroll that element first (@end by default)\n',
+    '          [--measure <css>]           print every match\'s box, padding, position, scroll and\n',
+    '                                      visibility as one JSON line after the path\n',
+    '          [--account seeded|new]      dev only: which managed account (seeded by default)\n',
+    '          [--onboarding]              dev only: reseed the account and show its onboarding\n',
     '          [--me]                      prod only: signed in as you, from mc shot login prod\n',
-    '          [--here]                    dev only: a server for the worktree you stand in\n',
+    '          [--here]                    the worktree you stand in — the default inside a memoro worktree\n',
     '          [--out <file.png>] [--open] [--json]\n',
     '        mc shot <dev|prod> --list     the targets and viewports memoro declares\n',
     '        mc shot login prod            sign in once in a browser; mc keeps the session\n',
@@ -305,7 +359,13 @@ export function usage() {
     '        mc shot logout prod           forget it\n',
     '\n',
     'A target is a path under /app or a name from memoro\'s .mc/shot.json. Without --out the\n',
-    'file goes under ~/.memoro/mc/shots/. dev signs in as the seeded account through\n',
-    '/dev/login; prod as the test account, or as you with --me.\n',
+    'file goes under ~/.memoro/mc/shots/. Inside a memoro worktree dev serves that worktree\n',
+    '(restarted when it was edited since the server started) and says which tree it serves;\n',
+    'elsewhere it serves the shared checkout. dev signs in through /dev/login; prod as the\n',
+    'test account, or as you with --me.\n',
+    '\n',
+    'Example — the bottom of the main chat on a phone, with its numbers:\n',
+    '  mc shot dev assistant --viewport iphone --scroll \'.window-view__content\' \\\n',
+    '    --measure \'.window-view__content, .assistant-layout__footer, .assistant-summon\'\n',
   ].join('');
 }

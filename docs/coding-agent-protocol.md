@@ -245,15 +245,17 @@ Use one bounded transaction for ordinary commit → PR → main work:
 1. Inspect the current branch, complete diff, and base once. Reading the diff
    is the review; no test run gates this step.
 2. Stage only intended files, commit, and freeze the exact local head SHA.
-3. Push the workarea's own branch — `<project>` or `<project>-<n>`, whatever
+3. The branch to publish is the workarea's own branch — `<project>` or `<project>-<n>`, whatever
    the worktree stands on — and no other. Never force-push and never rewrite
    published history. A branch you named yourself is one `mc run` neither
    lands nor sees as in flight, so it will run the next step on top of your
    unlanded work.
-4. Create or update the PR with `gh pr create` / `gh pr edit` from that
-   branch. The PR description states what changed, why, user impact, root
-   cause for fixes, and known gaps. It does not claim validation that was not
-   performed.
+4. Push and create or update the PR with `mc publish --title "…" --body-file
+   <file>` from that branch — one call, never a force, refused on `main`, on a
+   dirty tree and when origin's branch moved. Not `git push` and
+   `gh pr create`: `mc hook pre-tool` turns those back to `mc publish`. The PR
+   description states what changed, why, user impact, root cause for fixes,
+   and known gaps. It does not claim validation that was not performed.
 5. Read one current PR/check/review snapshot for the frozen head. This
    repository currently has no automatic pull-request workflows; an empty
    checks result is terminal normal state, not a reason to poll. Never claim a

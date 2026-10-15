@@ -15,7 +15,7 @@ import { describe, it } from 'node:test';
 
 import { run, usage } from '../../src/mc/commands/shot.js';
 import {
-  buildRequest, outPath, parseResult, parseViewport, resolveTarget, slug,
+  buildRequest, outPath, parseResult, parseSafeArea, parseScroll, parseViewport, resolveTarget, slug,
 } from '../../src/mc/shot.js';
 
 const TOKEN = 'tok-5ecret-7e57';
@@ -38,7 +38,7 @@ if (how === 'not-signed-in') {
 if (request.mode === 'login') { console.log(JSON.stringify({ ok: true, session: '${COOKIE}' })); process.exit(0); }
 writeFileSync(request.out, Buffer.from('89504e470d0a1a0a', 'hex'));
 console.log('some progress on stdout');
-console.log(JSON.stringify({ ok: true, file: request.out, url: request.base_url + '/app/', subject: request.element ? 'element' : request.shell ? 'shell' : 'page', selector: request.element, width: 10, height: 10, warnings: how === 'warn' ? ['2 elements match; the first was captured'] : [] }));
+console.log(JSON.stringify({ ok: true, file: request.out, url: request.base_url + '/app/', subject: request.element ? 'element' : request.shell ? 'shell' : 'page', selector: request.element, width: 10, height: 10, safe_area: request.safe_area, ...(request.measure ? { measure: [{ element: 'main.window-view__content', rect: { top: 0, bottom: 844 } }] } : {}), warnings: how === 'warn' ? ['2 elements match; the first was captured'] : [] }));
 `;
 
 const SHOT_JSON = {
@@ -192,7 +192,11 @@ describe('mc shot — the pieces', () => {
     const request = buildRequest({
       baseUrl: 'http://127.0.0.1:8787', account: 'seeded', signIn: { kind: 'url', url: 'u' }, target: { name: 'home' }, viewport: 'desktop', out: '/o.png',
     });
-    assert.deepEqual(Object.keys(request), ['mode', 'base_url', 'account', 'sign_in', 'target', 'element', 'shell', 'full_page', 'viewport', 'theme', 'locale', 'out']);
+    assert.deepEqual(Object.keys(request), [
+      'mode', 'base_url', 'account', 'sign_in', 'target', 'element', 'shell', 'full_page', 'viewport', 'theme', 'locale', 'out',
+      'safe_area', 'wait_for', 'scroll', 'measure', 'onboarding',
+    ]);
+    assert.equal(request.onboarding, false);
     assert.equal(request.full_page, false);
   });
 });
@@ -358,5 +362,81 @@ describe('mc shot login | logout prod', () => {
     const result = await shot(['logout', 'prod'], fx, { deleteSecret: async (k) => { deleted.push(k); } });
     assert.equal(result.code, 0);
     assert.deepEqual(deleted, ['MEMORO_SHOT_SESSION']);
+  });
+});
+
+describe('mc shot — measuring a layout', () => {
+  it('reads --safe-area and --scroll into what the script takes', () => {
+    assert.deepEqual(parseSafeArea('47,0,34,0'), { ok: true, safeArea: { top: 47, right: 0, bottom: 34, left: 0 } });
+    assert.deepEqual(parseSafeArea('0'), { ok: true, safeArea: { top: 0, right: 0, bottom: 0, left: 0 } });
+    assert.deepEqual(parseSafeArea(null), { ok: true, safeArea: null });
+    assert.equal(parseSafeArea('47,34').ok, false);
+    assert.equal(parseSafeArea('-1').ok, false);
+    assert.deepEqual(parseScroll('.window-view__content'), { ok: true, scroll: { selector: '.window-view__content', to: 'end' } });
+    assert.deepEqual(parseScroll('[data-x="a"]@top'), { ok: true, scroll: { selector: '[data-x="a"]', to: 'top' } });
+    assert.deepEqual(parseScroll('.x@350'), { ok: true, scroll: { selector: '.x', to: 350 } });
+    assert.equal(parseScroll('.x@middle').ok, false);
+    assert.equal(parseScroll('@end').ok, false);
+  });
+
+  it('hands the measuring flags over, and prints the numbers on the line after the path', async () => {
+    const fx = fixture();
+    const result = await shot([
+      'dev', '/app/assistant', '--viewport', 'iphone', '--safe-area', '47,0,34,0', '--wait-for', '.window-view--main-chat',
+      '--scroll', '.window-view__content', '--measure', '.window-view__content, .assistant-summon',
+    ], fx);
+    assert.equal(result.code, 0, result.stderr);
+    const { request } = sideOf(fx);
+    assert.deepEqual(request.safe_area, { top: 47, right: 0, bottom: 34, left: 0 });
+    assert.equal(request.wait_for, '.window-view--main-chat');
+    assert.deepEqual(request.scroll, { selector: '.window-view__content', to: 'end' });
+    assert.equal(request.measure, '.window-view__content, .assistant-summon');
+    const lines = result.stdout.split('\n');
+    assert.equal(lines[0], request.out, 'the path stays first, alone');
+    const numbers = JSON.parse(lines[2]);
+    assert.equal(numbers.measure[0].rect.bottom, 844);
+    assert.deepEqual(numbers.safe_area, { top: 47, right: 0, bottom: 34, left: 0 });
+  });
+
+  it('signs in as the account asked for, reseeded for its onboarding', async () => {
+    const fx = fixture();
+    let result = await shot(['dev', 'home', '--account', 'new'], fx);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(sideOf(fx).request.sign_in.url, 'http://127.0.0.1:8787/dev/login?account=new&ready=1');
+    assert.equal(sideOf(fx).request.account, 'new');
+    result = await shot(['dev', 'home', '--onboarding'], fx);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(sideOf(fx).request.sign_in.url, 'http://127.0.0.1:8787/dev/login?account=seeded&reseed=1');
+    assert.equal(sideOf(fx).request.onboarding, true);
+  });
+
+  it('refuses a measuring flag it cannot read, and the dev-only ones on prod', async () => {
+    const fx = fixture();
+    for (const [argv, said] of [
+      [['dev', 'home', '--safe-area', '1,2'], /--safe-area is top,right,bottom,left/u],
+      [['dev', 'home', '--scroll', '.x@middle'], /after @ comes end, top/u],
+      [['dev', 'home', '--account', 'review'], /--account is seeded or new/u],
+      [['prod', 'home', '--account', 'new'], /are for dev/u],
+      [['prod', 'home', '--onboarding'], /are for dev/u],
+    ]) {
+      const result = await shot(argv, fx);
+      assert.equal(result.code, 2, argv.join(' '));
+      assert.match(result.stderr, said, argv.join(' '));
+    }
+  });
+
+  it('inside a memoro worktree, dev serves that worktree and says which tree it served', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', 'home'], fx, {
+      callerWorktree: () => fx.worktree,
+      servedTree: (worktree) => ({ worktree, branch: 'fix-x', commit: 'abcdef1234', line: `${worktree} — fix-x @ abcdef1234` }),
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stderr, /serving .*memoro — fix-x @ abcdef1234/u);
+    const json = await shot(['dev', 'home', '--json'], fx, {
+      callerWorktree: () => fx.worktree,
+      servedTree: (worktree) => ({ worktree, branch: 'fix-x', commit: 'abcdef1234', line: 'x' }),
+    });
+    assert.equal(JSON.parse(json.stdout).served.branch, 'fix-x');
   });
 });

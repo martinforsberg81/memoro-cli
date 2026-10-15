@@ -16,6 +16,7 @@ export const VERB_MODULES = {
   test: './mc/commands/test.js',
   gate: './mc/commands/gate.js',
   shot: './mc/commands/shot.js',
+  hook: './mc/commands/hook.js',
   publish: './mc/commands/publish.js',
   dev: './mc/commands/dev.js',
   deploy: './mc/commands/deploy.js',
