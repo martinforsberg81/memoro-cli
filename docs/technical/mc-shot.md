@@ -84,6 +84,16 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   is the onboarding, the same every time. A target may declare `"onboarding":
   "fresh"` itself. Without a table (an older memoro) the paths are
   `account=<name>&ready=1`, or `reseed=1` for `fresh`.
+- **`--compare <ref>`** (dev only) pictures and measures the same surface on
+  `<ref>` too, in one call: the ref is checked out detached under
+  `~/.memoro/mc/compare/<worktree>-<sha10>` (reused while it is at that commit,
+  `npm run deps:prepare` when it has no `node_modules`, pruned after 24 h
+  without a server), served by its own server, and captured with the same
+  request and this worktree's script. Line 1 is this tree's PNG, line 2 the
+  ref's (`-<sha7>` before `.png`), then one `diff  <element>  <field>  <ref> →
+  <here>` line per measured value that moved, or that none did. With `--json`:
+  `{ here, ref: { ref, commit, result }, diff }`. Refused with `--out` and with
+  a ref that is HEAD while nothing is edited.
 
 The request gains `safe_area`, `wait_for`, `scroll`, `measure` and
 `onboarding`, after `out`; a capture result gains `safe_area` and, when asked,
