@@ -26,6 +26,10 @@ mc dev admit <service> [--worktree <path>] [--wait <seconds>] [--json]
 mc dev stop <instance_id>                stop it, through its own stop command
 ```
 
+`mc dev open <surface>` and `mc dev surfaces` share the noun and not the
+protocol: they read memoro's `.mc/shot.json`, and are described in
+[`technical/mc-shot.md`](technical/mc-shot.md#mc-dev-open-and-mc-dev-surfaces).
+
 `list` is a capability probe as much as a listing: memoro's wrapper runs
 `mc dev list --json` before every register to find out whether the installed mc
 speaks this protocol at all, so it exits 0 and prints JSON on a machine with no

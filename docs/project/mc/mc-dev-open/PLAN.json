@@ -21,12 +21,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "From a memoro worktree, `mc dev open assistant --account new --viewport iphone --open` returns within the server's start time, leaves a headed browser on the main chat at 390×844, and prints one line with the URL, `new/done` and the branch @ commit.",
       "check": "`mc dev open assistant --account new --viewport iphone --open; echo exit $?` prints a line containing `/dev/login?account=new&ready=1&next=%2Fapp%2Fassistant` and `new/done`, then `exit 0`; `pgrep -f scripts/shot/shot.mjs` prints a pid until the window is closed, and nothing after."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc dev surfaces` lists every target memoro's `.mc/shot.json` declares, with its path and summary, and the accounts with their states.",
       "check": "`mc dev surfaces` from a memoro worktree prints lines for `assistant`, `inbox`, `mail`, `library`, `reader`, `onboarding` with their summaries, and `accounts: seeded (done, fresh) · new (done, fresh)`."
     },

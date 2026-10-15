@@ -12,10 +12,15 @@
  * 0600, in a directory of its own, removed in a `finally` whatever the script
  * did. Its path reaches the script through `MEMORO_SHOT_REQUEST`, never argv.
  */
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import {
+  closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { mcHome } from './paths.js';
+import { callerWorktree, sharedWorktree } from './test-environment.js';
 
 export const SHOT_FILE = join('.mc', 'shot.json');
 export const SESSION_SECRET = 'MEMORO_SHOT_SESSION';
@@ -23,6 +28,7 @@ export const SHELLS = ['base', 'immersive', 'window'];
 export const THEMES = ['light', 'dark'];
 export const DEV_ACCOUNTS = ['seeded', 'new'];
 export const CAPTURE_TIMEOUT_MS = 180_000;
+export const OPEN_TIMEOUT_MS = 150_000;
 
 /** `.mc/shot.json`, or the one line that says why there is none to read. */
 export function readShotDeclaration(worktree) {
@@ -44,6 +50,23 @@ export function readShotDeclaration(worktree) {
     return { ok: false, error: `${path}: targets is a list of { name, path }` };
   }
   return { ok: true, declaration: { targets: [], viewports: {}, ...declaration } };
+}
+
+/**
+ * Which memoro worktree `mc shot` and `mc dev open` read: the one you stand in
+ * when it has `.mc/shot.json`, else the shared checkout; `here` forces the
+ * first. `{ worktree }`, or `{ error }` saying why there is none.
+ */
+export function shotWorktree({
+  cwd = process.cwd(), env = process.env, here = false, deps = {},
+} = {}) {
+  const standing = (deps.callerWorktree || callerWorktree)(cwd);
+  const standsInMemoro = Boolean(standing && (deps.existsSync || existsSync)(join(standing, SHOT_FILE)));
+  const worktree = here || standsInMemoro ? standing : sharedWorktree(env);
+  if (worktree) return { worktree };
+  return {
+    error: here ? '--here needs a git worktree, and this is not one' : 'no memoro checkout to read .mc/shot.json from',
+  };
 }
 
 /** A path under /app as given, or a declared target name; an unknown name lists the known ones. */
@@ -250,5 +273,89 @@ export function runCapture({ worktree, declaration, request, env = process.env, 
     return { ok: true, result: parsed.result, status };
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `runCapture`'s sibling for a script that outlives mc: a headed browser left
+ * with a person. The request is written the same way; the script is spawned
+ * detached, its stderr to a log under `~/.memoro/mc/shots/`, and mc reads its
+ * stdout only until the first result line. Then mc lets go — the stream is
+ * closed, the child unref'd — and the browser lives until its window is
+ * closed. The request directory is removed in every case: the script has read
+ * it by the time it answers, and one that never answers is killed.
+ */
+export function runOpen({ worktree, declaration, request, env = process.env, deps = {} }) {
+  const dir = (deps.mkdtemp || mkdtempSync)(join(deps.tmpdir || tmpdir(), 'mc-shot-'));
+  const file = join(dir, 'request.json');
+  const logDir = deps.logDir || join(mcHome(env), 'shots');
+  const log = join(logDir, `open-${stamp(deps.now ? deps.now() : new Date())}.log`);
+  const timeoutMs = deps.timeoutMs ?? OPEN_TIMEOUT_MS;
+  const cleanup = () => rmSync(dir, { recursive: true, force: true });
+
+  let child = null;
+  try {
+    writeFileSync(file, `${JSON.stringify(request)}\n`, { mode: 0o600 });
+    mkdirSync(logDir, { recursive: true });
+    const logFd = openSync(log, 'a');
+    try {
+      const [command, ...args] = declaration.argv;
+      child = (deps.spawn || spawn)(command, args, {
+        cwd: worktree,
+        env: { ...env, MEMORO_SHOT_REQUEST: file },
+        detached: true,
+        stdio: ['ignore', 'pipe', logFd],
+      });
+    } finally {
+      closeSync(logFd);
+    }
+  } catch (error) {
+    cleanup();
+    return Promise.resolve({ ok: false, error: `the browser script could not run: ${error.message} — ${log}` });
+  }
+
+  return new Promise((settle) => {
+    let done = false;
+    let buffered = '';
+    const finish = (outcome) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      child.stdout?.destroy();
+      cleanup();
+      settle(outcome);
+    };
+    const timer = setTimeout(() => {
+      child.kill?.();
+      finish({ ok: false, error: `the browser did not open within ${Math.round(timeoutMs / 1000)}s — ${log}` });
+    }, timeoutMs);
+    child.stdout?.setEncoding?.('utf8');
+    child.stdout?.on('data', (chunk) => {
+      buffered += chunk;
+      const lines = buffered.split('\n');
+      buffered = lines.pop();
+      for (const line of lines) {
+        const result = resultLine(line);
+        if (!result) continue;
+        child.unref?.();
+        finish({ ok: true, result, log });
+        return;
+      }
+    });
+    child.on('error', (error) => finish({ ok: false, error: `the browser script could not run: ${error.message} — ${log}` }));
+    // `close`, not `exit`: a line written just before exiting is read first.
+    child.on('close', (code, signal) => finish({
+      ok: false,
+      error: `the browser script ${signal ? `was stopped by ${signal}` : `exited ${code}`} before the surface was open — ${log}`,
+    }));
+  });
+}
+
+function resultLine(line) {
+  try {
+    const value = JSON.parse(line.trim());
+    return value && typeof value === 'object' && typeof value.ok === 'boolean' ? value : null;
+  } catch {
+    return null;
   }
 }
