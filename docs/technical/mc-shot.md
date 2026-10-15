@@ -25,6 +25,8 @@ The work is split between the two repositories, and they meet in one place:
 ```
 mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window] [--full]
         [--viewport <name|WxH[@dpr]>] [--theme light|dark] [--locale <code>]
+        [--safe-area <t,r,b,l>|0] [--wait-for <css>] [--scroll <css>[@end|@top|@<px>]]
+        [--measure <css>] [--account seeded|new] [--onboarding]
         [--me] [--here] [--out <file.png>] [--open] [--json]
 mc shot <dev|prod> --list
 mc shot login prod [--paste]
@@ -49,16 +51,59 @@ mc shot logout prod
   `--json` prints the script's result object instead, and `--open` opens the
   file with the platform's opener (`open`, `xdg-open`, `start`), detached.
 
+## Measuring a layout (2026-10-15)
+
+A picture answers "how does it look"; a layout bug is answered by numbers. A
+session fixing the main chat's bottom safe area on 2026-10-15 wrote its own
+Playwright scripts for an hour because `mc shot` could do neither of the two
+things the bug needed — a phone's safe area and the bottom of a scroller — and
+gave no numbers. Each of these is now one flag, and the capture script does it:
+
+- **`--safe-area top,right,bottom,left`** (or one number, or `0` for none):
+  the insets Chrome reports to `env(safe-area-inset-*)`, through CDP
+  `Emulation.setSafeAreaInsetsOverride`, set before the first navigation. A
+  declared viewport may carry its own (`viewports.iphone.safe_area` in
+  memoro's `.mc/shot.json`: 47, 0, 34, 0), so `--viewport iphone` is a phone
+  with a notch and a home indicator without saying so; the flag overrides it.
+- **`--wait-for <css>`**: wait until it is visible (10 s), else `no-element`.
+- **`--scroll <css>[@end|@top|@<px>]`**: scroll that element first; `@end`
+  when nothing follows the `@`. The last `@` separates, so an attribute
+  selector keeps its own characters.
+- **`--measure <css>`**: every element the selector matches (at most 20; a
+  selector list measures each part), as `{ element, rect, position, padding,
+  margin, overflow_y, z_index, scroll, visible }`, with `visible` walking the
+  ancestors. Printed as one JSON line `{ measure, safe_area }` after the path
+  and the URL; with `--json` it is part of the result.
+- **`--account seeded|new`** (dev only) picks the managed account, and
+  **`--onboarding`** (dev only) signs in with `reseed=1` instead of `ready=1`,
+  so the account is back at its seed — onboarding not yet done — and the
+  picture is the onboarding, the same every time.
+
+The request gains `safe_area`, `wait_for`, `scroll`, `measure` and
+`onboarding`, after `out`; a capture result gains `safe_area` and, when asked,
+`measure`.
+
 ## Worktree, server and sign-in
 
-The worktree is the shared memoro checkout (`sharedWorktree`), or with `--here`
-the one you stand in. mc reads `.mc/shot.json` from it, plus `.mc/test.json`
+The worktree is the one you stand in when it is a memoro worktree (it has
+`.mc/shot.json`); elsewhere it is the shared memoro checkout
+(`sharedWorktree`). `--here` still names the one you stand in explicitly.
+Until 2026-10-15 the shared checkout was the default everywhere, so a session
+on its own branch photographed `main` unless it remembered `--here`.
+
+The dev server is `ensureAppServer`'s, and it is started over when its tree
+moved (`builtFromMoved`) **or when a file git reports as changed or new was
+written after the server started** (`editedSince`): workerd reads the tree
+once, so an uncommitted fix was invisible until someone restarted the server
+by hand. mc then prints, on stderr, `mc: serving <worktree> — <branch> @
+<commit> on <url>`, and `--json` carries it as `served` — the evidence that
+the picture is of the tree you mean, which a port never was. mc reads `.mc/shot.json` from it, plus `.mc/test.json`
 through `readDeclaration`. A memoro without `.mc/shot.json` gets the error
 `memoro has no .mc/shot.json at <worktree> — it comes with memoro's shot-capture project`.
 
 | Case | Base URL | `account` | `sign_in` |
 |---|---|---|---|
-| `dev` | the app tier, started if it is down, through `ensureAppServer` — the same function `mc test dev` calls | `seeded` | `{ kind: "url", url: "<base>/dev/login?account=seeded&ready=1" }` |
+| `dev` | the app tier, started if it is down, through `ensureAppServer` — the same function `mc test dev` calls | `seeded`, or `--account new` | `{ kind: "url", url: "<base>/dev/login?account=<account>&ready=1" }`, or `&reseed=1` with `--onboarding` |
 | `prod` | `.mc/test.json` `environments.prod.base_url` | `seeded` | `{ kind: "url", url: "<base><account.route>/<token>" }`, with the token from `tokenFor` (environment, then keychain) |
 | `prod --me` | the same | `me` | `{ kind: "session", cookie }`, from the keychain entry `MEMORO_SHOT_SESSION` |
 

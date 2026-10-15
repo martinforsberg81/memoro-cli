@@ -21,6 +21,7 @@ export const SHOT_FILE = join('.mc', 'shot.json');
 export const SESSION_SECRET = 'MEMORO_SHOT_SESSION';
 export const SHELLS = ['base', 'immersive', 'window'];
 export const THEMES = ['light', 'dark'];
+export const DEV_ACCOUNTS = ['seeded', 'new'];
 export const CAPTURE_TIMEOUT_MS = 180_000;
 
 /** `.mc/shot.json`, or the one line that says why there is none to read. */
@@ -80,6 +81,39 @@ export function parseViewport(value, declaration = {}) {
   };
 }
 
+/**
+ * `--safe-area`: `top,right,bottom,left` in whole pixels, one number for all
+ * four, or `0` for none. Nothing given is the viewport's own (a declared phone
+ * carries its notch and home indicator), so this only overrides.
+ */
+export function parseSafeArea(value) {
+  if (value === null || value === undefined) return { ok: true, safeArea: null };
+  const parts = String(value).split(',').map((part) => part.trim());
+  const numbers = parts.map((part) => (/^\d+$/u.test(part) ? Number(part) : NaN));
+  if ((parts.length !== 1 && parts.length !== 4) || numbers.some(Number.isNaN)) {
+    return { ok: false, error: `--safe-area is top,right,bottom,left in whole pixels (or one number), not ${value}` };
+  }
+  const [top, right = top, bottom = top, left = top] = numbers;
+  return { ok: true, safeArea: { top, right, bottom, left } };
+}
+
+/**
+ * `--scroll <css>[@end|@top|@<px>]`: which element to scroll before the
+ * picture, and where to. `@end` when nothing is said — the question is
+ * usually what the bottom of a scroller looks like.
+ */
+export function parseScroll(value) {
+  if (value === null || value === undefined) return { ok: true, scroll: null };
+  const text = String(value);
+  const at = text.lastIndexOf('@');
+  const selector = (at >= 0 ? text.slice(0, at) : text).trim();
+  const where = at >= 0 ? text.slice(at + 1).trim() : 'end';
+  if (!selector) return { ok: false, error: `--scroll needs a selector, as <css>[@end|@top|@<px>]` };
+  if (where === 'end' || where === 'top') return { ok: true, scroll: { selector, to: where } };
+  if (/^\d+$/u.test(where)) return { ok: true, scroll: { selector, to: Number(where) } };
+  return { ok: false, error: `--scroll ${text}: after @ comes end, top or a number of pixels` };
+}
+
 /** `/app/people` → `app-people`, `/app/` → `app`. */
 export function slug(value) {
   return String(value).toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '') || 'app';
@@ -109,7 +143,8 @@ export function outPath({
 /** The capture request, in the shape the contract fixes. */
 export function buildRequest({
   baseUrl, account, signIn, target, element = null, shell = null, full = false, viewport,
-  theme = null, locale = null, out,
+  theme = null, locale = null, out, safeArea = null, waitFor = null, scroll = null, measure = null,
+  onboarding = false,
 }) {
   return {
     mode: 'capture',
@@ -124,6 +159,11 @@ export function buildRequest({
     theme,
     locale,
     out,
+    safe_area: safeArea,
+    wait_for: waitFor,
+    scroll,
+    measure,
+    onboarding: Boolean(onboarding),
   };
 }
 

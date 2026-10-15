@@ -40,6 +40,8 @@ THE PAGE
   mc gate                          This worktree's own gate, answered in 2 KB
   mc shot dev | prod <target>      A PNG of the running app; prints its path
   mc publish                       Push this branch, open its pull request
+  mc hook session-start | pre-tool The coding agent's hooks: the worktree's state
+                                    at start, shell commands turned to mc verbs
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc deploy --follow               Watch the deploy that is running
@@ -246,15 +248,24 @@ IN FULL
                                     measures again and decides
   mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window]
           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
-          [--locale <code>] [--me] [--here] [--out <file.png>] [--open] [--json]
+          [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
+          [--scroll <css>[@end|@top|@<px>]] [--measure <css>]
+          [--account seeded|new] [--onboarding] [--me] [--here]
+          [--out <file.png>] [--open] [--json]
                                     A PNG of the running app — a local dev
                                     server, started as mc test dev starts one,
-                                    or production. The target is a path under
-                                    /app or a name from memoro's .mc/shot.json,
-                                    whose capture script takes the picture. The
-                                    file's path is printed first, alone; the
-                                    file goes under ~/.memoro/mc/shots/ unless
-                                    --out. dev signs in as the seeded account,
+                                    or production. Inside a memoro worktree dev
+                                    serves that worktree, restarted when it was
+                                    edited after the server started, and says
+                                    which branch and commit it served. The
+                                    target is a path under /app or a name from
+                                    memoro's .mc/shot.json, whose capture
+                                    script takes the picture. The file's path
+                                    is printed first, alone; with --measure the
+                                    measured boxes follow as one JSON line. A
+                                    declared phone viewport carries its safe
+                                    area. dev signs in as seeded (or --account
+                                    new; --onboarding reseeds and shows it),
                                     prod as the test account, or as you with
                                     --me (prod only)
   mc shot <dev|prod> --list        The targets and viewports memoro declares
@@ -262,6 +273,19 @@ IN FULL
                                     memoro_session cookie; mc keeps it in the
                                     keychain as MEMORO_SHOT_SESSION
   mc shot logout prod              Forget it
+  mc hook session-start            For a SessionStart hook: each mc worktree at
+                                    the session's directory — branch, behind and
+                                    ahead of origin/main, changed files, dev
+                                    server — the warnings (a merged branch, a
+                                    stale one, main, a session started outside
+                                    the repository) and the mc toolbox
+  mc hook pre-tool                 For a PreToolUse hook on Bash|Write: gh pr
+                                    create and git push → mc publish, gh pr
+                                    merge → mc merge, npm run ci → mc gate, npm
+                                    run dev → mc test dev --here --url, a scratch
+                                    Playwright script → mc shot. MC_HOOK_ALLOW=1
+                                    in the command lets it through. Both read
+                                    the hook JSON on stdin and always exit 0
   mc publish [--title …] [--body …] Push the branch you stand on (never force)
                                     and open its pull request, or find the one
                                     it has — title and body from the last

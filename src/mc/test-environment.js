@@ -26,7 +26,7 @@
  * nobody can work on.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
@@ -243,6 +243,42 @@ export function builtFromMoved(server, worktree, deps = {}) {
 }
 
 /**
+ * The same question for a change nobody committed: workerd reads the tree
+ * once, at start, so a file edited afterwards is not what it serves — and a
+ * session measuring its own fix measured the code before it (2026-10-15, a
+ * CSS rule that "did nothing" until the server was restarted by hand). Any
+ * file git reports as changed or new whose mtime is after the server's
+ * `started_at` is a reason to start over. Only a service that says what it was
+ * built from (`built_from`) is asked; one that says nothing is trusted.
+ */
+export function editedSince(server, worktree, deps = {}) {
+  if (!server?.built_from) return null;
+  const startedMs = Date.parse(server.started_at || '');
+  if (!Number.isFinite(startedMs)) return null;
+  const git = deps.git || ((args) => spawnSync('git', args, { cwd: worktree, encoding: 'utf8' }));
+  const asked = git(['status', '--porcelain=v1', '-z', '--untracked-files=normal']);
+  if (asked.status !== 0) return null;
+  const stat = deps.statSync || statSync;
+  const entries = String(asked.stdout || '').split('\0').filter(Boolean);
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const code = entry.slice(0, 2);
+    const path = entry.slice(3);
+    // A rename carries its old path as the next entry; only the new one is on disk.
+    if (code.includes('R') || code.includes('C')) index += 1;
+    if (code.includes('D')) continue;
+    try {
+      if (stat(join(worktree, path)).mtimeMs > startedMs) {
+        return { was: String(server.built_from.commit || '').slice(0, 10), now: `${path} edited`, edited: path };
+      }
+    } catch {
+      // Gone between status and stat: not served either way.
+    }
+  }
+  return null;
+}
+
+/**
  * A dev server for this worktree — the one already there, or a new one.
  *
  * Or a new one in place of the one there, when the checkout has moved on from
@@ -287,7 +323,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     }
     replacedHung = running.instance_id;
   } else if (running) {
-    const stale = builtFromMoved(running, worktree, deps);
+    const stale = builtFromMoved(running, worktree, deps) || editedSince(running, worktree, deps);
     if (!stale) return { ok: true, server: running, started: false };
     // The server is alive and it is this worktree's, and it is serving a tree
     // that is no longer here. Stopped through its own stop command, like
@@ -405,7 +441,9 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
     if (ensured.replacedHung) {
       stdout.write(`mc: ${ensured.replacedHung} was alive but not answering — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
     } else if (ensured.restartedFrom) {
-      stdout.write(`mc: the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}) — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
+      stdout.write(ensured.restartedFrom.edited
+        ? `mc: ${ensured.restartedFrom.edited} was edited after the server started — started a fresh one, ${baseUrl} (${server.instance_id})\n`
+        : `mc: the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}) — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
     } else {
       stdout.write(ensured.started
         ? `mc: started one — ${baseUrl} (${server.instance_id})\n`

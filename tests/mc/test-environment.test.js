@@ -23,7 +23,7 @@ import { describe, it } from 'node:test';
 import { registerManifest } from '../../src/mc/dev-servers.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import {
-  accountAvailable, answers, builtFromMoved, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
+  accountAvailable, answers, builtFromMoved, editedSince, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
   serversFor, servingWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
 
@@ -1068,5 +1068,34 @@ describe('admission before a start', () => {
     assert.equal(asked.worktree, worktree);
     assert.equal(asked.waitSeconds, 900);
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+});
+
+describe('editedSince — a change nobody committed', () => {
+  const server = { built_from: { commit: 'aaaaaaaaaa1111' }, started_at: '2026-10-15T10:00:00.000Z' };
+  const started = Date.parse(server.started_at);
+  const status = (text) => () => ({ status: 0, stdout: text });
+
+  it('a file edited after the server started is a reason to start over', () => {
+    const git = status(' M public/css/x.css\0?? public/css/new.css\0');
+    const stat = (path) => ({ mtimeMs: path.endsWith('x.css') ? started + 60_000 : started - 60_000 });
+    assert.deepEqual(editedSince(server, '/w', { git, statSync: stat }), {
+      was: 'aaaaaaaaaa', now: 'public/css/x.css edited', edited: 'public/css/x.css',
+    });
+  });
+
+  it('an edit from before the start, a deletion, or a quiet tree is not', () => {
+    const before = () => ({ mtimeMs: started - 1 });
+    assert.equal(editedSince(server, '/w', { git: status(' M a.js\0'), statSync: before }), null);
+    assert.equal(editedSince(server, '/w', { git: status(' D gone.js\0'), statSync: () => { throw new Error('no'); } }), null);
+    assert.equal(editedSince(server, '/w', { git: status(''), statSync: before }), null);
+  });
+
+  it('a rename is read by its new path, and a manifest that says nothing is trusted', () => {
+    const git = status('R  new.js\0old.js\0');
+    const seen = [];
+    editedSince(server, '/w', { git, statSync: (path) => { seen.push(path); return { mtimeMs: started - 1 }; } });
+    assert.deepEqual(seen, ['/w/new.js']);
+    assert.equal(editedSince({ started_at: server.started_at }, '/w', { git, statSync: () => ({ mtimeMs: started + 1 }) }), null);
   });
 });
