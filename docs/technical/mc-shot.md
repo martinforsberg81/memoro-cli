@@ -89,6 +89,59 @@ The request gains `safe_area`, `wait_for`, `scroll`, `measure` and
 `onboarding`, after `out`; a capture result gains `safe_area` and, when asked,
 `measure`.
 
+## mc dev open and mc dev surfaces
+
+They read the same `.mc/shot.json` as `mc shot`, choose the worktree the same
+way (`shotWorktree`: the one you stand in when it has `.mc/shot.json`, else the
+shared checkout; `--here` forces the first), and start or restart its server
+through the same `ensureAppServer`.
+
+```sh
+mc dev surfaces [--here] [--json]
+mc dev open <surface> [--account <name>] [--onboarding] [--here] [--json]
+mc dev open <surface> --open [--viewport <v>] [--theme light|dark] [--locale <code>] [--safe-area <t,r,b,l>|0]
+```
+
+`mc dev surfaces` starts no server. It prints one line per declared target —
+name, path, summary (`-` when there is none) — then a blank line and
+`accounts: seeded (done, fresh) · new (done, fresh)`, the default first.
+`--json` is `{ schema_version, worktree, surfaces: [{ name, path, summary,
+window, scroller, chrome, measure, onboarding }], accounts, default_account }`,
+with `measure` as the declared names `--measure @<name>` takes.
+
+`mc dev open <surface>` takes a declared name or a path under `/app`. The
+surface and the account are resolved before any server, so a wrong word costs
+nothing. Then it prints one line on stdout:
+
+```
+http://127.0.0.1:8920/dev/login?account=new&ready=1&next=%2Fapp%2Fassistant  new/done  my-branch @ 1025664171
+```
+
+— the URL that signs in as the account in its onboarding state and lands on
+the surface (`next`), the account and state, and the tree served. A target that
+opens a window by clicking adds `then click: <selector> → <selector>`: the
+clicks a person or a browser tool makes after landing. A `fresh` state says on
+stderr that the URL reseeds the account each time it is opened. `--json` is
+`{ url, account, onboarding, surface, served, then }`.
+
+**`--open`** hands memoro's capture script a request in mode `open` — the URL
+above as `sign_in`, the target, the viewport, theme, locale and safe area —
+and the script leaves a headed browser on the surface. mc spawns it detached,
+its stderr to `~/.memoro/mc/shots/open-<YYYYMMDD-HHMMSS>.log`, reads its stdout
+until the first result line, and lets go: the request file is removed, the
+same one line is printed, and the browser lives until its window is closed.
+A script that exits first, or has not answered in 150 s, is an error naming the
+log. `--viewport`, `--theme`, `--locale` and `--safe-area` are for `--open`
+only (a URL has no viewport); `--open` is refused on a Linux machine with no
+display.
+
+A layout question is two calls: look, then measure.
+
+```sh
+mc dev open assistant --viewport iphone --open
+mc shot dev assistant --viewport iphone --scroll @end --measure @layout
+```
+
 ## Worktree, server and sign-in
 
 The worktree is the one you stand in when it is a memoro worktree (it has

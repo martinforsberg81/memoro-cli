@@ -10,6 +10,9 @@
  *   mc dev stop <instance_id>               stop it, through its own stop command
  *   mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]
  *                                           remove what nobody owns any more
+ *   mc dev open <surface> [--account <name>] [--onboarding] [--open] [--json]
+ *                                           this worktree's app, signed in, on it
+ *   mc dev surfaces [--json]                the surfaces and accounts memoro declares
  *
  * `admit` is the fourth, added on 2026-09-26 with the reader it was missing:
  * `resource_class` had been carried in every manifest and read by nothing
@@ -27,7 +30,12 @@
  * rules in `dev-reap.js` prove orphaned, and registrations whose worktree is
  * gone. The runner's chore pass runs it every pass.
  *
- * Six, and not the thirteen-verb session manager `mc-cut` removed on
+ * `open` and `surfaces` are the seventh and eighth (`mc-dev-open`,
+ * 2026-10-15), and speak no protocol: they read memoro's `.mc/shot.json`, and
+ * their work is in `dev-open.js`. A session that wanted to look at its change
+ * had made five calls to get there; `open` is one.
+ *
+ * Six protocol verbs, and not the thirteen-verb session manager `mc-cut` removed on
  * 2026-09-03. `ensure`, `plan`, `status`, `logs` and `restart` are not coming
  * back with them: the month of `mc.log` that decided this recorded ten human
  * invocations of `mc dev` in total, six of them `ensure`, and the verb that
@@ -53,11 +61,14 @@ import {
   admit, holdersText, listServers, refusalText, registerManifest, stopServer, unregisterManifest,
 } from '../dev-servers.js';
 import { ageText, DEFAULT_MIN_AGE_SECONDS, reap as reapOrphans } from '../dev-reap.js';
+import { open as openSurface, surfaces } from '../dev-open.js';
 import { log } from '../logger.js';
+import { parseSafeArea, THEMES } from '../shot.js';
 import { callerWorktree } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 
-const VERBS = ['list', 'register', 'unregister', 'admit', 'stop', 'reap'];
+const VERBS = ['list', 'register', 'unregister', 'admit', 'stop', 'reap', 'open', 'surfaces'];
+const SURFACE_VERBS = ['open', 'surfaces'];
 
 /** `EX_TEMPFAIL`: refused for now, try again later. */
 export const REFUSED_EXIT = 75;
@@ -74,6 +85,8 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
+  if (opts.verb === 'surfaces') return surfaces(opts, { stdout, stderr, deps });
+  if (opts.verb === 'open') return openSurface(opts, { stdout, stderr, deps });
   if (opts.verb === 'list') return list(opts, { stdout, root });
   if (opts.verb === 'register') return register(opts, { stdout, stderr, root });
   if (opts.verb === 'admit') return askAdmission(opts, { stdout, root, deps });
@@ -211,6 +224,7 @@ async function reapVerb(opts, { stdout, root, reap }) {
 }
 
 export function parseArgs(argv, { cwd = process.cwd(), callerWorktree: worktreeOf = callerWorktree } = {}) {
+  if (SURFACE_VERBS.includes(argv.find((arg) => !arg.startsWith('-')))) return surfaceArgs(argv);
   const scanned = scanArgs(argv, { booleans: ['--json', '--dry-run'], strictValues: ['--worktree', '--wait', '--min-age-seconds'] });
   const opts = { verb: 'list', json: scanned.flags.json, manifest: null, instanceId: null };
   if (scanned.error) return { ...opts, error: scanned.error };
@@ -252,6 +266,47 @@ export function parseArgs(argv, { cwd = process.cwd(), callerWorktree: worktreeO
   return opts;
 }
 
+/** `open` and `surfaces` have flags of their own, read by their own scan. */
+function surfaceArgs(argv) {
+  const scanned = scanArgs(argv, {
+    booleans: ['--onboarding', '--open', '--here', '--json'],
+    strictValues: ['--account', '--viewport', '--theme', '--locale', '--safe-area'],
+  });
+  const { flags } = scanned;
+  const positional = [...scanned.positional];
+  const verb = positional.shift();
+  const opts = { verb, json: flags.json, here: flags.here };
+  if (scanned.error) return { ...opts, error: scanned.error };
+  const browserFlags = ['viewport', 'theme', 'locale', 'safe-area'].filter((name) => flags[name] !== null);
+  if (verb === 'surfaces') {
+    const extra = [flags.account !== null && 'account', ...browserFlags, flags.onboarding && 'onboarding', flags.open && 'open']
+      .find(Boolean);
+    if (extra) return { ...opts, error: `--${extra} belongs to mc dev open, not mc dev surfaces` };
+    if (positional.length) return { ...opts, error: `mc dev surfaces takes no argument (${positional[0]})` };
+    return opts;
+  }
+  const surface = positional.shift();
+  if (!surface) return { ...opts, error: 'mc dev open needs a surface — a name from mc dev surfaces or a path under /app' };
+  if (positional.length) return { ...opts, error: `mc dev open takes one surface (${positional[0]})` };
+  if (browserFlags.length && !flags.open) {
+    return { ...opts, error: `${browserFlags.map((name) => `--${name}`).join(', ')} ${browserFlags.length === 1 ? 'is' : 'are'} for --open: a URL has no viewport` };
+  }
+  if (flags.theme !== null && !THEMES.includes(flags.theme)) return { ...opts, error: `--theme is light or dark, not ${flags.theme}` };
+  const safeArea = parseSafeArea(flags['safe-area']);
+  if (!safeArea.ok) return { ...opts, error: safeArea.error };
+  return {
+    ...opts,
+    surface,
+    account: flags.account,
+    onboarding: flags.onboarding,
+    open: flags.open,
+    viewport: flags.viewport,
+    theme: flags.theme,
+    locale: flags.locale,
+    safeArea: safeArea.safeArea,
+  };
+}
+
 function admitArgs(opts, positional, flags, { cwd, worktreeOf }) {
   const service = positional.shift();
   if (!service) return { ...opts, error: 'mc dev admit needs the service that wants to start' };
@@ -273,5 +328,11 @@ export function usage() {
     '        mc dev stop <instance_id>             stop it through its own stop command\n',
     '        mc dev reap [--dry-run] [--json] [--min-age-seconds <n>]\n',
     '                                              remove orphaned dev processes and dead-worktree registrations\n',
+    '        mc dev open <surface> [--account <name>] [--onboarding] [--here] [--json]\n',
+    '                                              this worktree\'s server up, and one line: the URL that signs\n',
+    '                                              in and lands on the surface, account/state, branch @ commit\n',
+    '          [--open [--viewport <v>] [--theme light|dark] [--locale <code>] [--safe-area <t,r,b,l>|0]]\n',
+    '                                              …and a headed browser left there for a person\n',
+    '        mc dev surfaces [--here] [--json]     the surfaces and accounts memoro\'s .mc/shot.json declares\n',
   ].join('');
 }

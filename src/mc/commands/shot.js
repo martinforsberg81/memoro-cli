@@ -23,7 +23,7 @@
  * session is never printed, never in `--json`, never in argv.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -32,10 +32,10 @@ import { openCommandFor } from '../../lib/device-flow.js';
 import { mcHome } from '../paths.js';
 import {
   SESSION_SECRET, SHELLS, THEMES, accountTable, buildLoginRequest, buildRequest, outPath, parseSafeArea,
-  parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture,
+  parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture, shotWorktree,
 } from '../shot.js';
 import {
-  callerWorktree, ensureAppServer, readDeclaration, sharedWorktree, tokenFor,
+  ensureAppServer, readDeclaration, sharedWorktree, tokenFor,
 } from '../test-environment.js';
 import { scanArgs } from './flags.js';
 
@@ -102,15 +102,9 @@ export async function run(argv, deps = {}) {
 
   const env = deps.env || process.env;
   const cwd = deps.cwd || process.cwd();
-  const here = (deps.callerWorktree || callerWorktree)(cwd);
-  const standsInMemoro = Boolean(here && (deps.existsSync || existsSync)(join(here, '.mc', 'shot.json')));
-  const worktree = flags.here || standsInMemoro ? here : sharedWorktree(env);
-  if (!worktree) {
-    stderr.write(flags.here
-      ? 'mc: --here needs a git worktree, and this is not one\n'
-      : 'mc: no memoro checkout to read .mc/shot.json from\n');
-    return 1;
-  }
+  const chosen = shotWorktree({ cwd, env, here: flags.here, deps });
+  if (!chosen.worktree) { stderr.write(`mc: ${chosen.error}\n`); return 1; }
+  const { worktree } = chosen;
   const shot = readShotDeclaration(worktree);
   if (!shot.ok) { stderr.write(`mc: ${shot.error}\n`); return 1; }
   const declared = shot.declaration;
