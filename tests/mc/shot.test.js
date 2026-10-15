@@ -15,7 +15,7 @@ import { describe, it } from 'node:test';
 
 import { run, usage } from '../../src/mc/commands/shot.js';
 import {
-  buildRequest, outPath, parseResult, parseSafeArea, parseScroll, parseViewport, resolveTarget, slug,
+  buildRequest, outPath, parseResult, parseSafeArea, parseScroll, parseViewport, resolveAccount, resolveTarget, slug,
 } from '../../src/mc/shot.js';
 
 const TOKEN = 'tok-5ecret-7e57';
@@ -376,7 +376,11 @@ describe('mc shot — measuring a layout', () => {
     assert.deepEqual(parseScroll('[data-x="a"]@top'), { ok: true, scroll: { selector: '[data-x="a"]', to: 'top' } });
     assert.deepEqual(parseScroll('.x@350'), { ok: true, scroll: { selector: '.x', to: 350 } });
     assert.equal(parseScroll('.x@middle').ok, false);
-    assert.equal(parseScroll('@end').ok, false);
+    assert.deepEqual(parseScroll('@end'), { ok: true, scroll: { selector: null, to: 'end' } });
+    assert.deepEqual(parseScroll('@top'), { ok: true, scroll: { selector: null, to: 'top' } });
+    assert.deepEqual(parseScroll('@350'), { ok: true, scroll: { selector: null, to: 350 } });
+    assert.equal(parseScroll('@middle').ok, false);
+    assert.equal(parseScroll('').ok, false);
   });
 
   it('hands the measuring flags over, and prints the numbers on the line after the path', async () => {
@@ -415,7 +419,7 @@ describe('mc shot — measuring a layout', () => {
     for (const [argv, said] of [
       [['dev', 'home', '--safe-area', '1,2'], /--safe-area is top,right,bottom,left/u],
       [['dev', 'home', '--scroll', '.x@middle'], /after @ comes end, top/u],
-      [['dev', 'home', '--account', 'review'], /--account is seeded or new/u],
+      [['dev', 'home', '--account', 'review'], /--account is one of seeded, new, not review/u],
       [['prod', 'home', '--account', 'new'], /are for dev/u],
       [['prod', 'home', '--onboarding'], /are for dev/u],
     ]) {
@@ -438,5 +442,90 @@ describe('mc shot — measuring a layout', () => {
       servedTree: (worktree) => ({ worktree, branch: 'fix-x', commit: 'abcdef1234', line: 'x' }),
     });
     assert.equal(JSON.parse(json.stdout).served.branch, 'fix-x');
+  });
+});
+
+describe('mc shot — the accounts table and a bare @end', () => {
+  const ACCOUNTS = {
+    default_account: 'seeded',
+    accounts: {
+      seeded: {
+        summary: 'the managed seeded account',
+        onboarding: { done: '/dev/login?account=seeded&ready=1&next=%2Fapp%2F', fresh: '/dev/login?account=seeded&reseed=1' },
+      },
+      new: {
+        summary: 'an account that has never signed in',
+        onboarding: { done: '/dev/login?account=new&ready=1', fresh: '/dev/login?account=new&reseed=1' },
+      },
+    },
+  };
+  const WITH_TABLE = {
+    ...SHOT_JSON,
+    ...ACCOUNTS,
+    targets: [...SHOT_JSON.targets, { name: 'onboarding', path: '/app/', onboarding: 'fresh' }],
+  };
+
+  it('resolves the account and its onboarding state from the table', () => {
+    assert.deepEqual(resolveAccount(ACCOUNTS), {
+      ok: true, account: 'seeded', state: 'done', path: '/dev/login?account=seeded&ready=1&next=%2Fapp%2F',
+    });
+    assert.deepEqual(resolveAccount(ACCOUNTS, { account: 'new' }), { ok: true, account: 'new', state: 'done', path: '/dev/login?account=new&ready=1' });
+    assert.deepEqual(resolveAccount({ ...ACCOUNTS, default_account: 'new' }), { ok: true, account: 'new', state: 'done', path: '/dev/login?account=new&ready=1' });
+    assert.deepEqual(resolveAccount(ACCOUNTS, { onboarding: true }), { ok: true, account: 'seeded', state: 'fresh', path: '/dev/login?account=seeded&reseed=1' });
+    assert.equal(resolveAccount(ACCOUNTS, { entry: { name: 'onboarding', onboarding: 'fresh' } }).path, '/dev/login?account=seeded&reseed=1');
+    assert.equal(resolveAccount(ACCOUNTS, { entry: { onboarding: 'done' } }).state, 'done');
+    assert.deepEqual(resolveAccount(ACCOUNTS, { account: 'review' }), { ok: false, error: '--account is one of seeded, new, not review' });
+    const partial = { accounts: { seeded: { onboarding: { done: '/dev/login?account=seeded&ready=1' } } } };
+    assert.deepEqual(resolveAccount(partial, { onboarding: true }), {
+      ok: false, error: '.mc/shot.json: account seeded declares no onboarding state fresh',
+    });
+  });
+
+  it('without a table, today\'s two sign-in paths', () => {
+    assert.deepEqual(resolveAccount(SHOT_JSON), { ok: true, account: 'seeded', state: 'done', path: '/dev/login?account=seeded&ready=1' });
+    assert.deepEqual(resolveAccount(SHOT_JSON, { account: 'new', onboarding: true }), {
+      ok: true, account: 'new', state: 'fresh', path: '/dev/login?account=new&reseed=1',
+    });
+    assert.deepEqual(resolveAccount(SHOT_JSON, { account: 'review' }), { ok: false, error: '--account is one of seeded, new, not review' });
+  });
+
+  it('signs in through the table\'s paths, and a target that declares fresh', async () => {
+    const fx = fixture({ shot: WITH_TABLE });
+    let result = await shot(['dev', 'home'], fx);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(sideOf(fx).request.sign_in.url, 'http://127.0.0.1:8787/dev/login?account=seeded&ready=1&next=%2Fapp%2F');
+    result = await shot(['dev', 'home', '--account', 'new'], fx);
+    assert.equal(sideOf(fx).request.sign_in.url, 'http://127.0.0.1:8787/dev/login?account=new&ready=1');
+    assert.equal(sideOf(fx).request.onboarding, false);
+    result = await shot(['dev', 'onboarding', '--account', 'new', '--viewport', 'iphone'], fx);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(sideOf(fx).request.sign_in.url, 'http://127.0.0.1:8787/dev/login?account=new&reseed=1');
+    assert.equal(sideOf(fx).request.onboarding, true);
+    assert.equal(sideOf(fx).request.account, 'new');
+    result = await shot(['dev', 'home', '--onboarding'], fx);
+    assert.equal(sideOf(fx).request.sign_in.url, 'http://127.0.0.1:8787/dev/login?account=seeded&reseed=1');
+  });
+
+  it('refuses an account the table does not declare, before a server starts', async () => {
+    const fx = fixture({ shot: WITH_TABLE });
+    let started = false;
+    const result = await shot(['dev', 'home', '--account', 'review'], fx, {
+      ensureDevServer: async () => {
+        started = true;
+        return { ok: true, server: { url: 'http://127.0.0.1:8787/', instance_id: 'srv-1' }, started: false };
+      },
+    });
+    assert.equal(result.code, 2);
+    assert.equal(result.stderr, 'mc: --account is one of seeded, new, not review\n');
+    assert.equal(started, false);
+    assert.equal(existsSync(fx.side), false, 'no script ran');
+  });
+
+  it('--scroll @end passes a null selector: the declared scroller', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', '/app/assistant', '--scroll', '@end', '--measure', '@layout'], fx);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(sideOf(fx).request.scroll, { selector: null, to: 'end' });
+    assert.equal(sideOf(fx).request.measure, '@layout');
   });
 });

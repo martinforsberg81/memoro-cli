@@ -100,18 +100,50 @@ export function parseSafeArea(value) {
 /**
  * `--scroll <css>[@end|@top|@<px>]`: which element to scroll before the
  * picture, and where to. `@end` when nothing is said — the question is
- * usually what the bottom of a scroller looks like.
+ * usually what the bottom of a scroller looks like. An empty selector before
+ * the `@` (`@end`, `@top`, `@350`) means the surface's declared scroller, so
+ * `selector` is null and memoro resolves it.
  */
 export function parseScroll(value) {
   if (value === null || value === undefined) return { ok: true, scroll: null };
   const text = String(value);
   const at = text.lastIndexOf('@');
-  const selector = (at >= 0 ? text.slice(0, at) : text).trim();
+  const selector = (at >= 0 ? text.slice(0, at) : text).trim() || null;
   const where = at >= 0 ? text.slice(at + 1).trim() : 'end';
-  if (!selector) return { ok: false, error: `--scroll needs a selector, as <css>[@end|@top|@<px>]` };
+  if (!selector && at < 0) return { ok: false, error: `--scroll needs a selector, as <css>[@end|@top|@<px>]` };
   if (where === 'end' || where === 'top') return { ok: true, scroll: { selector, to: where } };
   if (/^\d+$/u.test(where)) return { ok: true, scroll: { selector, to: Number(where) } };
   return { ok: false, error: `--scroll ${text}: after @ comes end, top or a number of pixels` };
+}
+
+/**
+ * The `accounts` table `.mc/shot.json` declares, or null for an older memoro
+ * that declares none — then `DEV_ACCOUNTS` and the two sign-in paths stand.
+ */
+export function accountTable(declared) {
+  const table = declared?.accounts;
+  return table && typeof table === 'object' && !Array.isArray(table) ? table : null;
+}
+
+/**
+ * `--account` and the onboarding state: which account a dev server signs in as,
+ * and the `/dev/login` path that signs it in. `done` is onboarding finished,
+ * which every picture wants; `fresh` is the account reseeded to its onboarding.
+ * `--onboarding` asks for `fresh`, else a target's own `onboarding` says it.
+ */
+export function resolveAccount(declared, { account = null, onboarding = false, entry = null } = {}) {
+  const table = accountTable(declared);
+  const names = table ? Object.keys(table) : DEV_ACCOUNTS;
+  const name = account ?? (table ? declared.default_account : null) ?? 'seeded';
+  if (!names.includes(name)) return { ok: false, error: `--account is one of ${names.join(', ')}, not ${name}` };
+  const state = onboarding ? 'fresh' : (entry?.onboarding ?? 'done');
+  if (!table) {
+    const flag = state === 'fresh' ? 'reseed=1' : 'ready=1';
+    return { ok: true, account: name, state, path: `/dev/login?account=${name}&${flag}` };
+  }
+  const path = table[name]?.onboarding?.[state];
+  if (!path) return { ok: false, error: `.mc/shot.json: account ${name} declares no onboarding state ${state}` };
+  return { ok: true, account: name, state, path };
 }
 
 /** `/app/people` → `app-people`, `/app/` → `app`. */

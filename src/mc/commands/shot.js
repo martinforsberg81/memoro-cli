@@ -4,8 +4,8 @@
  *   mc shot <dev|prod> <target> [--el <css>] [--shell base|immersive|window]
  *           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
  *           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
- *           [--scroll <css>[@end|@top|@<px>]] [--measure <css>]
- *           [--account seeded|new] [--onboarding] [--me] [--here]
+ *           [--scroll <css>[@end|@top|@<px>] | @end] [--measure <css> | @<name>]
+ *           [--account <name>] [--onboarding] [--me] [--here]
  *           [--out <file.png>] [--open] [--json]
  *   mc shot <dev|prod> --list
  *   mc shot login prod [--paste]
@@ -31,8 +31,8 @@ import { deleteSecret, getSecret, setSecret } from '../../lib/keychain.js';
 import { openCommandFor } from '../../lib/device-flow.js';
 import { mcHome } from '../paths.js';
 import {
-  DEV_ACCOUNTS, SESSION_SECRET, SHELLS, THEMES, buildLoginRequest, buildRequest, outPath, parseSafeArea,
-  parseScroll, parseViewport, readShotDeclaration, resolveTarget, runCapture,
+  SESSION_SECRET, SHELLS, THEMES, accountTable, buildLoginRequest, buildRequest, outPath, parseSafeArea,
+  parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture,
 } from '../shot.js';
 import {
   callerWorktree, ensureAppServer, readDeclaration, sharedWorktree, tokenFor,
@@ -73,10 +73,6 @@ export async function run(argv, deps = {}) {
   }
   if ((flags.account || flags.onboarding) && where === 'prod') {
     stderr.write('mc: --account and --onboarding are for dev — production signs in as the test account or as you\n');
-    return 2;
-  }
-  if (flags.account && !DEV_ACCOUNTS.includes(flags.account)) {
-    stderr.write(`mc: --account is ${DEV_ACCOUNTS.join(' or ')}, not ${flags.account}\n`);
     return 2;
   }
   const safeArea = parseSafeArea(flags['safe-area']);
@@ -123,6 +119,7 @@ export async function run(argv, deps = {}) {
 
   const target = resolveTarget(word, declared);
   if (!target.ok) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  const entry = target.target.name ? (declared.targets.find((item) => item.name === target.target.name) ?? null) : null;
   const viewport = parseViewport(flags.viewport, declared);
   if (!viewport.ok) { stderr.write(`mc: ${viewport.error}\n`); return 2; }
 
@@ -135,18 +132,19 @@ export async function run(argv, deps = {}) {
   let signIn = null;
   let who = flags.account || 'seeded';
   let served = null;
+  let resolved = null;
   const secrets = [];
   if (where === 'dev') {
+    // Refused before a server is started, so a wrong name costs no server.
+    resolved = resolveAccount(declared, { account: flags.account, onboarding: flags.onboarding, entry });
+    if (!resolved.ok) { stderr.write(`mc: ${resolved.error}\n`); return 2; }
     const app = await ensureAppServer(worktree, declaration, { json: flags.json, stdout: stderr, deps });
     if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
     baseUrl = app.baseUrl;
     served = (deps.servedTree || servedTree)(worktree, app.server);
     if (!flags.json) stderr.write(`mc: serving ${served.line}\n`);
-    // `reseed` puts the managed account back to its seed — onboarding not yet
-    // done — so `--onboarding` is the same picture every time; `ready=1` is
-    // onboarding done, which every other picture wants.
-    const state = flags.onboarding ? 'reseed=1' : 'ready=1';
-    signIn = { kind: 'url', url: `${baseUrl}/dev/login?account=${who}&${state}` };
+    who = resolved.account;
+    signIn = { kind: 'url', url: `${baseUrl}${resolved.path}` };
   } else {
     baseUrl = prodBase(declaration);
     if (!baseUrl) { stderr.write(`mc: ${worktree} declares no production base_url\n`); return 1; }
@@ -195,7 +193,7 @@ export async function run(argv, deps = {}) {
     waitFor: flags['wait-for'],
     scroll: scroll.scroll,
     measure: flags.measure,
-    onboarding: flags.onboarding,
+    onboarding: resolved?.state === 'fresh',
   });
   const ran = runCapture({ worktree, declaration: declared, request, env: withoutToken(env, declaration), deps });
   const scrub = scrubber(secrets);
@@ -311,6 +309,13 @@ function listing(declared, { stdout }) {
     stdout.write(`  ${name}  ${size.width}x${size.height}@${size.dpr ?? 1}${size.mobile ? ' mobile' : ''}\n`);
   }
   stdout.write('  or WxH[@dpr]\n');
+  const table = accountTable(declared);
+  if (table) {
+    stdout.write(`accounts (default ${declared.default_account || 'seeded'}):\n`);
+    for (const [name, account] of Object.entries(table)) {
+      stdout.write(`  ${name}  ${Object.keys(account?.onboarding || {}).join(', ')}  ${account?.summary || ''}\n`);
+    }
+  }
   return 0;
 }
 
@@ -344,10 +349,13 @@ export function usage() {
     '          [--theme light|dark] [--locale <code>]\n',
     '          [--safe-area <t,r,b,l>|0]    insets as a phone reports them; iphone carries 47,0,34,0\n',
     '          [--wait-for <css>]          wait until it is visible\n',
-    '          [--scroll <css>[@end|@top|@<px>]]  scroll that element first (@end by default)\n',
-    '          [--measure <css>]           print every match\'s box, padding, position, scroll and\n',
-    '                                      visibility as one JSON line after the path\n',
-    '          [--account seeded|new]      dev only: which managed account (seeded by default)\n',
+    '          [--scroll <css>[@end|@top|@<px>] | @end]\n',
+    '                                      scroll that element first (@end by default); a bare\n',
+    '                                      @end/@top scrolls the surface\'s declared scroller\n',
+    '          [--measure <css> | @<name>]  print every match\'s box, padding, position, scroll and\n',
+    '                                      visibility as one JSON line after the path; a name is\n',
+    '                                      one of the surface\'s declared measurements (mc dev surfaces)\n',
+    '          [--account <name>]          dev only: an account .mc/shot.json declares (seeded by default)\n',
     '          [--onboarding]              dev only: reseed the account and show its onboarding\n',
     '          [--me]                      prod only: signed in as you, from mc shot login prod\n',
     '          [--here]                    the worktree you stand in — the default inside a memoro worktree\n',

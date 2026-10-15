@@ -25,8 +25,8 @@ The work is split between the two repositories, and they meet in one place:
 ```
 mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window] [--full]
         [--viewport <name|WxH[@dpr]>] [--theme light|dark] [--locale <code>]
-        [--safe-area <t,r,b,l>|0] [--wait-for <css>] [--scroll <css>[@end|@top|@<px>]]
-        [--measure <css>] [--account seeded|new] [--onboarding]
+        [--safe-area <t,r,b,l>|0] [--wait-for <css>] [--scroll <css>[@end|@top|@<px>]|@end]
+        [--measure <css>|@<name>] [--account <name>] [--onboarding]
         [--me] [--here] [--out <file.png>] [--open] [--json]
 mc shot <dev|prod> --list
 mc shot login prod [--paste]
@@ -68,16 +68,22 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
 - **`--wait-for <css>`**: wait until it is visible (10 s), else `no-element`.
 - **`--scroll <css>[@end|@top|@<px>]`**: scroll that element first; `@end`
   when nothing follows the `@`. The last `@` separates, so an attribute
-  selector keeps its own characters.
-- **`--measure <css>`**: every element the selector matches (at most 20; a
-  selector list measures each part), as `{ element, rect, position, padding,
-  margin, overflow_y, z_index, scroll, visible }`, with `visible` walking the
-  ancestors. Printed as one JSON line `{ measure, safe_area }` after the path
-  and the URL; with `--json` it is part of the result.
-- **`--account seeded|new`** (dev only) picks the managed account, and
-  **`--onboarding`** (dev only) signs in with `reseed=1` instead of `ready=1`,
-  so the account is back at its seed — onboarding not yet done — and the
-  picture is the onboarding, the same every time.
+  selector keeps its own characters. A bare `@end` or `@top` (no selector)
+  scrolls the surface's declared scroller, which memoro resolves: the request
+  carries `selector: null`.
+- **`--measure <css> | @<name>`**: every element the selector matches (at most
+  20; a selector list measures each part), as `{ element, rect, position,
+  padding, margin, overflow_y, z_index, scroll, visible }`, with `visible`
+  walking the ancestors. A name is one of the surface's declared measurements
+  (`mc dev surfaces`). Printed as one JSON line `{ measure, safe_area }` after
+  the path and the URL; with `--json` it is part of the result.
+- **`--account <name>`** (dev only) picks an account `.mc/shot.json` declares
+  (seeded by default), and **`--onboarding`** (dev only) asks for its `fresh`
+  onboarding state. The account and state come from the `accounts` table: each
+  state is a `/dev/login` path, and `fresh` reseeds the account, so the picture
+  is the onboarding, the same every time. A target may declare `"onboarding":
+  "fresh"` itself. Without a table (an older memoro) the paths are
+  `account=<name>&ready=1`, or `reseed=1` for `fresh`.
 
 The request gains `safe_area`, `wait_for`, `scroll`, `measure` and
 `onboarding`, after `out`; a capture result gains `safe_area` and, when asked,
@@ -103,7 +109,7 @@ through `readDeclaration`. A memoro without `.mc/shot.json` gets the error
 
 | Case | Base URL | `account` | `sign_in` |
 |---|---|---|---|
-| `dev` | the app tier, started if it is down, through `ensureAppServer` — the same function `mc test dev` calls | `seeded`, or `--account new` | `{ kind: "url", url: "<base>/dev/login?account=<account>&ready=1" }`, or `&reseed=1` with `--onboarding` |
+| `dev` | the app tier, started if it is down, through `ensureAppServer` — the same function `mc test dev` calls | the table's `default_account` (`seeded`), or `--account <name>` | `{ kind: "url", url: "<base><path>" }`, where the path is the `accounts` table's entry for the account and state |
 | `prod` | `.mc/test.json` `environments.prod.base_url` | `seeded` | `{ kind: "url", url: "<base><account.route>/<token>" }`, with the token from `tokenFor` (environment, then keychain) |
 | `prod --me` | the same | `me` | `{ kind: "session", cookie }`, from the keychain entry `MEMORO_SHOT_SESSION` |
 
@@ -170,7 +176,8 @@ for 90 days of disuse. A wrong or expired session shows up on the next `--me`
 shot, which reports `not-signed-in` and tells you to run `mc shot login prod`.
 
 There is no `--me` on a dev server. A local server has only the managed accounts
-that `/dev/login` offers, and `mc shot dev` always uses `seeded`.
+that `/dev/login` offers, and `mc shot dev` uses the table's default account
+unless `--account` names another one.
 
 ## Out of scope
 
