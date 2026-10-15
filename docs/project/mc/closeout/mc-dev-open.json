@@ -1,0 +1,159 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-dev-open",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-dev-open/PLAN.json",
+  "archived": "2026-10-15",
+  "goal": [
+    "`mc dev open <surface> [--account <name>] [--onboarding] [--viewport <v>] [--open]` is one call that ends with the app where the work is: this worktree's server up (started, or restarted after edits), signed in as the asked account in the asked onboarding state, on the surface, and one line printed: the URL, account/state, branch @ commit. With `--open` a headed browser at that viewport is left open for a person.",
+    "`mc dev surfaces` lists the surfaces memoro declares, one line each, and the accounts with their onboarding states.",
+    "`mc shot` and `mc dev open` take accounts and onboarding states from memoro's `.mc/shot.json` `accounts` table instead of knowing `seeded`/`new` and `ready=1`/`reseed=1` themselves.",
+    "`mc shot dev <surface> --compare <ref>` pictures and measures the same surface on this worktree and on `<ref>` in one call, and prints both PNG paths and the measured numbers that differ."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "From a memoro worktree, `mc dev open assistant --account new --viewport iphone --open` returns within the server's start time, leaves a headed browser on the main chat at 390×844, and prints one line with the URL, `new/done` and the branch @ commit.",
+      "check": "`mc dev open assistant --account new --viewport iphone --open; echo exit $?` prints a line containing `/dev/login?account=new&ready=1&next=%2Fapp%2Fassistant` and `new/done`, then `exit 0`; `pgrep -f scripts/shot/shot.mjs` prints a pid until the window is closed, and nothing after."
+    },
+    {
+      "met": true,
+      "criterion": "`mc dev surfaces` lists every target memoro's `.mc/shot.json` declares, with its path and summary, and the accounts with their states.",
+      "check": "`mc dev surfaces` from a memoro worktree prints lines for `assistant`, `inbox`, `mail`, `library`, `reader`, `onboarding` with their summaries, and `accounts: seeded (done, fresh) · new (done, fresh)`."
+    },
+    {
+      "met": true,
+      "criterion": "Before and after in one call: `mc shot dev assistant --viewport iphone --scroll @end --measure @layout --compare origin/main` prints this tree's PNG path, origin/main's PNG path, and the differing numbers or that there are none.",
+      "check": "Run it from a memoro worktree with an edit to `public/css/features/assistant-window/_index.css` (e.g. the footer's bottom offset); lines 1 and 2 are existing `.png` files, and a `diff` line names `.assistant-layout__footer` with `ref → here` values. Revert the edit afterwards."
+    },
+    {
+      "met": false,
+      "criterion": "The account comes from the table: `mc shot dev home --account review` is refused with the declared names, and `mc shot dev onboarding --account new --viewport iphone` signs in through `/dev/login?account=new&reseed=1` because the surface declares `onboarding: fresh`.",
+      "check": "`mc shot dev home --account review` exits 2 with `--account is one of seeded, new`; `mc shot dev onboarding --account new --viewport iphone --json` exits 0 and its picture is the onboarding (`url` ends in `/app/`)."
+    }
+  ],
+  "steps": [
+    {
+      "title": "mc shot reads accounts and onboarding states from .mc/shot.json; @end and @<name> without a selector",
+      "done_when": "`mc shot dev` builds its sign-in URL from the `accounts` table (falling back to today's behaviour when memoro declares none), `--scroll @end` passes a null selector, `tests/mc/shot.test.js` covers both, and `mc gate` is green.",
+      "status": "done",
+      "pr": 914,
+      "landed": {
+        "sha": "50cf7cbac86256facb50ca872906a310801724c0",
+        "into": "main",
+        "at": "2026-10-15T20:22:10Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "resolveAccount (src/mc/shot.js) reads the accounts table from .mc/shot.json; mc shot dev resolves the account before starting a server. Without a table it falls back to DEV_ACCOUNTS and the two /dev/login paths mc built before. A target's own onboarding: fresh applies without --onboarding. parseScroll: an empty selector before @end/@top/@<px> gives selector null (memoro resolves the declared scroller). --list prints an accounts block when there is a table. Not verified live: no memoro .mc/shot.json with accounts was run against a dev server here; tests use fixtures. Success criteria in PLAN.json are not marked met by this step."
+      ],
+      "sessions": 1,
+      "seconds": 204,
+      "cost_usd": 0.037642
+    },
+    {
+      "title": "mc dev open <surface> and mc dev surfaces",
+      "done_when": "`mc dev open` and `mc dev surfaces` exist as specified, `tests/mc/dev-open.test.js` covers them with injected server, git and spawn, success criteria 1 and 2 pass from a memoro worktree on this machine, and `mc gate` is green.",
+      "status": "done",
+      "pr": 915,
+      "landed": {
+        "sha": "39a8e1cd9b71d6f06c54a9ac97a868020fb60065",
+        "into": "main",
+        "at": "2026-10-15T21:10:32Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Released 2026-10-15T20:58:45Z: project mc-dev-door is done"
+      ],
+      "sessions": 1,
+      "seconds": 460,
+      "cost_usd": 1.540157
+    },
+    {
+      "title": "mc shot dev --compare <ref>: both trees, both pictures, the numbers that moved",
+      "done_when": "`mc shot dev <target> --compare <ref>` captures this worktree and `<ref>` with one request, prints both paths and the measurement diff (or `--json` with both results and the diff), `tests/mc/shot-compare.test.js` covers the tree, the diff and the output, success criterion 3 passes from a memoro worktree, and `mc gate` is green.",
+      "status": "done",
+      "pr": 916,
+      "landed": {
+        "sha": "327102364d925f53d1b3c6cbef99d86a75d551d1",
+        "into": "main",
+        "at": "2026-10-15T21:26:20Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "deps:prepare in a compare tree writes npm's stdout to stderr (stdio ['ignore', 2, 'inherit']), not 'inherit' as the instruction said: on the first hand run npm's lines landed before the PNG path on stdout, breaking the path-alone-on-line-1 contract. Criterion 3 was verified from a scratch memoro worktree at origin/main because ~/mc/plan/mc/memoro is on an old plan branch without the accounts table or @layout."
+      ],
+      "sessions": 1,
+      "seconds": 408,
+      "cost_usd": 1.137933
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-15T20:21:34Z",
+      "kind": "step",
+      "seconds": 204,
+      "land_seconds": null,
+      "pr": 914,
+      "turns": 40,
+      "input": 28,
+      "output": 36291,
+      "cache_read": 872774,
+      "cache_write": 86126,
+      "model": null,
+      "note": "success,queued",
+      "session": "34c96b30-cea4-4ca7-b11c-153773c3a20a",
+      "cost_usd": 0.03764179
+    },
+    {
+      "ts": "2026-10-15T21:10:02Z",
+      "kind": "step",
+      "seconds": 460,
+      "land_seconds": null,
+      "pr": 915,
+      "turns": 37,
+      "input": 62,
+      "output": 31483,
+      "cache_read": 2118247,
+      "cache_write": 97320,
+      "model": null,
+      "note": "success,queued",
+      "session": "bd47a07c-7f48-470c-bffb-74b2089b4e57",
+      "cost_usd": 1.5401573999999998
+    },
+    {
+      "ts": "2026-10-15T21:25:54Z",
+      "kind": "step",
+      "seconds": 408,
+      "land_seconds": null,
+      "pr": 916,
+      "turns": 33,
+      "input": 56,
+      "output": 26128,
+      "cache_read": 1376794,
+      "cache_write": 67958,
+      "model": null,
+      "note": "success,queued",
+      "session": "903a777d-d69d-40d6-9761-ef79b3788a82",
+      "cost_usd": 1.1379328
+    }
+  ],
+  "totals": {
+    "sessions": 3,
+    "seconds": 1072,
+    "land_seconds": 0,
+    "cost_usd": 2.715732,
+    "cost_unknown": 0,
+    "input": 146,
+    "output": 93902,
+    "cache_read": 4367815,
+    "cache_write": 251404,
+    "first": "2026-10-15T20:21:34Z",
+    "landed": "2026-10-15T21:26:20Z"
+  }
+}
