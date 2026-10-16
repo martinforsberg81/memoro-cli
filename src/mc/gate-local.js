@@ -48,23 +48,43 @@ const FAILURE = /^\s*(✖|not ok\b|\s*status: fail|\s*command [\w:-]+: fail|Asse
 const LOCATION = /^\s+at .*\((.*?:\d+):\d+\)|^\s+at (\S+:\d+):\d+/u;
 const COUNTS = /^ℹ (tests|pass|fail|skipped) (\d+)$/u;
 const CI_TESTS = /^\s*tests: ran (\d+)\/(\d+) files/u;
+// memoro's ci prints one `ℹ tests` block per lane; a failed command gate is
+// `command sql:pr-ci: fail`; a refused selection is `ci runner:` and the paths.
+const COMMAND_FAIL = /^\s*command ([\w:.-]+): fail/u;
+const CI_RUNNER = /^ci runner: /u;
+const CI_RUNNER_PATH = /^\s*- \S/u;
+const CI_RUNNER_PATHS = 10;
 
 /**
- * The output boiled down: `ok`, the counts the reporter printed, the failing
- * lines (each with the first location line under it), and how many failing
- * lines were left unnamed. `ok` is the exit code's, not the text's — a suite
- * that crashes before its summary is red with no counts.
+ * The output boiled down: `ok`, the counts the reporter printed (summed over
+ * every block — each lane prints its own), the failed command gates by name,
+ * the failing lines (each with the first location line under it), and how
+ * many failing lines were left unnamed. `ok` is the exit code's, not the
+ * text's — a suite that crashes before its summary is red with no counts.
  */
 export function summarizeGate(output, { exitCode }) {
   const lines = String(output || '').split('\n');
   const counts = {};
+  const gates = [];
   const failures = [];
   let pendingLocation = false;
+  let runnerPaths = -1;
   for (const line of lines) {
     const count = COUNTS.exec(line);
-    if (count) { counts[count[1]] = Number(count[2]); continue; }
+    if (count) { counts[count[1]] = (counts[count[1]] || 0) + Number(count[2]); continue; }
     const ran = CI_TESTS.exec(line);
     if (ran) { counts.files = Number(ran[1]); counts.selected = Number(ran[2]); continue; }
+    const gate = COMMAND_FAIL.exec(line);
+    if (gate && !gates.includes(gate[1])) gates.push(gate[1]);
+    if (CI_RUNNER.test(line)) { failures.push(line.trimEnd()); runnerPaths = 0; continue; }
+    if (runnerPaths >= 0) {
+      if (CI_RUNNER_PATH.test(line)) {
+        if (runnerPaths < CI_RUNNER_PATHS) failures.push(line.trimEnd());
+        runnerPaths++;
+        continue;
+      }
+      runnerPaths = -1;
+    }
     if (pendingLocation) {
       const at = LOCATION.exec(line);
       if (at) { failures.push(`    ${at[1] || at[2]}`); pendingLocation = false; continue; }
@@ -74,7 +94,7 @@ export function summarizeGate(output, { exitCode }) {
       pendingLocation = true;
     }
   }
-  return { ok: exitCode === 0, counts, failures: failures.slice(0, FAILURE_LINES), more: Math.max(0, failures.length - FAILURE_LINES) };
+  return { ok: exitCode === 0, counts, gates, failures: failures.slice(0, FAILURE_LINES), more: Math.max(0, failures.length - FAILURE_LINES) };
 }
 
 /**
@@ -83,16 +103,23 @@ export function summarizeGate(output, { exitCode }) {
  */
 export function gateLines(summary, { command, seconds, logPath }) {
   const c = summary.counts;
-  const counted = c.tests != null
+  const gates = summary.gates ?? [];
+  let counted = c.tests != null
     ? `${c.tests} tests, ${c.fail ?? 0} failed${c.skipped ? `, ${c.skipped} skipped` : ''}`
     : c.files != null ? `${c.files}/${c.selected} files` : 'no counts in the output';
+  if (!summary.ok && gates.length) {
+    counted += `; command gate${gates.length === 1 ? '' : 's'} failed: ${gates.join(', ')}`;
+  } else if (!summary.ok && !c.fail && c.files == null && summary.failures.length) {
+    // The counts say nothing failed, but something did, and it is named below.
+    counted = `${c.tests ?? 0} tests counted — the failure is below`;
+  }
   const lines = [
     `${summary.ok ? 'GREEN' : 'RED'} — ${command} — ${counted} — ${seconds}s`,
   ];
   if (!summary.ok) {
     for (const line of summary.failures) lines.push(line);
     if (summary.more) lines.push(`… and ${summary.more} more failing lines`);
-    if (!summary.failures.length) lines.push('the output names no failing test — read the log');
+    if (!summary.failures.length && !gates.length) lines.push('the output names no failing test — read the log');
   }
   lines.push(`whole output: ${logPath}`);
   let text = lines.join('\n');
