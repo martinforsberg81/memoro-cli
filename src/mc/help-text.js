@@ -237,7 +237,8 @@ IN FULL
                                     workerd whose parent is gone — and
                                     registrations whose worktree is gone. The
                                     runner runs it every chore pass
-  mc gate [--base <ref>] [--json]  The repository's own gate on the tree you
+  mc gate [--base <ref>] [--json] [--budget <s>] [--wait]
+                                    The repository's own gate on the tree you
                                     stand in — npm run ci -- --base-ref
                                     origin/main where there is a ci script,
                                     npm test otherwise — with the whole output
@@ -245,7 +246,11 @@ IN FULL
                                     or RED, the counts, the failing lines and
                                     their locations, the file's path. A meter
                                     for a session before it pushes; mc merge
-                                    measures again and decides
+                                    measures again and decides. Answers within
+                                    --budget s (default 540); past it, RUNNING
+                                    and exit 3 — the gate runs on, and --wait
+                                    prints its verdict from the same log. One
+                                    gate per worktree: a second refuses, exit 2
   mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window]
           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
