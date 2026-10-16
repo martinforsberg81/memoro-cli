@@ -1440,3 +1440,58 @@ re-run, and the gate's own gaps (the 600 s tool limit, a RED headline reading
 publication sequence* still describes raw `git push`/`gh pr create`/`gh pr
 merge`; it is rewritten in memoro once this has landed. Carried by
 `publish-handover` (`docs/project/mc/publish-handover/PLAN.json`).
+
+## 44 · A red is kept and handed on, a green tree is not measured twice, and main's red is main's
+
+`ruling · 2026-10-16` · raised by Martin in the brief session
+
+> "Vi behöver också se över mc test igen. […] Jag upplever att vi kör för
+> mycket test, och vi håller inte kvar i felet utan samma test måste göras om
+> flera gånger." (Martin, 2026-10-16) — and on the recommendations below,
+> each taken as recommended.
+
+Measured 2026-09-26..10-16: 1,758 memoro merge rounds for 1,300 landed PRs,
+108 h of round time (62 % suite); 24 % of it in rounds before a PR's last.
+Step sessions, over the ten days their transcripts are kept: ~1,100 test
+calls, ~21 h — 194 `mc gate` (43 cut off by the 600 s tool limit, then
+polled), 851 `node --test` (831 piped through `tail`/`grep`, 178 pure
+repeats), 39 `npm test`; 19 of 52 mends began with a whole `npm test`.
+Nothing keeps a red: the merger's TAP output stays in memory, the retry
+preamble carries one line (at most five names), and the mend prompt's
+`red files:` line was empty in all 52 mends. Four SQL snapshot tests red on
+main were measured red in 77 rounds of 43 PRs; the JSC start-up budget in 39
+rounds, dead-CSS in 20. 59 of 66 session REDs read "N tests, 0 failed".
+
+1. **A red is kept.** Every red round writes its failing tests — name,
+   assertion, location, at most 200 lines — to
+   `~/mc/runner/merge-red/<repo>-<pr>.txt`. The retry preamble and the mend
+   prompt carry that path, the red files, and a ready re-run line; the mend
+   runs `mc gate`, never a whole `npm test`.
+2. **A red is measured first.** A round for a PR whose previous round was
+   red runs that round's red files alone, before the selection; still red,
+   the round stops red there.
+3. **A green tree is not measured twice.** `mc gate`, on a clean tree in a
+   repository whose declaration has `select`, records its green against
+   (tree, selection, gate version). The merger skips the suite and the
+   selected command gates when its candidate's tree, its own selection and
+   the gate version match a recorded green exactly; the PR's own tests still
+   run. Anything else is measured as today.
+4. **Main's red is main's.** The strictness rule in `repo-gate.js` (a change
+   whose reached tests include one red on main is red) is reversed for a
+   change that does not touch the test: when every red file left is red on
+   main by the main-red probe, and the PR changes none of those files, the
+   round is not red on them — it goes on, names them once in its verdict,
+   and leaves an intake note for the helper (one per file per week). A PR
+   that changes a red file is red as before.
+5. **A declared timing test gets one more run.** The shipped gate table
+   names, per repository, the test files and command gates known to flip
+   under load (`retry_once`). A red only in those is run once more alone;
+   green then, the round goes on and the flip is recorded. No quarantine: a
+   file that flips often is a proposal, not a skip.
+6. **`mc gate` answers inside the tool limit.** The log is written as it
+   runs; after a budget of 540 s the gate says it is still running, with the
+   log and `mc gate --wait`. One gate per worktree. The RED line counts every
+   reporter block and names the failed command gates and the `ci runner:`
+   reason. `mc gate <files…>` runs named test files the same way.
+
+Carried by `gate-memory` (`docs/project/mc/gate-memory/PLAN.json`).
