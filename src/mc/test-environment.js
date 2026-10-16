@@ -250,6 +250,14 @@ export function builtFromMoved(server, worktree, deps = {}) {
  * file git reports as changed or new whose mtime is after the server's
  * `started_at` is a reason to start over. Only a service that says what it was
  * built from (`built_from`) is asked; one that says nothing is trusted.
+ *
+ * An edit undone after start leaves a clean file and no newer mtime behind
+ * (2026-10-16: a CSS rule reverted with `git checkout` went on being served).
+ * A service that also lists what was dirty when it started
+ * (`built_from.dirty`) is therefore stale when a path that was dirty then is
+ * clean now, or when a path is deleted now that was not dirty then — a
+ * deletion has no mtime to read either. Without the list those cannot be told
+ * apart from a tree that never changed, and are trusted as before.
  */
 export function editedSince(server, worktree, deps = {}) {
   if (!server?.built_from) return null;
@@ -259,21 +267,32 @@ export function editedSince(server, worktree, deps = {}) {
   const asked = git(['status', '--porcelain=v1', '-z', '--untracked-files=normal']);
   if (asked.status !== 0) return null;
   const stat = deps.statSync || statSync;
+  const was = String(server.built_from.commit || '').slice(0, 10);
+  const dirtyAtStart = Array.isArray(server.built_from.dirty) ? new Set(server.built_from.dirty) : null;
+  const dirtyNow = new Set();
   const entries = String(asked.stdout || '').split('\0').filter(Boolean);
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     const code = entry.slice(0, 2);
     const path = entry.slice(3);
+    dirtyNow.add(path);
     // A rename carries its old path as the next entry; only the new one is on disk.
-    if (code.includes('R') || code.includes('C')) index += 1;
-    if (code.includes('D')) continue;
+    if (code.includes('R') || code.includes('C')) {
+      if (entries[index + 1]) dirtyNow.add(entries[index + 1]);
+      index += 1;
+    }
+    if (code.includes('D')) {
+      if (dirtyAtStart && !dirtyAtStart.has(path)) return { was, now: `${path} deleted`, edited: path };
+      continue;
+    }
     try {
-      if (stat(join(worktree, path)).mtimeMs > startedMs) {
-        return { was: String(server.built_from.commit || '').slice(0, 10), now: `${path} edited`, edited: path };
-      }
+      if (stat(join(worktree, path)).mtimeMs > startedMs) return { was, now: `${path} edited`, edited: path };
     } catch {
       // Gone between status and stat: not served either way.
     }
+  }
+  for (const path of dirtyAtStart ?? []) {
+    if (!dirtyNow.has(path)) return { was, now: `${path} reverted`, edited: path };
   }
   return null;
 }
@@ -442,7 +461,7 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
       stdout.write(`mc: ${ensured.replacedHung} was alive but not answering — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
     } else if (ensured.restartedFrom) {
       stdout.write(ensured.restartedFrom.edited
-        ? `mc: ${ensured.restartedFrom.edited} was edited after the server started — started a fresh one, ${baseUrl} (${server.instance_id})\n`
+        ? `mc: ${ensured.restartedFrom.now} after the server started — started a fresh one, ${baseUrl} (${server.instance_id})\n`
         : `mc: the checkout moved (${ensured.restartedFrom.was} → ${ensured.restartedFrom.now}) — started a fresh one, ${baseUrl} (${server.instance_id})\n`);
     } else {
       stdout.write(ensured.started

@@ -1098,4 +1098,31 @@ describe('editedSince — a change nobody committed', () => {
     assert.deepEqual(seen, ['/w/new.js']);
     assert.equal(editedSince({ started_at: server.started_at }, '/w', { git, statSync: () => ({ mtimeMs: started + 1 }) }), null);
   });
+
+  // 2026-10-16: a CSS edit undone with `git checkout` left a clean file and no
+  // newer mtime, and the edited build went on being served.
+  describe('with the paths that were dirty at start', () => {
+    const listed = (dirty) => ({ ...server, built_from: { ...server.built_from, dirty } });
+    const before = () => ({ mtimeMs: started - 1 });
+
+    it('a path dirty at start and clean now was reverted, and is a reason to start over', () => {
+      assert.deepEqual(editedSince(listed(['public/css/x.css']), '/w', { git: status(''), statSync: before }), {
+        was: 'aaaaaaaaaa', now: 'public/css/x.css reverted', edited: 'public/css/x.css',
+      });
+      assert.equal(editedSince(listed(['a.js', 'b.js']), '/w', { git: status(' M a.js\0'), statSync: before }).now, 'b.js reverted');
+    });
+
+    it('a deletion since the start is one too; a deletion from before it is not', () => {
+      const git = status(' D gone.js\0');
+      const missing = () => { throw new Error('no'); };
+      assert.equal(editedSince(listed([]), '/w', { git, statSync: missing }).now, 'gone.js deleted');
+      assert.equal(editedSince(listed(['gone.js']), '/w', { git, statSync: missing }), null);
+    });
+
+    it('the same dirty paths, untouched since the start, are the tree that was built', () => {
+      const git = status(' M a.js\0R  new.js\0old.js\0');
+      assert.equal(editedSince(listed(['a.js', 'new.js', 'old.js']), '/w', { git, statSync: before }), null);
+      assert.equal(editedSince(listed([]), '/w', { git: status(''), statSync: before }), null);
+    });
+  });
 });

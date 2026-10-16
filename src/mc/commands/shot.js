@@ -32,7 +32,7 @@ import { openCommandFor } from '../../lib/device-flow.js';
 import { mcHome } from '../paths.js';
 import { runCompare } from '../shot-compare.js';
 import {
-  SESSION_SECRET, SHELLS, THEMES, accountTable, buildLoginRequest, buildRequest, outPath, parseSafeArea,
+  SESSION_SECRET, SHELLS, THEMES, accessLine, accountTable, buildLoginRequest, buildRequest, outPath, parseSafeArea,
   parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture, shotWorktree,
 } from '../shot.js';
 import {
@@ -105,7 +105,7 @@ export async function run(argv, deps = {}) {
     return 2;
   }
   if (!flags.list && !word) {
-    stderr.write(`mc: mc shot ${where} needs a target — a path under /app or a name from mc shot ${where} --list\n`);
+    stderr.write(`mc: mc shot ${where} needs a target — a path under /app or /admin, or a name from mc shot ${where} --list\n`);
     return 2;
   }
 
@@ -230,6 +230,9 @@ export async function run(argv, deps = {}) {
     stderr.write('mc: the capture script said ok and named no file\n');
     return 1;
   }
+  // A gated target's verdict: the picture is taken either way, and a gate
+  // that did not hold makes the exit 1.
+  const access = accessLine(result.access);
   if (flags.json) {
     stdout.write(`${scrub(JSON.stringify(served ? { ...result, served } : result, null, 2))}\n`);
   } else {
@@ -237,10 +240,12 @@ export async function run(argv, deps = {}) {
     if (result.url) stdout.write(`${scrub(result.url)}\n`);
     // The numbers, one line, after the path: what a layout question turns on.
     if (result.measure) stdout.write(`${scrub(JSON.stringify({ measure: result.measure, safe_area: result.safe_area ?? null }))}\n`);
+    if (access && !access.failed) stdout.write(`${scrub(access.line)}\n`);
     for (const warning of result.warnings || []) stdout.write(`mc: warning — ${scrub(warning)}\n`);
   }
+  if (access?.failed) stderr.write(`mc: ${scrub(access.line)}\n`);
   if (flags.open) openFile(result.file, deps);
-  return 0;
+  return access?.failed ? 1 : 0;
 }
 
 /** `mc shot login prod [--paste]` and `mc shot logout prod`. */
@@ -295,14 +300,23 @@ async function account(verb, argv, { stdout, stderr, deps }) {
  * Which tree the server is serving, said rather than assumed: the branch and
  * commit it was built from, and the files edited since it started — none
  * after `ensureAppServer`, which starts a fresh one when there are. A port is
- * the server's opinion of itself; this is the evidence.
+ * the server's opinion of itself; this is the evidence. A server built with
+ * uncommitted changes says how many (`built_from.dirty`), so two trees at the
+ * same commit are not read as the same tree (2026-10-16: a `--compare` of an
+ * edited worktree against its own HEAD printed `@ <commit>` on both sides).
  */
 export function servedTree(worktree, server, deps = {}) {
   const git = deps.git || ((args) => spawnSync('git', args, { cwd: worktree, encoding: 'utf8' }));
   const branch = String(git(['branch', '--show-current']).stdout || '').trim() || '(detached)';
   const commit = String(server?.built_from?.commit || git(['rev-parse', 'HEAD']).stdout || '').trim().slice(0, 10);
+  const dirty = server?.built_from?.dirty;
+  const uncommitted = Array.isArray(dirty) ? dirty.length : null;
   const url = server?.url || null;
-  return { worktree, branch, commit, url, line: `${worktree} — ${branch} @ ${commit}${url ? ` on ${url}` : ''}` };
+  const edits = uncommitted ? ` + ${uncommitted} uncommitted ${uncommitted === 1 ? 'file' : 'files'}` : '';
+  return {
+    worktree, branch, commit, uncommitted, url,
+    line: `${worktree} — ${branch} @ ${commit}${edits}${url ? ` on ${url}` : ''}`,
+  };
 }
 
 /**
@@ -389,11 +403,13 @@ export function usage() {
     '                                      meetmemoro.app, Chrome DevTools → Application → Cookies\n',
     '        mc shot logout prod           forget it\n',
     '\n',
-    'A target is a path under /app or a name from memoro\'s .mc/shot.json. Without --out the\n',
-    'file goes under ~/.memoro/mc/shots/. Inside a memoro worktree dev serves that worktree\n',
-    '(restarted when it was edited since the server started) and says which tree it serves;\n',
-    'elsewhere it serves the shared checkout. dev signs in through /dev/login; prod as the\n',
-    'test account, or as you with --me.\n',
+    'A target is a path under /app or /admin, or a name from memoro\'s .mc/shot.json. Without\n',
+    '--out the file goes under ~/.memoro/mc/shots/. Inside a memoro worktree dev serves that\n',
+    'worktree (restarted when it was edited since the server started) and says which tree it\n',
+    'serves; elsewhere it serves the shared checkout. dev signs in through /dev/login; prod as\n',
+    'the test account, or as you with --me. A target that requires a role (every /admin path)\n',
+    'is judged against the account\'s declared role: one line says whether its gate held, and\n',
+    'a gate that did not hold exits 1.\n',
     '\n',
     'Example — the bottom of the main chat on a phone, with its numbers:\n',
     '  mc shot dev assistant --viewport iphone --scroll \'.window-view__content\' \\\n',

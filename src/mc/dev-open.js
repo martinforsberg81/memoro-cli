@@ -13,9 +13,15 @@
  * state and the tree served. With `--open` memoro's capture script, in mode
  * `open`, leaves a headed browser on the surface (`runOpen`), and mc returns
  * as soon as the script says the surface is open.
+ *
+ * A surface may require a role (`access.requires`; every /admin path requires
+ * admin) and an account may declare one (`role`). Without `--open` mc warns
+ * when the account's role is not the one required: the page will refuse it.
+ * With `--open` the script judges it, and a gate that did not hold exits 1.
  */
 import {
-  parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runOpen, shotWorktree,
+  accessLine, accountRole, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runOpen, shotWorktree,
+  targetRequires,
 } from './shot.js';
 import { ensureAppServer, readDeclaration } from './test-environment.js';
 import { servedTree } from './commands/shot.js';
@@ -28,6 +34,7 @@ export function surfaces(opts, { stdout, stderr, deps = {} }) {
   const targets = declared.targets || [];
   const accounts = Object.fromEntries(Object.entries(declared.accounts || {})
     .map(([name, account]) => [name, Object.keys(account?.onboarding || {})]));
+  const roles = Object.fromEntries(Object.keys(accounts).map((name) => [name, accountRole(declared, name)]));
   const defaultAccount = declared.default_account || Object.keys(accounts)[0] || null;
 
   if (opts.json) {
@@ -43,8 +50,10 @@ export function surfaces(opts, { stdout, stderr, deps = {} }) {
         chrome: target.chrome ?? [],
         measure: Object.keys(target.measure || {}),
         onboarding: target.onboarding ?? null,
+        requires: targetRequires(target),
       })),
       accounts,
+      roles,
       default_account: defaultAccount,
     }, null, 2)}\n`);
     return 0;
@@ -53,12 +62,14 @@ export function surfaces(opts, { stdout, stderr, deps = {} }) {
   const nameWidth = Math.max(0, ...targets.map((target) => String(target.name).length));
   const pathWidth = Math.max(0, ...targets.map((target) => String(target.path || '').length));
   for (const target of targets) {
-    stdout.write(`${String(target.name).padEnd(nameWidth)}  ${String(target.path || '').padEnd(pathWidth)}  ${target.summary || '-'}\n`);
+    const requires = targetRequires(target);
+    stdout.write(`${String(target.name).padEnd(nameWidth)}  ${String(target.path || '').padEnd(pathWidth)}  ${target.summary || '-'}${requires ? `  [${requires}]` : ''}\n`);
   }
   // The default first, then the rest as declared.
   const names = Object.keys(accounts).sort((a, b) => (b === defaultAccount) - (a === defaultAccount));
   if (names.length) {
-    stdout.write(`\naccounts: ${names.map((name) => `${name} (${accounts[name].join(', ')})`).join(' · ')}\n`);
+    const said = (name) => `${name}${roles[name] ? ` [${roles[name]}]` : ''} (${accounts[name].join(', ')})`;
+    stdout.write(`\naccounts: ${names.map(said).join(' · ')}\n`);
   }
   return 0;
 }
@@ -78,6 +89,8 @@ export async function open(opts, { stdout, stderr, deps = {} }) {
   const entry = target.target.name ? (declared.targets.find((item) => item.name === target.target.name) ?? null) : null;
   const resolved = resolveAccount(declared, { account: opts.account, onboarding: opts.onboarding, entry });
   if (!resolved.ok) { stderr.write(`mc: ${resolved.error}\n`); return 2; }
+  const requires = targetRequires(entry, target.target.path);
+  const role = accountRole(declared, resolved.account);
   let viewport = null;
   if (opts.open) {
     if ((deps.platform || process.platform) === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY) {
@@ -97,6 +110,7 @@ export async function open(opts, { stdout, stderr, deps = {} }) {
   const url = new URL(resolved.path, app.baseUrl);
   url.searchParams.set('next', entry?.path ?? opts.surface);
   const then = (entry?.open || []).map((step) => step.click).filter(Boolean);
+  let access = null;
 
   if (opts.open) {
     const request = {
@@ -118,11 +132,20 @@ export async function open(opts, { stdout, stderr, deps = {} }) {
       return 1;
     }
     for (const warning of ran.result.warnings || []) stderr.write(`mc: warning — ${warning}\n`);
+    access = ran.result.access ?? null;
   }
 
   if (opts.json) {
     stdout.write(`${JSON.stringify({
-      url: url.href, account: resolved.account, onboarding: resolved.state, surface: opts.surface, served, then,
+      url: url.href,
+      account: resolved.account,
+      onboarding: resolved.state,
+      surface: opts.surface,
+      served,
+      then,
+      requires,
+      role,
+      ...(access ? { access } : {}),
     }, null, 2)}\n`);
   } else {
     stdout.write(`${url.href}  ${resolved.account}/${resolved.state}  ${served.branch} @ ${served.commit}\n`);
@@ -130,10 +153,17 @@ export async function open(opts, { stdout, stderr, deps = {} }) {
     if (then.length && !opts.open) stdout.write(`then click: ${then.join(' → ')}\n`);
   }
   if (resolved.state === 'fresh') stderr.write(`mc: opening this URL reseeds ${resolved.account} each time\n`);
+  // Said before anyone looks, so a refusal is not mistaken for a broken page;
+  // with --open the script has looked, and says whether the gate held.
+  if (requires && role && role !== requires && !opts.open) {
+    stderr.write(`mc: warning — ${opts.surface} requires ${requires}, and ${resolved.account} is ${role}: the page will refuse it\n`);
+  }
+  const verdict = accessLine(access);
+  if (verdict) stderr.write(`mc: ${verdict.line}\n`);
   if (opts.open) {
     stderr.write(`mc: a browser is open on ${opts.surface} at ${viewport.label} — close its window when you are done\n`);
   }
-  return 0;
+  return verdict?.failed ? 1 : 0;
 }
 
 function shotDeclaration(opts, deps) {

@@ -258,16 +258,19 @@ IN FULL
                                     serves that worktree, restarted when it was
                                     edited after the server started, and says
                                     which branch and commit it served. The
-                                    target is a path under /app or a name from
-                                    memoro's .mc/shot.json, whose capture
-                                    script takes the picture. The file's path
-                                    is printed first, alone; with --measure the
-                                    measured boxes follow as one JSON line. A
-                                    declared phone viewport carries its safe
-                                    area. dev signs in as seeded (or --account
-                                    new; --onboarding reseeds and shows it),
-                                    prod as the test account, or as you with
-                                    --me (prod only)
+                                    target is a path under /app or /admin, or
+                                    a name from memoro's .mc/shot.json, whose
+                                    capture script takes the picture. The
+                                    file's path is printed first, alone; with
+                                    --measure the measured boxes follow as one
+                                    JSON line. A declared phone viewport
+                                    carries its safe area. dev signs in as
+                                    seeded (or --account new; --onboarding
+                                    reseeds and shows it), prod as the test
+                                    account, or as you with --me (prod only).
+                                    An /admin target is judged against the
+                                    account's role; a gate that did not hold
+                                    exits 1
   mc shot <dev|prod> --list        The targets and viewports memoro declares
   mc shot login prod [--paste]     Sign in once, in a browser or by pasting the
                                     memoro_session cookie; mc keeps it in the

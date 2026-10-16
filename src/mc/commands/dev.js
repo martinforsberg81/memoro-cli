@@ -286,7 +286,7 @@ function surfaceArgs(argv) {
     return opts;
   }
   const surface = positional.shift();
-  if (!surface) return { ...opts, error: 'mc dev open needs a surface — a name from mc dev surfaces or a path under /app' };
+  if (!surface) return { ...opts, error: 'mc dev open needs a surface — a name from mc dev surfaces or a path under /app or /admin' };
   if (positional.length) return { ...opts, error: `mc dev open takes one surface (${positional[0]})` };
   if (browserFlags.length && !flags.open) {
     return { ...opts, error: `${browserFlags.map((name) => `--${name}`).join(', ')} ${browserFlags.length === 1 ? 'is' : 'are'} for --open: a URL has no viewport` };
