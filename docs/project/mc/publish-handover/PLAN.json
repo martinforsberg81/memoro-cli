@@ -21,7 +21,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc publish --body-file <f>` on a branch with an open pull request edits only its body, and `mc publish --title <t>` only its title.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/publish.test.js` passes, including the tests named in step 1."
     },

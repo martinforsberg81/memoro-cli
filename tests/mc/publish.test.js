@@ -99,6 +99,27 @@ describe('mc publish', () => {
     assert.deepEqual(edited.out.gh[1], ['pr', 'edit', '4', '--title', 'New', '--body', 'B']);
   });
 
+  it('on an open pull request --body edits the body alone', async () => {
+    const edited = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
+    assert.equal(await run(['--body', 'B'], edited.deps), 0);
+    assert.deepEqual(edited.out.gh[1], ['pr', 'edit', '4', '--body', 'B']);
+  });
+
+  it('--title edits the title alone, --base the base alone', async () => {
+    const titled = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
+    assert.equal(await run(['--title', 'T'], titled.deps), 0);
+    assert.deepEqual(titled.out.gh[1], ['pr', 'edit', '4', '--title', 'T']);
+    const based = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
+    assert.equal(await run(['--base', 'release'], based.deps), 0);
+    assert.deepEqual(based.out.gh[1], ['pr', 'edit', '4', '--base', 'release']);
+  });
+
+  it('a new pull request aims at --base when given', async () => {
+    const { out, deps } = fixture();
+    assert.equal(await run(['--base', 'release'], deps), 0);
+    assert.deepEqual(out.gh[1], ['pr', 'create', '--base', 'release', '--head', 'step-x', '--title', 'The subject', '--body', 'The body.']);
+  });
+
   it('refuses main and a dirty tree before touching the network; --json is the snapshot', async () => {
     const main = fixture({ branch: 'main' });
     assert.equal(await run([], main.deps), 1);

@@ -10,9 +10,9 @@
  * The sequence memoro's `AGENTS.md` asks a session to walk by hand
  * (`publish.js` has each rule): refuse on main, refuse a dirty tree, refuse
  * a remote branch that moved (never force), non-force `git push -u`, then
- * one `gh pr create` — or `gh pr edit` when the branch already has an open
- * pull request and a title or body was given — and one `gh pr view` of the
- * result. Five lines back, the last of them `mc merge <repo> <pr>`.
+ * one `gh pr create` — or, when the branch already has an open pull request,
+ * `gh pr edit` of exactly the fields given (title, body, base) — and one
+ * `gh pr view` of the result. Five lines back, the last of them `mc merge <repo> <pr>`.
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -26,7 +26,7 @@ export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const cwd = deps.cwd || process.cwd();
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--title', '--body', '--body-file'] });
+  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--title', '--body', '--body-file', '--base'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   if (scanned.positional.length) { stderr.write(`mc: mc publish takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
   const { flags } = scanned;
@@ -67,12 +67,16 @@ export async function run(argv, deps = {}) {
   let created = false;
   let number = open?.number ?? null;
   if (open) {
-    if (flags.title || bodyGiven != null) {
-      const edited = gh(['pr', 'edit', String(open.number), '--title', title, '--body', body]);
+    const edit = ['pr', 'edit', String(open.number)];
+    if (flags.title) edit.push('--title', flags.title);
+    if (bodyGiven != null) edit.push('--body', bodyGiven);
+    if (flags.base) edit.push('--base', flags.base);
+    if (edit.length > 3) {
+      const edited = gh(edit);
       if (!edited.ok) { stderr.write(`mc: gh pr edit #${open.number} failed: ${edited.text}\n`); return 1; }
     }
   } else {
-    const base = defaultBase(git);
+    const base = flags.base || defaultBase(git);
     const made = gh(['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', body]);
     if (!made.ok) { stderr.write(`mc: gh pr create failed: ${made.text}\n`); return 1; }
     created = true;
@@ -133,8 +137,9 @@ function ghCommand(args, cwd) {
 export function usage() {
   return [
     'usage — mc publish                          push this branch and open its pull request (title and body from the last commit)\n',
-    '        mc publish --title "…" --body "…"   named instead; edits an open pull request\'s\n',
+    '        mc publish --title "…" --body "…"   named instead; on an open pull request each edits only its own field\n',
     '        mc publish --body-file <path>       the body from a file\n',
+    '        mc publish --base <branch>          the base a new pull request aims at, or the open one is moved to\n',
     '        mc publish --json                   the pull request snapshot as one object\n',
     '\n',
     'Refuses on main, on a dirty tree, and when origin\'s branch moved (never force). Ends with the mc merge line to run.\n',
