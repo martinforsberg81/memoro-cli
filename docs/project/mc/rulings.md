@@ -1390,3 +1390,53 @@ in step 10, mended on Opus in 86 s. Opus steps 4–7 of the same project cost
 
 Mend stays on Opus (Martin, 2026-10-13, at the trial). Carried by
 `haiku-steps` (`docs/project/mc/haiku-steps/PLAN.json`).
+
+## 43 · Every push of a step goes through `mc publish`, and the PR says what came after its description
+
+`ruling · 2026-10-16` · raised by Martin in the brief session
+
+> "Vi behöver utveckla mc publish. […] mc publish doesn't update the
+> description of a PR that already exists. […] Tänk igenom ytterligare luckor
+> i mc gate, publish, merge." (Martin, 2026-10-16) — and on the
+> recommendations: "Ja bra, skriv ihop till en plan".
+
+Measured over the 125 step transcripts since 2026-09-26: 21 sessions pushed
+with a plain `git push` and 20 of them went straight to `mc merge`; 7 ran
+`gh pr edit --body-file` by hand; 8 PRs landed with a description of their
+first head only — which is what the merger books (`remainderOf`) and what
+the squash carries. mc sends sessions past `mc publish` itself: the retry
+preamble (`run-plan.js`) says "push to the same branch", the mend prompt
+says `git push origin HEAD:<branch>` — which the pre-tool hook has refused
+since #912 — and `--body-file` alone overwrites the title with the last
+commit's subject (a fix's), `--title` alone the body.
+
+1. `mc publish` edits only what it is given: `--title`, `--body`/`--body-file`
+   and the new `--base` each on its own.
+2. The description carries the head it describes, as a last line
+   `<!-- mc:described <sha> -->`. `mc publish` without a body, on an open PR
+   with commits after that head, writes them under a generated
+   `## After the description` section (subject and body of each, oldest
+   first, merges left out), regenerated on every publish. The text above it
+   is never touched; `--body`/`--body-file` replaces the whole and moves the
+   mark to the head being published. A description with no mark is taken to
+   describe the branch's oldest commit.
+3. `mc publish --branch <name>` publishes a detached HEAD to that branch with
+   the same refusals (the mend's worktree is `origin/<branch>`, detached).
+4. The retry preamble and the mend prompt say `mc publish`, never `git push`;
+   the pre-tool hook sends `gh pr edit` to `mc publish` as it sends
+   `gh pr create`.
+5. `mc merge` refuses at the door, before queueing: a PR whose branch is
+   checked out in the caller's worktree at a head origin does not hold
+   ("`mc publish` first"), and a PR GitHub reports `CONFLICTING` (merge
+   `origin/main` in the worktree, which still has the context).
+6. The merger lands only the head it measured or freshened:
+   `gh pr merge --squash --match-head-commit <sha>`, after GitHub reports
+   that head.
+
+`mc gate` and the test rounds are not in this ruling: Martin asked the same
+day for a review of how much is tested and how often the same failure is
+re-run, and the gate's own gaps (the 600 s tool limit, a RED headline reading
+"0 failed") are planned with that. memoro's `AGENTS.md` *Deterministic
+publication sequence* still describes raw `git push`/`gh pr create`/`gh pr
+merge`; it is rewritten in memoro once this has landed. Carried by
+`publish-handover` (`docs/project/mc/publish-handover/PLAN.json`).
