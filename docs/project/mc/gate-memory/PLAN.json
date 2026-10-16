@@ -1,0 +1,208 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A red found once is not found again by re-running: the merger keeps each red round's failing tests on disk and hands their path, files and a re-run line to the next session and the mend.",
+    "The same tree is not measured twice: a session's green `mc gate` on a clean tree is reused by the merger when the candidate's tree, selection and gate version match exactly.",
+    "A test red on main does not make an unrelated PR red; a declared timing test gets one more run before it does.",
+    "`mc gate` answers inside the 600 s tool limit, writes its log as it runs, runs once per worktree, says truthfully what failed, and runs named test files too."
+  ],
+  "contract": [
+    "Ruling 44 (`docs/project/mc/rulings.md` § 44).",
+    "A PR that changes a test file red on main is red as before; a red in a file not declared `retry_once` is red as before.",
+    "The merger measures exactly as today whenever no recorded green matches its candidate exactly — tree, selection (files and command gates) and gate version.",
+    "The PR's own tests (`ownTests`) run in every round, cached or not.",
+    "`mc gate`'s exit codes stay 0 green, 1 red, 2 nothing to run; a new 3 means still running. Its printed answer stays within `OUTPUT_CAP`.",
+    "No quarantine: nothing is skipped because it is flaky."
+  ],
+  "out_of_scope": [
+    "memoro's selector (`scripts/testing/ci.mjs`) and its registry.",
+    "Fixing the tests that are red on main or flip under load — those are their own proposals.",
+    "Splitting a red batch by file ownership, and the merge-throughput proposal (`2026-10-11-merge-throughput-regressed.md`).",
+    "The nightly's schedule and what it measures.",
+    "`mc publish`, the merge door and the landing call — project `publish-handover` (ruling 43)."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A red merger round leaves `~/mc/runner/merge-red/<repo>-<pr>.txt`, and the retry preamble and the mend prompt for that PR name its path, its red files and a re-run line.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/mend.test.js tests/mc/run-plan.test.js` passes with the step-4 tests."
+    },
+    {
+      "met": false,
+      "criterion": "`mc gate` over a command that outlives its budget prints `RUNNING`, exits 3, and `mc gate --wait` later prints the verdict from the same log; a second `mc gate` in the same worktree meanwhile refuses.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-local.test.js` passes with the step-1 to step-3 tests."
+    },
+    {
+      "met": false,
+      "criterion": "A round whose candidate matches a recorded green skips the suite and says so; a red only on files red on main and untouched by the PR goes on; a red only in a `retry_once` file that passes alone goes on.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/merger.test.js` passes with the step-5 to step-8 tests."
+    }
+  ],
+  "documents": [
+    {
+      "label": "Ruling 44",
+      "path": "../rulings.md"
+    },
+    {
+      "label": "mc merge",
+      "path": "../../../technical/mc-merge.md"
+    },
+    {
+      "label": "mc command matrix",
+      "path": "../../../mc-command-matrix.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "`mc gate` writes its log as it runs, answers within a budget, and runs once per worktree",
+      "status": "ready",
+      "runner": {
+        "model": "haiku",
+        "effort": "high"
+      },
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-local.test.js` passes with the new tests (create `tests/mc/gate-command.test.js` if no test file covers `src/mc/commands/gate.js` yet), and `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 44 § 6): 43 of 194 session gates since 2026-09-26 were cut off by the Bash tool's 600 s limit; `spawnSync` buffers the output, so the backgrounded log was empty and sessions polled `pgrep`. One session started a second gate while the first had run 54 min.",
+        "In `src/mc/commands/gate.js`, replace the `spawnSync` run with a detached child: `spawn('sh', ['-c', `${command.run}; echo $? > '${logPath}.exit'`], { cwd: root, env: { ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' }, detached: true, stdio: ['ignore', fd, fd] })` where `fd` is `openSync(logPath, 'a')` — so stdout and stderr go to the log as they come and the child outlives mc. Write the child's pid to `${logPath}.pid`. Create the log directory before opening it. `child.unref()`.",
+        "Wait for `${logPath}.exit` to appear, polling every 2 s (injectable `sleep` and `now` deps), up to a budget: `--budget <seconds>` (new `strictValues` flag), default 540. When the exit file appears, read the log and the exit code from it, then summarize and print exactly as today (`summarizeGate`, `gateLines`, `--json`); remove the lock (below). When the budget runs out first, print two lines — `RUNNING — ${command.run} — ${seconds}s so far, still running (pid ${pid})` and `log: ${logPath} — mc gate --wait waits for it and prints the verdict` — and exit 3. Leave the lock.",
+        "Lock, one gate per worktree: the lock file is `join(gitDir, 'mc-gate.json')` where `gitDir` is `git rev-parse --absolute-git-dir` in `root`, holding `{ pid, log, started }`. At start, if it exists and its pid is alive (`process.kill(pid, 0)` without throwing) and `${log}.exit` does not exist, refuse: `mc: a gate is already running here (pid ${pid}, since ${started}) — mc gate --wait\\n` to stderr, exit 2. A lock whose pid is dead or whose exit file exists is stale: overwrite it.",
+        "`mc gate --wait` (boolean flag): read the lock; with none, `mc: no gate running here — mc gate starts one\\n`, exit 2. Otherwise wait on its `log`'s exit file with the same budget and print as above (verdict, or `RUNNING` again with exit 3). When the pid is dead and no exit file exists, print `RED — the gate's process ended without an exit code — log: ${log}` and exit 1.",
+        "`usage()`: add `mc gate --budget <s>` ('answer after at most s seconds, default 540; the gate keeps running') and `mc gate --wait` ('wait for the gate running here and print its verdict'), and 'Exit 0 green, 1 red, 2 nothing to run or already running, 3 still running.' Update the `mc gate` entry in `src/mc/help-text.js` and the row in `docs/mc-command-matrix.md` the same way, and the hook's `ci` rule reason in `src/mc/hooks.js` stays as it is.",
+        "Tests in `tests/mc/gate-command.test.js`, with `deps.spawn`, `deps.sleep` (async no-op), `deps.now` (a clock you advance), `deps.exists`, `deps.read`, `deps.write`, `deps.alive` injected: (1) `'a gate that finishes inside the budget prints its verdict and clears the lock'`; (2) `'past the budget it prints RUNNING with the log and exits 3, and the lock stays'`; (3) `'a second gate while one is alive refuses with exit 2'`; (4) `'--wait prints the verdict of the running gate once it ends'`; (5) `'a stale lock (dead pid) is taken over'`. Keep `gateCommand`/`summarizeGate`/`gateLines` pure and their tests unchanged."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The RED line counts every reporter block and names what failed",
+      "status": "ready",
+      "runner": {
+        "model": "haiku",
+        "effort": "high"
+      },
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-local.test.js` passes with the new tests, and `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 44 § 6): 59 of 66 session REDs since 2026-09-26 read 'N tests, 0 failed' — each `ℹ tests/fail` block overwrites the one before (memoro's ci prints one per lane), and a failed command gate (`command sql:pr-ci: fail`) is never counted. 6 fast REDs said 'the output names no failing test' while stderr carried `ci runner: Affected test selection has unmapped changes:` and a list of `- <path>` lines.",
+        "In `summarizeGate` (`src/mc/gate-local.js`): `COUNTS` matches add to `counts[key]` (`(counts[key] || 0) + Number(...)`) instead of overwriting. Collect `gates`: every line matching `/^\\s*command ([\\w:.-]+): fail/u` pushes the name (deduplicated, in order). A line matching `/^ci runner: /u` is a failure line, and so is each following line matching `/^\\s*- \\S/u` until a line that does not (up to 10 of them). Return `{ ok, counts, gates, failures, more }`.",
+        "In `gateLines`: on red, the count clause becomes `${c.tests} tests, ${c.fail ?? 0} failed` as today plus, when `gates.length`, `; command gate${gates.length === 1 ? '' : 's'} failed: ${gates.join(', ')}`. When `c.fail` is 0 or missing and `gates` is empty and `failures` is non-empty, the clause is `${c.tests ?? 0} tests counted — the failure is below`. The 'names no failing test' line stays for a red with neither.",
+        "Tests in `tests/mc/gate-local.test.js`: (1) `'two lane summaries add up'` — output with `ℹ tests 10`/`ℹ fail 1` then `ℹ tests 5`/`ℹ fail 0` gives `tests 15, fail 1`; (2) `'a failed command gate is named in the RED line'` — `ℹ tests 414`, `ℹ fail 0`, `command sql:pr-ci: fail`, exit 1: the first line contains `command gate failed: sql:pr-ci`; (3) `'a ci runner refusal and its paths are the failure'` — `ci runner: Affected test selection has unmapped changes:` then `- tests/_helpers/x.mjs`: both lines are in `failures` and the RED line does not say 'names no failing test'."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "`mc gate <files…>` runs named test files with the same log and summary",
+      "status": "ready",
+      "runner": {
+        "model": "haiku",
+        "effort": "high"
+      },
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-local.test.js` passes with the new tests, and `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 44 § 6): 851 `node --test` calls in step sessions, 831 piped through `tail`/`grep`/`head`; 178 were repeats because the filter threw the answer away (a TAP grep over the spec reporter prints nothing).",
+        "`mc gate` accepts positionals: test file paths relative to the worktree root. Each must exist (else `mc: no such test file: <f>` and exit 2). The command is then `node --test ${flags} ${files}` where `flags` are the repository's test flags: read `package.json` `scripts.test`, and when it starts with `node --test`, take every `--import <x>` / `--import=<x>` and `--experimental-*` argument from it in order (memoro-cli's is `--import ./tests/_isolate-home.mjs`); otherwise none. `--test-name-pattern <p>` (new strict value) is passed through. Everything else — detached run, log, budget, lock, summary, exit codes — is step 1's.",
+        "On red with named files, add one line before `whole output:`: `re-run: mc gate ${files.join(' ')} --test-name-pattern '${names}'` where `names` is the failing test names (from `✖ <name>` lines, the text after `✖ ` with any trailing ` (… ms)` removed, at most 5, regex-escaped, joined by `|`). Put the name extraction in `gate-local.js` as `failingNames(output)` (pure, exported).",
+        "`usage()`, help text and the matrix row: `mc gate <test files…> [--test-name-pattern <p>]` — 'the named files with this repository's node --test flags; the same log, budget and summary'. In `src/mc/hooks.js` `TOOLBOX`, after the `check the tree` line add `'  run some tests    mc gate <files…> [--test-name-pattern …]   (whole output in a file, the failures printed)'`.",
+        "Tests: (1) `'named files run with the repository\\'s node --test flags'` — a `package.json` with `\"test\": \"node --test --import ./tests/_isolate-home.mjs tests/**/*.test.js\"`: the spawned command contains `node --test --import ./tests/_isolate-home.mjs a.test.js`; (2) `'a missing file refuses before running'`; (3) `'a red names a re-run line with the failing names'` — output with `✖ adds up (2.1ms)` gives `re-run: mc gate a.test.js --test-name-pattern 'adds up'`; (4) `failingNames` unit test with three names and one regex character."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A red round keeps its failures on disk, and the retry and the mend are handed them",
+      "status": "ready",
+      "runner": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "done_when": "A red round in the tests writes `merge-red/<repo>-<pr>.txt`; the retry preamble and mend prompt name its path, the red files and a re-run line; the reason `red files:` was empty in every mend is found, fixed and said in the PR body; `node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/mend.test.js tests/mc/run-plan.test.js tests/mc/merger.test.js` passes; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 44 § 1): the merger's TAP output stays in memory; `retryPreamble` (`src/mc/run-plan.js`) passes one line (`nameSome` caps at five names) and `mendPrompt` (`src/mc/mend.js`) adds merger.log lines without assertions. Its `red files:` line (`redFiles` over `report.red_files` / `report.candidate.red_files`) was empty in all 52 mends since 2026-09-26, though `measureSelected` (`src/mc/repo-gate.js`) computes `red_files`. Retry sessions and mends re-ran the gate to find the failure again.",
+        "Judgement this step needs: where in the round the failing TAP blocks are cut out (the suite's and the selected files' runs both, after the killed/cancelled filtering), and why the mend's report has no `red_files` — trace from where the merger hands the report to `mend.js` and from the `gate-rounds.jsonl` record. Fix the cause, not the symptom.",
+        "What must be true afterwards: (a) every round that finishes `red` writes `join(runnerDir(), 'merge-red', `${repoName}-${pr}.txt`)` (one per PR, batch included; overwritten by the next red, removed by a green landing) holding, per red test, its file, name, the assertion's first lines and its location — at most 200 lines in all — and its path is on the report (`red_detail`) and in the round's `gate-rounds.jsonl` record together with `red_files`; (b) `retryPreamble` adds, when the step's retry carries them, `Red files: <files>`, `The failures, as the round saw them: <path>` and `Re-run just those: mc gate <files> --test-name-pattern '<names>'` (the `mc gate <files…>` form from step 3; names regex-escaped, at most 5); (c) `mendPrompt` shows the same three lines, and its 'Run the red files … or the repository's suite command' line becomes 'Run `mc gate <red files>` until they are green, then `mc gate` once for the whole selection — never a bare `npm test`'.",
+        "Tests: a round fake with two red tests in one file writes the file with both names and the location, and `red_detail` points at it; a green landing removes it; `retryPreamble` and `mendPrompt` given a report with `red_files` and `red_detail` contain the three lines; `mendPrompt` does not contain `npm test`. Keep every existing assertion about `nameSome` and the reason line.",
+        "Docs: `docs/technical/mc-merge.md`, where a red round's report is described: one paragraph on `merge-red/` and who reads it (ruling 44)."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A PR's previous red files are measured first, and a red there stops the round",
+      "status": "ready",
+      "runner": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "done_when": "In the tests, a round for a PR whose last recorded round was red with `red_files` runs those files alone first and stops red there without running the selection, and runs the selection as today when they pass; `node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js` passes; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 44 § 2): 283 PRs needed more than one round; the rounds before a PR's last cost 1,550 min, and each began with the whole selection although the previous round had named the red files.",
+        "Read the PR's last round from `gate-rounds.jsonl` (the record step 4 makes carries `red_files`; there is a reader for that file already — use it). Only when that round was `red` and had `red_files`, and only after the candidate is prepared (prepare, derived, as the round does today): run those files alone on the candidate with `runTests` and the round's flags, before selection. Any still red: `finish('red', …)` with the same reason shape the round uses today, the main-red probe as today, and `red_detail` written (step 4). All green: say `previous red files green — measuring the selection` and go on exactly as today.",
+        "Judgement: where in `runGate` this sits so the timings (`timed`) and the report stay readable — a new timed phase `previous red`. A batch round skips it.",
+        "Tests: (1) previous round red on `a.test.js`, still red → stop `red`, the selection's runner never called; (2) previous red green → the selection runs; (3) previous round green or none → no extra run. Document the phase in `docs/technical/mc-merge.md` in one sentence (ruling 44)."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A red only on tests red on main, which the PR does not touch, does not stop the round",
+      "status": "ready",
+      "runner": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "done_when": "In the tests, a red whose files are all `red_on_main` by the probe and untouched by the PR's diff goes on to the command gates and the PR's own tests and ends green with `main_red_files` named; one red file the PR changes stops it red as today; an intake note is written once per file per seven days; `node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/merger.test.js` passes; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 44 § 4, reversing the strictness paragraph at the top of `src/mc/repo-gate.js`): four SQL snapshot tests red on main were measured red in 77 rounds of 43 PRs, the JSC start-up budget in 39 rounds of 32 PRs, dead-CSS in 20 of 21 — about 700 min, each time charged to a PR that did not cause it.",
+        "In the red branch of `runGate`, after the main-red probe (`report.main_red`): let `onMain` be the probe's `red_on_main` files and `touched` the PR's changed paths against the base (the round already computes the diff for `ownTests`; reuse it). When every file in `after.result.red_files` is in `onMain` and none is in `touched`, do not `finish('red')`: set `report.main_red_files` to them, `say` `${n} red file(s) red on main too, untouched by this change — not this round's red: <files>`, and continue to the command gates and the PR's own tests as a green test result would. The verdict's headline (`verdictHeadline`) adds ` — ${n} test file(s) red on main, not counted` when `main_red_files` is non-empty. Any other mix stops `red` as today. A batch round applies the same rule against the union of its PRs' changed paths.",
+        "Intake note: for each such file, unless a file in `~/mc/intake/` or `~/mc/proposals/` (top level only) names that test path and is younger than seven days, write `~/mc/intake/<YYYY-MM-DD>-red-on-main-<basename without .test.js>.md` with: the repo, the file, the red names, the landing the probe blamed (`breaks`), and the PR whose round found it. Use `intakeDir()` from `helper-collect.js`.",
+        "Rewrite the strictness paragraph at the top of `repo-gate.js` to say what is now true (ruling 44), and the sentence in `docs/technical/mc-merge.md` that describes red-on-main. Tests: the three cases in done_when, plus that `verdictHeadline` carries the clause."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Declared timing tests get one more run alone before they are red",
+      "status": "ready",
+      "runner": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "done_when": "In the tests, a red only in a `retry_once` file that passes when run alone on the candidate goes on and records the flip; a red in it that stays red stops red; a red outside the list is red as today; `node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/repo-gate-table.test.js` passes; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 44 § 5): since 2026-10-09, fast red-then-green flips with no change: the JSC start-up budget 19, the `sql:pr-ci` command gate 15, dead-CSS 6, build-bundle under load. The existing retries (`file-killed`, `red-under-load`) do not catch them, and 'flaky under load' fired 0 times.",
+        "Shipped table (`src/mc/repo-gate-table.js`, `SHIPPED.memoro`): add `retry_once: Object.freeze({ files: Object.freeze([...]), gates: Object.freeze(['sql:pr-ci']) })` and `retry_once_why` with the counts above. Find the test files for the JSC start-up budget, dead-CSS and build-bundle in memoro (`git -C <memoro checkout> grep -l` on `origin/main` for the test names in `~/.memoro/mc/gate-rounds.jsonl` red names) and list their repository paths; name in the PR body how each was found. The repository's own `.mc/test.json` may override it like any other field; check `declarationFor` passes it through and add it to whatever validates the table.",
+        "In `runGate`: after the killed/cancelled filtering and before the main-red probe, when every remaining red file is in `retry_once.files`, run them once alone on the candidate (`redAt`, as the probe does); all green → record `report.flipped = { files, names }`, `say` it, and go on as green; otherwise go on to the probe and `red` as today with the files that stayed red. Likewise, when every failed selected command gate is in `retry_once.gates`, run those commands once more alone; green → `report.flipped.gates`, go on. Every flip is in the round's `gate-rounds.jsonl` record.",
+        "Tests: the three cases in done_when for files, one for a command gate. Docs: one paragraph in `docs/technical/mc-merge.md` (ruling 44: no quarantine; a file that flips often is a proposal)."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A session's green `mc gate` on the exact candidate tree spares the merger the suite",
+      "status": "ready",
+      "runner": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "done_when": "In the tests, `mc gate` on a clean tree in a repository with a declared `select` records a green with tree, selection hash and gate version; the merger, given a candidate whose tree, selection and version match, skips the suite and selected command gates, still runs the PR's own tests, and says so; any mismatch measures as today; `node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/repo-gate.test.js` passes; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 44 § 3): `commands/gate.js` calls itself 'a meter, not a door: mc merge measures again in its own tree'. In about 45 % of landed PRs the session's last tree was the tree that landed, and the merger measured it again — an estimated 400–600 min since 2026-09-26.",
+        "The record: `join(mcHome(), 'gate-greens.jsonl')`, one line per green: `{ repo, tree, selection, gate_version, at, session }`. `tree` is `git rev-parse HEAD^{tree}`; `selection` is the sha256 of the selection's files and command gates, sorted, as the declared `select` command prints them (`declarationFor(repoPath).select`, run in the worktree — for memoro `node scripts/testing/ci.mjs --list --json --base-ref origin/main`); `gate_version` is one exported constant both sides import, `GATE_MEASUREMENT_VERSION = 1`, with a comment that it is bumped whenever what either side measures changes. Write it only when: the gate was green, `git status --porcelain` was empty before and after, the repository's declaration has `select`, and the select command succeeded. Keep the file to its last 2,000 lines.",
+        "The reuse: in `runGate`, after the candidate is prepared and the derived files regenerated, and after the round's own selection is computed: if `report.candidate`'s tree (`HEAD^{tree}` in the candidate) and the round's own selection hash and the version match a recorded green for the repository, skip the suite and the selected command gates — `say` `the candidate's tree ${short} was measured green by mc gate at ${at} with the same selection — not measured again`, set `report.reused = { at, session }` — then run the PR's own tests and finish as today. A batch round never reuses. `--full` never reuses. The verdict's headline adds ` (measured by mc gate)` when reused.",
+        "Judgement this step needs: how the selection the merger computes and the one `mc gate` computes are made the same bytes (same command, same base ref resolution, same JSON fields hashed). Where they cannot be made the same for a repository, record nothing for it and say so in the PR body.",
+        "Tests for the record conditions (dirty tree, no select, red: no record), for a match, and for each single mismatch (tree, selection, version). Docs: `docs/technical/mc-merge.md` and the `mc gate` row in `docs/mc-command-matrix.md` (ruling 44)."
+      ],
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
