@@ -289,10 +289,12 @@ IN FULL
                                     Playwright script → mc shot. MC_HOOK_ALLOW=1
                                     in the command lets it through. Both read
                                     the hook JSON on stdin and always exit 0
-  mc publish [--title …] [--body …] Push the branch you stand on (never force)
+  mc publish [--title …] [--body-file …] [--base …]
+                                    Push the branch you stand on (never force)
                                     and open its pull request, or find the one
                                     it has — title and body from the last
-                                    commit unless given — then one gh pr view.
+                                    commit for a new one; on an open one, edits
+                                    only the fields given — then one gh pr view.
                                     Refuses on main, a dirty tree, or a remote
                                     branch that moved. Ends with the mc merge
                                     line to run
