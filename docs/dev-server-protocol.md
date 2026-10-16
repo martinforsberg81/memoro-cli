@@ -174,7 +174,7 @@ default).
 A manifest may also say what tree the service was built from:
 
 ```json
-"built_from": { "commit": "<git HEAD at start>" }
+"built_from": { "commit": "<git HEAD at start>", "dirty": ["<path git status listed at start>", "…"] }
 ```
 
 `mc test dev` compares it with the worktree's HEAD when it finds a live
@@ -182,7 +182,14 @@ service to reuse. A mismatch means the service is serving a tree that is no
 longer there — the measurement fixture reads `public/` once at start, and a
 module that lands afterwards answers 404 until it starts again — so mc stops
 it through its own stop command and starts a fresh one, saying so. A manifest
-without the field is reused as before. The plan identity fields (`profile`, `definition_fingerprint`,
+without the field is reused as before.
+
+The same holds for a change nobody committed: a file git lists as changed or
+new whose mtime is after `started_at`. `dirty` (optional) is every path
+`git status --porcelain` listed when the service started, a rename by both
+paths. With it mc also sees what leaves no newer mtime: a path dirty then and
+clean now (an edit undone with `git checkout`, 2026-10-16), and a deletion
+since the start. Without it those two are not looked for. The plan identity fields (`profile`, `definition_fingerprint`,
 `start_argv`, `resource_class`) and `coding_session_id` are optional and
 carried through as they come — the exact-match reuse they were added for went
 with `mc dev ensure`, and a manifest without them is a first-class citizen

@@ -69,15 +69,20 @@ export function shotWorktree({
   };
 }
 
-/** A path under /app as given, or a declared target name; an unknown name lists the known ones. */
+/** `/admin` and below: memoro's admin pages, served outside the app's router. */
+export function isAdminPath(value) {
+  return value === '/admin' || String(value).startsWith('/admin/');
+}
+
+/** A path under /app or /admin as given, or a declared target name; an unknown name lists the known ones. */
 export function resolveTarget(word, declaration) {
   const value = String(word || '');
-  if (value.startsWith('/app')) return { ok: true, target: { path: value }, label: slug(value) };
+  if (value.startsWith('/app') || isAdminPath(value)) return { ok: true, target: { path: value }, label: slug(value) };
   const names = (declaration.targets || []).map((target) => target.name);
   if (names.includes(value)) return { ok: true, target: { name: value }, label: slug(value) };
   return {
     ok: false,
-    error: `no target called ${value} — a path under /app, or one of: ${names.join(', ') || '(none declared)'}`,
+    error: `no target called ${value} — a path under /app or /admin, or one of: ${names.join(', ') || '(none declared)'}`,
   };
 }
 
@@ -167,6 +172,46 @@ export function resolveAccount(declared, { account = null, onboarding = false, e
   const path = table[name]?.onboarding?.[state];
   if (!path) return { ok: false, error: `.mc/shot.json: account ${name} declares no onboarding state ${state}` };
   return { ok: true, account: name, state, path };
+}
+
+/**
+ * The role a target requires of the account looking at it: its declared
+ * `access.requires`, else admin for a path under /admin (memoro's capture
+ * script holds the same rule), else null.
+ */
+export function targetRequires(entry, path = null) {
+  if (typeof entry?.access?.requires === 'string') return entry.access.requires;
+  return isAdminPath(entry?.path ?? path ?? '') ? 'admin' : null;
+}
+
+/** The role `.mc/shot.json` declares for an account, or null when it says none. */
+export function accountRole(declared, account) {
+  const role = accountTable(declared)?.[account]?.role;
+  return typeof role === 'string' && role !== '' ? role : null;
+}
+
+/**
+ * The access verdict memoro's capture script returns for a gated target, said
+ * in one line, and whether it failed. `holds: false` — the account was let in
+ * where its role should be refused, refused where it should be let in, or the
+ * server's own answer disagreed — fails, and the verb exits 1. A refusal the
+ * role expects is the picture asked for, not a failure.
+ */
+export function accessLine(access) {
+  if (!access || typeof access !== 'object') return null;
+  const who = `${access.account}${access.role ? ` (${access.role})` : ''}`;
+  const status = access.status === null || access.status === undefined ? '' : ` ${access.status}`;
+  const probe = access.probe ? `; the server answered ${access.probe.path} with ${access.probe.status ?? 'nothing'}` : '';
+  if (access.holds === false) {
+    return {
+      failed: true,
+      line: `the ${access.requires} gate did not hold: ${who} should be ${access.expected}, the page was ${access.page}${status}${probe}`,
+    };
+  }
+  if (access.holds !== true) {
+    return { failed: false, line: `access: requires ${access.requires}; ${who} declares no role, so nothing was held to it — the page was ${access.page}${status}${probe}` };
+  }
+  return { failed: false, line: `access: requires ${access.requires} — ${who} ${access.page}, as its role expects${probe}` };
 }
 
 /** `/app/people` → `app-people`, `/app/` → `app`. */

@@ -13,9 +13,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { run, usage } from '../../src/mc/commands/shot.js';
+import { run, servedTree, usage } from '../../src/mc/commands/shot.js';
 import {
-  buildRequest, outPath, parseResult, parseSafeArea, parseScroll, parseViewport, resolveAccount, resolveTarget, slug,
+  accessLine, buildRequest, outPath, parseResult, parseSafeArea, parseScroll, parseViewport, resolveAccount, resolveTarget,
+  slug, targetRequires,
 } from '../../src/mc/shot.js';
 
 const TOKEN = 'tok-5ecret-7e57';
@@ -134,7 +135,7 @@ describe('mc shot — the surface', () => {
     const fx = fixture();
     const result = await shot(['dev', 'planing'], fx);
     assert.equal(result.code, 2);
-    assert.match(result.stderr, /no target called planing — a path under \/app, or one of: home, notifications/u);
+    assert.match(result.stderr, /no target called planing — a path under \/app or \/admin, or one of: home, notifications/u);
   });
 
   it('a memoro without .mc/shot.json says where it comes from', async () => {
@@ -160,6 +161,9 @@ describe('mc shot — the pieces', () => {
     assert.deepEqual(resolveTarget('/app/people', SHOT_JSON), { ok: true, target: { path: '/app/people' }, label: 'app-people' });
     assert.deepEqual(resolveTarget('home', SHOT_JSON), { ok: true, target: { name: 'home' }, label: 'home' });
     assert.equal(resolveTarget('people', SHOT_JSON).ok, false);
+    assert.deepEqual(resolveTarget('/admin/security', SHOT_JSON), { ok: true, target: { path: '/admin/security' }, label: 'admin-security' });
+    assert.equal(resolveTarget('/admin', SHOT_JSON).ok, true);
+    assert.match(resolveTarget('/administrator', SHOT_JSON).error, /a path under \/app or \/admin/u);
     assert.equal(slug('/app/'), 'app');
   });
 
@@ -443,6 +447,18 @@ describe('mc shot — measuring a layout', () => {
     });
     assert.equal(JSON.parse(json.stdout).served.branch, 'fix-x');
   });
+
+  it('a server built with uncommitted changes says how many, so it is not read as its commit', () => {
+    const git = (args) => ({ stdout: args[0] === 'branch' ? 'fix-x\n' : 'abcdef1234ffff\n' });
+    const at = (dirty) => servedTree('/w', { url: 'http://127.0.0.1:8920', built_from: { commit: 'abcdef1234ffff', dirty } }, { git });
+    assert.equal(at(['a.css', 'b.js']).line, '/w — fix-x @ abcdef1234 + 2 uncommitted files on http://127.0.0.1:8920');
+    assert.equal(at(['a.css']).line, '/w — fix-x @ abcdef1234 + 1 uncommitted file on http://127.0.0.1:8920');
+    assert.equal(at([]).line, '/w — fix-x @ abcdef1234 on http://127.0.0.1:8920');
+    assert.equal(at([]).uncommitted, 0);
+    // A manifest that does not list them says nothing either way.
+    assert.equal(at(undefined).line, '/w — fix-x @ abcdef1234 on http://127.0.0.1:8920');
+    assert.equal(at(undefined).uncommitted, null);
+  });
 });
 
 describe('mc shot — the accounts table and a bare @end', () => {
@@ -527,5 +543,51 @@ describe('mc shot — the accounts table and a bare @end', () => {
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(sideOf(fx).request.scroll, { selector: null, to: 'end' });
     assert.equal(sideOf(fx).request.measure, '@layout');
+  });
+});
+
+describe('mc shot — a gated target', () => {
+  const access = (over = {}) => ({
+    requires: 'admin', account: 'new', role: 'user', expected: 'denied', page: 'denied', status: 200,
+    probe: { path: '/api/admin/stats', status: 403, expected: '401/403' }, holds: true, ...over,
+  });
+
+  it('says what a role requires: declared, or admin under /admin', () => {
+    assert.equal(targetRequires({ path: '/app/', access: { requires: 'owner' } }), 'owner');
+    assert.equal(targetRequires({ path: '/admin/security' }), 'admin');
+    assert.equal(targetRequires(null, '/admin'), 'admin');
+    assert.equal(targetRequires({ path: '/app/admin' }), null);
+  });
+
+  it('says the verdict in one line, and only a gate that did not hold fails', () => {
+    assert.deepEqual(accessLine(access()), {
+      failed: false,
+      line: 'access: requires admin — new (user) denied, as its role expects; the server answered /api/admin/stats with 403',
+    });
+    assert.deepEqual(accessLine(access({ page: 'granted', holds: false })), {
+      failed: true,
+      line: 'the admin gate did not hold: new (user) should be denied, the page was granted 200; the server answered /api/admin/stats with 403',
+    });
+    const unheld = accessLine(access({ role: null, expected: null, holds: null, probe: null }));
+    assert.equal(unheld.failed, false);
+    assert.match(unheld.line, /new declares no role, so nothing was held to it/u);
+    assert.equal(accessLine(null), null);
+  });
+
+  it('prints the verdict after the path, and exits 1 when the gate did not hold — the picture is still taken', async () => {
+    const fx = fixture();
+    const capture = (verdict) => ({
+      runCapture: () => ({ ok: true, result: { ok: true, file: '/tmp/x.png', warnings: [], access: verdict } }),
+    });
+    const held = await shot(['dev', '/admin/security', '--account', 'new'], fx, capture(access()));
+    assert.equal(held.code, 0, held.stderr);
+    assert.deepEqual(held.stdout.split('\n').slice(0, 2), ['/tmp/x.png', accessLine(access()).line]);
+    const broken = await shot(['dev', '/admin/security', '--account', 'new'], fx, capture(access({ page: 'granted', holds: false })));
+    assert.equal(broken.code, 1);
+    assert.equal(broken.stdout, '/tmp/x.png\n');
+    assert.match(broken.stderr, /mc: the admin gate did not hold: new \(user\) should be denied, the page was granted/u);
+    const json = await shot(['dev', '/admin/security', '--json'], fx, capture(access({ page: 'granted', holds: false })));
+    assert.equal(json.code, 1);
+    assert.equal(JSON.parse(json.stdout).access.holds, false);
   });
 });

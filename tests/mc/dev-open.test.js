@@ -56,11 +56,25 @@ const TEST_JSON = {
   suites: [{ name: 'smoke', argv: ['true'] }],
 };
 
-function fixture() {
+/** The same declaration with roles: seeded is an admin, new a user, and two admin surfaces. */
+const GATED_JSON = {
+  ...SHOT_JSON,
+  accounts: {
+    seeded: { ...SHOT_JSON.accounts.seeded, role: 'admin' },
+    new: { ...SHOT_JSON.accounts.new, role: 'user' },
+  },
+  targets: [
+    ...SHOT_JSON.targets,
+    { name: 'admin', path: '/admin/', summary: 'Admin dashboard', access: { requires: 'admin', probe: '/api/admin/stats' } },
+    { name: 'admin-assets', path: '/admin/asset-library', summary: 'Asset library' },
+  ],
+};
+
+function fixture(shot = SHOT_JSON) {
   const home = mkdtempSync(join(tmpdir(), 'mc-dev-open-test-'));
   const worktree = join(home, 'memoro');
   mkdirSync(join(worktree, '.mc'), { recursive: true });
-  writeFileSync(join(worktree, '.mc', 'shot.json'), JSON.stringify(SHOT_JSON));
+  writeFileSync(join(worktree, '.mc', 'shot.json'), JSON.stringify(shot));
   writeFileSync(join(worktree, '.mc', 'test.json'), JSON.stringify(TEST_JSON));
   return { home, worktree };
 }
@@ -124,8 +138,10 @@ describe('mc dev surfaces', () => {
       chrome: ['.assistant-layout__footer'],
       measure: ['layout', 'composer'],
       onboarding: null,
+      requires: null,
     });
     assert.deepEqual(json.accounts, { seeded: ['done', 'fresh'], new: ['done', 'fresh'] });
+    assert.deepEqual(json.roles, { seeded: null, new: null });
     assert.equal(json.default_account, 'seeded');
   });
 
@@ -314,5 +330,61 @@ describe('runOpen', () => {
     assert.match(ran.error, /did not open within/u);
     assert.equal(child.killed, true);
     assert.equal(existsSync(dirs[0]), false);
+  });
+});
+
+describe('mc dev — a surface that requires a role', () => {
+  it('surfaces marks what each surface requires and each account is', async () => {
+    const fx = fixture(GATED_JSON);
+    const result = await dev(['surfaces'], fx);
+    const lines = result.stdout.split('\n');
+    assert.equal(lines[4], 'admin         /admin/               Admin dashboard  [admin]');
+    assert.equal(lines[5], 'admin-assets  /admin/asset-library  Asset library  [admin]', 'an /admin path requires admin undeclared');
+    assert.equal(lines[7], 'accounts: seeded [admin] (done, fresh) · new [user] (done, fresh)');
+    const json = JSON.parse((await dev(['surfaces', '--json'], fx)).stdout);
+    assert.equal(json.surfaces[4].requires, 'admin');
+    assert.equal(json.surfaces[0].requires, null);
+    assert.deepEqual(json.roles, { seeded: 'admin', new: 'user' });
+  });
+
+  it('open warns when the account is not the role the surface requires, and lands there all the same', async () => {
+    const fx = fixture(GATED_JSON);
+    const user = await dev(['open', 'admin', '--account', 'new'], fx);
+    assert.equal(user.code, 0, user.stderr);
+    assert.match(user.stdout, /account=new&ready=1&next=%2Fadmin%2F {2}new\/done/u);
+    assert.match(user.stderr, /mc: warning — admin requires admin, and new is user: the page will refuse it/u);
+    const path = await dev(['open', '/admin/security', '--account', 'new'], fx);
+    assert.match(path.stderr, /\/admin\/security requires admin, and new is user/u);
+    const admin = await dev(['open', 'admin'], fx);
+    assert.doesNotMatch(admin.stderr, /warning/u);
+    const json = JSON.parse((await dev(['open', 'admin', '--account', 'new', '--json'], fx)).stdout);
+    assert.equal(json.requires, 'admin');
+    assert.equal(json.role, 'user');
+  });
+
+  it('--open says the verdict instead, and exits 1 when the gate did not hold', async () => {
+    const fx = fixture(GATED_JSON);
+    const verdict = (holds, page) => ({
+      platform: 'darwin',
+      runOpen: async () => ({
+        ok: true,
+        result: {
+          ok: true,
+          mode: 'open',
+          url: 'http://127.0.0.1:8787/admin/',
+          warnings: [],
+          access: { requires: 'admin', account: 'new', role: 'user', expected: 'denied', page, status: 200, probe: null, holds },
+        },
+        log: '/tmp/open.log',
+      }),
+    });
+    const held = await dev(['open', 'admin', '--account', 'new', '--open'], fx, verdict(true, 'denied'));
+    assert.equal(held.code, 0, held.stderr);
+    assert.match(held.stderr, /mc: access: requires admin — new \(user\) denied, as its role expects/u);
+    assert.doesNotMatch(held.stderr, /will refuse it/u);
+    const broken = await dev(['open', 'admin', '--account', 'new', '--open', '--json'], fx, verdict(false, 'granted'));
+    assert.equal(broken.code, 1);
+    assert.match(broken.stderr, /mc: the admin gate did not hold: new \(user\) should be denied, the page was granted 200/u);
+    assert.equal(JSON.parse(broken.stdout).access.holds, false);
   });
 });
