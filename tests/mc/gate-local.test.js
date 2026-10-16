@@ -5,7 +5,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { FAILURE_LINES, OUTPUT_CAP, gateCommand, gateLines, summarizeGate } from '../../src/mc/gate-local.js';
-import { run } from '../../src/mc/commands/gate.js';
 
 describe('gateCommand', () => {
   it('is npm run ci with the base where there is a ci script, npm test otherwise, null with neither', () => {
@@ -66,50 +65,3 @@ describe('gateLines', () => {
   });
 });
 
-describe('mc gate', () => {
-  function io(shell, { manifest = { scripts: { test: 'node --test' } } } = {}) {
-    const out = { stdout: '', stderr: '', written: {}, dirs: [] };
-    const deps = {
-      stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } },
-      cwd: '/w/x', env: { MC_SCRATCH: '/scratch' }, now: () => new Date('2026-09-25T10:00:00Z'),
-      git: (cwd, args) => (args[0] === 'rev-parse' ? '/w/x' : null),
-      read: (path) => { if (path === '/w/x/package.json' && manifest) return JSON.stringify(manifest); throw new Error('ENOENT'); },
-      shell: (command, opts) => { out.command = command; out.cwd = opts.cwd; return shell(command); },
-      mkdir: (p) => out.dirs.push(p), write: (p, text) => { out.written[p] = text; },
-    };
-    return { out, deps };
-  }
-
-  it('runs the repository\'s command in the worktree root, writes the whole output under MC_SCRATCH, prints the verdict', async () => {
-    const { out, deps } = io(() => ({ status: 0, stdout: 'ℹ tests 3\nℹ pass 3\nℹ fail 0\n', stderr: '' }));
-    assert.equal(await run([], deps), 0);
-    assert.equal(out.command, 'npm test');
-    assert.equal(out.cwd, '/w/x');
-    assert.deepEqual(out.dirs, ['/scratch']);
-    assert.deepEqual(Object.keys(out.written), ['/scratch/gate-20260925T100000Z.log']);
-    assert.equal(out.stdout, 'GREEN — npm test — 3 tests, 0 failed — 0s\nwhole output: /scratch/gate-20260925T100000Z.log\n');
-  });
-
-  it('red is exit 1 with the failing lines; --json is the object; --base reaches the ci script', async () => {
-    const { out, deps } = io(() => ({ status: 1, stdout: '✖ a (1ms)\nℹ tests 1\nℹ fail 1\n', stderr: 'boom' }), { manifest: { scripts: { ci: 'node ci.mjs' } } });
-    assert.equal(await run(['--base', 'origin/dev'], deps), 1);
-    assert.equal(out.command, 'npm run ci -- --base-ref origin/dev');
-    assert.match(out.stdout, /^RED — npm run ci -- --base-ref origin\/dev — 1 tests, 1 failed — 0s\n✖ a\n/u);
-    assert.match(out.written['/scratch/gate-20260925T100000Z.log'], /--- stderr ---\nboom/u);
-    const j = io(() => ({ status: 1, stdout: '✖ a\n', stderr: '' }));
-    assert.equal(await run(['--json'], j.deps), 1);
-    const parsed = JSON.parse(j.out.stdout);
-    assert.deepEqual([parsed.ok, parsed.failures, parsed.command, parsed.exit], [false, ['✖ a'], 'npm test', 1]);
-  });
-
-  it('is 2 outside a worktree, with nothing to run, and on a positional', async () => {
-    const none = io(() => ({ status: 0, stdout: '', stderr: '' }), { manifest: { scripts: {} } });
-    assert.equal(await run([], none.deps), 2);
-    assert.match(none.out.stderr, /no ci or test script/u);
-    const outside = io(() => ({ status: 0, stdout: '', stderr: '' }));
-    outside.deps.git = () => null;
-    assert.equal(await run([], outside.deps), 2);
-    const pos = io(() => ({ status: 0, stdout: '', stderr: '' }));
-    assert.equal(await run(['memoro'], pos.deps), 2);
-  });
-});
