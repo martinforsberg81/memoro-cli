@@ -93,6 +93,9 @@ export async function runMergeRound({
   mode = 'merge',
   // Whether the gate installs its own SIGINT/SIGTERM handler (`runGate`).
   signals = true,
+  // The pause between reads of GitHub's head (see `headAsGitHubSeesIt`); a
+  // test passes a no-op rather than waiting five seconds a read.
+  sleep = defaultSleep,
 } = {}) {
   const startedAt = clock();
   // Kept as well as printed — see the note on the gate's own `say`. This is
@@ -195,7 +198,7 @@ export async function runMergeRound({
         }
         say(`— round for #${number}`);
         const round = await runMergeRound({
-          repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals,
+          repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals, sleep,
         });
         report.batch.rounds.push(round);
         report.batch.merges.push({ number, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });
@@ -279,6 +282,10 @@ export async function runMergeRound({
         // branch before its turn — a conflict here stops the batch, and
         // what has landed stays landed and said.
       }
+      // The head this landing squashes: the one the gate measured, or the one
+      // the branch was freshened to when that was needed. A round that cannot
+      // say which head it means squashes none — and says so.
+      let pin = batch ? (verdict.prs || []).find((item) => item.number === number)?.head_sha : verdict.pr.head_sha;
       // Freshened before its squash: every later branch of a batch, because
       // the squash before it is a commit the branch does not have; and any
       // branch at all when the gate had to regenerate derived artifacts after
@@ -294,9 +301,23 @@ export async function runMergeRound({
             if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: `could not be freshened for landing: ${ready.reason}` });
             return finish('merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it${index > 0 ? `, and ${verdict.pr.base} now stands at a state the batch never measured by itself` : ''}`);
           }
+          pin = ready.sha || null;
         }
       }
-      const merged = await askGh(['pr', 'merge', String(number), '--squash'], { cwd: repoPath });
+      // The squash takes the head it was measured at and no other. A push that
+      // lands during the round is a commit nobody measured, and `gh pr merge`
+      // without a pin would squash it all the same.
+      if (pin) {
+        const seen = await headAsGitHubSeesIt({ gh: askGh, repoPath, pr: number, expected: pin, sleep });
+        if (!seen.ok) {
+          const reason = `#${number} is at ${short(seen.actual)} on GitHub, not the ${short(pin)} this round measured — not merged`;
+          if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: reason });
+          return finish('drift', batch ? `${reason}; ${index} of ${numbers.length} landed before it` : reason);
+        }
+      } else {
+        say(`#${number} has no measured head to pin the squash to — merging without --match-head-commit`);
+      }
+      const merged = await askGh(['pr', 'merge', String(number), '--squash', ...(pin ? ['--match-head-commit', pin] : [])], { cwd: repoPath });
       if (merged.status !== 0) {
         // A failed call is not a failed merge. On #10844 GitHub took the call,
         // performed it, and timed out on the reply; the round said "nothing was
@@ -365,7 +386,7 @@ export async function runMergeRound({
               }
               say(`— round for #${later}`);
               const round = await runMergeRound({
-                repoPath, pr: later, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals,
+                repoPath, pr: later, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals, sleep,
               });
               report.batch.rounds.push(round);
               report.batch.merges.push({ number: later, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });
@@ -519,6 +540,37 @@ async function defaultBranch(git, repoPath) {
  * after a merge call failed, which is the one moment "nothing was merged"
  * would be a guess.
  */
+/**
+ * GitHub's head for the pull request, read until it is `expected`.
+ *
+ * A push reaches the branch some seconds before GitHub's API says so (the
+ * `prFacts` note in repo-gate.js), so a squash pinned to a head read straight
+ * after a push can be refused for a head that is about to be right. Read up to
+ * six times, five seconds apart; if GitHub never agrees, the round stops rather
+ * than squash a head it did not measure.
+ *
+ * @returns {{ok: true} | {ok: false, actual: string|null}}
+ */
+async function headAsGitHubSeesIt({ gh, repoPath, pr, expected, sleep }) {
+  let actual = null;
+  for (let read = 1; read <= HEAD_READS; read += 1) {
+    if (read > 1) await sleep(HEAD_READ_GAP_MS);
+    const asked = await gh(['pr', 'view', String(pr), '--json', 'headRefOid'], { cwd: repoPath });
+    if (asked?.status === 0) {
+      try { actual = JSON.parse(asked.stdout)?.headRefOid || null; } catch { actual = null; }
+    }
+    if (actual === expected) return { ok: true };
+  }
+  return { ok: false, actual };
+}
+
+const HEAD_READS = 6;
+const HEAD_READ_GAP_MS = 5000;
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
 /** The squash commit a merged pull request became, or null if the forge will not say. */
 async function mergeCommitOf({ gh, repoPath, pr }) {
   const asked = await gh(['pr', 'view', String(pr), '--json', 'mergeCommit'], { cwd: repoPath });
