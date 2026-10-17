@@ -114,7 +114,7 @@ import {
   keptParagraph, logRows, mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
-import { branchLanded, mergedPullAtTip } from './branch-landed.js';
+import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
@@ -1094,6 +1094,14 @@ export function createRunner({
     }));
   }
 
+  /** Did `branch` land through the merger's restack (`landedThroughRemote`)? */
+  function landedRemotely(worktree, branch) {
+    return Boolean(landedThroughRemote(worktree, branch, {
+      gh: (args) => deps.gh(worktree, args),
+      run: (args) => gitOut(worktree, args),
+    }));
+  }
+
   /**
    * The workarea, moved to a branch it can still push to.
    *
@@ -1119,6 +1127,16 @@ export function createRunner({
    * merged pull request from this branch whose head is the branch's tip means
    * nothing came after the landing (`mergedAtTip`).
    *
+   * The merger restacks a branch before it lands it (`restack`, merger.js):
+   * the head it pushes is not the workarea's tip, so `mergedAtTip` says no.
+   * `publish-handover` step 6 started on `publish-handover-7` on 2026-10-17
+   * nine minutes after #929 had landed from it, and its publish was refused.
+   * So on `unknown`, and on `ahead` too — a restacked branch whose local tip
+   * merged main can read so — the remote is asked as well
+   * (`landedThroughRemote`): the merged pull request's head is
+   * `origin/<branch>`, and the local tip carries nothing of its own beyond it
+   * and origin/main.
+   *
    * Returns `{ ok, moved, why }`: `moved` is the new branch, or null when the
    * workarea was already somewhere it could push from.
    */
@@ -1128,8 +1146,10 @@ export function createRunner({
     // Detached, or git could not say: not a branch this can reason about.
     if (!branch) return { ok: true, moved: null };
     const landed = branchLanded(worktree, branch, { run: (args) => gitOut(worktree, args) });
-    if (landed === 'ahead') return { ok: true, moved: null };
-    if (landed === 'unknown' && !mergedAtTip(worktree, branch)) return { ok: true, moved: null };
+    if (landed === 'ahead' && !landedRemotely(worktree, branch)) return { ok: true, moved: null };
+    if (landed === 'unknown' && !mergedAtTip(worktree, branch) && !landedRemotely(worktree, branch)) {
+      return { ok: true, moved: null };
+    }
     const local = (gitOut(worktree, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']) || '').split('\n');
     const remote = (gitOut(worktree, ['ls-remote', '--heads', 'origin']) || '').split('\n')
       .map((line) => line.split('refs/heads/')[1]);

@@ -32,7 +32,7 @@
       "check": "The step-2 tests in `tests/mc/run.test.js` pass."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A workarea on a branch whose merged pull request's head is `origin/<branch>` (restacked by the merger) and whose local tip carries no other work is moved to `<project>-<n>` from origin/main before the session starts.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/branch-landed.test.js tests/mc/run.test.js` passes, including the tests named in step 3."
     },

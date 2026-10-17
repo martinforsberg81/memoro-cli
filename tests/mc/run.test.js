@@ -853,6 +853,29 @@ test('a landed branch whose merge conflicts is moved when its tip is the merged 
   assert.match(f.files['/w/runner/log/runner.log'], /beta: beta has already landed — moved to beta-3 from origin\/main/u);
 });
 
+/**
+ * The merger restacks before it lands (merger.js): the merged head is
+ * `origin/<branch>`, not the workarea's tip. `publish-handover` step 6 was
+ * built on `publish-handover-7` on 2026-10-17 after #929 had landed from it.
+ */
+test('a branch the merger restacked and landed is moved to `<name>-<n>` from origin/main', async () => {
+  for (const which of ['conflicted', 'ahead']) {
+    const f = fixture({
+      areas: { beta: { repo: 'memoro', programme: 'prog', plan: ready } },
+      plans: { memoro: { beta: ready } },
+      ...(which === 'conflicted' ? { conflicted: ['beta'] } : { landed: [] }),
+      refs: { beta: ['beta', 'beta-2'] }, tips: { beta: 'aec79c2a', 'origin/beta': '97addbd7' },
+      merged: { beta: [{ number: 929, mergedAt: '2026-10-17T06:23:00Z', headRefOid: '97addbd7' }] },
+      session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
+    });
+    const runner = createRunner({ deps: f.deps });
+    await runner.pass();
+    assert.deepEqual(f.calls.checkouts, [['/w/beta/memoro', 'beta-3']], which);
+    assert.ok(f.calls.git.some((c) => c[0] === '/w/beta/memoro' && c.includes('rev-list') && c.includes('97addbd7...beta')), which);
+    assert.match(f.files['/w/runner/log/runner.log'], /beta: beta has already landed — moved to beta-3 from origin\/main/u);
+  }
+});
+
 test('a conflicting branch with a commit after its merged pull request is left where it is', async () => {
   const f = fixture({
     areas: { beta: { repo: 'memoro', programme: 'prog', plan: ready } },

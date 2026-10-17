@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { branchLanded, mergedPullAtTip } from '../../src/mc/branch-landed.js';
+import { branchLanded, landedThroughRemote, mergedPullAtTip } from '../../src/mc/branch-landed.js';
 import { inspectWorkArea, releaseWorkArea, removeWorktree } from '../../src/mc/work-area.js';
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], {
@@ -200,5 +200,86 @@ describe('mergedPullAtTip', () => {
     let seen = null;
     mergedPullAtTip('/x', 'feat', { gh: (args) => { seen = args; return { ok: false }; }, tip: 't' });
     assert.deepEqual(seen, ['pr', 'list', '--head', 'feat', '--state', 'merged', '--limit', '5', '--json', 'number,mergedAt,headRefOid']);
+  });
+});
+
+/**
+ * A branch the merger restacked (2026-10-17): `restack` (merger.js) replayed
+ * `publish-handover-7` onto main and pushed a new head, so #929's head was
+ * not the workarea's tip and the next step was built on a dead branch.
+ * A bare origin: `feat` carries A locally; the remote `feat` is A′, the same
+ * patch on a newer main.
+ */
+function restacked() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'mc-restack-')));
+  const origin = join(root, 'origin.git');
+  const repo = join(root, 'repo');
+  git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
+  mkdirSync(repo);
+  git(repo, ['init', '-q', '-b', 'main']);
+  git(repo, ['remote', 'add', 'origin', origin]);
+  writeFileSync(join(repo, 'base.txt'), 'base\n');
+  git(repo, ['add', 'base.txt']);
+  git(repo, ['commit', '-q', '-m', 'root']);
+  git(repo, ['push', '-q', 'origin', 'main']);
+  git(repo, ['switch', '-qc', 'feat']);
+  writeFileSync(join(repo, 'a.txt'), 'a\n');
+  git(repo, ['add', 'a.txt']);
+  git(repo, ['commit', '-q', '-m', 'A']);
+  git(repo, ['push', '-q', 'origin', 'feat']);
+  git(repo, ['switch', '-q', 'main']);
+  writeFileSync(join(repo, 'm.txt'), 'm\n');
+  git(repo, ['add', 'm.txt']);
+  git(repo, ['commit', '-q', '-m', 'main moves on']);
+  git(repo, ['push', '-q', 'origin', 'main']);
+  // The merger's restack: A replayed onto the newer main, pushed as feat.
+  git(repo, ['switch', '-qc', 'replay']);
+  git(repo, ['cherry-pick', 'feat']);
+  git(repo, ['push', '-q', '--force', 'origin', 'replay:feat']);
+  const head = git(repo, ['rev-parse', 'replay']);
+  git(repo, ['switch', '-q', 'feat']);
+  git(repo, ['branch', '-qD', 'replay']);
+  git(repo, ['fetch', '-q', 'origin']);
+  return { root, repo, head, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+describe('landedThroughRemote', () => {
+  const pulls = (head) => () => ({ ok: true, stdout: JSON.stringify([
+    { number: 7, mergedAt: '2026-10-01T00:00:00Z', headRefOid: 'old' },
+    { number: 929, mergedAt: '2026-10-17T06:23:00Z', headRefOid: head },
+  ]) });
+
+  it('answers when origin/<branch> is the merged head and the local tip carries nothing else', () => {
+    const fx = restacked();
+    try {
+      assert.notEqual(git(fx.repo, ['rev-parse', 'feat']), fx.head, 'the local tip is not the merged head');
+      assert.deepEqual(landedThroughRemote(fx.repo, 'feat', { gh: pulls(fx.head) }), { number: 929, merged_at: '2026-10-17T06:23:00Z' });
+    } finally { fx.cleanup(); }
+  });
+
+  it('is null when the local branch carries a commit the merged head lacks', () => {
+    const fx = restacked();
+    try {
+      writeFileSync(join(fx.repo, 'b.txt'), 'b\n');
+      git(fx.repo, ['add', 'b.txt']);
+      git(fx.repo, ['commit', '-q', '-m', 'B']);
+      assert.equal(landedThroughRemote(fx.repo, 'feat', { gh: pulls(fx.head) }), null);
+    } finally { fx.cleanup(); }
+  });
+
+  it('is null when gh fails', () => {
+    const fx = restacked();
+    try {
+      assert.equal(landedThroughRemote(fx.repo, 'feat', { gh: () => ({ ok: false, stdout: '' }) }), null);
+      assert.equal(landedThroughRemote(fx.repo, 'feat', { gh: () => { throw new Error('boom'); } }), null);
+    } finally { fx.cleanup(); }
+  });
+
+  it('is null when origin/<branch> is not the merged pull request\'s head', () => {
+    const fx = restacked();
+    try {
+      const other = git(fx.repo, ['rev-parse', 'origin/main']);
+      assert.equal(landedThroughRemote(fx.repo, 'feat', { gh: pulls(other) }), null);
+    } finally { fx.cleanup(); }
   });
 });
