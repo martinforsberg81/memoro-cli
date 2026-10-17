@@ -24,16 +24,28 @@
  * One gate per worktree: a lock beside the git directory names the running
  * gate's pid and log, and a second `mc gate` there refuses while that pid lives.
  *
- * It is a meter, not a door: `mc merge` measures again in its own tree and
- * decides. This one answers "is my tree red?" before the push.
+ * It answers "is my tree red?" before the push, and a green is remembered
+ * (ruling 44, `gate-greens.js`). The whole gate against origin/main, on a
+ * clean tree, in a repository that declares `select`: the tree, the hash of
+ * what the declared `select` prints here and the measurement version go in
+ * `gate-greens.jsonl`, and a merge round whose candidate is that tree with
+ * that selection runs only the pull request's own tests. The selection is
+ * asked exactly as the merger asks it — the primary checkout's declaration,
+ * its selection state directory, the same `origin/main` — and the gate runs
+ * with that state too. Anything else, and `mc merge` measures again.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
+import { GATE_MEASUREMENT_VERSION, recordGreen, selectionHash } from '../gate-greens.js';
 import { tryGit } from '../git.js';
+import { mcHome } from '../paths.js';
+import { declarationFor } from '../repo-gate-table.js';
+import { selectionStateDir } from '../repo-gate.js';
+import { currentHolder } from '../work-identity.js';
 import { scanArgs } from './flags.js';
 
 /** How long the answer waits for the gate, in seconds, unless `--budget` says otherwise. */
@@ -57,6 +69,10 @@ const SYSTEM = {
   },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => new Date(),
+  declaration: (repoPath, { env }) => declarationFor(repoPath, { root: mcHome(env), env }),
+  select: (command, { cwd, env }) => spawnSync('sh', ['-c', command], { cwd, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
+  recordGreen: (entry, { env }) => recordGreen({ root: mcHome(env), entry }),
+  holder: ({ cwd, env }) => currentHolder({ cwd, env }).name,
 };
 
 export async function run(argv, deps = {}) {
@@ -83,7 +99,7 @@ export async function run(argv, deps = {}) {
   if (scanned.flags.wait) {
     const lock = readLock(io, lockPath);
     if (!lock) { stderr.write('mc: no gate running here — mc gate starts one\n'); return 2; }
-    return answer(io, { lock, lockPath, budget, waitedFrom: io.now(), json: scanned.flags.json, stdout });
+    return answer(io, { lock, lockPath, budget, waitedFrom: io.now(), json: scanned.flags.json, stdout, root, env });
   }
 
   const missing = files.find((file) => !io.exists(join(root, file)));
@@ -101,6 +117,10 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
+  // The whole gate against origin/main is the one a merge round can take.
+  const recordable = files.length ? null : greenToRecord(io, { root, env, base });
+  const childEnv = { ...(recordable?.env || env), CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
+
   const startedAt = io.now();
   const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
   const dir = env.MC_SCRATCH || join(tmpdir(), 'mc-gate');
@@ -110,7 +130,7 @@ export async function run(argv, deps = {}) {
     io.mkdir(dir);
     const fd = io.open(logPath);
     child = io.spawn('sh', ['-c', `${command.run}; echo $? > '${logPath}.exit'`], {
-      cwd: root, env: { ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' }, detached: true, stdio: ['ignore', fd, fd],
+      cwd: root, env: childEnv, detached: true, stdio: ['ignore', fd, fd],
     });
     io.close(fd);
   } catch (error) {
@@ -119,9 +139,64 @@ export async function run(argv, deps = {}) {
   }
   child.unref();
   io.write(`${logPath}.pid`, `${child.pid}\n`);
-  const lock = { pid: child.pid, log: logPath, started: startedAt.toISOString(), command: { ...command, base } };
+  const lock = {
+    pid: child.pid, log: logPath, started: startedAt.toISOString(), command: { ...command, base },
+    ...(recordable?.green ? { green: recordable.green } : {}),
+  };
   io.write(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
-  return answer(io, { lock, lockPath, budget, waitedFrom: startedAt, json: scanned.flags.json, stdout });
+  return answer(io, { lock, lockPath, budget, waitedFrom: startedAt, json: scanned.flags.json, stdout, root, env });
+}
+
+/**
+ * What a green of this gate would record, asked before it starts: `{ env,
+ * green }`, or null when the repository declares no `select` — then the gate
+ * runs as it always did and nothing is recorded.
+ *
+ * `env` is the environment the merger's round selects with: the selection
+ * state directory of the primary checkout, read-only. `green` is set only on
+ * a clean tree against origin/main whose `select` answered: the repository's
+ * name as the merger reads it, the tree, and the selection's hash.
+ */
+function greenToRecord(io, { root, env, base }) {
+  const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!common) return null;
+  const primary = dirname(common);
+  let declared = null;
+  try { declared = io.declaration(primary, { env }); } catch { return null; }
+  const select = declared?.ok ? declared.declaration?.select : null;
+  if (!select) return null;
+  const state = selectionStateDir({ root: mcHome(env), repoPath: primary });
+  try { io.mkdir(state); } catch { /* a selector without it selects as before */ }
+  const selectEnv = { ...env, MC_SELECTION_STATE: state };
+  delete selectEnv.MC_SELECTION_STATE_WRITE;
+  if (base !== 'origin/main' || io.git(root, ['status', '--porcelain']) !== '') return { env: selectEnv, green: null };
+  const tree = io.git(root, ['rev-parse', 'HEAD^{tree}']);
+  if (!tree) return { env: selectEnv, green: null };
+  let parsed = null;
+  try {
+    const ran = io.select(select, { cwd: root, env: selectEnv });
+    parsed = ran?.status === 0 ? JSON.parse(ran.stdout) : null;
+  } catch { parsed = null; }
+  if (!Array.isArray(parsed?.files)) return { env: selectEnv, green: null };
+  return { env: selectEnv, green: { repo: basename(primary), tree, selection: selectionHash(parsed) } };
+}
+
+/**
+ * The green, written down once the gate is green — and only while the tree is
+ * still the clean tree it measured. A record that cannot be written is said
+ * nowhere and changes no verdict; the merger then measures again.
+ */
+function remember(io, { lock, root, env }) {
+  const green = lock.green;
+  if (!green) return false;
+  if (io.git(root, ['status', '--porcelain']) !== '' || io.git(root, ['rev-parse', 'HEAD^{tree}']) !== green.tree) return false;
+  try {
+    io.recordGreen({
+      repo: green.repo, tree: green.tree, selection: green.selection, gate_version: GATE_MEASUREMENT_VERSION,
+      at: io.now().toISOString(), session: io.holder({ cwd: root, env }),
+    }, { env });
+    return true;
+  } catch { return false; }
 }
 
 /**
@@ -129,7 +204,7 @@ export async function run(argv, deps = {}) {
  * verdict (and the lock goes), a red for a process that ended without an exit
  * code (and the lock goes), or RUNNING with exit 3 (and the lock stays).
  */
-async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) {
+async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout, root, env }) {
   const outcome = await waitForExit(io, { log: lock.log, pid: lock.pid, since: waitedFrom, budget });
   const seconds = Math.round((io.now().getTime() - Date.parse(lock.started)) / 1000);
   if (outcome.budget) {
@@ -143,10 +218,12 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   }
   const output = readText(io, lock.log);
   const summary = summarizeGate(output, { exitCode: outcome.code });
+  const recorded = summary.ok ? remember(io, { lock, root, env }) : false;
   if (json) {
-    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, base: lock.command.base, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, base: lock.command.base, seconds, log: lock.log, exit: outcome.code, recorded }, null, 2)}\n`);
   } else {
     stdout.write(`${gateLines(summary, { command: lock.command.run, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}\n`);
+    if (recorded) stdout.write(`recorded: tree ${lock.green.tree.slice(0, 7)} green — mc merge does not measure it again while the tree and selection match\n`);
   }
   return summary.ok ? 0 : 1;
 }

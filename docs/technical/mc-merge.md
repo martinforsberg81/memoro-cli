@@ -407,6 +407,34 @@ flips often is a proposal to fix it, not a longer list.
 An empty selection stops the round: it is not a measurement, and a green from it
 would be the most confident kind of nothing.
 
+**A green `mc gate` on the same tree is not measured again** (ruling 44). A
+session's `mc gate` — the whole gate against `origin/main`, on a tree with
+nothing uncommitted before and after, in a repository whose declaration has
+`select`, with the select command answering — writes one line to
+`gate-greens.jsonl` under mc's home when it is green: `{ repo, tree, selection,
+gate_version, at, session }`, the last 2,000 kept
+([`src/mc/gate-greens.js`](../../src/mc/gate-greens.js)). `tree` is `git
+rev-parse HEAD^{tree}`; `selection` is the sha256 of the selection's test files
+and command gates (`packageScript`, `passBaseRef`), each sorted, as the declared
+`select` printed them; `gate_version` is `GATE_MEASUREMENT_VERSION`, one
+constant both sides import and bumped whenever what either side measures
+changes. Both sides make the selection the same bytes: `mc gate` reads the
+declaration of the worktree's primary checkout (the merger's `repo_path`), runs
+its `select` in the worktree with that checkout's `MC_SELECTION_STATE`
+directory and no write, runs the gate itself with the same state, and both
+resolve `origin/main` through the one ref store every worktree shares.
+
+A single pull request's round, after prepare, the derived regeneration, the
+previous red files and its own selection, looks up its candidate's `HEAD^{tree}`,
+that selection's hash and the version. All three matching a recorded green for
+the repository, it runs neither the suite nor the selected command gates, says
+`the candidate's tree <short> was measured green by mc gate at <at> with the
+same selection — not measured again`, sets `reused: { at, session }`, and then
+runs the pull request's own tests and the declared extra gates as always; the
+headline reads `GREEN — the test gate passes (measured by mc gate)`. Any one of
+them different, and the round measures as before. A batch never reuses — its
+candidate is a tree no session stood in — and `--full` never does.
+
 **The command gates the selection names run beside the suite** (merge-throughput,
 ruling 34). Until then they ran after it: 65 s mean on top of every round that
 had any on 2026-10-09/10, `sql:pr-ci` alone 36 s at the median over 55 rounds.

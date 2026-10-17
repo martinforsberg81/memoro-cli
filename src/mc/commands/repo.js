@@ -615,6 +615,9 @@ function ranPhrase(report) {
   const both = (what) => `${what}${tests === undefined ? '' : ` (${tests} tests)`}`
     + ` and ${gates} command gate${gates === 1 ? '' : 's'}`;
   const files = report.selection?.files;
+  if (report.reused) {
+    return `ran none of the ${files} selected test file${files === 1 ? '' : 's'} again — mc gate measured this tree green at ${report.reused.at}`;
+  }
   if (report.full || !report.selection) return both('ran the whole suite');
   return both(`ran ${files} test file${files === 1 ? '' : 's'}`);
 }

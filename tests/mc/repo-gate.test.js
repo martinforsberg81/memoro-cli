@@ -31,6 +31,7 @@ import { gateRoot, runGate, selectionState, verdictFor, verdictHeadline, verdict
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
+import { GATE_MEASUREMENT_VERSION, findGreen, greensPath, recordGreen, selectionHash } from '../../src/mc/gate-greens.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const OTHER = { name: 'pm', kind: 'work-area' };
@@ -2034,6 +2035,120 @@ describe('a repository that selects by diff', () => {
         assert.equal(fx.runs.length, 0, 'the custom runner answered, and it was asked once');
       } finally { fx.cleanup(); }
     });
+  });
+
+  describe('a green mc gate measured on the same tree (ruling 44)', () => {
+    const files = ['tests/a.test.js', 'tests/b.test.js'];
+    const commands = [{ id: 'lint', packageScript: 'lint', passBaseRef: true }];
+    const TREE = 'tree3333aaaa';
+    const AT = '2026-10-17T08:00:00.000Z';
+
+    /** The fixture, with the candidate's tree, a pull request touching its own test, and one recorded green. */
+    function recorded({ green = {}, tree = TREE } = {}) {
+      const fx = selecting({
+        files, commands, scripts: { lint: marking('lint') },
+        gitAlso: (args) => {
+          if (args[0] === 'rev-parse' && args[1] === 'HEAD^{tree}') return { status: 0, stdout: `${tree}\n`, stderr: '' };
+          if (args[0] === 'diff') return { status: 0, stdout: 'tests/a.test.js\nsrc/x.js\n', stderr: '' };
+          return undefined;
+        },
+      });
+      recordGreen({
+        root: fx.mcHome,
+        entry: {
+          repo: 'repo', tree: TREE, selection: selectionHash({ files, commands }), gate_version: GATE_MEASUREMENT_VERSION,
+          at: AT, session: 'gate-memory', ...green,
+        },
+      });
+      return fx;
+    }
+
+    it('a match skips the suite and the selected command gates, runs the PR\'s own tests, and says so', async () => {
+      const fx = recorded();
+      const said = [];
+      try {
+        const report = await fx.report({ onProgress: (line) => said.push(line) });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.deepEqual(report.reused, { at: AT, session: 'gate-memory' });
+        assert.ok(said.includes(`the candidate's tree tree333 was measured green by mc gate at ${AT} with the same selection — not measured again`));
+        assert.deepEqual(fx.runs.map((run) => run.files), [['tests/a.test.js']], 'only the pull request\'s own tests ran');
+        assert.deepEqual(report.pr_tests.files, ['tests/a.test.js']);
+        assert.equal(fx.mark('lint'), null, 'the selected command gate did not run');
+        assert.deepEqual(report.extra_gates, []);
+        assert.equal(report.candidate.tree, TREE);
+        assert.equal(report.candidate.commit, 'cand2222');
+        assert.deepEqual(report.candidate.red, []);
+        assert.equal(verdictHeadline(report), 'GREEN — the test gate passes (measured by mc gate)');
+        assert.match(gateLines(report).join('\n'), /ran none of the 2 selected test files again — mc gate measured this tree green at 2026-10-17T08:00:00\.000Z/u);
+      } finally { fx.cleanup(); }
+    });
+
+    for (const [what, green, tree] of [
+      ['tree', {}, 'tree4444bbbb'],
+      ['selection', { selection: selectionHash({ files: ['tests/a.test.js'], commands }) }, TREE],
+      ['version', { gate_version: GATE_MEASUREMENT_VERSION + 1 }, TREE],
+      ['repository', { repo: 'other' }, TREE],
+    ]) {
+      it(`a different ${what} measures as today`, async () => {
+        const fx = recorded({ green, tree });
+        try {
+          const report = await fx.report();
+          assert.equal(report.verdict, 'green', report.reason);
+          assert.equal(report.reused, null);
+          assert.deepEqual(fx.runs.map((run) => run.files), [files, ['tests/a.test.js']], 'the selection ran, then the own tests');
+          assert.equal(fx.mark('lint'), '--base-ref base1111', 'the selected command gate ran');
+          assert.equal(verdictHeadline(report), 'GREEN — the test gate passes');
+        } finally { fx.cleanup(); }
+      });
+    }
+
+    it('a batch never reuses', async () => {
+      const fx = recorded();
+      try {
+        const report = await fx.report({ prs: [7, 8] });
+        assert.equal(report.reused, null);
+        assert.ok(fx.runs.some((run) => run.files.length === files.length), 'the selection ran');
+      } finally { fx.cleanup(); }
+    });
+
+    it('--full never reuses', async () => {
+      const fx = selecting({ files, full: true });
+      try {
+        const report = await fx.report();
+        assert.equal(report.reused, null);
+        assert.equal(fx.suites.length, 1, 'the whole suite ran');
+      } finally { fx.cleanup(); }
+    });
+
+    it('a red own test is still red on a reused round', async () => {
+      const fx = recorded();
+      try {
+        const report = await fx.report({
+          tests: ({ files: ran }) => Promise.resolve({ code: 1, tap: tapWith(['an own test'], { tests: ran.length }) }),
+        });
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'pr-tests');
+        assert.deepEqual(report.reused, { at: AT, session: 'gate-memory' });
+      } finally { fx.cleanup(); }
+    });
+  });
+});
+
+describe('the green record file', () => {
+  it('keeps its last 2,000 lines, and finds the last match', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-greens-'));
+    try {
+      for (let i = 0; i < 2005; i += 1) {
+        recordGreen({ root, entry: { repo: 'r', tree: `t${i}`, selection: 's', gate_version: GATE_MEASUREMENT_VERSION, at: `${i}`, session: 'x' } });
+      }
+      const lines = readFileSync(greensPath(root), 'utf8').trim().split('\n');
+      assert.equal(lines.length, 2000);
+      assert.equal(JSON.parse(lines[0]).tree, 't5');
+      assert.equal(findGreen({ root, repo: 'r', tree: 't4', selection: 's' }), null);
+      assert.equal(findGreen({ root, repo: 'r', tree: 't2004', selection: 's' }).at, '2004');
+      recordGreen({ root, entry: { repo: 'r', tree: 't2004', selection: 's', gate_version: GATE_MEASUREMENT_VERSION, at: 'later', session: 'y' } });
+      assert.equal(findGreen({ root, repo: 'r', tree: 't2004', selection: 's' }).at, 'later');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 
