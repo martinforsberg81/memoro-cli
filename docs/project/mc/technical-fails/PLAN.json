@@ -27,7 +27,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run-plan.test.js tests/mc/run.test.js tests/mc/billing.test.js` passes, including the tests named in step 1."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A step whose lane is in a quota pause or server retry is not interrupted by `sweepRunning`; one whose runner is gone still is.",
       "check": "The step-2 tests in `tests/mc/run.test.js` pass."
     },

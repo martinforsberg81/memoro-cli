@@ -2521,6 +2521,13 @@ export function createRunner({
           break;
         }
         say(`${name}: the API ended the session (${last.said || last.interrupted}) — ${last.session} is resumed once it answers`);
+        // The child is gone while the lane waits: the register names this
+        // runner instead, so `sweepRunning` sees a live pid (ruling 45 § 2).
+        // The relaunch's `onSpawn` writes the new child's pid, without `waiting`.
+        if (stepIndex != null) {
+          const was = readEntry(root, name, { read: deps.read })?.steps?.[stepIndex]?.session;
+          recordStep(name, stepIndex, { session: { ...was, pid, waiting: last.interrupted } });
+        }
         if (last.interrupted === 'server') await deps.sleep(SERVER_RETRY_MS);
         else await quotaPause(last.interrupted === 'quota' ? last.quotaReset : null, last.interrupted === 'login' ? 'claude is not logged in (`claude /login`)' : null);
         waited = true;
