@@ -5,6 +5,7 @@
  *   mc publish                         last commit's subject and body as the PR's
  *   mc publish --title "…" --body "…"  named instead
  *   mc publish --body-file <path>      the body from a file
+ *   mc publish --branch <name>         a detached HEAD (a mend's worktree) to that branch
  *   mc publish --json                  the snapshot as one object
  *
  * The sequence memoro's `AGENTS.md` asks a session to walk by hand
@@ -26,7 +27,7 @@ export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const cwd = deps.cwd || process.cwd();
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--title', '--body', '--body-file', '--base'] });
+  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--title', '--body', '--body-file', '--base', '--branch'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   if (scanned.positional.length) { stderr.write(`mc: mc publish takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
   const { flags } = scanned;
@@ -35,7 +36,11 @@ export async function run(argv, deps = {}) {
   const gh = deps.gh || ((args) => ghCommand(args, cwd));
   const root = git(['rev-parse', '--show-toplevel']);
   if (!root) { stderr.write('mc: not inside a git worktree\n'); return 2; }
-  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const current = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (flags.branch && current !== 'HEAD' && current !== flags.branch) { stderr.write(`mc: --branch ${flags.branch}, but this worktree is on ${current} — drop --branch\n`); return 2; }
+  if (flags.branch && git(['check-ref-format', '--branch', flags.branch]) === null) { stderr.write(`mc: --branch ${flags.branch} is not a branch name\n`); return 2; }
+  const branch = flags.branch || current;
+  const detached = current === 'HEAD';
   const localHead = git(['rev-parse', 'HEAD']);
   const dirty = (git(['status', '--porcelain']) || '').split('\n').filter(Boolean);
   const remoteLine = git(['ls-remote', '--heads', 'origin', branch]) || '';
@@ -47,8 +52,8 @@ export async function run(argv, deps = {}) {
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
   const pushed = remoteHead !== localHead;
   if (pushed) {
-    const push = (deps.push || ((name) => pushBranch(cwd, name, { stderr })))(branch);
-    if (!push.ok) { stderr.write(`mc: git push -u origin ${branch} failed:\n${push.text}\n`); return 1; }
+    const push = (deps.push || ((name, opts) => pushBranch(cwd, name, { stderr, ...opts })))(branch, { detached });
+    if (!push.ok) { stderr.write(`mc: ${detached ? 'git push' : 'git push -u'} origin ${branch} failed:\n${push.text}\n`); return 1; }
   }
 
   const listed = gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url']);
@@ -151,12 +156,14 @@ export function repoName(url, root) {
 }
 
 /**
- * Non-force `git push -u`. GitHub has refused a thin pack with `Internal
+ * Non-force `git push -u`, or for a detached HEAD `git push origin
+ * HEAD:refs/heads/<branch>`. GitHub has refused a thin pack with `Internal
  * Server Error` while taking the same commit with `--no-thin` (2026-10-07),
  * so that rejection — and only that one — is pushed once more without it.
  */
-export function pushBranch(cwd, branch, { spawn = spawnSync, stderr = process.stderr } = {}) {
-  const push = (extra) => spawn('git', ['push', ...extra, '-u', 'origin', branch], { cwd, encoding: 'utf8', timeout: 120_000 });
+export function pushBranch(cwd, branch, { spawn = spawnSync, stderr = process.stderr, detached = false } = {}) {
+  const target = detached ? ['origin', `HEAD:refs/heads/${branch}`] : ['-u', 'origin', branch];
+  const push = (extra) => spawn('git', ['push', ...extra, ...target], { cwd, encoding: 'utf8', timeout: 120_000 });
   let r = push([]);
   if (r.status !== 0 && /Internal Server Error/u.test(r.stderr || '')) {
     stderr.write('mc: GitHub rejected the thin pack; pushed again with --no-thin\n');
@@ -176,8 +183,9 @@ export function usage() {
     '        mc publish --title "…" --body "…"   named instead; on an open pull request each edits only its own field\n',
     '        mc publish --body-file <path>       the body from a file\n',
     '        mc publish --base <branch>          the base a new pull request aims at, or the open one is moved to\n',
+    '        mc publish --branch <name>          a detached HEAD (a mend\'s worktree) to that branch\n',
     '        mc publish --json                   the pull request snapshot as one object\n',
     '\n',
-    'Refuses on main, on a dirty tree, and when origin\'s branch moved (never force). Ends with the mc merge line to run.\n',
+    'Refuses on main, on a dirty tree, and when origin\'s branch moved (never force); a detached HEAD only with --branch. Ends with the mc merge line to run.\n',
   ].join('');
 }
