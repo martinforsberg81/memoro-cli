@@ -19,12 +19,13 @@ const OLD_LOG = '/scratch/gate-20260925T095000Z.log';
  * A fake machine. The gate finishes after `finishAfter` sleeps: it writes its
  * log and exit code then, and is no longer alive.
  */
-function harness({ lock = null, manifest = { scripts: { test: 'node --test' } }, live = [], finishAfter = Infinity, code = 0, output = '' } = {}) {
+function harness({ lock = null, manifest = { scripts: { test: 'node --test' } }, live = [], finishAfter = Infinity, code = 0, output = '', tests = [] } = {}) {
   const files = new Map();
   const alive = new Set(live);
   const out = { stdout: '', stderr: '', spawned: [], dirs: [], removed: [], ticks: 0, unref: false };
   let clock = Date.parse('2026-09-25T10:00:00Z');
   if (lock) files.set(LOCK, JSON.stringify(lock));
+  for (const test of tests) files.set(`/w/x/${test}`, '');
   const deps = {
     stdout: { write: (s) => { out.stdout += s; } },
     stderr: { write: (s) => { out.stderr += s; } },
@@ -132,6 +133,41 @@ describe('mc gate, started', () => {
     assert.equal(await run(['--budget', '0'], budget.deps), 2);
     assert.match(budget.out.stderr, /--budget takes seconds/u);
     assert.deepEqual(budget.out.spawned, []);
+  });
+});
+
+describe('mc gate <test files…>', () => {
+  const TEST_SCRIPT = 'node --test --import ./tests/_isolate-home.mjs \'tests/**/*.test.js\'';
+
+  it('named files run with the repository\'s node --test flags', async () => {
+    const { out, deps } = harness({ manifest: { scripts: { test: TEST_SCRIPT } }, tests: ['a.test.js'], finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
+    assert.equal(await run(['a.test.js'], deps), 0);
+    assert.equal(out.spawned[0].args[1], `node --test --import ./tests/_isolate-home.mjs a.test.js; echo $? > '${EXIT}'`);
+    assert.match(out.stdout, /^GREEN — node --test --import \.\/tests\/_isolate-home\.mjs a\.test\.js — 1 tests, 0 failed — 2s\n/u);
+  });
+
+  it('a missing file refuses before running', async () => {
+    const { out, deps } = harness({ tests: ['a.test.js'] });
+    assert.equal(await run(['a.test.js', 'missing.test.js'], deps), 2);
+    assert.equal(out.stderr, 'mc: no such test file: missing.test.js\n');
+    assert.deepEqual(out.spawned, []);
+  });
+
+  it('a red names a re-run line with the failing names, before the whole output', async () => {
+    const { out, deps } = harness({ manifest: { scripts: { test: TEST_SCRIPT } }, tests: ['a.test.js'], finishAfter: 1, code: 1, output: '✖ adds up (2.1ms)\n  AssertionError [ERR_ASSERTION]: 1 == 2\nℹ tests 1\nℹ fail 1\n' });
+    assert.equal(await run(['a.test.js'], deps), 1);
+    assert.match(out.stdout, /^re-run: mc gate a\.test\.js --test-name-pattern 'adds up'\nwhole output: /mu);
+  });
+
+  it('--test-name-pattern goes with files only, and reaches node', async () => {
+    const { out, deps } = harness({ tests: ['a.test.js'], finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
+    assert.equal(await run(['--test-name-pattern', 'adds up'], deps), 2);
+    assert.match(out.stderr, /goes with test files/u);
+    assert.deepEqual(out.spawned, []);
+
+    const named = harness({ tests: ['a.test.js'], finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
+    assert.equal(await run(['a.test.js', '--test-name-pattern', 'adds up'], named.deps), 0);
+    assert.equal(named.out.spawned[0].args[1], `node --test a.test.js --test-name-pattern 'adds up'; echo $? > '${EXIT}'`);
   });
 });
 

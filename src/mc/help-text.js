@@ -251,6 +251,10 @@ IN FULL
                                     and exit 3 — the gate runs on, and --wait
                                     prints its verdict from the same log. One
                                     gate per worktree: a second refuses, exit 2
+  mc gate <test files…> [--test-name-pattern <p>]
+                                    The named test files with this repository's
+                                    node --test flags — the same log, budget and
+                                    summary; a red names the re-run line
   mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window]
           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]

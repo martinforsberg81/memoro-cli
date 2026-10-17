@@ -6,10 +6,13 @@
  *   mc gate --json            the summary as one object
  *   mc gate --budget <s>      answer after at most s seconds (default 540); the gate keeps running
  *   mc gate --wait            wait for the gate running here and print its verdict
+ *   mc gate <files…> [--test-name-pattern <p>]
+ *                             the named test files, with the repository's node --test flags
  *
  * What runs is the repository's, read from its `package.json` (`gate-local.js`):
  * `npm run ci -- --base-ref origin/main` where there is a `ci` script, else
- * `npm test`. The gate is a detached child whose output goes to a file — under
+ * `npm test`; named files run `node --test` with the flags of its `test` script.
+ * The gate is a detached child whose output goes to a file — under
  * `$MC_SCRATCH` in a runner session, the system temp directory otherwise — as
  * it is written, so the log is readable while the gate runs; when it ends it
  * writes its exit code beside the log. This verb answers within the budget:
@@ -29,7 +32,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { gateCommand, gateLines, summarizeGate } from '../gate-local.js';
+import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
 import { tryGit } from '../git.js';
 import { scanArgs } from './flags.js';
 
@@ -62,9 +65,12 @@ export async function run(argv, deps = {}) {
   const env = deps.env || process.env;
   const cwd = deps.cwd || process.cwd();
   const io = { ...SYSTEM, ...deps };
-  const scanned = scanArgs(argv, { booleans: ['--json', '--wait'], strictValues: ['--base', '--budget'] });
+  const scanned = scanArgs(argv, { booleans: ['--json', '--wait'], strictValues: ['--base', '--budget', '--test-name-pattern'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
-  if (scanned.positional.length) { stderr.write(`mc: mc gate takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
+  const files = scanned.positional;
+  const pattern = scanned.flags['test-name-pattern'];
+  if (pattern != null && !files.length) { stderr.write(`mc: --test-name-pattern goes with test files (mc gate <files…> --test-name-pattern <p>)\n${usage()}`); return 2; }
+  if (files.length && scanned.flags.wait) { stderr.write(`mc: --wait takes no test files — it waits for the gate running here\n${usage()}`); return 2; }
   const budget = scanned.flags.budget == null ? DEFAULT_BUDGET : Number(scanned.flags.budget);
   if (!(budget > 0)) { stderr.write(`mc: --budget takes seconds, a positive number (${scanned.flags.budget})\n${usage()}`); return 2; }
 
@@ -80,10 +86,13 @@ export async function run(argv, deps = {}) {
     return answer(io, { lock, lockPath, budget, waitedFrom: io.now(), json: scanned.flags.json, stdout });
   }
 
+  const missing = files.find((file) => !io.exists(join(root, file)));
+  if (missing) { stderr.write(`mc: no such test file: ${missing}\n`); return 2; }
+
   let manifest = null;
   try { manifest = JSON.parse(io.read(join(root, 'package.json'), 'utf8')); } catch { manifest = null; }
   const base = scanned.flags.base || 'origin/main';
-  const command = gateCommand(manifest, { base });
+  const command = files.length ? namedCommand(manifest, files, { pattern }) : gateCommand(manifest, { base });
   if (!command) { stderr.write(`mc: ${root} has no ci or test script in package.json — nothing to run\n`); return 2; }
 
   const held = readLock(io, lockPath);
@@ -132,11 +141,12 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
     stdout.write(`RED — the gate's process ended without an exit code — log: ${lock.log}\n`);
     return 1;
   }
-  const summary = summarizeGate(readText(io, lock.log), { exitCode: outcome.code });
+  const output = readText(io, lock.log);
+  const summary = summarizeGate(output, { exitCode: outcome.code });
   if (json) {
     stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, base: lock.command.base, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
-    stdout.write(`${gateLines(summary, { command: lock.command.run, seconds, logPath: lock.log })}\n`);
+    stdout.write(`${gateLines(summary, { command: lock.command.run, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}\n`);
   }
   return summary.ok ? 0 : 1;
 }
@@ -184,6 +194,7 @@ export function usage() {
     '        mc gate --json                the summary as one object\n',
     '        mc gate --budget <s>          answer after at most s seconds, default 540; the gate keeps running\n',
     '        mc gate --wait                wait for the gate running here and print its verdict\n',
+    '        mc gate <test files…> [--test-name-pattern <p>]   the named files with this repository\'s node --test flags; the same log, budget and summary\n',
     '\n',
     'Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, and the path of the whole output.\n',
     'Exit 0 green, 1 red, 2 nothing to run or already running, 3 still running.\n',

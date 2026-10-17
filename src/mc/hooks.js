@@ -138,6 +138,7 @@ export const TOOLBOX = [
   '                    serves the worktree you stand in, restarts it after edits, prints which tree it served',
   '  a server URL      mc test dev --here --url',
   '  check the tree    mc gate            (npm run ci for this worktree, 2 KB verdict)',
+  '  run some tests    mc gate <files…> [--test-name-pattern …]   (whole output in a file, the failures printed)',
   '  publish           mc publish [--title … --body-file …]   (push + open/update the PR, never force)',
   '  land              mc merge <repo> <pr>   (the gate, then the merge)',
   '  what runs where   mc dev list · mc prs · mc status <name>',
