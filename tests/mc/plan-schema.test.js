@@ -302,6 +302,18 @@ describe('the plan has no status of its own', () => {
     assert.equal(deliverableStep(plan()).step.title, 'The hero object');
     assert.match(deliverableStep(plan({ contract: [] })).why, /does not parse/u);
   });
+
+  it('says why a failed step failed, one line at most 200 characters, and what starts it again (ruling 45 § 4)', () => {
+    const [done, ready] = plan().steps;
+    const failed = { ...ready, status: 'failed', reason: 'the gate was red' };
+    assert.equal(deliverableStep(plan({ steps: [done, failed] })).why, 'step 2 failed: the gate was red; mc step ready starts it again');
+    const folded = { ...failed, reason: 'the gate\n   was  red' };
+    assert.equal(deliverableStep(plan({ steps: [done, folded] })).why, 'step 2 failed: the gate was red; mc step ready starts it again', 'whitespace folds to single spaces');
+    const long = { ...failed, reason: 'x'.repeat(250) };
+    assert.equal(deliverableStep(plan({ steps: [done, long] })).why, `step 2 failed: ${'x'.repeat(199)}…; mc step ready starts it again`);
+    const bare = { ...failed, reason: null };
+    assert.equal(deliverableStep(plan({ steps: [done, bare] })).why, 'step 2 failed; mc step ready starts it again', 'without a reason, today\'s text');
+  });
 });
 
 describe('what a step session may have changed', () => {

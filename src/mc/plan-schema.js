@@ -92,6 +92,7 @@ const STEP_KEYS = Object.freeze([
   'comments',
   'pr',
   'blocked_by',
+  'reason',
   'runner',
 ]);
 
@@ -429,6 +430,12 @@ export function planState(plan) {
 /** "every step `done`", "all steps are done", "steps 1–3 are `done`". */
 const ASKS_STEPS_DONE = /\b(?:every|all) (?:the )?(?:other )?steps?\b[^.;]*\bdone\b|\bsteps \d+\s*[–-]\s*\d+\b[^.;]*\bdone\b/iu;
 
+/** A reason as one line of at most `max` characters, cut with `…`; '' when there is none. */
+function clip(text, max) {
+  const one = String(text ?? '').replace(/\s+/gu, ' ').trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+}
+
 /**
  * The step `mc run` would hand out, or the reason it would not — the whole
  * admission test, in one place, before a session is spent.
@@ -441,6 +448,8 @@ export function deliverableStep(plan) {
   if (state.status === 'done') return { step: null, index: -1, reason: 'done', why: 'every step is done', problems: [] };
   if (state.status !== 'ready') {
     const waiting = state.step?.blocked_by;
+    // Why it failed, from the register (ruling 45 § 4): the page and `mc status` say it.
+    const failure = clip(state.step?.reason, 200);
     const why = state.status === 'blocked'
       ? `step ${state.index + 1} is blocked on ${waiting?.kind || 'something'} ${waiting?.name || '(unnamed)'}`
       : (state.status === 'running'
@@ -448,7 +457,7 @@ export function deliverableStep(plan) {
         : state.status === 'landing'
         ? `step ${state.index + 1} is landing — #${state.step?.pr ?? '?'} is in the merge queue`
         : (state.status === 'failed'
-          ? `step ${state.index + 1} failed${state.step?.pr ? ` — #${state.step.pr} is open` : ''}; mc step ready starts it again`
+          ? `step ${state.index + 1} failed${failure ? `: ${failure}` : ''}${state.step?.pr ? ` — #${state.step.pr} is open` : ''}; mc step ready starts it again`
           : `step ${state.index + 1} is ${state.status}`));
     return { step: null, index: state.index, reason: state.status, why, problems: [] };
   }

@@ -64,8 +64,9 @@ test('applyEntry lays the register over the file, and the summary is recomputed 
   const out = applyEntry(rec, entry);
   assert.equal(out.plan.steps[1].status, 'failed');
   assert.equal(out.plan.steps[1].pr, 9);
+  assert.equal(out.plan.steps[1].reason, 'the gate was red', 'the register\'s reason reaches the plan step');
   assert.equal(out.status, 'failed', 'planSummary reads the overlaid steps');
-  assert.match(out.next, /step 2 failed — #9 is open; mc step ready/u);
+  assert.equal(out.next, 'step 2 failed: the gate was red — #9 is open; mc step ready starts it again');
   // The file's own step is untouched: the record is a new object.
   assert.equal(rec.plan.steps[1].status, 'ready');
   // And the overlaid plan still validates: running and failed are schema words now.

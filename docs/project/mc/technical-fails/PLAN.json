@@ -37,7 +37,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/branch-landed.test.js tests/mc/run.test.js` passes, including the tests named in step 3."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`deliverableStep` on a failed step reads `step N failed: <reason>; mc step ready starts it again`, and a step failed by interruption count has a reason naming the last API refusal.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-schema.test.js tests/mc/register.test.js tests/mc/run.test.js tests/mc/status-project.test.js` passes, including the tests named in step 4."
     }
