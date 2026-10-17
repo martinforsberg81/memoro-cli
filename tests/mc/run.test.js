@@ -1470,6 +1470,67 @@ test('a limit that ends a long session pauses until the reset and resumes it, on
   assert.equal(registerOf(f, 'r').steps[0].status, 'done');
 });
 
+/**
+ * A lane waiting out a refusal holds its step (ruling 45 § 2): the register
+ * names the runner while the child is gone, so a sweep in that moment does not
+ * count the wait as a dead session. 2026-10-17 two steps failed that way.
+ */
+test('during a quota pause the step names the runner, and a sweep leaves it running', async () => {
+  const f = fixture({ now: '2026-09-22T07:00:00Z', plans: { memoro: { r: ready } }, session: () => null, livePids: [4242] });
+  const runner = createRunner({ deps: f.deps });
+  const during = [];
+  f.deps.sleep = async () => {
+    if (during.length) return;
+    const before = registerOf(f, 'r').steps[0];
+    runner.queue();
+    during.push({ before, after: registerOf(f, 'r').steps[0] });
+  };
+  let calls = 0;
+  const limited = apiEndedSession("You've hit your monthly spend limit · your weekly limit resets Sep 22 at 11am (Europe/Stockholm)", { api_error_status: 429 });
+  const lands = landsItself(f, 'r', 54, okSession({ type: 'result' }));
+  const childPids = [];
+  f.deps.session = (call) => {
+    f.calls.sessions.push(call);
+    calls += 1;
+    const childPid = 5000 + calls;
+    childPids.push(childPid);
+    call.onSpawn?.(childPid);
+    if (calls === 2) assert.deepEqual(registerOf(f, 'r').steps[0].session.pid, childPid);
+    return calls === 1 ? limited(call) : lands(call);
+  };
+  await runner.pass();
+  assert.equal(f.calls.sessions.length, 2);
+  const [{ before, after }] = during;
+  assert.equal(before.session.pid, 4242, 'the runner, not the child that is gone');
+  assert.equal(before.session.waiting, 'quota');
+  assert.equal(after.status, 'running');
+  assert.equal(after.session.pid, 4242);
+  assert.equal(after.interrupted?.count ?? 0, before.interrupted?.count ?? 0, 'the wait is not an interruption');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /was running under pid/u);
+  assert.equal(registerOf(f, 'r').steps[0].status, 'done');
+});
+
+test('a server retry names the runner; once the relaunch spawns, its pid is recorded without `waiting`', async () => {
+  const f = fixture({ plans: { memoro: { r: ready } }, session: () => null, livePids: [4242] });
+  const seen = [];
+  f.deps.sleep = async () => { seen.push(registerOf(f, 'r').steps[0].session); };
+  let calls = 0;
+  const overloaded = apiEndedSession('API Error: 529 Overloaded. This is a server-side issue', { api_error_status: 529 });
+  const relaunched = [];
+  f.deps.session = (call) => {
+    f.calls.sessions.push(call);
+    calls += 1;
+    call.onSpawn?.(6000 + calls);
+    if (calls === 2) relaunched.push(registerOf(f, 'r').steps[0].session);
+    return calls === 1 ? overloaded(call) : { status: 1, stdout: '', stderr: '', timedOut: false };
+  };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(seen[0].pid, 4242);
+  assert.equal(seen[0].waiting, 'server');
+  assert.equal(relaunched[0].pid, 6002);
+  assert.equal(relaunched[0].waiting, undefined);
+});
+
 test('three interruptions in a row end the step as failed, with what the API said', async () => {
   const f = fixture({ plans: { memoro: { r: ready } }, session: apiEndedSession('API Error: 500 Internal server error.', { api_error_status: 500 }) });
   f.deps.sleep = async () => {};
