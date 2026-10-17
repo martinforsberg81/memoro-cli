@@ -2358,11 +2358,12 @@ export function createRunner({
     // What a refusal says about the billing it came on: a plan refusal is
     // `plan.refused_until` — its reset, or `QUOTA_SLEEP_MS` from now when it
     // named none — which `auto` reads to move to the credit; an exhausted or
-    // rejected credit is unusable for `CREDITS_RETRY_MS`. A 429 on a credits
-    // session is the API's own rate limit and touches neither. Returns
+    // rejected credit is unusable for `CREDITS_RETRY_MS`, or until the date a
+    // spent workspace limit names (`creditsUntil`, ruling 45 § 1). A 429 on a
+    // credits session is the API's own rate limit and touches neither. Returns
     // `{ from, to }` when the next launch would get another billing than this
     // one ran on — a hand-over instead of a sleep — or null.
-    const noteRefusal = ({ interrupted: kind, quota, quotaReset }, billing) => {
+    const noteRefusal = ({ interrupted: kind, quota, quotaReset, creditsUntil }, billing) => {
       if (launch.id !== 'claude-code' || !deps.billing?.patchState) return null;
       const nowMs = deps.now().getTime();
       try {
@@ -2370,8 +2371,9 @@ export function createRunner({
           const until = quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset : new Date(nowMs + QUOTA_SLEEP_MS);
           deps.billing.patchState({ plan: { refused_until: until.toISOString() } });
         } else if ((kind === 'credits' || kind === 'key') && billing === 'credits') {
-          const until = new Date(nowMs + CREDITS_RETRY_MS).toISOString();
-          const why = kind === 'credits' ? 'credit balance too low' : 'API key rejected';
+          const named = creditsUntil instanceof Date;
+          const until = (named && creditsUntil.getTime() > nowMs ? creditsUntil : new Date(nowMs + CREDITS_RETRY_MS)).toISOString();
+          const why = kind === 'credits' ? (named ? 'workspace API usage limit reached' : 'credit balance too low') : 'API key rejected';
           deps.billing.patchState({ credits: { unusable_until: until, why } });
           say(`${name}: the step credit is unusable until ${until} (${why}) — \`mc run --billing ${deps.billing.readMode?.() || 'plan'}\` clears it sooner`);
         } else {

@@ -1338,10 +1338,14 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   const fewTurns = !(Number(json.num_turns) > 2);
   const text = `${json.result ?? ''}\n${stderr}`;
   const interrupted = apiInterruption(json);
-  const quota = interrupted?.kind === 'quota' || (fewTurns && quotaSeen(text));
+  // A classified refusal decides its own kind; the turn-count reading is for a
+  // stream nothing classified. A workspace limit is `credits` at any turn count,
+  // and `quotaSeen` would call it a quota (its `usage limit`) in a short session.
+  const quota = interrupted ? interrupted.kind === 'quota' : (fewTurns && quotaSeen(text));
   return {
     // Only on a session the API ended: `run.js` resumes it (`RESUME_LIMIT`).
-    ...(quota || interrupted ? { interrupted: quota ? 'quota' : interrupted.kind, said: interrupted?.said ?? null } : {}),
+    // `creditsUntil` is the date a workspace limit names, for `noteRefusal`.
+    ...(quota || interrupted ? { interrupted: quota ? 'quota' : interrupted.kind, said: interrupted?.said ?? null, creditsUntil: interrupted?.until ?? null } : {}),
     turns: pick(json.num_turns),
     session: pick(json.session_id),
     input: pick(usage.input_tokens),
@@ -1435,15 +1439,43 @@ export function quotaSeen(text) {
  * for an exhausted credit), and `key` for `Invalid API key · Fix external API
  * key` (measured 2026-10-11: `terminal_reason: 'api_error'`, `subtype:
  * 'success'`, exit 1).
+ *
+ * A spent workspace limit is the same credit (2026-10-17, ruling 45 § 1):
+ * `API Error: 400 You have reached your specified workspace API usage limits.
+ * You will regain access on 2026-11-01 at 00:00 UTC.` It is read before the
+ * quota test, which its `usage limit` would otherwise match, and `until` is the
+ * instant the refusal names (`creditsResetAt`).
  */
 export function apiInterruption(json) {
   if (!json || json.terminal_reason !== 'api_error') return null;
   const said = String(json.result ?? '').trim().split('\n')[0].slice(0, 200);
+  if (/workspace api usage limits?/iu.test(said)) return { kind: 'credits', said, until: creditsResetAt(said) };
   if (/credit balance is too low/iu.test(said)) return { kind: 'credits', said };
   if (/invalid api key/iu.test(said)) return { kind: 'key', said };
   if (json.api_error_status === 429 || quotaSeen(said)) return { kind: 'quota', said };
   if (/not logged in|\/login/iu.test(said)) return { kind: 'login', said };
   return { kind: 'server', said };
+}
+
+const WORKSPACE_RESET_RE = /regain access on (\d{4}-\d{2}-\d{2})(?: at (\d{1,2}):(\d{2}) UTC)?/u;
+
+/**
+ * The instant a spent workspace limit says access returns: `You will regain
+ * access on 2026-11-01 at 00:00 UTC.` is 2026-11-01T00:00Z, and 00:00 UTC when
+ * the text names no time. Null when the text names no date, or a date or time
+ * that is not one. Only UTC is read: the refusal says UTC, and nothing else is
+ * guessed at.
+ */
+export function creditsResetAt(text) {
+  const m = WORKSPACE_RESET_RE.exec(String(text || ''));
+  if (!m) return null;
+  const [, day, hourText = '0', minuteText = '0'] = m;
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (hour > 23 || minute > 59) return null;
+  const at = new Date(`${day}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00.000Z`);
+  if (Number.isNaN(at.getTime()) || at.toISOString().slice(0, 10) !== day) return null;
+  return at;
 }
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
