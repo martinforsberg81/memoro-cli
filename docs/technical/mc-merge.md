@@ -368,12 +368,23 @@ second `npm ci` and four modules of machinery (`repo-baseline-cache.js`,
 `compareRed`, the red ratchet) to answer a question a merge does not ask. All of
 it is gone.
 
-What that buys and what it costs are the same sentence: a test the change
-reaches that is **already red on main** now makes the round red, and cannot land
-until that test is green. The differential form let it through, at the price of
-measuring main every round to find out. The way out is a selector that reaches
-fewer unrelated tests, and it belongs in the repository rather than in a second
-measurement here.
+**Main's red is main's** (ruling 44 § 4). From 2026-08-31 a test the change
+reached that was already red on main made the round red: four SQL snapshot
+tests red on main were measured red in 77 rounds of 43 PRs, about 700 minutes in
+all charged to changes that had not caused them. Now, when every red file a
+round is left with is `red_on_main` by the base probe (below) and the change's
+own diff against the base — a batch's is the union of its PRs' — touches none of
+them, the round is not red on them: it puts the candidate back at its head, sets
+`main_red_files`, says `N red file(s) red on main too, untouched by this change —
+not this round's red`, and goes on to the command gates and the PR's own tests as
+a green suite would. A green verdict's headline then ends `— N test file(s) red
+on main, not counted`, and each such file gets an intake note
+(`~/mc/intake/<date>-red-on-main-<name>.md`: repo, file, red names, the landing
+the probe blamed, the PR whose round found it) unless a file at the top of
+`~/mc/intake/` or `~/mc/proposals/` younger than seven days already names it
+(`noteRedOnMain` in [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)). One red
+file the change touches, any red the probe does not call main's, or a diff that
+cannot be read, and the round is red as before.
 
 An empty selection stops the round: it is not a measurement, and a green from it
 would be the most confident kind of nothing.
@@ -517,8 +528,9 @@ A red round runs its red files once more on the base
 the change broke them. Red there too, and the files are walked back along
 `main`'s first parents to the first commit where they pass; the landing after it
 is recorded, with the paths it changed (`git diff-tree --name-only`), and the red
-reason says `— N of the red files are red on main too, broken by #M`. The
-verdict is red either way; only that sentence depends on the walk.
+reason says `— N of the red files are red on main too, broken by #M`. The walk
+only names the landing; whether the round goes on is decided by `red_on_main`
+and the change's diff (*Main's red is main's*, above).
 
 A landing whose every path is under `docs/` is measured again before it is
 named (`remeasure`). Both ways have happened. On 2026-10-06 (`mc merge memoro

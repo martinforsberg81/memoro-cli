@@ -2,11 +2,12 @@
  * The gate round, as a machine.
  *
  * The rule it enforces: a test the change reaches is either green, or the
- * round is red. Whether main was already red is not the round's question —
- * ruled by Martin on 2026-08-31, after the differential form spent half of
- * every round's wall clock, a second worktree and a second `npm ci` answering
- * it. What is measured is the diff: the test files the repository's selector
- * says the change reaches, and the command gates it named beside them.
+ * round is red — unless it is red on main too and the change does not touch
+ * it (ruling 44 § 4, below). Main is not measured to find that out: ruled by
+ * Martin on 2026-08-31, after the differential form spent half of every
+ * round's wall clock, a second worktree and a second `npm ci` answering it.
+ * What is measured is the diff: the test files the repository's selector says
+ * the change reaches, and the command gates it named beside them.
  *
  * The round, in order, stopping at the first red step:
  *
@@ -36,15 +37,20 @@
  * passing suite carrying an unescalated design decision is exactly the mistake
  * that conflation would license.
  *
- * The strictness has a cost, and it is said out loud rather than discovered:
- * a change whose reached tests include one that is already red on main is red,
- * and cannot land until that test is green. The differential form let that
- * through, at the price of measuring main every round to find out. The way
- * out is a selector that reaches fewer unrelated tests, which belongs in the
- * repository rather than in a second measurement here.
+ * Main's red is main's (ruling 44 § 4). Until then a change whose reached
+ * tests included one already red on main was red, and could not land until
+ * that test was green: four SQL snapshot tests red on main were measured red
+ * in 77 rounds of 43 pull requests, the JSC start-up budget in 39 of 32,
+ * about 700 minutes charged to changes that had not caused it. Now a red
+ * round asks the base only after it is red (`selector-miss.js`), and when
+ * every red file is red there too and the change touches none of them, the
+ * round goes on to the command gates and the pull request's own tests, names
+ * them in its verdict as not counted, and leaves the helper an intake note
+ * (one per file per week). A change that touches one of them is red as before,
+ * and so is any red the probe does not call main's.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
@@ -63,6 +69,7 @@ import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { readRounds, recordRound } from './repo-round-log.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
+import { intakeDir, proposalsDir } from './helper-collect.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -232,6 +239,10 @@ export async function runGate({
     // landing broke them (`selector-miss.js`). Attribution only — the verdict
     // is decided before it runs. Null on every round that was not red.
     main_red: null,
+    // The red files the round went on past: red on main by the probe, and
+    // untouched by the change (ruling 44 § 4). Named in the verdict as not
+    // counted; null when there were none.
+    main_red_files: null,
     // The pull request's own tests: every `*.test.js` it adds or changes, run
     // on the candidate after the suite (D-0157). `files: []` when it touches
     // none, which is said rather than left blank.
@@ -575,10 +586,46 @@ export async function runGate({
     const flags = declared.declaration.pr_tests_flags || [];
     const is = facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
 
-    // A red the round measured, and whose red it is. The verdict is red
-    // whatever the probe finds; the probe only says whose. `alone` is a run of
-    // the red files by themselves on the candidate already — the previous red
+    // What each pull request changed against the base, asked of git once a
+    // round: the red that is main's needs it to know the change left a red
+    // file alone, and the pull request's own tests need it to know what to run.
+    const diffs = new Map();
+    const changedBy = (head) => {
+      if (!diffs.has(head)) diffs.set(head, prDiff({ git: askGit, cwd: headDir, baseRef, head }));
+      return diffs.get(head);
+    };
+    // Every path the round's change touches — a batch's is the union of its
+    // pull requests' — or null when one of them could not be read.
+    const touchedPaths = async () => {
+      const each = await Promise.all((batch ? all.map((item) => item.head_sha) : ['HEAD']).map(changedBy));
+      return each.every((diff) => diff.ok) ? new Set(each.flatMap((diff) => diff.files)) : null;
+    };
+    // Red files that are main's, and the round goes on past them (ruling
+    // 44 § 4): named, noted for the helper, and taken out of the candidate's
+    // red so nothing downstream reads a green round as a red one.
+    const mainRedGoesOn = (result, probe) => {
+      const files = result.red_files;
+      report.main_red_files = [...new Set([...(report.main_red_files || []), ...files])];
+      say(`${files.length} red file${files.length === 1 ? '' : 's'} red on main too, untouched by this change — not this round's red: ${files.join(', ')}`);
+      for (const file of files) {
+        const names = (result.red_tests || []).filter((test) => test.file === file).map((test) => test.name);
+        const note = noteRedOnMain({
+          env, now: clock(), repo: basename(String(repoPath)), file, names,
+          breaks: (probe?.breaks || []).filter((found) => found.file === file), prs: numbers,
+        });
+        if (note) say(`intake note: ${note}`);
+      }
+      result.red = [];
+      result.red_files = [];
+      result.red_tests = [];
+      return null;
+    };
+
+    // A red the round measured, and whose red it is. `alone` is a run of the
+    // red files by themselves on the candidate already — the previous red
     // phase — which is the second sample the probe would otherwise take.
+    // Returns the finished report, or null when every red file is main's and
+    // the change touches none of them: the round goes on.
     const stopRed = async (result, { alone = false } = {}) => {
       // A file something outside the round killed is not a verdict on this
       // change, and the base would pass it — the main-red probe would then
@@ -618,20 +665,40 @@ export async function runGate({
       // What a killed or cancelled file failed is not the red either, and is
       // not handed to whoever mends it (ruling 44).
       if (result.red_tests) result.red_tests = result.red_tests.filter((test) => red.includes(test.name));
-      // The verdict is already red; this only says whose red it is. Worth a
-      // few seconds on a round that failed, because the other reading is the
-      // one #12107 got: red twice on tests a landed change had broken.
+      // Every red file in it, and every red test located in one: a red name
+      // no file accounts for is nobody's to excuse.
+      const within = (files) => Boolean(result.red_files?.length)
+        && result.red_files.every((file) => files.has(file))
+        && (result.red_tests || []).every((test) => files.has(test.file));
+      // Main's already, by this round's own probe of the previous red files —
+      // and untouched, which that probe's turn checked: not asked twice.
+      if (within(new Set(report.main_red_files || []))) return mainRedGoesOn(result, report.main_red);
+      // Whose red it is. Worth a few seconds on a round that failed, because
+      // the other reading is the one #12107 got: red twice on tests a landed
+      // change had broken.
       if (facts.pr && result.red_files?.length) {
         const headCommit = trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null;
         report.main_red = await timed('main red', () => probeMain({
           git: askGit, tests: runTests, cwd: headDir, baseCommit: report.base.commit, files: result.red_files,
           flags, say, root, repo: repoPath, foundBy: numbers,
         }));
+        const probe = report.main_red;
+        // Every red file red on main too, and none of them changed by this
+        // pull request: not this round's red (ruling 44 § 4). The probe moved
+        // the candidate to older commits; it is put back before anything else
+        // runs there. One red file the change touches, and it is red as before.
+        if (headCommit && probe && !probe.stopped && within(new Set(probe.red_on_main || []))) {
+          const back = await askGit(['checkout', '--detach', '--force', headCommit], { cwd: headDir });
+          if (back?.status !== 0) return finish('worktree', `could not put the candidate back at ${headCommit.slice(0, 7)} after the main-red probe`);
+          const touched = await touchedPaths();
+          if (touched && !result.red_files.some((file) => touched.has(file))) return mainRedGoesOn(result, probe);
+          say(touched ? 'this change touches a red file that is red on main — red as before'
+            : 'could not read what this change touches — red as before');
+        }
         // Green on the base is one sample on a quieter machine. #891 (a role
         // text) and #872 (docs only) were blamed on it and went green
         // unchanged, so the same files are run alone on the candidate too:
         // red there is the change's, green there is the round's load.
-        const probe = report.main_red;
         if (headCommit && probe && !probe.stopped && !probe.red_on_main?.length) {
           if (alone) {
             report.head_alone = { red: result.red_files };
@@ -677,7 +744,9 @@ export async function runGate({
           report.candidate = first.result;
           report.candidate.tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
           say(`${first.result.red.length} red in the previous red files — the selection is not run`);
-          return stopRed(first.result, { alone: true });
+          const stop = await stopRed(first.result, { alone: true });
+          if (stop) return stop;
+          say('the previous red files are main\'s red — measuring the selection');
         } else {
           report.previous_red = { files: previous, red: [] };
           say('previous red files green — measuring the selection');
@@ -715,7 +784,8 @@ export async function runGate({
 
     // The one run. What it finds red is the verdict: there is no second tree
     // to subtract, so a test the change reaches is either green or the round
-    // is red.
+    // is red — unless the probe after it finds that red main's and the change
+    // leaves the file alone (`stopRed`).
     //
     // The gates the selection named, on the candidate, started when the suite
     // starts and awaited with it — before any verdict is reached, because a
@@ -782,7 +852,10 @@ export async function runGate({
     // Both halves have finished, so the probe for main red never runs beside
     // a gate.
     say(`${after.result.red.length} red`);
-    if (after.result.red.length) return stopRed(after.result);
+    if (after.result.red.length) {
+      const stop = await stopRed(after.result);
+      if (stop) return stop;
+    }
 
     // A command gate the selection chose is a contract about this diff, and a
     // change that breaks one is red whatever its tests did. They all ran; the
@@ -800,8 +873,8 @@ export async function runGate({
     // changes is run, wherever it lies, from the same diff that counts red.
     // A list of directories would fix yesterday's hole and make tomorrow's.
     if (facts.pr && !batch) {
-      const own = await timed('pr tests', () => ownTests({
-        git: askGit, tests: runTests, cwd: headDir, baseRef, say, flags: declared.declaration.pr_tests_flags || [],
+      const own = await timed('pr tests', async () => ownTests({
+        tests: runTests, cwd: headDir, changed: await changedBy('HEAD'), say, flags: declared.declaration.pr_tests_flags || [],
       }));
       report.pr_tests = own.result;
       if (!own.ok) return finish('pr-tests', own.reason);
@@ -812,8 +885,8 @@ export async function runGate({
       // pull request carried which test, and a red here names the one.
       for (const [index, item] of all.entries()) {
         say(`#${item.number}'s own tests`);
-        const own = await timed('pr tests', () => ownTests({
-          git: askGit, tests: runTests, cwd: headDir, baseRef, head: item.head_sha, say, flags: declared.declaration.pr_tests_flags || [],
+        const own = await timed('pr tests', async () => ownTests({
+          tests: runTests, cwd: headDir, changed: await changedBy(item.head_sha), say, flags: declared.declaration.pr_tests_flags || [],
         }));
         report.prs[index].pr_tests = own.result;
         if (!own.ok) return finish('pr-tests', `#${item.number}: ${own.reason}`);
@@ -917,9 +990,15 @@ export function verdictFor(report) {
  * The round no longer measures the base, so there is no number to carry and no
  * second reading to guard against: green is green. What ran is a count on the
  * line under it, not a clause in here (2026-08-31).
+ *
+ * Except the red it went on past (ruling 44 § 4): test files red on main and
+ * untouched by the change are not counted, and a green that does not say so
+ * reads as a suite that passed.
  */
 export function verdictHeadline(report) {
-  return `GREEN — the test gate passes${scopeOf(report)}`;
+  const mainRed = report.main_red_files?.length || 0;
+  return `GREEN — the test gate passes${scopeOf(report)}`
+    + (mainRed ? ` — ${mainRed} test file${mainRed === 1 ? '' : 's'} red on main, not counted` : '');
 }
 
 /** The same statement mid-sentence, for a round that is narrating itself. */
@@ -1421,6 +1500,71 @@ function trim(value) {
 const TEST_FILE = /\.test\.(?:js|mjs|cjs)$/u;
 
 /**
+ * The paths a pull request adds or changes against the base: `{ ok, files }`.
+ *
+ * `baseRef...head`: what the pull request changed since it left the base, not
+ * what the base changed since — on a batch candidate, HEAD carries the other
+ * pull requests' files too, and a plain two-dot diff would run them under this
+ * one's name.
+ */
+async function prDiff({ git, cwd, baseRef, head = 'HEAD' }) {
+  const diff = await git(['diff', '--name-only', '--diff-filter=AM', `${baseRef}...${head}`], { cwd });
+  if (diff?.status !== 0) return { ok: false, files: [] };
+  return { ok: true, files: String(diff.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean) };
+}
+
+/** How long an intake note or proposal about a red-on-main test keeps another from being written. */
+export const RED_ON_MAIN_NOTE_DAYS = 7;
+
+/**
+ * An intake note for the helper about a test file red on main that a round
+ * went on past (ruling 44 § 4) — or null when one is not written.
+ *
+ * One per file per week: a file at the top of `~/mc/intake/` or
+ * `~/mc/proposals/` younger than seven days that names the test path is the
+ * note already, whoever wrote it. The SQL snapshot tests were red in 77 rounds
+ * of 43 pull requests; 77 notes would be the noise the round just stopped
+ * making. Best effort: a note that cannot be written never changes a verdict.
+ */
+export function noteRedOnMain({ env = process.env, now = Date.now(), repo, file, names = [], breaks = [], prs = [] }) {
+  try {
+    const since = now - RED_ON_MAIN_NOTE_DAYS * 24 * 60 * 60 * 1000;
+    for (const dir of [intakeDir(env), proposalsDir(env)]) {
+      if (!existsSync(dir)) continue;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        const path = join(dir, entry.name);
+        try {
+          if (statSync(path).mtimeMs >= since && readFileSync(path, 'utf8').includes(file)) return null;
+        } catch { /* unreadable: not a note about anything */ }
+      }
+    }
+    const dir = intakeDir(env);
+    mkdirSync(dir, { recursive: true });
+    const stem = `${new Date(now).toISOString().slice(0, 10)}-red-on-main-${basename(file).replace(TEST_FILE, '')}`;
+    let path = join(dir, `${stem}.md`);
+    for (let n = 2; existsSync(path); n += 1) path = join(dir, `${stem}-${n}.md`);
+    const landing = (found) => `${found.pr ? `#${found.pr} ` : ''}${String(found.commit || '').slice(0, 7)}`
+      + `${found.kind ? ` (${found.kind})` : ''}${found.subject ? ` — ${found.subject}` : ''}`;
+    writeFileSync(path, [
+      `# ${file} is red on main`,
+      '',
+      `- repo: ${repo}`,
+      `- file: \`${file}\``,
+      `- found by: ${prs.map((number) => `#${number}`).join(', ') || 'a round with no pull request'} — the round went on past it: red on main too, and untouched by the change (ruling 44 § 4)`,
+      `- broken by: ${breaks.length ? breaks.map(landing).join('; ') : 'the probe found no landing'}`,
+      '',
+      'Red:',
+      ...(names.length ? names : ['(no test named)']).map((name) => `- ${name}`),
+      '',
+    ].join('\n'));
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The pull request's own tests, run on the candidate.
  *
  * The files come from the same diff that counts red: what the PR adds or
@@ -1433,17 +1577,11 @@ const TEST_FILE = /\.test\.(?:js|mjs|cjs)$/u;
  * A PR that touches no test file is recorded as exactly that, `files: []`,
  * and the round goes on: that fact belongs to the reviewer, not to the gate.
  */
-async function ownTests({ git, tests, cwd, baseRef, head = 'HEAD', say, flags = [] }) {
-
-  // `baseRef...head`: what the pull request changed since it left the base,
-  // not what the base changed since — on a batch candidate, HEAD carries the
-  // other pull requests' files too, and a plain two-dot diff would run them
-  // under this one's name.
-  const diff = await git(['diff', '--name-only', '--diff-filter=AM', `${baseRef}...${head}`], { cwd });
-  if (diff?.status !== 0) {
+async function ownTests({ tests, cwd, changed, say, flags = [] }) {
+  if (!changed.ok) {
     return { ok: false, reason: 'could not list the files the pull request changes', result: null };
   }
-  const files = String(diff.stdout || '').split('\n').map((line) => line.trim()).filter((line) => TEST_FILE.test(line));
+  const files = changed.files.filter((line) => TEST_FILE.test(line));
   if (files.length === 0) {
     say('the pull request adds or changes no test file');
     return { ok: true, result: { files, totals: null, red: [], exit_code: null } };
