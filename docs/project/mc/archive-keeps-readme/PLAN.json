@@ -1,0 +1,94 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "When the runner archives a done project, its README stays on main as `docs/project/<programme>/closeout/<name>.md`, beside the closeout record.",
+    "No relative Markdown link under `docs/project/` or `docs/technical/` is left pointing into a directory the archive removed: in the same commit it points at `closeout/<name>.md` or `closeout/<name>.json`."
+  ],
+  "contract": [
+    "Ruling 46 (`docs/project/mc/rulings.md` § 46).",
+    "The closeout record (`closeoutPath`, `buildCloseout`, `closeoutText`) is unchanged.",
+    "A file `keptFiles` names stays where it is, as today, and a link to it is not rewritten.",
+    "The closeout backfill (`closeoutBackfill`, `CLOSEOUT_BACKFILL_MAX`) writes nothing new: it restores no README and rewrites no link.",
+    "The archive still lands through `landDocsPr` / `mc merge --docs`: every file it changes is under `docs/`."
+  ],
+  "out_of_scope": [
+    "Restoring the READMEs of projects archived before this lands (memoro does that once, in `msr-core-residue` step 6).",
+    "Repairing links that are broken today.",
+    "`mc plan <programme> --archive` (`src/mc/archive-programme.js`): it removes the whole programme directory, `closeout/` included.",
+    "Links in files outside `docs/project/` and `docs/technical/`, and links that are absolute (`/…`), have a scheme (`https:`, `mailto:`) or are anchors only (`#…`)."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`rewriteArchivedLinks` rewrites a README link (anchor kept), a directory link, a `PLAN.json` link and a link to another removed file to the right closeout path, relative to the file it is in, and leaves kept files, other links and fenced code alone.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/archive-plan.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": false,
+      "criterion": "Archiving against real git leaves `docs/project/mc/closeout/documented.md` on main with the README's text, and a document on main that linked to `../mc/documented/README.md#close` and `../mc/documented/PLAN.json` links to `../mc/closeout/documented.md#close` and `../mc/closeout/documented.json`, all in the archive's one commit.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/archive-live.test.js tests/mc/run.test.js` passes, including the assertions named in step 2."
+    }
+  ],
+  "documents": [
+    {
+      "label": "Ruling 46",
+      "path": "../rulings.md"
+    },
+    {
+      "label": "mc run",
+      "path": "../../../technical/mc-run.md"
+    },
+    {
+      "label": "mc tidy — the closeout",
+      "path": "../../../technical/mc-tidy.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "A link into an archived directory, rewritten to its closeout",
+      "status": "ready",
+      "runner": {
+        "model": "haiku",
+        "effort": "high"
+      },
+      "done_when": "`closeoutReadmePath` and `rewriteArchivedLinks` are exported, the new tests in `tests/mc/archive-plan.test.js` and `tests/mc/closeout.test.js` pass, and `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 46): the archive removes `docs/project/<programme>/<name>/` and every relative link into it dies. This step writes the pure function that rewrites one Markdown text; step 2 calls it. No call site changes in this step.",
+        "`src/mc/closeout.js`: beside `closeoutPath` (line 30), add and export `closeoutReadmePath(programme, project)` returning `` `docs/project/${programme}/closeout/${project}.md` ``. Doc comment: where the archive puts a project's README (ruling 46).",
+        "`src/mc/archive-plan.js`: add `import { posix } from 'node:path';` and `import { closeoutPath, closeoutReadmePath } from './closeout.js';` (`closeout.js` imports only `brief-collect.js`, so this is no cycle). Add and export `rewriteArchivedLinks(text, { from, to = from, archived })`, returning the text with links rewritten (the same string when nothing changed).",
+        "Arguments. `from`: the repository-relative path (posix, e.g. `docs/project/mc/x/README.md`) that the text's relative links were written against. `to`: the path the text lives at after the archive; it differs from `from` only for a README the archive moved. `archived`: `[{ dir, programme, project, readme, kept }]`, where `dir` is `docs/project/<programme>/<project>` with no trailing slash, `readme` is true when the README was copied to `closeoutReadmePath`, and `kept` is the list of repository-relative files under `dir` that stay.",
+        "Which links. Inline links `[label](target)` and `[label](target \"title\")` (also images `![…](…)`), and reference definitions on their own line `[label]: target`. Not inside fenced code blocks: a line whose trimmed start is ``` or ~~~ opens a fence and the next such line closes it; skip every line in between, and the fence lines. Leave a target alone when it is empty, starts with `#`, `/` or `<`, or matches `^[a-z][a-z0-9+.-]*:` (case-insensitive).",
+        "Resolving. Split the target at its first `#` into `path` and `anchor` (the anchor includes `#`, or is `''`). Resolve `resolved = posix.normalize(posix.join(posix.dirname(from), decodeURI(path))).replace(/\\/+$/u, '')`; a `decodeURI` that throws leaves the link alone. Find the entry `a` in `archived` with `resolved === a.dir` or `resolved.startsWith(a.dir + '/')`; none → unchanged. If `a.kept.includes(resolved)` → unchanged.",
+        "The destination. `md = closeoutReadmePath(a.programme, a.project)`, `json = closeoutPath(a.programme, a.project)`. `resolved` is `a.dir` or `a.dir + '/README.md'` → `a.readme ? md + anchor : json` (an anchor never goes onto the json). `resolved` is `a.dir + '/PLAN.json'` → `json`. Any other file under `a.dir` → `a.readme ? md : json`, without the anchor (it was another file's).",
+        "The new target is `posix.relative(posix.dirname(to), destination-without-anchor)` plus the anchor when one is kept. Replace only the target text inside the parentheses (or after `]: `); the label and a title stay byte for byte.",
+        "Add a doc comment above the function: what it rewrites, the four destinations, that `from`/`to` differ for a moved README, and ruling 46. Match the comment style of `keptFiles` in the same file.",
+        "Tests in `tests/mc/archive-plan.test.js` (import the function beside the others on lines 10–11), with `archived = [{ dir: 'docs/project/mc/gone', programme: 'mc', project: 'gone', readme: true, kept: ['docs/project/mc/gone/skills/a.md'] }]` and `from = 'docs/project/mc/other/README.md'` unless said: (1) `[r](../gone/README.md#close)` → `[r](../closeout/gone.md#close)`; (2) `[d](../gone/)` and `[d](../gone)` → `../closeout/gone.md`; (3) `[p](../gone/PLAN.json)` → `../closeout/gone.json`; (4) `[n](../gone/notes.md#x)` → `../closeout/gone.md` with no anchor; (5) `[k](../gone/skills/a.md)` unchanged; (6) `[o](../other/PLAN.json)`, `[h](https://x/gone)`, `[a](#gone)`, `[s](/docs/project/mc/gone/README.md)` unchanged; (7) the same README link inside a ``` fence is unchanged while one after the fence is rewritten; (8) a reference definition `[r]: ../gone/README.md` is rewritten; (9) a title is kept: `[r](../gone/README.md \"t\")` → `[r](../closeout/gone.md \"t\")`; (10) from `docs/technical/x.md`: `[r](../project/mc/gone/README.md)` → `../project/mc/closeout/gone.md`; (11) with `readme: false`, the README link and the directory link → `../closeout/gone.json` with no anchor; (12) a moved README: `from = 'docs/project/mc/gone/README.md'`, `to = 'docs/project/mc/closeout/gone.md'`, text `[p](PLAN.json) [n](./notes.md) [r](../rulings.md)` → `[p](gone.json) [n](gone.md) [r](../rulings.md)`; (13) a text with no link comes back `===` the input.",
+        "`tests/mc/closeout.test.js`: one test that `closeoutReadmePath('mc', 'x')` is `docs/project/mc/closeout/x.md`.",
+        "Run `mc gate tests/mc/archive-plan.test.js tests/mc/closeout.test.js`, then `mc gate`. Publish with `mc publish`, land with `mc merge memoro-cli <pr>`."
+      ]
+    },
+    {
+      "title": "The archive moves the README and rewrites the links in its own commit",
+      "status": "ready",
+      "runner": {
+        "model": "haiku",
+        "effort": "high"
+      },
+      "done_when": "`archiveIn` copies each archived project's README to `closeout/<name>.md` and rewrites the links under `docs/project/` and `docs/technical/` in the archive commit; the new assertions in `tests/mc/archive-live.test.js` pass; `docs/project/README.md`, `docs/technical/mc-run.md` and `docs/technical/mc-tidy.md` say so; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 46): step 1 added `rewriteArchivedLinks` and `closeoutReadmePath`; this step calls them from the archive. Everything is in `archiveIn` in `src/mc/run.js` (around line 1452); `closeoutBackfill` and `writeCloseout` do not change.",
+        "Imports in `src/mc/run.js`: add `closeoutReadmePath` to the `./closeout.js` import (line 126) and `rewriteArchivedLinks` to the `./archive-plan.js` import.",
+        "In `archiveIn`, before the `for (const plan of done)` loop, declare `const moved = [];`. Inside the loop, after `keptFiles` and the `remove && !remove.length` early `continue`, and before the `git rm`: let `readmePath = join(dir, 'README.md')`, `md = closeoutReadmePath(plan.programme, plan.project)`, and `readmeText = kept.some((k) => k.file === readmePath) ? null : deps.read(join(worktree, readmePath))` — read before the `git rm` removes it.",
+        "After the `git rm` succeeded (the existing `if (!deps.git(worktree, rm).ok) { … continue; }`), and only then: when `readmeText != null`, `deps.write(join(worktree, md), readmeText)`. Push `{ dir, programme: plan.programme, project: plan.project, readme: readmeText != null, kept: kept.map((k) => k.file), from: readmePath, to: md }` onto `moved`. A project whose `git rm` failed writes nothing, as today.",
+        "When the project's README was copied, add after the existing `say(... removed ...)` line: `say(`archive: ${repo.name} ${plan.programme}/${plan.project} README kept as ${md}`)`.",
+        "After the `done` loop and before the backfill loop, when `moved.length`: (a) `git add -- <each md of moved with readme>` in the worktree; (b) list the documents with `const listed = deps.git(worktree, ['ls-files', '--', 'docs/project', 'docs/technical']);` and, when `listed.ok`, take the lines ending in `.md`; (c) for each such path `p`: `const own = moved.find((m) => m.readme && m.to === p);` read `deps.read(join(worktree, p))`, skip null, call `rewriteArchivedLinks(text, { from: own ? own.from : p, to: p, archived: moved })`, and when the result differs, `deps.write` it and count it; (d) `git add` every rewritten path in one call; (e) `say(`archive: ${repo.name} ${n} document${n === 1 ? '' : 's'} relinked to the closeout`)` when `n > 0`. A failing `ls-files` relinks nothing and says `archive: ${repo.name} — could not list docs/, no link rewritten`.",
+        "The PR body (the `body` array further down): replace the first two lines' claim `the project directory is removed and \\`docs/project/project_log.md\\` carries` / `a row for it.` with: the project directory is removed, its README is kept as `docs/project/<programme>/closeout/<project>.md`, every relative link under `docs/project/` and `docs/technical/` that pointed into the directory points at the closeout, and `docs/project/project_log.md` carries a row for it. Keep the rest of the body, and keep the line `Each project's closeout is in docs/project/<programme>/closeout/.` exactly (a test matches it).",
+        "Test, against real git, in `tests/mc/archive-live.test.js`. In `repository()` add `write('docs/project/mc/documented/README.md', '# Documented\\n\\n## Close\\n\\nIts plan: [plan](PLAN.json).\\n')` and `write('docs/technical/documented.md', '# Documented\\n\\nSee [the close](../project/mc/documented/README.md#close) and [the plan](../project/mc/documented/PLAN.json); [mc](https://example.invalid/mc/documented/README.md) stays.\\n')`. In `it('removes the directories, writes the rows and lands them on main')`: the expected `docs/project/` tree gains `docs/project/mc/closeout/documented.md`; assert `fx.mainFile('docs/project/mc/closeout/documented.md')` contains `[plan](documented.json)`; assert `fx.mainFile('docs/technical/documented.md')` contains `(../project/mc/closeout/documented.md#close)` and `(../project/mc/closeout/documented.json)` and still `(https://example.invalid/mc/documented/README.md)`; assert the archive commit's `changed` list contains `docs/technical/documented.md` and the closeout `.md` (as `A\\t…` or as a rename line `R…\\tdocs/project/mc/documented/README.md\\tdocs/project/mc/closeout/documented.md` — accept either). The other projects in the fixture have no README; assert no `docs/project/mc/closeout/closed-out.md` is on main.",
+        "Run `mc gate tests/mc/archive-live.test.js tests/mc/run.test.js tests/mc/archive-plan.test.js`. If a `tests/mc/run.test.js` archive test fails because its injected git answers `ls-files` with a fixed list (line ~3010), make the new code tolerate it (the file read returns null → skipped) rather than changing that test's expectations.",
+        "Docs. `docs/project/README.md` § the paragraph `**\\`closeout/\\` under a programme is the archive's.**` (line ~222): it holds the JSON record per archived project and, when the project had one, its README as `<project>.md`; links into the removed directory are rewritten to these in the same pull request (ruling 46). `docs/technical/mc-run.md` step 4 of the round (line ~276) and the paragraph `**An archive keeps what the code reads.**` (line ~921): one sentence each saying the README is kept as `closeout/<project>.md` and the links follow. `docs/technical/mc-tidy.md` § *The closeout* (line ~89): the README beside the record. No other text.",
+        "`mc gate`, `mc publish`, `mc merge memoro-cli <pr>`. This is the plan's last step: in the same PR set both `success_criteria[].met` to true in this plan. The `project_log.md` row is the archive's to write, not this step's."
+      ]
+    }
+  ]
+}

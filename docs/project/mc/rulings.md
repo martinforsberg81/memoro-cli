@@ -1546,3 +1546,36 @@ Ruled, as recommended:
    names the last refusal the API gave and the billing it came on.
 
 Carried by `technical-fails` (`docs/project/mc/technical-fails/PLAN.json`).
+
+## 46 · The archive keeps a project's README, and the links to it follow
+
+`ruling · 2026-10-17` · raised in memoro's `msr-core` programme (ruling
+`msr-core-doc-links`, F41, review I-2), carried here by the proposal
+`2026-10-17-archive-keeps-readme`
+
+> Should the archive keep the README, or should documents cite only
+> `project_log.md` and pull requests? — Martin, 2026-10-17: **the archive
+> keeps the README**, at `docs/project/<programme>/closeout/<name>.md` beside
+> the closeout record, and rewrites the links to it in the same commit.
+
+Measured on memoro `origin/main` 08d6e256ba: 221 relative links in 53 files
+under `docs/project/` and `docs/technical/` resolve to nothing; 215 of them
+point into an archived project's directory — 185 at its `PLAN.json`, 15 at
+its `README.md`, 15 at another file or the directory. The count grows with
+every archive.
+
+1. `archiveIn` copies `docs/project/<programme>/<name>/README.md` to
+   `docs/project/<programme>/closeout/<name>.md` in the commit that removes
+   the directory and adds the closeout record. A README that code names
+   (`keptFiles`) stays where it is and is not copied.
+2. In the same commit, every relative Markdown link in a `.md` file under
+   `docs/project/` and `docs/technical/` that resolves into an archived
+   directory is rewritten: the README or the directory → `closeout/<name>.md`
+   (anchor kept); `PLAN.json` → `closeout/<name>.json`; any other removed
+   file → `closeout/<name>.md`. With no README, every one of those goes to
+   `closeout/<name>.json`. A link to a kept file is left alone.
+3. The closeout backfill does not restore old READMEs; memoro does that once,
+   in `msr-core-residue` step 6. `mc plan <programme> --archive` is
+   unchanged: it removes the programme's `closeout/` with the rest.
+
+Carried by `archive-keeps-readme` (`docs/project/mc/archive-keeps-readme/PLAN.json`).
