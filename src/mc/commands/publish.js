@@ -5,6 +5,7 @@
  *   mc publish                         last commit's subject and body as the PR's
  *   mc publish --title "…" --body "…"  named instead
  *   mc publish --body-file <path>      the body from a file
+ *   mc publish --branch <name>         a detached HEAD (a mend's worktree) to that branch
  *   mc publish --json                  the snapshot as one object
  *
  * The sequence memoro's `AGENTS.md` asks a session to walk by hand
@@ -19,14 +20,14 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { tryGit } from '../git.js';
-import { messageParts, publishLines, refusal } from '../publish.js';
+import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
 import { scanArgs } from './flags.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const cwd = deps.cwd || process.cwd();
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--title', '--body', '--body-file', '--base'] });
+  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--title', '--body', '--body-file', '--base', '--branch'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   if (scanned.positional.length) { stderr.write(`mc: mc publish takes no positional (${scanned.positional.join(' ')})\n${usage()}`); return 2; }
   const { flags } = scanned;
@@ -35,7 +36,11 @@ export async function run(argv, deps = {}) {
   const gh = deps.gh || ((args) => ghCommand(args, cwd));
   const root = git(['rev-parse', '--show-toplevel']);
   if (!root) { stderr.write('mc: not inside a git worktree\n'); return 2; }
-  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const current = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (flags.branch && current !== 'HEAD' && current !== flags.branch) { stderr.write(`mc: --branch ${flags.branch}, but this worktree is on ${current} — drop --branch\n`); return 2; }
+  if (flags.branch && git(['check-ref-format', '--branch', flags.branch]) === null) { stderr.write(`mc: --branch ${flags.branch} is not a branch name\n`); return 2; }
+  const branch = flags.branch || current;
+  const detached = current === 'HEAD';
   const localHead = git(['rev-parse', 'HEAD']);
   const dirty = (git(['status', '--porcelain']) || '').split('\n').filter(Boolean);
   const remoteLine = git(['ls-remote', '--heads', 'origin', branch]) || '';
@@ -47,8 +52,8 @@ export async function run(argv, deps = {}) {
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
   const pushed = remoteHead !== localHead;
   if (pushed) {
-    const push = (deps.push || ((name) => pushBranch(cwd, name, { stderr })))(branch);
-    if (!push.ok) { stderr.write(`mc: git push -u origin ${branch} failed:\n${push.text}\n`); return 1; }
+    const push = (deps.push || ((name, opts) => pushBranch(cwd, name, { stderr, ...opts })))(branch, { detached });
+    if (!push.ok) { stderr.write(`mc: ${detached ? 'git push' : 'git push -u'} origin ${branch} failed:\n${push.text}\n`); return 1; }
   }
 
   const listed = gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url']);
@@ -66,10 +71,23 @@ export async function run(argv, deps = {}) {
 
   let created = false;
   let number = open?.number ?? null;
+  let described = localHead;
+  let after = 0;
   if (open) {
     const edit = ['pr', 'edit', String(open.number)];
     if (flags.title) edit.push('--title', flags.title);
-    if (bodyGiven != null) edit.push('--body', bodyGiven);
+    if (bodyGiven != null) {
+      edit.push('--body', markedBody(bodyGiven, localHead));
+    } else {
+      const read = gh(['pr', 'view', String(open.number), '--json', 'body']);
+      let current = null;
+      try { current = JSON.parse(read.stdout || 'null')?.body ?? null; } catch { current = null; }
+      if (!read.ok || current == null) { stderr.write(`mc: gh pr view #${open.number} failed: ${read.text}\n`); return 1; }
+      const later = afterTheDescription({ git, body: current, base: flags.base || defaultBase(git), stderr });
+      described = later.described;
+      after = later.after;
+      if (later.body != null) edit.push('--body', later.body);
+    }
     if (flags.base) edit.push('--base', flags.base);
     if (edit.length > 3) {
       const edited = gh(edit);
@@ -77,7 +95,7 @@ export async function run(argv, deps = {}) {
     }
   } else {
     const base = flags.base || defaultBase(git);
-    const made = gh(['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', body]);
+    const made = gh(['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', markedBody(body, localHead)]);
     if (!made.ok) { stderr.write(`mc: gh pr create failed: ${made.text}\n`); return 1; }
     created = true;
     const found = /\/pull\/(\d+)/u.exec(made.stdout || '');
@@ -95,10 +113,10 @@ export async function run(argv, deps = {}) {
   if (!viewed.ok || !pr) { stderr.write(`mc: gh pr view #${number} failed: ${viewed.text}\n`); return 1; }
 
   if (flags.json) {
-    stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, next: `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, described, after, next: `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);
     return 0;
   }
-  for (const line of publishLines({ pr, localHead, branch, pushed, created, repo })) stdout.write(`${line}\n`);
+  for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described })) stdout.write(`${line}\n`);
   return 0;
 }
 
@@ -108,6 +126,29 @@ function defaultBase(git) {
   return head ? head.replace(/^origin\//u, '') : 'main';
 }
 
+/**
+ * The commits after the head the description describes, and the body that
+ * lists them — `body` is null when it already says so. A description with no
+ * mark describes the branch's first commit. When that head is not in this
+ * branch nothing is written: the reason goes to stderr, and the body stays.
+ */
+function afterTheDescription({ git, body, base, stderr }) {
+  const read = readBody(body);
+  const described = read.described || (git(['rev-list', '--reverse', '--no-merges', `origin/${base}..HEAD`]) || '').split('\n')[0] || null;
+  if (!described || git(['merge-base', '--is-ancestor', described, 'HEAD']) === null) {
+    stderr.write(`mc: the description's head ${described || '(none)'} is not in this branch — left as it is; write it again with --body-file\n`);
+    return { described, after: 0, body: null };
+  }
+  const commits = (git(['log', '--reverse', '--no-merges', '--format=%H%x1f%s%x1f%b%x1e', `${described}..HEAD`]) || '')
+    .split('\x1e').map((record) => record.trim()).filter(Boolean)
+    .map((record) => {
+      const [sha, subject, text = ''] = record.split('\x1f');
+      return { sha, subject, body: text };
+    });
+  const next = describedBody({ text: read.text, described, commits });
+  return { described, after: commits.length, body: next === body ? null : next };
+}
+
 /** The repository as mc names it — the last segment of origin's URL, or the checkout's own name. */
 export function repoName(url, root) {
   const last = String(url || '').trim().replace(/\/+$/u, '').split(/[/:]/u).pop() || '';
@@ -115,12 +156,14 @@ export function repoName(url, root) {
 }
 
 /**
- * Non-force `git push -u`. GitHub has refused a thin pack with `Internal
+ * Non-force `git push -u`, or for a detached HEAD `git push origin
+ * HEAD:refs/heads/<branch>`. GitHub has refused a thin pack with `Internal
  * Server Error` while taking the same commit with `--no-thin` (2026-10-07),
  * so that rejection — and only that one — is pushed once more without it.
  */
-export function pushBranch(cwd, branch, { spawn = spawnSync, stderr = process.stderr } = {}) {
-  const push = (extra) => spawn('git', ['push', ...extra, '-u', 'origin', branch], { cwd, encoding: 'utf8', timeout: 120_000 });
+export function pushBranch(cwd, branch, { spawn = spawnSync, stderr = process.stderr, detached = false } = {}) {
+  const target = detached ? ['origin', `HEAD:refs/heads/${branch}`] : ['-u', 'origin', branch];
+  const push = (extra) => spawn('git', ['push', ...extra, ...target], { cwd, encoding: 'utf8', timeout: 120_000 });
   let r = push([]);
   if (r.status !== 0 && /Internal Server Error/u.test(r.stderr || '')) {
     stderr.write('mc: GitHub rejected the thin pack; pushed again with --no-thin\n');
@@ -140,8 +183,9 @@ export function usage() {
     '        mc publish --title "…" --body "…"   named instead; on an open pull request each edits only its own field\n',
     '        mc publish --body-file <path>       the body from a file\n',
     '        mc publish --base <branch>          the base a new pull request aims at, or the open one is moved to\n',
+    '        mc publish --branch <name>          a detached HEAD (a mend\'s worktree) to that branch\n',
     '        mc publish --json                   the pull request snapshot as one object\n',
     '\n',
-    'Refuses on main, on a dirty tree, and when origin\'s branch moved (never force). Ends with the mc merge line to run.\n',
+    'Refuses on main, on a dirty tree, and when origin\'s branch moved (never force); a detached HEAD only with --branch. Ends with the mc merge line to run.\n',
   ].join('');
 }

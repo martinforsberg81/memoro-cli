@@ -4,8 +4,20 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { messageParts, publishLines, refusal } from '../../src/mc/publish.js';
+import { describedBody, messageParts, publishLines, readBody, refusal } from '../../src/mc/publish.js';
 import { pushBranch, repoName, run } from '../../src/mc/commands/publish.js';
+
+describe('readBody and describedBody', () => {
+  it('readBody and describedBody round-trip, and a second publish changes nothing', () => {
+    const commits = [{ sha: 'def5678aaaa', subject: 'Fix it', body: 'Why.\n\nCo-Authored-By: x' }];
+    const once = describedBody({ text: 'Intro', described: 'abc1234', commits });
+    const read = readBody(once);
+    assert.deepEqual(read, { text: 'Intro', described: 'abc1234' });
+    assert.match(once, /- `def5678` Fix it\n {2}Why\./u);
+    assert.doesNotMatch(once, /Co-Authored-By/u);
+    assert.equal(describedBody({ ...read, commits }), once);
+  });
+});
 
 describe('refusal', () => {
   it('refuses main, a dirty tree, and a remote branch that moved — and nothing else', () => {
@@ -48,8 +60,8 @@ describe('messageParts and publishLines', () => {
 });
 
 describe('mc publish', () => {
-  function fixture({ branch = 'step-x', status = '', remote = '', prs = [], created = 'https://x/pull/9\n' } = {}) {
-    const out = { stdout: '', stderr: '', gh: [], pushed: [] };
+  function fixture({ branch = 'step-x', status = '', remote = '', prs = [], created = 'https://x/pull/9\n', body = '', log = '' } = {}) {
+    const out = { stdout: '', stderr: '', gh: [], pushed: [], pushOpts: [] };
     const git = (args) => {
       const key = args.join(' ');
       if (key === 'rev-parse --show-toplevel') return '/w/x';
@@ -61,6 +73,9 @@ describe('mc publish', () => {
       if (key === 'remote get-url origin') return 'git@github.com:m/memoro.git';
       if (key === 'log -1 --format=%B') return 'The subject\n\nThe body.\n';
       if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
+      if (key.startsWith('check-ref-format')) return args.at(-1).includes('..') ? null : args.at(-1);
+      if (key.startsWith('rev-list')) return 'aaaaaaa1111';
+      if (key.startsWith('log --reverse')) return log;
       return null;
     };
     const gh = (args) => {
@@ -68,12 +83,13 @@ describe('mc publish', () => {
       if (args[1] === 'list') return { ok: true, stdout: JSON.stringify(prs), text: '' };
       if (args[1] === 'create') return { ok: true, stdout: created, text: '' };
       if (args[1] === 'edit') return { ok: true, stdout: '', text: '' };
+      if (args[1] === 'view' && args[4] === 'body') return { ok: true, stdout: JSON.stringify({ body }), text: '' };
       if (args[1] === 'view') return { ok: true, stdout: JSON.stringify({ number: Number(args[2]), url: `https://x/pull/${args[2]}`, headRefOid: 'aaaaaaa1111', baseRefName: 'main', mergeStateStatus: 'UNKNOWN', mergeable: 'UNKNOWN' }), text: '' };
       return { ok: false, stdout: '', text: 'unexpected' };
     };
     const deps = {
       stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } },
-      cwd: '/w/x', git, gh, push: (name) => { out.pushed.push(name); return { ok: true, text: '' }; },
+      cwd: '/w/x', git, gh, push: (name, opts) => { out.pushed.push(name); out.pushOpts.push(opts); return { ok: true, text: '' }; },
     };
     return { out, deps };
   }
@@ -83,41 +99,56 @@ describe('mc publish', () => {
     assert.equal(await run([], deps), 0);
     assert.deepEqual(out.pushed, ['step-x']);
     assert.deepEqual(out.gh.map((a) => a.slice(0, 2)), [['pr', 'list'], ['pr', 'create'], ['pr', 'view']]);
-    assert.deepEqual(out.gh[1], ['pr', 'create', '--base', 'main', '--head', 'step-x', '--title', 'The subject', '--body', 'The body.']);
-    assert.equal(out.stdout, '#9 https://x/pull/9\nopened from step-x → main; pushed aaaaaaa\nnext: mc merge memoro 9\n');
+    assert.deepEqual(out.gh[1], ['pr', 'create', '--base', 'main', '--head', 'step-x', '--title', 'The subject', '--body', 'The body.\n\n<!-- mc:described aaaaaaa1111 -->']);
+    assert.equal(out.stdout,'#9 https://x/pull/9\nopened from step-x → main; pushed aaaaaaa\nnext: mc merge memoro 9\n');
   });
 
   it('finds the open pull request rather than opening a second, edits it only when asked, and skips a push the remote already has', async () => {
-    const same = fixture({ remote: 'aaaaaaa1111\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
+    const same = fixture({ remote: 'aaaaaaa1111\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }], body: 'Intro\n\n<!-- mc:described aaaaaaa1111 -->' });
     assert.equal(await run([], same.deps), 0);
     assert.deepEqual(same.out.pushed, []);
-    assert.deepEqual(same.out.gh.map((a) => a[1]), ['list', 'view']);
+    assert.deepEqual(same.out.gh.map((a) => a[1]), ['list', 'view', 'view']);
     assert.match(same.out.stdout, /^#4 .*\nalready open from step-x → main; nothing to push aaaaaaa\nnext: mc merge memoro 4\n$/u);
     const edited = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
     assert.equal(await run(['--title', 'New', '--body', 'B'], edited.deps), 0);
     assert.deepEqual(edited.out.pushed, ['step-x']);
-    assert.deepEqual(edited.out.gh[1], ['pr', 'edit', '4', '--title', 'New', '--body', 'B']);
+    assert.deepEqual(edited.out.gh[1], ['pr', 'edit', '4', '--title', 'New', '--body', 'B\n\n<!-- mc:described aaaaaaa1111 -->']);
   });
 
   it('on an open pull request --body edits the body alone', async () => {
     const edited = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
     assert.equal(await run(['--body', 'B'], edited.deps), 0);
-    assert.deepEqual(edited.out.gh[1], ['pr', 'edit', '4', '--body', 'B']);
+    assert.deepEqual(edited.out.gh[1], ['pr', 'edit', '4', '--body', 'B\n\n<!-- mc:described aaaaaaa1111 -->']);
   });
 
   it('--title edits the title alone, --base the base alone', async () => {
-    const titled = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
+    const marked = 'Intro\n\n<!-- mc:described aaaaaaa1111 -->';
+    const titled = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }], body: marked });
     assert.equal(await run(['--title', 'T'], titled.deps), 0);
-    assert.deepEqual(titled.out.gh[1], ['pr', 'edit', '4', '--title', 'T']);
-    const based = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
+    assert.deepEqual(titled.out.gh[2], ['pr', 'edit', '4', '--title', 'T']);
+    const based = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }], body: marked });
     assert.equal(await run(['--base', 'release'], based.deps), 0);
-    assert.deepEqual(based.out.gh[1], ['pr', 'edit', '4', '--base', 'release']);
+    assert.deepEqual(based.out.gh[2], ['pr', 'edit', '4', '--base', 'release']);
+  });
+
+  it('an open pull request with later commits gets them under After the description, and only the body is edited', async () => {
+    const later = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }], body: 'Intro\n\n<!-- mc:described ccccccc -->', log: 'ddddddd0000\x1fFix\x1f\x1e' });
+    assert.equal(await run([], later.deps), 0);
+    assert.deepEqual(later.out.gh[2], ['pr', 'edit', '4', '--body', 'Intro\n\n## After the description\n\n- `ddddddd` Fix\n\n<!-- mc:described ccccccc -->']);
+    assert.equal(later.out.gh.filter((a) => a[1] === 'edit').length, 1);
+    assert.match(later.out.stdout, /description at ccccccc; 1 later commit under "After the description"/u);
+  });
+
+  it('nothing after the mark: no edit', async () => {
+    const marked = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }], body: 'Intro\n\n<!-- mc:described ccccccc -->' });
+    assert.equal(await run([], marked.deps), 0);
+    assert.deepEqual(marked.out.gh.map((a) => a[1]), ['list', 'view', 'view']);
   });
 
   it('a new pull request aims at --base when given', async () => {
     const { out, deps } = fixture();
     assert.equal(await run(['--base', 'release'], deps), 0);
-    assert.deepEqual(out.gh[1], ['pr', 'create', '--base', 'release', '--head', 'step-x', '--title', 'The subject', '--body', 'The body.']);
+    assert.deepEqual(out.gh[1], ['pr', 'create', '--base', 'release', '--head', 'step-x', '--title', 'The subject', '--body', 'The body.\n\n<!-- mc:described aaaaaaa1111 -->']);
   });
 
   it('refuses main and a dirty tree before touching the network; --json is the snapshot', async () => {
@@ -133,6 +164,36 @@ describe('mc publish', () => {
     const parsed = JSON.parse(json.out.stdout);
     assert.deepEqual([parsed.number, parsed.created, parsed.pushed, parsed.next], [9, true, true, 'mc merge memoro 9']);
     assert.equal(await run(['extra'], fixture().deps), 2);
+  });
+
+  it('a detached HEAD publishes to --branch without -u', async () => {
+    const { out, deps } = fixture({ branch: 'HEAD' });
+    assert.equal(await run(['--branch', 'step-x'], deps), 0);
+    assert.deepEqual(out.pushed, ['step-x']);
+    assert.deepEqual(out.pushOpts, [{ detached: true }]);
+    assert.deepEqual(out.gh[1].slice(0, 6), ['pr', 'create', '--base', 'main', '--head', 'step-x']);
+    const calls = [];
+    const spawn = (cmd, args) => { calls.push([cmd, ...args]); return { status: 0, stdout: '', stderr: '' }; };
+    assert.equal(pushBranch('/w/x', 'step-x', { spawn, stderr: { write() {} }, detached: true }).ok, true);
+    assert.deepEqual(calls, [['git', 'push', 'origin', 'HEAD:refs/heads/step-x']]);
+  });
+
+  it('--branch on another branch, or an invalid name, refuses before the network', async () => {
+    const other = fixture({ branch: 'other' });
+    assert.equal(await run(['--branch', 'step-x'], other.deps), 2);
+    assert.deepEqual([other.out.pushed, other.out.gh], [[], []]);
+    assert.match(other.out.stderr, /--branch step-x, but this worktree is on other — drop --branch/u);
+    const bad = fixture({ branch: 'HEAD' });
+    assert.equal(await run(['--branch', 'bad..name'], bad.deps), 2);
+    assert.deepEqual([bad.out.pushed, bad.out.gh], [[], []]);
+    assert.match(bad.out.stderr, /--branch bad\.\.name is not a branch name/u);
+  });
+
+  it('a detached HEAD without --branch is still refused', async () => {
+    const { out, deps } = fixture({ branch: 'HEAD' });
+    assert.equal(await run([], deps), 1);
+    assert.match(out.stderr, /on HEAD/u);
+    assert.deepEqual([out.pushed, out.gh], [[], []]);
   });
 });
 
