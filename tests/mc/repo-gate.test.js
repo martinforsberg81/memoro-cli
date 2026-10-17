@@ -4,9 +4,10 @@
  *
  * The verdict half: ONE tree, the candidate with the current base merged into
  * it, and what went red in it named at every level. There is no baseline and
- * no comparison — ruled by Martin on 2026-08-31, so a test the change reaches
- * that is already red on main is red here too, which several tests below exist
- * to pin rather than to soften. A run that never finished is still treated as
+ * no comparison — ruled by Martin on 2026-08-31. The one exception is ruling
+ * 44 § 4: a red only in files the probe finds red on main, and the change does
+ * not touch, goes on and ends green with those files named; a red file the
+ * change touches is red as before, which tests below pin. A run that never finished is still treated as
  * no evidence rather than as a clean sweep: it is the quiet failure worth
  * guarding, and with one side it is the whole verdict.
  *
@@ -17,7 +18,7 @@
  * one review this step cannot survive is "it looked like it only checked".
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1531,12 +1532,14 @@ describe('a repository that selects by diff', () => {
     const history = ['base1111full', 'good0000full'];
     // `round`, when given, is what the round's own run finds red; every run
     // after it reads `redAt` — the files alone, on the base or the candidate
-    // (`cand2222`, what the fixture's `rev-parse HEAD` names).
-    function onMain({ redAt, round = null }) {
+    // (`cand2222`, what the fixture's `rev-parse HEAD` names). `touched` is
+    // what the pull request's diff against the base lists.
+    function onMain({ redAt, round = null, touched = [] }) {
       let at = 'candidate';
       let first = true;
       const gitAlso = (args) => {
         if (args[0] === 'checkout') { [at] = args.slice(-1); if (at === 'cand2222') at = 'candidate'; return { status: 0, stdout: '', stderr: '' }; }
+        if (args[0] === 'diff') return { status: 0, stdout: touched.map((file) => `${file}\n`).join(''), stderr: '' };
         if (args[0] === 'rev-list') return { status: 0, stdout: `${history.join('\n')}\n`, stderr: '' };
         if (args[0] === 'cat-file') return { status: 0, stdout: '', stderr: '' };
         if (args[0] === 'log') return { status: 0, stdout: 'suggestion-is-a-record 2: the row\'s own verbs (#12106)\n', stderr: '' };
@@ -1552,8 +1555,8 @@ describe('a repository that selects by diff', () => {
       return { gitAlso, tests };
     }
 
-    it('red on the base too: the reason names the landing, and a selector miss is written once', async () => {
-      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner], base1111full: [scanner] } });
+    it('red on the base too, in a file the change touches: the reason names the landing, and a selector miss is written once', async () => {
+      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner], base1111full: [scanner] }, touched: [scanner] });
       const fx = selecting({ files: [scanner], gitAlso });
       try {
         // The landing's own round, which selected something else.
@@ -1562,7 +1565,8 @@ describe('a repository that selects by diff', () => {
           merged: [12106], selected: ['tests/assistant/suggestion-button.test.js'],
         })}\n`);
         const report = await fx.report({ tests });
-        assert.equal(report.verdict, 'red', 'attribution must not change the verdict');
+        assert.equal(report.verdict, 'red', 'a red file the change touches is red as before (ruling 44 § 4)');
+        assert.equal(report.main_red_files, null);
         assert.deepEqual(report.main_red.red_on_main, [scanner]);
         assert.equal(report.main_red.breaks[0].pr, 12106);
         assert.equal(report.main_red.breaks[0].kind, 'not-selected');
@@ -1573,6 +1577,92 @@ describe('a repository that selects by diff', () => {
         await fx.report({ tests });
         assert.equal(readFileSync(join(fx.mcHome, 'selector-misses.jsonl'), 'utf8').trim().split('\n').length, 1, 'the same break is written once');
       } finally { fx.cleanup(); }
+    });
+
+    /** The round's environment with a work root of its own, where intake notes go. */
+    function withWork(fx) {
+      const work = mkdtempSync(join(tmpdir(), 'mc-work-'));
+      return { work, env: { ...process.env, GATE_MARKS: fx.marks, MC_WORK_ROOT: work }, intake: join(work, 'intake') };
+    }
+
+    /**
+     * Ruling 44 § 4: four SQL snapshot tests red on main were measured red in
+     * 77 rounds of 43 pull requests that did not touch them.
+     */
+    it('red only in files red on main and untouched: the gates and the own tests run, and it ends green with them named', async () => {
+      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner], base1111full: [scanner] }, touched: ['src/x.js', own] });
+      const fx = selecting({
+        files: [own, scanner], gitAlso,
+        commands: [{ id: 'css-lint', packageScript: 'css:lint', passBaseRef: false }],
+        scripts: { 'css:lint': marking('css-lint') },
+      });
+      const { work, env, intake } = withWork(fx);
+      const said = [];
+      const runs = [];
+      try {
+        const report = await fx.report({
+          env, onProgress: (line) => said.push(line), tests: (call) => { runs.push([...call.files]); return tests(call); },
+        });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.equal(report.ok, true);
+        assert.deepEqual(report.main_red_files, [scanner]);
+        assert.deepEqual(report.main_red.red_on_main, [scanner]);
+        assert.ok(said.includes(`1 red file red on main too, untouched by this change — not this round's red: ${scanner}`));
+        assert.equal(fx.mark('css-lint'), '', 'the command gate the selection named ran');
+        assert.ok(report.extra_gates.some((gate) => gate.name === 'css:lint' && gate.ok));
+        assert.deepEqual(report.pr_tests.files, [own], 'the pull request\'s own tests ran');
+        assert.deepEqual(runs.at(-1), [own]);
+        assert.deepEqual(report.candidate.red, [], 'not counted as the candidate\'s red');
+        assert.match(verdictHeadline(report), /^GREEN — the test gate passes — 1 test file red on main, not counted$/u);
+
+        const day = new Date().toISOString().slice(0, 10);
+        const note = join(intake, `${day}-red-on-main-scan.md`);
+        const text = readFileSync(note, 'utf8');
+        for (const part of ['- repo: repo', `\`${scanner}\``, '#7', '#12106', `- a test in ${scanner}`]) assert.ok(text.includes(part), part);
+      } finally { fx.cleanup(); rmSync(work, { recursive: true, force: true }); }
+    });
+
+    it('an intake note is written once per file per seven days, and a proposal naming it counts', async () => {
+      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner], base1111full: [scanner] } });
+      const fx = selecting({ files: [scanner], gitAlso });
+      const { work, env, intake } = withWork(fx);
+      const notes = () => readdirSync(intake).filter((name) => name.includes('red-on-main')).length;
+      try {
+        assert.equal((await fx.report({ env, tests })).verdict, 'green');
+        assert.equal(notes(), 1);
+        assert.equal((await fx.report({ env, tests })).verdict, 'green');
+        assert.equal(notes(), 1, 'the same file inside seven days: no second note');
+
+        const [first] = readdirSync(intake);
+        const old = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
+        utimesSync(join(intake, first), old, old);
+        mkdirSync(join(work, 'proposals'), { recursive: true });
+        writeFileSync(join(work, 'proposals', '2026-10-17-snapshots.md'), `memoro: ${scanner} is red on main\n`);
+        await fx.report({ env, tests });
+        assert.equal(notes(), 1, 'a proposal younger than seven days names it');
+
+        rmSync(join(work, 'proposals'), { recursive: true, force: true });
+        await fx.report({ env, tests });
+        assert.equal(notes(), 2, 'older than seven days, and nothing else names it: a new note');
+      } finally { fx.cleanup(); rmSync(work, { recursive: true, force: true }); }
+    });
+
+    it('one red file red on main that the change touches stops it red as today, and writes no note', async () => {
+      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner, own], base1111full: [scanner, own] }, touched: [own] });
+      const fx = selecting({ files: [own, scanner], gitAlso });
+      const { work, env, intake } = withWork(fx);
+      const said = [];
+      try {
+        const report = await fx.report({ env, tests, onProgress: (line) => said.push(line) });
+        assert.equal(report.stopped_at, 'red');
+        assert.equal(report.verdict, 'red');
+        assert.equal(report.main_red_files, null);
+        assert.deepEqual(report.main_red.red_on_main, [own, scanner]);
+        assert.match(report.reason, /2 of the red files are red on main too/u);
+        assert.equal(report.pr_tests, null, 'the round stopped before the own tests');
+        assert.ok(said.includes('this change touches a red file that is red on main — red as before'));
+        assert.equal(existsSync(intake), false);
+      } finally { fx.cleanup(); rmSync(work, { recursive: true, force: true }); }
     });
 
     it('green on the base: the change broke it, and nothing is written', async () => {
@@ -1904,6 +1994,12 @@ describe('a verdict says how far it reached', () => {
     const fell = verdictHeadline({ selection: { files: 258, full_suite: true }, pr: { base: 'main' } });
     assert.match(fell, /over the whole suite: the selector could not narrow this change/u);
     assert.doesNotMatch(fell, /this change reaches/u);
+  });
+
+  it('a green that went on past red on main says how many files it did not count (ruling 44 § 4)', () => {
+    assert.equal(verdictHeadline({ selection: { files: 6 }, main_red_files: ['a.test.js'] }), 'GREEN — the test gate passes — 1 test file red on main, not counted');
+    assert.equal(verdictHeadline({ selection: { files: 6 }, main_red_files: ['a.test.js', 'b.test.js'] }), 'GREEN — the test gate passes — 2 test files red on main, not counted');
+    assert.equal(verdictHeadline({ selection: { files: 6 }, main_red_files: null }), 'GREEN — the test gate passes');
   });
 
   it('a round with no selection says nothing extra, because its reach is what a reader assumes', () => {
