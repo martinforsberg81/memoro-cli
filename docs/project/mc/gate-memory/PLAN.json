@@ -34,7 +34,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-local.test.js` passes with the step-1 to step-3 tests."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A round whose candidate matches a recorded green skips the suite and says so; a red only on files red on main and untouched by the PR goes on; a red only in a `retry_once` file that passes alone goes on.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/merger.test.js` passes with the step-5 to step-8 tests."
     }

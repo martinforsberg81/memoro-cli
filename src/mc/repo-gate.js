@@ -70,6 +70,7 @@ import { duplicateRow } from './archive-plan.js';
 import { readRounds, recordRound } from './repo-round-log.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
+import { GATE_MEASUREMENT_VERSION, findGreen, selectionHash } from './gate-greens.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -256,6 +257,10 @@ export async function runGate({
     // when the repository declares none.
     derived: null,
     candidate: null,
+    // The green `mc gate` recorded for exactly this tree and selection, when
+    // the round took it instead of running the suite and the selected command
+    // gates (`gate-greens.js`): `{ at, session }`. Null when it measured.
+    reused: null,
     // The prefix trees of a batch candidate as it was built, `T_1..T_N`:
     // what main must be, byte for byte, after each landing. Null for a
     // single round; `T_N` equals `candidate.tree`.
@@ -822,6 +827,32 @@ export async function runGate({
       }
     }
 
+    // A green `mc gate` already measured this exact tree with this exact
+    // selection (`gate-greens.js`): the suite and the selected command gates
+    // are not run again. The pull request's own tests and the declared gates
+    // still are, below. Only a single pull request's round: a batch candidate
+    // is a tree no session stood in, and `--full` asks for a measurement.
+    let reused = null;
+    if (selection && facts.pr && !batch) {
+      const tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
+      const green = findGreen({
+        root, repo: basename(String(repoPath)), tree, selection: selection.hash, version: GATE_MEASUREMENT_VERSION,
+      });
+      if (green) {
+        const at = await askGit(['rev-parse', 'HEAD'], { cwd: headDir });
+        reused = {
+          ok: true,
+          result: {
+            commit: at?.status === 0 ? String(at.stdout || '').trim() : null, is, exit_code: 0, totals: null,
+            red: [], red_files: [], red_tests: [], selected: selection.files.length,
+            killed_files: [], killed_red: [], cancelled_files: [], cancelled_red: [],
+          },
+        };
+        report.reused = { at: green.at ?? null, session: green.session ?? null };
+        say(`the candidate's tree ${tree.slice(0, 7)} was measured green by mc gate at ${green.at} with the same selection — not measured again`);
+      }
+    }
+
     // The one run. What it finds red is the verdict: there is no second tree
     // to subtract, so a test the change reaches is either green or the round
     // is red — unless the probe after it finds that red main's and the change
@@ -857,7 +888,7 @@ export async function runGate({
     // with nothing wrong in the change — the same red memoro's own `ci.mjs`
     // closed on 2026-09-06 by handing its gates the merge base as a commit.
     const besideFrom = clock();
-    const halves = await Promise.allSettled([
+    const halves = reused ? [{ status: 'fulfilled', value: reused }, { status: 'fulfilled', value: [] }] : await Promise.allSettled([
       selection
         ? (say(`running the ${selection.files.length} file${selection.files.length === 1 ? '' : 's'} this change reaches`), timed('suite', () => measureSelected({
           tests: runTests, git: askGit, cwd: headDir, files: selection.files, flags, say, is,
@@ -871,7 +902,7 @@ export async function runGate({
         })
         : Promise.resolve([]),
     ]);
-    if (selection?.commands?.length) report.timings.gates_beside_suite_ms = clock() - besideFrom;
+    if (selection?.commands?.length && !reused) report.timings.gates_beside_suite_ms = clock() - besideFrom;
     const thrown = halves.find((half) => half.status === 'rejected');
     if (thrown) throw thrown.reason;
     const [after, selectedGates] = halves.map((half) => half.value);
@@ -891,7 +922,7 @@ export async function runGate({
 
     // Both halves have finished, so the probe for main red never runs beside
     // a gate.
-    say(`${after.result.red.length} red`);
+    if (!reused) say(`${after.result.red.length} red`);
     if (after.result.red.length) {
       const stop = await stopRed(after.result);
       if (stop) return stop;
@@ -1060,7 +1091,7 @@ export function verdictFor(report) {
  */
 export function verdictHeadline(report) {
   const mainRed = report.main_red_files?.length || 0;
-  return `GREEN — the test gate passes${scopeOf(report)}`
+  return `GREEN — the test gate passes${scopeOf(report)}${report.reused ? ' (measured by mc gate)' : ''}`
     + (mainRed ? ` — ${mainRed} test file${mainRed === 1 ? '' : 's'} red on main, not counted` : '');
 }
 
@@ -1200,7 +1231,7 @@ async function selectFiles({ command, cwd, env, say }) {
 
   say(`selection read from ${command}${full ? ' — it fell back to the whole suite' : ''}`
     + (commands.length ? `, with ${commands.length} command gate${commands.length === 1 ? '' : 's'}: ${commands.map((entry) => entry.packageScript).join(', ')}` : ''));
-  return { ok: true, files: clean, commands, full, why: parsed?.why ?? null };
+  return { ok: true, files: clean, commands, full, why: parsed?.why ?? null, hash: selectionHash(parsed) };
 }
 
 /**
@@ -1519,12 +1550,21 @@ export function mainRedClause(probe) {
 
 /** The round's environment with the selection state directory in it. */
 export function selectionState(env, { root, repoPath, writes }) {
-  const dir = join(root, 'selection', repoFileSlug(repoPath));
+  const dir = selectionStateDir({ root, repoPath });
   try { mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { /* a selector without it selects as before */ }
   const next = { ...env, MC_SELECTION_STATE: dir };
   if (writes) next.MC_SELECTION_STATE_WRITE = '1';
   else delete next.MC_SELECTION_STATE_WRITE;
   return next;
+}
+
+/**
+ * The selection state directory of a repository, by its primary checkout.
+ * `mc gate` selects with the same one, so a session's selection is the
+ * merger's (`gate-greens.js`).
+ */
+export function selectionStateDir({ root, repoPath }) {
+  return join(root, 'selection', repoFileSlug(repoPath));
 }
 
 function seconds(ms) {

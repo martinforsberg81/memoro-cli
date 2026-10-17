@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/gate.js';
+import { GATE_MEASUREMENT_VERSION, selectionHash } from '../../src/mc/gate-greens.js';
 
 const CHILD = 4242;
 const LOG = '/scratch/gate-20260925T100000Z.log';
@@ -168,6 +169,107 @@ describe('mc gate <test files…>', () => {
     const named = harness({ tests: ['a.test.js'], finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
     assert.equal(await run(['a.test.js', '--test-name-pattern', 'adds up'], named.deps), 0);
     assert.equal(named.out.spawned[0].args[1], `node --test a.test.js --test-name-pattern 'adds up'; echo $? > '${EXIT}'`);
+  });
+});
+
+describe('mc gate, a green remembered for the merger (ruling 44)', () => {
+  const SELECTION = { files: ['tests/b.test.js', 'tests/a.test.js'], commands: [{ id: 'lint', packageScript: 'lint', passBaseRef: true }] };
+  const GREEN = 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n';
+
+  /**
+   * The harness of a worktree of `/repo/x` whose primary checkout declares a
+   * selector. `porcelain` answers `git status --porcelain` before and after
+   * the gate, `tree` answers `HEAD^{tree}` the same way.
+   */
+  function remembering({ select = 'node select.js', porcelain = ['', ''], tree = ['tree1234abcd', 'tree1234abcd'], code = 0, output = GREEN } = {}) {
+    const machine = harness({ finishAfter: 1, code, output });
+    const asked = { selects: [], greens: [] };
+    let status = 0;
+    let trees = 0;
+    const plain = machine.deps.git;
+    machine.deps.env = { ...machine.deps.env, MC_HOME: '/home' };
+    machine.deps.git = (cwd, args) => {
+      if (args.includes('--git-common-dir')) return '/repo/x/.git';
+      if (args[0] === 'status') return porcelain[Math.min(status++, porcelain.length - 1)];
+      if (args[1] === 'HEAD^{tree}') return tree[Math.min(trees++, tree.length - 1)];
+      return plain(cwd, args);
+    };
+    machine.deps.declaration = (path) => ({ ok: true, name: 'x', declaration: { select, path } });
+    machine.deps.select = (command, opts) => {
+      asked.selects.push({ command, ...opts });
+      return { status: 0, stdout: JSON.stringify(SELECTION) };
+    };
+    machine.deps.recordGreen = (entry) => { asked.greens.push(entry); };
+    machine.deps.holder = () => 'gate-memory';
+    return { ...machine, asked };
+  }
+
+  it('a clean tree, a declared select, green: the tree, the selection hash and the version are recorded', async () => {
+    const { out, deps, asked } = remembering();
+    assert.equal(await run([], deps), 0);
+    assert.deepEqual(asked.greens, [{
+      repo: 'x', tree: 'tree1234abcd', selection: selectionHash(SELECTION), gate_version: GATE_MEASUREMENT_VERSION,
+      at: '2026-09-25T10:00:02.000Z', session: 'gate-memory',
+    }]);
+    assert.equal(GATE_MEASUREMENT_VERSION, 1);
+    // Selected as the merger selects: the declared command, in the worktree,
+    // with the primary checkout's selection state and no write.
+    assert.equal(asked.selects[0].command, 'node select.js');
+    assert.equal(asked.selects[0].cwd, '/w/x');
+    assert.match(asked.selects[0].env.MC_SELECTION_STATE, /^\/home\/selection\/x-/u);
+    assert.equal(asked.selects[0].env.MC_SELECTION_STATE_WRITE, undefined);
+    assert.equal(out.spawned[0].opts.env.MC_SELECTION_STATE, asked.selects[0].env.MC_SELECTION_STATE);
+    assert.match(out.stdout, /\nrecorded: tree tree123 green — mc merge does not measure it again while the tree and selection match\n$/u);
+  });
+
+  it('the hash is the selection, not the order it was printed in', () => {
+    assert.equal(selectionHash(SELECTION), selectionHash({ ...SELECTION, files: [...SELECTION.files].reverse(), why: { other: true } }));
+    assert.notEqual(selectionHash(SELECTION), selectionHash({ ...SELECTION, files: ['tests/a.test.js'] }));
+    assert.notEqual(selectionHash(SELECTION), selectionHash({ files: SELECTION.files }));
+  });
+
+  it('a dirty tree, before or after, records nothing', async () => {
+    const before = remembering({ porcelain: [' M src/a.js', ' M src/a.js'] });
+    assert.equal(await run([], before.deps), 0);
+    assert.deepEqual([before.asked.greens, before.asked.selects], [[], []]);
+    assert.doesNotMatch(before.out.stdout, /recorded/u);
+
+    const after = remembering({ porcelain: ['', '?? new.txt'] });
+    assert.equal(await run([], after.deps), 0);
+    assert.deepEqual(after.asked.greens, []);
+
+    const moved = remembering({ tree: ['tree1234abcd', 'tree9999ffff'] });
+    assert.equal(await run([], moved.deps), 0);
+    assert.deepEqual(moved.asked.greens, []);
+  });
+
+  it('no select declared records nothing, and the gate runs as it did', async () => {
+    const { out, deps, asked } = remembering({ select: null });
+    assert.equal(await run([], deps), 0);
+    assert.deepEqual([asked.greens, asked.selects], [[], []]);
+    assert.equal(out.spawned[0].opts.env.MC_SELECTION_STATE, undefined);
+  });
+
+  it('a red records nothing; nor does another base, or named files', async () => {
+    const red = remembering({ code: 1, output: '✖ a\nℹ tests 1\nℹ fail 1\n' });
+    assert.equal(await run([], red.deps), 1);
+    assert.deepEqual(red.asked.greens, []);
+
+    const base = remembering();
+    assert.equal(await run(['--base', 'origin/dev'], base.deps), 0);
+    assert.deepEqual(base.asked.greens, []);
+
+    const named = remembering();
+    named.files.set('/w/x/a.test.js', '');
+    assert.equal(await run(['a.test.js'], named.deps), 0);
+    assert.deepEqual(named.asked.greens, []);
+  });
+
+  it('a select that fails records nothing', async () => {
+    const { deps, asked } = remembering();
+    deps.select = () => ({ status: 1, stdout: '' });
+    assert.equal(await run([], deps), 0);
+    assert.deepEqual(asked.greens, []);
   });
 });
 
