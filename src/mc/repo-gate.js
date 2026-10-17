@@ -243,6 +243,10 @@ export async function runGate({
     // untouched by the change (ruling 44 § 4). Named in the verdict as not
     // counted; null when there were none.
     main_red_files: null,
+    // What was red in the round and green when run once more alone, in the
+    // files and command gates the declaration names `retry_once` (ruling 44
+    // § 5): `{ files, names, gates }`. Null when nothing flipped.
+    flipped: null,
     // The pull request's own tests: every `*.test.js` it adds or changes, run
     // on the candidate after the suite (D-0157). `files: []` when it touches
     // none, which is said rather than left blank.
@@ -626,6 +630,7 @@ export async function runGate({
     // phase — which is the second sample the probe would otherwise take.
     // Returns the finished report, or null when every red file is main's and
     // the change touches none of them: the round goes on.
+    const retry = declared.declaration.retry_once || { files: [], gates: [] };
     const stopRed = async (result, { alone = false } = {}) => {
       // A file something outside the round killed is not a verdict on this
       // change, and the base would pass it — the main-red probe would then
@@ -673,6 +678,40 @@ export async function runGate({
       // Main's already, by this round's own probe of the previous red files —
       // and untouched, which that probe's turn checked: not asked twice.
       if (within(new Set(report.main_red_files || []))) return mainRedGoesOn(result, report.main_red);
+      // Red only in files declared to flip under load (ruling 44 § 5): run
+      // once more alone on the candidate. Green, and the round goes on with
+      // the flip recorded; whatever stays red goes to the probe as today,
+      // and that run is the probe's second sample alone on the candidate.
+      let retried = false;
+      if (retry.files.length && within(new Set(retry.files))) {
+        const headCommit = trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null;
+        if (headCommit) {
+          const files = result.red_files;
+          say(`red only in ${files.join(', ')}, declared retry_once — running ${files.length === 1 ? 'it' : 'them'} once more alone`);
+          const ran = await timed('retry once', () => redAt({
+            git: askGit, tests: runTests, cwd: headDir, commit: headCommit, files, flags,
+          }));
+          if (ran.ok && !ran.red.length) {
+            report.flipped = { ...(report.flipped || {}), files, names: [...result.red] };
+            say(`green alone — ${files.join(', ')} flipped under load, not this round's red`);
+            result.red = [];
+            result.red_files = [];
+            result.red_tests = [];
+            return null;
+          }
+          if (ran.ok) {
+            const stayed = new Set(ran.red);
+            result.red_files = files.filter((file) => stayed.has(file));
+            result.red_tests = (result.red_tests || []).filter((test) => stayed.has(test.file));
+            const kept = new Set(result.red_tests.map((test) => test.name));
+            if (kept.size) result.red = result.red.filter((name) => kept.has(name));
+            retried = true;
+            say(`red again alone: ${result.red_files.join(', ')}`);
+          } else {
+            say(`could not run them once more alone: ${ran.reason}`);
+          }
+        }
+      }
       // Whose red it is. Worth a few seconds on a round that failed, because
       // the other reading is the one #12107 got: red twice on tests a landed
       // change had broken.
@@ -700,7 +739,7 @@ export async function runGate({
         // unchanged, so the same files are run alone on the candidate too:
         // red there is the change's, green there is the round's load.
         if (headCommit && probe && !probe.stopped && !probe.red_on_main?.length) {
-          if (alone) {
+          if (alone || retried) {
             report.head_alone = { red: result.red_files };
             say('red alone on the candidate — this change broke them');
           } else {
@@ -718,7 +757,7 @@ export async function runGate({
           }
         }
       }
-      return finish('red', `${red.length} test${red.length === 1 ? '' : 's'} red: ${nameSome(red)}${mainRedClause(report.main_red)}`);
+      return finish('red', `${result.red.length} test${result.red.length === 1 ? '' : 's'} red: ${nameSome(result.red)}${mainRedClause(report.main_red)}`);
     };
 
     // The files this pull request's last round found red, alone on the
@@ -746,7 +785,8 @@ export async function runGate({
           say(`${first.result.red.length} red in the previous red files — the selection is not run`);
           const stop = await stopRed(first.result, { alone: true });
           if (stop) return stop;
-          say('the previous red files are main\'s red — measuring the selection');
+          say(report.flipped ? 'the previous red files flipped green alone — measuring the selection'
+            : 'the previous red files are main\'s red — measuring the selection');
         } else {
           report.previous_red = { files: previous, red: [] };
           say('previous red files green — measuring the selection');
@@ -836,7 +876,7 @@ export async function runGate({
     if (thrown) throw thrown.reason;
     const [after, selectedGates] = halves.map((half) => half.value);
     report.extra_gates.push(...selectedGates);
-    const failedGates = selectedGates.filter((gate) => !gate.ok);
+    let failedGates = selectedGates.filter((gate) => !gate.ok);
 
     // Sequentially, a suite that could not be measured stopped the round
     // before any gate ran. Beside it the gates did run, and are listed; the
@@ -855,6 +895,29 @@ export async function runGate({
     if (after.result.red.length) {
       const stop = await stopRed(after.result);
       if (stop) return stop;
+    }
+
+    // Failed only in command gates declared to flip under load (ruling 44
+    // § 5): those run once more, alone now the suite is done. All green, and
+    // the round goes on with the flip recorded; otherwise red as below, on
+    // the ones that failed again.
+    if (failedGates.length && failedGates.every((gate) => retry.gates.includes(gate.name))) {
+      const names = failedGates.map((gate) => gate.name);
+      say(`only ${names.join(', ')} failed, declared retry_once — running ${names.length === 1 ? 'it' : 'them'} once more alone`);
+      const again = await runSelectedCommands({
+        commands: selection.commands.filter((entry) => names.includes(entry.packageScript)),
+        cwd: headDir, env, baseRef: report.base.commit || baseRef, say, clock, shell: runShell,
+        timed: (step, fn) => timed('retry once', fn),
+      });
+      for (const gate of failedGates) {
+        const second = again.find((one) => one.name === gate.name);
+        gate.retry = second ? { ok: second.ok, exit_code: second.exit_code, duration_ms: second.duration_ms } : null;
+      }
+      failedGates = failedGates.filter((gate) => !gate.retry?.ok);
+      if (!failedGates.length) {
+        report.flipped = { ...(report.flipped || {}), gates: names };
+        say(`green alone — ${names.join(', ')} flipped under load, not this round's red`);
+      }
     }
 
     // A command gate the selection chose is a contract about this diff, and a

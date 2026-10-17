@@ -247,6 +247,23 @@ export const SHIPPED = Object.freeze({
     deps_notes: Object.freeze([
       Object.freeze({ name: 'wrangler', argv: Object.freeze(['node', 'scripts/check-wrangler.mjs', '--summary']) }),
     ]),
+    // The tests and command gates known to flip red-then-green under load
+    // with no change (ruling 44 § 5). A red only in these is run once more
+    // alone on the candidate before it is red. Not a quarantine: nothing here
+    // is skipped, and a file that flips often is a proposal, not a longer list.
+    // The JSC start-up budget was a test in core-bundle-jsc.test.js until
+    // memoro #12987 (2026-10-08) made it the command gate below.
+    retry_once: Object.freeze({
+      files: Object.freeze([
+        'tests/architecture/css-dead-rules.test.js',
+        'tests/scripts/build-bundle.test.js',
+      ]),
+      gates: Object.freeze(['sql:pr-ci', 'core:startup:jsc:check']),
+    }),
+    retry_once_why: 'measured in gate-rounds.jsonl to 2026-10-16: fast red-then-green flips with no change — '
+      + 'the JSC start-up budget 19 (2026-10-07, now `core:startup:jsc:check`), the `sql:pr-ci` command gate 15, '
+      + 'dead-CSS 6 (css-dead-rules.test.js), build-bundle.test.js under load (#13470 at load ~38); '
+      + 'the file-killed and red-under-load retries caught none of them',
   }),
 });
 
@@ -387,6 +404,15 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
         name,
         reason: `${name} declares gate_lane ${JSON.stringify(declared.gate_lane)}, which is not a lane mc has — `
           + `one of ${GATE_LANES.map((lane) => `"${lane}"`).join(', ')}, or nothing for "heavy".`,
+      };
+    }
+    // A retry list the round cannot read would retry nothing in silence.
+    if (declared.retry_once != null && !validRetryOnce(declared.retry_once)) {
+      return {
+        ok: false,
+        name,
+        reason: `${name} declares retry_once ${JSON.stringify(declared.retry_once)}, which is not `
+          + '{"files": ["<test file>", …], "gates": ["<package script>", …]} — each list optional, every entry a path or a script name.',
       };
     }
     // Which fields of the layers below it this override silently dropped, if
@@ -542,7 +568,23 @@ function normalise(entry, env) {
     // declared is `heavy`: one at a time with memoro, as every round was.
     gate_lane: entry.gate_lane ?? 'heavy',
     gate_lane_why: entry.gate_lane_why ?? null,
+    // The test files and selected command gates a red in which is run once
+    // more alone before it is red (ruling 44 § 5). Nothing declared retries
+    // nothing.
+    retry_once: {
+      files: Array.isArray(entry.retry_once?.files) ? entry.retry_once.files.map(String) : [],
+      gates: Array.isArray(entry.retry_once?.gates) ? entry.retry_once.gates.map(String) : [],
+    },
+    retry_once_why: entry.retry_once_why ?? null,
   };
+}
+
+/** `{ files?: string[], gates?: string[] }` and nothing else. */
+function validRetryOnce(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (Object.keys(value).some((key) => key !== 'files' && key !== 'gates')) return false;
+  return ['files', 'gates'].every((key) => value[key] === undefined
+    || (Array.isArray(value[key]) && value[key].every((item) => typeof item === 'string' && item.length > 0)));
 }
 
 /**

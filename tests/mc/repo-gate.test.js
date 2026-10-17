@@ -29,6 +29,7 @@ import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateRoot, runGate, selectionState, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
+import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
@@ -1013,6 +1014,8 @@ describe('a repository that selects by diff', () => {
     gitAlso = () => undefined,
     // The selector command itself, for a selection too large to `echo`.
     select = null,
+    // The declaration's `retry_once` (ruling 44 § 5), when the test wants one.
+    retryOnce = null,
   } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
     const repoPath = join(root, 'repo');
@@ -1040,6 +1043,7 @@ describe('a repository that selects by diff', () => {
         extra_gates: [],
         merge_log: null,
         pr_tests_flags: ['--import', './x.mjs'],
+        ...(retryOnce ? { retry_once: retryOnce } : {}),
       },
     });
 
@@ -1712,6 +1716,113 @@ describe('a repository that selects by diff', () => {
         assert.deepEqual(report.head_alone, { red: [own] });
         assert.ok(said.some((line) => /red alone on the candidate too — this change broke them/u.test(line)));
       } finally { fx.cleanup(); }
+    });
+
+    /**
+     * Ruling 44 § 5: the JSC start-up budget, `sql:pr-ci`, dead-CSS and
+     * build-bundle flipped red-then-green with no change, and neither
+     * `file-killed` nor `red-under-load` caught them. What the declaration
+     * names `retry_once` is run once more alone before it is red.
+     */
+    describe('a declared timing test gets one more run alone (retry_once)', () => {
+      it('red only in a retry_once file that passes alone: it goes on, green, and the flip is in the round\'s record', async () => {
+        const { gitAlso, tests } = onMain({ redAt: {}, round: [scanner] });
+        const fx = selecting({ files: [own, scanner], gitAlso, retryOnce: { files: [scanner] } });
+        const said = [];
+        const probed = [];
+        try {
+          const report = await fx.report({
+            tests, onProgress: (line) => said.push(line),
+            probeMain: async (args) => { probed.push(args); return { red_on_main: [], breaks: [] }; },
+          });
+          assert.equal(report.verdict, 'green', report.reason);
+          assert.deepEqual(report.flipped, { files: [scanner], names: [`a test in ${scanner}`] });
+          assert.deepEqual(report.candidate.red, [], 'a flip is not counted as the candidate\'s red');
+          assert.deepEqual(probed, [], 'a flip is not asked of the base');
+          assert.ok(said.includes(`red only in ${scanner}, declared retry_once — running it once more alone`));
+          assert.ok(said.includes(`green alone — ${scanner} flipped under load, not this round's red`));
+          assert.deepEqual(report.pr_tests.files, [], 'the round went on to the pull request\'s own tests');
+
+          recordRound(report, { root: fx.mcHome });
+          const line = JSON.parse(readFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), 'utf8').trim().split('\n').at(-1));
+          assert.deepEqual(line.flipped, { files: [scanner], names: [`a test in ${scanner}`] });
+        } finally { fx.cleanup(); }
+      });
+
+      it('red in a retry_once file that stays red alone: red as today, and that run is the sample alone', async () => {
+        const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner] } });
+        const fx = selecting({ files: [own, scanner], gitAlso, retryOnce: { files: [scanner] } });
+        const said = [];
+        try {
+          const report = await fx.report({ tests, onProgress: (line) => said.push(line) });
+          assert.equal(report.stopped_at, 'red');
+          assert.equal(report.verdict, 'red');
+          assert.equal(report.flipped, null);
+          assert.equal(report.reason, `1 test red: a test in ${scanner}`);
+          assert.deepEqual(report.head_alone, { red: [scanner] });
+          assert.ok(said.includes(`red again alone: ${scanner}`));
+        } finally { fx.cleanup(); }
+      });
+
+      it('a red outside the list, beside one in it, is red as today and nothing is retried', async () => {
+        const { gitAlso, tests } = onMain({ redAt: { candidate: [own, scanner] } });
+        const fx = selecting({ files: [own, scanner], gitAlso, retryOnce: { files: [scanner] } });
+        const said = [];
+        try {
+          const report = await fx.report({ tests, onProgress: (line) => said.push(line) });
+          assert.equal(report.stopped_at, 'red');
+          assert.equal(report.flipped, null);
+          assert.match(report.reason, /^2 tests red/u);
+          assert.ok(!said.some((line) => /retry_once/u.test(line)), said.join('\n'));
+        } finally { fx.cleanup(); }
+      });
+
+      /** A shell where each named gate fails the first `fails[name]` times it runs. */
+      function flippingShell(fails) {
+        const ran = [];
+        const run = async (command) => {
+          ran.push(command);
+          const name = Object.keys(fails).find((one) => command.includes(`npm run ${one}`));
+          const failing = name && fails[name] > 0;
+          if (failing) fails[name] -= 1;
+          return { status: failing ? 1 : 0, stdout: '', stderr: failing ? 'head does not include moving base' : '' };
+        };
+        return { ran, run };
+      }
+      const sqlGate = [{ id: 'sql-pr-ci', packageScript: 'sql:pr-ci', passBaseRef: true }];
+
+      it('a retry_once command gate that fails and then passes alone: it goes on, green, with the flip recorded', async () => {
+        const fx = selecting({ files: [own], commands: sqlGate, retryOnce: { gates: ['sql:pr-ci'] } });
+        const gates = flippingShell({ 'sql:pr-ci': 1 });
+        try {
+          const report = await fx.report({ shell: gates.run });
+          assert.equal(report.verdict, 'green', report.reason);
+          assert.deepEqual(report.flipped, { gates: ['sql:pr-ci'] });
+          assert.equal(gates.ran.length, 2);
+          assert.equal(gates.ran[1], 'npm run sql:pr-ci -- --base-ref base1111');
+          assert.equal(report.extra_gates[0].ok, false, 'the first run is listed as it was');
+          assert.equal(report.extra_gates[0].retry.ok, true);
+          assert.ok(report.timings['retry once'] >= 0);
+        } finally { fx.cleanup(); }
+      });
+
+      it('a retry_once command gate that fails again is selected-gate as today, and an undeclared one is not retried', async () => {
+        const stays = selecting({ files: [own], commands: sqlGate, retryOnce: { gates: ['sql:pr-ci'] } });
+        const undeclared = selecting({ files: [own], commands: sqlGate, retryOnce: { gates: ['css:lint'] } });
+        try {
+          const twice = flippingShell({ 'sql:pr-ci': 2 });
+          const red = await stays.report({ shell: twice.run });
+          assert.equal(red.stopped_at, 'selected-gate');
+          assert.equal(red.flipped, null);
+          assert.equal(twice.ran.length, 2);
+          assert.equal(red.extra_gates[0].retry.ok, false);
+
+          const once = flippingShell({ 'sql:pr-ci': 1 });
+          const plain = await undeclared.report({ shell: once.run });
+          assert.equal(plain.stopped_at, 'selected-gate');
+          assert.equal(once.ran.length, 1, 'a gate outside the list runs once');
+        } finally { stays.cleanup(); undeclared.cleanup(); }
+      });
     });
 
     /** TAP for a file whose `before` hook timed out, the way node 24.10 writes it: the suite hookFailed, its tests cancelled. */
