@@ -83,6 +83,9 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
 
   const calls = [];
   let merged = false;
+  // The head GitHub reports for the pull request — the measured one until a
+  // test says a push has moved it.
+  const forge = { head: verdict.pr.head_sha };
   const git = (args, opts = {}) => {
     calls.push({ tool: 'git', args, cwd: opts.cwd });
     if (args[0] === 'symbolic-ref') {
@@ -109,6 +112,7 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
   const gh = (args, opts = {}) => {
     calls.push({ tool: 'gh', args, cwd: opts.cwd });
     if (args[0] === 'pr' && args[1] === 'view') {
+      if (args.includes('headRefOid')) return { status: 0, stdout: JSON.stringify({ headRefOid: forge.head }) };
       // What the forge says after a failed merge call: the truth, or nothing.
       if (mergeFails === 'timed-out-merged') { merged = true; return { status: 0, stdout: JSON.stringify({ state: 'MERGED', mergedAt: '2026-08-22T21:30:00Z' }) }; }
       if (mergeFails === 'timed-out-unknown') return { status: 1, stderr: 'Post "https://api.github.com/graphql": read: operation timed out' };
@@ -129,6 +133,7 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
     mcHome,
     logPath,
     calls,
+    forge,
     ran: (tool) => calls.filter((call) => call.tool === tool),
     log: () => readFileSync(logPath, 'utf8'),
     lease: () => readLease(repoPath, { root: mcHome }),
@@ -143,6 +148,7 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
       gate: async () => verdict,
       mergeLog: logPath,
       clock: () => Date.parse('2026-08-17T09:00:00.000Z'),
+      sleep: async () => {},
       ...extra,
     }),
     cleanup() { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } },
@@ -159,7 +165,7 @@ describe('a green gate lands the change', () => {
       assert.equal(report.merge_commit, LANDED);
 
       const merge = fx.ran('gh').find((call) => call.args[1] === 'merge');
-      assert.deepEqual(merge.args, ['pr', 'merge', '400', '--squash']);
+      assert.deepEqual(merge.args, ['pr', 'merge', '400', '--squash', '--match-head-commit', HEAD]);
     } finally { fx.cleanup(); }
   });
 
@@ -193,6 +199,49 @@ describe('a green gate lands the change', () => {
       const report = await fx.run({ mergeLog: null });
       assert.equal(report.merged, true);
       assert.equal(report.log_path, null);
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * The squash takes the head the round measured, or freshened, and no other
+ * (ruling 43): a push that lands during a round is a commit nobody measured.
+ */
+describe('the squash lands the head the round measured', () => {
+  it('the landing pins the measured head', async () => {
+    const fx = fixture();
+    try {
+      const report = await fx.run();
+      assert.equal(report.merged, true, report.reason || '');
+      const merge = fx.ran('gh').find((call) => call.args[1] === 'merge');
+      assert.equal(merge.args[merge.args.indexOf('--match-head-commit') + 1], HEAD);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a freshened branch is landed at the freshened head', async () => {
+    const freshSha = 'f'.repeat(40);
+    const fx = fixture({ verdict: { ...green(), derived: { commit: 'eeee555', regenerated: ['docs/sql/x.json'] } } });
+    try {
+      const report = await fx.run({
+        refresh: () => { fx.forge.head = freshSha; return { ok: true, at: 'fffffff', sha: freshSha }; },
+      });
+      assert.equal(report.merged, true, report.reason || '');
+      const merge = fx.ran('gh').find((call) => call.args[1] === 'merge');
+      assert.equal(merge.args[merge.args.indexOf('--match-head-commit') + 1], freshSha);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a head GitHub never reports is drift, and nothing is merged', async () => {
+    const fx = fixture();
+    fx.forge.head = 'd'.repeat(40);
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'drift');
+      assert.equal(report.reason, `#400 is at ddddddd on GitHub, not the ${HEAD} this round measured — not merged`);
+      assert.equal(report.merged, false);
+      assert.equal(fx.ran('gh').filter((call) => call.args[1] === 'view' && call.args.includes('headRefOid')).length, 6, 'read six times, then stopped');
+      assert.deepEqual(fx.ran('gh').filter((call) => call.args[1] === 'merge'), []);
     } finally { fx.cleanup(); }
   });
 });
@@ -664,6 +713,7 @@ describe('a batch lands in order, or falls back one by one', () => {
       }
       if (args[0] === 'pr' && args[1] === 'view') {
         const number = Number(args[2]);
+        if (args.includes('headRefOid')) return { status: 0, stdout: JSON.stringify({ headRefOid: `sha${number}` }) };
         return landed.includes(number)
           ? { status: 0, stdout: JSON.stringify({ state: 'MERGED', mergeCommit: { oid: `landed${number}` } }) }
           : { status: 0, stdout: JSON.stringify({ state: 'OPEN' }) };
@@ -756,7 +806,7 @@ describe('a batch lands in order, or falls back one by one', () => {
   it('a landing whose tree is not the measured build\'s re-measures the rest in rounds of their own', async () => {
     const verdict = { ...greenBatch(), candidate_trees: ['landed401', 'expected-but-not-what-main-became', 'landed403'] };
     // The single rounds that re-measure land green against fresh main.
-    const gateFor = async ({ prs, pr }, state) => (prs ? verdict : { ...green({ baseCommit: state.mainAt }), pr: { ...green().pr, number: pr } });
+    const gateFor = async ({ prs, pr }, state) => (prs ? verdict : { ...green({ baseCommit: state.mainAt }), pr: { ...green().pr, number: pr, head_sha: `sha${pr}` } });
     const fx = batchFixture({ verdict, gateFor });
     const progress = [];
     try {
@@ -779,8 +829,8 @@ describe('a batch lands in order, or falls back one by one', () => {
     const gateFor = async ({ prs, pr }, state) => {
       if (prs) return batchVerdict;
       const fresh = green({ baseCommit: state.mainAt });
-      if (pr === 402) return { ...fresh, pr: { ...fresh.pr, number: 402 }, ok: false, stopped_at: 'red', reason: '1 test red', broke: ['x › y'] };
-      return { ...fresh, pr: { ...fresh.pr, number: pr } };
+      if (pr === 402) return { ...fresh, pr: { ...fresh.pr, number: 402, head_sha: 'sha402' }, ok: false, stopped_at: 'red', reason: '1 test red', broke: ['x › y'] };
+      return { ...fresh, pr: { ...fresh.pr, number: pr, head_sha: `sha${pr}` } };
     };
     const fx = batchFixture({ verdict: batchVerdict, gateFor });
     const progress = [];

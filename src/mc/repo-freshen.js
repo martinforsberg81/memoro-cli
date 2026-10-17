@@ -104,9 +104,12 @@ export async function freshenBranchForLanding({
     }
     const pushed = await askGit(['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: workspace });
     if (pushed.status !== 0) return { ok: false, reason: trim(pushed.stderr) || 'push refused' };
-    const at = trim((await askGit(['rev-parse', 'HEAD'], { cwd: workspace })).stdout).slice(0, 7);
+    // The whole sha is what the squash is pinned to (`--match-head-commit`);
+    // the seven characters are only what the progress line shows.
+    const sha = trim((await askGit(['rev-parse', 'HEAD'], { cwd: workspace })).stdout);
+    const at = sha.slice(0, 7);
     say(`freshened ${branch} for its landing: ${base} merged in at ${at}`);
-    return { ok: true, at };
+    return { ok: true, at, sha };
   } finally {
     rmSync(workspace, { recursive: true, force: true });
     await askGit(['worktree', 'prune'], { cwd: repoPath });
