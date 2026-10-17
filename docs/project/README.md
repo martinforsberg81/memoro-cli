@@ -225,7 +225,10 @@ the runner in the same pull request that removes the plan: the goal, the steps
 with the pull request, sha and date each landed with, and time, tokens and cost
 per session. `closeout` is never a project name, nobody edits the files, and
 nothing reads them but people
-([`docs/technical/mc-tidy.md`](../technical/mc-tidy.md) § *The closeout*).
+([`docs/technical/mc-tidy.md`](../technical/mc-tidy.md) § *The closeout*). When the
+project had a README, it stays beside the record as `<project>.md`, and the links
+into the removed directory are rewritten to these in the same pull request
+(ruling 46).
 
 ## Citing a decision
 

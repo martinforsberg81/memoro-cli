@@ -111,7 +111,7 @@ import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
 import { cacheTtlMs as codexCacheTtlMs } from '../adapters/codex.js';
 import {
   ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, keptFiles,
-  keptParagraph, logRows, mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
+  keptParagraph, logRows, mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rewriteArchivedLinks, rowFor, undocumentedRow,
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-landed.js';
@@ -123,7 +123,7 @@ import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from '.
 import { deploysPath, parseDeploys } from './deploys.js';
 import { releaseDue } from './step-release.js';
 import { isPlanPath, mergePlanText } from './plan-merge.js';
-import { buildCloseout, closeoutPath, closeoutText, readSessionResults } from './closeout.js';
+import { buildCloseout, closeoutPath, closeoutReadmePath, closeoutText, readSessionResults } from './closeout.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -1457,6 +1457,7 @@ export function createRunner({
     const closedOut = [];
     const undocumented = [];
     const keptAll = [];
+    const moved = [];
 
     for (const plan of done) {
       const dir = join('docs', 'project', plan.programme, plan.project);
@@ -1473,11 +1474,17 @@ export function createRunner({
         say(`archive: ${repo.name} ${plan.programme}/${plan.project} — every file is read by code outside docs/, nothing archived`);
         continue;
       }
+      // The README is read before `git rm` takes it away; a README a kept file names stays.
+      const readmePath = join(dir, 'README.md');
+      const md = closeoutReadmePath(plan.programme, plan.project);
+      const readmeText = kept.some((k) => k.file === readmePath) ? null : deps.read(join(worktree, readmePath));
       const rm = remove ? ['rm', '-q', '--', ...remove] : ['rm', '-r', '-q', '--', dir];
       if (!deps.git(worktree, rm).ok) {
         say(`archive: ${repo.name} ${plan.programme}/${plan.project} — git rm failed, left alone`);
         continue;
       }
+      if (readmeText != null) deps.write(join(worktree, md), readmeText);
+      moved.push({ dir, programme: plan.programme, project: plan.project, readme: readmeText != null, kept: kept.map((k) => k.file), from: readmePath, to: md });
       keptAll.push(...kept);
       // The row is preferred, never waited for: a close-out step that already
       // wrote one knows more about the project than this does.
@@ -1497,6 +1504,7 @@ export function createRunner({
       if (!existing) logText = appendRow(logText, row);
       archived.push(plan.project);
       say(`archive: ${repo.name} ${plan.programme}/${plan.project} removed — ${existing ? 'row already written' : 'row added to project_log.md'}`);
+      if (readmeText != null) say(`archive: ${repo.name} ${plan.programme}/${plan.project} README kept as ${md}`);
       if (isUndocumented(row)) {
         undocumented.push(undocumentedRow({ date, repo: repo.name, programme: plan.programme, project: plan.project, pointer: row.pointer }));
         say(`archive: ${plan.project} names no docs/technical/ note — recorded for mc brief`);
@@ -1505,6 +1513,28 @@ export function createRunner({
         project: plan.project, programme: plan.programme, plan: parsedPlan(planText),
         planPath: plan.path ?? null, archivedAt: date, tsv,
       });
+    }
+    // The links into the removed directories follow them (ruling 46): each
+    // README is staged at its closeout, then every document under docs/ that
+    // links into an archived directory is relinked in this same commit.
+    if (moved.length) {
+      const readmes = moved.filter((m) => m.readme).map((m) => m.to);
+      if (readmes.length) deps.git(worktree, ['add', '--', ...readmes]);
+      const listed = deps.git(worktree, ['ls-files', '--', 'docs/project', 'docs/technical']);
+      if (!listed.ok) say(`archive: ${repo.name} — could not list docs/, no link rewritten`);
+      const relinked = [];
+      for (const p of listed.ok ? String(listed.stdout ?? '').split('\n').filter((line) => line.endsWith('.md')) : []) {
+        const text = deps.read(join(worktree, p));
+        if (text == null) continue;
+        const own = moved.find((m) => m.readme && m.to === p);
+        const next = rewriteArchivedLinks(text, { from: own ? own.from : p, to: p, archived: moved });
+        if (next === text) continue;
+        deps.write(join(worktree, p), next);
+        relinked.push(p);
+      }
+      if (relinked.length) deps.git(worktree, ['add', '--', ...relinked]);
+      const n = relinked.length;
+      if (n > 0) say(`archive: ${repo.name} ${n} document${n === 1 ? '' : 's'} relinked to the closeout`);
     }
     // Projects archived before the closeout existed, given theirs now — from
     // the register and the plan as git history last had it.
@@ -1523,8 +1553,9 @@ export function createRunner({
       : `Closeout ${closedOut.length} archived project${closedOut.length === 1 ? '' : 's'}: ${closedOut.join(', ')}`;
     const body = [
       'A plan that reaches `done` is archived in the round the runner reads it:',
-      'the project directory is removed and `docs/project/project_log.md` carries',
-      'a row for it. The history is the record — `git log --all -- <path>` still',
+      'the project directory is removed, its README is kept as `docs/project/<programme>/closeout/<project>.md`,',
+      'every relative link under `docs/project/` and `docs/technical/` that pointed into it points at the closeout,',
+      'and `docs/project/project_log.md` carries a row for it. The history is the record — `git log --all -- <path>` still',
       'answers every question the removed directory could.',
       '',
       ...archived.map((project) => `- ${project}`),

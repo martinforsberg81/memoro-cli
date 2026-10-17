@@ -25,7 +25,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/archive-plan.test.js` passes, including the tests named in step 1."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Archiving against real git leaves `docs/project/mc/closeout/documented.md` on main with the README's text, and a document on main that linked to `../mc/documented/README.md#close` and `../mc/documented/PLAN.json` links to `../mc/closeout/documented.md#close` and `../mc/closeout/documented.json`, all in the archive's one commit.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/archive-live.test.js tests/mc/run.test.js` passes, including the assertions named in step 2."
     }

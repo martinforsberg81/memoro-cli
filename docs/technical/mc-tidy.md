@@ -90,7 +90,8 @@ Two things about the mechanics are worth knowing:
 A finished project leaves one file in git:
 `docs/project/<programme>/closeout/<project>.json` (`src/mc/closeout.js`).
 The archive writes it into the same commit and pull request that removes the
-plan, so the plan never leaves main without it. It holds:
+plan, so the plan never leaves main without it. The project's README, when it had
+one, stays beside it as `closeout/<project>.md`. It holds:
 
 - `goal` and `success_criteria`, from the plan as it stood at the archive;
 - `steps`: each step's `title` and `done_when` from the plan, and from the

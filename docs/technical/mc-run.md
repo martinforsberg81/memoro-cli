@@ -273,8 +273,9 @@ project used to.
    digests came to be waiting in a directory that is supposed to drain.
 3. **Tidy `queue.md`** against the plans on both `origin/main`s, and write
    `~/mc/runner/unreadable-plans.md` from the same reading.
-4. **Archive** every plan that says `status: done` — the directory removed and
-   a `project_log.md` row left behind it, one PR per repository, landed through
+4. **Archive** every plan that says `status: done` — the directory removed, its
+   README kept as `closeout/<project>.md` with the links into it rewritten to
+   that, and a `project_log.md` row left behind it, one PR per repository, landed through
    `mc merge --docs` — but only while no lane is in a session, because the
    gate refuses a second landing rather than queueing it. See
    [`mc-tidy.md`](mc-tidy.md).
@@ -931,7 +932,9 @@ every other file is `git rm`'d, and with nothing named the directory goes whole
 as before. The PR body ends with one `- kept: <file> — named by <path>:<line>`
 per kept file, and `runner.log` says the same. One kept file never refuses the
 archive; only a directory whose every file is named archives nothing, and says
-so.
+so. A README that is not kept is copied to `closeout/<project>.md` in the same
+commit, and every document under `docs/project/` and `docs/technical/` that linked
+into the directory is relinked to it.
 
 A **stack** needs an order rather than a call — `mc merge` refuses a batch
 aimed at several bases. `stackOrder` in run-plan.js is the whole decision, over
