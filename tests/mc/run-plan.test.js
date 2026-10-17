@@ -6,7 +6,7 @@ import {
   AUTOCOMPACT_TOKENS, CLAUDE_TOOLS, DEFAULT_CHECK_IN_MINUTES, DEFAULT_STALL_MINUTES, SESSION_DEFAULTS, assembleQueue, checkInPrompt, quietPrompt, chooseKind, collectNote,
   describeSettings, describeWatch, headlessArgs, helperDue, holdingPrs,
   inFlight, intakeNote, nightlyDue, intakeQueue, landingNote, nextBranch, nextFor, queueFileNames,
-  queueFileText, quotaResetAt, quotaSeen, apiInterruption, resumePrompt,
+  queueFileText, quotaResetAt, quotaSeen, apiInterruption, creditsResetAt, resumePrompt,
   COLD_RESUME_MAX_TOKENS, INTERRUPT_LIMIT, WARM_MARGIN_MS, readSessionOutput, recoveryFor, restartPrompt, sessionSpoke, sessionStanding, streamRateLimit, streamSummary, sessionResult, sessionSettings, stepOfPr, stepPrompt, strictQueue,
   tsvHeader, tsvRow, userMessageLine,
 } from '../../src/mc/run-plan.js';
@@ -1130,6 +1130,27 @@ test('apiInterruption: an exhausted credit is credits and a rejected key is key,
   assert.equal(read.note, 'interrupted');
   assert.equal(read.quota, false);
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: JSON.stringify(apiEnded('Invalid API key · Fix external API key')), exitCode: 1 }).note, 'interrupted');
+});
+
+test('apiInterruption: a spent workspace limit is credits until the date it names, not quota', () => {
+  const limit = 'API Error: 400 You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.';
+  assert.deepEqual(apiInterruption(apiEnded(limit, { api_error_status: 400 })), { kind: 'credits', said: limit, until: new Date('2026-11-01T00:00:00.000Z') });
+  const short = readSessionOutput({ toolId: 'claude-code', stdout: JSON.stringify(apiEnded(limit, { num_turns: 1 })), exitCode: 1 });
+  assert.equal(short.interrupted, 'credits');
+  assert.equal(short.note, 'interrupted');
+  assert.equal(short.quota, false, 'a session of one turn is not a quota either');
+  assert.equal(short.creditsUntil.toISOString(), '2026-11-01T00:00:00.000Z');
+  assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: JSON.stringify(apiEnded('Your credit balance is too low to access the Anthropic API.', { api_error_status: 400 })), exitCode: 1 }).creditsUntil, null);
+});
+
+test('creditsResetAt reads the instant a workspace limit names, 00:00 UTC without a time, and nothing else', () => {
+  assert.deepEqual(creditsResetAt('You will regain access on 2026-11-01 at 00:00 UTC.'), new Date('2026-11-01T00:00:00.000Z'));
+  assert.deepEqual(creditsResetAt('You will regain access on 2026-11-03 at 09:30 UTC.'), new Date('2026-11-03T09:30:00.000Z'));
+  assert.deepEqual(creditsResetAt('You will regain access on 2026-11-01.'), new Date('2026-11-01T00:00:00.000Z'));
+  assert.equal(creditsResetAt("You've hit your weekly limit · resets Sep 25 at 3pm"), null);
+  assert.equal(creditsResetAt('You will regain access on 2026-02-30 at 00:00 UTC.'), null);
+  assert.equal(creditsResetAt('You will regain access on 2026-11-01 at 25:00 UTC.'), null);
+  assert.equal(creditsResetAt(null), null);
 });
 
 test('readSessionOutput: a long session the API ended is interrupted, and a limit is quota whatever the turn count', () => {

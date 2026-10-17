@@ -4849,6 +4849,27 @@ test('credits: an exhausted credit marks it unusable for 24 h and hands the step
   }
 });
 
+test('credits: a spent workspace limit is unusable until the date it names, and handed to the plan without a quota pause', async () => {
+  const limit = streamed(apiEndedSession('API Error: 400 You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.', { api_error_status: 400 }));
+  const { f, billing, slept, calls } = onRefusal('credits', limit);
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(billing.credits.unusable_until, '2026-11-01T00:00:00.000Z');
+  assert.equal(billing.credits.why, 'workspace API usage limit reached');
+  assert.equal(billing.plan.refused_until, undefined, 'the plan is not touched');
+  assert.deepEqual(slept, [], 'no quota pause');
+  assert.equal(calls.length, 1, 'not resumed on the credit');
+  const step = registerOf(f, 'r').steps[0];
+  assert.equal(step.status, 'ready');
+  assert.equal(step.interrupted.billing, 'credits');
+  assert.equal(step.interrupted.count, 0);
+  const [row] = runRows(f.files).filter((r) => r.kind === 'step');
+  assert.equal(row.note, 'interrupted,handed-to-plan');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /r: the step credit is unusable until 2026-11-01T00:00:00\.000Z \(workspace API usage limit reached\)/u);
+  assert.match(log, /r: step 1 handed from credits to plan/u);
+  assert.doesNotMatch(log, /every lane sleeping/u);
+});
+
 test('plan: the same 429 is today\'s quota pause and resume, with the refusal written', async () => {
   const { f, billing, slept, calls } = onRefusal('plan', REFUSED_429);
   await createRunner({ deps: f.deps }).pass();

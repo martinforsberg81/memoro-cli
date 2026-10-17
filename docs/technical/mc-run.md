@@ -1534,7 +1534,9 @@ session (the quota, 429) writes `plan.refused_until` — the refusal's reset, or
 `QUOTA_SLEEP_MS` from now when it named none — in every mode. An exhausted
 credit (`Your credit balance is too low …`, `apiInterruption` kind `credits`)
 or a rejected key (`Invalid API key`, kind `key`) on a credits session writes
-`credits.unusable_until` 24 h out (`CREDITS_RETRY_MS`) with its `why`, and a
+`credits.unusable_until` 24 h out (`CREDITS_RETRY_MS`) with its `why` — or, for a
+spent workspace limit (`… workspace API usage limits …`, also kind `credits`),
+the instant the refusal names, with `why` `workspace API usage limit reached` — and a
 `runner.log` line that names `mc run --billing <mode>` as the way to clear it
 sooner. Then `billingFor` is asked for the next launch: when it is the other
 billing, the session is not waited on or resumed — the step goes back `ready`
