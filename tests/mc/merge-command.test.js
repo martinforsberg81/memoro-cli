@@ -244,6 +244,7 @@ describe('mc merge makes the step landing', () => {
     assert.equal(remainderOf('## Remainder\n\n`smart-search.js` — 16 sites.\n\n## Verified\n\nnpm test'), '`smart-search.js` — 16 sites.');
     assert.equal(remainderOf('## Remainder\n\nNone.\n'), null);
     assert.equal(remainderOf('no such heading'), null);
+    assert.equal(remainderOf('## Remainder\nOne thing.\n\n<!-- mc:described abc1234 -->'), 'One thing.');
   });
 });
 
