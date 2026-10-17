@@ -48,6 +48,7 @@ import {
   placeOf, queuedFor, stepsDone,
 } from './merge-queue.js';
 import { MEND_AT_ONCE, mendedReason, mendLine } from './mend.js';
+import { removeRedDetail, writeRedDetail } from './merge-red.js';
 import { landedPatch, landingPatch, redPatch, shouldWait } from './merge-step.js';
 import { readEntry, realLock, updateStep } from './register.js';
 import { gateLaneOf } from './repo-gate-table.js';
@@ -491,6 +492,7 @@ export async function landJob(batch, {
       ...(job.holder ? { holder: job.holder } : {}),
       onProgress: (message) => say(`${label}: ${message}`),
     });
+    keepRed(report, { root, repo: job.repo, pr: job.pr, batch: jobs.length > 1, now });
     record(report, { mode: 'merge' });
     if (report?.stopped_at === 'file-killed' && !killedOnce) {
       killedOnce = true;
@@ -513,6 +515,24 @@ export async function landJob(batch, {
 
   for (const one of answersFor(jobs, report)) await answer(one.job, one.landed, one.report);
   return answers;
+}
+
+/**
+ * A red round's failures written to `runner/merge-red/` and its path put on
+ * the report as `red_detail` (ruling 44): for one job, the round's; for a
+ * batch, each pull request's own fallback round's, by its number.
+ */
+function keepRed(report, { root, repo, pr, batch, now }) {
+  if (!report) return;
+  if (batch) {
+    for (const round of report.batch?.rounds || []) {
+      const path = writeRedDetail({ root, repo, pr: round?.pr?.number, report: round, now: now() });
+      if (path) round.red_detail = path;
+    }
+    return;
+  }
+  const path = writeRedDetail({ root, repo, pr, report, now: now() });
+  if (path) report.red_detail = path;
 }
 
 /**
@@ -540,6 +560,8 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   // runner lane next asks GitHub. A cache that cannot be written costs the
   // page a stale row and the landing nothing.
   if (landed) { try { dropFromPage({ root, repo: job.repo, number: job.pr }); } catch { /* see above */ } }
+  // Its last red is nobody's to read any more.
+  if (landed) removeRedDetail({ root, repo: job.repo, pr: job.pr });
 
   if (job.step && !mending) {
     const stamp = now().toISOString().replace(/\.\d{3}Z$/u, 'Z');

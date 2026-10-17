@@ -2322,7 +2322,7 @@ export function createRunner({
     // on with the same branch and the same pull request.
     const standingBefore = choice.index == null ? null : readEntry(root, name, { read: deps.read })?.steps?.[choice.index] || null;
     const retry = standingBefore?.pr && standingBefore.attempts > 0 && standingBefore.reason
-      ? { pr: standingBefore.pr, reason: standingBefore.reason, attempts: standingBefore.attempts }
+      ? { pr: standingBefore.pr, reason: standingBefore.reason, attempts: standingBefore.attempts, red: standingBefore.red || null }
       : null;
     // A resumed step keeps the stack it was started on; the branch did not move.
     const stacked = resuming ? (standingBefore?.stacked_on ?? null) : (moved.stacked || null);

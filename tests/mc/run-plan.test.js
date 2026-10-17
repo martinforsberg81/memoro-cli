@@ -411,6 +411,26 @@ test('stepPrompt: a conflicted worktree is a preamble, and the step is still the
   assert.match(p, /----- Your step: steps\[1\] -----\ntitle: The hero object/u);
 });
 
+test('stepPrompt: a retry from a red round names its red files, its kept failures and the re-run line (ruling 44)', () => {
+  const { plan } = threeSteps();
+  const step = plan.steps[1];
+  const names = ['a (b)', 'c', 'd', 'e', 'f', 'g'];
+  const p = stepPrompt({
+    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan, step, index: 1,
+    retry: {
+      pr: 41, reason: '6 tests red: a (b), c, d, e, f, …', attempts: 1,
+      red: { files: ['tests/a.test.js', 'tests/b.test.js'], detail: '/home/mc/runner/merge-red/memoro-41.txt', names },
+    },
+  });
+  assert.match(p, /The gate said: 6 tests red: a \(b\), c, d, e, f, …\nRed files: tests\/a\.test\.js tests\/b\.test\.js\n/u);
+  assert.match(p, /^The failures, as the round saw them: \/home\/mc\/runner\/merge-red\/memoro-41\.txt$/mu);
+  assert.match(p, /^Re-run just those: mc gate tests\/a\.test\.js tests\/b\.test\.js --test-name-pattern 'a \\\(b\\\)\|c\|d\|e\|f'$/mu, 'escaped, at most five');
+  const plain = stepPrompt({
+    name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.json', plan, step, index: 1, retry: { pr: 41, reason: 'red', attempts: 1 },
+  });
+  assert.doesNotMatch(plain, /Red files:|Re-run just those/u, 'a retry with no red files is as it was');
+});
+
 test('stepPrompt: an interrupted step gets a handover after the retry preamble, and the step is still the job', () => {
   const { plan } = threeSteps();
   const step = plan.steps[1];

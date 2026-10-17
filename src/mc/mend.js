@@ -22,6 +22,7 @@ import { dirname, join } from 'node:path';
 import { resolveLaunch } from '../adapters/index.js';
 import { runTool } from './child-async.js';
 import { profileArgs } from './portrait.js';
+import { gateRedFiles, redHandoff, redLines } from './merge-red.js';
 import { readEntry } from './register.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, readSessionOutput, sessionResult, TIMEOUT_EXIT } from './run-plan.js';
@@ -75,9 +76,16 @@ export function mayMend(job, report) {
   return true;
 }
 
-/** The red files the round named: on the report, or on its candidate. */
+/**
+ * The red files the round named: on the report, or on its candidate — the
+ * merge round's own report and the gate's verdict under it. Until ruling 44
+ * only the first two were read, and a merge round carried neither: every mend
+ * was told `red files:` with nothing after it.
+ */
 export function redFilesOf(report) {
-  return [...new Set([...(report?.red_files || []), ...(report?.candidate?.red_files || [])])];
+  return [...new Set([
+    ...(report?.red_files || []), ...(report?.candidate?.red_files || []), ...(report?.gate ? gateRedFiles(report.gate) : []),
+  ])];
 }
 
 /** The paths a conflict names: git's `Merge conflict in <path>`, and the restack's `conflicts in a b —`. */
@@ -125,7 +133,10 @@ export function mendPrompt({ job, report, title = null, step = null, log = [] })
     `    stopped at: ${stop}`,
     `    reason: ${report?.reason || 'the round said nothing'}`,
   ];
-  if (red.length) out.push(`    red files: ${red.join(' ')}`);
+  if (red.length) {
+    const handed = redHandoff(report);
+    out.push(...redLines({ files: red, detail: handed?.detail || null, names: handed?.names || [] }).map((line) => `    ${line}`));
+  }
   if (conflicts.length) out.push(`    conflicts in: ${conflicts.join(' ')}`);
   if (step) {
     out.push('', `It is ${job.step.project} step ${job.step.index + 1}${step.title ? `, "${step.title}"` : ''}. What it was for:`, '');
@@ -139,7 +150,9 @@ export function mendPrompt({ job, report, title = null, step = null, log = [] })
       ? '- Merge `origin/main` into the branch (`git fetch -q origin && git merge origin/main`) and resolve every conflict keeping both intents — never take a side because it is quicker.'
       : '- Merge `origin/main` into the branch first if it is behind and that is where the red comes from.',
     '- Where the change\'s own tests are red, fix the change; never skip, weaken or delete a test.',
-    `- Run ${red.length ? `the red files (\`node --test ${red.join(' ')}\`)` : 'the red files'} or the repository's suite command until they are green.`,
+    red.length
+      ? `- Run \`mc gate ${red.join(' ')}\` until they are green, then \`mc gate\` once for the whole selection — never a bare \`npm test\`.`
+      : '- Run `mc gate` until it is green — never a bare `npm test`.',
     `- Commit, then \`git push origin HEAD:${branch}\`. No force.`,
     '- Edit no `PLAN.json`.',
     '- If it cannot be fixed here, push nothing and say why in your last line.',

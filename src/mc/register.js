@@ -86,7 +86,7 @@ export function registerPath(root, project) {
 export function emptyStep() {
   return {
     key: null, status: 'ready', pr: null, branch: null, blocked_by: null, reason: null, comments: [],
-    session: null, attempts: 0, landed: null, stacked_on: null, interrupted: null, updated: null,
+    session: null, attempts: 0, landed: null, stacked_on: null, interrupted: null, red: null, updated: null,
   };
 }
 
@@ -150,6 +150,16 @@ function normaliseStep(step) {
       : null,
     // The session that died under this step (see `STEP_STATES`).
     interrupted: plain(step.interrupted) ? { ...step.interrupted } : null,
+    // What the merger's last red round handed on (ruling 44): `{ files,
+    // detail, names }` — its red files, its file under `runner/merge-red/`
+    // and its red tests' names, for the retry preamble.
+    red: plain(step.red) && Array.isArray(step.red.files) && step.red.files.length
+      ? {
+        files: step.red.files.map(String),
+        detail: typeof step.red.detail === 'string' ? step.red.detail : null,
+        names: Array.isArray(step.red.names) ? step.red.names.map(String) : [],
+      }
+      : null,
     updated: typeof step.updated === 'string' ? step.updated : null,
   };
 }

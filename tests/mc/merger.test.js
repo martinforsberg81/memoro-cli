@@ -115,6 +115,66 @@ describe('landJob — one job, landed or answered', () => {
     assert.ok(m.said.some((line) => /ready again \(attempt 1\)/u.test(line)));
   });
 
+  // A merge round red on two tests in one file, the way `runMergeRound`
+  // answers: the gate's verdict under `gate`, its red files lifted beside it.
+  const twoRed = () => ({
+    ok: false, merged: false, stopped_at: 'red', reason: '2 tests red: s › a, s › b', red_files: ['tests/x.test.js'], main_red: null,
+    pr: { number: 671 },
+    gate: {
+      ok: false, stopped_at: 'red',
+      candidate: {
+        red: ['s › a', 's › b', 's'], red_files: ['tests/x.test.js'],
+        red_tests: [
+          { file: 'tests/x.test.js', name: 's › a', own: 'a', at: 'tests/x.test.js:12:5', error: ['Expected values to be strictly equal:', '1 !== 2'] },
+          { file: 'tests/x.test.js', name: 's › b', own: 'b', at: 'tests/x.test.js:20:7', error: ['boom'] },
+        ],
+      },
+    },
+  });
+
+  it('a red round keeps its failures in merge-red/, on the report, in the round record and in the register (ruling 44)', async () => {
+    register();
+    const recorded = [];
+    const m = machine([twoRed()], { record: (report, options) => recorded.push({ report, options }) });
+    const [answer] = await landJob(JOB, m.deps);
+    const path = join(root, 'runner', 'merge-red', 'memoro-cli-671.txt');
+    assert.equal(answer.report.red_detail, path);
+    assert.equal(recorded[0].report.red_detail, path, 'on the report the round record is written from');
+    const text = readFileSync(path, 'utf8');
+    assert.match(text, /^tests\/x\.test\.js$/mu);
+    assert.match(text, /✗ s › a\n {4}at tests\/x\.test\.js:12:5\n {4}Expected values to be strictly equal:\n {4}1 !== 2/u);
+    assert.match(text, /✗ s › b\n {4}at tests\/x\.test\.js:20:7\n {4}boom/u);
+    assert.deepEqual(stepNow().red, { files: ['tests/x.test.js'], detail: path, names: ['a', 'b'] });
+  });
+
+  it('the next red overwrites the file and a green landing removes it', async () => {
+    register();
+    const path = join(root, 'runner', 'merge-red', 'memoro-cli-671.txt');
+    await landJob(JOB, machine([twoRed()]).deps);
+    const again = twoRed();
+    again.gate.candidate.red_tests = [again.gate.candidate.red_tests[1]];
+    register();
+    await landJob(JOB, machine([again]).deps);
+    assert.doesNotMatch(readFileSync(path, 'utf8'), /✗ s › a/u,'one file per pull request, the last red\'s');
+    register();
+    await landJob(JOB, machine([green]).deps);
+    assert.equal(existsSync(path), false);
+    assert.equal(stepNow().red, null);
+  });
+
+  it('a batch keeps one file per pull request, from each one\'s own round', async () => {
+    register();
+    const own = { ...twoRed(), pr: { number: 672 } };
+    const batch = {
+      ok: false, merged: false, stopped_at: 'batch', reason: '1 of 2 did not land',
+      batch: { prs: [671, 672], merges: [{ number: 671, merged: true, merge_commit: 'abc' }, { number: 672, merged: false, error: 'red' }], rounds: [{ ...green, pr: { number: 671 } }, own] },
+    };
+    await landJob([JOB, { ...JOB, pr: 672, branch: 'mq2', step: null }], machine([batch]).deps);
+    assert.equal(own.red_detail, join(root, 'runner', 'merge-red', 'memoro-cli-672.txt'));
+    assert.equal(existsSync(own.red_detail), true);
+    assert.equal(existsSync(join(root, 'runner', 'merge-red', 'memoro-cli-671.txt')), false);
+  });
+
   it(`red on the ${MAX_MERGE_ATTEMPTS}th attempt is failed — a person's`, async () => {
     register({ attempts: MAX_MERGE_ATTEMPTS - 1 });
     await landJob(JOB, machine([red]).deps);
