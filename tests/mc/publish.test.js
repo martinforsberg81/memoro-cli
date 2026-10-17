@@ -61,7 +61,7 @@ describe('messageParts and publishLines', () => {
 
 describe('mc publish', () => {
   function fixture({ branch = 'step-x', status = '', remote = '', prs = [], created = 'https://x/pull/9\n', body = '', log = '' } = {}) {
-    const out = { stdout: '', stderr: '', gh: [], pushed: [] };
+    const out = { stdout: '', stderr: '', gh: [], pushed: [], pushOpts: [] };
     const git = (args) => {
       const key = args.join(' ');
       if (key === 'rev-parse --show-toplevel') return '/w/x';
@@ -73,6 +73,7 @@ describe('mc publish', () => {
       if (key === 'remote get-url origin') return 'git@github.com:m/memoro.git';
       if (key === 'log -1 --format=%B') return 'The subject\n\nThe body.\n';
       if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
+      if (key.startsWith('check-ref-format')) return args.at(-1).includes('..') ? null : args.at(-1);
       if (key.startsWith('rev-list')) return 'aaaaaaa1111';
       if (key.startsWith('log --reverse')) return log;
       return null;
@@ -88,7 +89,7 @@ describe('mc publish', () => {
     };
     const deps = {
       stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } },
-      cwd: '/w/x', git, gh, push: (name) => { out.pushed.push(name); return { ok: true, text: '' }; },
+      cwd: '/w/x', git, gh, push: (name, opts) => { out.pushed.push(name); out.pushOpts.push(opts); return { ok: true, text: '' }; },
     };
     return { out, deps };
   }
@@ -163,6 +164,36 @@ describe('mc publish', () => {
     const parsed = JSON.parse(json.out.stdout);
     assert.deepEqual([parsed.number, parsed.created, parsed.pushed, parsed.next], [9, true, true, 'mc merge memoro 9']);
     assert.equal(await run(['extra'], fixture().deps), 2);
+  });
+
+  it('a detached HEAD publishes to --branch without -u', async () => {
+    const { out, deps } = fixture({ branch: 'HEAD' });
+    assert.equal(await run(['--branch', 'step-x'], deps), 0);
+    assert.deepEqual(out.pushed, ['step-x']);
+    assert.deepEqual(out.pushOpts, [{ detached: true }]);
+    assert.deepEqual(out.gh[1].slice(0, 6), ['pr', 'create', '--base', 'main', '--head', 'step-x']);
+    const calls = [];
+    const spawn = (cmd, args) => { calls.push([cmd, ...args]); return { status: 0, stdout: '', stderr: '' }; };
+    assert.equal(pushBranch('/w/x', 'step-x', { spawn, stderr: { write() {} }, detached: true }).ok, true);
+    assert.deepEqual(calls, [['git', 'push', 'origin', 'HEAD:refs/heads/step-x']]);
+  });
+
+  it('--branch on another branch, or an invalid name, refuses before the network', async () => {
+    const other = fixture({ branch: 'other' });
+    assert.equal(await run(['--branch', 'step-x'], other.deps), 2);
+    assert.deepEqual([other.out.pushed, other.out.gh], [[], []]);
+    assert.match(other.out.stderr, /--branch step-x, but this worktree is on other — drop --branch/u);
+    const bad = fixture({ branch: 'HEAD' });
+    assert.equal(await run(['--branch', 'bad..name'], bad.deps), 2);
+    assert.deepEqual([bad.out.pushed, bad.out.gh], [[], []]);
+    assert.match(bad.out.stderr, /--branch bad\.\.name is not a branch name/u);
+  });
+
+  it('a detached HEAD without --branch is still refused', async () => {
+    const { out, deps } = fixture({ branch: 'HEAD' });
+    assert.equal(await run([], deps), 1);
+    assert.match(out.stderr, /on HEAD/u);
+    assert.deepEqual([out.pushed, out.gh], [[], []]);
   });
 });
 
