@@ -75,7 +75,8 @@ function numberedRun(head, project) {
  * by protocol (memoro #11812); any project may.
  */
 export function remainderOf(body) {
-  const lines = String(body || '').split(/\r?\n/u);
+  // The mark `mc publish` ends a description with is not part of a remainder.
+  const lines = String(body || '').split(/\r?\n/u).filter((line) => !/^<!-- mc:[^>]*-->$/u.test(line));
   const start = lines.findIndex((line) => /^#{1,2}\s+remainder\s*$/iu.test(line.trim()));
   if (start < 0) return null;
   const rest = lines.slice(start + 1);

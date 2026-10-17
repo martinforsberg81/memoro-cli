@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { tryGit } from '../git.js';
-import { messageParts, publishLines, refusal } from '../publish.js';
+import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
 import { scanArgs } from './flags.js';
 
 export async function run(argv, deps = {}) {
@@ -66,10 +66,23 @@ export async function run(argv, deps = {}) {
 
   let created = false;
   let number = open?.number ?? null;
+  let described = localHead;
+  let after = 0;
   if (open) {
     const edit = ['pr', 'edit', String(open.number)];
     if (flags.title) edit.push('--title', flags.title);
-    if (bodyGiven != null) edit.push('--body', bodyGiven);
+    if (bodyGiven != null) {
+      edit.push('--body', markedBody(bodyGiven, localHead));
+    } else {
+      const read = gh(['pr', 'view', String(open.number), '--json', 'body']);
+      let current = null;
+      try { current = JSON.parse(read.stdout || 'null')?.body ?? null; } catch { current = null; }
+      if (!read.ok || current == null) { stderr.write(`mc: gh pr view #${open.number} failed: ${read.text}\n`); return 1; }
+      const later = afterTheDescription({ git, body: current, base: flags.base || defaultBase(git), stderr });
+      described = later.described;
+      after = later.after;
+      if (later.body != null) edit.push('--body', later.body);
+    }
     if (flags.base) edit.push('--base', flags.base);
     if (edit.length > 3) {
       const edited = gh(edit);
@@ -77,7 +90,7 @@ export async function run(argv, deps = {}) {
     }
   } else {
     const base = flags.base || defaultBase(git);
-    const made = gh(['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', body]);
+    const made = gh(['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', markedBody(body, localHead)]);
     if (!made.ok) { stderr.write(`mc: gh pr create failed: ${made.text}\n`); return 1; }
     created = true;
     const found = /\/pull\/(\d+)/u.exec(made.stdout || '');
@@ -95,10 +108,10 @@ export async function run(argv, deps = {}) {
   if (!viewed.ok || !pr) { stderr.write(`mc: gh pr view #${number} failed: ${viewed.text}\n`); return 1; }
 
   if (flags.json) {
-    stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, next: `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, described, after, next: `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);
     return 0;
   }
-  for (const line of publishLines({ pr, localHead, branch, pushed, created, repo })) stdout.write(`${line}\n`);
+  for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described })) stdout.write(`${line}\n`);
   return 0;
 }
 
@@ -106,6 +119,29 @@ export async function run(argv, deps = {}) {
 function defaultBase(git) {
   const head = git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
   return head ? head.replace(/^origin\//u, '') : 'main';
+}
+
+/**
+ * The commits after the head the description describes, and the body that
+ * lists them — `body` is null when it already says so. A description with no
+ * mark describes the branch's first commit. When that head is not in this
+ * branch nothing is written: the reason goes to stderr, and the body stays.
+ */
+function afterTheDescription({ git, body, base, stderr }) {
+  const read = readBody(body);
+  const described = read.described || (git(['rev-list', '--reverse', '--no-merges', `origin/${base}..HEAD`]) || '').split('\n')[0] || null;
+  if (!described || git(['merge-base', '--is-ancestor', described, 'HEAD']) === null) {
+    stderr.write(`mc: the description's head ${described || '(none)'} is not in this branch — left as it is; write it again with --body-file\n`);
+    return { described, after: 0, body: null };
+  }
+  const commits = (git(['log', '--reverse', '--no-merges', '--format=%H%x1f%s%x1f%b%x1e', `${described}..HEAD`]) || '')
+    .split('\x1e').map((record) => record.trim()).filter(Boolean)
+    .map((record) => {
+      const [sha, subject, text = ''] = record.split('\x1f');
+      return { sha, subject, body: text };
+    });
+  const next = describedBody({ text: read.text, described, commits });
+  return { described, after: commits.length, body: next === body ? null : next };
 }
 
 /** The repository as mc names it — the last segment of origin's URL, or the checkout's own name. */
