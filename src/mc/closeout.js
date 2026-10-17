@@ -32,6 +32,14 @@ export function closeoutPath(programme, project) {
 }
 
 /**
+ * Where the archive puts a project's README (ruling 46): beside its closeout
+ * record, so the links that pointed into the removed directory can follow it.
+ */
+export function closeoutReadmePath(programme, project) {
+  return `docs/project/${programme}/closeout/${project}.md`;
+}
+
+/**
  * A session result file of one project under `runner/log/`:
  * `<project>-<yyyymmddThhmmssZ>.json`, gzipped or not. Exact, because a
  * prefix would let `ui-faults` read `ui-faults-2`'s files.

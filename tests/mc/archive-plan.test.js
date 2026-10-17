@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import {
   NO_DOC, UNDOCUMENTED_HEADER, appendRow, donePlans, duplicateRow, formatRow, isUndocumented, keptFiles, keptParagraph,
-  logRows, mergedPrs, namedFiles, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
+  logRows, mergedPrs, namedFiles, planDoc, planSummary, pointerCell, remoteSlug, rewriteArchivedLinks, rowFor, undocumentedRow,
 } from '../../src/mc/archive-plan.js';
 
 const LOG = `# Project log
@@ -193,4 +193,70 @@ test('a directory named literally keeps what is under it; a file that is not the
   assert.deepEqual(namedFiles(Q, Q_FILES, [{ path: 'src/a.js', text: "'docs/project/p/q/gone.md'" }]), []);
   assert.deepEqual(namedFiles(Q, Q_FILES, [{ path: 'src/a.js', text: "'docs/project/p/q-two/skills/a.md'" }]), [],
     'q-two is not q');
+});
+
+const GONE = [{ dir: 'docs/project/mc/gone', programme: 'mc', project: 'gone', readme: true, kept: ['docs/project/mc/gone/skills/a.md'] }];
+const FROM = 'docs/project/mc/other/README.md';
+const rewrite = (text, options = {}) => rewriteArchivedLinks(text, { from: FROM, archived: GONE, ...options });
+
+test('a link to the README keeps its anchor and goes to the README\'s closeout', () => {
+  assert.equal(rewrite('[r](../gone/README.md#close)'), '[r](../closeout/gone.md#close)');
+});
+
+test('a link to the directory goes to the README\'s closeout, with or without the slash', () => {
+  assert.equal(rewrite('[d](../gone/) [e](../gone)'), '[d](../closeout/gone.md) [e](../closeout/gone.md)');
+});
+
+test('a link to PLAN.json goes to the closeout record, and an anchor never goes onto the json', () => {
+  assert.equal(rewrite('[p](../gone/PLAN.json)'), '[p](../closeout/gone.json)');
+  assert.equal(rewrite('[p](../gone/PLAN.json#steps)'), '[p](../closeout/gone.json)');
+});
+
+test('another removed file goes to the README\'s closeout, without its anchor', () => {
+  assert.equal(rewrite('[n](../gone/notes.md#x)'), '[n](../closeout/gone.md)');
+});
+
+test('a link to a kept file, or to a directory that holds one, is left alone', () => {
+  assert.equal(rewrite('[k](../gone/skills/a.md)'), '[k](../gone/skills/a.md)');
+  assert.equal(rewrite('[s](../gone/skills/)'), '[s](../gone/skills/)');
+});
+
+test('a link that is not into the archived directory, or not a relative path, is left alone', () => {
+  const text = '[o](../other/PLAN.json) [h](https://x/gone) [a](#gone) [s](/docs/project/mc/gone/README.md)';
+  assert.equal(rewrite(text), text);
+});
+
+test('a link inside a fenced code block is left alone, one after the fence is rewritten', () => {
+  const text = ['```', '[r](../gone/README.md)', '```', '[r](../gone/README.md)'].join('\n');
+  assert.equal(rewrite(text), ['```', '[r](../gone/README.md)', '```', '[r](../closeout/gone.md)'].join('\n'));
+});
+
+test('a reference definition on its own line is rewritten', () => {
+  assert.equal(rewrite('[r]: ../gone/README.md'), '[r]: ../closeout/gone.md');
+});
+
+test('a title is kept as it was written', () => {
+  assert.equal(rewrite('[r](../gone/README.md "t")'), '[r](../closeout/gone.md "t")');
+});
+
+test('the new target is relative to the file the text lives in', () => {
+  assert.equal(rewrite('[r](../project/mc/gone/README.md)', { from: 'docs/technical/x.md' }),
+    '[r](../project/mc/closeout/gone.md)');
+});
+
+test('with no README copied, every link goes to the closeout record and no anchor is kept', () => {
+  const archived = GONE.map((a) => ({ ...a, readme: false }));
+  assert.equal(rewrite('[r](../gone/README.md#close) [d](../gone/) [n](../gone/notes.md)', { archived }),
+    '[r](../closeout/gone.json) [d](../closeout/gone.json) [n](../closeout/gone.json)');
+});
+
+test('a moved README rewrites its links against where it now lives', () => {
+  const text = '[p](PLAN.json) [n](./notes.md) [r](../rulings.md)';
+  assert.equal(rewrite(text, { from: 'docs/project/mc/gone/README.md', to: 'docs/project/mc/closeout/gone.md' }),
+    '[p](gone.json) [n](gone.md) [r](../rulings.md)');
+});
+
+test('a text with no link comes back as it was', () => {
+  const text = 'Plain prose, no link at all.\n';
+  assert.equal(rewrite(text), text);
 });
