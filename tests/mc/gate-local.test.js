@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { FAILURE_LINES, OUTPUT_CAP, gateCommand, gateLines, summarizeGate } from '../../src/mc/gate-local.js';
+import { FAILURE_LINES, OUTPUT_CAP, failingNames, gateCommand, gateLines, namePattern, namedCommand, rerunLine, summarizeGate, testFlags } from '../../src/mc/gate-local.js';
 
 describe('gateCommand', () => {
   it('is npm run ci with the base where there is a ci script, npm test otherwise, null with neither', () => {
@@ -78,6 +78,39 @@ describe('summarizeGate', () => {
     const s = summarizeGate(['ci runner: Affected test selection has unmapped changes:', ...paths].join('\n'), { exitCode: 1 });
     assert.equal(s.failures.length, 11);
     assert.equal(s.more, 0);
+  });
+});
+
+describe('named test files', () => {
+  it('failingNames: the names the reporter printed, the duration and the summary heading left out, once each', () => {
+    const output = [
+      '✖ adds up (2.1ms)',
+      '✖ parses 1+1 [x] (0.4ms)',
+      '  ✖ handles (case) (3ms)',
+      '✖ adds up (2.1ms)',
+      '✖ failing tests:',
+    ].join('\n');
+    assert.deepEqual(failingNames(output), ['adds up', 'parses 1+1 [x]', 'handles (case)']);
+    assert.equal(namePattern(failingNames(output)), 'adds up|parses 1\\+1 \\[x\\]|handles \\(case\\)');
+    assert.equal(namePattern(['a', 'b', 'c', 'd', 'e', 'f']), 'a|b|c|d|e');
+  });
+
+  it('testFlags: the --import and --experimental arguments of a node --test script, in order; none otherwise', () => {
+    assert.deepEqual(testFlags('node --test --import ./tests/_isolate-home.mjs \'tests/**/*.test.js\''), ['--import', './tests/_isolate-home.mjs']);
+    assert.deepEqual(testFlags('node --test --experimental-strip-types --import=./x.mjs --test-reporter spec tests/a.js'), ['--experimental-strip-types', '--import=./x.mjs']);
+    assert.deepEqual(testFlags('vitest run'), []);
+  });
+
+  it('namedCommand: node --test, the flags, the files, the pattern', () => {
+    const manifest = { scripts: { test: 'node --test --import ./tests/_isolate-home.mjs tests/**/*.test.js' } };
+    assert.equal(namedCommand(manifest, ['a.test.js', 'tests/b x.test.js']).run, 'node --test --import ./tests/_isolate-home.mjs a.test.js \'tests/b x.test.js\'');
+    assert.equal(namedCommand(null, ['a.test.js'], { pattern: 'it\'s' }).run, 'node --test a.test.js --test-name-pattern \'it\'\\\'\'s\'');
+  });
+
+  it('rerunLine: none without files; the files and the failing names otherwise', () => {
+    assert.equal(rerunLine(undefined, '✖ a'), null);
+    assert.equal(rerunLine(['a.test.js'], 'ℹ tests 1'), 're-run: mc gate a.test.js');
+    assert.equal(rerunLine(['a.test.js'], '✖ adds up (2ms)'), 're-run: mc gate a.test.js --test-name-pattern \'adds up\'');
   });
 });
 

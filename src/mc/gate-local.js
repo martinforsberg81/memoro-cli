@@ -40,6 +40,73 @@ export function gateCommand(manifest, { base = 'origin/main' } = {}) {
   return null;
 }
 
+/**
+ * The `node --test` flags a repository's `test` script carries: every
+ * `--import <x>` / `--import=<x>` and `--experimental-*` argument, in order.
+ * Empty when the script does not start with `node --test`.
+ */
+export function testFlags(script) {
+  const words = String(script || '').trim().split(/\s+/u);
+  if (words[0] !== 'node' || words[1] !== '--test') return [];
+  const flags = [];
+  for (let i = 2; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === '--import' && words[i + 1]) { flags.push(word, words[i + 1]); i += 1; }
+    else if (word.startsWith('--import=') || word.startsWith('--experimental-')) flags.push(word);
+  }
+  return flags;
+}
+
+/**
+ * The command for named test files: `node --test` with the repository's flags,
+ * the files (relative to the worktree root), and the name pattern if one was given.
+ */
+export function namedCommand(manifest, files, { pattern } = {}) {
+  const script = manifest?.scripts?.test ?? null;
+  const words = ['node', '--test', ...testFlags(script), ...files.map(shellWord)];
+  if (pattern != null) words.push('--test-name-pattern', shellQuote(pattern));
+  return { run: words.join(' '), script, source: 'files', files };
+}
+
+/** The failing test names the reporter printed (`✖ name (1.2ms)`), once each, in order. */
+export function failingNames(output) {
+  const names = [];
+  for (const line of String(output || '').split('\n')) {
+    const failed = FAILED_TEST.exec(line);
+    if (!failed || failed[1] === 'failing tests:' || names.includes(failed[1])) continue;
+    names.push(failed[1]);
+  }
+  return names;
+}
+
+/**
+ * The `--test-name-pattern` that selects the named tests: at most five of
+ * them, each regex-escaped, joined by `|`.
+ */
+export function namePattern(names) {
+  return names.slice(0, RERUN_NAMES).map((name) => name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')).join('|');
+}
+
+/**
+ * The line a red named-files gate hands back: the same files again, on the
+ * tests that failed. Null when no files were named.
+ */
+export function rerunLine(files, output) {
+  if (!files?.length) return null;
+  const names = failingNames(output);
+  const pattern = names.length ? ` --test-name-pattern ${shellQuote(namePattern(names))}` : '';
+  return `re-run: mc gate ${files.map(shellWord).join(' ')}${pattern}`;
+}
+
+/** A word for `sh -c`, quoted only where it has to be. */
+function shellWord(word) {
+  return /^[\w./:=@%+,-]+$/u.test(word) ? word : shellQuote(word);
+}
+
+function shellQuote(text) {
+  return `'${String(text).replace(/'/gu, `'\\''`)}'`;
+}
+
 // A line that names a failure, across the reporters the two repositories
 // print: node's spec reporter (`✖ name`), TAP (`not ok N - name`), memoro's
 // ci summary (`status: fail`, `command x: fail`), and the assertion's own
@@ -54,6 +121,10 @@ const COMMAND_FAIL = /^\s*command ([\w:.-]+): fail/u;
 const CI_RUNNER = /^ci runner: /u;
 const CI_RUNNER_PATH = /^\s*- \S/u;
 const CI_RUNNER_PATHS = 10;
+// A failing test's line in node's spec reporter, with its duration when it has one.
+const FAILED_TEST = /^\s*✖ (.+?)(?:\s+\(\d+(?:\.\d+)?ms\))?\s*$/u;
+/** How many failing test names a re-run line names. */
+const RERUN_NAMES = 5;
 
 /**
  * The output boiled down: `ok`, the counts the reporter printed (summed over
@@ -99,9 +170,10 @@ export function summarizeGate(output, { exitCode }) {
 
 /**
  * The lines the session reads, capped at `OUTPUT_CAP` bytes. Green is three
- * lines; red names what failed and where the whole output is.
+ * lines; red names what failed, the re-run line when there are named files,
+ * and where the whole output is.
  */
-export function gateLines(summary, { command, seconds, logPath }) {
+export function gateLines(summary, { command, seconds, logPath, rerun = null }) {
   const c = summary.counts;
   const gates = summary.gates ?? [];
   let counted = c.tests != null
@@ -120,6 +192,7 @@ export function gateLines(summary, { command, seconds, logPath }) {
     for (const line of summary.failures) lines.push(line);
     if (summary.more) lines.push(`… and ${summary.more} more failing lines`);
     if (!summary.failures.length && !gates.length) lines.push('the output names no failing test — read the log');
+    if (rerun) lines.push(rerun);
   }
   lines.push(`whole output: ${logPath}`);
   let text = lines.join('\n');
