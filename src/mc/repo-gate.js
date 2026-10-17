@@ -61,7 +61,7 @@ import { regenerateDerived } from './repo-derived.js';
 import { ensureWorkDeps } from './work-deps.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
-import { recordRound } from './repo-round-log.js';
+import { readRounds, recordRound } from './repo-round-log.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
@@ -572,6 +572,119 @@ export async function runGate({
       }
     }
 
+    const flags = declared.declaration.pr_tests_flags || [];
+    const is = facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
+
+    // A red the round measured, and whose red it is. The verdict is red
+    // whatever the probe finds; the probe only says whose. `alone` is a run of
+    // the red files by themselves on the candidate already — the previous red
+    // phase — which is the second sample the probe would otherwise take.
+    const stopRed = async (result, { alone = false } = {}) => {
+      // A file something outside the round killed is not a verdict on this
+      // change, and the base would pass it — the main-red probe would then
+      // call it "this change broke them" (#13337, 2026-10-10 12:19:56). Every
+      // red killed: a stop the merger measures again. Some: the rest is the
+      // red, and the killed ones are listed beside it, never counted green.
+      const killed = result.killed_files || [];
+      if (killed.length) {
+        report.killed_files = killed;
+        const theirs = new Set(result.killed_red || []);
+        const rest = result.red.filter((name) => !theirs.has(name));
+        if (!rest.length) {
+          const signals = [...new Set(killed.map((one) => one.signal))].join('/');
+          return finish('file-killed', `${killed.map((one) => one.file).join(', ')} ended by ${signals} from outside the round — not a verdict on this change`);
+        }
+        result.red = rest;
+        if (result.red_files) result.red_files = result.red_files.filter((file) => !killed.some((one) => one.file === file));
+      }
+      // A file whose tests were cancelled and none failed — a `before` hook
+      // that ran out of time, as memoro's build-bundle.test.js on #13470 at
+      // load ~38 — is under load, not the change's: taken out of the red as a
+      // file that passed alone would be, without running it again, and never
+      // counted green. Every red cancelled: the merger measures again.
+      const cancelled = result.cancelled_files || [];
+      if (cancelled.length) {
+        report.cancelled_files = cancelled;
+        const theirs = new Set(result.cancelled_red || []);
+        const rest = result.red.filter((name) => !theirs.has(name));
+        if (!rest.length) {
+          report.under_load_files = cancelled;
+          return finish('red-under-load', underLoadReason({ cancelled }));
+        }
+        result.red = rest;
+        if (result.red_files) result.red_files = result.red_files.filter((file) => !cancelled.includes(file));
+      }
+      const red = result.red;
+      // What a killed or cancelled file failed is not the red either, and is
+      // not handed to whoever mends it (ruling 44).
+      if (result.red_tests) result.red_tests = result.red_tests.filter((test) => red.includes(test.name));
+      // The verdict is already red; this only says whose red it is. Worth a
+      // few seconds on a round that failed, because the other reading is the
+      // one #12107 got: red twice on tests a landed change had broken.
+      if (facts.pr && result.red_files?.length) {
+        const headCommit = trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null;
+        report.main_red = await timed('main red', () => probeMain({
+          git: askGit, tests: runTests, cwd: headDir, baseCommit: report.base.commit, files: result.red_files,
+          flags, say, root, repo: repoPath, foundBy: numbers,
+        }));
+        // Green on the base is one sample on a quieter machine. #891 (a role
+        // text) and #872 (docs only) were blamed on it and went green
+        // unchanged, so the same files are run alone on the candidate too:
+        // red there is the change's, green there is the round's load.
+        const probe = report.main_red;
+        if (headCommit && probe && !probe.stopped && !probe.red_on_main?.length) {
+          if (alone) {
+            report.head_alone = { red: result.red_files };
+            say('red alone on the candidate — this change broke them');
+          } else {
+            const ran = await timed('main red', () => redAt({
+              git: askGit, tests: runTests, cwd: headDir, commit: headCommit, files: result.red_files, flags,
+            }));
+            report.head_alone = ran.ok ? { red: ran.red } : { stopped: ran.reason };
+            if (ran.ok && !ran.red.length) {
+              say('green alone on the candidate too — red only under load');
+              report.under_load_files = [...result.red_files, ...cancelled];
+              return finish('red-under-load', underLoadReason({ alone: result.red_files, cancelled }));
+            }
+            say(ran.ok ? 'red alone on the candidate too — this change broke them'
+              : `could not run the red files alone on the candidate: ${ran.reason}`);
+          }
+        }
+      }
+      return finish('red', `${red.length} test${red.length === 1 ? '' : 's'} red: ${nameSome(red)}${mainRedClause(report.main_red)}`);
+    };
+
+    // The files this pull request's last round found red, alone on the
+    // prepared candidate, before anything else is asked of it (ruling 44 § 2).
+    // 283 pull requests needed more than one round, and each round began with
+    // the whole selection although the one before had named its red files. A
+    // red there is the round's red; green, and the round goes on as it always
+    // did. A file the candidate no longer has is not run, and a batch has no
+    // one previous round to read.
+    if (facts.pr && !batch) {
+      const previous = previousRedFiles({ root, repoPath, pr: facts.pr.number })
+        .filter((file) => existsSync(join(headDir, file)));
+      if (previous.length) {
+        say(`the last round was red in ${previous.join(', ')} — running ${previous.length === 1 ? 'it' : 'them'} alone first`);
+        const first = await timed('previous red', () => measureSelected({
+          tests: runTests, git: askGit, cwd: headDir, files: previous, flags, say, is,
+        }));
+        if (!first.ok) {
+          report.previous_red = { files: previous, stopped: first.reason };
+          say(`the previous red files could not be measured alone — the run ${first.reason}; measuring the selection`);
+        } else if (first.result.red.length) {
+          report.previous_red = { files: previous, red: first.result.red_files };
+          report.candidate = first.result;
+          report.candidate.tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
+          say(`${first.result.red.length} red in the previous red files — the selection is not run`);
+          return stopRed(first.result, { alone: true });
+        } else {
+          report.previous_red = { files: previous, red: [] };
+          say('previous red files green — measuring the selection');
+        }
+      }
+    }
+
     // What this change reaches, asked of the repository rather than assumed.
     let selection = null;
     if (selects) {
@@ -603,8 +716,7 @@ export async function runGate({
     // The one run. What it finds red is the verdict: there is no second tree
     // to subtract, so a test the change reaches is either green or the round
     // is red.
-    const flags = declared.declaration.pr_tests_flags || [];
-    const is = facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
+    //
     // The gates the selection named, on the candidate, started when the suite
     // starts and awaited with it — before any verdict is reached, because a
     // round that stopped at a red test and skipped them would report a
@@ -670,75 +782,7 @@ export async function runGate({
     // Both halves have finished, so the probe for main red never runs beside
     // a gate.
     say(`${after.result.red.length} red`);
-    if (after.result.red.length) {
-      // A file something outside the round killed is not a verdict on this
-      // change, and the base would pass it — the main-red probe would then
-      // call it "this change broke them" (#13337, 2026-10-10 12:19:56). Every
-      // red killed: a stop the merger measures again. Some: the rest is the
-      // red, and the killed ones are listed beside it, never counted green.
-      const killed = after.result.killed_files || [];
-      if (killed.length) {
-        report.killed_files = killed;
-        const theirs = new Set(after.result.killed_red || []);
-        const rest = after.result.red.filter((name) => !theirs.has(name));
-        if (!rest.length) {
-          const signals = [...new Set(killed.map((one) => one.signal))].join('/');
-          return finish('file-killed', `${killed.map((one) => one.file).join(', ')} ended by ${signals} from outside the round — not a verdict on this change`);
-        }
-        after.result.red = rest;
-        if (after.result.red_files) after.result.red_files = after.result.red_files.filter((file) => !killed.some((one) => one.file === file));
-      }
-      // A file whose tests were cancelled and none failed — a `before` hook
-      // that ran out of time, as memoro's build-bundle.test.js on #13470 at
-      // load ~38 — is under load, not the change's: taken out of the red as a
-      // file that passed alone would be, without running it again, and never
-      // counted green. Every red cancelled: the merger measures again.
-      const cancelled = after.result.cancelled_files || [];
-      if (cancelled.length) {
-        report.cancelled_files = cancelled;
-        const theirs = new Set(after.result.cancelled_red || []);
-        const rest = after.result.red.filter((name) => !theirs.has(name));
-        if (!rest.length) {
-          report.under_load_files = cancelled;
-          return finish('red-under-load', underLoadReason({ cancelled }));
-        }
-        after.result.red = rest;
-        if (after.result.red_files) after.result.red_files = after.result.red_files.filter((file) => !cancelled.includes(file));
-      }
-      const red = after.result.red;
-      // What a killed or cancelled file failed is not the red either, and is
-      // not handed to whoever mends it (ruling 44).
-      if (after.result.red_tests) after.result.red_tests = after.result.red_tests.filter((test) => red.includes(test.name));
-      // The verdict is already red; this only says whose red it is. Worth a
-      // few seconds on a round that failed, because the other reading is the
-      // one #12107 got: red twice on tests a landed change had broken.
-      if (facts.pr && after.result.red_files?.length) {
-        const headCommit = trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null;
-        report.main_red = await timed('main red', () => probeMain({
-          git: askGit, tests: runTests, cwd: headDir, baseCommit: report.base.commit, files: after.result.red_files,
-          flags, say, root, repo: repoPath, foundBy: numbers,
-        }));
-        // Green on the base is one sample on a quieter machine. #891 (a role
-        // text) and #872 (docs only) were blamed on it and went green
-        // unchanged, so the same files are run alone on the candidate too:
-        // red there is the change's, green there is the round's load.
-        const probe = report.main_red;
-        if (headCommit && probe && !probe.stopped && !probe.red_on_main?.length) {
-          const alone = await timed('main red', () => redAt({
-            git: askGit, tests: runTests, cwd: headDir, commit: headCommit, files: after.result.red_files, flags,
-          }));
-          report.head_alone = alone.ok ? { red: alone.red } : { stopped: alone.reason };
-          if (alone.ok && !alone.red.length) {
-            say('green alone on the candidate too — red only under load');
-            report.under_load_files = [...after.result.red_files, ...cancelled];
-            return finish('red-under-load', underLoadReason({ alone: after.result.red_files, cancelled }));
-          }
-          say(alone.ok ? 'red alone on the candidate too — this change broke them'
-            : `could not run the red files alone on the candidate: ${alone.reason}`);
-        }
-      }
-      return finish('red', `${red.length} test${red.length === 1 ? '' : 's'} red: ${nameSome(red)}${mainRedClause(report.main_red)}`);
-    }
+    if (after.result.red.length) return stopRed(after.result);
 
     // A command gate the selection chose is a contract about this diff, and a
     // change that breaks one is red whatever its tests did. They all ran; the
@@ -1116,6 +1160,22 @@ function killedOf(tap, files) {
     cancelled_files: cancelled,
     cancelled_red: redNamesIn(tap, cancelled),
   };
+}
+
+/**
+ * The red files of a pull request's last recorded round (`gate-rounds.jsonl`),
+ * or none: only when that round ended `red` and named them. A batch's line is
+ * every pull request's red at once, so a last round that was a batch gives
+ * none rather than another pull request's files.
+ */
+export function previousRedFiles({ root = mcHome(), repoPath, pr }) {
+  const repo = basename(String(repoPath || ''));
+  const number = Number(pr);
+  const last = readRounds({ root }).rounds
+    .filter((round) => (round.phase === 'end' || !round.phase) && round.repo === repo && (round.prs || []).map(Number).includes(number))
+    .at(-1);
+  if (!last || last.prs.length !== 1 || last.stopped_at !== 'red' || !Array.isArray(last.red_files)) return [];
+  return [...new Set(last.red_files.filter((file) => typeof file === 'string' && file))];
 }
 
 /** Why a round stopped `red-under-load`: which files passed alone, and which were cancelled with none failed. */

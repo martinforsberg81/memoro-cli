@@ -861,6 +861,14 @@ it. A merge round keeps the gate's verdict under `gate`, and the mend read only
 the top of the report. Now `runMergeRound` lifts `red_files` and `main_red` up
 to the top when the gate stops.
 
+**Previous red first** (ruling 44 § 2). When a pull request's last
+`gate-rounds.jsonl` line ended `red` with `red_files`, the next single round
+runs those files alone on the prepared candidate in a timed phase
+`previous red` before the selection: still red stops it `red` there, with the
+main-red probe as for any red, and all green says `previous red files green —
+measuring the selection` and goes on as before (`previousRedFiles` in
+[`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)); a batch skips it.
+
 The three numbers are constants with their reasons beside them, not settings:
 
 - **`MEND_STOPS`** — `merge`, `restack`, `red`, `selected-gate`, `pr-tests`,

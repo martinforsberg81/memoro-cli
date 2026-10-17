@@ -1747,6 +1747,81 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
+    /** The pull request's last round, as `gate-rounds.jsonl` keeps it. */
+    function lastRound(fx, line) {
+      writeFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), `${JSON.stringify({
+        schema: 'mc-gate-round', version: 1, phase: 'end', at: '2026-10-16T10:00:00Z', repo: 'repo', mode: 'merge', ...line,
+      })}\n`);
+    }
+
+    /** A runner that records what it ran and is red in `red` wherever it runs them. */
+    function recording(red = []) {
+      const ran = [];
+      const tests = ({ files }) => {
+        ran.push([...files]);
+        const now = red.filter((file) => files.includes(file));
+        return Promise.resolve({ code: now.length ? 1 : 0, tap: located(now) });
+      };
+      return { ran, tests };
+    }
+
+    it('a previous red file still red stops the round red, and the selection never runs (ruling 44 § 2)', async () => {
+      const fx = selecting({ files: [own, scanner] });
+      const { ran, tests } = recording([own]);
+      const said = [];
+      try {
+        lastRound(fx, { prs: [7], ok: false, stopped_at: 'red', red_files: [own] });
+        const report = await fx.report({
+          tests, onProgress: (line) => said.push(line), probeMain: async () => ({ red_on_main: [], breaks: [] }),
+        });
+        assert.equal(report.stopped_at, 'red');
+        assert.equal(report.verdict, 'red');
+        assert.equal(report.reason, `1 test red: a test in ${own}`);
+        assert.deepEqual(ran, [[own]], 'the previous red file alone, and nothing of the selection');
+        assert.equal(report.selection, null, 'the selector was never asked');
+        assert.deepEqual(report.candidate.red_files, [own], 'what the merger keeps in merge-red/');
+        assert.deepEqual(report.previous_red, { files: [own], red: [own] });
+        assert.deepEqual(report.head_alone, { red: [own] }, 'the run was alone already; it is not run a third time');
+        assert.equal(typeof report.timings['previous red'], 'number');
+        assert.equal(report.timings.suite, undefined);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a previous red file now green: the selection runs as it always did', async () => {
+      const fx = selecting({ files: [own, scanner] });
+      const { ran, tests } = recording();
+      const said = [];
+      try {
+        lastRound(fx, { prs: [7], ok: false, stopped_at: 'red', red_files: [own] });
+        const report = await fx.report({ tests, onProgress: (line) => said.push(line) });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.deepEqual(ran, [[own], [own, scanner]]);
+        assert.deepEqual(report.previous_red, { files: [own], red: [] });
+        assert.ok(said.includes('previous red files green — measuring the selection'));
+        assert.equal(report.selection.files, 2);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a previous round green, a batch, another pull request\'s or none: no extra run', async () => {
+      for (const line of [
+        { prs: [7], ok: true, stopped_at: null, red_files: null },
+        { prs: [7, 8], ok: false, stopped_at: 'red', red_files: [own] },
+        { prs: [8], ok: false, stopped_at: 'red', red_files: [own] },
+        null,
+      ]) {
+        const fx = selecting({ files: [own, scanner] });
+        const { ran, tests } = recording();
+        try {
+          if (line) lastRound(fx, line);
+          const report = await fx.report({ tests });
+          assert.equal(report.verdict, 'green', report.reason);
+          assert.deepEqual(ran, [[own, scanner]], JSON.stringify(line));
+          assert.equal(report.previous_red, undefined);
+          assert.equal(report.timings['previous red'], undefined);
+        } finally { fx.cleanup(); }
+      }
+    });
+
     it('a green round runs nothing more, and keeps the files it selected', async () => {
       const { gitAlso, tests } = onMain({ redAt: {} });
       const fx = selecting({ files: [own, scanner], gitAlso });
