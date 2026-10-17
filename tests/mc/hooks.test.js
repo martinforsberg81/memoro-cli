@@ -90,6 +90,7 @@ describe('mc hook — shell commands that have an mc verb', () => {
       ['gh pr create --title x', 'pr-create', /mc publish/u],
       ['git push -u origin x', 'push', /mc publish/u],
       ['cd memoro && git push', 'push', /mc publish/u],
+      ['gh pr edit 12 --body-file x', 'pr-edit', /mc publish/u],
       ['gh pr merge 12 --squash --match-head-commit abc', 'pr-merge', /mc merge <repo> <pr>/u],
       ['npm run ci -- --base-ref origin/main', 'ci', /mc gate/u],
       ['npm run dev:agent -- --restart', 'dev-server', /mc test dev --here --url/u],
@@ -107,6 +108,7 @@ describe('mc hook — shell commands that have an mc verb', () => {
     for (const command of [
       'git status', 'npm test', 'npm run css:lint', 'git commit -m "push the thing"', 'gh pr view 3 --json state',
       'gh pr merge 12 --squash --admin', `${ALLOW_MARK} git push --force-with-lease`, 'npm run deps:prepare',
+      `${ALLOW_MARK} gh pr edit 12 --base main`, 'echo "gh pr edit 12"',
       'npm run ci -- --list --json',
     ]) {
       assert.equal(preToolDecision(bash(command)), null, command);

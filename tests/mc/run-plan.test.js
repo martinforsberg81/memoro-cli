@@ -424,6 +424,7 @@ test('stepPrompt: an interrupted step gets a handover after the retry preamble, 
     retry: { pr: 41, reason: 'red', attempts: 1 }, interrupted,
   });
   assert.ok(p.indexOf('This step came back from the merger') < p.indexOf('An earlier session on this step'), 'retry first, both there');
+  assert.match(p, /run `mc publish` \(it pushes to the same branch/u);
   assert.match(p, /An earlier session on this step was cut off at 2026-10-10T07:12:00Z \(cold, 120 000 tokens — fresh\)\./u);
   assert.match(p, /Its commits on this branch \(`git log --oneline origin\/main\.\.HEAD`\):\n {4}c0ffee0 commit 0\n/u);
   assert.match(p, /c0ffee19 commit 19/u);

@@ -140,7 +140,7 @@ export function mendPrompt({ job, report, title = null, step = null, log = [] })
       : '- Merge `origin/main` into the branch first if it is behind and that is where the red comes from.',
     '- Where the change\'s own tests are red, fix the change; never skip, weaken or delete a test.',
     `- Run ${red.length ? `the red files (\`node --test ${red.join(' ')}\`)` : 'the red files'} or the repository's suite command until they are green.`,
-    `- Commit, then \`git push origin HEAD:${branch}\`. No force.`,
+    `- Commit, then \`mc publish --branch ${branch}\` — it pushes without force and lists the commit under the pull request's description. Never \`git push\`.`,
     '- Edit no `PLAN.json`.',
     '- If it cannot be fixed here, push nothing and say why in your last line.',
     '',

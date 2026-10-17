@@ -64,6 +64,7 @@ repository). A `Bash` command is matched on its words:
 | Command | Turned to |
 | --- | --- |
 | `gh pr create` | `mc publish` |
+| `gh pr edit` | `mc publish` (on an open pull request each of `--title`, `--body-file`, `--base` edits only its own field) |
 | `git push` | `mc publish` |
 | `gh pr merge` without `--admin` | `mc merge <repo> <pr>` (the admin merge stays memoro's documented livelock fallback) |
 | `npm run ci` | `mc gate` |

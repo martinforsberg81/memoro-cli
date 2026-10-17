@@ -184,7 +184,8 @@ describe('a mend (merger-hardening step 6)', () => {
     const prompt = mm.sessions[0].args.join('\n');
     assert.match(prompt, /src\/card-views\.js/u);
     assert.match(prompt, /DONE-WHEN-THE-THING/u);
-    assert.match(prompt, /git push origin HEAD:mq/u);
+    assert.match(prompt, /mc publish --branch mq/u);
+    assert.doesNotMatch(prompt, /git push origin/u);
     assert.ok(mm.sessions[0].args.includes('--tools'));
     assert.ok(run.said.some((line) => /^memoro-cli #671: #671 conflicts with main[\s\S]* — mending \(one try\)$/u.test(line)), run.said.join('\n'));
   });
