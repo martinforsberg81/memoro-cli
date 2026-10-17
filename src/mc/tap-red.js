@@ -174,17 +174,32 @@ const SIGNAL = /^\s*signal:\s*'?([A-Z][A-Z0-9]*)'?\s*$/u;
 const TYPE = /^\s*type:\s*'?(\w+)'?\s*$/u;
 const FAILURE_TYPE = /^\s*failureType:\s*'?(\w+)'?\s*$/u;
 
+/** The location as written, line and column kept: `/abs/x.test.js:12:3`. */
+const LOCATION_AT = /^\s*location:\s*'?(.*?)'?\s*$/u;
+/** A multi-line scalar in the block — `error: |-`, `stack: |-` — whose lines sit deeper than its key. */
+const SCALAR = /^(\s*)(error|stack):\s*[|>][-+]?\s*$/u;
+/** The same key on one line: `error: 'test failed'`. */
+const INLINE_ERROR = /^\s*error:\s*(.+?)\s*$/u;
+
 /**
  * Every failing entry of a run with what its YAML block says about it: the full
- * name (as `redNames` gives it), its own name, the locations under it and the
- * signal that ended it, if one did, and its `type` and `failureType`. The walk
- * `redFiles` makes, kept whole.
+ * name (as `redNames` gives it), its own name, the locations under it (and the
+ * first as written, `at`), the signal that ended it, if one did, its `type` and
+ * `failureType`, and the lines of its `error` and `stack`. The walk `redFiles`
+ * makes, kept whole.
  */
 function failingBlocks(tap) {
   const blocks = [];
   const path = [];
   let open = null;
+  // The multi-line scalar being read: its key's indent and where its lines go.
+  let scalar = null;
   for (const line of String(tap ?? '').split('\n')) {
+    if (scalar) {
+      const indent = /^\s*/u.exec(line)[0].length;
+      if (!line.trim() || indent > scalar.indent) { scalar.lines.push(line.slice(scalar.indent + 2)); continue; }
+      scalar = null;
+    }
     const announced = SUBTEST.exec(line);
     if (announced) {
       open = null;
@@ -199,15 +214,26 @@ function failingBlocks(tap) {
       if (DIRECTIVE.test(failed[2])) continue;
       const level = Math.floor(failed[1].length / INDENT);
       const own = failed[2].trim();
-      open = { name: [...path.slice(0, level), own].join(' › '), own, top: level ? path[0] : own, locations: [], signal: null, type: null, failureType: null };
+      open = {
+        name: [...path.slice(0, level), own].join(' › '), own, top: level ? path[0] : own,
+        locations: [], at: null, signal: null, type: null, failureType: null, error: [], stack: [],
+      };
       blocks.push(open);
       continue;
     }
     if (/^\s*ok \d+ - /u.test(line)) { open = null; continue; }
     if (!open) continue;
     if (BLOCK_END.test(line)) { open = null; continue; }
+    const multi = SCALAR.exec(line);
+    if (multi) { scalar = { indent: multi[1].length, lines: open[multi[2]] }; continue; }
     const located = LOCATION.exec(line);
-    if (located) { open.locations.push(located[1]); continue; }
+    if (located) {
+      open.locations.push(located[1]);
+      open.at ??= LOCATION_AT.exec(line)[1];
+      continue;
+    }
+    const inline = INLINE_ERROR.exec(line);
+    if (inline) { open.error.push(inline[1].replace(/^(['"])(.*)\1$/u, '$2')); continue; }
     const signalled = SIGNAL.exec(line);
     if (signalled) { open.signal = signalled[1]; continue; }
     const typed = TYPE.exec(line);
@@ -269,6 +295,58 @@ export function cancelledFiles(tap, files) {
     else if (!(block.type === 'suite' && ['hookFailed', 'subtestsFailed'].includes(block.failureType))) failed.add(file);
   }
   return [...cancelled].filter((file) => !failed.has(file));
+}
+
+/** How many lines of a test's error are kept: the assertion's first lines, not its whole diff. */
+const ERROR_LINES = 6;
+const TEST_FILE = /\.[cm]?[jt]sx?$/u;
+const escapeRegExp = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+
+/**
+ * Every red test of a run, cut out of its TAP: `[{ file, name, own, at, error }]`
+ * — the file it is in (one of `files`, matched as `redFiles` does; with
+ * `files` null, the location as written, relative to `cwd` when under it), its
+ * full name, where it failed (`file:line:col`, the assertion's own frame in
+ * the file when the stack has one, else the test's location) and the first
+ * lines of its error (ruling 44).
+ *
+ * A test cancelled by its parent did not fail on its own, and a suite or file
+ * failing because its subtests did is its subtests' failure, already listed:
+ * neither is a red test here. What a person needs to re-run is the leaves.
+ */
+export function redTests(tap, files, { cwd = null } = {}) {
+  const owner = ownerIn(files);
+  const relative = (path) => (path && cwd && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path);
+  const tests = [];
+  const seen = new Set();
+  for (const block of failingBlocks(tap)) {
+    if (block.failureType === 'cancelledByParent' || block.failureType === 'subtestsFailed') continue;
+    if (seen.has(block.name)) continue;
+    seen.add(block.name);
+    const named = files == null ? [block.own, block.top].filter((path) => TEST_FILE.test(path)) : [block.own, block.top];
+    const file = relative([...block.locations, ...named].map(owner).find(Boolean) || null);
+    tests.push({ file, name: block.name, own: block.own, at: placeOf(block, file, relative), error: errorLines(block.error) });
+  }
+  return tests;
+}
+
+/** Where a red test failed: its frame in its own file from the stack, else its location; `file:line:col`. */
+function placeOf(block, file, relative) {
+  if (file) {
+    const frame = new RegExp(`(?:^|[/(\\s])${escapeRegExp(file)}:(\\d+):(\\d+)`, 'u');
+    for (const line of block.stack) {
+      const hit = frame.exec(line);
+      if (hit) return `${file}:${hit[1]}:${hit[2]}`;
+    }
+  }
+  if (!block.at) return file;
+  const at = /^(.*?)(:\d+:\d+)?$/u.exec(block.at);
+  return file && (at[1] === file || at[1].endsWith(`/${file}`)) ? `${file}${at[2] || ''}` : relative(block.at);
+}
+
+/** The first lines of an error, blank ones dropped. */
+function errorLines(lines) {
+  return lines.map((line) => line.trimEnd()).filter((line) => line.trim()).slice(0, ERROR_LINES);
 }
 
 /**

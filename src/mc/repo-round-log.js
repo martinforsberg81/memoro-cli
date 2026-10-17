@@ -119,12 +119,29 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     // list would call a selected test unselected. Null for a whole-suite
     // round, which selected nothing because it ran everything.
     selected: Array.isArray(gate?.selection?.selected) ? gate.selection.selected : null,
+    // A red round's files and where the merger kept its failures
+    // (`runner/merge-red/`, ruling 44). A batch that fell back is one line for
+    // all its pull requests: the files of every own round, and each one's
+    // path.
+    ...redOf(report, gate),
   };
   log('gate.round', {
     repo: line.repo, mode, ok: line.ok, stopped_at: line.stopped_at,
     prs: line.prs, merged: line.merged, duration_ms: line.duration_ms,
   });
   return append(line, root);
+}
+
+/** `red_files` and `red_detail` for a round's line: null each when it kept none. */
+function redOf(report, gate) {
+  const rounds = report.batch?.rounds || [];
+  if (rounds.length) {
+    const files = [...new Set(rounds.flatMap((round) => round?.red_files || []))];
+    const details = rounds.map((round) => round?.red_detail).filter(Boolean);
+    return { red_files: files.length ? files : null, red_detail: details.length ? details : null };
+  }
+  const files = report.red_files?.length ? report.red_files : gate?.candidate?.red_files;
+  return { red_files: files?.length ? files : null, red_detail: report.red_detail || null };
 }
 
 /** One line, or null. A line that describes a round must never fail it. */

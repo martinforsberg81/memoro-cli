@@ -24,7 +24,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A red merger round leaves `~/mc/runner/merge-red/<repo>-<pr>.txt`, and the retry preamble and the mend prompt for that PR name its path, its red files and a re-run line.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/mend.test.js tests/mc/run-plan.test.js` passes with the step-4 tests."
     },

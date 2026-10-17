@@ -34,6 +34,7 @@ import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { freshenBranchForLanding } from './repo-freshen.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
+import { gateRedFiles } from './merge-red.js';
 import { mcHome } from './paths.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
@@ -208,7 +209,12 @@ export async function runMergeRound({
     }
     if (!verdict.ok) {
       // The gate stops the round and there is nothing here that can overrule
-      // it. A red gate is reported and the change stays where it is.
+      // it. A red gate is reported and the change stays where it is. Its red
+      // files and whose red they are go on the round's own report: the mend
+      // read them there and found nothing, every time, while they sat under
+      // `gate` (ruling 44).
+      report.red_files = gateRedFiles(verdict);
+      report.main_red = verdict.main_red ?? null;
       return finish(verdict.stopped_at === 'red' ? 'red' : verdict.stopped_at, verdict.reason);
     }
 

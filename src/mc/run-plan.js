@@ -17,6 +17,7 @@
  * started projects off answered decision files.
  */
 import { parseRuns } from './brief-collect.js';
+import { redLines } from './merge-red.js';
 import { deliverableStep, EFFORT_LEVELS } from './plan-schema.js';
 import { estimateCost } from './prices.js';
 import { describePr, openPrsFor } from './project-prs.js';
@@ -791,13 +792,16 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
 /**
  * What a session is told first when its step came back red from the merger
  * (ruling 30): the pull request is open on this branch, and the gate's reason
- * is the work. Empty when the step is fresh.
+ * is the work — with a red round's files, its kept failures and the line that
+ * runs just those again, when it named them (ruling 44). Empty when the step
+ * is fresh.
  */
 function retryPreamble(retry, repo) {
   if (!retry) return [];
   return [
     `This step came back from the merger: #${retry.pr} did not land (attempt ${retry.attempts}).`,
     `The gate said: ${retry.reason}`,
+    ...redLines(retry.red),
     `#${retry.pr} is still open, on this branch, with the earlier session's work.`,
     'Start there — `gh pr view` and the diff — fix what the gate named (never by',
     'lowering a threshold or skipping a test), commit, run `mc publish` (it pushes to the same branch and lists your commits under the description; `--body-file` when the description itself is now wrong), and run',

@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { markMended, markMending, mergesPath, nextBatch, parseQueue } from '../../src/mc/merge-queue.js';
-import { conflictPaths, MEND_AT_ONCE, MEND_STOPS, mayMend, mendLine, runMend } from '../../src/mc/mend.js';
+import { conflictPaths, MEND_AT_ONCE, MEND_STOPS, mayMend, mendLine, mendPrompt, redFilesOf, runMend } from '../../src/mc/mend.js';
 import { landerFor, serve } from '../../src/mc/merger.js';
 import { registerPath } from '../../src/mc/register.js';
 import { readCanonRole } from '../../src/mc/roles.js';
@@ -127,6 +127,38 @@ describe('which reds are mended', () => {
     assert.equal(mayMend(JOB, red(['a.test.js', 'b.test.js'])), false);
     assert.equal(mayMend(JOB, red(['a.test.js'])), true);
     assert.equal(mayMend(JOB, red([])), true);
+  });
+
+  it('a merge round\'s red files are read from the gate\'s verdict under it, and a red all main\'s is still not mended', () => {
+    // The shape `runMergeRound` answers with: the verdict under `gate`, which
+    // is where every mend's `red files:` came out empty (ruling 44).
+    const merge = (onMain) => ({
+      ok: false, stopped_at: 'red', reason: '2 tests red',
+      gate: { stopped_at: 'red', candidate: { red_files: ['a.test.js'] }, main_red: { red_on_main: onMain } },
+    });
+    assert.deepEqual(redFilesOf(merge([])), ['a.test.js']);
+    const whole = { ok: false, stopped_at: 'red', gate: { candidate: { red_tests: [{ file: 'tests/w.test.js', name: 'w', own: 'w' }] } } };
+    assert.deepEqual(redFilesOf(whole), ['tests/w.test.js'], 'a whole-suite run names its files by its red tests');
+    assert.equal(mayMend(JOB, { ...merge(['a.test.js']), main_red: { red_on_main: ['a.test.js'] } }), false);
+    assert.equal(mayMend(JOB, merge([])), true);
+  });
+
+  it('the prompt names the red files, the kept failures and the re-run line, and runs mc gate — never a bare npm test', () => {
+    const report = {
+      ok: false, stopped_at: 'red', reason: '2 tests red: s › a.b, s › c',
+      red_files: ['tests/a.test.js'], red_detail: '/home/mc/runner/merge-red/memoro-cli-671.txt',
+      gate: { candidate: { red_tests: [{ file: 'tests/a.test.js', name: 's › a.b', own: 'a.b' }, { file: 'tests/a.test.js', name: 's › c', own: 'c' }] } },
+    };
+    const prompt = mendPrompt({ job: JOB, report });
+    assert.match(prompt, /^ {4}reason: 2 tests red: s › a\.b, s › c$/mu);
+    assert.match(prompt, /^ {4}Red files: tests\/a\.test\.js$/mu);
+    assert.match(prompt, /^ {4}The failures, as the round saw them: \/home\/mc\/runner\/merge-red\/memoro-cli-671\.txt$/mu);
+    assert.match(prompt, /^ {4}Re-run just those: mc gate tests\/a\.test\.js --test-name-pattern 'a\\\.b\|c'$/mu);
+    assert.match(prompt, /- Run `mc gate tests\/a\.test\.js` until they are green, then `mc gate` once for the whole selection — never a bare `npm test`\./u);
+    // `npm test` is named once, as what not to run: never as an instruction.
+    assert.equal(prompt.split('npm test').length - 1, 1);
+    assert.doesNotMatch(prompt.replace('never a bare `npm test`', ''), /npm test/u);
+    assert.doesNotMatch(prompt, /node --test|suite command/u);
   });
 
   it('a mended job, or one without a branch, is not mended', () => {
