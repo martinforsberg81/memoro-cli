@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { gate, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { remainderOf, stepForMerge } from '../../src/mc/merge-step.js';
+import { roundLogPath } from '../../src/mc/repo-round-log.js';
 import { registerPath } from '../../src/mc/register.js';
 
 let root = null;
@@ -48,7 +49,7 @@ const entryNow = () => JSON.parse(readFileSync(registerPath(root, 'merge-queue')
  * the pull request's branch, the door is open unless told otherwise, and the
  * merger is started by a fake that counts.
  */
-function deps({ env = {}, head = null, boundary = null, merger = { pid: 777, started: true } } = {}) {
+function deps({ env = {}, head = null, boundary = null, merger = { pid: 777, started: true }, mergeable = undefined, git = undefined, cwd = undefined } = {}) {
   const out = { out: '', err: '' };
   const starts = [];
   let ranRound = false;
@@ -64,9 +65,11 @@ function deps({ env = {}, head = null, boundary = null, merger = { pid: 777, sta
       mergeRound: async () => { ranRound = true; throw new Error('mc merge runs no round of its own'); },
       now: () => new Date('2026-09-06T18:00:00Z'),
       env: { MC_WORK_ROOT: root, ...env },
-      gh: (args) => (args[1] === 'view' && head ? { status: 0, stdout: JSON.stringify({ headRefName: head }) } : { status: 1, stdout: '' }),
+      gh: (args) => (args[1] === 'view' && head ? { status: 0, stdout: JSON.stringify({ headRefName: head, mergeable }) } : { status: 1, stdout: '' }),
       planBoundary: async () => boundary || { checked: false },
       lock: (_root, fn) => fn(),
+      git,
+      cwd,
       startMerger: (options) => { starts.push(options); return merger; },
     },
   };
@@ -245,6 +248,55 @@ describe('mc merge makes the step landing', () => {
     assert.equal(remainderOf('## Remainder\n\nNone.\n'), null);
     assert.equal(remainderOf('no such heading'), null);
     assert.equal(remainderOf('## Remainder\nOne thing.\n\n<!-- mc:described abc1234 -->'), 'One thing.');
+  });
+});
+
+describe('the door refuses what cannot land as asked (ruling 43)', () => {
+  fresh('mc-merge-refuse');
+
+  const WORKTREE = '/work/some-branch';
+  const LOCAL = 'a'.repeat(40);
+  const REMOTE = 'b'.repeat(40);
+
+  /** A worktree on `branch` at `local`, whose origin has `remote` of the pull request's branch (or nothing). */
+  const here = ({ branch, local = LOCAL, remote = REMOTE }) => (args, { cwd }) => {
+    if (cwd !== WORKTREE) return { status: 1, stdout: '' };
+    if (args.join(' ') === 'rev-parse --abbrev-ref HEAD') return { status: 0, stdout: `${branch}\n` };
+    if (args.join(' ') === 'rev-parse HEAD') return { status: 0, stdout: `${local}\n` };
+    if (args[0] === 'ls-remote') return { status: 0, stdout: remote ? `${remote}\trefs/heads/some-branch\n` : '' };
+    return { status: 1, stdout: '' };
+  };
+
+  it('a pull request GitHub reports CONFLICTING is refused at the door and nothing is queued', async () => {
+    const d = deps({ head: 'some-branch', mergeable: 'CONFLICTING' });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 1);
+    assert.match(d.out.err, /^mc: #671 conflicts with its base on GitHub — merge origin\/main into the branch here \(git fetch -q origin && git merge origin\/main\), resolve, mc publish, then mc merge again$/mu);
+    assert.deepEqual(queue(), []);
+    assert.equal(d.starts.length, 0);
+    assert.equal(d.ranRound(), false);
+    assert.equal(existsSync(roundLogPath(root)), false, 'a refusal at the door records no round');
+  });
+
+  it('the branch checked out here at a head origin does not have is refused: mc publish first', async () => {
+    const d = deps({ head: 'some-branch', cwd: WORKTREE, git: here({ branch: 'some-branch' }) });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 1);
+    assert.equal(d.out.err, `mc: this worktree holds some-branch at aaaaaaa, origin at bbbbbbb — mc publish first, then mc merge\n`);
+    assert.deepEqual(queue(), []);
+    assert.equal(d.starts.length, 0);
+    assert.equal(existsSync(roundLogPath(root)), false, 'a refusal at the door records no round');
+
+    const gone = deps({ head: 'some-branch', cwd: WORKTREE, git: here({ branch: 'some-branch', remote: '' }) });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, gone.io), 1);
+    assert.match(gone.out.err, /^mc: this worktree holds some-branch at aaaaaaa, origin at nothing — mc publish first, then mc merge$/mu);
+    assert.deepEqual(queue(), []);
+  });
+
+  it('a worktree on another branch, and UNKNOWN mergeability, are queued as before', async () => {
+    const d = deps({ head: 'some-branch', mergeable: 'UNKNOWN', cwd: WORKTREE, git: here({ branch: 'elsewhere' }) });
+    assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
+    assert.equal(d.out.err, '');
+    assert.equal(queue().length, 1);
+    assert.match(d.out.out, /^mc: #671 is queued for the merger — it is next$/mu);
   });
 });
 
