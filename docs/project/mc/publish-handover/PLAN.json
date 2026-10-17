@@ -31,7 +31,7 @@
       "check": "The step-2 tests in `tests/mc/publish.test.js` pass."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No prompt, hook reason, toolbox line or help text mc gives a session tells it to run `git push` or `gh pr edit`.",
       "check": "`grep -rn -E 'git push origin HEAD|push to the same branch' src/mc` finds nothing; `node --test --import ./tests/_isolate-home.mjs tests/mc/hooks.test.js tests/mc/mend.test.js tests/mc/run-plan.test.js` passes."
     },

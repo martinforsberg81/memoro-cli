@@ -71,7 +71,7 @@ export function usage() {
   return [
     'usage — mc hook session-start   for a SessionStart hook: the worktrees\' branch, how far behind\n',
     '                                origin/main, changed files, dev server, the warnings, the mc toolbox\n',
-    '        mc hook pre-tool        for a PreToolUse hook (Bash|Write): gh pr create / git push →\n',
+    '        mc hook pre-tool        for a PreToolUse hook (Bash|Write): gh pr create, gh pr edit / git push →\n',
     '                                mc publish, gh pr merge → mc merge, npm run ci → mc gate,\n',
     '                                npm run dev* → mc test dev --here --url, a scratch Playwright\n',
     '                                script → mc shot. MC_HOOK_ALLOW=1 in the command lets it through.\n',

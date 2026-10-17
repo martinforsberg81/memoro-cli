@@ -108,6 +108,8 @@ origin/main into itself has that merge as its base, so main's edits up to it
 are in `before` and are not the session's. Only when the merge base cannot be
 read, or the plan did not exist there, is `before` `origin/<base>:<path>`.
 
+Before that, the door refuses a pull request GitHub reports CONFLICTING, and one whose branch the caller's worktree holds at a head origin does not have (ruling 43).
+
 Not ok stops at `plan-trespass`, one line per problem on stderr as `mc:
 plan-trespass — <problem>`, recorded in `gate-rounds.jsonl` like any stop,
 never queued, exit 1: a plan trespass is not a busy gate someone else will
