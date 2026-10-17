@@ -62,8 +62,8 @@ export async function run(argv, deps = {}) {
   if (!listed.ok) { stderr.write(`mc: gh pr list failed: ${listed.text}\n`); return 1; }
 
   let bodyGiven = flags.body;
-  if (flags.bodyFile) {
-    try { bodyGiven = (deps.read || readFileSync)(flags.bodyFile, 'utf8'); } catch (error) { stderr.write(`mc: --body-file ${flags.bodyFile}: ${error.message}\n`); return 2; }
+  if (flags['body-file']) {
+    try { bodyGiven = (deps.read || readFileSync)(flags['body-file'], 'utf8'); } catch (error) { stderr.write(`mc: --body-file ${flags['body-file']}: ${error.message}\n`); return 2; }
   }
   const fromCommit = messageParts(git(['log', '-1', '--format=%B']));
   const title = flags.title || fromCommit.title;

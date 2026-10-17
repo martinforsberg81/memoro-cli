@@ -121,6 +121,16 @@ describe('mc publish', () => {
     assert.deepEqual(edited.out.gh[1], ['pr', 'edit', '4', '--body', 'B\n\n<!-- mc:described aaaaaaa1111 -->']);
   });
 
+  it('--body-file reads the body from the file, on a new pull request and on an open one', async () => {
+    const read = (path) => (path === 'b.md' ? 'File body.' : null);
+    const created = fixture();
+    assert.equal(await run(['--body-file', 'b.md'], { ...created.deps, read }), 0);
+    assert.deepEqual(created.out.gh[1], ['pr', 'create', '--base', 'main', '--head', 'step-x', '--title', 'The subject', '--body', 'File body.\n\n<!-- mc:described aaaaaaa1111 -->']);
+    const edited = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
+    assert.equal(await run(['--body-file', 'b.md'], { ...edited.deps, read }), 0);
+    assert.deepEqual(edited.out.gh[1], ['pr', 'edit', '4', '--body', 'File body.\n\n<!-- mc:described aaaaaaa1111 -->']);
+  });
+
   it('--title edits the title alone, --base the base alone', async () => {
     const marked = 'Intro\n\n<!-- mc:described aaaaaaa1111 -->';
     const titled = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }], body: marked });

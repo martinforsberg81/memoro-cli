@@ -18,7 +18,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`run(['--body-file', 'b.md'])` with `deps.read` returning `File body.` creates the pull request with body `File body.` plus the mark, and on an open pull request edits it to that body.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/publish.test.js` passes, including the tests named in step 1."
     },
