@@ -71,6 +71,54 @@ export function mergedPullAtTip(dir, branch, { gh = null, tip } = {}) {
   return { number: newest.number, merged_at: newest.mergedAt || null };
 }
 
+/**
+ * The newest pull request merged from `branch`, when it landed through the
+ * merger's restack: `{ number, merged_at }`. The merger (`restack`,
+ * merger.js) replays a branch onto main in a worktree of its own and pushes
+ * a new head, so the workarea's local tip is that head's ancestor in content
+ * but not in sha, and `mergedPullAtTip` says no. 2026-10-17: `publish-handover`
+ * step 6 started on `publish-handover-7` nine minutes after #929 had landed
+ * from it — head 97addbd7 on the remote, aec79c2a in the workarea.
+ *
+ * So: the newest merged pull request's head must be `origin/<branch>` (read
+ * after the caller's fetch), and the local branch must carry no commit of
+ * its own that head lacks by patch, other than what origin/main already
+ * has. Anything else — no remote ref, a different one, a commit left over,
+ * a git or GitHub call failing — is `null`: a question that fails means keep.
+ *
+ * `run(args)` returns git's trimmed stdout, or null on failure.
+ */
+export function landedThroughRemote(dir, branch, { gh = null, run = null } = {}) {
+  const git = run || ((args) => defaultGit(dir, args));
+  const ask = gh || ((args) => defaultGh(dir, args));
+  let asked;
+  try {
+    asked = ask(['pr', 'list', '--head', branch, '--state', 'merged', '--limit', '5',
+      '--json', 'number,mergedAt,headRefOid']);
+  } catch { return null; }
+  if (!asked?.ok) return null;
+  let merged;
+  try { merged = JSON.parse(String(asked.stdout || '[]')); } catch { return null; }
+  if (!Array.isArray(merged) || !merged.length) return null;
+  const newest = merged.reduce((a, b) => (String(b.mergedAt || '') > String(a.mergedAt || '') ? b : a));
+  const remote = git(['rev-parse', `origin/${branch}`]);
+  if (!remote || !newest.headRefOid || remote.trim() !== newest.headRefOid) return null;
+  const own = git(['rev-list', '--no-merges', '--cherry-pick', '--right-only', `${newest.headRefOid}...${branch}`]);
+  if (own === null || own === undefined) return null;
+  for (const sha of String(own).split('\n').map((s) => s.trim()).filter(Boolean)) {
+    if (git(['merge-base', '--is-ancestor', sha, 'origin/main']) === null) return null;
+  }
+  return { number: newest.number, merged_at: newest.mergedAt || null };
+}
+
+function defaultGit(dir, args) {
+  try {
+    return execFileSync('git', ['-C', dir, ...args], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch { return null; }
+}
+
 function defaultGh(dir, args) {
   try {
     const stdout = execFileSync('gh', args, {
