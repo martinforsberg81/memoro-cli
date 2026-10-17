@@ -1,0 +1,123 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A spent workspace API limit on the step credit hands the step to the plan instead of sleeping on it and failing it.",
+    "A lane waiting out an API refusal is not counted as a dead session.",
+    "A step after a landing the merger restacked starts on a new branch from origin/main, never on the landed branch.",
+    "A failed step says why on the page and in `mc status`, and a failure by interruption count names the API refusal behind it."
+  ],
+  "contract": [
+    "Ruling 45 (`docs/project/mc/rulings.md` § 45).",
+    "`INTERRUPT_LIMIT`, `RESUME_LIMIT`, `QUOTA_SLEEP_MS` and `CREDITS_RETRY_MS` keep their values.",
+    "A real death — the runner killed, the machine asleep, the claude process gone while nothing waits on it — is counted exactly as today.",
+    "`freshBranch` keeps every branch it keeps today when its local commits carry work the landed pull request did not; it only moves more branches, never fewer.",
+    "`billingFor`'s rules are unchanged: an unusable credit already means `plan` in every mode."
+  ],
+  "out_of_scope": [
+    "Raising or watching the Console workspace limit itself.",
+    "`mc publish`'s and the push-guard's refusals and their wording.",
+    "Restacking the workarea's local branch from the merger (the workarea is another worktree; the runner fixes it at the next start).",
+    "The `codex` tool's refusals."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`apiInterruption` on `API Error: 400 You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.` returns kind `credits`, and a credits session ended by it records `credits.unusable_until` 2026-11-01T00:00:00.000Z and hands over to the plan without a quota pause.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run-plan.test.js tests/mc/run.test.js tests/mc/billing.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": false,
+      "criterion": "A step whose lane is in a quota pause or server retry is not interrupted by `sweepRunning`; one whose runner is gone still is.",
+      "check": "The step-2 tests in `tests/mc/run.test.js` pass."
+    },
+    {
+      "met": false,
+      "criterion": "A workarea on a branch whose merged pull request's head is `origin/<branch>` (restacked by the merger) and whose local tip carries no other work is moved to `<project>-<n>` from origin/main before the session starts.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/branch-landed.test.js tests/mc/run.test.js` passes, including the tests named in step 3."
+    },
+    {
+      "met": false,
+      "criterion": "`deliverableStep` on a failed step reads `step N failed: <reason>; mc step ready starts it again`, and a step failed by interruption count has a reason naming the last API refusal.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-schema.test.js tests/mc/register.test.js tests/mc/run.test.js tests/mc/status-project.test.js` passes, including the tests named in step 4."
+    }
+  ],
+  "documents": [
+    {
+      "label": "Ruling 45",
+      "path": "../rulings.md"
+    },
+    {
+      "label": "mc run",
+      "path": "../../../technical/mc-run.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "A spent workspace API limit is a credit refusal, handed to the plan",
+      "status": "ready",
+      "runner": {
+        "model": "haiku",
+        "effort": "high"
+      },
+      "done_when": "`apiInterruption` returns kind `credits` for the workspace-limit refusal; the credit is marked unusable until the date it names; the new tests in `tests/mc/run-plan.test.js` and `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 45 § 1): on 2026-10-17 every credits session died in three seconds on `API Error: 400 You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.` `apiInterruption` (`src/mc/run-plan.js`) tests `quotaSeen(said)` before anything about workspace limits, and `quotaSeen` matches `usage limit`, so the kind was `quota`. `noteRefusal` in `src/mc/run.js` only marks the credit unusable for kind `credits`/`key` on a credits session, so nothing was handed to the plan and the lane slept 30 min, five times.",
+        "In `src/mc/run-plan.js` `apiInterruption`: before the `credits balance` test, add `if (/workspace api usage limits?/iu.test(said)) return { kind: 'credits', said, until: creditsResetAt(said) };`. Add and export `creditsResetAt(text)`: it reads `regain access on (\\d{4}-\\d{2}-\\d{2})(?: at (\\d{1,2}):(\\d{2}) UTC)?` and returns that instant as a `Date` (00:00 UTC when no time is given), or null when absent or unparsable. Extend the doc comment above `apiInterruption` with the measured text and date. The no-JSON path in `readSessionOutput` (stderr only) is left as it is.",
+        "Carry `until` out of `readSessionOutput`: where it spreads `interrupted: …, said: …`, also set `creditsUntil: interrupted?.until ?? null`.",
+        "In `src/mc/run.js` `noteRefusal`: destructure `creditsUntil` too. For kind `credits` on a credits session, `until` is `creditsUntil` when it is a `Date` later than now, else `now + CREDITS_RETRY_MS` as today; `why` is `workspace API usage limit reached` when `creditsUntil` came from the refusal, else as today. Everything after (the `billingFor` call that returns the hand-over) is unchanged — `billingFor` already returns `plan` for an unusable credit in every mode.",
+        "Tests. `tests/mc/run-plan.test.js`: `apiInterruption` on a result with `terminal_reason: 'api_error'` and the exact text above returns `{ kind: 'credits', until: 2026-11-01T00:00:00Z }`; `creditsResetAt` on text without the phrase returns null. `tests/mc/run.test.js`, beside the existing credit-balance hand-over test (search for `credit balance is too low`): the same scenario with the workspace-limit text records `credits.unusable_until` `2026-11-01T00:00:00.000Z` with why `workspace API usage limit reached`, says `handed from credits to plan`, and does not call the quota pause.",
+        "Run `mc gate`, then `mc publish` and `mc merge memoro-cli <pr>`."
+      ]
+    },
+    {
+      "title": "A lane waiting out an API refusal holds its step",
+      "status": "ready",
+      "runner": {
+        "model": "opus",
+        "effort": "medium"
+      },
+      "done_when": "During a quota pause, server retry or login wait in the resume loop, the step's register session names the runner's own pid, so `sweepRunning` leaves it alone; after the wait the relaunched child's pid is recorded again; the new tests in `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 45 § 2): the register's `session.pid` is the claude child's (`recordStep(… session: { pid: childPid, … })` in the launch). When the API ends the session the child exits and the lane waits in the resume loop (`quotaPause` / `deps.sleep(SERVER_RETRY_MS)`) while the step stays `running`. The next round's `sweepRunning` finds the child's pid gone and calls `recordInterrupted`, which counted three times on 2026-10-17 and failed `gate-memory` step 4 and `publish-handover` step 2. Its own comment says a pid this process owns and is awaiting is alive; this makes that true.",
+        "In `src/mc/run.js`, in the resume loop of the session launch (the `for (let resumes = 0; ; resumes += 1)` loop): immediately before the wait (`if (last.interrupted === 'server') await deps.sleep(…); else await quotaPause(…)`), when `stepIndex != null`, read the step's register session and write `recordStep(name, stepIndex, { session: { ...was, pid, waiting: last.interrupted } })`, where `pid` is the runner's own (`const pid = deps.pid ?? process.pid` near the top of the factory). After the wait, the relaunch already writes the new child's pid through the existing launch path; make sure `waiting` is not carried into that record (write it as `null` or omit it there).",
+        "`sweepRunning` is unchanged: `alive(runner pid)` is true while the runner lives, and a runner killed during the wait leaves a dead pid, which is interrupted as today.",
+        "Tests in `tests/mc/run.test.js`, using the existing fakes for a session the API ends with a quota refusal (search for `is resumed once it answers`): while the fake `quotaPause`/sleep is pending, the register's step session `pid` equals the fake runner pid and `waiting` is `quota`; a `sweepRunning` round run at that moment (a second round in the same fake, or calling the round entry the existing sweep tests use) leaves the step `running` and the interruption count unchanged. And the existing test that a dead pid is interrupted still passes.",
+        "Run `mc gate`, then `mc publish` and `mc merge memoro-cli <pr>`."
+      ]
+    },
+    {
+      "title": "A branch the merger restacked and landed is landed",
+      "status": "ready",
+      "runner": {
+        "model": "opus",
+        "effort": "medium"
+      },
+      "done_when": "`freshBranch` moves a workarea whose branch's newest merged pull request has `origin/<branch>` as head and whose local tip carries no commit that pull request lacks; it keeps one whose local tip carries other work; the new tests in `tests/mc/branch-landed.test.js` and `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 45 § 3): `publish-handover` step 6 started on `publish-handover-7` at 06:32Z on 2026-10-17, nine minutes after #929 had landed from it. The merger's `restack` (`src/mc/merger.js`) had replayed that branch onto main in a temporary worktree and pushed a new head (97addbd7); the workarea's local branch kept its old tip (aec79c2a), an ancestor-in-content but a different sha. `freshBranch` (`src/mc/run.js`) got `unknown` from `branchLanded` (main had changed `src/mc/mend.js` since), then `mergedAtTip` → `mergedPullAtTip` compared the pull request's `headRefOid` with the local tip and said no. The step was built on a dead branch and its publish was refused.",
+        "In `src/mc/branch-landed.js` add and export `landedThroughRemote(dir, branch, { gh, run })`: ask `gh pr list --head <branch> --state merged --limit 5 --json number,mergedAt,headRefOid` as `mergedPullAtTip` does and take the newest; read `git rev-parse origin/<branch>` (after the caller's fetch). If the remote ref is missing or differs from the newest pull request's `headRefOid`, return null. Otherwise list the local branch's own commits that the pull request's head does not carry: `git rev-list --no-merges --cherry-pick --right-only <headRefOid>...<branch>`, then drop any reachable from origin/main (`git merge-base --is-ancestor <sha> origin/main`). Empty list → `{ number, merged_at }`; anything left, or any git call failing → null. A failing question means keep, as in the rest of the file. Document it beside `mergedPullAtTip`, naming the 2026-10-17 case.",
+        "In `src/mc/run.js` `freshBranch`: where it now reads `if (landed === 'unknown' && !mergedAtTip(worktree, branch)) return …`, keep the branch only when both `mergedAtTip` and the new `landedThroughRemote` (called with `deps.gh` and `gitOut` the way `mergedAtTip` is) say no. Also for `landed === 'ahead'`: before returning `moved: null`, ask `landedThroughRemote` and move when it answers — a restacked branch whose local tip is a merge of main can read `ahead`. Extend `freshBranch`'s doc comment with the case.",
+        "Tests. `tests/mc/branch-landed.test.js`, with a real temporary repository and bare origin as the existing tests build them: (a) a local branch with commit A, the remote branch replaced by A′ (same patch, on a newer main) and a fake `gh` reporting a merged PR with head A′ → answers; (b) the same with a further local commit B not in A′ → null; (c) `gh` failing → null; (d) `origin/<branch>` different from the PR head → null. `tests/mc/run.test.js`, beside the existing `freshBranch` / `has already landed — moved to` tests: a workarea in case (a) is moved to `<name>-<n>` from origin/main with the `has already landed` line.",
+        "Run `mc gate`, then `mc publish` and `mc merge memoro-cli <pr>`."
+      ]
+    },
+    {
+      "title": "A failed step says why on the page and in `mc status`",
+      "status": "ready",
+      "runner": {
+        "model": "haiku",
+        "effort": "high"
+      },
+      "done_when": "The register's `reason` reaches the plan step; `deliverableStep` says `step N failed: <reason>; mc step ready starts it again`; a step failed by interruption count has a reason naming the last API refusal and billing; the new tests pass; `mc gate` is green.",
+      "instruction": [
+        "Why (ruling 45 § 4): on 2026-10-17 the page and `mc status` showed only `step 6 failed; mc step ready starts it again` for three failed steps; the cause was in `runner.log` or the register, and for the two failed by interruption count, nowhere — the reason was `interrupted 3 times in a row — last session <id>`, while every one of those sessions had died on the same workspace-limit refusal.",
+        "In `src/mc/register.js`, where the entry is laid over the plan step (the function that copies `status`, `blocked_by` and `comments` onto the step — `applyEntry`'s step mapping): also copy `reason: state.reason ?? null`.",
+        "In `src/mc/plan-schema.js` `deliverableStep`, the `failed` branch: `step ${n} failed${reason ? `: ${clip(reason, 200)}` : ''}${pr ? ` — #${pr} is open` : ''}; mc step ready starts it again`, where `reason` is `state.step?.reason` and `clip` cuts at 200 characters with `…`. Collapse whitespace in the reason to single spaces first. Any status line that prints `why` (the page row, `mc status <project>`'s NEXT) then shows it with no further change; check `src/mc/commands/status-project.js` prints `why` whole and does not cut it itself — if it cuts, leave the page row's own width alone but let NEXT in `mc status` print the whole reason.",
+        "In `src/mc/run.js` `recordInterrupted`: read the last API refusal in the session's stream log — `apiInterruption(sessionResult(stdout))` on the `<log>.jsonl` already read there (import both from `run-plan.js`; they are exported or export them). When it answers, the failed reason becomes `interrupted ${count} times in a row — last refusal (${billing}): ${said} — last session ${id}`; otherwise as today. Also store `said` in the `interrupted` record for the next count.",
+        "Tests. `tests/mc/register.test.js`: an entry with a failed step and a reason lays `reason` onto the plan step. `tests/mc/plan-schema.test.js`: `deliverableStep` on a failed step with a reason prints it, clipped at 200 characters; without one prints today's text. `tests/mc/run.test.js`: the third interruption of a step whose `<log>.jsonl` ends in an `api_error` result names that refusal and the billing in the failed reason. `tests/mc/status-project.test.js`: NEXT for a failed step shows the reason.",
+        "Run `mc gate`, then `mc publish` and `mc merge memoro-cli <pr>`."
+      ]
+    }
+  ]
+}

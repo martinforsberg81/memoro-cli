@@ -1495,3 +1495,54 @@ rounds, dead-CSS in 20. 59 of 66 session REDs read "N tests, 0 failed".
    reason. `mc gate <files…>` runs named test files the same way.
 
 Carried by `gate-memory` (`docs/project/mc/gate-memory/PLAN.json`).
+
+## 45 · A technical cause never fails a step, and a failed step says why where it is shown
+
+`ruling · 2026-10-17` · raised by Martin in the plan session
+
+> "detta är en brist i mc som vi behöver laga; mc ska aldrig fastna på sådana
+> här tekniska orsaker. Vi behöver ev förbättra loggningen vid failed så att
+> det direkt går att se orsak till alla fails." (Martin, 2026-10-17)
+
+What happened on 2026-10-16/17, measured in `runner.log` and the register:
+
+- `gate-memory` step 4 and `publish-handover` step 2 were `failed` after
+  "interrupted 3 times in a row". Every session had died within three seconds
+  on `API Error: 400 You have reached your specified workspace API usage
+  limits. You will regain access on 2026-11-01 at 00:00 UTC.` with billing
+  `credits`. `apiInterruption` read it as `quota` (`usage limit` matches
+  `quotaSeen`), so the credit was never marked unusable and no hand-over to
+  the plan happened — the plan's windows were at 2 % / 3 %. While the lane
+  slept the quota pause, the step stayed `running` with the dead claude
+  child's pid; the next round's `sweepRunning` found the pid gone and counted
+  an interruption, three times, and the third failed the step.
+- `publish-handover` step 6 ran on `publish-handover-7`, the branch #929 had
+  landed from. The merger had restacked that branch onto main (`restack`,
+  merger.js) and pushed a new head (97addbd7); the workarea's local branch kept
+  the old tip (aec79c2a). `freshBranch` got `unknown` from `branchLanded`
+  (main had since changed `src/mc/mend.js`), and `mergedPullAtTip` compared the
+  PR's head with the *local* tip — different, so the branch was kept. The step
+  was built, and its push was refused at the end.
+- The page and `mc status` said only "step N failed; mc step ready starts it
+  again". The cause was in `runner.log` or the register's `reason`, and for an
+  interruption count it was not anywhere: the reason named no refusal.
+
+Ruled, as recommended:
+
+1. **A spent workspace limit is a credit refusal.** `workspace API usage
+   limits` is `credits`, not `quota`; the credit is unusable until the time the
+   refusal names (`regain access on <date> at <hh:mm> UTC`), else
+   `CREDITS_RETRY_MS`, and the step is handed to the plan, not slept on.
+2. **A lane waiting out a refusal holds its step.** While a lane waits (quota
+   pause, server retry, login), the step's register session names the runner's
+   own pid, so `sweepRunning` does not count the wait as a death.
+3. **A branch the merger restacked and landed is landed.** `freshBranch` also
+   accepts a branch whose newest merged pull request's head is
+   `origin/<branch>` and whose local commits carry nothing that pull request
+   did not; the workarea moves to a new branch from origin/main.
+4. **A failed step says why where it is shown.** The register's `reason` is
+   laid over the plan with the status; the NEXT line of the page and of
+   `mc status` reads `step N failed: <reason>`; a failure by interruption count
+   names the last refusal the API gave and the billing it came on.
+
+Carried by `technical-fails` (`docs/project/mc/technical-fails/PLAN.json`).
