@@ -75,6 +75,11 @@ function repository() {
   // reads the state back after merging rather than trusting the exit code.
   const ghCalls = [];
   let merged = false;
+  const headOf = () => {
+    const create = ghCalls.find((call) => call[1] === 'create');
+    const branch = create[create.indexOf('--head') + 1];
+    return git(repo, ['rev-parse', `origin/${branch}`]).trim();
+  };
   const gh = (cwd, args) => {
     ghCalls.push(args);
     const json = (value) => ({ ok: true, status: 0, stdout: `${JSON.stringify(value)}\n`, stderr: '' });
@@ -86,8 +91,9 @@ function repository() {
         const create = ghCalls.find((call) => call[1] === 'create');
         const branch = create[create.indexOf('--head') + 1];
         const files = git(repo, ['diff', '--name-only', 'origin/main', `origin/${branch}`]).split('\n').filter(Boolean);
-        return json({ number: 77, title: 'Archive', state: merged ? 'MERGED' : 'OPEN', isDraft: false, baseRefName: 'main', files: files.map((path) => ({ path })) });
+        return json({ number: 77, title: 'Archive', state: merged ? 'MERGED' : 'OPEN', isDraft: false, baseRefName: 'main', headRefOid: headOf(), files: files.map((path) => ({ path })) });
       }
+      if (fields === 'headRefOid') return json({ headRefOid: headOf() });
       if (fields.includes('mergeable')) return json({ mergeable: 'MERGEABLE' });
       return json({ state: merged ? 'MERGED' : 'OPEN', mergeCommit: merged ? { oid: 'deadbeefdeadbeef' } : null });
     }

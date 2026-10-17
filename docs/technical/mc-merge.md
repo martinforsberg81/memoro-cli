@@ -182,7 +182,7 @@ nothing on a queue that has not moved while it waits.
 [`src/mc/docs-merge.js`](../../src/mc/docs-merge.js), about eighty lines, is the
 whole of it. It takes a repository path and a number and:
 
-1. reads the pull request with `gh pr view --json number,title,state,isDraft,baseRefName,files`;
+1. reads the pull request with `gh pr view --json number,title,state,isDraft,baseRefName,files,headRefOid`, the head beside the file list; a pull request with no head is refused as `read`;
 2. refuses a pull request that is not `OPEN`, a draft, one that changes no
    files, and one whose file list holds **any** path outside `docs/` — naming
    that first path, so the reader knows what to do instead;
@@ -195,7 +195,10 @@ whole of it. It takes a repository path and a number and:
 3. waits for GitHub's mergeability, up to twelve five-second turns, because
    `UNKNOWN` for a few seconds after a push is normal and merging then fails for
    no real reason; `CONFLICTING` is a refusal that says which base to merge in;
-4. squash-merges with subject `<title> (#<n>)`;
+   then it reads the head again, and a head that moved since step 1 is `drift`:
+   not merged, because the files checked are not the files that would land;
+4. squash-merges with subject `<title> (#<n>)`, pinned with `--match-head-commit`
+   to the head it checked, so the squash lands that head and no other (ruling 43);
 5. reads the state back and refuses to claim a merge it cannot see — a `gh` call
    that returned an error after the merge had in fact happened is `merge-unknown`,
    not a silent success;

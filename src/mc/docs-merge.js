@@ -56,8 +56,11 @@ export async function runDocsMerge({
   const report = { repo: repoPath, pr: { number: pr }, mode: 'docs', ok: false, merged: false, stopped_at: null, reason: null, files: [], merge_commit: null, started_at: started.toISOString() };
   const finish = (stopped, reason) => ({ ...report, stopped_at: stopped, reason, duration_ms: now() - started });
 
-  const info = view(gh, pr, 'number,title,state,isDraft,baseRefName,files');
+  const info = view(gh, pr, 'number,title,state,isDraft,baseRefName,files,headRefOid');
   if (!info) return finish('read', `gh could not read #${pr}`);
+  const head = info.headRefOid || null;
+  report.head = head;
+  if (!head) return finish('read', `gh gave no head for #${pr}`);
   report.pr = { number: info.number, title: info.title, base: info.baseRefName };
   report.files = (info.files || []).map((f) => f.path);
   if (info.state !== 'OPEN') return finish('state', `#${pr} is ${String(info.state).toLowerCase()}, not open`);
@@ -77,7 +80,12 @@ export async function runDocsMerge({
   }
   if (mergeable === 'CONFLICTING') return finish('conflicting', `#${pr} conflicts with ${report.pr.base} — merge ${report.pr.base} in and push`);
 
-  const merged = gh(['pr', 'merge', String(pr), '--squash', '--subject', `${info.title} (#${info.number})`]);
+  // The squash lands the head whose files were checked and no other (ruling 43),
+  // as the gate form pins its squash in repo-merge.js.
+  const headNow = view(gh, pr, 'headRefOid')?.headRefOid || null;
+  if (headNow !== head) return finish('drift', `#${pr} moved on GitHub from ${String(head).slice(0, 7)} to ${String(headNow || 'nothing').slice(0, 7)} after its files were checked — not merged; run mc merge --docs again`);
+
+  const merged = gh(['pr', 'merge', String(pr), '--squash', '--subject', `${info.title} (#${info.number})`, '--match-head-commit', head]);
   const after = view(gh, pr, 'state,mergeCommit');
   if (after?.state !== 'MERGED') {
     const error = merged.stderr.trim().split('\n').at(-1) || `gh could not merge #${pr}`;
