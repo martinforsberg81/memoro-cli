@@ -66,7 +66,7 @@ the merge-log line are all described where they live —
 [`src/mc/repo-merge.js`](../../src/mc/repo-merge.js),
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js) and
 [`docs/mc-command-matrix.md`](../mc-command-matrix.md). There is still no flag
-that merges a red gate.
+that merges a red gate. The squash is pinned with `--match-head-commit` to the head the round measured or freshened, once GitHub reports it (ruling 43).
 
 **The lane** (ruling 34). A repository's gate table entry may say
 `gate_lane: 'light'`, with a `gate_lane_why`; nothing declared is `heavy`, and
