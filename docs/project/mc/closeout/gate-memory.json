@@ -1,0 +1,387 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "gate-memory",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/gate-memory/PLAN.json",
+  "archived": "2026-10-17",
+  "goal": [
+    "A red found once is not found again by re-running: the merger keeps each red round's failing tests on disk and hands their path, files and a re-run line to the next session and the mend.",
+    "The same tree is not measured twice: a session's green `mc gate` on a clean tree is reused by the merger when the candidate's tree, selection and gate version match exactly.",
+    "A test red on main does not make an unrelated PR red; a declared timing test gets one more run before it does.",
+    "`mc gate` answers inside the 600 s tool limit, writes its log as it runs, runs once per worktree, says truthfully what failed, and runs named test files too."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A red merger round leaves `~/mc/runner/merge-red/<repo>-<pr>.txt`, and the retry preamble and the mend prompt for that PR name its path, its red files and a re-run line.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/mend.test.js tests/mc/run-plan.test.js` passes with the step-4 tests."
+    },
+    {
+      "met": true,
+      "criterion": "`mc gate` over a command that outlives its budget prints `RUNNING`, exits 3, and `mc gate --wait` later prints the verdict from the same log; a second `mc gate` in the same worktree meanwhile refuses.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-local.test.js` passes with the step-1 to step-3 tests."
+    },
+    {
+      "met": true,
+      "criterion": "A round whose candidate matches a recorded green skips the suite and says so; a red only on files red on main and untouched by the PR goes on; a red only in a `retry_once` file that passes alone goes on.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/merger.test.js` passes with the step-5 to step-8 tests."
+    }
+  ],
+  "steps": [
+    {
+      "title": "`mc gate` writes its log as it runs, answers within a budget, and runs once per worktree",
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-local.test.js` passes with the new tests (create `tests/mc/gate-command.test.js` if no test file covers `src/mc/commands/gate.js` yet), and `mc gate` is green.",
+      "status": "done",
+      "pr": 922,
+      "landed": {
+        "sha": "596dace60c4dbc0fafec52219a228d8ae65eb42e",
+        "into": "main",
+        "at": "2026-10-16T21:20:32Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc gate now runs the repository's gate as a detached child that writes its log as it runs (and its exit code beside it), answers within --budget (default 540 s; the poll never sleeps past the budget), and prints RUNNING with exit 3 when the budget runs out — the gate runs on, and mc gate --wait prints the verdict from the same log. One gate per worktree: a lock at <git-dir>/mc-gate.json holds {pid, log, started, command}; a second mc gate refuses with exit 2 while that pid lives and the gate has not written its exit code; a dead pid or an existing exit file makes the lock stale. The run() tests moved from gate-local.test.js to tests/mc/gate-command.test.js (15 tests, all deps injected); gateCommand, summarizeGate and gateLines are unchanged. Steps 2-7 start from this verb: the log, the exit file and the lock are the things they read."
+      ],
+      "sessions": 1,
+      "seconds": 2153,
+      "cost_usd": 0.04848
+    },
+    {
+      "title": "The RED line counts every reporter block and names what failed",
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-local.test.js` passes with the new tests, and `mc gate` is green.",
+      "status": "done",
+      "pr": 923,
+      "landed": {
+        "sha": "837410aa62c3eb4e7061dce392bec32cd79fb0f0",
+        "into": "main",
+        "at": "2026-10-16T23:48:46Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "summarizeGate sums every ℹ tests/ℹ fail block (memoro's ci prints one per lane; the last-wins overwrite made 59 of 66 REDs read 'N tests, 0 failed'), names failed command gates (command x: fail) in gates, and keeps a 'ci runner:' refusal with its '- <path>' lines (up to 10) as failures. gateLines puts 'command gate failed: …' on the RED line, and says 'N tests counted — the failure is below' when counts show no failure but one is named. The existing red-line expectation for counts-less output changed to that wording, as the step's clause requires; the files-count form (ci summary) is kept as it was."
+      ],
+      "sessions": 1,
+      "seconds": 1966,
+      "cost_usd": 0.016722
+    },
+    {
+      "title": "`mc gate <files…>` runs named test files with the same log and summary",
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-local.test.js` passes with the new tests, and `mc gate` is green.",
+      "status": "done",
+      "pr": 924,
+      "landed": {
+        "sha": "86d03bb8a2d16de00d5f7be4834d1caddc1b7c61",
+        "into": "main",
+        "at": "2026-10-17T00:50:31Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc gate <test files…> [--test-name-pattern <p>] is in: named files run node --test with the repository's --import/--experimental-* flags from its test script, through the same detached log, budget, lock and summary. A missing file refuses with exit 2 before anything runs. A red with named files prints a re-run line (first five failing names, regex-escaped) before the whole-output line; the pure helpers are failingNames, namePattern, testFlags, namedCommand and rerunLine in gate-local.js. --test-name-pattern without files and --wait with files are refused with exit 2. The new TOOLBOX line, usage, help text and matrix row are updated. Verified: the step's two test files pass (29/29), mc gate on the tree is GREEN (2666 tests), and this worktree's entry point runs a named file green and refuses a missing one. The installed mc on PATH is older and still refuses positionals."
+      ],
+      "sessions": 1,
+      "seconds": 2024,
+      "cost_usd": 0.036704
+    },
+    {
+      "title": "A red round keeps its failures on disk, and the retry and the mend are handed them",
+      "done_when": "A red round in the tests writes `merge-red/<repo>-<pr>.txt`; the retry preamble and mend prompt name its path, the red files and a re-run line; the reason `red files:` was empty in every mend is found, fixed and said in the PR body; `node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/mend.test.js tests/mc/run-plan.test.js tests/mc/merger.test.js` passes; `mc gate` is green.",
+      "status": "done",
+      "pr": 927,
+      "landed": {
+        "sha": "871d8df377fba75fe14e781c35e5028ae690c245",
+        "into": "main",
+        "at": "2026-10-17T06:17:36Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Set ready on 2026-10-17T05:55:34Z: failed on credits workspace limit (until 11-01); billing switched to plan"
+      ],
+      "sessions": 1,
+      "seconds": 915,
+      "cost_usd": 3.097001
+    },
+    {
+      "title": "A PR's previous red files are measured first, and a red there stops the round",
+      "done_when": "In the tests, a round for a PR whose last recorded round was red with `red_files` runs those files alone first and stops red there without running the selection, and runs the selection as today when they pass; `node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js` passes; `mc gate` is green.",
+      "status": "done",
+      "pr": 930,
+      "landed": {
+        "sha": "505605bed9435550a5c783f6a7efdad23f5d35ae",
+        "into": "main",
+        "at": "2026-10-17T06:25:52Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 411,
+      "cost_usd": 0.829662
+    },
+    {
+      "title": "A red only on tests red on main, which the PR does not touch, does not stop the round",
+      "done_when": "In the tests, a red whose files are all `red_on_main` by the probe and untouched by the PR's diff goes on to the command gates and the PR's own tests and ends green with `main_red_files` named; one red file the PR changes stops it red as today; an intake note is written once per file per seven days; `node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/merger.test.js` passes; `mc gate` is green.",
+      "status": "done",
+      "pr": 931,
+      "landed": {
+        "sha": "5fd9a23c06e843a92a793e6eafa3fdac48970629",
+        "into": "main",
+        "at": "2026-10-17T06:36:57Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 823,
+      "cost_usd": 2.094391
+    },
+    {
+      "title": "Declared timing tests get one more run alone before they are red",
+      "done_when": "In the tests, a red only in a `retry_once` file that passes when run alone on the candidate goes on and records the flip; a red in it that stays red stops red; a red outside the list is red as today; `node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js tests/mc/repo-gate-table.test.js` passes; `mc gate` is green.",
+      "status": "done",
+      "pr": 932,
+      "landed": {
+        "sha": "755cc33a51d405371172961c662e5badd54b7859",
+        "into": "main",
+        "at": "2026-10-17T06:45:56Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "retry_once.gates for memoro is ['sql:pr-ci', 'core:startup:jsc:check'], not just sql:pr-ci: the JSC start-up budget test left tests/architecture/core-bundle-jsc.test.js in memoro #12987 (2026-10-08) and is that command gate now. files: css-dead-rules.test.js, build-bundle.test.js. A stayed-red retry counts as the probe's alone-on-candidate sample (no third run). report.flipped is in the gate-rounds.jsonl line."
+      ],
+      "sessions": 1,
+      "seconds": 554,
+      "cost_usd": 1.876304
+    },
+    {
+      "title": "A session's green `mc gate` on the exact candidate tree spares the merger the suite",
+      "done_when": "In the tests, `mc gate` on a clean tree in a repository with a declared `select` records a green with tree, selection hash and gate version; the merger, given a candidate whose tree, selection and version match, skips the suite and selected command gates, still runs the PR's own tests, and says so; any mismatch measures as today; `node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/repo-gate.test.js` passes; `mc gate` is green.",
+      "status": "done",
+      "pr": 933,
+      "landed": {
+        "sha": "d6a4e6f44c02ea2a1d33dfbcc5965e375472f287",
+        "into": "main",
+        "at": "2026-10-17T07:06:20Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 727,
+      "cost_usd": 2.86532
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-16T21:20:03Z",
+      "kind": "step",
+      "seconds": 2153,
+      "land_seconds": null,
+      "pr": 922,
+      "turns": 31,
+      "input": 44,
+      "output": 51039,
+      "cache_read": 1273741,
+      "cache_write": 81752,
+      "model": null,
+      "note": "success,queued",
+      "session": "732a616e-dc93-4738-9b55-dd162cada333",
+      "cost_usd": 0.04848030999999999
+    },
+    {
+      "ts": "2026-10-16T22:15:27Z",
+      "kind": "step",
+      "seconds": 1829,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 2,
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "model": null,
+      "note": "quota",
+      "session": "baf9b80b-4ad5-4195-98d3-eed66497a4a8",
+      "cost_usd": 0.016721544999999997
+    },
+    {
+      "ts": "2026-10-16T23:48:40Z",
+      "kind": "step",
+      "seconds": 1966,
+      "land_seconds": null,
+      "pr": 923,
+      "turns": 20,
+      "input": 24,
+      "output": 15955,
+      "cache_read": 358127,
+      "cache_write": 41283,
+      "model": null,
+      "note": "success,queued",
+      "session": "baf9b80b-4ad5-4195-98d3-eed66497a4a8",
+      "cost_usd": 0.016721544999999997
+    },
+    {
+      "ts": "2026-10-17T00:50:00Z",
+      "kind": "step",
+      "seconds": 2024,
+      "land_seconds": null,
+      "pr": 924,
+      "turns": 46,
+      "input": 40,
+      "output": 34980,
+      "cache_read": 985968,
+      "cache_write": 74806,
+      "model": null,
+      "note": "success,queued",
+      "session": "3e6ba633-4432-4b7c-a279-2583d579317c",
+      "cost_usd": 0.036704429999999996
+    },
+    {
+      "ts": "2026-10-17T01:46:44Z",
+      "kind": "step",
+      "seconds": 1814,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 2,
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "model": null,
+      "note": "quota",
+      "session": "757117ab-1f97-411b-a88f-999b093fa929",
+      "cost_usd": 0
+    },
+    {
+      "ts": "2026-10-17T03:17:08Z",
+      "kind": "step",
+      "seconds": 1814,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 2,
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "model": null,
+      "note": "quota",
+      "session": "757117ab-1f97-411b-a88f-999b093fa929",
+      "cost_usd": 0
+    },
+    {
+      "ts": "2026-10-17T04:18:21Z",
+      "kind": "step",
+      "seconds": 1807,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 2,
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "model": null,
+      "note": "quota,failed",
+      "session": "757117ab-1f97-411b-a88f-999b093fa929",
+      "cost_usd": 0
+    },
+    {
+      "ts": "2026-10-17T06:14:59Z",
+      "kind": "step",
+      "seconds": 915,
+      "land_seconds": null,
+      "pr": 927,
+      "turns": 118,
+      "input": 100,
+      "output": 53120,
+      "cache_read": 3773945,
+      "cache_write": 213963,
+      "model": null,
+      "note": "success,queued",
+      "session": "400115dd-b073-4c71-a73c-34a5ecf82bc0",
+      "cost_usd": 3.0970013999999995
+    },
+    {
+      "ts": "2026-10-17T06:21:56Z",
+      "kind": "step",
+      "seconds": 411,
+      "land_seconds": null,
+      "pr": 930,
+      "turns": 30,
+      "input": 36,
+      "output": 15726,
+      "cache_read": 943163,
+      "cache_write": 65273,
+      "model": null,
+      "note": "success,queued",
+      "session": "d82a741c-5331-4185-85ef-d70002f983e9",
+      "cost_usd": 0.8296616
+    },
+    {
+      "ts": "2026-10-17T06:35:43Z",
+      "kind": "step",
+      "seconds": 823,
+      "land_seconds": null,
+      "pr": 931,
+      "turns": 89,
+      "input": 92,
+      "output": 39657,
+      "cache_read": 2406470,
+      "cache_write": 129008,
+      "model": null,
+      "note": "success,queued",
+      "session": "b0a6fa55-5a1c-4810-be0c-456f04f5187c",
+      "cost_usd": 2.0943908
+    },
+    {
+      "ts": "2026-10-17T06:45:02Z",
+      "kind": "step",
+      "seconds": 554,
+      "land_seconds": null,
+      "pr": 932,
+      "turns": 65,
+      "input": 72,
+      "output": 29901,
+      "cache_read": 2631621,
+      "cache_write": 122494,
+      "model": null,
+      "note": "success,queued",
+      "session": "b565fb34-cd17-473d-a700-24c99ede83df",
+      "cost_usd": 1.876304
+    },
+    {
+      "ts": "2026-10-17T07:05:21Z",
+      "kind": "step",
+      "seconds": 727,
+      "land_seconds": null,
+      "pr": 933,
+      "turns": 101,
+      "input": 94,
+      "output": 47218,
+      "cache_read": 3429640,
+      "cache_write": 204858,
+      "model": null,
+      "note": "success,queued",
+      "session": "5258d74e-4ed5-447f-844f-ee5e5b5a73fa",
+      "cost_usd": 2.86532
+    }
+  ],
+  "totals": {
+    "sessions": 12,
+    "seconds": 16837,
+    "land_seconds": 0,
+    "cost_usd": 10.881306,
+    "cost_unknown": 0,
+    "input": 502,
+    "output": 287596,
+    "cache_read": 15802675,
+    "cache_write": 933437,
+    "first": "2026-10-16T21:20:03Z",
+    "landed": "2026-10-17T07:06:20Z"
+  }
+}

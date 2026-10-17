@@ -1,0 +1,190 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "technical-fails",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/technical-fails/PLAN.json",
+  "archived": "2026-10-17",
+  "goal": [
+    "A spent workspace API limit on the step credit hands the step to the plan instead of sleeping on it and failing it.",
+    "A lane waiting out an API refusal is not counted as a dead session.",
+    "A step after a landing the merger restacked starts on a new branch from origin/main, never on the landed branch.",
+    "A failed step says why on the page and in `mc status`, and a failure by interruption count names the API refusal behind it."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`apiInterruption` on `API Error: 400 You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.` returns kind `credits`, and a credits session ended by it records `credits.unusable_until` 2026-11-01T00:00:00.000Z and hands over to the plan without a quota pause.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run-plan.test.js tests/mc/run.test.js tests/mc/billing.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": true,
+      "criterion": "A step whose lane is in a quota pause or server retry is not interrupted by `sweepRunning`; one whose runner is gone still is.",
+      "check": "The step-2 tests in `tests/mc/run.test.js` pass."
+    },
+    {
+      "met": true,
+      "criterion": "A workarea on a branch whose merged pull request's head is `origin/<branch>` (restacked by the merger) and whose local tip carries no other work is moved to `<project>-<n>` from origin/main before the session starts.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/branch-landed.test.js tests/mc/run.test.js` passes, including the tests named in step 3."
+    },
+    {
+      "met": true,
+      "criterion": "`deliverableStep` on a failed step reads `step N failed: <reason>; mc step ready starts it again`, and a step failed by interruption count has a reason naming the last API refusal.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-schema.test.js tests/mc/register.test.js tests/mc/run.test.js tests/mc/status-project.test.js` passes, including the tests named in step 4."
+    }
+  ],
+  "steps": [
+    {
+      "title": "A spent workspace API limit is a credit refusal, handed to the plan",
+      "done_when": "`apiInterruption` returns kind `credits` for the workspace-limit refusal; the credit is marked unusable until the date it names; the new tests in `tests/mc/run-plan.test.js` and `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 936,
+      "landed": {
+        "sha": "d333d3134f62a3f1ddb7a6e0d19b9342eecdb01f",
+        "into": "main",
+        "at": "2026-10-17T07:54:47Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 1 (ruling 45 § 1): apiInterruption reads the workspace-limit refusal as kind credits before the quota test, with until = creditsResetAt(said) (the date it names, 00:00 UTC when no time). readSessionOutput carries it as creditsUntil; noteRefusal marks the step credit unusable until that instant, why 'workspace API usage limit reached', and hands the step to the plan. A credits-kind refusal no longer also counts as a quota on a short session (quota is now the classified kind's own word when one exists). Steps 2-4 are untouched."
+      ],
+      "sessions": 1,
+      "seconds": 222,
+      "cost_usd": 0.037134
+    },
+    {
+      "title": "A lane waiting out an API refusal holds its step",
+      "done_when": "During a quota pause, server retry or login wait in the resume loop, the step's register session names the runner's own pid, so `sweepRunning` leaves it alone; after the wait the relaunched child's pid is recorded again; the new tests in `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 937,
+      "landed": {
+        "sha": "8344291478924a0c12840649b50f9cf7a47bcd86",
+        "into": "main",
+        "at": "2026-10-17T07:56:18Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 144,
+      "cost_usd": 0.344183
+    },
+    {
+      "title": "A branch the merger restacked and landed is landed",
+      "done_when": "`freshBranch` moves a workarea whose branch's newest merged pull request has `origin/<branch>` as head and whose local tip carries no commit that pull request lacks; it keeps one whose local tip carries other work; the new tests in `tests/mc/branch-landed.test.js` and `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 938,
+      "landed": {
+        "sha": "c4c30e5273cfdcbb87f249ee4a6dd17f84c2e459",
+        "into": "main",
+        "at": "2026-10-17T07:59:56Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 179,
+      "cost_usd": 0.53563
+    },
+    {
+      "title": "A failed step says why on the page and in `mc status`",
+      "done_when": "The register's `reason` reaches the plan step; `deliverableStep` says `step N failed: <reason>; mc step ready starts it again`; a step failed by interruption count has a reason naming the last API refusal and billing; the new tests pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 939,
+      "landed": {
+        "sha": "4a6baa5c7c3088f0032ec61b9c8bb14ef03fc3a2",
+        "into": "main",
+        "at": "2026-10-17T08:06:15Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 4 done: the register's reason now reaches the plan step (applyEntry), and deliverableStep reads 'step N failed: <reason>; mc step ready starts it again' (reason whitespace-folded, cut at 200 characters with an ellipsis; today's text when there is none). reason is now a known step key in plan-schema's STEP_KEYS, because the overlay adds it to every step and validatePlan refuses unknown keys: without that every overlaid plan would read as unparseable. recordInterrupted reads the last API refusal from the session's stream log (apiInterruption(sessionResult(stdout))) and, when there is one, the third interruption's reason names it with the billing: 'interrupted 3 times in a row — last refusal (credits): <refusal> — last session <id>'. The refusal is also kept in the interrupted record as said, so a count whose own stream names no refusal still carries the one the run was under. NEXT in mc status prints the whole reason (it wraps at 90 columns and does not cut)."
+      ],
+      "sessions": 1,
+      "seconds": 310,
+      "cost_usd": 0.058245
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-17T07:53:34Z",
+      "kind": "step",
+      "seconds": 222,
+      "land_seconds": null,
+      "pr": 936,
+      "turns": 37,
+      "input": 36,
+      "output": 28269,
+      "cache_read": 1254074,
+      "cache_write": 83641,
+      "model": null,
+      "note": "success,queued",
+      "session": "e4a71a62-2fb4-401b-b4d8-efe665329d32",
+      "cost_usd": 0.03713396500000001
+    },
+    {
+      "ts": "2026-10-17T07:56:02Z",
+      "kind": "step",
+      "seconds": 144,
+      "land_seconds": null,
+      "pr": 937,
+      "turns": 23,
+      "input": 30,
+      "output": 6721,
+      "cache_read": 398966,
+      "cache_write": 25970,
+      "model": null,
+      "note": "success,queued",
+      "session": "623bec12-3670-4f6a-b83c-8aff32217890",
+      "cost_usd": 0.34418319999999997
+    },
+    {
+      "ts": "2026-10-17T07:59:06Z",
+      "kind": "step",
+      "seconds": 179,
+      "land_seconds": null,
+      "pr": 938,
+      "turns": 31,
+      "input": 38,
+      "output": 11229,
+      "cache_read": 643764,
+      "cache_write": 36429,
+      "model": null,
+      "note": "success,queued",
+      "session": "c81bbcb9-7d1d-4dc3-8567-7e1206de157a",
+      "cost_usd": 0.5356298
+    },
+    {
+      "ts": "2026-10-17T08:05:37Z",
+      "kind": "step",
+      "seconds": 310,
+      "land_seconds": null,
+      "pr": 939,
+      "turns": 64,
+      "input": 74,
+      "output": 40836,
+      "cache_read": 2562906,
+      "cache_write": 97526,
+      "model": null,
+      "note": "success,queued",
+      "session": "2311373b-f650-416a-8ed0-8a5adb4feef3",
+      "cost_usd": 0.05824520999999999
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 855,
+    "land_seconds": 0,
+    "cost_usd": 0.975192,
+    "cost_unknown": 0,
+    "input": 178,
+    "output": 87055,
+    "cache_read": 4859710,
+    "cache_write": 243566,
+    "first": "2026-10-17T07:53:34Z",
+    "landed": "2026-10-17T08:06:15Z"
+  }
+}

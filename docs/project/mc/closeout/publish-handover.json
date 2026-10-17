@@ -1,0 +1,332 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "publish-handover",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/publish-handover/PLAN.json",
+  "archived": "2026-10-17",
+  "goal": [
+    "`mc publish` is the one way a step's session or a mend puts a new head on its pull request: it edits only the fields it is given, can retarget the base, publishes a detached HEAD to a named branch, and keeps the description honest by listing the commits that came after it.",
+    "Nothing mc tells a session sends it past `mc publish`: the retry preamble, the mend prompt, the pre-tool hook, the toolbox and the help all name it.",
+    "`mc merge` refuses an unpushed head or a conflicting pull request at the door, and the merger lands only the head it measured."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`mc publish --body-file <f>` on a branch with an open pull request edits only its body, and `mc publish --title <t>` only its title.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/publish.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": true,
+      "criterion": "`mc publish` with no body on an open pull request with later commits writes them under `## After the description` and leaves the text above it alone; run twice, it changes nothing the second time.",
+      "check": "The step-2 tests in `tests/mc/publish.test.js` pass."
+    },
+    {
+      "met": true,
+      "criterion": "No prompt, hook reason, toolbox line or help text mc gives a session tells it to run `git push` or `gh pr edit`.",
+      "check": "`grep -rn -E 'git push origin HEAD|push to the same branch' src/mc` finds nothing; `node --test --import ./tests/_isolate-home.mjs tests/mc/hooks.test.js tests/mc/mend.test.js tests/mc/run-plan.test.js` passes."
+    },
+    {
+      "met": false,
+      "criterion": "`mc merge` refuses a pull request whose branch this worktree holds at an unpushed head, or that GitHub reports `CONFLICTING`, and queues nothing; the merger's `gh pr merge` carries `--match-head-commit`.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/merge-command.test.js tests/mc/repo-merge.test.js` passes, including the tests named in steps 5 and 6; `grep -n 'match-head-commit' src/mc/repo-merge.js` finds the landing call."
+    }
+  ],
+  "steps": [
+    {
+      "title": "`mc publish` edits only the fields it is given, and takes `--base`",
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/publish.test.js` passes with the three new tests, and `mc gate` is green.",
+      "status": "done",
+      "pr": 921,
+      "landed": {
+        "sha": "8e9f81bca3aa70a8b8ad143efb7c7b2a4539cb15",
+        "into": "main",
+        "at": "2026-10-16T20:46:33Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc publish edits only the fields given on an open pull request: --title, --body or --body-file, --base each go to gh pr edit alone, and gh is not run when none is given. --base is strict and aims a new pull request (default: origin's default branch, else main) or moves the open one. Tests: tests/mc/publish.test.js (12 pass), including the three new ones. The step-2 tests (the description's head, commits listed after it) are not written yet."
+      ],
+      "sessions": 1,
+      "seconds": 113,
+      "cost_usd": 0.016187
+    },
+    {
+      "title": "The description carries the head it describes, and `mc publish` lists the commits after it",
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/publish.test.js tests/mc/merge-command.test.js` passes with the new tests, and `mc gate` is green.",
+      "status": "done",
+      "pr": 925,
+      "landed": {
+        "sha": "a07ff0074632b98e493c64c43fa2d4403b14a4f0",
+        "into": "main",
+        "at": "2026-10-17T06:05:18Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Set ready on 2026-10-17T05:55:34Z: failed on credits workspace limit (until 11-01); billing switched to plan",
+        "Step 2: mc publish writes the description's head as <!-- mc:described <sha> --> (create and body-given edits use the local head); with no body it reads the mark (or the branch's first commit when there is none), and lists the commits after it under ## After the description, editing only the body when that text changes. A head not in this branch is refused on stderr and the body is left alone. remainderOf ignores mc: lines. Tests: publish.test.js and merge-command.test.js pass; mc gate green (2669 tests). The matrix row carries the one sentence on the mark."
+      ],
+      "sessions": 1,
+      "seconds": 294,
+      "cost_usd": 0.03886
+    },
+    {
+      "title": "`mc publish --branch <name>` publishes a detached HEAD",
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/publish.test.js` passes with the new tests, and `mc gate` is green.",
+      "status": "done",
+      "pr": 926,
+      "landed": {
+        "sha": "4e369a0b0bf776476d04b197abc5bffbe8f053a8",
+        "into": "main",
+        "at": "2026-10-17T06:10:31Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc publish --branch <name> publishes a detached HEAD (a mend's worktree). --branch is a strict value; before any network call it refuses (2) when this worktree is on another branch than the name, and when check-ref-format rejects the name. branch becomes flags.branch || current, so the ls-remote and the refusals run on the named branch. A detached HEAD is pushed by pushBranch with detached: true as HEAD:refs/heads/<name>, without -u; the --no-thin retry covers both forms. Without --branch a detached HEAD is still refused on HEAD. Three new tests in tests/mc/publish.test.js; the publish file passes 18/18 and mc gate is GREEN (2672 tests)."
+      ],
+      "sessions": 1,
+      "seconds": 150,
+      "cost_usd": 0.019301
+    },
+    {
+      "title": "The retry preamble, the mend prompt, the hook and the toolbox send every push through `mc publish`",
+      "done_when": "Success criterion 2's grep finds nothing, `node --test --import ./tests/_isolate-home.mjs tests/mc/hooks.test.js tests/mc/mend.test.js tests/mc/run-plan.test.js` passes, and `mc gate` is green.",
+      "status": "done",
+      "pr": 928,
+      "landed": {
+        "sha": "66f40fa4a47e8a2df5fa23b29e8cd3414109ac0e",
+        "into": "main",
+        "at": "2026-10-17T06:22:32Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 4 is in the pull request. retryPreamble, mendPrompt, the pre-tool hook (new pr-edit rule, and the push reason), the toolbox publish line and the mc hook pre-tool help (help-text.js and commands/hook.js) now name mc publish; success criterion 2 grep finds nothing. For the next reader: an unquoted echo of the pr-edit words is refused by pr-edit, as the pr-create rule already refuses the create words, because the regex cannot tell an echo argument from a command word; a quoted echo passes. mendPrompt says Never `git push`, so the mend test asserts no `git push origin` instead of no push at all."
+      ],
+      "sessions": 1,
+      "seconds": 482,
+      "cost_usd": 0.032708
+    },
+    {
+      "title": "`mc merge` refuses an unpushed head and a conflicting pull request before queueing",
+      "done_when": "`node --test --import ./tests/_isolate-home.mjs tests/mc/merge-command.test.js` passes with the new tests, and `mc gate` is green.",
+      "status": "done",
+      "pr": 929,
+      "landed": {
+        "sha": "3afcbf0133c70e045f30b4dbf29b61e214194009",
+        "into": "main",
+        "at": "2026-10-17T06:23:24Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc merge's door (queueForMerger, src/mc/commands/repo.js) now refuses two things before queueing and before any round is recorded: a pull request GitHub reports mergeable CONFLICTING (gh pr view now asks headRefName,headRefOid,mergeable), and a pull request whose branch the caller's worktree (deps.cwd || process.cwd()) is on at a head origin does not have (ls-remote --heads origin <head> differs from rev-parse HEAD). A failed ls-remote fails open. doorRefusal() is the pure function holding both messages. Tests: tests/mc/merge-command.test.js, describe 'the door refuses what cannot land as asked (ruling 43)'. The merger's landing call (--match-head-commit) is not touched here; that is steps[5]."
+      ],
+      "sessions": 1,
+      "seconds": 389,
+      "cost_usd": 0.033123
+    },
+    {
+      "title": "The merger lands only the head it measured: `--match-head-commit`",
+      "done_when": "`grep -n 'match-head-commit' src/mc/repo-merge.js` finds the landing call, `node --test --import ./tests/_isolate-home.mjs tests/mc/repo-merge.test.js tests/mc/merger.test.js` passes with the new tests, and `mc gate` is green.",
+      "status": "done",
+      "pr": 935,
+      "landed": {
+        "sha": "bd3c31154a13fdfa518e1d0eb61fd915c25326b4",
+        "into": "main",
+        "at": "2026-10-17T07:50:41Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 6 (--match-head-commit). The squash in repo-merge.js now passes --match-head-commit <sha> to the forge's squash call. The sha is verdict.pr.head_sha for one pull request, or the batch item's head_sha, and it is replaced by the sha freshenBranchForLanding returns when the branch was freshened first. freshenBranchForLanding now returns the full sha as well as the 7-character at. Before the squash, headOnGithub reads headRefOid up to six times, five seconds apart (a sleep dep, defaulting to a timer), and a head that never matches stops the round as drift with a message naming both shas; nothing is merged. With no expected head the landing is unpinned and the round says so. Not covered here: src/mc/docs-merge.js (the --docs form) still squashes without a pin, and the door refusals in success criterion 3 belong to step 4.",
+        "Step 6 is built and gate-green on this tree (npm test 2692 tests, 0 failed; repo-merge, merger and repo-freshen suites 113 pass). It is committed locally on publish-handover-7 at 26db7469: origin/main 5fd9a23c, plus the step's commit b39ef86c, plus a no-content merge recording origin/publish-handover-7 (97addbd7, PR 929, already merged) as an ancestor. Publishing it is refused: the branch was merged as PR 929, a push to it reopens nothing, and mc publish will not open a second PR for a branch. The step needs a new branch cut from origin/main with b39ef86c on it. The superseded local tip is kept as backup/publish-handover-7-pre-step6.",
+        "Failed on 2026-10-17T06:42:15Z: publish-handover-7 was merged as PR 929 and mc refuses a push to it or a second PR for it; the finished step is committed locally and needs a new branch from origin/main, which is Martin's call",
+        "Set ready on 2026-10-17T07:41:29Z: rerun on fresh origin/main: previous session ran on landed branch publish-handover-7 (#929) and could not push; old work kept at backup/publish-handover-6-attempt1",
+        "The landing call in repo-merge.js now pins the squash with --match-head-commit. The expected head is the sha freshenBranchForLanding returns (now also sha, untruncated) when the branch was freshened, else the head the gate measured (verdict.pr.head_sha, or the batch item's head_sha). Before the squash, headRefOid is read up to six times, five seconds apart, through an injected sleep; a head GitHub never reports stops the round with drift and nothing is merged. A null expected head merges unpinned and says so with a progress line — reachable only when rev-parse returns nothing after a freshen. Batch tests' refresh fakes return no sha, so batch landings after the first are unpinned in those tests; the freshened-pin path is covered for a single round only."
+      ],
+      "sessions": 1,
+      "seconds": 219,
+      "cost_usd": 0.038667
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-16T20:46:02Z",
+      "kind": "step",
+      "seconds": 113,
+      "land_seconds": null,
+      "pr": 921,
+      "turns": 30,
+      "input": 24,
+      "output": 14014,
+      "cache_read": 368972,
+      "cache_write": 43902,
+      "model": null,
+      "note": "success,queued",
+      "session": "bf65f031-7896-4d31-bcd2-10ca1ae734d0",
+      "cost_usd": 0.016186870000000003
+    },
+    {
+      "ts": "2026-10-16T21:45:13Z",
+      "kind": "step",
+      "seconds": 1826,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 2,
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "model": null,
+      "note": "quota",
+      "session": "ceedc691-b87e-4f38-88fa-3e4801c96d17",
+      "cost_usd": 0
+    },
+    {
+      "ts": "2026-10-16T23:15:57Z",
+      "kind": "step",
+      "seconds": 1821,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 2,
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "model": null,
+      "note": "quota",
+      "session": "ceedc691-b87e-4f38-88fa-3e4801c96d17",
+      "cost_usd": 0
+    },
+    {
+      "ts": "2026-10-17T00:46:23Z",
+      "kind": "step",
+      "seconds": 1806,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 2,
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "model": null,
+      "note": "quota,failed",
+      "session": "ceedc691-b87e-4f38-88fa-3e4801c96d17",
+      "cost_usd": 0
+    },
+    {
+      "ts": "2026-10-17T06:04:41Z",
+      "kind": "step",
+      "seconds": 294,
+      "land_seconds": null,
+      "pr": 925,
+      "turns": 38,
+      "input": 20,
+      "output": 43874,
+      "cache_read": 603273,
+      "cache_write": 87105,
+      "model": null,
+      "note": "success,queued",
+      "session": "db9a3c1a-0bd4-49aa-948f-189622d5050a",
+      "cost_usd": 0.03885985500000001
+    },
+    {
+      "ts": "2026-10-17T06:07:15Z",
+      "kind": "step",
+      "seconds": 150,
+      "land_seconds": null,
+      "pr": 926,
+      "turns": 29,
+      "input": 20,
+      "output": 21024,
+      "cache_read": 357146,
+      "cache_write": 41727,
+      "model": null,
+      "note": "success,queued",
+      "session": "856f9177-8a40-4a99-816d-211e212790a5",
+      "cost_usd": 0.019301335000000003
+    },
+    {
+      "ts": "2026-10-17T06:15:22Z",
+      "kind": "step",
+      "seconds": 482,
+      "land_seconds": null,
+      "pr": 928,
+      "turns": 42,
+      "input": 26,
+      "output": 38107,
+      "cache_read": 575176,
+      "cache_write": 63198,
+      "model": null,
+      "note": "success,queued",
+      "session": "f574760b-87d5-4311-831b-ef5a174da800",
+      "cost_usd": 0.032707610000000005
+    },
+    {
+      "ts": "2026-10-17T06:22:00Z",
+      "kind": "step",
+      "seconds": 389,
+      "land_seconds": null,
+      "pr": 929,
+      "turns": 34,
+      "input": 38,
+      "output": 31472,
+      "cache_read": 945609,
+      "cache_write": 63417,
+      "model": null,
+      "note": "success,queued",
+      "session": "9e988c53-b375-4ae8-aa4b-70ff2b0de9d9",
+      "cost_usd": 0.033123015
+    },
+    {
+      "ts": "2026-10-17T06:43:01Z",
+      "kind": "step",
+      "seconds": 614,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 67,
+      "input": 72,
+      "output": 60001,
+      "cache_read": 2659880,
+      "cache_write": 128007,
+      "model": null,
+      "note": "success,failed",
+      "session": "09cf0d5c-8865-4beb-af8d-de3fbc3532df",
+      "cost_usd": 0.16865620500000003
+    },
+    {
+      "ts": "2026-10-17T07:49:55Z",
+      "kind": "step",
+      "seconds": 219,
+      "land_seconds": null,
+      "pr": 935,
+      "turns": 35,
+      "input": 32,
+      "output": 30823,
+      "cache_read": 1155443,
+      "cache_write": 93585,
+      "model": null,
+      "note": "success,queued",
+      "session": "4886313a-e821-46ad-8851-b25d9b9973b4",
+      "cost_usd": 0.038667255
+    }
+  ],
+  "totals": {
+    "sessions": 10,
+    "seconds": 7714,
+    "land_seconds": 0,
+    "cost_usd": 0.347502,
+    "cost_unknown": 0,
+    "input": 232,
+    "output": 239315,
+    "cache_read": 6665499,
+    "cache_write": 520941,
+    "first": "2026-10-16T20:46:02Z",
+    "landed": "2026-10-17T07:50:41Z"
+  }
+}
