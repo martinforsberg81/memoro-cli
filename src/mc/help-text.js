@@ -292,7 +292,7 @@ IN FULL
                                     stale one, main, a session started outside
                                     the repository) and the mc toolbox
   mc hook pre-tool                 For a PreToolUse hook on Bash|Write: gh pr
-                                    create and git push → mc publish, gh pr
+                                    create, gh pr edit and git push → mc publish, gh pr
                                     merge → mc merge, npm run ci → mc gate, npm
                                     run dev → mc test dev --here --url, a scratch
                                     Playwright script → mc shot. MC_HOOK_ALLOW=1

@@ -153,7 +153,7 @@ export function mendPrompt({ job, report, title = null, step = null, log = [] })
     red.length
       ? `- Run \`mc gate ${red.join(' ')}\` until they are green, then \`mc gate\` once for the whole selection — never a bare \`npm test\`.`
       : '- Run `mc gate` until it is green — never a bare `npm test`.',
-    `- Commit, then \`git push origin HEAD:${branch}\`. No force.`,
+    `- Commit, then \`mc publish --branch ${branch}\` — it pushes without force and lists the commit under the pull request's description. Never \`git push\`.`,
     '- Edit no `PLAN.json`.',
     '- If it cannot be fixed here, push nothing and say why in your last line.',
     '',

@@ -804,7 +804,7 @@ function retryPreamble(retry, repo) {
     ...redLines(retry.red),
     `#${retry.pr} is still open, on this branch, with the earlier session's work.`,
     'Start there — `gh pr view` and the diff — fix what the gate named (never by',
-    'lowering a threshold or skipping a test), push to the same branch, and run',
+    'lowering a threshold or skipping a test), commit, run `mc publish` (it pushes to the same branch and lists your commits under the description; `--body-file` when the description itself is now wrong), and run',
     `\`mc merge ${repo} ${retry.pr}\` again. No new pull request.`,
     '',
   ];

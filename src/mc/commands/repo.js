@@ -27,6 +27,7 @@ import { projectForBranch } from '../project-prs.js';
 import { mergerLogPath, queueMerge } from '../merger.js';
 import { listEntries } from '../register.js';
 import { workRoot } from '../paths.js';
+import { tryGit } from '../git.js';
 import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
@@ -352,6 +353,21 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
 }
 
 /**
+ * The door's refusals for one pull request (ruling 43), as the line `mc merge`
+ * says, or null when it may be queued. Pure: the caller reads GitHub and the
+ * worktree. `remoteHead` is null when origin has no such branch.
+ */
+function doorRefusal({ pr, mergeable, head, worktreeBranch, localHead, remoteHead }) {
+  if (mergeable === 'CONFLICTING') {
+    return `mc: #${pr} conflicts with its base on GitHub — merge origin/main into the branch here (git fetch -q origin && git merge origin/main), resolve, mc publish, then mc merge again`;
+  }
+  if (head && worktreeBranch === head && localHead && remoteHead !== localHead) {
+    return `mc: this worktree holds ${head} at ${localHead.slice(0, 7)}, origin at ${remoteHead ? remoteHead.slice(0, 7) : 'nothing'} — mc publish first, then mc merge`;
+  }
+  return null;
+}
+
+/**
  * `mc merge <repo> <pr>`, past the door: the pull request handed to the
  * merger (`merger.js`), and the caller told where it stands. The step it is —
  * from `MC_STEP` in a runner session's environment, else from the branch
@@ -364,11 +380,32 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   const repo = basename(String(repoPath).replace(/\/+$/u, ''));
   const askGh = deps.gh || spawnTool('gh');
   let head = null;
+  let mergeable = null;
   try {
-    head = JSON.parse(askGh(['pr', 'view', String(opts.pr), '--json', 'headRefName'], { cwd: repoPath }).stdout)?.headRefName || null;
+    const view = JSON.parse(askGh(['pr', 'view', String(opts.pr), '--json', 'headRefName,headRefOid,mergeable'], { cwd: repoPath }).stdout);
+    head = view?.headRefName || null;
+    mergeable = view?.mergeable || null;
   } catch { head = null; }
   const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
+
+  // Refused before anything is queued or any round is recorded. The caller's
+  // worktree is asked only when it is on the pull request's branch; another
+  // branch, or no git at all, is no refusal.
+  const worktree = deps.cwd || process.cwd();
+  const askHere = deps.git
+    ? (args) => { const r = deps.git(args, { cwd: worktree }); return r?.status === 0 ? String(r.stdout || '').trim() : null; }
+    : (args) => tryGit(worktree, args);
+  const worktreeBranch = askHere(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const localHead = head && worktreeBranch === head ? askHere(['rev-parse', 'HEAD']) : null;
+  const remoteLine = localHead ? askHere(['ls-remote', '--heads', 'origin', head]) : null;
+  // A failed ls-remote is no refusal: the door fails open (mc-merge.md).
+  const remoteHead = remoteLine === null ? localHead : (remoteLine.split(/\s+/u)[0] || null);
+  const refusal = doorRefusal({ pr: opts.pr, mergeable, head, worktreeBranch, localHead, remoteHead });
+  if (refusal) {
+    stderr.write(`${refusal}\n`);
+    return 1;
+  }
   const step = stepForMerge({ env, head, entries: listEntries(root, io) });
   // A step that started on top of one still landing (ruling 30, A): the
   // merger lands it after that one, and the door compares the plan with that

@@ -139,7 +139,7 @@ export const TOOLBOX = [
   '  a server URL      mc test dev --here --url',
   '  check the tree    mc gate            (npm run ci for this worktree, 2 KB verdict)',
   '  run some tests    mc gate <files…> [--test-name-pattern …]   (whole output in a file, the failures printed)',
-  '  publish           mc publish [--title … --body-file …]   (push + open/update the PR, never force)',
+  '  publish           mc publish [--title … --body-file … --base …]   (push + open/update the PR, never force)',
   '  land              mc merge <repo> <pr>   (the gate, then the merge)',
   '  what runs where   mc dev list · mc prs · mc status <name>',
   'Every verb: mc <verb> --help.',
@@ -177,9 +177,14 @@ export const BASH_RULES = [
     reason: 'Use `mc publish` — it pushes this branch without force and opens its PR (title and body from the last commit, or --title/--body-file), and ends with the mc merge line.',
   },
   {
+    id: 'pr-edit',
+    test: /(^|[;&|(]\s*|\s)gh\s+pr\s+edit\b/u,
+    reason: 'Use `mc publish` — on an open pull request `--title`, `--body-file` and `--base` each edit only their own field, and without a body it lists the commits after the description.',
+  },
+  {
     id: 'push',
     test: /(^|[;&|(]\s*|\s)git\s+push\b/u,
-    reason: 'Use `mc publish` — it pushes without force, refuses on main, a dirty tree or a moved remote, and opens or updates the PR. A deliberate force-with-lease (a rebased stack) carries MC_HOOK_ALLOW=1.',
+    reason: 'Use `mc publish` — it pushes without force, refuses on main, a dirty tree or a moved remote, and opens or updates the PR; `--branch <name>` from a detached HEAD. A deliberate force-with-lease (a rebased stack) carries MC_HOOK_ALLOW=1.',
   },
   {
     id: 'pr-merge',
