@@ -295,6 +295,7 @@ export function applyEntry(record, entry) {
       ...step,
       status: state.status,
       pr: state.pr,
+      reason: state.reason ?? null,
       blocked_by: state.status === 'blocked' ? state.blocked_by : null,
       comments: state.comments,
     };

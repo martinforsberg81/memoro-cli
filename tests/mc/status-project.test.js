@@ -363,6 +363,15 @@ describe('the project page', () => {
     assert.match(text, /note: gh pr list failed/u);
   });
 
+  it('NEXT says why a failed step failed, and what starts it again (ruling 45 § 4)', () => {
+    const failed = JSON.parse(PLAN('failed', 'One project'));
+    failed.steps[1].reason = 'interrupted 3 times in a row — last refusal (credits): API Error: 400 You have reached your specified workspace API usage limits.';
+    const text = renderProject({ ...data, plan: failed });
+    // NEXT folds at 90 columns: the fold is undone so the whole reason is read, not a line of it.
+    const next = text.slice(text.indexOf('NEXT\n'), text.indexOf('STEPS\n')).replace(/\n {2}/gu, ' ');
+    assert.match(next, /^NEXT step 2 failed: interrupted 3 times in a row — last refusal \(credits\): API Error: 400 You have reached your specified workspace API usage limits\.; mc step ready starts it again/u);
+  });
+
   it('says plainly when a workarea has no plan, no runs and no PR', () => {
     const text = renderProject({ ...data, path: null, repo: null, programme: null, plan: null, problems: [], runs: [], prs: [], notes: [] });
     assert.match(text, /no plan — this is a workarea without a project/u);

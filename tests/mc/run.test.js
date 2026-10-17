@@ -4371,11 +4371,11 @@ const CODEX_LOG = [
 ].map((e) => JSON.stringify(e)).join('\n') + '\n{"type":"turn.completed","usage":{"input_tok';
 
 /** A register whose one step is `running` under a pid that is gone, with its stream log on disk. */
-function deadSession({ tool = 'claude', log = CLAUDE_LOG, interrupted = null } = {}) {
+function deadSession({ tool = 'claude', log = CLAUDE_LOG, interrupted = null, billing } = {}) {
   const f = fixture({ plans: { memoro: { alpha: ready } }, livePids: [] });
   f.files['/w/runner/projects/alpha.json'] = JSON.stringify({
     project: 'alpha', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/alpha/PLAN.json',
-    steps: [{ status: 'running', branch: 'alpha', interrupted, session: { pid: 99999, started: '2026-08-29T09:00:00Z', tool, model: 'm-1', log: '/w/runner/log/alpha-20260829T090000Z' } }],
+    steps: [{ status: 'running', branch: 'alpha', interrupted, session: { pid: 99999, started: '2026-08-29T09:00:00Z', tool, model: 'm-1', billing, log: '/w/runner/log/alpha-20260829T090000Z' } }],
   });
   if (log != null) f.files['/w/runner/log/alpha-20260829T090000Z.jsonl'] = log;
   f.deps.mtime = (path) => (path in f.files ? '2026-08-29T09:55:00Z' : null);
@@ -4393,7 +4393,7 @@ test('register: a running step whose claude session is gone is ready again with 
   assert.equal(step.reason, null);
   assert.deepEqual(step.interrupted, {
     at: '2026-08-29T10:00:00Z', session_id: 'c1a2b3c4-dead-4bee-8000-000000000001', tool: 'claude', model: 'm-1',
-    log: '/w/runner/log/alpha-20260829T090000Z', last_activity: '2026-08-29T09:55:00Z', context_tokens: 5320, branch: 'alpha', count: 1, billing: 'plan',
+    log: '/w/runner/log/alpha-20260829T090000Z', last_activity: '2026-08-29T09:55:00Z', context_tokens: 5320, branch: 'alpha', count: 1, billing: 'plan', said: null,
   });
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: step 1 was running under pid 99999, which is gone — interrupted/u);
   assert.match(f.files['/w/runner/log/runner.log'], /step 1 interrupted — claude session c1a2b3c4-dead-4bee-8000-000000000001 died under it/u);
@@ -4433,6 +4433,31 @@ test('register: the second interruption in a row counts two, the third is failed
   assert.equal(step.status, 'failed');
   assert.equal(step.reason, 'interrupted 3 times in a row — last session c1a2b3c4-dead-4bee-8000-000000000001');
   assert.equal(step.interrupted, null, 'a failed step carries no record');
+});
+
+/** A claude stream as the cut-off one above, ended on the result line a spent workspace limit leaves. */
+const refusedLog = (refusal) => `${CLAUDE_LOG.split('\n').slice(0, 3).join('\n')}\n${JSON.stringify({
+  type: 'result', subtype: 'success', is_error: true, num_turns: 3, session_id: 'c1a2b3c4-dead-4bee-8000-000000000001',
+  terminal_reason: 'api_error', api_error_status: 400, result: refusal,
+})}\n`;
+const WORKSPACE_LIMIT = 'API Error: 400 You have reached your specified workspace API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.';
+
+test('register: the third interruption whose stream ended on a spent workspace limit names that refusal and its billing (ruling 45 § 4)', async () => {
+  const f = deadSession({ log: refusedLog(WORKSPACE_LIMIT), billing: 'credits', interrupted: { count: 2, session_id: 'older' } });
+  createRunner({ deps: f.deps }).queue();
+  const step = registerOf(f, 'alpha').steps[0];
+  assert.equal(step.status, 'failed');
+  assert.equal(step.reason, `interrupted 3 times in a row — last refusal (credits): ${WORKSPACE_LIMIT} — last session c1a2b3c4-dead-4bee-8000-000000000001`);
+});
+
+test('register: a second interruption records the refusal it was under, and a third with no refusal of its own still names it', async () => {
+  const second = deadSession({ log: refusedLog(WORKSPACE_LIMIT), interrupted: { count: 1, session_id: 'older' } });
+  createRunner({ deps: second.deps }).queue();
+  assert.equal(registerOf(second, 'alpha').steps[0].interrupted.said, WORKSPACE_LIMIT);
+
+  const third = deadSession({ interrupted: { count: 2, session_id: 'older', said: WORKSPACE_LIMIT } });
+  createRunner({ deps: third.deps }).queue();
+  assert.equal(registerOf(third, 'alpha').steps[0].reason, `interrupted 3 times in a row — last refusal (plan): ${WORKSPACE_LIMIT} — last session c1a2b3c4-dead-4bee-8000-000000000001`);
 });
 
 test('register: a session killed by a signal the runner did not send is interrupted, its stream on disk as it came', async () => {

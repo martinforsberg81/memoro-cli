@@ -161,7 +161,7 @@ import {
   DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
   helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
-  initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
+  apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -709,8 +709,12 @@ export function createRunner({
     const lastActivity = log && stdout != null && deps.mtime ? deps.mtime(`${log}.jsonl`) : null;
     const count = (Number(was?.interrupted?.count) || 0) + (counted ? 1 : 0);
     const id = standing.session_id || 'unknown';
+    // The refusal the stream ended on (ruling 45 § 4) — the one that cut the
+    // session off, or else the one an earlier death in this run was under, so a
+    // count that names no refusal of its own still says what the run is under.
+    const said = apiInterruption(sessionResult(stdout))?.said ?? was?.interrupted?.said ?? null;
     if (counted && count >= INTERRUPT_LIMIT) {
-      const reason = `interrupted ${count} times in a row — last session ${id}`;
+      const reason = `interrupted ${count} times in a row — ${said ? `last refusal (${billing}): ${said} — ` : ''}last session ${id}`;
       say(`${name}: step ${index + 1} ${reason} — failed`);
       return recordStep(name, index, { status: 'failed', reason, session: null });
     }
@@ -719,7 +723,7 @@ export function createRunner({
       status: 'ready', reason: null, session: null,
       interrupted: {
         at: stamp(), session_id: standing.session_id, tool: tool ?? null, model: model ?? null, log: log ?? null,
-        last_activity: lastActivity, context_tokens: standing.context_tokens, branch: branch ?? null, count, billing,
+        last_activity: lastActivity, context_tokens: standing.context_tokens, branch: branch ?? null, count, billing, said,
       },
     });
   }
