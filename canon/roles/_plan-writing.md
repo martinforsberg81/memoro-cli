@@ -27,6 +27,20 @@ start to finish, and know when it is done? If not, it is not a step
   instruction can settle beforehand, and only once you have tried to split
   it: decide here, and let Haiku steps carry it out. Many narrow Haiku steps
   beat one broad Opus step.
+  - Never put `model` in the plan's own `runner`: it makes every step that
+    model. The model is named on each step, never left to the default.
+  - **Haiku** when you can name the files, the functions, the order and the
+    tests: a bug whose cause you found, a function whose signature and cases
+    you wrote down, wiring a finished function into its call site, a flag or
+    message, a doc paragraph, a test the instruction lists case by case.
+  - **Opus** only when the step itself must choose, and you cannot choose
+    for it: a layout or visual result judged against `mc shot`, a change
+    spread across many files whose shape the code only shows while it is
+    being made, a concurrency or ordering change where every edge case
+    cannot be listed, a merge that is expected to conflict.
+  - Unsure? Write it as Haiku. If you cannot write the instruction precisely
+    enough for Haiku, the investigation is not done: do it here, not in an
+    Opus step.
 - **Overall:** `goal`; `contract` (what may not change without Martin);
   `out_of_scope`, named; `success_criteria` with a `check` — for anything
   with a surface, measured in the running app. All frozen: a step session
