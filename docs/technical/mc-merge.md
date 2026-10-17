@@ -840,6 +840,27 @@ a merger finds at start belonged to a mend that died with the merger before
 it: it goes back in line unmended. A SIGTERM drops the mends waiting (their
 entries stay `mending`) and waits for the one running.
 
+**What a red round keeps** (ruling 44). Every round that finishes `red` writes
+its failures to `~/mc/runner/merge-red/<repo>-<pr>.txt`
+([`src/mc/merge-red.js`](../../src/mc/merge-red.js)): one file per pull
+request, a batch's from each one's own fallback round. The next red overwrites
+it and a landing removes it. The file holds, per red test, its file, its name,
+where it failed and the assertion's first lines, at most 200 lines in all. The
+gate cuts these blocks out of the suite's TAP and out of the selected files'
+TAP (`redTests` in [`src/mc/tap-red.js`](../../src/mc/tap-red.js)) after the
+killed and cancelled files are taken out of the red. The path is on the report
+as `red_detail`, and it goes into the round's `gate-rounds.jsonl` line with
+`red_files`. Two readers get it. The step's next session gets it through the
+register's `red` and the retry preamble. The mend gets it through its prompt.
+Both are given the same three lines: `Red files: …`, `The failures, as the round
+saw them: <path>`, and `Re-run just those: mc gate <files> --test-name-pattern
+'<names>'` (at most five names, regex-escaped). The mend is told to run
+`mc gate <red files>` until they are green, then `mc gate` once, and never a
+bare `npm test`. Until then every mend was told `red files:` with nothing after
+it. A merge round keeps the gate's verdict under `gate`, and the mend read only
+the top of the report. Now `runMergeRound` lifts `red_files` and `main_red` up
+to the top when the gate stops.
+
 The three numbers are constants with their reasons beside them, not settings:
 
 - **`MEND_STOPS`** — `merge`, `restack`, `red`, `selected-gate`, `pr-tests`,

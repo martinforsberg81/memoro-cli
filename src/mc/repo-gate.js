@@ -48,7 +48,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
-import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, tapTotals } from './tap-red.js';
+import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, tapTotals } from './tap-red.js';
 import { probeMainRed, redAt } from './selector-miss.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
@@ -706,6 +706,9 @@ export async function runGate({
         if (after.result.red_files) after.result.red_files = after.result.red_files.filter((file) => !cancelled.includes(file));
       }
       const red = after.result.red;
+      // What a killed or cancelled file failed is not the red either, and is
+      // not handed to whoever mends it (ruling 44).
+      if (after.result.red_tests) after.result.red_tests = after.result.red_tests.filter((test) => red.includes(test.name));
       // The verdict is already red; this only says whose red it is. Worth a
       // few seconds on a round that failed, because the other reading is the
       // one #12107 got: red twice on tests a landed change had broken.
@@ -938,6 +941,8 @@ async function measure({ suite, git, cwd, command, say, is }) {
       exit_code: run.code,
       totals,
       red: redNames(run.tap),
+      // Each red test's failure, cut out of the run for whoever mends it.
+      red_tests: redTests(run.tap, null, { cwd }),
       // No file list to name them by: the locations as node wrote them.
       ...killedOf(run.tap, null),
     },
@@ -1091,6 +1096,7 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
     ok: true,
     result: {
       commit, is, exit_code: run.code, totals, red: redNames(run.tap), red_files: redFiles(run.tap, files), selected: files.length,
+      red_tests: redTests(run.tap, files),
       ...killedOf(run.tap, files),
     },
   };

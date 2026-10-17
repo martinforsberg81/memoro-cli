@@ -1717,6 +1717,36 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
+    it('two red tests in one file are cut out of the run with their names, locations and errors (ruling 44)', async () => {
+      const fx = selecting({ files: [scanner, own] });
+      const block = (index, name, line, error) => [
+        `    # Subtest: ${name}`, `    not ok ${index} - ${name}`, '      ---', "      type: 'test'",
+        `      location: '/somewhere/candidate/${own}:${line}:3'`, "      failureType: 'testCodeFailure'", '      error: |-',
+        ...error.map((text) => (text ? `        ${text}` : '')), "      code: 'ERR_ASSERTION'", '      stack: |-',
+        `        TestContext.<anonymous> (file:///somewhere/candidate/${own}:${line + 2}:12)`, '        Test.runInAsyncScope (node:async_hooks:214:14)',
+        '      ...',
+      ];
+      const tap = [
+        'TAP version 13', '# Subtest: s',
+        ...block(1, 'a', 10, ['Expected values to be strictly equal:', '', '1 !== 2', '']),
+        ...block(2, 'b', 20, ['boom']),
+        '    1..2', 'not ok 1 - s', '  ---', "  type: 'suite'", `  location: '/somewhere/candidate/${own}:9:1'`,
+        "  failureType: 'subtestsFailed'", "  error: '2 subtests failed'", '  ...', '1..1', '# tests 2', '# pass 0', '# fail 2',
+      ].join('\n');
+      try {
+        const report = await fx.report({
+          tests: () => Promise.resolve({ code: 1, tap }),
+          probeMain: async () => ({ red_on_main: [], breaks: [] }),
+        });
+        assert.equal(report.stopped_at, 'red');
+        assert.deepEqual(report.candidate.red_files, [own]);
+        assert.deepEqual(report.candidate.red_tests, [
+          { file: own, name: 's › a', own: 'a', at: `${own}:12:12`, error: ['Expected values to be strictly equal:', '1 !== 2'] },
+          { file: own, name: 's › b', own: 'b', at: `${own}:22:12`, error: ['boom'] },
+        ], 'the leaves, not the suite failing because of them');
+      } finally { fx.cleanup(); }
+    });
+
     it('a green round runs nothing more, and keeps the files it selected', async () => {
       const { gitAlso, tests } = onMain({ redAt: {} });
       const fx = selecting({ files: [own, scanner], gitAlso });

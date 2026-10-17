@@ -22,6 +22,7 @@
  *
  * Pure over what it is handed; the verb and the merger do the reading.
  */
+import { redHandoff } from './merge-red.js';
 import { projectForBranch } from './project-prs.js';
 import { currentIndex, parseStepEnv } from './register.js';
 
@@ -98,6 +99,7 @@ export function landedPatch({ pr, report, now, body = null }) {
     status: 'done',
     pr: Number(pr),
     reason: null,
+    red: null,
     landed: { sha: report?.merge_commit || null, into: report?.merged_into || null, at: now, ...(remainder ? { remainder } : {}) },
     ...(remainder ? { comment: `#${Number(pr)} landed with a remainder no step holds yet — ${remainder}` } : {}),
   };
@@ -132,6 +134,9 @@ export function redPatch({ step, report }) {
     status,
     attempts,
     reason: status === 'failed' && !persons ? `${reason} (attempt ${attempts} of ${MAX_MERGE_ATTEMPTS})` : reason,
+    // The round's red files, its kept failures and its red tests' names,
+    // handed to the next session (ruling 44); null when it named none.
+    red: redHandoff(report),
   };
 }
 
