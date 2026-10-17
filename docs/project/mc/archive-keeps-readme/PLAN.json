@@ -20,7 +20,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`rewriteArchivedLinks` rewrites a README link (anchor kept), a directory link, a `PLAN.json` link and a link to another removed file to the right closeout path, relative to the file it is in, and leaves kept files, other links and fenced code alone.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/archive-plan.test.js` passes, including the tests named in step 1."
     },
