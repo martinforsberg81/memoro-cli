@@ -45,9 +45,10 @@ describe('docs/technical/mc-merge.md says what the code does', () => {
   it('states the round-log mode a docs round is written under', async () => {
     const gh = (args) => {
       if (args[1] === 'view' && args.at(-1).includes('files')) {
-        return { ok: true, stdout: JSON.stringify({ number: 7, title: 'Plan: x', state: 'OPEN', isDraft: false, baseRefName: 'main', files: [{ path: 'docs/project/x/PLAN.md' }] }), stderr: '' };
+        return { ok: true, stdout: JSON.stringify({ number: 7, title: 'Plan: x', state: 'OPEN', isDraft: false, baseRefName: 'main', headRefOid: 'aaaa111', files: [{ path: 'docs/project/x/PLAN.md' }] }), stderr: '' };
       }
       if (args[1] === 'view' && args.at(-1) === 'mergeable') return { ok: true, stdout: '{"mergeable":"MERGEABLE"}', stderr: '' };
+      if (args[1] === 'view' && args.at(-1) === 'headRefOid') return { ok: true, stdout: '{"headRefOid":"aaaa111"}', stderr: '' };
       if (args[1] === 'view') return { ok: true, stdout: '{"state":"MERGED","mergeCommit":{"oid":"abc1234"}}', stderr: '' };
       return { ok: true, stdout: '', stderr: '' };
     };

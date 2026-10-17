@@ -11,7 +11,7 @@ import { docsMergeLines, firstNonDoc, firstScript, runDocsMerge } from '../../sr
 import { run } from '../../src/mc/commands/merge.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 
-function stubGh({ files, state = 'OPEN', isDraft = false, mergeable = 'MERGEABLE', unknownFirst = 0 }) {
+function stubGh({ files, state = 'OPEN', isDraft = false, mergeable = 'MERGEABLE', unknownFirst = 0, head = 'aaaa111', headAfter = head }) {
   const calls = [];
   let asked = 0;
   let merged = false;
@@ -21,8 +21,9 @@ function stubGh({ files, state = 'OPEN', isDraft = false, mergeable = 'MERGEABLE
     if (args[0] === 'pr' && args[1] === 'view') {
       const fields = args[4];
       if (fields === 'mergeable') { asked += 1; return json({ mergeable: asked <= unknownFirst ? 'UNKNOWN' : mergeable }); }
+      if (fields === 'headRefOid') return json({ headRefOid: headAfter });
       if (fields === 'state,mergeCommit') return json({ state: merged ? 'MERGED' : 'OPEN', mergeCommit: merged ? { oid: 'abc1234def' } : null });
-      return json({ number: 12, title: 'Plan: gate-word', state, isDraft, baseRefName: 'main', files: files.map((path) => ({ path })) });
+      return json({ number: 12, title: 'Plan: gate-word', state, isDraft, baseRefName: 'main', headRefOid: head, files: files.map((path) => ({ path })) });
     }
     if (args[0] === 'pr' && args[1] === 'merge') { merged = true; return { ok: true, stdout: '', stderr: '' }; }
     return { ok: false, stdout: '', stderr: 'unexpected' };
@@ -39,8 +40,25 @@ describe('runDocsMerge', () => {
     assert.equal(report.ok, true);
     assert.equal(report.merged, true);
     assert.equal(report.merge_commit, 'abc1234def');
-    assert.deepEqual(calls.find((c) => c[1] === 'merge'), ['pr', 'merge', '12', '--squash', '--subject', 'Plan: gate-word (#12)']);
+    assert.deepEqual(calls.find((c) => c[1] === 'merge'), ['pr', 'merge', '12', '--squash', '--subject', 'Plan: gate-word (#12)', '--match-head-commit', 'aaaa111']);
     assert.match(docsMergeLines(report)[0], /^mc: merged #12 into main as abc1234 \(squash, docs only: 2 files under docs\/\)$/u);
+  });
+
+  it('refuses with drift, and does not merge, when the head moved after its files were checked', async () => {
+    const { gh, calls } = stubGh({ files: ['docs/a.md'], headAfter: 'bbbb222' });
+    const report = await runDocsMerge(opts(gh));
+    assert.equal(report.ok, false);
+    assert.equal(report.stopped_at, 'drift');
+    assert.match(report.reason, /aaaa111/u);
+    assert.match(report.reason, /bbbb222/u);
+    assert.ok(!calls.some((c) => c[0] === 'pr' && c[1] === 'merge'));
+  });
+
+  it('refuses with read when gh gives no head', async () => {
+    const { gh, calls } = stubGh({ files: ['docs/a.md'], head: null });
+    const report = await runDocsMerge(opts(gh));
+    assert.equal(report.stopped_at, 'read');
+    assert.ok(!calls.some((c) => c[0] === 'pr' && c[1] === 'merge'));
   });
 
   it('refuses one file outside docs/, by name, before touching merge', async () => {

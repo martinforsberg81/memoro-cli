@@ -23,7 +23,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/publish.test.js` passes, including the tests named in step 1."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`runDocsMerge` calls `gh pr merge <n> --squash --subject … --match-head-commit <headRefOid>`, and stops at `drift` without calling merge when the head read after the mergeability wait differs from the one read with the files.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/docs-merge.test.js` passes, including the tests named in step 2."
     }
