@@ -386,6 +386,24 @@ the probe blamed, the PR whose round found it) unless a file at the top of
 file the change touches, any red the probe does not call main's, or a diff that
 cannot be read, and the round is red as before.
 
+**A declared timing test gets one more run** (ruling 44 § 5). Since 2026-10-07
+memoro's JSC start-up budget, `sql:pr-ci`, dead-CSS and build-bundle went red
+and then green with no change, and neither `file-killed` nor `red-under-load`
+caught them. A declaration's `retry_once` names such test files and selected
+command gates (`{ "files": […], "gates": […] }`, shipped for memoro in
+[`src/mc/repo-gate-table.js`](../../src/mc/repo-gate-table.js), overridable in
+`.mc/test.json` like any field). After the killed and cancelled files are taken
+out and before the base probe, a red whose every file is in `files` is run once
+more alone on the candidate: green, and the round sets `flipped: { files, names
+}`, says `green alone — … flipped under load`, and goes on as a green suite
+would; still red, the files that stayed red go to the probe as today, and that
+run counts as their sample alone on the candidate. Likewise a round whose every
+failed selected command gate is in `gates` runs those once more after the suite;
+all green sets `flipped.gates` and goes on, any still failing is `selected-gate`
+as today. A red outside the lists is red as before. Every flip is in the round's
+line in `gate-rounds.jsonl`. No quarantine: nothing is skipped, and a file that
+flips often is a proposal to fix it, not a longer list.
+
 An empty selection stops the round: it is not a measurement, and a green from it
 would be the most confident kind of nothing.
 

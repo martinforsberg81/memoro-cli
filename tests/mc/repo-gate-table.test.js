@@ -57,7 +57,8 @@ describe('an override that shadows shipped fields is said, not silent (D-0135)',
       // it stops every `--full` for that repository.
       // `derived` joined on 2026-10-03: an override that drops it puts the
       // stale-snapshot race straight back.
-      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags', 'deps_notes']);
+      // `retry_once` joined on 2026-10-17 (ruling 44 § 5).
+      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags', 'deps_notes', 'retry_once', 'retry_once_why']);
       // The shipped entry alone shadows nothing.
       const plain = declarationFor('/x/memoro-cli', { root });
       assert.deepEqual(plain.shadowed, []);
@@ -408,6 +409,8 @@ describe('a repository that declares itself in .mc/test.json', () => {
         deps_notes: [],
         gate_lane: SHIPPED['memoro-cli'].gate_lane,
         gate_lane_why: SHIPPED['memoro-cli'].gate_lane_why,
+        retry_once: { files: [], gates: [] },
+        retry_once_why: null,
       });
       // And every field is attributed to the file it came from.
       assert.equal(answer.sources.select, 'shipped');
@@ -585,6 +588,41 @@ describe('the fields a declaration can carry', () => {
       fx.declare({ affected: 'node scripts/affected-tests.js --base-ref origin/main' });
       assert.equal(fx.ask().declaration.affected, 'node scripts/affected-tests.js --base-ref origin/main');
       assert.equal(fx.ask().sources.affected, 'repository');
+    } finally { fx.cleanup(); }
+  });
+
+  /**
+   * Ruling 44 § 5: the test files and command gates known to flip under load,
+   * run once more alone before they are red. Declared, like everything here,
+   * and a repository can say it for itself.
+   */
+  it('retry_once ships for memoro with its evidence, reads through the repository\'s file, and is empty elsewhere', () => {
+    const fx = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
+    const cli = repo('memoro-cli', { name: 'memoro-cli', dependencies: { a: '1' } });
+    try {
+      const shipped = fx.ask().declaration;
+      assert.deepEqual(shipped.retry_once.gates, ['sql:pr-ci', 'core:startup:jsc:check']);
+      assert.deepEqual(shipped.retry_once.files, ['tests/architecture/css-dead-rules.test.js', 'tests/scripts/build-bundle.test.js']);
+      assert.match(shipped.retry_once_why, /sql:pr-ci` command gate 15/u);
+      assert.equal(fx.ask().sources.retry_once, 'shipped');
+
+      fx.declare({ retry_once: { files: ['tests/slow.test.js'] }, retry_once_why: 'measured here' });
+      assert.deepEqual(fx.ask().declaration.retry_once, { files: ['tests/slow.test.js'], gates: [] });
+      assert.equal(fx.ask().sources.retry_once, 'repository');
+
+      assert.deepEqual(cli.ask().declaration.retry_once, { files: [], gates: [] });
+    } finally { fx.cleanup(); cli.cleanup(); }
+  });
+
+  it('a retry_once the round cannot read is a declaration error, not a quiet nothing', () => {
+    const fx = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
+    try {
+      for (const bad of [['tests/a.test.js'], { files: 'tests/a.test.js' }, { gates: [''] }, { tests: [] }]) {
+        fx.declare({ retry_once: bad });
+        const answer = fx.ask();
+        assert.equal(answer.ok, false, JSON.stringify(bad));
+        assert.match(answer.reason, /declares retry_once/u);
+      }
     } finally { fx.cleanup(); }
   });
 
