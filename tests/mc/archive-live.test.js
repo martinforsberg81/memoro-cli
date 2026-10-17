@@ -64,6 +64,8 @@ function repository() {
   write('docs/project/mc/closed-out/PLAN.md', plan('done', 'Step 2 — the last step it ran'));
   write('docs/project/mc/still-going/PLAN.md', plan('ready', 'Step 1 — not finished'));
   write('docs/project/prog-two/alone/PLAN.md', plan('done', 'Step 1 — the only project of its programme'));
+  write('docs/project/mc/documented/README.md', '# Documented\n\n## Close\n\nIts plan: [plan](PLAN.json).\n');
+  write('docs/technical/documented.md', '# Documented\n\nSee [the close](../project/mc/documented/README.md#close) and [the plan](../project/mc/documented/PLAN.json); [mc](https://example.invalid/mc/documented/README.md) stays.\n');
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-q', '-m', 'the projects']);
   git(repo, ['push', '-q', 'origin', 'HEAD:main']);
@@ -144,6 +146,7 @@ describe('archiving a done plan, for real', () => {
     assert.deepEqual(tree.filter((path) => path.startsWith('docs/project/')).sort(), [
       'docs/project/mc/closeout/closed-out.json',
       'docs/project/mc/closeout/documented.json',
+      'docs/project/mc/closeout/documented.md',
       'docs/project/mc/still-going/PLAN.md',
       'docs/project/prog-two/closeout/alone.json',
       'docs/project/project_log.md',
@@ -155,7 +158,20 @@ describe('archiving a done plan, for real', () => {
     const changed = git(fx.repo, ['show', '--name-status', '--format=', `origin/${branch}`]).split('\n').filter(Boolean);
     assert.ok(changed.includes('D\tdocs/project/mc/documented/PLAN.md'), changed.join('\n'));
     assert.ok(changed.includes('A\tdocs/project/mc/closeout/documented.json'), changed.join('\n'));
+    assert.ok(changed.some((line) => line === 'A\tdocs/project/mc/closeout/documented.md'
+      || /^R\d*\tdocs\/project\/mc\/documented\/README\.md\tdocs\/project\/mc\/closeout\/documented\.md$/u.test(line)), changed.join('\n'));
+    assert.ok(changed.includes('M\tdocs/technical/documented.md'), changed.join('\n'));
     assert.match(create[create.indexOf('--body') + 1], /Each project's closeout is in docs\/project\/<programme>\/closeout\/\./u);
+    assert.match(create[create.indexOf('--body') + 1], /its README is kept as `docs\/project\/<programme>\/closeout\/<project>\.md`/u);
+    assert.doesNotMatch(tree.join('\n'), /docs\/project\/mc\/closeout\/closed-out\.md/u, 'a project with no README keeps none');
+
+    // The README moves with its links rewritten to the closeout; the document
+    // that linked into the directory follows, and the external link stays.
+    assert.match(fx.mainFile('docs/project/mc/closeout/documented.md'), /\[plan\]\(documented\.json\)/u);
+    const technical = fx.mainFile('docs/technical/documented.md');
+    assert.match(technical, /\(\.\.\/project\/mc\/closeout\/documented\.md#close\)/u);
+    assert.match(technical, /\(\.\.\/project\/mc\/closeout\/documented\.json\)/u);
+    assert.match(technical, /\(https:\/\/example\.invalid\/mc\/documented\/README\.md\)/u);
     const closeout = JSON.parse(fx.mainFile('docs/project/mc/closeout/documented.json'));
     assert.equal(closeout.schema, 'mc-closeout');
     assert.equal(closeout.project, 'documented');
