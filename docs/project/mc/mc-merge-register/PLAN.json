@@ -41,7 +41,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/run-control.test.js tests/mc/repo-watch.test.js tests/mc/page.test.js` passes, including the tests named in step 2."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "While a batch's round runs, a member answered before it (closed, already merged, a restack refused) is already `red`, gone or `mending` in `merges.json`, and a mending member's mend has started.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/merger.test.js` passes, including the three tests named in step 3."
     },
