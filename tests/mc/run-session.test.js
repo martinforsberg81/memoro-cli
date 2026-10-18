@@ -235,6 +235,35 @@ describe('streamSession', () => {
     assert.equal(texts().some((t) => t.startsWith('quiet')), false);
   });
 
+  it('re-arms the stall guard across a machine sleep instead of killing, and says how long it slept', async () => {
+    const slept = [];
+    const { child, session } = start({ onSleep: (m) => slept.push(m) });
+    run(child, 5);
+    mock.timers.setTime(Date.now() + 26 * MINUTE);
+    mock.timers.tick(1);
+    assert.deepEqual(child.killed, [], 'a sleep is not a silence');
+    assert.deepEqual(slept, [26]);
+    run(child, 19);
+    assert.deepEqual(child.killed, [], 'the guard is re-armed for a full stall interval');
+    run(child, 1);
+    assert.deepEqual(child.killed, ['SIGTERM']);
+    assert.equal((await session).stalled, true);
+  });
+
+  it('sees the sleep when the stall timer is the first to wake', () => {
+    const slept = [];
+    const { child } = start({ onSleep: (m) => slept.push(m) });
+    mock.timers.tick(10_000);
+    child.say(JSON.stringify({ type: 'assistant', message: { content: [] } }));
+    run(child, 19);
+    mock.timers.tick(55_000);
+    assert.deepEqual(child.killed, [], 'the stall is due at 20 min 10 s; the heartbeat at 20 min 0 s ran');
+    mock.timers.setTime(Date.now() + 26 * MINUTE);
+    mock.timers.tick(1);
+    assert.deepEqual(child.killed, [], 'the stall timer is re-armed at the wake, not fired');
+    assert.deepEqual(slept, [26]);
+  });
+
   it('appends every stdout chunk to logPath as it arrives, and reports the signal it ended on', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-session-log-'));
     try {

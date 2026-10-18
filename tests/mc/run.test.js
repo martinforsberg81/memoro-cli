@@ -701,6 +701,8 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.equal(call.stallMs, 20 * 60_000);
   assert.match(call.checkIn(60, 1), /running for 60 minutes \(this is check-in number 1\)[\s\S]*"name": "alpha-check-in"/u);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: check-in 1 at 60 min/u);
+  call.onSleep(26);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: machine slept 26 min — stall guard re-armed/u);
   assert.deepEqual(call.args.slice(-5), ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
   // Ruling 18's second addendum: a step is opus at medium effort, no advisor.
   assert.deepEqual(call.args.slice(1, 12), ['--model', 'opus', '--effort', 'medium', '--permission-mode', 'acceptEdits', '--autocompact', '150000', '--tools', 'Bash,Read,Edit,Write,Grep,Glob', '--strict-mcp-config']);
