@@ -180,23 +180,40 @@ export function readLast(io, gitDir) {
 }
 
 /**
- * The primary checkout's declared `select`, the environment the merger
- * selects with (its selection state, read-only) and the flags its tests take.
- * Null when there is no declaration or no `select`.
+ * The primary checkout of the worktree at `root` and its gate declaration, or null when either cannot be read.
  */
-function primaryDeclaration(io, { root, env }) {
+export function primaryCheckoutDeclaration(io, { root, env }) {
   const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (!common) return null;
   const primary = dirname(common);
   let declared = null;
   try { declared = io.declaration(primary, { env }); } catch { return null; }
-  const select = declared?.ok ? declared.declaration?.select : null;
+  return declared?.ok && declared.declaration ? { primary, declaration: declared.declaration } : null;
+}
+
+/**
+ * The `node --test` flags the primary checkout declares (`pr_tests_flags`), or null when it declares none — then the `test` script's own flags stand.
+ */
+export function declaredTestFlags(io, { root, env }) {
+  const flags = primaryCheckoutDeclaration(io, { root, env })?.declaration?.pr_tests_flags;
+  return Array.isArray(flags) && flags.length ? [...flags] : null;
+}
+
+/**
+ * The primary checkout's declared `select`, the environment the merger
+ * selects with (its selection state, read-only) and the flags its tests take.
+ * Null when there is no declaration or no `select`.
+ */
+function primaryDeclaration(io, { root, env }) {
+  const found = primaryCheckoutDeclaration(io, { root, env });
+  if (!found) return null;
+  const select = found.declaration.select;
   if (!select) return null;
-  const state = selectionStateDir({ root: mcHome(env), repoPath: primary });
+  const state = selectionStateDir({ root: mcHome(env), repoPath: found.primary });
   try { io.mkdir(state); } catch { /* a selector without it selects as before */ }
   const selectEnv = { ...env, MC_SELECTION_STATE: state };
   delete selectEnv.MC_SELECTION_STATE_WRITE;
-  const flags = declared.declaration.pr_tests_flags;
+  const flags = found.declaration.pr_tests_flags;
   return { select, env: selectEnv, flags: Array.isArray(flags) && flags.length ? flags : null };
 }
 

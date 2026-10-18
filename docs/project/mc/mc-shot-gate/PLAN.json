@@ -25,7 +25,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc gate <files…>` in a worktree whose primary checkout declares `pr_tests_flags` runs `node --test <those flags> <files>`; without a declaration it runs the flags of the `test` script, as today.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-fast.test.js` passes, including 'named files run with the declared pr_tests_flags, which replace the test script\\'s' and 'declaredTestFlags reads the primary checkout\\'s declaration'."
     },
