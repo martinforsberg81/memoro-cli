@@ -1262,7 +1262,8 @@ export function sessionStanding({ toolId, stdout }) {
  *
  * Output that is one JSON object and no `result` line — `--output-format
  * json`, which the helper still runs on — is read whole, as it always was.
- * Null when there is neither.
+ * A zero-turn `result` (the stale notification a resume opens with) is no
+ * answer and is skipped. Null when there is neither.
  */
 export function sessionResult(stdout) {
   const results = [];
@@ -1270,11 +1271,12 @@ export function sessionResult(stdout) {
     if (!line.includes('"result"')) continue;
     let event = null;
     try { event = JSON.parse(line); } catch { continue; }
-    if (event && typeof event === 'object' && event.type === 'result') results.push(event);
+    if (event && typeof event === 'object' && event.type === 'result' && event.num_turns !== 0) results.push(event);
   }
   if (!results.length) {
     let json = null;
     try { json = JSON.parse(stdout); } catch { json = null; }
+    if (json?.type === 'result' && json.num_turns === 0) return null;
     return json && typeof json === 'object' && !Array.isArray(json) ? json : null;
   }
   const last = results.at(-1);

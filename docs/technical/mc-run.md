@@ -1126,7 +1126,13 @@ next turn by itself when the task finishes. claude reports the set in
 leaves stdin open. The whole line is searched for the `result`: claude writes
 its `type` after the usage, some 2 000 characters in, and until 2026-09-25 the
 scan looked only at the first 200 — so no `result` was ever seen, stdin was
-never closed by it, and the result grace below never ran.
+never closed by it, and the result grace below never ran. Nor is a `result` of
+zero turns. A resumed session whose background shell died with the previous
+process opens with a `task_notification` and a `result` with `num_turns: 0` and
+`origin.kind: task-notification`. On 2026-10-17 the runner took that for the end
+and killed msr-core-finish-measure two minutes into its resume. The scan and
+`sessionResult` skip it. A task-notification result with turns, which is
+claude's own next turn after a background task, is an end like any other.
 
 The only kill is the **stall guard**: a timer re-armed on every byte of
 stdout, and the child `SIGTERM`ed when `stall_minutes` go by without one — the

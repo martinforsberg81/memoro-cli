@@ -39,7 +39,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run-session.test.js tests/mc/run.test.js` passes, including the two sleep tests and the `machine slept 26 min — stall guard re-armed` assertion named in step 1."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A stream that opens with a `task_notification` and a `result` with `num_turns: 0` keeps stdin open and arms no grace, and `sessionResult` returns null for it. A task-notification result with `num_turns` ≥ 1 still ends the session.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run-session.test.js tests/mc/run-plan.test.js` passes, including the three tests named in step 2."
     },
