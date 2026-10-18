@@ -17,7 +17,7 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { planSummary, readPlanText } from './plan-schema.js';
 
@@ -59,6 +59,15 @@ export function listProposals(dir) {
   } catch {
     return [];
   }
+}
+
+/** The systems a proposal's filename may name: `<date>-<system>-<slug>.md`. One word per repository in `defaultRepos`; the list grows only when one joins. */
+export const PROPOSAL_SYSTEMS = Object.freeze(['mc', 'memoro']);
+
+/** The system a proposal's filename names, `'mc'` or `'memoro'`, or null when the name carries none. Read off the name, never out of the file. */
+export function proposalSystem(file) {
+  const match = /^\d{4}-\d{2}-\d{2}-(mc|memoro)-[^/]+\.md$/u.exec(basename(String(file || '')));
+  return match ? match[1] : null;
 }
 
 /* --------------------------------------------------------------------- plans */

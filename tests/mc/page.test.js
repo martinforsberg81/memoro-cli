@@ -1212,7 +1212,7 @@ describe('INTAKE', () => {
   it('names the digest, its age and the proposals waiting', () => {
     const intake = intakeSection({
       digests: [{ repo: 'memoro', name: 'errors-memoro-2026-08-29.md', text: DIGEST, mtime_ms: Date.parse('2026-08-29T10:00:00Z') }],
-      proposals: ['2026-08-29-one.md', '2026-08-29-two.md'],
+      proposals: ['2026-08-29-mc-one.md', '2026-08-29-two.md'],
       now: NOW,
     });
     assert.equal(intake.repos[0].repo, 'memoro');
@@ -1221,12 +1221,13 @@ describe('INTAKE', () => {
     assert.equal(intake.repos[0].new_errors, 2);
     assert.equal(intake.repos[0].loud, 1);
     assert.equal(intake.proposals, 2);
+    assert.deepEqual(intake.by_system, { mc: 1, memoro: 0, untagged: 1 });
     // What lies in proposals, as BRIEF says it: how far back the pile reaches
     // and the newest by name — read off the file names, never out of the files.
-    assert.deepEqual(intake.proposal_files, { oldest: '2026-08-29', newest: '2026-08-29', newest_names: ['two', 'one'] });
+    assert.deepEqual(intake.proposal_files, { oldest: '2026-08-29', newest: '2026-08-29', newest_names: ['two', 'mc-one'] });
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
     const at = lines.findIndex((line) => /^ {2}BRIEF/u.test(line));
-    assert.match(lines[at + 1], /^ {7}2 proposals · 08-29 · newest two · one$/u);
+    assert.match(lines[at + 1], /^ {7}2 proposals · mc 1 · untagged 1 · 08-29 · newest two · mc-one$/u);
     assert.match(lines[lines.findIndex((line) => /^ {2}HELPER/u.test(line)) + 1],
       /^ {7}memoro {6}2 new errors, 1 loud · 2 h old/u);
   });
@@ -1725,7 +1726,7 @@ describe('the page', () => {
     assert.doesNotMatch(text, /skipped \d/u, 'NEXT is the order and nothing else');
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /^ {7}memoro {6}1 new error, 1 loud · 60 min old {3}! /mu);
-    assert.match(text, /^ {7}1 proposal$/mu);
+    assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
     assert.match(text, /PROGRAMMES {2}3 programmes · 4 projects {2}ready 2 · blocked 1 · done 1\s+p {2}plan a programme/u);
     assert.match(text, /^ {2}docx-editing-surface\s+1 ready · 0 blocked\s+·\s{2}no plan session$/mu,
       'the programme is a heading of its own, and it counts its own projects');
@@ -2321,7 +2322,7 @@ describe('the palette', () => {
     'red grey green red', //                             memoro  1 new error, 1 loud · 60 min old   ! loud — 41x 500
     '',
     'bold+cyan grey grey', //                          BRIEF  ·  not open                                mc brief
-    'yellow', //                                         1 proposal
+    'yellow yellow', //                                  1 proposal · untagged 1
     'red grey grey', //                                  1 blocked · 1 on a decision · held most by assistant-avatar-1 1
     '',
     'bold+cyan grey grey', //                          NEXT  2 runnable                          mc status <name>

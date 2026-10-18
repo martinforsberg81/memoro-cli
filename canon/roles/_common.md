@@ -25,9 +25,10 @@ would do — answerable in a word. Never a menu of options. Never ask while the
 question is unclear or reading would settle it: then read.
 
 What you found that is not your job is a proposal: one file per finding,
-`~/mc/proposals/<date>-<slug>.md` — prose, which system (`memoro` = the
-deployed service, `memoro-cli` = mc), what you read. Say so in one line and
-carry on. Not `~/mc/intake/`: that is raw material, drained one file per turn
+`~/mc/proposals/<date>-<system>-<slug>.md`, where `<system>` is `mc` (memoro-cli,
+mc itself) or `memoro` (the deployed service): the one whose change would
+resolve it, the first when both would change. Inside it: prose, which system
+and why, what you read. Say so in one line and carry on. Not `~/mc/intake/`: that is raw material, drained one file per turn
 by a session that judges it; writing there asks a second session to work it
 out again from less than you had.
 

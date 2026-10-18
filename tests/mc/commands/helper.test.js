@@ -142,7 +142,7 @@ describe('mc helper — the desk', () => {
       proposalsPath: '/work/proposals', role: ROLE, now: new Date('2026-08-30T09:00:00Z'),
     });
     assert.match(launch.prompt, /^Today is 2026-08-30\./u);
-    assert.match(launch.prompt, /`\/work\/proposals` as `2026-08-30-<slug>\.md`/u);
+    assert.match(launch.prompt, /`\/work\/proposals` as `2026-08-30-<mc\|memoro>-<slug>\.md`/u);
     assert.match(launch.prompt, /Open by asking what he has\. Write nothing until you have it\./u);
     assert.equal(launch.model, 'sonnet');
   });
@@ -174,7 +174,7 @@ describe('the helper role', () => {
   it('names where a proposal goes and what it is called, and dictates no format', () => {
     const { overlay } = readCanonRole('helper');
     assert.match(overlay, /~\/mc\/proposals\//u);
-    assert.match(overlay, /<date>-<slug>\.md/u);
+    assert.match(overlay, /<date>-<system>-<slug>\.md/u);
   });
 
   it('is a different role from the one the intake turn wears', () => {
@@ -188,8 +188,8 @@ describe('the helper role', () => {
 describe('mc helper --intake', () => {
   it('collects and then drains the inbox, archiving each file after its turn', async () => {
     const result = await invoke(['--intake'], {}, TURN({
-      wrote: [{ file: '2026-08-29-expose-operations.md' }],
-      waiting: [{ file: '2026-08-29-expose-operations.md' }],
+      wrote: [{ file: '2026-08-29-mc-expose-operations.md' }],
+      waiting: [{ file: '2026-08-29-mc-expose-operations.md' }],
     }));
     assert.equal(result.code, 0);
     assert.equal(result.turned.called, true);
@@ -202,7 +202,7 @@ describe('mc helper --intake', () => {
     assert.match(result.moved[0][0], /\/intake\/errors-2026-08-29\.md$/u);
     assert.match(result.moved[0][1], /\/runner\/log\/intake\/\d{4}-\d{2}-\d{2}\/errors-2026-08-29\.md$/u);
     assert.match(result.stdout, /errors-2026-08-29\.md: 1 proposal, 1 waiting \(\d+s, claude sonnet\)/u);
-    assert.match(result.stdout, /2026-08-29-expose-operations\.md/u);
+    assert.match(result.stdout, /2026-08-29-mc-expose-operations\.md/u);
     assert.match(result.stdout, /read them at the next brief/u);
   });
 
@@ -307,6 +307,8 @@ describe('mc helper --intake', () => {
   it('says what the turn produced in one line', () => {
     assert.equal(describeTurn({ wrote: [], waiting: [] }), 'no proposal — nothing in the file warranted one (0 still waiting)');
     assert.equal(describeTurn({ wrote: [1, 2], waiting: [1, 2, 3] }), '2 proposals, 3 waiting');
+    assert.equal(describeTurn({ wrote: [{ file: '2026-08-29-mc-a.md' }], waiting: [1] }), '1 proposal, 1 waiting');
+    assert.equal(describeTurn({ wrote: [{ file: '2026-08-29-a.md' }], waiting: [1] }), '1 proposal, 1 waiting — proposal 2026-08-29-a.md names no system (mc|memoro)');
   });
 
   it('lists the unreadable sections by name', () => {
