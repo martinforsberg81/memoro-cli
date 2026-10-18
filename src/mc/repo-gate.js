@@ -70,7 +70,7 @@ import { duplicateRow } from './archive-plan.js';
 import { readRounds, recordRound } from './repo-round-log.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
-import { GATE_MEASUREMENT_VERSION, findGreen, selectionHash } from './gate-greens.js';
+import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, selectionHash } from './gate-greens.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -257,9 +257,12 @@ export async function runGate({
     // when the repository declares none.
     derived: null,
     candidate: null,
-    // The green `mc gate` recorded for exactly this tree and selection, when
-    // the round took it instead of running the suite and the selected command
-    // gates (`gate-greens.js`): `{ at, session }`. Null when it measured.
+    // The green `mc gate` recorded, when the round took it instead of
+    // measuring (`gate-greens.js`): `{ mode: 'exact', at, session }` for this
+    // exact tree and selection, or `{ mode: 'delta', at, session,
+    // delta_paths, rerun_files, rerun_commands }` for the pull request's own
+    // head tree with only what main's movement reaches run again (ruling 47).
+    // Null when it measured the whole selection.
     reused: null,
     // The prefix trees of a batch candidate as it was built, `T_1..T_N`:
     // what main must be, byte for byte, after each landing. Null for a
@@ -848,10 +851,73 @@ export async function runGate({
             killed_files: [], killed_red: [], cancelled_files: [], cancelled_red: [],
           },
         };
-        report.reused = { at: green.at ?? null, session: green.session ?? null };
+        report.reused = { mode: 'exact', at: green.at ?? null, session: green.session ?? null };
         say(`the candidate's tree ${tree.slice(0, 7)} was measured green by mc gate at ${green.at} with the same selection — not measured again`);
       }
     }
+
+    // No exact match: main moved since the session's `mc gate`, as it does on
+    // almost every round (11 hits in 513). Ruling 47 reuses the green measured
+    // on the pull request's own head tree and runs only what can have changed
+    // verdict. Sound exactly as far as the selector is, which every round
+    // already trusts for every test it does not select:
+    //
+    //  - a test reached only by the pull request's diff was measured green on
+    //    the pull request's tree, and main's movement touches nothing the
+    //    selector says reaches it;
+    //  - a test reached only by main's movement was measured green when those
+    //    pull requests landed;
+    //  - only a test reached by both — or newly selected on the candidate —
+    //    can change verdict, and those are what run.
+    //
+    // Anything that goes wrong on the way is a fallback to the whole
+    // selection, never a green.
+    let rerun = null;
+    if (selection && facts.pr && !batch && !reused && declared.declaration.select_changed_path) {
+      const delta = await timed('delta', () => deltaFromGreen({
+        git: askGit, cwd: headDir, root, repo: basename(String(repoPath)), headSha: facts.pr.head_sha,
+        baseCommit: report.base.commit, derived: report.derived?.commit ? report.derived.regenerated : [],
+        command: declared.declaration.select, env, selection,
+      }));
+      if (delta.kind === 'fallback') {
+        say(`delta reuse not taken — ${delta.reason}; measuring the whole selection`);
+      } else if (delta.kind === 'reuse') {
+        const { green } = delta;
+        report.reused = {
+          mode: 'delta', at: green.at ?? null, session: green.session ?? null,
+          delta_paths: delta.paths.length, rerun_files: delta.files.length, rerun_commands: delta.commands.map((entry) => entry.packageScript),
+        };
+        const head = String(facts.pr.head_sha || '').slice(0, 7);
+        if (!delta.files.length && !delta.commands.length) {
+          const at = await askGit(['rev-parse', 'HEAD'], { cwd: headDir });
+          reused = {
+            ok: true,
+            result: {
+              commit: at?.status === 0 ? String(at.stdout || '').trim() : null, is, exit_code: 0, totals: null,
+              red: [], red_files: [], red_tests: [], selected: selection.files.length,
+              killed_files: [], killed_red: [], cancelled_files: [], cancelled_red: [],
+            },
+          };
+          say(`#${facts.pr.number}'s head ${head} was measured green by mc gate at ${green.at}; main moved ${delta.paths.length} path${delta.paths.length === 1 ? '' : 's'} since, reaching none of the ${selection.files.length} selected file${selection.files.length === 1 ? '' : 's'} — not measured again`);
+        } else {
+          rerun = { files: delta.files, commands: delta.commands };
+          say(`#${facts.pr.number}'s head ${head} was measured green by mc gate at ${green.at}; main moved ${delta.paths.length} path${delta.paths.length === 1 ? '' : 's'} since — running ${delta.files.length} of the ${selection.files.length} selected file${selection.files.length === 1 ? '' : 's'} and ${delta.commands.length} of ${selection.commands.length} command gate${selection.commands.length === 1 ? '' : 's'} again`);
+        }
+      }
+    }
+    // What the run below measures: the whole selection, or the delta's part.
+    const runFiles = rerun ? rerun.files : selection?.files;
+    const runCommands = rerun ? rerun.commands : selection?.commands;
+    // A delta that reaches command gates and no test file: the files half is
+    // the recorded green, not an empty run (which reports no tests and stops).
+    const greenFiles = rerun && !rerun.files.length ? {
+      ok: true,
+      result: {
+        commit: trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null, is, exit_code: 0, totals: null,
+        red: [], red_files: [], red_tests: [], selected: 0,
+        killed_files: [], killed_red: [], cancelled_files: [], cancelled_red: [],
+      },
+    } : null;
 
     // The one run. What it finds red is the verdict: there is no second tree
     // to subtract, so a test the change reaches is either green or the round
@@ -889,20 +955,21 @@ export async function runGate({
     // closed on 2026-09-06 by handing its gates the merge base as a commit.
     const besideFrom = clock();
     const halves = reused ? [{ status: 'fulfilled', value: reused }, { status: 'fulfilled', value: [] }] : await Promise.allSettled([
-      selection
-        ? (say(`running the ${selection.files.length} file${selection.files.length === 1 ? '' : 's'} this change reaches`), timed('suite', () => measureSelected({
-          tests: runTests, git: askGit, cwd: headDir, files: selection.files, flags, say, is,
-        })))
-        : (say(`running the whole suite — ${commandLine.run} — this takes a while`), timed('suite', () => measure({
-          suite: runSuite, git: askGit, cwd: headDir, command: commandLine.run, say, is,
-        }))),
-      selection?.commands?.length
+      greenFiles ? Promise.resolve(greenFiles)
+        : selection
+          ? (say(`running the ${runFiles.length} file${runFiles.length === 1 ? '' : 's'} this change reaches${rerun ? ' that main\'s movement can have changed' : ''}`), timed('suite', () => measureSelected({
+            tests: runTests, git: askGit, cwd: headDir, files: runFiles, flags, say, is,
+          })))
+          : (say(`running the whole suite — ${commandLine.run} — this takes a while`), timed('suite', () => measure({
+            suite: runSuite, git: askGit, cwd: headDir, command: commandLine.run, say, is,
+          }))),
+      runCommands?.length
         ? runSelectedCommands({
-          commands: selection.commands, cwd: headDir, env, baseRef: report.base.commit || baseRef, say, timed, clock, shell: runShell,
+          commands: runCommands, cwd: headDir, env, baseRef: report.base.commit || baseRef, say, timed, clock, shell: runShell,
         })
         : Promise.resolve([]),
     ]);
-    if (selection?.commands?.length && !reused) report.timings.gates_beside_suite_ms = clock() - besideFrom;
+    if (runCommands?.length && !reused) report.timings.gates_beside_suite_ms = clock() - besideFrom;
     const thrown = halves.find((half) => half.status === 'rejected');
     if (thrown) throw thrown.reason;
     const [after, selectedGates] = halves.map((half) => half.value);
@@ -1091,7 +1158,8 @@ export function verdictFor(report) {
  */
 export function verdictHeadline(report) {
   const mainRed = report.main_red_files?.length || 0;
-  return `GREEN — the test gate passes${scopeOf(report)}${report.reused ? ' (measured by mc gate)' : ''}`
+  const partly = report.reused?.mode === 'delta' && (report.reused.rerun_files || report.reused.rerun_commands?.length);
+  return `GREEN — the test gate passes${scopeOf(report)}${report.reused ? (partly ? ' (the rest measured by mc gate)' : ' (measured by mc gate)') : ''}`
     + (mainRed ? ` — ${mainRed} test file${mainRed === 1 ? '' : 's'} red on main, not counted` : '');
 }
 
@@ -1232,6 +1300,80 @@ async function selectFiles({ command, cwd, env, say }) {
   say(`selection read from ${command}${full ? ' — it fell back to the whole suite' : ''}`
     + (commands.length ? `, with ${commands.length} command gate${commands.length === 1 ? '' : 's'}: ${commands.map((entry) => entry.packageScript).join(', ')}` : ''));
   return { ok: true, files: clean, commands, full, why: parsed?.why ?? null, hash: selectionHash(parsed) };
+}
+
+/** More delta paths than this and the selector is not asked: the command line would be the risk. */
+export const DELTA_PATHS_MAX = 4000;
+
+/**
+ * What a green `mc gate` on the pull request's own head tree leaves to run on
+ * the candidate (ruling 47), as one of:
+ *
+ *  - `{ kind: 'none' }` — no such green, or one measured from a base main
+ *    does not descend from: the round measures as it always did;
+ *  - `{ kind: 'fallback', reason }` — the green is there, but something on
+ *    the way failed: the round measures as it always did, and says why;
+ *  - `{ kind: 'reuse', green, paths, files, commands }` — the delta paths
+ *    (what main changed since `green.base`, and what the derived commit
+ *    regenerated), and the selected files and command gates to run again:
+ *    the candidate's selection reached by the delta too, or not measured by
+ *    the green at all. Both empty means nothing needs running.
+ *
+ * The delta's reach is asked of the repository's own selector, the declared
+ * `select` with ` --changed-path <p>` per path, read like `selectFiles`.
+ */
+export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit, derived = [], command, env, selection }) {
+  if (!headSha || !baseCommit) return { kind: 'none' };
+  const tree = await git(['rev-parse', `${headSha}^{tree}`], { cwd });
+  const headTree = tree?.status === 0 ? trim(tree.stdout) : null;
+  if (!headTree) return { kind: 'fallback', reason: `could not read the tree of ${String(headSha).slice(0, 7)}` };
+  const green = findGreenForHead({ root, repo, headTree, version: GATE_MEASUREMENT_VERSION });
+  if (!green) return { kind: 'none' };
+  const ancestor = await git(['merge-base', '--is-ancestor', green.base, baseCommit], { cwd });
+  if (ancestor?.status === 1) return { kind: 'fallback', reason: `the green's base ${green.base.slice(0, 7)} is not an ancestor of ${baseCommit.slice(0, 7)}` };
+  if (ancestor?.status !== 0) return { kind: 'fallback', reason: `git could not say whether ${green.base.slice(0, 7)} is an ancestor of ${baseCommit.slice(0, 7)}` };
+  const diff = await git(['diff', '--name-only', green.base, baseCommit], { cwd });
+  if (diff?.status !== 0) return { kind: 'fallback', reason: `git could not diff ${green.base.slice(0, 7)}..${baseCommit.slice(0, 7)}` };
+  const paths = [...new Set([
+    ...String(diff.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean),
+    ...(derived || []).map(String).filter(Boolean),
+  ])].sort();
+
+  // What the green measured, against what the candidate selects. A file or a
+  // command gate it never ran is run whatever the delta reaches.
+  const measuredFiles = new Set(green.files.map(String));
+  const measuredCommands = new Set((Array.isArray(green.commands) ? green.commands : []).map(String));
+  const fresh = (reached) => ({
+    files: selection.files.filter((file) => reached.files.has(file) || !measuredFiles.has(file)),
+    commands: selection.commands.filter((entry) => reached.commands.has(entry.packageScript) || !measuredCommands.has(entry.packageScript)),
+  });
+  if (!paths.length) return { kind: 'reuse', green, paths, ...fresh({ files: new Set(), commands: new Set() }) };
+  if (paths.length > DELTA_PATHS_MAX) return { kind: 'fallback', reason: `main moved ${paths.length} paths since the green, more than ${DELTA_PATHS_MAX} to hand the selector` };
+
+  const asked = `${command}${paths.map((path) => ` --changed-path ${shellQuote(path)}`).join('')}`;
+  let run = null;
+  try { run = await shell(asked, { cwd, env }); } catch (error) {
+    return { kind: 'fallback', reason: `the selector could not be run for the delta (${error.message})` };
+  }
+  if (run?.status !== 0) {
+    return { kind: 'fallback', reason: `the selector failed for the delta — ${trim(run?.stderr) || run?.error?.code || `exit ${run?.status}`}` };
+  }
+  let parsed = null;
+  try { parsed = JSON.parse(run.stdout); } catch { return { kind: 'fallback', reason: 'the selector printed no JSON for the delta' }; }
+  if (!Array.isArray(parsed?.files)) return { kind: 'fallback', reason: 'the selector printed no `files` array for the delta' };
+  if (parsed.commands !== undefined && !Array.isArray(parsed.commands)) {
+    return { kind: 'fallback', reason: 'the selector printed a `commands` field that is not a list for the delta' };
+  }
+  const reached = {
+    files: new Set(parsed.files.map(String).filter(Boolean)),
+    commands: new Set((parsed.commands || []).map((entry) => String(entry?.packageScript ?? '')).filter(Boolean)),
+  };
+  return { kind: 'reuse', green, paths, ...fresh(reached) };
+}
+
+/** One argument for `sh -c`, single-quoted. */
+function shellQuote(value) {
+  return `'${String(value).replace(/'/gu, `'\\''`)}'`;
 }
 
 /**

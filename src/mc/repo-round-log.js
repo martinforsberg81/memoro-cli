@@ -123,6 +123,10 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     // command gates declared `retry_once` (ruling 44 § 5) — counted here, so a
     // file that flips often is found and proposed rather than retried forever.
     flipped: gate?.flipped || null,
+    // The green `mc gate` the round took instead of measuring, and how
+    // (`exact`, or `delta` with what it ran again — ruling 47), so the hit
+    // rate is counted from the log rather than guessed. Null when it measured.
+    reused: gate?.reused || null,
     // A red round's files and where the merger kept its failures
     // (`runner/merge-red/`, ruling 44). A batch that fell back is one line for
     // all its pull requests: the files of every own round, and each one's

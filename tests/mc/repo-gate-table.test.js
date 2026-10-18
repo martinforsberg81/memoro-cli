@@ -57,8 +57,10 @@ describe('an override that shadows shipped fields is said, not silent (D-0135)',
       // it stops every `--full` for that repository.
       // `derived` joined on 2026-10-03: an override that drops it puts the
       // stale-snapshot race straight back.
-      // `retry_once` joined on 2026-10-17 (ruling 44 § 5).
-      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags', 'deps_notes', 'retry_once', 'retry_once_why']);
+      // `retry_once` joined on 2026-10-17 (ruling 44 § 5), and
+      // `select_changed_path` on 2026-10-18 (ruling 47): dropped, the round
+      // says so and measures without the delta reuse — nothing else changes.
+      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'select_changed_path', 'select_changed_path_why', 'suite', 'suite_why', 'derived', 'pr_tests_flags', 'deps_notes', 'retry_once', 'retry_once_why']);
       // The shipped entry alone shadows nothing.
       const plain = declarationFor('/x/memoro-cli', { root });
       assert.deepEqual(plain.shadowed, []);
@@ -398,6 +400,8 @@ describe('a repository that declares itself in .mc/test.json', () => {
         prepare_why: SHIPPED['memoro-cli'].prepare_why,
         select: SHIPPED['memoro-cli'].select,
         select_why: SHIPPED['memoro-cli'].select_why,
+        select_changed_path: false,
+        select_changed_path_why: null,
         suite: SHIPPED['memoro-cli'].suite,
         suite_why: SHIPPED['memoro-cli'].suite_why,
         extra_gates: [],
@@ -611,6 +615,21 @@ describe('the fields a declaration can carry', () => {
       assert.equal(fx.ask().sources.retry_once, 'repository');
 
       assert.deepEqual(cli.ask().declaration.retry_once, { files: [], gates: [] });
+    } finally { fx.cleanup(); cli.cleanup(); }
+  });
+
+  it('select_changed_path ships on for memoro, off elsewhere, and a non-boolean is a declaration error (ruling 47)', () => {
+    const fx = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
+    const cli = repo('memoro-cli', { name: 'memoro-cli', dependencies: { a: '1' } });
+    try {
+      assert.equal(fx.ask().declaration.select_changed_path, true);
+      assert.match(fx.ask().declaration.select_changed_path_why, /--changed-path/u);
+      assert.equal(cli.ask().declaration.select_changed_path, false);
+      fx.declare({ select_changed_path: false });
+      assert.equal(fx.ask().declaration.select_changed_path, false);
+      fx.declare({ select_changed_path: 'yes' });
+      assert.equal(fx.ask().ok, false);
+      assert.match(fx.ask().reason, /declares select_changed_path "yes"/u);
     } finally { fx.cleanup(); cli.cleanup(); }
   });
 

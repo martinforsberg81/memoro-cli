@@ -47,7 +47,11 @@ export function selectionHash(parsed) {
   return createHash('sha256').update(JSON.stringify({ files, commands })).digest('hex');
 }
 
-/** Appends one green `{ repo, tree, selection, gate_version, at, session }` and keeps the last 2,000. */
+/**
+ * Appends one green `{ repo, tree, selection, gate_version, at, session }` —
+ * since ruling 47 also `{ head_tree, base, files, commands }` — and keeps the
+ * last 2,000.
+ */
 export function recordGreen({ root = mcHome(), entry }) {
   const path = greensPath(root);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -65,6 +69,26 @@ export function findGreen({ root = mcHome(), repo, tree, selection, version = GA
     let entry = null;
     try { entry = JSON.parse(line); } catch { continue; }
     if (entry?.repo === repo && entry.tree === tree && entry.selection === selection && entry.gate_version === version) found = entry;
+  }
+  return found;
+}
+
+/**
+ * The last green recorded for a pull request's own head tree that can carry a
+ * delta (ruling 47): same repository, same tree, same version, and a `base`
+ * and `files` to compute the delta from. Records written before those fields
+ * existed are never returned — they can only be matched exactly.
+ */
+export function findGreenForHead({ root = mcHome(), repo, headTree, version = GATE_MEASUREMENT_VERSION }) {
+  if (!repo || !headTree) return null;
+  let found = null;
+  for (const line of readLines(greensPath(root))) {
+    let entry = null;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (entry?.repo !== repo || entry.gate_version !== version) continue;
+    if ((entry.head_tree ?? entry.tree) !== headTree) continue;
+    if (typeof entry.base !== 'string' || !entry.base || !Array.isArray(entry.files)) continue;
+    found = entry;
   }
   return found;
 }

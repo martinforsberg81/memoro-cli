@@ -615,6 +615,11 @@ function ranPhrase(report) {
   const both = (what) => `${what}${tests === undefined ? '' : ` (${tests} tests)`}`
     + ` and ${gates} command gate${gates === 1 ? '' : 's'}`;
   const files = report.selection?.files;
+  const reran = report.reused?.mode === 'delta' ? report.reused : null;
+  if (reran && (reran.rerun_files || reran.rerun_commands?.length)) {
+    return both(`ran ${reran.rerun_files} of the ${files} selected test file${files === 1 ? '' : 's'}`)
+      + ` — what main's movement reaches; mc gate measured the rest green at ${report.reused.at}`;
+  }
   if (report.reused) {
     return `ran none of the ${files} selected test file${files === 1 ? '' : 's'} again — mc gate measured this tree green at ${report.reused.at}`;
   }

@@ -432,11 +432,39 @@ previous red files and its own selection, looks up its candidate's `HEAD^{tree}`
 that selection's hash and the version. All three matching a recorded green for
 the repository, it runs neither the suite nor the selected command gates, says
 `the candidate's tree <short> was measured green by mc gate at <at> with the
-same selection — not measured again`, sets `reused: { at, session }`, and then
+same selection — not measured again`, sets `reused: { mode: 'exact', at,
+session }`, and then
 runs the pull request's own tests and the declared extra gates as always; the
 headline reads `GREEN — the test gate passes (measured by mc gate)`. Any one of
 them different, and the round measures as before. A batch never reuses — its
 candidate is a tree no session stood in — and `--full` never does.
+
+**After main moved, only the delta is measured** (ruling 47). The exact match
+almost never hits — main moves between a session's `mc gate` and the round, and
+the candidate has main merged in — so a green also records `head_tree`, `base`
+(`git merge-base HEAD origin/main` when it was measured), `files` and
+`commands` (the selection by name). When the exact match misses, in a single
+pull request's round of a repository whose declaration says
+`select_changed_path: true` (memoro's shipped entry does), the round reads
+`<pr head>^{tree}` and looks up the last green for it with a `base` and `files`
+(`findGreenForHead`). With one, and `git merge-base --is-ancestor <green.base>
+<report.base.commit>`, the delta paths are `git diff --name-only <green.base>
+<report.base.commit>` plus the files the derived commit regenerated. None: the
+selection does not run again. Otherwise the declared `select` runs once more
+with ` --changed-path <p>` per path (shell-quoted; memoro's `ci.mjs --list`
+takes it in place of the base-ref diff), and the round runs the candidate's
+selected files and command gates the delta also reaches, plus any the green did
+not measure — through the same `measureSelected` and `runSelectedCommands`, with
+the same red handling. It says `#<n>'s head <short> was measured green by mc gate
+at <at>; main moved <n> paths since — running <k> of the <m> selected files and
+<j> of <c> command gates again`, sets `reused: { mode: 'delta', at, session,
+delta_paths, rerun_files, rerun_commands }`, and the headline reads `(the rest
+measured by mc gate)` when anything ran again. Any failure — git, the selector,
+a base main does not descend from, more than 4,000 paths — says `delta reuse
+not taken — <why>; measuring the whole selection` and measures as before. The
+round's `gate-rounds.jsonl` line carries `reused`, so the hit rate is counted.
+An operator override in `repo-gates.json` that omits `select_changed_path`
+turns it off, and the round says so as `DECLARATION SHADOWED`.
 
 **The command gates the selection names run beside the suite** (merge-throughput,
 ruling 34). Until then they ran after it: 65 s mean on top of every round that
