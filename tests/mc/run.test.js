@@ -3912,7 +3912,8 @@ test('a lane held back by the total goes through when the slot frees', async () 
   const held = new Promise((resolve) => { release = resolve; });
   f.deps.session = async (call) => { starts.push(areaOf(call.cwd)); await held; return inner(call); };
   f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
-  const runner = createRunner({ deps: f.deps, total: 1 });
+  f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
+  const runner = createRunner({ deps: f.deps });
   const world = runner.queue();
   const first = runner.runStep('a', world, { lane: 0 });
   await turns(4);
@@ -3928,6 +3929,73 @@ test('a lane held back by the total goes through when the slot frees', async () 
 });
 
 /**
+ * `mc run lanes --total` applies to the next start, not the next restart: the
+ * total is read each time a slot is taken. Lowered, it holds the next start;
+ * raised, the lane that was waiting goes.
+ */
+test('a total changed while the runner runs applies to the next slot', async () => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
+  let total = 2;
+  f.deps.laneCount = () => ({ per_repo: 1, total });
+  const inner = f.deps.session;
+  const starts = [];
+  let release = null;
+  const held = new Promise((resolve) => { release = resolve; });
+  f.deps.session = async (call) => { starts.push(areaOf(call.cwd)); await held; return inner(call); };
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  const first = runner.runStep('a', world, { lane: 0 });
+  await turns(4);
+  total = 1;
+  const second = runner.runStep('b', world, { lane: 1 });
+  await turns();
+  assert.deepEqual(starts, ['a'], 'a lowered total holds the next start');
+  assert.match(f.files['/w/runner/log/runner.log'], /b: 1 of 1 steps in flight on this machine — waiting for a lane/u);
+  total = 2;
+  await turns();
+  assert.deepEqual(starts, ['a', 'b'], 'a raised total lets the waiting lane go');
+  release();
+  assert.equal(await first, 'ran');
+  assert.equal(await second, 'ran');
+});
+
+/**
+ * Another runner's steps count against the total while its lane files exist:
+ * after a handover the predecessor finishes what it holds, and the successor
+ * must not start beside it past the cap. Its file going is the slot coming back.
+ */
+test('a live predecessor\'s steps count against the total', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [7000] });
+  f.files['/w/runner/current-memoro-cli.json'] = JSON.stringify({ name: 'z', step: 1, pid: 7000, lane: 0 });
+  f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  const a = runner.runStep('a', world, { lane: 0 });
+  await turns();
+  assert.equal(f.calls.sessions.length, 0, 'the predecessor holds the one slot');
+  assert.match(f.files['/w/runner/log/runner.log'], /a: 1 of 1 steps in flight on this machine — waiting for a lane/u);
+  delete f.files['/w/runner/current-memoro-cli.json'];
+  await turns();
+  assert.equal(f.calls.sessions.length, 1, 'the slot came back when the predecessor\'s file went');
+  assert.equal(await a, 'ran');
+});
+
+/** A dead runner's lane file is swept by `stepsHeld` and counts for nothing. */
+test('a dead runner\'s lane file does not count against the total', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [] });
+  f.files['/w/runner/current-memoro-cli.json'] = JSON.stringify({ name: 'z', step: 1, pid: 7001, lane: 0 });
+  f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  assert.equal(await runner.runStep('a', world, { lane: 0 }), 'ran');
+  assert.equal(f.calls.sessions.length, 1, 'the session started without waiting');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /waiting for a lane/u);
+});
+
+/**
  * A lane waiting for a slot when an UPDATE arrives starts nothing. The drain
  * is meant to end within one step's length: a lane that waited out somebody
  * else's step and then launched its own would make it two.
@@ -3940,7 +4008,8 @@ test('a lane waiting for a slot gives the wait up on UPDATE, and starts no step'
   const held = new Promise((resolve) => { release = resolve; });
   f.deps.session = async (call) => { starts.push(areaOf(call.cwd)); await held; return inner(call); };
   f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
-  const runner = createRunner({ deps: f.deps, total: 1 });
+  f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
+  const runner = createRunner({ deps: f.deps });
   const world = runner.queue();
   const first = runner.runStep('a', world, { lane: 0 });
   await turns(4);

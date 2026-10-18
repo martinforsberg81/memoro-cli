@@ -7,9 +7,9 @@
  * as the default, which is exactly what the runner did before the setting
  * existed: an operator who sets nothing gets what they always got. Each number
  * falls back on its own, so a file with one good value and one bad one keeps
- * the good one. The runner reads them once, at start — a running runner keeps
- * what it was started with, and `mc run --update` (or stop and start) is how a
- * new value takes effect, which is what the verb says when it writes.
+ * the good one. `per_repo` is read once, at start, and takes effect with
+ * `mc run --update`; `total` is read each time a step is about to start, so it
+ * applies at once.
  *
  * `per_repo` is why per repository and not in total: memoro's lane and
  * memoro-cli's never touch (different mains, different worktrees), so the

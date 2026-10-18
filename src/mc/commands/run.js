@@ -149,9 +149,9 @@ function lanes(opts, deps) {
     ok: true,
     code: 0,
     lines: [
-      `lanes ${phrase(pair, repos)} from the next start`,
+      `lanes ${phrase(pair, repos)} — the total applies now, per repository from the next start`,
       ...neverBinds(pair, repos),
-      'a running runner keeps the counts it started with: mc run --update takes the new ones after the step it is in',
+      'a running runner takes the total at its next start of a step; a new per-repository count takes mc run --update, after the step it is in',
     ],
   };
 }
