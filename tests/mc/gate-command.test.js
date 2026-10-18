@@ -159,6 +159,26 @@ describe('mc gate <test files…>', () => {
     assert.match(out.stdout, /^GREEN — node --test --import \.\/tests\/_isolate-home\.mjs a\.test\.js — 1 tests, 0 failed — 2s\n/u);
   });
 
+  it('named files run with the declared pr_tests_flags, which replace the test script\'s', async () => {
+    const { out, deps } = harness({ manifest: { scripts: { test: 'node scripts/testing/ci.mjs' } }, tests: ['tests/x.test.js'], finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
+    const plain = deps.git;
+    deps.git = (cwd, args) => (args.includes('--git-common-dir') ? '/repo/x/.git' : plain(cwd, args));
+    const asked = [];
+    deps.declaration = (path) => { asked.push(path); return { ok: true, declaration: { pr_tests_flags: ['--import', './tests/_helpers/browser-paths.mjs'] } }; };
+    assert.equal(await run(['tests/x.test.js'], deps), 0);
+    assert.equal(out.spawned[0].args[1], `node --test --import ./tests/_helpers/browser-paths.mjs tests/x.test.js; echo $? > '${EXIT}'`);
+    assert.deepEqual(asked, ['/repo/x']);
+  });
+
+  it('a declaration without pr_tests_flags leaves the test script\'s flags', async () => {
+    const { out, deps } = harness({ manifest: { scripts: { test: TEST_SCRIPT } }, tests: ['a.test.js'], finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
+    const plain = deps.git;
+    deps.git = (cwd, args) => (args.includes('--git-common-dir') ? '/repo/x/.git' : plain(cwd, args));
+    deps.declaration = () => ({ ok: true, declaration: { select: 'node select.js' } });
+    assert.equal(await run(['a.test.js'], deps), 0);
+    assert.equal(out.spawned[0].args[1], `node --test --import ./tests/_isolate-home.mjs a.test.js; echo $? > '${EXIT}'`);
+  });
+
   it('a missing file refuses before running', async () => {
     const { out, deps } = harness({ tests: ['a.test.js'] });
     assert.equal(await run(['a.test.js', 'missing.test.js'], deps), 2);
