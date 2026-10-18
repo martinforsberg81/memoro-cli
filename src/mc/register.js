@@ -34,18 +34,32 @@
  * them (`seedEntry`). After that the file's copies are ignored, and they go
  * from the schema when the last reader of them does.
  *
+ * Every write to the register also appends one line to `runner/log/register.log`
+ * (`registerLogPath`): what changed and which process made it — its pid, its
+ * parent's command, its run id, the shape of its arguments (`invocationShape`,
+ * which keeps flag names and drops their values and free text) and its
+ * directory. The register keeps no history, and on 2026-10-12 `log-page` step 1
+ * landed as memoro #13590 and stood `ready` again that evening, so the runner
+ * ran it twice; the only record of the hand-typed `mc step ready` that moved it
+ * was `mc.log`, which keeps no parent process and rotates. The file is not a
+ * session log, so `mc tidy` keeps it when it removes a project's own files. A
+ * log that cannot be written never fails the write.
+ *
  * Everything below the IO line is pure over entries and plan records, so the
  * rules are tested without a file.
  */
-import { closeSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import { invocationShape, rotateIfLarge, runId } from './logger.js';
 import { BLOCKER_KINDS, NAME_RE, blockerFieldProblems, planSummary } from './plan-schema.js';
 
 export const REGISTER_SCHEMA = 'mc-register';
 export const REGISTER_VERSION = 1;
 export const REGISTER_DIR = 'projects';
+export const REGISTER_LOG_MAX_BYTES = 4 * 1024 * 1024;
 
 /**
  * Where a step stands. `ready` the runner may hand it out; `running` a
@@ -78,6 +92,11 @@ export function registerDir(root) {
 
 export function registerPath(root, project) {
   return join(registerDir(root), `${project}.json`);
+}
+
+/** The register's own log, one JSON line per write (see the header). */
+export function registerLogPath(root) {
+  return join(root, 'runner', 'log', 'register.log');
 }
 
 /* --------------------------------------------------------------- entries */
@@ -403,6 +422,50 @@ export function parseStepEnv(value) {
 const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 const realWrite = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 });
 const realList = (dir) => { try { return readdirSync(dir); } catch { return []; } };
+const realAppend = (path, line) => {
+  mkdirSync(dirname(path), { recursive: true });
+  rotateIfLarge(path, REGISTER_LOG_MAX_BYTES);
+  appendFileSync(path, line, { mode: 0o644 });
+};
+
+let parentSeen;
+/** The command of this process's parent, asked of `ps` once per process. */
+function parentName() {
+  if (parentSeen !== undefined) return parentSeen;
+  try {
+    const found = spawnSync('ps', ['-o', 'comm=', '-p', String(process.ppid)], { encoding: 'utf8', timeout: 2000 });
+    parentSeen = found.status === 0 ? String(found.stdout || '').trim() || null : null;
+  } catch { parentSeen = null; }
+  return parentSeen;
+}
+
+/**
+ * Who is making a register write: this process, its parent's command, its
+ * run id, the shape of its invocation (`invocationShape`: flag names, no
+ * values, no free text) and its directory. `mc_step` is `MC_STEP`, when a
+ * session has one.
+ */
+export function whoAmI() {
+  return {
+    pid: process.pid,
+    ppid: process.ppid,
+    parent: parentName(),
+    run: runId(),
+    argv: invocationShape(process.argv.slice(2)),
+    cwd: process.cwd(),
+    mc_step: process.env.MC_STEP || null,
+  };
+}
+
+/**
+ * One line to `register.log`, after a write that has happened. Never throws:
+ * a log that cannot be written never fails the write it describes.
+ */
+function logWrite(root, append, by, fields) {
+  try {
+    append(registerLogPath(root), `${JSON.stringify({ at: new Date().toISOString(), ...fields, by: by() })}\n`);
+  } catch { /* the log never fails the write */ }
+}
 
 export function readEntry(root, project, { read = realRead } = {}) {
   return parseEntry(read(registerPath(root, project)));
@@ -428,9 +491,10 @@ export function listEntries(root, { list = realList, read = realRead } = {}) {
  * parsed plan (legacy, unreadable) passes through untouched.
  *
  * `root` null means no register — the fixtures that hand a reader plans
- * without a work root get the file's own state, as they always did.
+ * without a work root get the file's own state, as they always did. A seed,
+ * and a re-plan that moved something, is appended to `register.log` (`logWrite`).
  */
-export function overlayPlans(plans, { root = null, read = realRead, write = realWrite, now = null } = {}) {
+export function overlayPlans(plans, { root = null, read = realRead, write = realWrite, now = null, append = realAppend, by = whoAmI } = {}) {
   if (!root) return plans;
   return plans.map((record) => {
     if (!record?.plan || record.legacy) return record;
@@ -438,9 +502,14 @@ export function overlayPlans(plans, { root = null, read = realRead, write = real
     if (!entry) {
       entry = seedEntry(record, now);
       write(registerPath(root, record.project), entry);
+      logWrite(root, append, by, { event: 'seed', project: record.project, steps: entry.steps.length, statuses: entry.steps.map((s) => s.status) });
     } else {
       const brought = reconcileEntry(entry, record, now);
-      if (brought.changed) { entry = brought.entry; write(registerPath(root, record.project), entry); }
+      if (brought.changed) {
+        entry = brought.entry;
+        write(registerPath(root, record.project), entry);
+        logWrite(root, append, by, { event: 'reconcile', project: record.project, carried: brought.carried || [] });
+      }
     }
     return applyEntry(record, entry);
   });
@@ -450,14 +519,18 @@ export function overlayPlans(plans, { root = null, read = realRead, write = real
  * One step's state changed, on disk: read, patch, write, under the
  * register's lock. Returns the entry as written. Throws when there is no
  * entry — a project the register has never seen is not one a caller may
- * move a step of by hand; a reader seeds it first.
+ * move a step of by hand; a reader seeds it first. Each write appends a line
+ * to `register.log` naming this process (`logWrite`).
  */
-export function updateStep({ root, project, index, patch, read = realRead, write = realWrite, lock = realLock, now = null }) {
+export function updateStep({ root, project, index, patch, read = realRead, write = realWrite, lock = realLock, now = null, append = realAppend, by = whoAmI }) {
   return lock(root, () => {
     const entry = readEntry(root, project, { read });
     if (!entry) throw new Error(`${project}: not in the register at ${registerPath(root, project)}`);
     const next = patchStep(entry, index, patch, now);
     write(registerPath(root, project), next);
+    const was = entry.steps[index];
+    const made = next.steps[index];
+    logWrite(root, append, by, { event: 'step', project, index, key: made.key, from: was.status, to: made.status, pr: made.pr ?? null, fields: Object.keys(patch) });
     return next;
   });
 }
