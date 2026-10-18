@@ -11,25 +11,33 @@
  * (`ios-build-run.js` → `buildIos`) detached exactly as `mc deploy` starts
  * its deployer; this terminal then follows `~/mc/runner/log/ios-build.log`,
  * and ^C stops the watching, not the build. `--follow` alone watches the
- * build that is running. `--testflight` is declared and refused until its
- * step lands.
+ * build that is running.
  *
- * Exit codes: 0 for an answer, a recorded seed, or an installed build; 1 for
- * a question that cannot be answered, a refused preflight or a failed build;
- * 2 for a bad argument, a build already running, or a build not here yet;
- * 130 when the watching was stopped.
+ * `--testflight` runs the same preflights with an `Apple Distribution`
+ * identity and no phone, asks App Store Connect for the next build number
+ * (`listBuilds`), and asks at the terminal before anything is built whether
+ * the verified IPA may be uploaded — the yes travels in the job. With
+ * `--no-upload` nothing leaves the machine, so nothing is asked.
+ *
+ * Exit codes: 0 for an answer, a recorded seed, or an installed, built or
+ * uploaded build; 1 for a question that cannot be answered, a refused
+ * preflight, a no at the question, or a failed build; 2 for a bad argument,
+ * a build already running, or no terminal to ask at; 130 when the watching
+ * was stopped.
  */
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
 import {
-  devicePreflight, iosBuildLogPath, iosQuestion, recordShipped,
+  devicePreflight, iosBuildLogPath, iosQuestion, listBuilds, recordShipped,
 } from '../ios-build.js';
 import {
-  DEVICE, FAILED, INSTALLED, readIosBuilds, recordEnd, recordPid, recordStart, runningIosBuild,
+  BUILT, DEVICE, FAILED, INSTALLED, readIosBuilds, recordEnd, recordPid, recordStart, REFUSED, runningIosBuild,
+  TESTFLIGHT, UPLOADED,
 } from '../ios-builds.js';
 import { processAlive } from '../lease-owner.js';
 import { workRoot } from '../paths.js';
+import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { followLog, startDetached } from './deploy.js';
 import { scanArgs } from './flags.js';
 
@@ -95,16 +103,19 @@ export async function run(argv, deps = {}) {
   if (opts.shipped) {
     return recordShipped({ ...opts.shipped, env, repos: deps.repos, git: deps.git, stdout, stderr });
   }
-  if (opts.testflight || opts.noUpload) {
-    stderr.write('mc: not yet: mc-build-ios step 3\n');
-    return 2;
-  }
-  if ((opts.sha || opts.deviceId) && !opts.device) {
-    stderr.write(`mc: ${opts.sha ? '--sha' : '--device-id'} goes with --device\n`);
+  const misplaced = [
+    opts.device && opts.testflight && '--device and --testflight are two builds — one at a time',
+    opts.noUpload && !opts.testflight && '--no-upload goes with --testflight',
+    opts.deviceId && !opts.device && '--device-id goes with --device',
+    opts.sha && !opts.device && !opts.testflight && '--sha goes with --device or --testflight',
+  ].find(Boolean);
+  if (misplaced) {
+    stderr.write(`mc: ${misplaced}\n`);
     stderr.write(usage());
     return 2;
   }
   if (opts.device) return buildDevice(opts, { ...deps, env, stdout, stderr });
+  if (opts.testflight) return buildTestflight(opts, { ...deps, env, stdout, stderr });
   if (opts.follow) return followRunning({ ...deps, env, stdout, stderr });
   return iosQuestion({
     env, repos: deps.repos, git: deps.git, fetchVersion: deps.fetchVersion, lastShipped: deps.lastShipped,
@@ -137,7 +148,7 @@ export async function followBuild({ log, pid, key = null, env, stdout, deps = {}
   const row = key
     ? rows.findLast((r) => r.started === key.started && r.sha === key.sha)
     : rows.findLast((r) => String(r.pid) === String(pid));
-  return row?.outcome === INSTALLED ? 0 : 1;
+  return [INSTALLED, BUILT, UPLOADED].includes(row?.outcome) ? 0 : 1;
 }
 
 /** `mc build ios --follow`: the build going on now, watched; or a line saying none is. */
@@ -177,11 +188,79 @@ async function buildDevice(opts, deps) {
     return 2;
   }
   const { sha, device, live, repoPath, declaration } = pre;
-  const root = workRoot(env);
   const key = recordStart({ sha, kind: DEVICE, live_commit: live, pid: '' }, env);
+  const job = { key, sha, live, repoPath, declaration, device };
+  return startAndFollow(job, `for ${device.name}`, deps);
+}
+
+/**
+ * `mc build ios --testflight`: the terminal first (the question needs one,
+ * unless `--no-upload`), the preflights, the number from App Store Connect,
+ * the question, the row, and the builder started and followed as
+ * `--device`'s is.
+ */
+async function buildTestflight(opts, deps) {
+  const { env, stdout, stderr } = deps;
+  const alive = deps.alive || processAlive;
+  const interactive = deps.interactive || realInteractive;
+  if (!opts.noUpload && !interactive(env)) {
+    stderr.write('mc: mc build ios --testflight asks before it uploads — run it in a terminal, or add --no-upload\n');
+    return 2;
+  }
+  const pre = await devicePreflight({
+    env, repos: deps.repos, git: deps.git, run: deps.run, fetchVersion: deps.fetchVersion,
+    ref: opts.sha, alive, scratch: deps.scratch, testflight: true,
+  });
+  if (!pre.ok) {
+    for (const line of pre.lines) stderr.write(`mc: ${line}\n`);
+    return pre.code;
+  }
+  for (const warning of pre.warnings) stderr.write(`mc: ${warning}\n`);
+  const { sha, live, repoPath, declaration } = pre;
+  const asc = (deps.listBuilds || listBuilds)({ repoPath, declaration, run: deps.run, env });
+  if (!asc.ok) {
+    stderr.write(`mc: ${asc.line}\n`);
+    return 1;
+  }
+  const { next } = asc;
+  stdout.write(`mc: App Store Connect has up to build ${next - 1} — this one is ${next}\n`);
+
+  let upload = false;
+  if (!opts.noUpload) {
+    const answer = (deps.ask || realAsk)(
+      `upload memoro me (build ${next}) from ${short(sha)} — production runs ${short(live)} — to TestFlight after it is built and verified? [y/N]`,
+      { stdout },
+    );
+    if (!/^y(es)?$/iu.test(String(answer || '').trim())) {
+      const at = new Date().toISOString();
+      recordStart({
+        started: at, ended: at, sha, kind: TESTFLIGHT, build: String(next), live_commit: live, outcome: REFUSED,
+        note: 'answered no at the question',
+      }, env);
+      stdout.write('mc: nothing was built or uploaded\n');
+      return 1;
+    }
+    upload = true;
+  }
+
+  const other = runningIosBuild(env, { alive });
+  if (other) {
+    stderr.write(`mc: an iOS build is running (pid ${other.pid}) — mc build ios --follow\n`);
+    return 2;
+  }
+  const key = recordStart({ sha, kind: TESTFLIGHT, build: String(next), live_commit: live, pid: '' }, env);
   const job = {
-    key, sha, live, repoPath, declaration, device, root, ...(deps.lockRoot ? { lockRoot: deps.lockRoot } : {}),
+    key, sha, live, repoPath, declaration, kind: TESTFLIGHT, build: next, upload,
   };
+  return startAndFollow(job, `as build ${next} for TestFlight${upload ? '' : ' (no upload)'}`, deps);
+}
+
+/** The builder started for a job whose row is written, and this terminal following it. */
+async function startAndFollow(fields, what, deps) {
+  const { env, stdout, stderr } = deps;
+  const { key, sha } = fields;
+  const root = workRoot(env);
+  const job = { ...fields, root, ...(deps.lockRoot ? { lockRoot: deps.lockRoot } : {}) };
   const builder = (deps.startBuilder || startBuilderDefault)(job, { env });
   if (!builder?.pid) {
     const note = `the builder did not start: ${builder?.error || 'no pid'}`;
@@ -190,7 +269,7 @@ async function buildDevice(opts, deps) {
     return 1;
   }
   recordPid(key, builder.pid, env);
-  stdout.write(`mc: building memoro ${short(sha)} for ${device.name} in its own process (pid ${builder.pid}) — ^C stops watching, not the build; mc build ios --follow watches again\n`);
+  stdout.write(`mc: building memoro ${short(sha)} ${what} in its own process (pid ${builder.pid}) — ^C stops watching, not the build; mc build ios --follow watches again\n`);
   if (builder.inline) await builder.inline;
   return followBuild({
     log: builder.log || iosBuildLogPath(root), pid: builder.pid, key, env, stdout, deps,

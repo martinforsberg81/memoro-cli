@@ -22,10 +22,14 @@
  * process (`ios-build-run.js`) the way the deployer does — holding the heavy
  * lane, in mc's own worktree of the exact commit, every external command
  * through one `step`, the built app read back against the declaration
- * (`readBack`) before `devicectl` installs it.
+ * (`readBack`) before `devicectl` installs it. `--testflight` is the same
+ * builder with a number from App Store Connect (`listBuilds`): it archives,
+ * exports, reads the IPA itself back, and uploads only after a yes.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -35,7 +39,8 @@ import { defaultRepos } from './brief-collect.js';
 import { holdHeavyLane } from './commands/deploy.js';
 import { releaseGateLock } from './gate-lock.js';
 import {
-  FAILED, INSTALLED, lastShipped as lastShippedRow, recordEnd, recordStart, runningIosBuild, SEED, UPLOADED,
+  BUILT, FAILED, INSTALLED, lastShipped as lastShippedRow, recordEnd, recordStart, runningIosBuild, SEED, TESTFLIGHT,
+  UPLOADED,
 } from './ios-builds.js';
 import { mcHome } from './paths.js';
 
@@ -402,20 +407,23 @@ export function resolveTarget({ repoPath, live, ref = null, git = gitRead }) {
  * then the commit — after a fetch, the declaration from origin/main, and
  * production's `/api/version`. `{ ok: true, repoPath, declaration, device,
  * live, sha, warnings }` or `{ ok: false, code, lines }`.
+ *
+ * `testflight` asks for an `Apple Distribution` identity instead of
+ * `Apple Development`, and for no phone.
  */
 export async function devicePreflight({
   env = process.env, repos, git = gitRead, run = runSync, fetchVersion = fetchVersionDefault,
-  deviceId = null, ref = null, alive, scratch,
+  deviceId = null, ref = null, alive, scratch, testflight = false,
 } = {}) {
   const refuse = (lines, code = 1) => ({ ok: false, code, lines: [].concat(lines) });
   const other = runningIosBuild(env, alive ? { alive } : {});
   if (other) return refuse(`an iOS build is running (pid ${other.pid}) — mc build ios --follow`, 2);
   const xcode = checkXcode({ run, env });
   if (xcode) return refuse(xcode);
-  const signing = checkSigning({ run, env });
+  const signing = checkSigning({ run, env, identity: testflight ? 'Apple Distribution' : 'Apple Development' });
   if (signing) return refuse(signing);
-  const chosen = chooseDevice({ run, env, deviceId, ...(scratch ? { scratch } : {}) });
-  if (!chosen.device) return refuse(chosen.lines);
+  const chosen = testflight ? { device: null } : chooseDevice({ run, env, deviceId, ...(scratch ? { scratch } : {}) });
+  if (!testflight && !chosen.device) return refuse(chosen.lines);
 
   const repoPath = memoroRepo(env, repos || defaultRepos(env));
   if (!repoPath) return refuse(`no checkout of ${REPO} on this machine — mc build ios builds from it`);
@@ -432,6 +440,24 @@ export async function devicePreflight({
   const target = resolveTarget({ repoPath, live, ref, git });
   if (!target.sha) return refuse(target.line);
   return { ok: true, repoPath, declaration, device: chosen.device, live, sha: target.sha, warnings };
+}
+
+/**
+ * The build numbers App Store Connect has, asked through the declaration's
+ * `list_builds` in memoro's checkout — its script reads the credentials
+ * itself; mc reads no key. `{ ok: true, versions, next }` with `next` one
+ * more than the highest, or `{ ok: false, line }`. Never a file to fall back
+ * on: a number from anywhere else is one two binaries could share.
+ */
+export function listBuilds({ repoPath, declaration, run = runSync, env = process.env }) {
+  const r = run([].concat(declaration.list_builds), { cwd: repoPath, env, timeoutMs: 2 * MIN });
+  const refuse = (why) => ({ ok: false, line: `App Store Connect did not answer (${why}) — no build number can be chosen` });
+  if (r.code !== 0) return refuse(String(r.error || r.stderr || r.stdout || '').trim().split('\n')[0].trim() || `exit ${r.code}`);
+  let json;
+  try { json = JSON.parse(r.stdout); } catch { return refuse(`${declaration.list_builds.join(' ')} printed no JSON`); }
+  if (!Array.isArray(json?.builds)) return refuse(`${declaration.list_builds.join(' ')} printed no builds[]`);
+  const versions = json.builds.map((b) => Number.parseInt(String(b?.version ?? ''), 10)).filter(Number.isInteger);
+  return { ok: true, versions, next: Math.max(0, ...versions) + 1 };
 }
 
 /** `plutil -convert json` of a plist, parsed; throws when it will not convert. */
@@ -585,6 +611,56 @@ function stepNote(label, r, timeoutMs) {
   return `${label} ${why}${line ? ` — ${line}` : ''}`;
 }
 
+/* ------------------------------------------------------------ the TestFlight build */
+
+/** How many archive directories are kept under `<mcHome>/build/archives/`. */
+export const ARCHIVES_KEPT = 5;
+
+/** Where a TestFlight build of number `build` archives and exports. */
+export function archivePaths(build, env = process.env) {
+  const root = join(mcHome(env), 'build', 'archives');
+  const dir = join(root, String(build));
+  return { root, dir, archive: join(dir, 'App.xcarchive'), exportDir: join(dir, 'export') };
+}
+
+/** The app inside an archive. */
+export function archivedApp(archive) {
+  return join(archive, 'Products', 'Applications', 'App.app');
+}
+
+/**
+ * Keep the `keep` newest directories under `root` (by modification time) and
+ * remove the rest; `current` is always one of those kept. The names removed.
+ */
+export function pruneArchives(root, { current, keep = ARCHIVES_KEPT } = {}) {
+  let entries = [];
+  try { entries = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join(root, e.name)); } catch { return []; }
+  const others = entries.filter((path) => path !== current)
+    .map((path) => ({ path, at: statSync(path).mtimeMs }))
+    .sort((a, b) => b.at - a.at)
+    .map((e) => e.path);
+  const doomed = others.slice(current && entries.includes(current) ? keep - 1 : keep);
+  for (const path of doomed) rmSync(path, { recursive: true, force: true });
+  return doomed;
+}
+
+/** `codesign -dvv` of an app: its stderr, where the `Authority=` lines are. */
+export function codesignDisplay(appDir) {
+  const r = runSync(['codesign', '-dvv', appDir], { timeoutMs: 2 * MIN });
+  return `${r.stderr}${r.stdout}`;
+}
+
+/** The delivery id an upload printed (`Delivery UUID: <uuid>` or alike), or ''. */
+export function deliveryId(output) {
+  const m = /delivery[\s_-]*(?:uuid|id)\W*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/iu.exec(stripAnsi(String(output || '')));
+  return m ? m[1] : '';
+}
+
+/** The command a person runs, once App Store Connect has processed the build. */
+export function attachCommand(version, build) {
+  return `npm run asc:attach-build -- ${version} ${build} --wait`;
+}
+
 /**
  * The builder, in its own process (`ios-build-run.js`): the heavy lane held,
  * mc's worktree put on exactly `job.sha` with nothing generated surviving,
@@ -593,6 +669,11 @@ function stepNote(label, r, timeoutMs) {
  * install. The row `recordStart` wrote is completed however it ends —
  * `installed`, or `failed` with where it stopped — and a throw does the same
  * and goes on up, as `ship` does.
+ *
+ * A TestFlight job (`kind: testflight`, `build: <n>`, `upload`) goes the
+ * same way to the sync, which is told the number too, and then archives,
+ * reads the archived app back, exports, and reads the IPA itself back
+ * (`shipTestflight`).
  */
 export async function buildIos(job, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -601,6 +682,7 @@ export async function buildIos(job, deps = {}) {
   const step = deps.step || makeStep({ stdout });
   const exists = deps.exists || existsSync;
   const { key, sha, repoPath, declaration, device } = job;
+  const testflight = job.kind === TESTFLIGHT;
   const { worktree, derived, spm } = buildPaths(env);
   const app = builtApp(derived);
   let at = 'heavy lane';
@@ -609,7 +691,7 @@ export async function buildIos(job, deps = {}) {
   const fail = (stoppedAt, note) => {
     recordEnd(key, { outcome: FAILED, stopped_at: stoppedAt, note }, env);
     stderr.write(`mc: the build stopped at ${stoppedAt} — ${note}\n`);
-    stderr.write('mc: nothing was installed\n');
+    stderr.write(`mc: nothing was ${testflight ? 'uploaded' : 'installed'}\n`);
     return 1;
   };
   const run = (label, argv, options = {}) => {
@@ -617,6 +699,112 @@ export async function buildIos(job, deps = {}) {
     return step(label, argv, { cwd: worktree, env, ...options });
   };
   const failed = (label, r, timeoutMs, stoppedAt = label) => fail(stoppedAt, stepNote(label, r, timeoutMs));
+  const xcodeFailed = (label, r, timeoutMs, stoppedAt = label) => {
+    const hint = xcodeHint(r.output);
+    return hint ? fail(stoppedAt, `${label} failed — ${hint}`) : failed(label, r, timeoutMs, stoppedAt);
+  };
+  const readBackHere = (appDir, build) => (deps.readBack || readBack)({
+    appDir, declaration, sha, build, readFile: deps.readFile, plutil: deps.plutil, codesign: deps.codesign,
+  });
+  const refusedApp = (stoppedAt, what, read) => {
+    for (const problem of read.problems) stderr.write(`mc:   ${problem}\n`);
+    return fail(stoppedAt, `${what} is not what was declared: ${read.problems.join('; ')}`);
+  };
+
+  /** (f)–(k): archive, read back, export, read the IPA back, and stop or upload. */
+  const shipTestflight = async () => {
+    const number = Number(job.build);
+    const paths = archivePaths(number, env);
+    // A directory left by an earlier try at this number would leave a second IPA beside the new one.
+    rmSync(paths.dir, { recursive: true, force: true });
+
+    // (f) The archive, with the same two fixed directories as a device build.
+    const archived = await run('xcodebuild archive', [
+      'xcodebuild', '-project', declaration.project, '-scheme', declaration.scheme, '-configuration', 'Release',
+      '-destination', 'generic/platform=iOS', '-derivedDataPath', derived, '-clonedSourcePackagesDirPath', spm,
+      '-archivePath', paths.archive, '-allowProvisioningUpdates', 'archive',
+    ], { timeoutMs: 60 * MIN, stoppedAt: 'archive' });
+    if (!archived.ok) return xcodeFailed('xcodebuild archive', archived, 60 * MIN, 'archive');
+
+    // (g) The archived app read back, number and all.
+    at = 'read-back';
+    stdout.write('▸ read-back\n');
+    const archivedDir = archivedApp(paths.archive);
+    const read = readBackHere(archivedDir, number);
+    if (!read.ok) return refusedApp('read-back', 'the archived app', read);
+    stdout.write(`mc: ${archivedDir} says ${declaration.bundle_id}, ${read.version} (${read.build}) from ${short(sha)}, ${declaration.server_url}; signed\n`);
+
+    // (h) The export, with memoro's tracked options: the one that leaves the number alone.
+    const exported = await run('xcodebuild -exportArchive', [
+      'xcodebuild', '-exportArchive', '-archivePath', paths.archive,
+      '-exportOptionsPlist', join(worktree, declaration.export_options), '-exportPath', paths.exportDir,
+      '-allowProvisioningUpdates',
+    ], { timeoutMs: 30 * MIN, stoppedAt: 'export' });
+    if (!exported.ok) return xcodeFailed('xcodebuild -exportArchive', exported, 30 * MIN, 'export');
+
+    // (i) The IPA itself, unpacked and read back again: an export that
+    // renumbered the app, or signed it with anything but Distribution, stops here.
+    at = 'export-read-back';
+    let ipas = [];
+    try { ipas = (deps.readdir || readdirSync)(paths.exportDir).filter((name) => name.endsWith('.ipa')); } catch { ipas = []; }
+    if (ipas.length !== 1) return fail('export-read-back', `${paths.exportDir} holds ${ipas.length} .ipa files, not one`);
+    const ipa = join(paths.exportDir, ipas[0]);
+    const unpacked = mkdtempSync(join(deps.scratch || tmpdir(), 'mc-ipa-'));
+    let shipped;
+    try {
+      const unzip = await run('unzip', ['unzip', '-q', '-o', ipa, 'Payload/App.app/*', '-d', unpacked], {
+        timeoutMs: 10 * MIN, stoppedAt: 'export-read-back',
+      });
+      if (!unzip.ok) return failed('unzip', unzip, 10 * MIN, 'export-read-back');
+      at = 'export-read-back';
+      stdout.write('▸ IPA read-back\n');
+      const ipaApp = join(unpacked, 'Payload', 'App.app');
+      shipped = readBackHere(ipaApp, number);
+      if (!shipped.ok) return refusedApp('export-read-back', `the app in ${ipa}`, shipped);
+      const display = (deps.codesignDisplay || codesignDisplay)(ipaApp);
+      if (!/^Authority=Apple Distribution:/mu.test(display)) {
+        const authority = /^Authority=(.*)$/mu.exec(display)?.[1];
+        return fail('export-read-back', `${ipa} is not signed by Apple Distribution (codesign -dvv says ${authority ? `Authority=${authority}` : 'no Authority'})`);
+      }
+    } finally {
+      rmSync(unpacked, { recursive: true, force: true });
+    }
+    stdout.write(`mc: ${ipa} says ${declaration.bundle_id}, ${shipped.version} (${number}) from ${short(sha)}; signed by Apple Distribution\n`);
+
+    const prune = () => {
+      try {
+        const removed = (deps.pruneArchives || pruneArchives)(paths.root, { current: paths.dir });
+        if (removed.length) stdout.write(`mc: removed ${removed.length} old archive${removed.length === 1 ? '' : 's'}, keeping the newest ${ARCHIVES_KEPT}\n`);
+      } catch (error) {
+        stderr.write(`mc: old archives were not pruned: ${error?.message || error}\n`);
+      }
+    };
+    const done = { version: shipped.version, build: String(number), artifact: ipa, stopped_at: '', note: '' };
+
+    // (j) Nothing leaves the machine.
+    if (!job.upload) {
+      recordEnd(key, { outcome: BUILT, ...done }, env);
+      prune();
+      stdout.write(`mc: built ${ipa} — ${shipped.name} ${shipped.version} (${number}) from ${short(sha)}; not uploaded\n`);
+      return 0;
+    }
+
+    // (k) The number asked again: one uploaded meanwhile is not this binary's
+    // to take, and a stamped binary is not renumbered.
+    at = 'number-taken';
+    const again = (deps.listBuilds || listBuilds)({ repoPath, declaration, run: deps.run || runSync, env });
+    if (!again.ok) return fail('number-taken', again.line);
+    if (again.versions.includes(number)) {
+      return fail('number-taken', `build ${number} is in App Store Connect by now — this binary carries ${number} and is not renumbered; build again`);
+    }
+    const uploaded = await run('upload', [...[].concat(declaration.upload), ipa], { timeoutMs: 30 * MIN });
+    if (!uploaded.ok) return failed('upload', uploaded, 30 * MIN);
+    recordEnd(key, { outcome: UPLOADED, ...done, delivery: deliveryId(uploaded.output) }, env);
+    prune();
+    stdout.write(`mc: uploaded ${shipped.name} ${shipped.version} (${number}) from ${short(sha)}\n`);
+    stdout.write(`next, by hand when it has processed: ${attachCommand(shipped.version, number)} (in memoro)\n`);
+    return 0;
+  };
 
   try {
     holding = await (deps.holdHeavyLane || holdHeavyLane)(job, { ...deps, stdout, env, mode: IOS_BUILD_MODE });
@@ -652,10 +840,14 @@ export async function buildIos(job, deps = {}) {
 
     // (e) The sync, told the commit. A device build sets no number, so the
     // declaration's default stands; one in this environment is not passed on.
+    // A TestFlight build is told the number App Store Connect gave it.
     const syncEnv = { ...env, [declaration.env.build_commit]: sha };
-    delete syncEnv[declaration.env.build_number];
+    if (testflight) syncEnv[declaration.env.build_number] = String(job.build);
+    else delete syncEnv[declaration.env.build_number];
     const sync = await run(declaration.sync, ['sh', '-c', declaration.sync], { env: syncEnv, timeoutMs: 20 * MIN });
     if (!sync.ok) return failed(declaration.sync, sync, 20 * MIN);
+
+    if (testflight) return await shipTestflight();
 
     // (f) The build, with the two fixed directories that keep it warm.
     const xcode = await run('xcodebuild', [
@@ -663,21 +855,13 @@ export async function buildIos(job, deps = {}) {
       '-destination', 'generic/platform=iOS', '-derivedDataPath', derived, '-clonedSourcePackagesDirPath', spm,
       '-allowProvisioningUpdates', 'build',
     ], { timeoutMs: 60 * MIN });
-    if (!xcode.ok) {
-      const hint = xcodeHint(xcode.output);
-      return hint ? fail('xcodebuild', `xcodebuild failed — ${hint}`) : failed('xcodebuild', xcode, 60 * MIN);
-    }
+    if (!xcode.ok) return xcodeFailed('xcodebuild', xcode, 60 * MIN);
 
     // (g) The app read back before anything installs it.
     at = 'read-back';
     stdout.write('▸ read-back\n');
-    const read = (deps.readBack || readBack)({
-      appDir: app, declaration, sha, build: null, readFile: deps.readFile, plutil: deps.plutil, codesign: deps.codesign,
-    });
-    if (!read.ok) {
-      for (const problem of read.problems) stderr.write(`mc:   ${problem}\n`);
-      return fail('read-back', `the built app is not what was declared: ${read.problems.join('; ')}`);
-    }
+    const read = readBackHere(app, null);
+    if (!read.ok) return refusedApp('read-back', 'the built app', read);
     stdout.write(`mc: ${app} says ${declaration.bundle_id}, ${read.version} (${read.build}) from ${short(sha)}, ${declaration.server_url}; signed\n`);
 
     // (h) The install.
