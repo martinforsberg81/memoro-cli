@@ -16,7 +16,7 @@
  * command (`commands/hook.js`) reads stdin and writes the one JSON answer.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
 import { defaultRepos } from './brief-collect.js';
@@ -150,7 +150,7 @@ export function sessionStartContext({ cwd, inside, states }) {
   if (!states.length) return null;
   const lines = ['mc — session start'];
   if (!inside) {
-    lines.push(`This session started in ${cwd}, outside the repositories: their CLAUDE.md and .claude/settings.json were NOT loaded.`);
+    lines.push(`This session started in ${cwd}, outside the repositories: their CLAUDE.md was NOT loaded; their PreToolUse hooks are run by mc hook pre-tool.`);
     lines.push(`Read ${states.map((state) => join(state.worktree, 'CLAUDE.md')).join(' and ')} before changing anything, and run commands from inside the worktree.`);
   }
   for (const state of states) {
@@ -231,6 +231,80 @@ export function preToolDecision(input, { inRepo = () => false } = {}) {
         id: 'playwright',
         reason: 'Use `mc shot dev <target> [--viewport iphone] [--safe-area t,r,b,l] [--wait-for <css>] [--scroll <css>[@end]] [--measure <css>] [--account seeded|new] [--onboarding]` — it serves this worktree, signs in, and prints the PNG path and the measured boxes. If it cannot answer the question, say what is missing so mc can learn it; a scratch script that still has to be written carries a comment with MC_HOOK_ALLOW=1.',
       };
+    }
+  }
+  return null;
+}
+
+/*
+ * A session that started outside a repository (a plan directory, a workarea)
+ * never loaded that repository's hooks, and memoro's are its data-access
+ * policy, so mc runs them. `CLAUDE_PROJECT_DIR` is the worktree, so their
+ * `$CLAUDE_PROJECT_DIR/.claude/hooks/...` paths resolve.
+ */
+
+/** The PreToolUse hook commands a worktree's `.claude/settings.json` names for a tool, in file order. */
+export function repoPreToolHooks(worktree, tool, { readFileSync: read = readFileSync } = {}) {
+  let settings;
+  try {
+    settings = JSON.parse(read(join(worktree, '.claude', 'settings.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+  const entries = settings?.hooks?.PreToolUse;
+  if (!Array.isArray(entries)) return [];
+  const matches = (matcher) => {
+    if (matcher === undefined || matcher === null || matcher === '' || matcher === '*') return true;
+    try {
+      return new RegExp(`^(?:${matcher})$`, 'u').test(tool);
+    } catch {
+      return false;
+    }
+  };
+  const commands = [];
+  for (const entry of entries) {
+    if (!entry || !matches(entry.matcher) || !Array.isArray(entry.hooks)) continue;
+    for (const hook of entry.hooks) {
+      if (hook?.type === 'command' && typeof hook.command === 'string' && hook.command) commands.push(hook.command);
+    }
+  }
+  return commands;
+}
+
+/**
+ * The first denial the PreToolUse hooks of the worktrees at `cwd` give a tool
+ * call — `{ id: 'repo-hook', reason }` — or `null`. The worktree `projectDir`
+ * names is skipped: Claude Code already ran its hooks.
+ */
+export function repoHookDecision(input, {
+  cwd, projectDir = null, worktreesAt: find = worktreesAt, readFileSync: read = readFileSync,
+  spawnSync: spawn = spawnSync, env = process.env, findDeps = {},
+} = {}) {
+  const tool = input?.tool_name;
+  if (!tool) return null;
+  const { worktrees } = find(cwd, findDeps);
+  for (const entry of worktrees || []) {
+    if (projectDir && resolve(entry.worktree) === resolve(projectDir)) continue;
+    for (const command of repoPreToolHooks(entry.worktree, tool, { readFileSync: read })) {
+      const r = spawn('/bin/sh', ['-c', command], {
+        cwd: entry.worktree,
+        input: JSON.stringify(input),
+        encoding: 'utf8',
+        timeout: 10_000,
+        env: { ...env, CLAUDE_PROJECT_DIR: entry.worktree },
+      });
+      if (r.status === 2) {
+        return { id: 'repo-hook', reason: `${entry.name} hook: ${String(r.stderr || '').trim() || command}` };
+      }
+      let parsed = null;
+      try {
+        parsed = JSON.parse(String(r.stdout || '').trim());
+      } catch {
+        parsed = null;
+      }
+      if (parsed?.hookSpecificOutput?.permissionDecision === 'deny') {
+        return { id: 'repo-hook', reason: `${entry.name} hook: ${parsed.hookSpecificOutput.permissionDecisionReason || command}` };
+      }
     }
   }
   return null;

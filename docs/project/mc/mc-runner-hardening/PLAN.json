@@ -69,7 +69,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/commands/run-lanes.test.js` passes, including the tests named in step 2."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "From a session started in `~/mc/plan/mc`, `mc hook pre-tool` denies `npx wrangler d1 execute memoro-db --remote …` with memoro's `block-prod-wrangler.sh` reason and `git stash pop` with `block-shared-stash.sh`'s, and lets `ls` through.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/hooks.test.js` passes, including the tests named in the step; and `printf '%s' '{\"cwd\":\"'$HOME'/mc/plan/mc\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npx wrangler d1 execute memoro-db --remote --command x\"}}' | CLAUDE_PROJECT_DIR=$HOME/mc/plan/mc mc hook pre-tool` prints a `deny` whose reason contains `block-prod-wrangler.sh`."
     },
