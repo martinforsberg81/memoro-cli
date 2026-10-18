@@ -134,7 +134,7 @@ function machine() {
   const projects = join(claude, 'projects');
   const reposHome = join(home, 'repos');
   for (const dir of [work, projects, join(reposHome, 'memoro'), join(reposHome, 'memoro-cli')]) mkdirSync(dir, { recursive: true });
-  const env = { ...process.env, MC_WORK_ROOT: work, CLAUDE_CONFIG_DIR: claude, CODEX_HOME: join(home, 'codex'), MC_REPOS_HOME: reposHome };
+  const env = { ...process.env, MC_WORK_ROOT: work, CLAUDE_CONFIG_DIR: claude, CODEX_HOME: join(home, 'codex'), MC_REPOS_HOME: reposHome, MC_HOME: join(home, 'mchome') };
   const main = { memoro: { tree: [], log: LOG_HEAD }, 'memoro-cli': { tree: [], log: LOG_HEAD } };
   const worktrees = { memoro: [], 'memoro-cli': [] };
   const nameOf = (cwd) => (cwd.endsWith('memoro-cli') ? 'memoro-cli' : 'memoro');
@@ -162,6 +162,7 @@ function machine() {
     if (args[0] === 'ls-tree') return repo.tree.join('\n');
     if (args[0] === 'show') return repo.log;
     if (args[0] === 'worktree') return [cwd, ...worktrees[nameOf(cwd)]].map((path) => `worktree ${path}\nHEAD abc\n`).join('\n');
+    if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return `${join(reposHome, 'memoro')}/.git\n`;
     return null;
   };
   m.inspect = (path, name) => ({
@@ -318,6 +319,81 @@ describe('(X), (W), (S) and (R): areas and worktrees', () => {
       assert.deepEqual({ removed: outcome.removed, kept: outcome.kept }, { removed: 1, kept: 0 });
       for (const name of ['memoro', 'memoro-cli', 'wt-b', 'wt-c']) assert.ok(existsSync(join(area, name)));
       assert.ok(existsSync(join(m.work, 'work', 'x', 'memoro')));
+    } finally { m.cleanup(); }
+  });
+});
+
+describe('(C) mc shot --compare trees under ~/.memoro/mc/compare/', () => {
+  /** Three compare trees of memoro: one stale, one used today, one stale with a dev server in it. */
+  function compares(m) {
+    const root = join(m.home, 'mchome', 'compare');
+    const tree = (name, at) => {
+      const path = join(root, name);
+      m.write(join(path, '.git'), 'gitdir: x', at);
+      utimesSync(path, new Date(at), new Date(at));
+      return path;
+    };
+    const paths = { stale: tree('memoro-a-1111111111', NOW - 2 * DAY), recent: tree('memoro-b-2222222222', NOW - 2 * HOUR), served: tree('memoro-c-3333333333', NOW - 3 * DAY) };
+    // git lists them as memoro's worktrees; they are (C)'s, not foreign.
+    m.worktrees.memoro.push(paths.stale, paths.recent, paths.served);
+    m.removedWorktrees = [];
+    const doors = (over = {}) => m.doors({
+      servers: (dir) => (dir === paths.served ? [{ pid: 9 }] : []),
+      removeWorktree: (owner, path) => { m.removedWorktrees.push([owner, path]); rmSync(path, { recursive: true }); return true; },
+      ...over,
+    });
+    return { paths, doors };
+  }
+
+  it('one unused for a day with no dev server is listed; used today or served is kept, and none is foreign', () => {
+    const m = machine();
+    try {
+      const { paths, doors } = compares(m);
+      const { list } = runTidy(doors());
+      assert.deepEqual(ruled(list, 'C').map((item) => [item.path, item.kind, item.owner]), [[paths.stale, 'compare-worktree', join(m.home, 'repos', 'memoro')]]);
+      assert.equal(keptOf(list, paths.recent).why, 'used in the last day');
+      assert.equal(keptOf(list, paths.served).why, 'a dev server runs in it (1)');
+      assert.equal(list.kept.some((item) => item.rule === 'foreign-worktree'), false);
+      // A dry run removes nothing.
+      assert.deepEqual(m.removedWorktrees, []);
+      assert.ok(existsSync(paths.stale));
+    } finally { m.cleanup(); }
+  });
+
+  it('--apply removes it with git worktree remove in the repository that owns it', () => {
+    const m = machine();
+    try {
+      const { paths, doors } = compares(m);
+      const { outcome } = runTidy({ ...doors(), apply: true });
+      assert.deepEqual(m.removedWorktrees, [[join(m.home, 'repos', 'memoro'), paths.stale]]);
+      assert.equal(existsSync(paths.stale), false);
+      assert.ok(existsSync(paths.recent) && existsSync(paths.served));
+      assert.equal(outcome.applied.find((item) => item.path === paths.stale).ok, true);
+    } finally { m.cleanup(); }
+  });
+
+  it('a tree git refuses to remove, or one whose server started since the list, stays', () => {
+    const m = machine();
+    try {
+      const { paths, doors } = compares(m);
+      const refused = runTidy({ ...doors({ removeWorktree: () => false }), apply: true });
+      assert.equal(refused.outcome.applied.find((item) => item.path === paths.stale).why, 'git worktree remove refused');
+      const { listPath } = runTidy(doors());
+      const applied = applyTidy({ listPath, ...doors({ servers: () => [{ pid: 1 }] }) });
+      assert.match(applied.applied.find((item) => item.path === paths.stale).why, /^re-check: a dev server runs in it/u);
+      assert.ok(existsSync(paths.stale));
+    } finally { m.cleanup(); }
+  });
+
+  it('a tree whose servers cannot be asked, or whose owner git cannot name, is kept with the error', () => {
+    const m = machine();
+    try {
+      const { paths, doors } = compares(m);
+      const { list } = runTidy(doors({ servers: () => { throw new Error('registry unreadable'); } }));
+      assert.equal(keptOf(list, paths.stale).rule, 'error');
+      const git = m.git;
+      const owned = runTidy(doors({ git: (cwd, args) => (args[0] === 'rev-parse' ? null : git(cwd, args)) }));
+      assert.match(keptOf(owned.list, paths.stale).why, /git could not name the repository/u);
     } finally { m.cleanup(); }
   });
 });

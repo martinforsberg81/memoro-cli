@@ -505,27 +505,28 @@ export async function runGate({
 
     // The tree the candidate resolves through, made to match the candidate.
     //
-    // Not a preparation of the worktree and deliberately not one: nothing is
-    // written inside the checkout, where git and `scripts/affected-tests.js`
-    // would both see it. This is `mc work add`'s own mechanism
-    // (`work-deps.js`), called on the repository being measured — one
-    // `node_modules` at the work root, two directories above the candidate,
-    // for the workareas and the gate together.
+    // This is `mc work add`'s own mechanism (`work-deps.js`), called on the
+    // repository being measured — one `node_modules` at the work root, two
+    // directories above the candidate, for the workareas and the gate
+    // together. A candidate whose lockfile is the one that tree holds
+    // resolves through it and nothing runs.
     //
     // Read from the candidate rather than from the repository's checkout,
     // because the candidate is what is being measured: a pull request that
     // changes `package-lock.json` gets a tree installed from *its* lockfile
-    // instead of a round that cannot resolve what it added. The cost is that
-    // the shared tree then stands at that pull request's lockfile until the
-    // next `mc work add` or round moves it — the same one-tree-one-lockfile
-    // trade the work root already makes, said out loud.
+    // instead of a round that cannot resolve what it added. That install goes
+    // in the candidate's own `node_modules` (`ownTree`) — ignored by git, so
+    // neither `git status` nor `scripts/affected-tests.js` sees it, and gone
+    // with the worktree at the end of the round. Until 2026-10-18 it went
+    // into the shared tree and left it at the pull request's lockfile, which
+    // flipped the dependencies of every live session mid-session.
     //
     // It never stops the round. Whether the suite can resolve its
     // dependencies is measured below, from the candidate, and a measurement
     // beats a report of what an install thought it did.
-    const deps = await ensureWorkDeps({ repo: headDir, repoName: basename(repoPath), env, install: npmCiAsync });
-    if (deps.state === 'installed') say(`the dependency tree above the candidate was installed — ${deps.why}`);
-    if (!deps.ok) say(`the dependency tree above the candidate could not be made current — ${deps.why}`);
+    const deps = await ensureWorkDeps({ repo: headDir, repoName: basename(repoPath), env, install: npmCiAsync, ownTree: headDir });
+    if (deps.state === 'installed-own') say(`the candidate's own dependency tree was installed — ${deps.why}`);
+    if (!deps.ok) say(`the candidate's dependency tree could not be installed — ${deps.why}`);
 
     // Whatever this repository needs before its suite can be believed. A
     // prepare that fails stops the round: a suite run on a tree that was not
@@ -1963,7 +1964,7 @@ function shell(command, { cwd, env }) {
 export const commandShell = runShellAsync;
 
 /**
- * `npm ci` for the dependency tree above the candidate (`work-deps.js`),
+ * `npm ci` for the candidate's own dependency tree (`work-deps.js`),
  * without holding the event loop for up to ten minutes. `ensureWorkDeps`
  * reads a throw as the install failing, with npm's stderr as the reason.
  */

@@ -6,7 +6,7 @@
  * lists pair up, and the lines a caller reads.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -129,6 +129,17 @@ describe('compareTree', () => {
     const tree = compareTree(worktree, 'origin/main', { git, root, spawnSync: () => assert.fail('no deps:prepare') });
     assert.deepEqual(tree, { ok: true, dir, commit: REF_SHA, reused: true });
     assert.equal(calls.some((args) => args[3] === 'add'), false);
+  });
+
+  it('a reuse touches the directory, so its mtime is its last use (mc tidy reads it)', () => {
+    const { root, worktree } = roots();
+    const dir = join(root, `memoro-fix-${REF_SHA.slice(0, 10)}`);
+    mkdirSync(join(dir, 'node_modules'), { recursive: true });
+    const old = new Date('2026-10-01T00:00:00Z');
+    utimesSync(dir, old, old);
+    const at = new Date('2026-10-18T10:00:00Z');
+    compareTree(worktree, 'origin/main', { git: fakeGit({ heads: { [dir]: REF_SHA } }).git, root, now: () => at });
+    assert.equal(statSync(dir).mtimeMs, at.getTime());
   });
 
   it('otherwise the tree is added detached at the commit, and deps:prepare runs without node_modules', () => {

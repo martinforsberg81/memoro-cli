@@ -72,7 +72,7 @@ describe('the prepare cache', () => {
     assert.deepEqual(fx.installs, ['npm ci']);
     assert.equal(fx.clones.length, 1);
     assert.deepEqual(fx.clones[0].slice(0, 3), ['cp', '-cR', join(fx.headDir, 'node_modules')]);
-    const key = prepareCacheKey({ lock: readFileSync(join(fx.headDir, 'package-lock.json')), manifest: readFileSync(join(fx.headDir, 'package.json')) });
+    const key = prepareCacheKey({ lock: readFileSync(join(fx.headDir, 'package-lock.json')), manifest: readFileSync(join(fx.headDir, 'package.json')), platform: 'darwin' });
     assert.deepEqual(entries(fx), [key]);
     const meta = JSON.parse(readFileSync(join(fx.cacheDir, key, 'meta.json'), 'utf8'));
     assert.equal(meta.key, key);
@@ -94,10 +94,11 @@ describe('the prepare cache', () => {
     assert.ok(fx.said.includes(`prepare: cloned node_modules from the cache (${result.key})`));
   });
 
-  it('a changed lockfile is a miss, and a third key evicts the oldest', async () => {
+  it('a changed lockfile is a miss, and a key past PREPARE_CACHE_KEEP evicts the oldest', async () => {
     const fx = fixture();
     const first = await fx.go();
-    for (const [i, lock] of ['{"v":2}', '{"v":3}'].entries()) {
+    const locks = Array.from({ length: PREPARE_CACHE_KEEP }, (_, i) => `{"v":${i + 2}}`);
+    for (const [i, lock] of locks.entries()) {
       fx.fresh();
       fx.clock = 2000 + i;
       fx.lockfile(lock);
@@ -109,11 +110,34 @@ describe('the prepare cache', () => {
     assert.ok(!entries(fx).includes(first.key), 'the oldest entry is the one evicted');
   });
 
-  it('a different node version is a miss', () => {
-    const a = prepareCacheKey({ lock: 'l', manifest: 'm', node: 'v22.0.0' });
-    const b = prepareCacheKey({ lock: 'l', manifest: 'm', node: 'v22.1.0' });
-    assert.notEqual(a, b);
-    assert.match(a, /^[0-9a-f]{16}$/u);
+  it('keeps four entries', () => {
+    assert.equal(PREPARE_CACHE_KEEP, 4);
+  });
+
+  it('another node major, ABI, platform or architecture is a miss; a node minor or patch is not', () => {
+    const key = (extra) => prepareCacheKey({ lock: 'l', manifest: '{}', node: 'v22.0.0', abi: '127', platform: 'darwin', arch: 'arm64', ...extra });
+    assert.match(key(), /^[0-9a-f]{16}$/u);
+    assert.equal(key({ node: 'v22.11.3' }), key());
+    assert.notEqual(key({ node: 'v24.0.0' }), key());
+    assert.notEqual(key({ abi: '131' }), key());
+    assert.notEqual(key({ platform: 'linux' }), key());
+    assert.notEqual(key({ arch: 'x64' }), key());
+  });
+
+  it('hashes only what changes an install: not the name, version, scripts or description', () => {
+    const base = { name: 'memoro', version: '1.0.0', dependencies: { a: '^1' }, devDependencies: { b: '^2' }, scripts: { test: 'x' } };
+    const key = (manifest, lock = 'l') => prepareCacheKey({ lock, manifest: JSON.stringify(manifest), node: 'v22.0.0', abi: '127', platform: 'darwin', arch: 'arm64' });
+    assert.equal(key({ ...base, version: '1.0.1', description: 'new', scripts: { test: 'y', lint: 'z' } }), key(base));
+    // Key order in the file is not a change either.
+    assert.equal(key({ scripts: base.scripts, devDependencies: base.devDependencies, dependencies: base.dependencies, name: 'memoro' }), key(base));
+    for (const [field, value] of [
+      ['dependencies', { a: '^2' }], ['devDependencies', { b: '^3' }], ['optionalDependencies', { c: '1' }], ['peerDependencies', { d: '1' }],
+      ['overrides', { a: '1.2.3' }], ['engines', { node: '>=22' }], ['workspaces', ['pkg/*']], ['packageManager', 'npm@10.0.0'],
+      ['bundleDependencies', ['a']],
+    ]) {
+      assert.notEqual(key({ ...base, [field]: value }), key(base), field);
+    }
+    assert.notEqual(key(base, 'other lock'), key(base));
   });
 
   it('a clone that fails removes what it left and runs npm ci', async () => {
@@ -130,14 +154,17 @@ describe('the prepare cache', () => {
     assert.ok(existsSync(join(fx.headDir, 'node_modules', 'pkg')), 'npm ci wrote the tree');
   });
 
-  it('a package.json with a postinstall never uses the cache', async () => {
-    const fx = fixture({ manifest: '{"name":"memoro","scripts":{"postinstall":"node setup.js"}}' });
-    await fx.go();
-    fx.fresh();
-    await fx.go();
-    assert.deepEqual(fx.installs, ['npm ci']);
-    assert.deepEqual(fx.clones, []);
-    assert.ok(!existsSync(fx.cacheDir));
+  it('a package.json with a lifecycle script npm ci runs never uses the cache', async () => {
+    for (const script of ['preinstall', 'install', 'postinstall', 'prepare']) {
+      const fx = fixture({ manifest: JSON.stringify({ name: 'memoro', scripts: { [script]: 'node setup.js' } }) });
+      await fx.go();
+      fx.fresh();
+      await fx.go();
+      assert.deepEqual(fx.installs, ['npm ci']);
+      assert.deepEqual(fx.clones, []);
+      assert.ok(!existsSync(fx.cacheDir));
+      assert.ok(fx.said.includes(`prepare: the package.json has a ${script} script, so the cache is not used`));
+    }
   });
 
   it('a prepare other than npm ci, or another platform, runs as it is', async () => {

@@ -19,6 +19,11 @@
  *     shell, no `find`, no globbing. `memory/` is never opened.
  *   - Work areas and step areas are never targets: `mc work release` /
  *     `discard` and the runner's `closeWorkareas` remove them.
+ *   - (C) `mc shot --compare`'s trees under `~/.memoro/mc/compare/`
+ *     (`shot-compare.js`) go when unused for a day — by the directory's
+ *     mtime, which `compareTree` touches on every reuse — and no dev server
+ *     runs in them, through `git worktree remove` in the repository that
+ *     owns each one.
  */
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
@@ -32,9 +37,10 @@ import { defaultRepos } from './brief-collect.js';
 import { closeoutPath } from './closeout.js';
 import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js';
 import { log } from './logger.js';
-import { PLAN_HOME, STEP_HOME, WORK_HOME, runnerDir, workRoot } from './paths.js';
+import { PLAN_HOME, STEP_HOME, WORK_HOME, mcHome, runnerDir, workRoot } from './paths.js';
 import { listEntries, registerPath } from './register.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
+import { serversFor } from './test-environment.js';
 import {
   inspectWorktree, listStepAreas, pruneWorktrees, releaseVerdict, releaseWorktree,
 } from './work-area.js';
@@ -50,6 +56,8 @@ export const LIST_KEEP = 30;
  * 72 hours.
  */
 export const PROGRAMME_TRANSCRIPT_KEEP_MS = 72 * 60 * 60 * 1000;
+/** How long a `mc shot --compare` tree is kept after its last use — the day `shot-compare.js` prunes by. */
+export const COMPARE_KEEP_MS = 24 * 60 * 60 * 1000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TRANSCRIPT = /^(.+)\.jsonl$/u;
@@ -74,6 +82,7 @@ export function tidyRoots(env = process.env) {
     scratch: join(runner, 'scratch'),
     tidy: join(runner, 'tidy'),
     claude: join(claudeHome(env), 'projects'),
+    compare: join(mcHome(env), 'compare'),
   };
 }
 
@@ -86,6 +95,7 @@ const KIND_ROOT = {
   transcript: 'claude',
   leftover: 'claude',
   'plan-worktree': 'plan',
+  'compare-worktree': 'compare',
 };
 
 const escape = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -132,18 +142,20 @@ function realGit(cwd, args) {
 /**
  * Everything the plan is decided from, read now. Every door is injectable:
  * `git(cwd, args)` answers text or null, `cwds()` is the one lsof of the run,
- * `inspect` and `pullAtTip` are `inspectWorktree` and `mergedPullAtTip`.
+ * `inspect` and `pullAtTip` are `inspectWorktree` and `mergedPullAtTip`,
+ * `servers(dir)` the live dev servers standing in a directory.
  */
 export function gatherTidyFacts({
   env = process.env, now = Date.now(), gh = null, git = realGit, cwds = cwdsOfUser,
   inspect = inspectWorktree, pullAtTip = null, repos = defaultRepos(env), command = commandOf,
+  servers = serversFor,
 } = {}) {
   const roots = tidyRoots(env);
   const root = roots.root;
   const facts = {
     now, work_root: root, projects_root: roots.claude, roots,
     git_error: null, register_error: null, projects: [], plan_checkouts: [], plan_worktrees: [],
-    work_areas: [], step_areas: [], foreign: [], transcripts: [], leftovers: [],
+    work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [],
   };
 
   // origin/main, one `ls-tree` and one `show` per repository. A repository
@@ -225,13 +237,31 @@ export function gatherTidyFacts({
   facts.work_areas = listNames(roots.work).map((name) => ({ path: join(roots.work, name) }));
   facts.step_areas = listStepAreas({ root }).map((area) => ({ path: area.path }));
 
+  // (C) `mc shot --compare`'s trees: last used by the directory's mtime,
+  // which shot-compare touches on reuse; owned by the repository git names.
+  for (const name of listNames(roots.compare)) {
+    const path = join(roots.compare, name);
+    if (!present(join(path, '.git'))) continue;
+    const item = { path, owner: null, last_used_ms: null, live: null, bytes: 0 };
+    facts.compare_worktrees.push(item);
+    try {
+      item.last_used_ms = statSync(path).mtimeMs;
+      const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+      if (!common?.trim()) throw new Error('git could not name the repository that owns it');
+      item.owner = dirname(common.trim());
+      item.live = servers(path).length;
+      if (!compareWorktree(item, now).target) continue;
+      item.bytes = treeBytes(path);
+    } catch (error) { item.error = message(error); }
+  }
+
   // Worktrees git knows of outside the work root: listed, never removed.
   for (const repo of repos) {
     const text = git(repo.path, ['worktree', 'list', '--porcelain']);
     for (const line of String(text || '').split('\n')) {
       if (!line.startsWith('worktree ')) continue;
       const path = line.slice('worktree '.length).trim();
-      if (path === repo.path || path.startsWith(`${root}/`)) continue;
+      if (path === repo.path || path.startsWith(`${root}/`) || path.startsWith(`${roots.compare}/`)) continue;
       facts.foreign.push({ path, repo: repo.name });
     }
   }
@@ -351,6 +381,16 @@ export function planWorktree(item) {
   return { target: true, why: pr ? `#${pr} merged at this tip` : 'its content is on main' };
 }
 
+/** (C) A compare tree: unused for a day and no dev server in it. */
+export function compareWorktree(item, now) {
+  if (item.error) throw new Error(item.error);
+  if (item.live === null || item.live === undefined) throw new Error('could not tell whether a dev server runs in it');
+  if (item.live) return { target: false, why: `a dev server runs in it (${item.live})` };
+  if (!(item.last_used_ms <= now - COMPARE_KEEP_MS)) return { target: false, why: 'used in the last day' };
+  if (!item.owner) throw new Error('no repository owns it');
+  return { target: true, why: 'a mc shot --compare tree unused for a day, with no dev server' };
+}
+
 /** (L) T1–T5: a transcript neither P nor G claims. `rule` names which one answered. */
 export function looseTranscript(item, { cutoff, days, root, newest }) {
   if (item.error) throw new Error(item.error);
@@ -446,6 +486,12 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS } = {}) {
   for (const item of facts.step_areas || []) keep(item.path, 'step-area', 'the runner closes a step area when its project is done');
   // (R)
   for (const item of facts.foreign || []) keep(item.path, 'foreign-worktree', `a worktree of ${item.repo} outside ${root}`);
+  // (C)
+  for (const item of facts.compare_worktrees || []) {
+    const verdict = judge(compareWorktree, item, facts.now);
+    if (verdict.target) targets.push({ path: item.path, kind: 'compare-worktree', rule: 'C', why: verdict.why, bytes: item.bytes || 0, owner: item.owner });
+    else keep(item.path, 'C', verdict.why);
+  }
 
   // (L) T1–T5 and leftovers, unchanged, over what P and G left.
   const cutoff = facts.now - days * DAY_MS;
@@ -480,6 +526,9 @@ function present(path) {
 
 const realRemove = (path) => rmSync(path, { recursive: true });
 
+/** `git worktree remove` in the owning repository, without `--force`: a tree with edits stays. */
+const realRemoveWorktree = (owner, path) => realGit(owner, ['worktree', 'remove', path]) !== null;
+
 /** `<stamp>` of a list file: `yyyymmddThhmmssZ`. */
 function listStamp(now) {
   return new Date(now).toISOString().slice(0, 19).replace(/[-:]/gu, '') + 'Z';
@@ -505,6 +554,7 @@ export function outsideRoots(target, roots) {
     transcript: dirname(parent) === base && SESSION_ID.test(TRANSCRIPT.exec(name)?.[1] || ''),
     leftover: dirname(parent) === base && SESSION_ID.test(name) && lstatSync(real).isDirectory(),
     'plan-worktree': dirname(parent) === base && !PLAN_CHECKOUTS.has(name),
+    'compare-worktree': parent === base,
   }[target.kind];
   return shaped ? null : `not the shape a ${target.kind} has under ${roots[key]}`;
 }
@@ -533,7 +583,7 @@ export function runTidy({ apply = false, days = DEFAULT_DAYS, env = process.env,
  */
 export function applyTidy({
   listPath, env = process.env, now = Date.now(), write = writeJsonAtomic,
-  remove = realRemove, release = releaseWorktree, prune = pruneWorktrees, ...doors
+  remove = realRemove, release = releaseWorktree, prune = pruneWorktrees, removeWorktree = realRemoveWorktree, ...doors
 } = {}) {
   const roots = tidyRoots(env);
   const list = JSON.parse(readFileSync(listPath, 'utf8'));
@@ -543,6 +593,7 @@ export function applyTidy({
   const holds = new Map(fresh.targets.map((item) => [item.path, item]));
   const keptNow = new Map(fresh.kept.map((item) => [item.path, item]));
   const worktrees = new Map((facts.plan_worktrees || []).map((item) => [item.path, item]));
+  const compares = new Map((facts.compare_worktrees || []).map((item) => [item.path, item]));
 
   const applied = [];
   let freed = 0;
@@ -561,6 +612,10 @@ export function applyTidy({
       if (target.kind === 'plan-worktree') {
         const wt = worktrees.get(path)?.wt;
         if (!wt || !release(wt)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
+      } else if (target.kind === 'compare-worktree') {
+        // The owner read now, never the one the list file names.
+        const owner = compares.get(path)?.owner;
+        if (!owner || !removeWorktree(owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
       } else if (target.kind === 'transcript') {
         const sibling = join(dirname(path), TRANSCRIPT.exec(basename(path))[1]);
         remove(path);

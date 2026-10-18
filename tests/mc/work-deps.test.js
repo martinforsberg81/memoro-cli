@@ -26,7 +26,7 @@ import { workDepsLockPath, workDepsManifestPath, workDepsPath } from '../../src/
 import { createRunner, realDeps } from '../../src/mc/run.js';
 import { areasWithCheckout } from '../../src/mc/status-collect.js';
 import { addWorktree } from '../../src/mc/work-area.js';
-import { ensureWorkDeps, workDepsManifest } from '../../src/mc/work-deps.js';
+import { INSTALLED_MARK, ensureWorkDeps, workDepsManifest } from '../../src/mc/work-deps.js';
 
 const MANIFEST = {
   name: 'memoro-cli',
@@ -166,6 +166,89 @@ describe('the dependency tree above the workareas', () => {
       assert.equal(out.ok, false);
       assert.equal(out.state, 'failed');
       assert.match(out.why, /npm error `npm ci` can only install/u);
+    } finally { fx.cleanup(); }
+  });
+});
+
+describe('installed means installed (2026-10-18)', () => {
+  const failing = (installs) => (cwd) => {
+    installs.push(cwd);
+    // npm ci empties node_modules, then fails part-way.
+    mkdirSync(join(cwd, 'node_modules'), { recursive: true });
+    throw Object.assign(new Error('Command failed'), { stderr: 'npm error code E404\n' });
+  };
+
+  it('a failed npm ci is not current the next time: it is installed again', () => {
+    const fx = fixture();
+    try {
+      const tries = [];
+      assert.equal(fx.ensure({ install: failing(tries) }).state, 'failed');
+      // The copies npm ci read are there, and match — what used to make this `current`.
+      assert.equal(readFileSync(workDepsLockPath(fx.env), 'utf8'), readFileSync(join(fx.repo, 'package-lock.json'), 'utf8'));
+      assert.equal(existsSync(join(workDepsPath(fx.env), INSTALLED_MARK)), false);
+      const again = fx.ensure();
+      assert.equal(again.state, 'installed');
+      assert.deepEqual(fx.installs, [fx.work]);
+      assert.equal(fx.ensure().state, 'current');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a failed install that returned a promise leaves no mark either', async () => {
+    const fx = fixture();
+    try {
+      const out = await fx.ensure({ install: async (cwd) => { mkdirSync(join(cwd, 'node_modules'), { recursive: true }); throw new Error('npm ci exited 1'); } });
+      assert.equal(out.state, 'failed');
+      assert.equal(fx.ensure().state, 'installed');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a tree with no mark — installed before the mark, or by hand — is installed again once', () => {
+    const fx = fixture();
+    try {
+      fx.ensure();
+      rmSync(join(workDepsPath(fx.env), INSTALLED_MARK));
+      assert.equal(fx.ensure().state, 'installed');
+      assert.equal(fx.ensure().state, 'current');
+    } finally { fx.cleanup(); }
+  });
+});
+
+describe('the merge gate never flips the shared tree (ownTree)', () => {
+  it('a candidate with the shared tree\'s lockfile resolves through it and installs nothing', () => {
+    const fx = fixture();
+    try {
+      fx.ensure();
+      const candidate = join(fx.root, 'candidate');
+      assert.equal(fx.ensure({ ownTree: candidate }).state, 'current');
+      assert.equal(fx.installs.length, 1);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a candidate whose lockfile differs is installed in its own checkout; the shared tree and its copies stay', async () => {
+    const fx = fixture();
+    try {
+      fx.ensure();
+      const before = { lock: readFileSync(workDepsLockPath(fx.env), 'utf8'), mark: readFileSync(join(workDepsPath(fx.env), INSTALLED_MARK), 'utf8') };
+      writeFileSync(join(fx.repo, 'package-lock.json'), '{"lockfileVersion":3,"one":2}');
+      const out = await fx.ensure({ ownTree: fx.repo, install: async (cwd) => { fx.installs.push(cwd); } });
+      assert.equal(out.state, 'installed-own');
+      assert.equal(out.path, join(fx.repo, 'node_modules'));
+      assert.deepEqual(fx.installs, [fx.work, fx.repo]);
+      assert.equal(readFileSync(workDepsLockPath(fx.env), 'utf8'), before.lock);
+      assert.equal(readFileSync(join(workDepsPath(fx.env), INSTALLED_MARK), 'utf8'), before.mark);
+      // And the next workarea from main's lockfile still finds the tree current.
+      writeFileSync(join(fx.repo, 'package-lock.json'), before.lock);
+      assert.equal(fx.ensure().state, 'current');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a failed install in the candidate is a failure, and the shared tree is untouched', async () => {
+    const fx = fixture();
+    try {
+      const out = await fx.ensure({ ownTree: fx.repo, install: async () => { throw Object.assign(new Error('x'), { stderr: 'npm error boom\n' }); } });
+      assert.equal(out.state, 'failed');
+      assert.match(out.why, /npm error boom/u);
+      assert.equal(existsSync(workDepsLockPath(fx.env)), false);
     } finally { fx.cleanup(); }
   });
 });
