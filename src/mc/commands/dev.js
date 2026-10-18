@@ -58,7 +58,7 @@ import { resolve } from 'node:path';
 
 import { devServersRoot } from '../paths.js';
 import {
-  admit, holdersText, listServers, refusalText, registerManifest, stopServer, unregisterManifest,
+  admit, holdersText, listServers, processCwd, refusalText, registerManifest, stopServer, strayCwd, unregisterManifest,
 } from '../dev-servers.js';
 import { ageText, DEFAULT_MIN_AGE_SECONDS, reap as reapOrphans } from '../dev-reap.js';
 import { open as openSurface, surfaces } from '../dev-open.js';
@@ -87,7 +87,7 @@ export async function run(argv, deps = {}) {
 
   if (opts.verb === 'surfaces') return surfaces(opts, { stdout, stderr, deps });
   if (opts.verb === 'open') return openSurface(opts, { stdout, stderr, deps });
-  if (opts.verb === 'list') return list(opts, { stdout, root });
+  if (opts.verb === 'list') return list(opts, { stdout, root, cwdOf: deps.processCwd || processCwd });
   if (opts.verb === 'register') return register(opts, { stdout, stderr, root });
   if (opts.verb === 'admit') return askAdmission(opts, { stdout, root, deps });
   if (opts.verb === 'stop') return stop(opts, { stdout, stderr, root, stopServer: deps.stopServer || stopServer });
@@ -104,7 +104,7 @@ export async function run(argv, deps = {}) {
  * that asked what was running deserves to know the answer changed while it
  * asked.
  */
-function list(opts, { stdout, root }) {
+function list(opts, { stdout, root, cwdOf }) {
   const { servers, reaped } = listServers({ root });
   if (opts.json) {
     stdout.write(`${JSON.stringify({
@@ -116,7 +116,8 @@ function list(opts, { stdout, root }) {
     stdout.write('mc: no dev server is registered\n');
   }
   for (const server of servers) {
-    stdout.write(`${server.instance_id}  ${server.url}  ${server.session_name}  ${server.worktree_path}\n`);
+    const stray = strayCwd(server, { cwdOf });
+    stdout.write(`${server.instance_id}  ${server.url}  ${server.session_name}  ${server.worktree_path}${stray ? `  (runs in ${stray.cwd} — not this worktree's)` : ''}\n`);
   }
   if (reaped.length) {
     stdout.write(`mc: swept ${reaped.length} registration${reaped.length === 1 ? '' : 's'} whose process is gone\n`);
