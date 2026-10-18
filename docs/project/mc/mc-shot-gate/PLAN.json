@@ -30,7 +30,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-fast.test.js` passes, including 'named files run with the declared pr_tests_flags, which replace the test script\\'s' and 'declaredTestFlags reads the primary checkout\\'s declaration'."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Before starting the ref server, `--compare` stops a compare server of the same worktree name idle for more than 15 minutes, and leaves one idle for less, one of another name and a light one alone. The ref side asks admission for at most 60 s, and a `cap` refusal prints a line naming every running compare server's sha and URL.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/shot-compare.test.js tests/mc/test-environment.test.js` passes, including the `stopSuperseded` tests and 'a refused ref server waits at most 60 s and names the running compare servers'."
     },

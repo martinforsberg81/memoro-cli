@@ -378,7 +378,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       onWaiting: deps.onWaiting,
       ...(deps.freeMemory ? { freeMemory: deps.freeMemory } : {}),
     });
-    if (!admitted.ok) return { ok: false, error: refusalText(admitted) };
+    if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted };
   }
 
   const [command, ...args] = start.argv;
@@ -453,7 +453,7 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
     // minute with who holds the slots, so the wait has a name on it.
     onWaiting: json ? null : (verdict) => stdout.write(`mc: waiting for a slot — held by ${holdersText(verdict)}\n`),
   });
-  if (!ensured.ok) return { ok: false, error: ensured.error };
+  if (!ensured.ok) return { ok: false, error: ensured.error, ...(ensured.refused ? { refused: ensured.refused } : {}) };
   const { server } = ensured;
   const baseUrl = String(server.url).replace(/\/+$/u, '');
   if (!json) {

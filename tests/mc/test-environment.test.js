@@ -1042,6 +1042,8 @@ describe('admission before a start', () => {
     assert.equal(ensured.ok, false);
     assert.equal(spawned, 0);
     assert.match(ensured.error, /2 of 2 app servers already running — dev-a \(\/tmp\/a\), dev-b \(\/tmp\/b\)/u);
+    assert.equal(ensured.refused.reason, 'cap');
+    assert.equal(ensured.refused.holders.length, 2);
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 

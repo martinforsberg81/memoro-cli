@@ -6,13 +6,15 @@
  * lists pair up, and the lines a caller reads.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/shot.js';
-import { compareTree, diffMeasure, refOutPath } from '../../src/mc/shot-compare.js';
+import {
+  COMPARE_IDLE_MS, compareTree, diffMeasure, refOutPath, runningCompares, stopSuperseded,
+} from '../../src/mc/shot-compare.js';
 
 const HERE_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const REF_SHA = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -202,7 +204,8 @@ function sink() {
   return { write: (chunk) => { text += chunk; return true; }, get text() { return text; } };
 }
 
-async function compare(argv, { measures = {}, warnings = {} } = {}) {
+async function compare(argv, { measures = {}, warnings = {}, refuse = null, running = [] } = {}) {
+  const waits = [];
   const home = mkdtempSync(join(tmpdir(), 'mc-shot-compare-cmd-'));
   const worktree = join(home, 'memoro');
   const refDir = join(home, 'compare', `memoro-${REF_SHA.slice(0, 10)}`);
@@ -219,11 +222,24 @@ async function compare(argv, { measures = {}, warnings = {} } = {}) {
     env: { ...process.env, MC_REPOS_HOME: home },
     cwd: home,
     callerWorktree: () => worktree,
+    compareRoot: join(home, 'compare'),
+    serversFor: () => [],
+    stopServer: () => ({ ok: true }),
+    serversUnder: () => running.map((sha) => ({
+      instance_id: `srv-${sha}`,
+      service: 'memoro-measure',
+      worktree_path: join(home, 'compare', `memoro-${sha}`),
+      url: 'http://127.0.0.1:8930',
+      resource_class: 'standard',
+      live: true,
+    })),
     now: () => new Date(2026, 9, 15, 9, 0, 0),
     compareTree: (tree, ref) => ({ ok: true, dir: refDir, commit: REF_SHA, ref, from: tree }),
     readDeclaration: () => ({ ok: true, declaration: TEST_JSON }),
-    ensureAppServer: async (dir) => {
+    ensureAppServer: async (dir, declaration, opts) => {
       servers.push(dir);
+      waits.push(opts?.deps?.admitWaitSeconds);
+      if (refuse && dir !== worktree) return { ok: false, error: refuse.error, refused: refuse.verdict };
       const port = dir === worktree ? 8787 : 8788;
       return { ok: true, baseUrl: `http://127.0.0.1:${port}`, server: { url: `http://127.0.0.1:${port}/` } };
     },
@@ -237,8 +253,110 @@ async function compare(argv, { measures = {}, warnings = {} } = {}) {
       };
     },
   });
-  return { code, stdout: stdout.text, stderr: stderr.text, captures, servers, worktree, refDir };
+  return { code, stdout: stdout.text, stderr: stderr.text, captures, servers, worktree, refDir, waits };
 }
+
+describe('a superseded compare server', () => {
+  const NOW = new Date(2026, 9, 18, 12, 0, 0);
+  const MIN = 60 * 1000;
+  const ago = (minutes) => new Date(NOW.getTime() - minutes * MIN);
+
+  /**
+   * A compare root with an idle tree of this name, a recent one, the kept one,
+   * a light one and another name's idle one, and the servers standing in them.
+   */
+  function layout() {
+    const home = mkdtempSync(join(tmpdir(), 'mc-shot-supersede-'));
+    const root = join(home, 'compare');
+    for (const name of ['memoro-1111111111', 'memoro-2222222222', 'memoro-3333333333', 'memoro-5555555555', 'other-4444444444']) {
+      mkdirSync(join(root, name), { recursive: true });
+    }
+    for (const name of ['memoro-1111111111', 'other-4444444444', 'memoro-5555555555']) utimesSync(join(root, name), ago(20), ago(20));
+    utimesSync(join(root, 'memoro-2222222222'), ago(5), ago(5));
+    const servers = ['1111111111', '2222222222', '5555555555'].map((sha) => ({
+      instance_id: `srv-${sha}`,
+      service: 'memoro-measure',
+      worktree_path: join(root, `memoro-${sha}`),
+      url: `http://127.0.0.1:89${sha[0]}0`,
+      resource_class: sha === '5555555555' ? 'light' : 'standard',
+      live: true,
+    })).concat([{
+      instance_id: 'srv-other',
+      service: 'memoro-measure',
+      worktree_path: join(root, 'other-4444444444'),
+      url: 'http://127.0.0.1:8944',
+      resource_class: 'standard',
+      live: true,
+    }]);
+    return { home, root, servers };
+  }
+
+  it('stops only an idle compare server of the same worktree name, through its own stop', () => {
+    const { home, root, servers } = layout();
+    try {
+      const stops = [];
+      const freed = stopSuperseded(join(home, 'memoro'), join(root, 'memoro-3333333333'), {
+        compareRoot: root,
+        now: () => NOW,
+        serversUnder: () => servers,
+        serversFor: () => [],
+        stopServer: (server) => { stops.push(server.instance_id); return { ok: true }; },
+      });
+      assert.equal(COMPARE_IDLE_MS, 15 * 60 * 1000);
+      assert.deepEqual(stops, ['srv-1111111111']);
+      assert.deepEqual(freed.stopped, ['srv-1111111111']);
+      assert.deepEqual(freed.lines, ['stopped srv-1111111111, the compare server of 1111111111 idle 20 min, to free its slot']);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('stops nothing when the asked tree is already served', () => {
+    const { home, root, servers } = layout();
+    try {
+      const freed = stopSuperseded(join(home, 'memoro'), join(root, 'memoro-3333333333'), {
+        compareRoot: root,
+        now: () => NOW,
+        serversUnder: () => servers,
+        serversFor: () => [{ live: true, resource_class: 'standard' }],
+        stopServer: () => { throw new Error('nothing is stopped for a served tree'); },
+      });
+      assert.deepEqual(freed, { stopped: [], lines: [] });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a stop that fails is said, not counted', () => {
+    const { home, root, servers } = layout();
+    try {
+      const freed = stopSuperseded(join(home, 'memoro'), join(root, 'memoro-3333333333'), {
+        compareRoot: root,
+        now: () => NOW,
+        serversUnder: () => servers,
+        serversFor: () => [],
+        stopServer: () => ({ ok: false, error: 'no stop command' }),
+      });
+      assert.deepEqual(freed.stopped, []);
+      assert.deepEqual(freed.lines, ['could not stop srv-1111111111, the compare server of 1111111111: no stop command']);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('runningCompares names every running compare server of the name, idle or not', () => {
+    const { home, root, servers } = layout();
+    try {
+      assert.equal(
+        runningCompares(join(home, 'memoro'), join(root, 'memoro-3333333333'), { compareRoot: root, serversUnder: () => servers }),
+        'running compare servers: 1111111111 (http://127.0.0.1:8910), 2222222222 (http://127.0.0.1:8920) — --compare 1111111111 reuses one, with its tree and its database',
+      );
+      assert.equal(runningCompares(join(home, 'memoro'), join(root, 'memoro-3333333333'), { compareRoot: root, serversUnder: () => [] }), null);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('mc shot dev --compare', () => {
   it('serves both trees, captures both with this tree\'s script, prints two paths then the diff', async () => {
@@ -302,5 +420,28 @@ describe('mc shot dev --compare', () => {
       assert.deepEqual(result.servers, []);
       assert.deepEqual(result.captures, []);
     }
+  });
+
+  it('a refused ref server waits at most 60 s and names the running compare servers', async () => {
+    const result = await compare(['dev', 'assistant', '--compare', 'origin/main'], {
+      running: ['6a4cb31e83'],
+      refuse: {
+        error: '2 of 2 app servers already running — srv-a (/x), srv-b (/y); stop one with mc test dev --stop in its worktree',
+        verdict: { ok: false, reason: 'cap', holders: [] },
+      },
+    });
+    assert.equal(result.code, 1, result.stderr);
+    assert.deepEqual(result.waits, [undefined, 60]);
+    assert.match(result.stderr, /mc: origin\/main: 2 of 2 app servers already running/u);
+    assert.match(result.stderr, /mc: running compare servers: 6a4cb31e83 \(http:\/\/127\.0\.0\.1:8930\) — --compare 6a4cb31e83 reuses one, with its tree and its database\n/u);
+    assert.equal(result.stdout, '');
+
+    const memory = await compare(['dev', 'assistant', '--compare', 'origin/main'], {
+      running: ['6a4cb31e83'],
+      refuse: { error: 'only 9% memory free (floor 15%)', verdict: { ok: false, reason: 'memory', holders: [], free_percent: 9 } },
+    });
+    assert.equal(memory.code, 1, memory.stderr);
+    assert.match(memory.stderr, /mc: origin\/main: only 9% memory free/u);
+    assert.doesNotMatch(memory.stderr, /running compare servers/u);
   });
 });
