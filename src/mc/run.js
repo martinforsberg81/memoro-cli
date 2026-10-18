@@ -421,7 +421,12 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
         let event = null;
         try { event = JSON.parse(line); } catch { continue; }
         if (event?.subtype === 'background_tasks_changed') tasks = Array.isArray(event.tasks) ? event.tasks : [];
-        else if (event?.type === 'result' && !tasks.length) { onResultLine(); return; }
+        // A resumed session whose background shell died with the previous
+        // process opens with a `task_notification` and a `result` of zero turns
+        // (`origin.kind: task-notification`). It answers nothing, and taking it
+        // for the end killed msr-core-finish-measure on 2026-10-17. A
+        // task-notification result with turns is a real end.
+        else if (event?.type === 'result' && !tasks.length && event.num_turns !== 0) { onResultLine(); return; }
       }
     };
     const stdout = collect(child.stdout, scan);

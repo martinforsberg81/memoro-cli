@@ -664,6 +664,15 @@ describe('readSessionOutput on a stream-json run', () => {
     assert.equal(sessionResult([init, assistant].join('\n')), null);
   });
 
+  it('a zero-turn task-notification result is no answer', () => {
+    const stale = result({ num_turns: 0, duration_api_ms: 0, result: '', origin: { kind: 'task-notification' } });
+    assert.equal(sessionResult([init, stale, assistant].join('\n')), null);
+    assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: [init, stale, assistant].join('\n'), exitCode: 143 }).note, 'no-json');
+    const r = sessionResult([init, stale, assistant, result()].join('\n'));
+    assert.equal(r.num_turns, 4);
+    assert.equal(r.result, 'done');
+  });
+
   it('adds the turn group amounts, and takes the running totals from the last', () => {
     const first = result({
       num_turns: 30, total_cost_usd: 1.5, duration_ms: 1000, duration_api_ms: 800, session_id: 'sid',

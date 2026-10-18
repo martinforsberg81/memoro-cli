@@ -210,6 +210,23 @@ describe('streamSession', () => {
     assert.deepEqual(texts(), ['do the step']);
   });
 
+  it('does not take the stale task-notification result a resume starts with for the end', () => {
+    const { child } = start();
+    child.say(JSON.stringify({ type: 'system', subtype: 'task_notification', task_id: 'b0sv52dnz', status: 'stopped', summary: "Background shell command didn't finish before the previous session ended", session_id: 'sid' }));
+    child.say(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 0, duration_api_ms: 0, result: '', origin: { kind: 'task-notification' }, session_id: 'sid' }));
+    assert.equal(child.stdin.ended, false, 'a zero-turn result answers nothing');
+    mock.timers.tick(3 * MINUTE);
+    assert.deepEqual(child.killed, [], 'no grace was armed');
+    child.say(RESULT);
+    assert.equal(child.stdin.ended, true);
+  });
+
+  it('takes a task-notification result with turns for the end', () => {
+    const { child } = start();
+    child.say(JSON.stringify({ type: 'result', subtype: 'success', num_turns: 3, origin: { kind: 'task-notification', producer: 'session-task', runId: 'r1' }, session_id: 'sid' }));
+    assert.equal(child.stdin.ended, true);
+  });
+
   it('asks a session silent over a background task instead of killing it, and kills it if no answer comes', async () => {
     const { child, session, texts } = start();
     child.say(tasksChanged('b4swqbpox'));
