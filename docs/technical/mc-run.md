@@ -963,7 +963,9 @@ queue: every pull request `mc merge` or the runner handed it, landed one at a
 time by one process ([`mc-merge.md`](mc-merge.md) § *One round at a time*),
 which is what the page's MERGES draws. The runner reads it with the world:
 jobs and no live merger starts one (`sweepLanding`), and a step `landing`
-whose job is in no queue is `failed` with that reason.
+whose job is in no queue is `failed` with that reason. A `ready` or `failed` step
+whose register entry carries `landed` is written `done` before the pick and said
+in runner.log (`log-page` step 1, 2026-10-12).
 
 ### Held before merge — history
 
