@@ -59,4 +59,22 @@ describe('scanArgs', () => {
     assert.equal(scanArgs(['--models', 'x'], WORK_SPEC).error, 'unknown flag: --models');
     assert.equal(scanArgs(['--codex'], { booleans: [] }).error, 'unknown flag: --codex');
   });
+
+  it('repeatable flags collect every value, in order, and an empty array when not given', () => {
+    const { flags } = scanArgs(['x', '--click', 'a', '--click', 'text=Save'], { repeatable: ['--click'] });
+    assert.deepEqual(flags.click, ['a', 'text=Save']);
+    assert.deepEqual(scanArgs(['x'], { repeatable: ['--click'] }).flags.click, []);
+  });
+
+  it('a repeatable flag refuses a missing value, trailing or flag-eaten', () => {
+    assert.equal(scanArgs(['x', '--click'], { repeatable: ['--click'] }).error, '--click needs a value');
+    assert.equal(scanArgs(['--click', '--json'], { repeatable: ['--click'], booleans: ['--json'] }).error, '--click needs a value');
+  });
+
+  it('repeatable flags sit beside strict ones, and an undeclared repeatable flag is unknown', () => {
+    const { flags } = scanArgs(['--model', 'x', '--click', 'a', '--click', 'b'], { strictValues: ['--model'], repeatable: ['--click'] });
+    assert.equal(flags.model, 'x');
+    assert.deepEqual(flags.click, ['a', 'b']);
+    assert.equal(scanArgs(['--click', 'a'], {}).error, 'unknown flag: --click');
+  });
 });
