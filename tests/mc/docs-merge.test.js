@@ -5,13 +5,17 @@
  * gh is asked; the old spelling points at the new verb.
  */
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { docsMergeLines, firstNonDoc, firstScript, runDocsMerge } from '../../src/mc/docs-merge.js';
 import { run } from '../../src/mc/commands/merge.js';
+import { registerPath } from '../../src/mc/register.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 
-function stubGh({ files, state = 'OPEN', isDraft = false, mergeable = 'MERGEABLE', unknownFirst = 0, head = 'aaaa111', headAfter = head }) {
+function stubGh({ files, state = 'OPEN', isDraft = false, mergeable = 'MERGEABLE', unknownFirst = 0, head = 'aaaa111', headAfter = head, branch = 'plan/mc', body = '' }) {
   const calls = [];
   let asked = 0;
   let merged = false;
@@ -23,7 +27,7 @@ function stubGh({ files, state = 'OPEN', isDraft = false, mergeable = 'MERGEABLE
       if (fields === 'mergeable') { asked += 1; return json({ mergeable: asked <= unknownFirst ? 'UNKNOWN' : mergeable }); }
       if (fields === 'headRefOid') return json({ headRefOid: headAfter });
       if (fields === 'state,mergeCommit') return json({ state: merged ? 'MERGED' : 'OPEN', mergeCommit: merged ? { oid: 'abc1234def' } : null });
-      return json({ number: 12, title: 'Plan: gate-word', state, isDraft, baseRefName: 'main', headRefOid: head, files: files.map((path) => ({ path })) });
+      return json({ number: 12, title: 'Plan: gate-word', state, isDraft, baseRefName: 'main', headRefName: branch, body, headRefOid: head, files: files.map((path) => ({ path })) });
     }
     if (args[0] === 'pr' && args[1] === 'merge') { merged = true; return { ok: true, stdout: '', stderr: '' }; }
     return { ok: false, stdout: '', stderr: 'unexpected' };
@@ -118,6 +122,66 @@ describe('mc merge --docs, the verb', () => {
     });
     assert.equal(code, 0);
     assert.match(out, /merged #12 into main/u);
+  });
+
+  // msr-core-finish-measure steps 1 and 3 (#13772, #13784, 2026-10-18): the
+  // session landed its docs pull request through --docs, the step stayed
+  // `running`, and the runner, finding no open pull request on the deleted
+  // branch, wrote it `failed`.
+  describe('books the landing on the step whose pull request it is', () => {
+    function landing({ branch, status = 'running', env = {}, body = '' }) {
+      const root = mkdtempSync(join(tmpdir(), 'mc-docs-merge-'));
+      mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
+      writeFileSync(registerPath(root, 'measure'), JSON.stringify({
+        project: 'measure', repo: 'memoro', programme: 'msr-core', plan: 'docs/project/msr-core/measure/PLAN.json',
+        steps: [
+          { status: 'done', pr: 11, branch: 'measure-2', comments: [], attempts: 0 },
+          { status, pr: null, branch: 'measure-3', comments: [], attempts: 0 },
+        ],
+      }));
+      let out = '';
+      const stdout = { write: (s) => { out += s; } };
+      const { gh } = stubGh({ files: ['docs/project/msr-core/a.md'], branch, body });
+      return run(['memoro', '12', '--docs'], {
+        stdout, stderr: stdout, gh, root, env, lock: (_root, fn) => fn(),
+        resolveRepoPath: async () => '/repo', now: () => new Date('2026-10-18T07:10:28Z'),
+      }).then((code) => {
+        const step = JSON.parse(readFileSync(registerPath(root, 'measure'), 'utf8')).steps[1];
+        rmSync(root, { recursive: true, force: true });
+        return { code, out, step };
+      });
+    }
+
+    it('makes the step on the pull request\'s branch done, with the pull request and the landing', async () => {
+      const { code, out, step } = await landing({ branch: 'measure-3' });
+      assert.equal(code, 0);
+      assert.equal(step.status, 'done');
+      assert.equal(step.pr, 12);
+      assert.equal(step.landed.sha, 'abc1234def');
+      assert.match(out, /measure step 2 is done/u);
+    });
+
+    it('finds the step from MC_STEP when the session names it', async () => {
+      const { step } = await landing({ branch: 'some-other-name', env: { MC_STEP: 'measure:1' } });
+      assert.equal(step.status, 'done');
+    });
+
+    it('keeps what the body says it left undone, as the merger does', async () => {
+      const { step } = await landing({ branch: 'measure-3', body: '## Remainder\n\nThe phone rows.' });
+      assert.match(step.landed.remainder, /phone rows/u);
+    });
+
+    it('leaves a step the session has blocked as it is', async () => {
+      const { step } = await landing({ branch: 'measure-3', status: 'blocked' });
+      assert.equal(step.status, 'blocked');
+    });
+
+    it('books nothing for a planning session\'s pull request', async () => {
+      const { code, out, step } = await landing({ branch: 'plan/msr-core' });
+      assert.equal(code, 0);
+      assert.equal(step.status, 'running');
+      assert.doesNotMatch(out, /is done/u);
+    });
   });
 
   it('mc repo merge only points at mc merge now', () => {
