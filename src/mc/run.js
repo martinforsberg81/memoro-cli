@@ -104,7 +104,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
@@ -3014,15 +3014,24 @@ export function createRunner({
    * The steps in flight on this machine, one per `current-*.json`: its
    * `name`, the `pid` of the runner holding it, and `other` when that is a
    * live runner that is not this one — the runner a handover replaced,
-   * finishing what it held. A file naming a dead pid is nobody's.
+   * finishing what it held. A file naming a dead pid is nobody's: it is moved
+   * to `runner/log/` and said, not returned — a lane killed with its runner
+   * never reaches the `finally` that removes its file (`runStep`).
    */
   function stepsHeld() {
-    return paths.currents().map((path) => {
+    return paths.currents().flatMap((path) => {
       let held = null;
       try { held = JSON.parse(deps.read(path) ?? ''); } catch { held = null; }
       const owner = Number(held?.pid);
       const known = Number.isInteger(owner) && owner > 0;
-      return { path, name: held?.name || null, pid: known ? owner : null, other: known && owner !== pid && alive(owner) };
+      const foreign = known && owner !== pid;
+      if (foreign && !alive(owner)) {
+        const to = join(paths.log, `dead-${basename(path, '.json')}-${owner}.json`);
+        if (!deps.move?.(path, to)) remove(path);
+        say(`lane file ${basename(path)} names pid ${owner}, which is gone — ${held?.name || 'no step'}${Number.isInteger(held?.step) ? ` step ${held.step}` : ''}; moved to log/${basename(to)}`);
+        return [];
+      }
+      return [{ path, name: held?.name || null, pid: known ? owner : null, other: foreign }];
     });
   }
 
@@ -3514,7 +3523,7 @@ export async function runLoop({
       const drainPaths = { dir: dirname(runner.paths.update), update: runner.paths.update, runner: runner.paths.runner };
       const drainTick = () => {
         if (!handedOver) return;
-        const state = drainState({ paths: drainPaths, read: deps.read, list: deps.list, now: deps.now() });
+        const state = drainState({ paths: drainPaths, read: deps.read, list: deps.list, now: deps.now(), alive: isAlive });
         const own = state.inFlight.filter((held) => held.pid === runner.pid);
         if (own.length === 0) return;
         const now = deps.now().getTime();

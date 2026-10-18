@@ -627,6 +627,13 @@ describe('mc run --update', () => {
     assert.equal(drainLine({ ...state, draining: false }), null);
   });
 
+  it('drainState leaves out a lane whose runner pid is gone', () => {
+    const fx = fixture({ live: [100], files: { [paths.update]: '2026-08-30T17:50:00Z\n', [`${paths.dir}/current-memoro-2.json`]: JSON.stringify({ name: 'msr-core-residue', step: 4, pid: 41100, started: '2026-08-29T13:39:13Z' }), [`${paths.dir}/current-memoro-cli.json`]: JSON.stringify({ name: 'mc-ui', step: 1, pid: 100, started: '2026-08-30T17:58:00Z' }) } });
+    const state = drainState({ paths, read: fx.deps.read, list: fx.deps.list, now: fx.deps.now(), alive: fx.deps.alive });
+    assert.deepEqual(state.inFlight.map((s) => s.name), ['mc-ui']);
+    assert.doesNotMatch(drainLine(state), /msr-core-residue/u);
+  });
+
   it('refuses with no runner up — a runner started now reads the new code anyway', async () => {
     const fx = fixture();
     const out = await requestUpdate({ root: ROOT, deps: fx.deps });

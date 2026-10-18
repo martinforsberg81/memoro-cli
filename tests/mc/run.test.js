@@ -1998,6 +1998,34 @@ test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', 
   assert.equal('/w/runner/current-memoro.json' in f.files, false, 'the killed runner\'s in-flight file outlived it');
 });
 
+test('a lane file naming a dead pid is moved to runner/log and said once', () => {
+  const f = fixture({ plans: { memoro: {} }, session: okSession(), livePids: [7000] });
+  f.files['/w/runner/current-memoro-2.json'] = JSON.stringify({ name: 'msr-core-residue', step: 4, pid: 41100, lane: 2 });
+  f.files['/w/runner/current-memoro-1.json'] = JSON.stringify({ name: 'a', step: 1, pid: 7000, lane: 1 });
+  const runner = createRunner({ deps: f.deps });
+  const held = runner.stepsHeld();
+  assert.equal(held.length, 1);
+  assert.equal(held[0].pid, 7000);
+  assert.equal(held[0].other, true);
+  assert.equal('/w/runner/current-memoro-2.json' in f.files, false);
+  assert.equal(f.files['/w/runner/log/dead-current-memoro-2-41100.json'], JSON.stringify({ name: 'msr-core-residue', step: 4, pid: 41100, lane: 2 }));
+  assert.deepEqual(f.calls.moved, [['/w/runner/current-memoro-2.json', '/w/runner/log/dead-current-memoro-2-41100.json']]);
+  assert.match(f.files['/w/runner/log/runner.log'], /lane file current-memoro-2\.json names pid 41100, which is gone — msr-core-residue step 4; moved to log\/dead-current-memoro-2-41100\.json/u);
+  runner.stepsHeld();
+  assert.equal(f.files['/w/runner/log/runner.log'].match(/lane file current-memoro-2\.json/gu).length, 1);
+});
+
+test('a lane file with no pid is not swept', () => {
+  const f = fixture({ plans: { memoro: {} }, session: okSession() });
+  f.files['/w/runner/current-memoro.json'] = '{}';
+  const held = createRunner({ deps: f.deps }).stepsHeld();
+  assert.equal(held.length, 1);
+  assert.equal(held[0].pid, null);
+  assert.equal(held[0].other, false);
+  assert.equal('/w/runner/current-memoro.json' in f.files, true);
+  assert.deepEqual(f.calls.moved, []);
+});
+
 /**
  * Landing a pull request is enough (Martin, 2026-10-18): the chore pass reads
  * origin/main of mc's own checkout — fetched by `queue()` a moment before —
@@ -3912,7 +3940,7 @@ test('runLoop: an UPDATE hands over at once — the old runner starts no step, f
  * are polling.
  */
 test('runLoop: an old runner finishing a long step says what it holds every ten minutes, once for the runner', async () => {
-  const f = fixture({ plans: { memoro: { a: ready }, 'memoro-cli': {} }, session: okSession() });
+  const f = fixture({ plans: { memoro: { a: ready }, 'memoro-cli': {} }, session: okSession(), livePids: [4242] });
   const t0 = new Date('2026-08-26T12:00:00Z').getTime();
   let clock = t0;
   f.deps.now = () => new Date(clock);

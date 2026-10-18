@@ -1254,7 +1254,9 @@ thing it writes into a repository: a blocked step (below).
   the worktree, and it is
   written immediately before the session starts, rewritten with the count at
   each check-in, and removed in a `finally`
-  however that session returns, so a step that throws still clears it.
+  however that session returns, so a step that throws still clears it. A file
+  whose runner pid is gone is moved to `runner/log/dead-<file>-<pid>.json` by
+  the next runner that reads it, and the drain and stop lines leave it out.
   Readers — the page's RUNNER block, `mc status <name>` — glob
   `current-*.json` rather than opening one fixed path, which is why the block
   is a list of lines and not a line.

@@ -453,7 +453,7 @@ function canTakeOver({ kind, live, held }) {
 
 /** The lane files, as `drainState` reads them. */
 function stepsOf(paths, deps) {
-  return drainState({ paths, read: deps.read, list: deps.list, now: deps.now() }).inFlight;
+  return drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), alive: deps.alive }).inFlight;
 }
 
 /**
@@ -461,7 +461,7 @@ function stepsOf(paths, deps) {
  * UPDATE started, or the stop a STOP did. Empty when nothing is.
  */
 function progressLines(state, paths, deps) {
-  const reading = drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null });
+  const reading = drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null, alive: deps.alive });
   const line = state.kind === 'stopping' ? stopLine(reading) : drainLine(reading);
   return line ? [line] : [];
 }
@@ -513,7 +513,7 @@ export async function stopRunner({ force = false, root = null, deps = realContro
     const written = again ? 'STOP was already written' : 'STOP written';
     if (held.alive) lines.push(`${written} — pid ${held.pid} takes no new step, finishes the ones in flight, then exits`);
     if (finishing) lines.push(`${written} — pid ${finishing.pid}, the runner ${held.alive ? 'it replaced' : 'a handover replaced'}, finishes the steps it holds, then exits`);
-    const reading = stopLine(drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null }));
+    const reading = stopLine(drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null, alive: deps.alive }));
     if (reading) lines.push(reading);
     lines.push(`no session is abandoned · mc run stop --force ends ${live.length > 1 ? 'all of it' : 'it'} now · mc run start takes over at once instead`);
     return { ok: true, code: 0, lines };
@@ -594,14 +594,15 @@ function descendants(pid, ps) {
 /**
  * Where a drain stands: when UPDATE was written, the commit the runner runs,
  * and the steps it is still waiting on — one per `current-*.json`, which
- * exists exactly as long as that lane's session does (run.js `runStep`).
+ * exists exactly as long as that lane's session does (run.js `runStep`). A
+ * file whose runner pid is gone is not a step in flight, and is left out.
  *
  * `lanes` is how many lanes the runner has in all (`laneSlots`), so the lanes
  * done are the ones not in flight. Measured 2026-10-07: UPDATE written with
  * six lanes busy, four said so as their steps landed, and nothing said what
  * the other two were doing — so the person force-stopped the runner.
  */
-export function drainState({ paths, read, list, now, lanes = null }) {
+export function drainState({ paths, read, list, now, lanes = null, alive = pidAlive }) {
   const at = (iso) => { const t = Date.parse(String(iso ?? '').trim()); return Number.isNaN(t) ? null : t; };
   const since = (t) => (t == null ? null : Math.max(0, Math.round((now.getTime() - t) / 1000)));
   const text = read(paths.update);
@@ -616,6 +617,8 @@ export function drainState({ paths, read, list, now, lanes = null }) {
     .map((file) => {
       let current = null;
       try { current = JSON.parse(read(join(paths.dir, file)) ?? ''); } catch { current = null; }
+      // The runner that wrote it is gone, so the lane's session is gone too.
+      if (Number.isInteger(current?.pid) && !alive(current.pid)) return null;
       // `current-<repo>.json` is a repository's first lane and
       // `current-<repo>-<n>.json` its lane n+1, the way run.js names them.
       const base = file.replace(/^current-/u, '').replace(/\.json$/u, '');
@@ -632,7 +635,8 @@ export function drainState({ paths, read, list, now, lanes = null }) {
         started: started == null ? null : new Date(started).toISOString(),
         elapsed_seconds: since(started),
       };
-    });
+    })
+    .filter(Boolean);
   return {
     draining: text != null,
     requested: asked == null ? null : new Date(asked).toISOString(),
@@ -762,7 +766,7 @@ export async function requestUpdate({ root = null, force = false, checkout = nul
   const others = (dir) => processLines({
     root: work, head: dir ? () => head(dir, deps) : null, readMergerFn, watcher, read: (path) => deps.read(path),
   });
-  const state = () => drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null });
+  const state = () => drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null, alive: deps.alive });
   const reading = runnerState({ paths, deps });
   const { held } = reading;
   // A runner on its way out — stopping, or finishing what a handover left it
