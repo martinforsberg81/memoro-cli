@@ -192,6 +192,7 @@ describe('mc gate, a green remembered for the merger (ruling 44)', () => {
       if (args.includes('--git-common-dir')) return '/repo/x/.git';
       if (args[0] === 'status') return porcelain[Math.min(status++, porcelain.length - 1)];
       if (args[1] === 'HEAD^{tree}') return tree[Math.min(trees++, tree.length - 1)];
+      if (args[0] === 'merge-base') return 'base5678';
       return plain(cwd, args);
     };
     machine.deps.declaration = (path) => ({ ok: true, name: 'x', declaration: { select, path } });
@@ -210,6 +211,7 @@ describe('mc gate, a green remembered for the merger (ruling 44)', () => {
     assert.deepEqual(asked.greens, [{
       repo: 'x', tree: 'tree1234abcd', selection: selectionHash(SELECTION), gate_version: GATE_MEASUREMENT_VERSION,
       at: '2026-09-25T10:00:02.000Z', session: 'gate-memory',
+      head_tree: 'tree1234abcd', base: 'base5678', files: ['tests/a.test.js', 'tests/b.test.js'], commands: ['lint'],
     }]);
     assert.equal(GATE_MEASUREMENT_VERSION, 1);
     // Selected as the merger selects: the declared command, in the worktree,

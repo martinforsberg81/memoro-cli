@@ -31,7 +31,7 @@ import { gateRoot, runGate, selectionState, verdictFor, verdictHeadline, verdict
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
-import { GATE_MEASUREMENT_VERSION, findGreen, greensPath, recordGreen, selectionHash } from '../../src/mc/gate-greens.js';
+import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, greensPath, recordGreen, selectionHash } from '../../src/mc/gate-greens.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const OTHER = { name: 'pm', kind: 'work-area' };
@@ -2069,7 +2069,7 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({ onProgress: (line) => said.push(line) });
         assert.equal(report.verdict, 'green', report.reason);
-        assert.deepEqual(report.reused, { at: AT, session: 'gate-memory' });
+        assert.deepEqual(report.reused, { mode: 'exact', at: AT, session: 'gate-memory' });
         assert.ok(said.includes(`the candidate's tree tree333 was measured green by mc gate at ${AT} with the same selection — not measured again`));
         assert.deepEqual(fx.runs.map((run) => run.files), [['tests/a.test.js']], 'only the pull request\'s own tests ran');
         assert.deepEqual(report.pr_tests.files, ['tests/a.test.js']);
@@ -2128,13 +2128,225 @@ describe('a repository that selects by diff', () => {
         });
         assert.equal(report.ok, false);
         assert.equal(report.stopped_at, 'pr-tests');
-        assert.deepEqual(report.reused, { at: AT, session: 'gate-memory' });
+        assert.deepEqual(report.reused, { mode: 'exact', at: AT, session: 'gate-memory' });
+      } finally { fx.cleanup(); }
+    });
+  });
+
+  describe('a green mc gate on the pull request\'s own head, main moved since (ruling 47)', () => {
+    const own = 'tests/a.test.js';
+    const files = [own, 'tests/b.test.js', 'tests/c.test.js'];
+    const commands = [{ id: 'lint', packageScript: 'lint', passBaseRef: true }, { id: 'types', packageScript: 'types', passBaseRef: false }];
+    const HEAD_TREE = 'headtree9999';
+    const GREEN_BASE = 'gbase0000';
+    const AT = '2026-10-18T07:00:00.000Z';
+
+    /**
+     * A round whose candidate tree is not the green's (main was merged in),
+     * whose pull request head's tree is. The selector is a script: the whole
+     * selection without `--changed-path`, `delta` with it, and it writes the
+     * arguments it got where the test can read them.
+     */
+    function moved({
+      delta = { files: [] }, deltaExit = 0, mainPaths = 'src/moved.js\n', green = {}, ancestor = 0,
+      declare = true, record = true,
+    } = {}) {
+      let fx = null;
+      const dir = mkdtempSync(join(tmpdir(), 'mc-delta-sel-'));
+      const script = join(dir, 'select.sh');
+      const whole = JSON.stringify({ files, commands });
+      writeFileSync(script, [
+        'for a in "$@"; do',
+        '  if [ "$a" = "--changed-path" ]; then',
+        `    printf '%s' "$*" > "$GATE_MARKS/selector-delta"`,
+        `    echo '${JSON.stringify(delta)}'`,
+        `    exit ${deltaExit}`,
+        '  fi',
+        'done',
+        `echo '${whole}'`,
+      ].join('\n'));
+      fx = selecting({
+        files, commands, select: `sh ${script} --list --json --base-ref origin/main`,
+        scripts: { lint: marking('lint'), types: marking('types') },
+        gitAlso: (args) => {
+          if (args[0] === 'rev-parse' && args[1] === 'HEAD^{tree}') return { status: 0, stdout: 'candtree1111\n', stderr: '' };
+          if (args[0] === 'rev-parse' && args[1] === 'abc1234^{tree}') return { status: 0, stdout: `${HEAD_TREE}\n`, stderr: '' };
+          if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return { status: ancestor, stdout: '', stderr: ancestor === 1 ? '' : 'fatal' };
+          if (args[0] === 'diff' && args[2] === GREEN_BASE) return { status: 0, stdout: mainPaths, stderr: '' };
+          if (args[0] === 'diff') return { status: 0, stdout: `${own}\n`, stderr: '' };
+          return undefined;
+        },
+      });
+      if (declare) {
+        const table = JSON.parse(readFileSync(join(fx.mcHome, 'repo-gates.json'), 'utf8'));
+        table.repo.select_changed_path = true;
+        writeJson(join(fx.mcHome, 'repo-gates.json'), table);
+      }
+      if (record) {
+        recordGreen({
+          root: fx.mcHome,
+          entry: {
+            repo: 'repo', tree: HEAD_TREE, selection: selectionHash({ files, commands }), gate_version: GATE_MEASUREMENT_VERSION,
+            at: AT, session: 'delta-session', head_tree: HEAD_TREE, base: GREEN_BASE,
+            files: [...files].sort(), commands: ['lint', 'types'], ...green,
+          },
+        });
+      }
+      const cleanup = fx.cleanup;
+      fx.cleanup = () => { cleanup(); rmSync(dir, { recursive: true, force: true }); };
+      return fx;
+    }
+
+    it('the exact match still wins, and says mode exact', async () => {
+      const fx = moved();
+      try {
+        recordGreen({
+          root: fx.mcHome,
+          entry: { repo: 'repo', tree: 'candtree1111', selection: selectionHash({ files, commands }), gate_version: GATE_MEASUREMENT_VERSION, at: 'x', session: 's' },
+        });
+        const report = await fx.report();
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.deepEqual(report.reused, { mode: 'exact', at: 'x', session: 's' });
+        assert.deepEqual(fx.runs.map((run) => run.files), [[own]]);
+        assert.equal(fx.mark('selector-delta'), null, 'the delta was never asked');
+      } finally { fx.cleanup(); }
+    });
+
+    it('main moved nothing the selection could see: nothing of the selection runs again', async () => {
+      const fx = moved({ mainPaths: '' });
+      const said = [];
+      try {
+        const report = await fx.report({ onProgress: (line) => said.push(line) });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.deepEqual(report.reused, { mode: 'delta', at: AT, session: 'delta-session', delta_paths: 0, rerun_files: 0, rerun_commands: [] });
+        assert.deepEqual(fx.runs.map((run) => run.files), [[own]], 'only the pull request\'s own tests');
+        assert.equal(fx.mark('lint'), null);
+        assert.equal(fx.mark('selector-delta'), null, 'no paths, no selector');
+        assert.ok(said.some((line) => /#7's head abc1234 was measured green by mc gate at .* — not measured again/u.test(line)), said.join('\n'));
+        assert.equal(verdictHeadline(report), 'GREEN — the test gate passes (measured by mc gate)');
+      } finally { fx.cleanup(); }
+    });
+
+    it('a delta that reaches nothing selected is a whole reuse', async () => {
+      const fx = moved({ delta: { files: ['tests/elsewhere.test.js'] } });
+      try {
+        const report = await fx.report();
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.equal(report.reused.mode, 'delta');
+        assert.equal(report.reused.delta_paths, 1);
+        assert.equal(report.reused.rerun_files, 0);
+        assert.deepEqual(fx.runs.map((run) => run.files), [[own]]);
+        assert.equal(fx.mark('selector-delta'), "--list --json --base-ref origin/main --changed-path src/moved.js");
+      } finally { fx.cleanup(); }
+    });
+
+    it('a delta reaching part of the selection runs exactly that part, and its command gates', async () => {
+      const fx = moved({
+        mainPaths: "src/moved.js\nsrc/it's.js\n",
+        delta: { files: ['tests/b.test.js', 'tests/other.test.js'], commands: [{ id: 'types', packageScript: 'types' }] },
+      });
+      const said = [];
+      try {
+        const report = await fx.report({ onProgress: (line) => said.push(line) });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.deepEqual(fx.runs.map((run) => run.files), [['tests/b.test.js'], [own]], 'the intersection, then the own tests');
+        assert.equal(fx.mark('types'), '', 'the reached command gate ran');
+        assert.equal(fx.mark('lint'), null, 'the unreached one did not');
+        assert.deepEqual(report.reused, {
+          mode: 'delta', at: AT, session: 'delta-session', delta_paths: 2, rerun_files: 1, rerun_commands: ['types'],
+        });
+        assert.equal(fx.mark('selector-delta'), "--list --json --base-ref origin/main --changed-path src/it's.js --changed-path src/moved.js");
+        assert.ok(said.some((line) => /running 1 of the 3 selected files and 1 of 2 command gates again/u.test(line)), said.join('\n'));
+        assert.equal(verdictHeadline(report), 'GREEN — the test gate passes (the rest measured by mc gate)');
+        assert.match(gateLines(report).join('\n'), /ran 1 of the 3 selected test files .* mc gate measured the rest green at/u);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a file the green never measured runs whatever the delta reaches', async () => {
+      const fx = moved({ delta: { files: [] }, green: { files: [own, 'tests/b.test.js'] } });
+      try {
+        const report = await fx.report();
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.deepEqual(fx.runs.map((run) => run.files), [['tests/c.test.js'], [own]]);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a red in the rerun is red, as any red', async () => {
+      const fx = moved({ delta: { files: ['tests/b.test.js'] } });
+      try {
+        const report = await fx.report({
+          tests: ({ files: ran }) => Promise.resolve({ code: 1, tap: tapWith(['a moved test'], { tests: ran.length }) }),
+          probeMain: async () => ({ red_on_main: [], breaks: [] }),
+        });
+        assert.equal(report.ok, false);
+        assert.equal(report.reused.mode, 'delta');
+        assert.equal(report.verdict, 'red');
+      } finally { fx.cleanup(); }
+    });
+
+    for (const [what, options] of [
+      ['the green\'s base is not an ancestor of the base', { ancestor: 1 }],
+      ['git cannot say whether it is', { ancestor: 128 }],
+      ['the selector fails for the delta', { deltaExit: 3 }],
+      ['the selector prints no files for the delta', { delta: { nope: true } }],
+    ]) {
+      it(`${what}: the whole selection, said`, async () => {
+        const fx = moved({ delta: { files: ['tests/b.test.js'] }, ...options });
+        const said = [];
+        try {
+          const report = await fx.report({ onProgress: (line) => said.push(line) });
+          assert.equal(report.verdict, 'green', report.reason);
+          assert.equal(report.reused, null);
+          assert.deepEqual(fx.runs.map((run) => run.files), [files, [own]]);
+          assert.equal(fx.mark('lint'), '--base-ref base1111');
+          assert.ok(said.some((line) => line.startsWith('delta reuse not taken — ')), said.join('\n'));
+        } finally { fx.cleanup(); }
+      });
+    }
+
+    for (const [what, options] of [
+      ['a green from before base and files were recorded', { green: { base: undefined, files: undefined, head_tree: undefined } }],
+      ['no green for the head', { record: false }],
+      ['a declaration that does not say select_changed_path', { declare: false }],
+    ]) {
+      it(`${what}: the whole selection`, async () => {
+        const fx = moved({ delta: { files: [] }, ...options });
+        try {
+          const report = await fx.report();
+          assert.equal(report.verdict, 'green', report.reason);
+          assert.equal(report.reused, null);
+          assert.deepEqual(fx.runs.map((run) => run.files), [files, [own]]);
+          assert.equal(fx.mark('selector-delta'), null);
+        } finally { fx.cleanup(); }
+      });
+    }
+
+    it('a batch never takes the delta', async () => {
+      const fx = moved({ mainPaths: '' });
+      try {
+        const report = await fx.report({ prs: [7, 8] });
+        assert.equal(report.reused, null);
+        assert.ok(fx.runs.some((run) => run.files.length === files.length), 'the selection ran');
       } finally { fx.cleanup(); }
     });
   });
 });
 
 describe('the green record file', () => {
+  it('finds a head green only with a base and files, by head_tree or tree (ruling 47)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-greens-'));
+    try {
+      const v = GATE_MEASUREMENT_VERSION;
+      recordGreen({ root, entry: { repo: 'r', tree: 'h', selection: 's', gate_version: v, at: 'old' } });
+      assert.equal(findGreenForHead({ root, repo: 'r', headTree: 'h' }), null, 'an old record is exact-only');
+      recordGreen({ root, entry: { repo: 'r', tree: 'h', head_tree: 'h', selection: 's', gate_version: v, at: '1', base: 'b', files: [] } });
+      recordGreen({ root, entry: { repo: 'r', tree: 'h', head_tree: 'h', selection: 's', gate_version: v + 1, at: '2', base: 'b', files: [] } });
+      recordGreen({ root, entry: { repo: 'q', tree: 'h', head_tree: 'h', selection: 's', gate_version: v, at: '3', base: 'b', files: [] } });
+      assert.equal(findGreenForHead({ root, repo: 'r', headTree: 'h' }).at, '1');
+      assert.equal(findGreenForHead({ root, repo: 'r', headTree: 'other' }), null);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('keeps its last 2,000 lines, and finds the last match', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-greens-'));
     try {

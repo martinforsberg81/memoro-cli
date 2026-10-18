@@ -181,6 +181,14 @@ export const SHIPPED = Object.freeze({
     select_why: 'measured 2026-08-30: a documentation diff selected 332 files and 6 of them were '
       + 'the diff\'s; 326 were the always-on msr-contract profile. With that profile bound to its '
       + 'own surface and pin-following closing the blindness it covered, the same diff selects 6',
+    // The selector answers for explicit paths too (`--changed-path`, which
+    // ci.mjs takes beside `--list` and in place of the diff against
+    // `--base-ref`), so a round can ask what main's movement since a green
+    // `mc gate` reaches and rerun only that (ruling 47).
+    select_changed_path: true,
+    select_changed_path_why: 'scripts/testing/ci.mjs parseCiArgs takes repeatable --changed-path with --list, '
+      + 'and explicit paths replace the base-ref diff (read 2026-10-18); 502 of 513 rounds since 2026-10-10 '
+      + 'missed the exact-tree reuse because origin/main had moved',
     // The whole suite, which `npm test` here is not: `ci.mjs` selects by diff,
     // so a `--full` round with no pull request diffed origin/main against
     // itself and ran the 6 mandatory-core files as if they were everything.
@@ -415,6 +423,15 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + '{"files": ["<test file>", …], "gates": ["<package script>", …]} — each list optional, every entry a path or a script name.',
       };
     }
+    // A switch the round cannot read as one would switch nothing in silence.
+    if (declared.select_changed_path != null && typeof declared.select_changed_path !== 'boolean') {
+      return {
+        ok: false,
+        name,
+        reason: `${name} declares select_changed_path ${JSON.stringify(declared.select_changed_path)}, which is not `
+          + 'true or false — true says its `select` command takes `--changed-path <path>` (repeatable) in place of its diff.',
+      };
+    }
     // Which fields of the layers below it this override silently dropped, if
     // it is one. A shallow table means an override states every field it
     // wants — a rule this table's own operator wrote into the memoro entry
@@ -509,6 +526,12 @@ function normalise(entry, env) {
     // report main's own red as this change's doing.
     select: entry.select ?? null,
     select_why: entry.select_why ?? null,
+    // Whether `select` answers for explicit paths: the same command with
+    // ` --changed-path <p>` appended once per path, printing the same JSON.
+    // It lets a round reuse a green `mc gate` measured before main moved and
+    // rerun only what main's movement reaches (ruling 47). Off unless said.
+    select_changed_path: entry.select_changed_path === true,
+    select_changed_path_why: entry.select_changed_path_why ?? null,
     // What this repository calls its *whole* suite, for `--full`. Not read off
     // `package.json` any more: `npm test` is a selector in at least one of the
     // two repositories mc knows, and a selector run with nothing to select

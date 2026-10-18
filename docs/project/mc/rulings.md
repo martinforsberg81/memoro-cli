@@ -1579,3 +1579,50 @@ every archive.
    unchanged: it removes the programme's `closeout/` with the rest.
 
 Carried by `archive-keeps-readme` (`docs/project/mc/archive-keeps-readme/PLAN.json`).
+
+## 47 · A green `mc gate` on the pull request's head is reused after main moved: only the delta runs
+
+`ruling · 2026-10-18` · raised by Martin
+
+> "mc gate tar alldeles för lång tid och är alldeles för bred … gates måste
+> vara sjukt smart" and "Allting måste gå mycket fortare; dvs det måste körs
+> väsentligt många färre test och de som körs måste bli klara mycket
+> snabbare." (Martin, 2026-10-18)
+
+Measured since 2026-10-10: the merger spent 43.7 h on 513 memoro gate rounds.
+Ruling 44 § 3 skips the suite only when a session's green `mc gate` matches
+the candidate tree exactly — but the candidate is the PR head with the current
+`origin/main` merged in (plus, sometimes, a derived-artifacts commit), and main
+moves between the session's gate and the round. About 11 of the 513 rounds
+matched.
+
+1. **`mc gate` records what a delta needs.** Beside `tree`, `selection` and
+   the version, a green records `head_tree` (the same tree), `base` (`git
+   merge-base HEAD origin/main` at measurement), `files` (the selection's
+   sorted test files) and `commands` (its sorted `packageScript` names).
+2. **The round reuses the head's green and runs only the delta.** When the
+   exact match misses, in a single pull request's round (never a batch,
+   never `--full`) of a repository whose declaration says
+   `select_changed_path: true`, the round looks up the green for the PR
+   head's own tree. When there is one and its `base` is an ancestor of the
+   commit the round merged, the delta paths are `git diff --name-only
+   <green.base> <merged base>` and the files the derived commit regenerated.
+   No delta paths: nothing of the selection runs again. Otherwise the
+   declared `select` is asked again with ` --changed-path <p>` per path, and
+   the round runs only the candidate's selected files (and command gates)
+   that the delta also reaches, plus any the green never measured. Red
+   handling is unchanged; the PR's own tests and the declared extra gates
+   run as always.
+3. **Why it is sound.** A test reached only by the PR's diff was measured
+   green on the PR's tree, and main's movement touches nothing the selector
+   says reaches it. A test reached only by main's movement was measured green
+   when those PRs landed. Only a test reached by both — or newly selected —
+   can change verdict. This is exactly as sound as the selector, which every
+   round already trusts for every test it does not select.
+4. **A failure is a full measurement, never a green.** A git error, a
+   selector that fails or prints no `files`, or a green whose base main does
+   not descend from: the round measures the whole selection as today and
+   says why. A record written before these fields existed is matched only
+   exactly.
+5. **The hit rate is measured.** `reused` — `{ mode: 'exact' | 'delta', … }`
+   — is in the round's report and in its line in `gate-rounds.jsonl`.

@@ -197,7 +197,20 @@ function greenToRecord(io, { root, env, base }) {
     parsed = ran?.status === 0 ? JSON.parse(ran.stdout) : null;
   } catch { parsed = null; }
   if (!Array.isArray(parsed?.files)) return { env: selectEnv, green: null };
-  return { env: selectEnv, green: { repo: basename(primary), tree, selection: selectionHash(parsed) } };
+  // What the delta reuse (ruling 47) reads beside the hash: the commit of
+  // main this tree was measured from, and what the selection reached by name.
+  // `base` is null when git cannot say, and such a record is only ever an
+  // exact match.
+  const measuredFrom = io.git(root, ['merge-base', 'HEAD', 'origin/main']) || null;
+  return {
+    env: selectEnv,
+    green: {
+      repo: basename(primary), tree, selection: selectionHash(parsed), base: measuredFrom,
+      files: parsed.files.map(String).filter(Boolean).sort(),
+      commands: [...new Set((Array.isArray(parsed.commands) ? parsed.commands : [])
+        .map((entry) => String(entry?.packageScript ?? '')).filter(Boolean))].sort(),
+    },
+  };
 }
 
 /**
@@ -213,6 +226,10 @@ function remember(io, { lock, root, env }) {
     io.recordGreen({
       repo: green.repo, tree: green.tree, selection: green.selection, gate_version: GATE_MEASUREMENT_VERSION,
       at: io.now().toISOString(), session: io.holder({ cwd: root, env }),
+      // The delta reuse's half (ruling 47, `findGreenForHead`): the same tree
+      // under the name the merger looks it up by, the base it was measured
+      // from, and the selection by name rather than by hash.
+      head_tree: green.tree, base: green.base ?? null, files: green.files ?? [], commands: green.commands ?? [],
     }, { env });
     return true;
   } catch { return false; }
