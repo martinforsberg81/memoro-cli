@@ -60,10 +60,12 @@ export function testFlags(script) {
 /**
  * The command for named test files: `node --test` with the repository's flags,
  * the files (relative to the worktree root), and the name pattern if one was given.
+ * `flags` replaces the flags read off the `test` script — the declaration's
+ * `pr_tests_flags`, for a repository whose `test` script is not a `node --test` line.
  */
-export function namedCommand(manifest, files, { pattern } = {}) {
+export function namedCommand(manifest, files, { pattern, flags = null } = {}) {
   const script = manifest?.scripts?.test ?? null;
-  const words = ['node', '--test', ...testFlags(script), ...files.map(shellWord)];
+  const words = ['node', '--test', ...(flags?.length ? flags.map(shellWord) : testFlags(script)), ...files.map(shellWord)];
   if (pattern != null) words.push('--test-name-pattern', shellQuote(pattern));
   return { run: words.join(' '), script, source: 'files', files };
 }
@@ -98,6 +100,49 @@ export function rerunLine(files, output) {
   return `re-run: mc gate ${files.map(shellWord).join(' ')}${pattern}`;
 }
 
+/**
+ * The test files a red gate's output names as failing, once each, in order,
+ * relative to the worktree root: node's spec reporter prints `test at
+ * <file>:<line>:<col>` above each failing test in its closing summary; TAP
+ * prints `location: '<file>:<line>:<col>'` in the block of every test, so only
+ * a `not ok` block's counts; a stack frame counts when it follows a failing
+ * line; and a `✖ <file>` names a file that failed outside any test. Only
+ * `….test.js` / `….test.mjs` paths inside the worktree are kept — a helper
+ * module in a stack is not a test file. Empty when nothing names one, which
+ * the incremental gate reads as "cannot tell what was red".
+ */
+export function redFiles(output, { root = null } = {}) {
+  const found = [];
+  const keep = (raw) => {
+    const file = testFileOf(raw, root);
+    if (file && !found.includes(file)) found.push(file);
+  };
+  let failing = false;
+  for (const line of String(output || '').split('\n')) {
+    const at = SPEC_TEST_AT.exec(line);
+    if (at) { keep(at[1]); continue; }
+    if (TAP_OK.test(line) || PASSED.test(line)) { failing = false; continue; }
+    const crossed = FAILED_TEST.exec(line);
+    if (crossed) keep(crossed[1]);
+    if (FAILURE.test(line)) { failing = true; continue; }
+    if (!failing) continue;
+    const location = TAP_LOCATION.exec(line);
+    if (location) { keep(location[1]); continue; }
+    const frame = LOCATION.exec(line);
+    if (frame) keep(frame[1] || frame[2]);
+  }
+  return found;
+}
+
+/** A path from a report line as a worktree-relative test file, or null. */
+function testFileOf(raw, root) {
+  let path = String(raw || '').trim().replace(/^file:\/\//u, '').replace(/:\d+(?::\d+)?$/u, '');
+  if (root && path.startsWith(`${root}/`)) path = path.slice(root.length + 1);
+  path = path.replace(/^\.\//u, '');
+  if (path.startsWith('/') || path.includes('node_modules/') || path.split('/').includes('..')) return null;
+  return TEST_FILE.test(path) ? path : null;
+}
+
 /** A word for `sh -c`, quoted only where it has to be. */
 function shellWord(word) {
   return /^[\w./:=@%+,-]+$/u.test(word) ? word : shellQuote(word);
@@ -123,6 +168,13 @@ const CI_RUNNER_PATH = /^\s*- \S/u;
 const CI_RUNNER_PATHS = 10;
 // A failing test's line in node's spec reporter, with its duration when it has one.
 const FAILED_TEST = /^\s*✖ (.+?)(?:\s+\(\d+(?:\.\d+)?ms\))?\s*$/u;
+// What `redFiles` reads: the spec reporter's summary line above a failing test,
+// TAP's location, a passing test that ends a failing block, and a test file path.
+const SPEC_TEST_AT = /^\s*test at (\S+?:\d+:\d+)\s*$/u;
+const TAP_LOCATION = /^\s+location: '([^']+)'/u;
+const TAP_OK = /^\s*ok \d+\b/u;
+const PASSED = /^\s*✔ /u;
+const TEST_FILE = /^[\w@.+-][\w@.+/-]*\.test\.m?js$/u;
 /** How many failing test names a re-run line names. */
 const RERUN_NAMES = 5;
 
@@ -173,7 +225,7 @@ export function summarizeGate(output, { exitCode }) {
  * lines; red names what failed, the re-run line when there are named files,
  * and where the whole output is.
  */
-export function gateLines(summary, { command, seconds, logPath, rerun = null }) {
+export function gateLines(summary, { command, seconds, logPath, rerun = null, label = null }) {
   const c = summary.counts;
   const gates = summary.gates ?? [];
   let counted = c.tests != null
@@ -186,7 +238,7 @@ export function gateLines(summary, { command, seconds, logPath, rerun = null }) 
     counted = `${c.tests ?? 0} tests counted — the failure is below`;
   }
   const lines = [
-    `${summary.ok ? 'GREEN' : 'RED'} — ${command} — ${counted} — ${seconds}s`,
+    `${summary.ok ? 'GREEN' : 'RED'}${label ? ` ${label}` : ''} — ${command} — ${counted} — ${seconds}s`,
   ];
   if (!summary.ok) {
     for (const line of summary.failures) lines.push(line);

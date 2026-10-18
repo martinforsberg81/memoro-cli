@@ -3,9 +3,11 @@
  *
  * Without a flag it is the gate round that `mc repo merge` used to be
  * (repo.js still owns that code path; only the name moved). `--docs` lands a
- * documentation-only pull request without the suite — see docs-merge.js.
+ * documentation-only pull request without the suite — see docs-merge.js — and
+ * a pull request GitHub lists as documents only is routed there without the
+ * flag, landing in the call instead of queueing.
  */
-import { docsMergeLines, runDocsMerge } from '../docs-merge.js';
+import { docsMergeLines, docsOnly, prFiles, runDocsMerge } from '../docs-merge.js';
 import { landedPatch, stepForMerge } from '../merge-step.js';
 import { workRoot } from '../paths.js';
 import { listEntries, readEntry, updateStep } from '../register.js';
@@ -30,7 +32,7 @@ export async function run(argv, deps = {}) {
   // works, and it says where the measurement lives now: a person asking "is
   // this red?" should not have to find it under the verb for landing things.
   if (opts.check && !opts.docs) stderr.write('mc: --check is now mc test <repo> <pr> — same round, running it\n');
-  if (!opts.docs) return gate(opts, { stdout, stderr });
+  if (!opts.docs && (opts.check || opts.prs)) return (deps.gate || gate)(opts, { stdout, stderr });
 
   if (opts.prs) { stderr.write('mc: --docs lands one pull request at a time\n'); return 2; }
   if (opts.check) { stderr.write('mc: --docs has nothing to check — it is the gate or it is documentation\n'); return 2; }
@@ -38,6 +40,15 @@ export async function run(argv, deps = {}) {
   if (!repoPath) {
     stderr.write(`mc: no repository called "${opts.repo}" — mc repo status lists the ones mc can see\n`);
     return 1;
+  }
+  // A pull request whose every file GitHub lists is a document under docs/
+  // has no suite to run: it lands as --docs would, in this call. Anything
+  // else — gh could not say, one file outside docs/, a script — goes to the
+  // merger as before.
+  if (!opts.docs) {
+    const files = (deps.prFiles || prFiles)(opts.pr, { repoPath, gh: deps.gh });
+    if (!docsOnly(files)) return (deps.gate || gate)(opts, { stdout, stderr, resolveRepo: async () => repoPath });
+    stderr.write(`mc: #${opts.pr} changes only documents under docs/ (${files.length} file${files.length === 1 ? '' : 's'}, no script) — landing it as mc merge --docs, now, with no suite\n`);
   }
   const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
   // The body is read for the step's remainder, not kept in the round log.
@@ -118,7 +129,8 @@ export function usage() {
   return [
     'usage — mc merge <repo> <pr> [<pr>...] [--check] [--json]   the gate round, then squash\n',
     '        mc merge <repo> <pr> --watch [--json]                queue it, then follow it until it lands or goes red\n',
-    '        mc merge <repo> <pr> --docs [--json]                 docs-only: no suite, squash\n',
+    '        mc merge <repo> <pr> --docs [--json]                 docs-only: no suite, squash, in this call\n',
+    '                                                             (a pull request of documents only under docs/ lands this way without --docs)\n',
     '        mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a queued pull request until it lands or goes red\n',
   ].join('');
 }
