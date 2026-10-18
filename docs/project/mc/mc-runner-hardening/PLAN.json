@@ -54,7 +54,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js` passes, including the three `sweepLanded` tests (MC_STEP `m:1` when S1 carries `landed`)."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc step ready` on a step that carries `landed` exits 1, writes nothing and names `mc step done`.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/commands/step.test.js` passes, including the landed-step refusal test."
     },
