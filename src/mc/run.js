@@ -142,7 +142,7 @@ import { runDocsMerge } from './docs-merge.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
-import { planBoundary } from './merge-boundary.js';
+import { criteriaDoor, planBoundary } from './merge-boundary.js';
 import { redPatch } from './merge-step.js';
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
 import { parentLanded, queueMerge, readMerger, startMerger, stepsBeforeDone } from './merger.js';
@@ -590,6 +590,7 @@ export function realDeps(env = process.env) {
     startMerger: (options) => startMerger({ env, ...options }),
     pendingMerges: (root) => { try { return parseQueue(readFileSync(mergesPath(root), 'utf8')); } catch { return []; } },
     planBoundary: (options) => planBoundary(options),
+    criteriaDoor: (options) => criteriaDoor(options),
     docsMerge: (options) => runDocsMerge(options),
     // The session — `streamSession` below. The session's Bash tool gets a
     // ten-minute ceiling instead of claude's two-minute default. Measured
@@ -956,6 +957,9 @@ export function createRunner({
   // The origin/main shas `noticeNewCode` has already spoken about, so a
   // checkout that cannot be handed over is said once, not every pass.
   const codeNoticed = new Set();
+  // The projects whose plan `chores` has said is `unmet` — every step done, a
+  // criterion not met — so it is said once, not every pass.
+  const saidUnmet = new Set();
   // Held from the moment a handover begins: `handOver` removes UPDATE as its
   // first act, and a runner that has handed over takes nothing new for the
   // rest of its life (`runLoop`, ruling 28). Let go only when the handover
@@ -2854,6 +2858,15 @@ export function createRunner({
       say(`${name}: step ${index + 1} is ${patch.status} — ${patch.reason}`);
       return 'success,red';
     }
+    // The plan's last step lands only with every criterion met (`criteriaDoor`).
+    const door = deps.criteriaDoor ? await deps.criteriaDoor({ repoPath: worktree, pr: number, step: { project: name, index } }) : { checked: false };
+    if (door.checked && !door.ok) {
+      const standing = readEntry(root, name, { read: deps.read })?.steps?.[index];
+      const patch = redPatch({ step: standing, report: { stopped_at: 'unmet-criteria', reason: `unmet-criteria — ${door.problems.join('; ')}` } });
+      recordStep(name, index, { ...patch, pr: number, branch });
+      say(`${name}: step ${index + 1} is ${patch.status} — ${patch.reason}`);
+      return 'success,red';
+    }
     try {
       const holder = currentHolder({ cwd: worktree, env: deps.env });
       const queued = deps.queueMerge({
@@ -3190,6 +3203,13 @@ export function createRunner({
     // `queue()` has just fetched every repository, mc's own checkout among
     // them, so origin/main is as fresh as it gets without another fetch.
     noticeNewCode();
+    // An unmet plan is not archived (`donePlans` asks for done): said once,
+    // because nothing else would tell anyone it is waiting for a measurement.
+    for (const record of plans) {
+      if (record?.status !== 'unmet' || saidUnmet.has(record.project)) continue;
+      saidUnmet.add(record.project);
+      say(`${record.project}: ${record.next} — not archived`);
+    }
     tidyQueue(plans);
     writeUnreadable(plans);
     const quiet = paths.currents().length === 0;

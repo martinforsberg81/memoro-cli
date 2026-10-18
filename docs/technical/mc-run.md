@@ -285,7 +285,12 @@ project used to.
    digests came to be waiting in a directory that is supposed to drain.
 3. **Tidy `queue.md`** against the plans on both `origin/main`s, and write
    `~/mc/runner/unreadable-plans.md` from the same reading.
-4. **Archive** every plan that says `status: done` — the directory removed, its
+4. **Archive** every plan that is done — every step done and every success
+   criterion `met: true`. A plan whose steps are all done with a criterion not
+   met is `unmet`: the runner says so once in `runner.log`
+   (`<project>: every step is done, but success criterion N is not met on main
+   … — not archived`) and leaves it, its workarea and anything waiting on it
+   as they are. A done plan has the directory removed, its
    README kept as `closeout/<project>.md` with the links into it rewritten to
    that, and a `project_log.md` row left behind it, one PR per repository, landed through
    `mc merge --docs` — but only while no lane is in a session, because the

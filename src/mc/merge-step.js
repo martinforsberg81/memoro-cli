@@ -18,7 +18,7 @@
  * `plan/<programme>`, a hand-made branch — gets the round and nothing else.
  *
  * The door — the plan boundary checked before the queue — is `planBoundary`
- * in merge-boundary.js.
+ * in merge-boundary.js, and beside it `criteriaDoor` for the plan's last step.
  *
  * Pure over what it is handed; the verb and the merger do the reading.
  */
