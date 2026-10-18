@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { proposalSystem } from '../../src/mc/brief-collect.js';
 import { intakeArchiveDir, intakeDir, proposalsDir } from '../../src/mc/helper-collect.js';
 import { drainIntake, helperGround, helperPrompt, repoOfFile, runHelperTurn } from '../../src/mc/helper-turn.js';
 import { sharedRoleText } from '../../src/mc/roles.js';
@@ -177,7 +178,7 @@ describe('what the turn is told', () => {
   it('names the date, the file to write and the directory to write it in', () => {
     const prompt = helperPrompt({ file: FILE, now: NOW });
     assert.match(prompt, /Today is 2026-08-29/u);
-    assert.match(prompt, /2026-08-29-<slug>\.md/u);
+    assert.match(prompt, /2026-08-29-<mc\|memoro>-<slug>\.md/u);
     assert.match(prompt, /or none at all/u);
   });
 
@@ -201,15 +202,15 @@ describe('what the turn is told', () => {
   });
 
   it('says which repository a digest is, and leaves any other file to the turn', () => {
-    assert.match(helperPrompt({ file: FILE, now: NOW }), /It is \*\*memoro\*\*'s, so a proposal you write about it has `repo: memoro`/u);
-    assert.match(helperPrompt({ file: 'errors-memoro-cli-2026-08-29.md', now: NOW }), /`repo: memoro-cli`/u);
+    assert.match(helperPrompt({ file: FILE, now: NOW }), /It is \*\*memoro\*\*'s, so a proposal you write about it is named `2026-08-29-memoro-<slug>\.md`/u);
+    assert.match(helperPrompt({ file: 'errors-memoro-cli-2026-08-29.md', now: NOW }), /`2026-08-29-mc-<slug>\.md`/u);
     // What a person dropped in belongs to whichever system the contents say,
     // and the turn is the only reader that can tell.
     const dropped = helperPrompt({ file: 'screenshot.png', now: NOW });
-    assert.ok(!dropped.includes('in its frontmatter'), 'no repository is asserted for it');
-    assert.match(dropped, /Nothing in that name says which system[\s\S]*decide it from what you read/u);
+    assert.ok(!dropped.includes('is named `2026-08-29-'), 'no system is asserted for it');
+    assert.match(dropped, /Nothing in that name says which system[\s\S]*put it in the name/u);
     // And a caller that knows better than the name — the collector — is obeyed.
-    assert.match(helperPrompt({ file: 'screenshot.png', repo: 'memoro-cli', now: NOW }), /`repo: memoro-cli`/u);
+    assert.match(helperPrompt({ file: 'screenshot.png', repo: 'memoro-cli', now: NOW }), /`2026-08-29-mc-<slug>\.md`/u);
   });
 
   it('carries the plans on main and the project log as the ground to judge against', () => {
@@ -225,6 +226,17 @@ describe('what the turn is told', () => {
     assert.match(prompt, /PLANS ON MAIN -----\n_none read_/u);
     assert.match(prompt, /PROJECT LOG \(closed projects\) -----\n_none read_/u);
     assert.match(prompt, /PROPOSALS ALREADY WAITING -----\n_none_/u);
+  });
+});
+
+describe('the system a proposal\'s name carries', () => {
+  it('is read from the name alone', () => {
+    assert.equal(proposalSystem('2026-10-18-mc-merger-gate.md'), 'mc');
+    assert.equal(proposalSystem('/x/proposals/2026-10-18-memoro-sms-send.md'), 'memoro');
+    assert.equal(proposalSystem('2026-10-18-mcp-thing.md'), null);
+    assert.equal(proposalSystem('2026-10-18-merger-gate.md'), null);
+    assert.equal(proposalSystem('notes.md'), null);
+    assert.equal(proposalSystem(null), null);
   });
 });
 

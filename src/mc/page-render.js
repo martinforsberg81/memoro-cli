@@ -641,7 +641,8 @@ function helperLines(lines, c, wide, session, intake) {
  * queued or dropped, and the projects that stand still until somebody answers.
  *
  * The proposals are a count, how far back the pile reaches, and the newest few
- * by name — enough to see whether anything arrived since the last look. The
+ * by name — enough to see whether anything arrived since the last look. The count
+ * is split by the system in each filename, and `untagged` is drawn yellow. The
  * blocked rollup and the finished-blocker fault were under NEXT; NEXT is the
  * order the runner takes now and nothing else, and both of these are questions
  * for a person, which is what this desk is for.
@@ -657,6 +658,7 @@ function briefLines(lines, c, wide, session, intake, programmes, stale) {
       : '';
     lines.push(`       ${paint(c, fitting(trailing([
       { text: `${count} proposal${count === 1 ? '' : 's'}`, styles: ['yellow'] },
+      ...[['mc', intake?.by_system?.mc], ['memoro', intake?.by_system?.memoro], ['untagged', intake?.by_system?.untagged]].filter(([, n]) => n > 0).map(([label, n]) => ({ text: `${label} ${n}`, styles: [label === 'untagged' ? 'yellow' : 'grey'] })),
       { text: span, styles: ['grey'] },
       ...(files.newest_names || []).map((name, index) => ({ text: `${index ? '' : 'newest '}${name}`, styles: ['grey'] })),
     ]), room), room)}`);

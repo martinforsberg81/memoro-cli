@@ -103,8 +103,10 @@ below is about.
   drawn at all. One row each rather than the newer of the two, which hid
   memoro-cli's — the digest about this machine.
 - **BRIEF** — the desk, and **what is waiting for it**: the proposals nobody
-  has queued or dropped — how many, how far back the pile reaches, the newest
-  three by name (the slug of `<date>-<slug>.md`; no file is opened for it) —
+  has queued or dropped — how many, split by the system in each filename
+  (`mc 23 · memoro 81 · untagged 2`, with `untagged` drawn yellow), how far back
+  the pile reaches, the newest three by name (what follows the date in
+  `<date>-<system>-<slug>.md`; no file is opened for it) —
   then the two lines that were under NEXT and are questions for a person.
   **How many projects are blocked**, how many of them wait on a decision and
   how many on another project, and the blockers holding the most: `33 blocked
