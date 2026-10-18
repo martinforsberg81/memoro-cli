@@ -11,8 +11,8 @@ import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/hook.js';
 import {
-  ALLOW_MARK, inMcTerritory, preToolDecision, repoHookDecision, repoPreToolHooks, sessionStartContext, warningsFor,
-  worktreeState, worktreesAt,
+  ALLOW_MARK, hookDrift, hookRegistration, inMcTerritory, installHooks, preToolDecision, readClaudeSettings, repoHookDecision,
+  repoPreToolHooks, sessionStartContext, warningsFor, worktreeState, worktreesAt,
 } from '../../src/mc/hooks.js';
 
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
@@ -193,6 +193,58 @@ describe('mc hook — a repository\'s own hooks, for a session that started outs
     assert.equal(repoHookDecision(bash('npx wrangler d1 execute memoro-db --remote'), {
       cwd: area, worktreesAt: () => ({ inside: false, worktrees: [] }),
     }), null);
+  });
+});
+
+describe('mc hook install — mc\'s own registration', () => {
+  const FOREIGN = { matcher: 'Bash|Read', hooks: [{ type: 'command', command: '/x/block-secret-reads.sh' }] };
+  const OLD = {
+    permissions: { allow: ['Bash'] },
+    hooks: {
+      PreToolUse: [FOREIGN, { matcher: 'Bash|Write', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }] }],
+      SessionStart: [{ hooks: [{ type: 'command', command: 'mc hook session-start 2>/dev/null || true' }] }],
+    },
+  };
+
+  it('names the one entry that is out of date', () => {
+    const before = hookRegistration(OLD);
+    assert.equal(before.problems.length, 1);
+    assert.equal(before.problems[0].which, 'pre-tool');
+    assert.equal(hookDrift(before), 'pre-tool on Bash|Write, want Bash|Write|Read');
+  });
+
+  it('names both entries as missing from settings with no hooks', () => {
+    assert.equal(hookDrift(hookRegistration({})), 'session-start not registered, pre-tool not registered');
+  });
+
+  it('writes mc\'s entries beside the others, and changes nothing else', () => {
+    const next = installHooks(OLD);
+    assert.equal(hookRegistration(next).ok, true);
+    assert.deepEqual(next.hooks.PreToolUse[0], FOREIGN);
+    assert.deepEqual(next.permissions, { allow: ['Bash'] });
+    assert.equal(OLD.hooks.PreToolUse[1].matcher, 'Bash|Write', 'the argument is not changed');
+    assert.deepEqual(installHooks(next), next, 'a second install changes nothing');
+  });
+
+  it('reduces two mc pre-tool entries to one', () => {
+    const next = installHooks({
+      hooks: {
+        PreToolUse: [
+          { matcher: 'Bash', hooks: [{ type: 'command', command: 'mc hook pre-tool' }] },
+          { matcher: 'Write', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }] },
+        ],
+      },
+    });
+    assert.equal(next.hooks.PreToolUse.length, 1);
+    assert.deepEqual(next.hooks.PreToolUse[0], {
+      matcher: 'Bash|Write|Read', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }],
+    });
+  });
+
+  it('reads a missing, unparseable or non-object file as null, and never throws', () => {
+    assert.equal(readClaudeSettings('/nope/settings.json'), null);
+    assert.equal(readClaudeSettings('/whatever/settings.json', { readFileSync: () => '{oops' }), null);
+    assert.equal(readClaudeSettings('/whatever/settings.json', { readFileSync: () => '[1]' }), null);
   });
 });
 

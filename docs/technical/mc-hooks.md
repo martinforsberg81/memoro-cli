@@ -30,6 +30,13 @@ warning most.
 }
 ```
 
+`mc hook install` writes the block above into that file, changing only the
+entries whose command starts with `mc hook session-start` or `mc hook pre-tool`;
+every other entry is left as it is, and a file that is not JSON is refused and
+left alone. `mc hook install --check` writes nothing and exits 1 when the
+registration has drifted from the block, and the page's MC line names the drift
+as `hooks: … · mc hook install`.
+
 `Read` lets memoro's `block-sqlite-state.sh` answer the Read tool too.
 
 `|| true` because a hook must never stand between a session and its work: an

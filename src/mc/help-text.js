@@ -327,6 +327,10 @@ IN FULL
                                     Playwright script → mc shot. MC_HOOK_ALLOW=1
                                     in the command lets it through. Both read
                                     the hook JSON on stdin and always exit 0
+  mc hook install [--check]        Write mc's two hook entries into
+                                    ~/.claude/settings.json, changing no other
+                                    entry. --check only says whether they are
+                                    there (exit 1 when not)
   mc publish [--title …] [--body-file …] [--base …]
                                     Push the branch you stand on (never force)
                                     and open its pull request, or find the one
