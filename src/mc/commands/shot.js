@@ -396,6 +396,7 @@ export function usage() {
     '          [--me]                      prod only: signed in as you, from mc shot login prod\n',
     '          [--here]                    the worktree you stand in — the default inside a memoro worktree\n',
     '          [--compare <ref>]           dev only: the same picture and numbers on <ref>, and what moved\n',
+    '                                      --compare <sha> pins the tree and its database\n',
     '          [--out <file.png>] [--open] [--json]\n',
     '        mc shot <dev|prod> --list     the targets and viewports memoro declares\n',
     '        mc shot login prod            sign in once in a browser; mc keeps the session\n',

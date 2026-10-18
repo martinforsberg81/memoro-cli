@@ -14,11 +14,18 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, statSync, utimesSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
+import { serversUnder, stopServer } from './dev-servers.js';
+import { log } from './logger.js';
 import { mcHome } from './paths.js';
 import { runCapture } from './shot.js';
 import { ensureAppServer, readDeclaration, serversFor } from './test-environment.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How long the ref side of a compare waits for a slot: a minute, not the quarter of an hour a plain start waits. */
+export const COMPARE_ADMIT_WAIT_SECONDS = 60;
+/** A compare tree unused this long is not in the middle of a capture, and its server may be stopped to free a slot. */
+export const COMPARE_IDLE_MS = 15 * 60 * 1000;
 
 /** The fields compared besides `element` and the keys of `rect` and `scroll`. */
 const FIELDS = ['position', 'padding', 'margin', 'overflow_y', 'z_index', 'visible'];
@@ -84,6 +91,77 @@ function prune(worktree, root, { git, keep, deps }) {
   }
 }
 
+/** The compare root, as `compareTree` names it. */
+function compareRootOf(deps) {
+  return deps.compareRoot || join(mcHome(deps.env || process.env), 'compare');
+}
+
+/**
+ * The other compare servers of this worktree name: live, not `light`, each in
+ * a tree `<name>-<sha>` directly under the root, and not the `keep` tree.
+ */
+function siblings(worktree, keep, deps) {
+  const root = resolve(compareRootOf(deps));
+  const prefix = `${basename(worktree)}-`;
+  return (deps.serversUnder || serversUnder)(root)
+    .filter((server) => server.live !== false
+      && server.resource_class !== 'light'
+      && server.worktree_path
+      && dirname(resolve(server.worktree_path)) === root
+      && basename(server.worktree_path).startsWith(prefix)
+      && resolve(server.worktree_path) !== resolve(keep))
+    .map((server) => ({ server, sha: basename(server.worktree_path).slice(prefix.length) }));
+}
+
+/**
+ * Stops the compare servers of this worktree name, for other commits, that are
+ * idle for more than `COMPARE_IDLE_MS`, so the ref side finds a slot. A compare
+ * tree is per commit, so after main moved its previous server held one of the
+ * two slots; a server in use is not touched. An asked tree that is already
+ * served needs no slot, so nothing is stopped for it.
+ */
+export function stopSuperseded(worktree, keep, deps = {}) {
+  if ((deps.serversFor || serversFor)(keep).some((server) => server.resource_class !== 'light')) {
+    return { stopped: [], lines: [] };
+  }
+  const stopped = [];
+  const lines = [];
+  const now = deps.now ? deps.now().getTime() : Date.now();
+  for (const { server, sha } of siblings(worktree, keep, deps)) {
+    let mtimeMs;
+    try { mtimeMs = (deps.statSync || statSync)(server.worktree_path).mtimeMs; } catch { continue; }
+    const idle = now - mtimeMs;
+    if (idle <= COMPARE_IDLE_MS) continue;
+    let stop;
+    try { stop = (deps.stopServer || stopServer)(server); } catch (error) { stop = { ok: false, error: error.message }; }
+    log('dev-server-stopped', {
+      instance_id: server.instance_id,
+      service: server.service ?? null,
+      worktree_path: server.worktree_path,
+      reason: 'compare-superseded',
+      ok: stop.ok,
+    });
+    if (stop.ok) {
+      stopped.push(server.instance_id);
+      lines.push(`stopped ${server.instance_id}, the compare server of ${sha} idle ${Math.round(idle / 60_000)} min, to free its slot`);
+    } else {
+      lines.push(`could not stop ${server.instance_id}, the compare server of ${sha}: ${stop.error}`);
+    }
+  }
+  return { stopped, lines };
+}
+
+/**
+ * The line that names the compare servers already running for this worktree
+ * name, idle or not, and which `--compare <sha>` reuses. Null when there are none.
+ */
+export function runningCompares(worktree, keep, deps = {}) {
+  const list = siblings(worktree, keep, deps);
+  if (!list.length) return null;
+  return `running compare servers: ${list.map(({ server, sha }) => `${sha} (${server.url})`).join(', ')}`
+    + ` — --compare ${list[0].sha} reuses one, with its tree and its database`;
+}
+
 /** Rounded as the capture script rounds, so 0.04 of drift is not a difference. */
 function rounded(value) {
   if (typeof value === 'number') return Math.round(value * 10) / 10;
@@ -144,8 +222,19 @@ export async function runCompare({
 
   const read = (deps.readDeclaration || readDeclaration)(tree.dir);
   if (!read.ok) { stderr.write(`mc: ${ref}: ${read.error}\n`); return 1; }
-  const app = await (deps.ensureAppServer || ensureAppServer)(tree.dir, read.declaration, { json, stdout: stderr, deps });
-  if (!app.ok) { stderr.write(`mc: ${ref}: ${app.error}\n`); return 1; }
+  const freed = (deps.stopSuperseded || stopSuperseded)(worktree, tree.dir, deps);
+  for (const line of freed.lines) stderr.write(`mc: ${line}\n`);
+  const app = await (deps.ensureAppServer || ensureAppServer)(tree.dir, read.declaration, {
+    json, stdout: stderr, deps: { ...deps, admitWaitSeconds: deps.admitWaitSeconds ?? COMPARE_ADMIT_WAIT_SECONDS },
+  });
+  if (!app.ok) {
+    stderr.write(`mc: ${ref}: ${app.error}\n`);
+    if (app.refused?.reason === 'cap') {
+      const hint = runningCompares(worktree, tree.dir, deps);
+      if (hint) stderr.write(`mc: ${hint}\n`);
+    }
+    return 1;
+  }
   const refServed = servedTree(tree.dir, app.server);
   if (!json) stderr.write(`mc: ${ref}: serving ${refServed.line}\n`);
 
