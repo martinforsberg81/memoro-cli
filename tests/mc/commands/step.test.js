@@ -191,3 +191,12 @@ test('ready stays blocked when the placeholder could not be closed', async () =>
   assert.match(f.err.join(''), /could not be closed/u);
   assert.equal(f.step(1).status, 'blocked');
 });
+
+test('ready refuses a step that has landed, names mc step done, and writes nothing', async () => {
+  const f = fixture();
+  f.deps.write(registerPath(ROOT, 'p'), { project: 'p', repo: 'memoro', steps: [{ key: 'A', status: 'failed', pr: null, reason: 'no pull request', landed: { sha: '583009b1aa', into: 'main', at: '2026-10-12T06:28:21Z' } }, { key: 'B', status: 'ready' }] });
+  assert.equal(await run(['ready', 'p', '1'], f.deps), 1);
+  assert.match(f.err.join(''), /p step 1 landed as 583009b into main on 2026-10-12T06:28:21Z — it is done, not ready: mc step done p 1/u);
+  assert.equal(f.step(0).status, 'failed');
+  assert.equal(await run(['ready', 'p', '2'], f.deps), 0);
+});

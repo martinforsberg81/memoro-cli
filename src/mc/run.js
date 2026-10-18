@@ -903,6 +903,38 @@ export function createRunner({
       return out;
     });
   }
+  /**
+   * A step the register says has landed is done, whatever its status now
+   * says. `landedPatch` (merge-step.js) writes `landed` with `done`, and a
+   * later write that moves the status back leaves `landed` on the step
+   * (2026-10-12: `log-page` step 1 landed as memoro #13590 and stood `ready`
+   * again; two sessions found the work on main and ended without a pull
+   * request, and step 2 waited behind them). So a `ready` or `failed` step
+   * carrying `landed` is written `done` before the pick, and said. A
+   * `running`, `landing`, `blocked` or `done` step is left alone.
+   */
+  function sweepLanded(plans) {
+    return plans.map((record) => {
+      const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
+      let out = record;
+      steps.forEach((step, index) => {
+        const status = step?.status;
+        if (status !== 'ready' && status !== 'failed') return;
+        const landed = readEntry(root, record.project, { read: deps.read })?.steps?.[index]?.landed;
+        if (!landed) return;
+        const sha7 = String(landed.sha || '?').slice(0, 7);
+        const into = landed.into || 'main';
+        const at = landed.at || 'an unknown time';
+        const comment = `Set done by the runner on ${stamp()}: it landed as ${sha7} into ${into} on ${at}; a landed step is not run again.`;
+        const written = recordStep(record.project, index, { status: 'done', reason: null, comment });
+        if (!written) return;
+        out = applyEntry(out, written);
+        say(`${record.project}: step ${index + 1} landed as ${sha7} into ${into} but stood ${status} — done, not handed out again`);
+      });
+      return out;
+    });
+  }
+
   // Sticky: a STOP read once is a STOP for the rest of this run, whether or
   // not the file is still there. 2026-10-07 a STOP written three seconds
   // after a handover was read by eleven lanes and the chore loop, which exited
@@ -2869,8 +2901,10 @@ export function createRunner({
       // stands (register.js). A plan the register has never seen is seeded
       // from its own file here, once, and a step whose session is gone —
       // a runner killed under it, a machine that slept — is failed here,
-      // because a `running` step with no process is one nothing will finish.
-      plans.push(...sweepLanding(sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register))));
+      // because a `running` step with no process is one nothing will finish;
+      // a `ready` or `failed` step the register says has landed is done here,
+      // so it is never handed out again.
+      plans.push(...sweepLanded(sweepLanding(sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register)))));
       // A repository whose last ask failed is not asked again until its
       // backoff has run out (github-backoff.js): every ask at a locked keychain
       // left a modal and a process behind (2026-09-20). It starts nothing

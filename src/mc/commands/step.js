@@ -22,7 +22,8 @@
  * session's placeholder for its question — is closed instead: the runner
  * starts nothing while a project has one open, so it held settings-polish
  * step 6 twice after its decision was ruled (#13442, #13599). One that does
- * change files is refused by number.
+ * change files is refused by number. A step that has landed is refused too:
+ * it is done, and `mc step done` says so.
  *
  * `--until` and `--after-deploy` (ruling 35) block a step on a wait the
  * runner releases by itself (`step-release.js`): a moment, or an earlier
@@ -119,7 +120,12 @@ export async function run(argv, deps = {}) {
     if (flags.reason) patch.comment = `Blocked on ${now}: ${flags.reason}`;
   }
   if (status === 'ready') {
-    if (step.pr && (deps.prState || prState)(entry.repo, step.pr, env) === 'OPEN') {
+    if (step.landed) {
+      const sha7 = String(step.landed.sha || '?').slice(0, 7);
+      stderr.write(`mc: ${target.project} step ${index + 1} landed as ${sha7} into ${step.landed.into || 'main'}${step.landed.at ? ` on ${step.landed.at}` : ''} — it is done, not ready: mc step done ${target.project} ${index + 1}. Work it left undone is a new step in the plan.\n`);
+      return 1;
+    }
+    if (step.pr &&(deps.prState || prState)(entry.repo, step.pr, env) === 'OPEN') {
       stderr.write(`mc: #${step.pr} is still open — land it or close it first; a step set ready over an open pull request is run again on top of it\n`);
       return 1;
     }
