@@ -2,7 +2,9 @@
  * `mc hook` — the answers mc gives a coding agent's hooks.
  *
  *   mc hook session-start   the worktrees' state, the warnings, the mc toolbox
- *   mc hook pre-tool        turn a shell command that has an mc verb to the verb
+ *   mc hook pre-tool        run the PreToolUse hooks of every worktree the session
+ *                           did not start in, then turn a shell command that has
+ *                           an mc verb to the verb
  *
  * Both read the hook's JSON on stdin and write at most one JSON object on
  * stdout, in the shape Claude Code's hooks read (`hookSpecificOutput`). Both
@@ -12,7 +14,7 @@
  */
 import { listServers } from '../dev-servers.js';
 import {
-  inMcTerritory, pathInKnownRepo, preToolDecision, sessionStartContext, worktreeState, worktreesAt,
+  inMcTerritory, pathInKnownRepo, preToolDecision, repoHookDecision, sessionStartContext, worktreeState, worktreesAt,
 } from '../hooks.js';
 
 export async function run(argv, deps = {}) {
@@ -45,7 +47,9 @@ export async function run(argv, deps = {}) {
       return 0;
     }
     if (!(deps.inMcTerritory || inMcTerritory)(cwd, deps)) return 0;
-    const decision = preToolDecision(input, { inRepo: (path) => (deps.pathInKnownRepo || pathInKnownRepo)(path, deps) });
+    // The repository's denial comes first: a safety block outranks a turn to an mc verb.
+    const borrowed = (deps.repoHookDecision || repoHookDecision)(input, { cwd, projectDir: (deps.env || process.env).CLAUDE_PROJECT_DIR || null });
+    const decision = borrowed || preToolDecision(input, { inRepo: (path) => (deps.pathInKnownRepo || pathInKnownRepo)(path, deps) });
     if (decision) {
       stdout.write(`${JSON.stringify({
         hookSpecificOutput: {
@@ -71,7 +75,9 @@ export function usage() {
   return [
     'usage — mc hook session-start   for a SessionStart hook: the worktrees\' branch, how far behind\n',
     '                                origin/main, changed files, dev server, the warnings, the mc toolbox\n',
-    '        mc hook pre-tool        for a PreToolUse hook (Bash|Write): gh pr create, gh pr edit / git push →\n',
+    '        mc hook pre-tool        for a PreToolUse hook (Bash|Write|Read): first the PreToolUse hooks of\n',
+    '                                every worktree the session did not start in (their deny wins), then\n',
+    '                                gh pr create, gh pr edit / git push →\n',
     '                                mc publish, gh pr merge → mc merge, npm run ci → mc gate,\n',
     '                                npm run dev* → mc test dev --here --url, a scratch Playwright\n',
     '                                script → mc shot. MC_HOOK_ALLOW=1 in the command lets it through.\n',
@@ -79,6 +85,7 @@ export function usage() {
     'Both read the hook JSON on stdin, print at most one JSON object, and always exit 0.\n',
     'In ~/.claude/settings.json:\n',
     '  "SessionStart": [{ "hooks": [{ "type": "command", "command": "mc hook session-start 2>/dev/null || true" }] }]\n',
-    '  "PreToolUse": [{ "matcher": "Bash|Write", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }]\n',
+    '  "PreToolUse": [{ "matcher": "Bash|Write|Read", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }]\n',
+    'Read lets memoro\'s block-sqlite-state.sh answer the Read tool too.\n',
   ].join('');
 }
