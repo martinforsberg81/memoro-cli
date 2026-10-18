@@ -177,6 +177,17 @@ describe('watchState and watchLine', () => {
     assert.equal(watchLine(a, moved, { pr: 835 }), 'mc: #835 queued — place 1, next in line');
   });
 
+  it('a merger behind its checkout is named on the line', () => {
+    const entries = [{ repo: 'memoro', pr: 7, state: 'queued', since: 'a' }];
+    const merger = { pid: 1, commit: 'aaa1111' };
+    const behind = watchState(entries, { repo: 'memoro', pr: 7, merger, head: 'bbb2222' });
+    assert.equal(behind.code, 'merger on aaa1111 · main bbb2222');
+    assert.ok(watchLine(null, behind, { pr: 7 }).endsWith(' — merger on aaa1111 · main bbb2222'));
+    const current = watchState(entries, { repo: 'memoro', pr: 7, merger, head: 'aaa1111' });
+    assert.equal(current.code, undefined);
+    assert.notEqual(watchLine(current, behind, { pr: 7 }), null);
+  });
+
   it('another repository\'s number is not this job, and gone is gone', () => {
     const entries = [job(835, { repo: 'memoro' })];
     assert.deepEqual(watchState(entries, { repo: REPO, pr: 835, merger: MERGER }), { kind: 'gone' });

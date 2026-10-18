@@ -968,6 +968,19 @@ a merger finds at start belonged to a mend that died with the merger before
 it: it goes back in line unmended. A SIGTERM drops the mends waiting (their
 entries stay `mending`) and waits for the one running.
 
+**The merger leaves for new code.** On 2026-10-18 a merger served 5 h 22 min
+on 3b51ff90 while seven mc pull requests landed, because it read its commit
+once and left only on an empty queue. Since then `serve` in
+[`src/mc/merger.js`](../../src/mc/merger.js) reads its checkout's HEAD before
+each batch; a HEAD past the commit it started on ends it between rounds, like
+a stop, with the queue untouched — the rounds in flight are answered, a mend
+not started yet is dropped and a running one waited for. `merger-run.js` then
+starts its successor through `startMerger` while jobs remain in line
+(`succeed`); a SIGTERM starts none. The runner's `sweepLanding` and the next
+`mc merge` still start one when none lives. `mc merge watch` adds
+`merger on <commit> · main <commit>` to its line while the merger's commit
+and the installed checkout's HEAD differ.
+
 **What a red round keeps** (ruling 44). Every round that finishes `red` writes
 its failures to `~/mc/runner/merge-red/<repo>-<pr>.txt`
 ([`src/mc/merge-red.js`](../../src/mc/merge-red.js)): one file per pull

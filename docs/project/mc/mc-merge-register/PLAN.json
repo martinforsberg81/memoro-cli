@@ -31,7 +31,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A merger whose checkout HEAD differs from the commit it started on takes no new batch, finishes the round in flight, leaves the queue as it is, exits 0, and starts its successor when jobs remain; `mc merge watch` says `merger on <commit> · main <commit>` while they differ.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/merger.test.js tests/mc/merge-watch.test.js` passes, including 'a merger whose checkout moved takes no new batch, finishes the round in flight and leaves', 'succeed starts a merger only while jobs remain' and 'a merger behind its checkout is named on the line'."
     },
