@@ -26,8 +26,9 @@ Mixed work: the reviewed part here first, landed; then a plan for what is left.
 2. Build in pieces. At each review point stop and show Martin the thing
    itself — the diff, a screenshot (`mc shot`), the running app (`mc dev`) —
    with what you would do next. Build nothing past a point he has not seen.
-3. `mc gate`, commit, `mc publish`, `mc merge <repo> <pr>` — it queues the PR
-   for the merger and returns; `mc step` and `merger.log` say what came of it.
+3. `mc gate`, commit, `mc publish`, `mc merge <repo> <pr>` — it queues a code PR
+   for the merger and returns (a docs-only PR lands in the call); `mc step` and
+   `merger.log` say what came of it.
    `mc merge` once: do not call it again or poll — no loop, no `sleep`; the
    merger lands it without you. Fix reds yourself on the same branch, and
    `mc merge` again.

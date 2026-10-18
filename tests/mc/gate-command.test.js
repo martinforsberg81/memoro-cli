@@ -304,3 +304,77 @@ describe('mc gate --wait', () => {
     assert.equal(files.has(LOCK), true);
   });
 });
+
+describe('mc gate, the fast paths (gate-fast.js)', () => {
+  const MB = 'mb00000000000000000000000000000000000000';
+  const LAST = '/w/x/.git/mc-gate-last.json';
+
+  /** A worktree whose change against origin/main is `diff`, standing at `tree`. */
+  function fastHarness({ diff = ['src/a.js'], tree = 'tree-now', last = null, finishAfter = 1, code = 0, output = 'ℹ tests 1\nℹ fail 0\n', selection = { files: [], commands: [] } } = {}) {
+    const machine = harness({ finishAfter, code, output, tests: ['tests/mc/a.test.js', 'tests/mc/b.test.js'] });
+    const plain = machine.deps.git;
+    const asked = { greens: [], selects: [] };
+    if (last) machine.files.set(LAST, JSON.stringify(last));
+    machine.deps.git = (cwd, args) => {
+      if (args[0] === 'merge-base') return MB;
+      if (args[0] === 'ls-files') return '';
+      if (args[0] === 'diff') return args.length === 5 ? diff.join('\0') : 'src/b.js';
+      if (args.includes('--git-common-dir')) return '/repo/x/.git';
+      if (args[0] === 'status') return ' M src/a.js';
+      return plain(cwd, args);
+    };
+    machine.deps.snapshotTree = () => tree;
+    machine.deps.declaration = () => ({ ok: true, declaration: { select: 'node select.js' } });
+    machine.deps.select = (command) => { asked.selects.push(command); return { status: 0, stdout: JSON.stringify(selection) }; };
+    machine.deps.recordGreen = (entry) => { asked.greens.push(entry); };
+    return { ...machine, asked };
+  }
+
+  it('docs only answers at once: no child, no lock, exit 0', async () => {
+    const { out, deps, files } = fastHarness({ diff: ['docs/technical/mc-merge.md'] });
+    assert.equal(await run([], deps), 0);
+    assert.match(out.stdout, /^GREEN — docs only, nothing to run — 0s\n/u);
+    assert.deepEqual(out.spawned, []);
+    assert.equal(files.has(LOCK), false);
+  });
+
+  it('the whole gate runs fail-fast and writes what it measured beside the lock', async () => {
+    const { out, deps, files } = fastHarness({ code: 1, output: '✖ x\ntest at tests/mc/a.test.js:3:1\n✖ x (1ms)\nℹ tests 1\nℹ fail 1\n' });
+    assert.equal(await run([], deps), 1);
+    assert.equal(out.spawned[0].opts.env.MC_GATE_FAIL_FAST, '1');
+    assert.deepEqual(JSON.parse(files.get(LAST)), {
+      tree: 'tree-now', base: MB, ref: 'origin/main', exit: 1, red: ['tests/mc/a.test.js'], red_commands: [], at: '2026-09-25T10:00:00.000Z', log: LOG,
+    });
+  });
+
+  it('after a red, INCREMENTAL runs the red files and the selection, records no green and is not fail-fast', async () => {
+    const last = { tree: 'tree-red', base: MB, ref: 'origin/main', exit: 1, red: ['tests/mc/a.test.js'], red_commands: [], at: '2026-09-25T09:00:00.000Z', log: OLD_LOG };
+    const { out, deps, files, asked } = fastHarness({ last, selection: { files: ['tests/mc/b.test.js'], commands: [] } });
+    assert.equal(await run([], deps), 0);
+    assert.deepEqual(asked.selects, ['node select.js --changed-path src/b.js']);
+    assert.equal(out.spawned[0].args[1], `node --test tests/mc/a.test.js tests/mc/b.test.js; echo $? > '${EXIT}'`);
+    assert.equal(out.spawned[0].opts.env.MC_GATE_FAIL_FAST, undefined);
+    assert.match(out.stdout, /^GREEN INCREMENTAL — 1 red file from the gate at 2026-09-25T09:00:00\.000Z \+ 1 selected for 1 path changed since; not the whole gate \(mc gate --full\) — node --test 2 files — 1 tests, 0 failed — 2s\n/u);
+    assert.deepEqual(asked.greens, []);
+    // The last whole gate is still the one an incremental run is measured from.
+    assert.deepEqual(JSON.parse(files.get(LAST)), last);
+  });
+
+  it('--full runs the whole gate after a red, and with files it is refused', async () => {
+    const last = { tree: 'tree-red', base: MB, ref: 'origin/main', exit: 1, red: ['tests/mc/a.test.js'], at: 'x', log: OLD_LOG };
+    const { out, deps } = fastHarness({ last, diff: ['docs/a.md'] });
+    assert.equal(await run(['--full'], deps), 0);
+    assert.equal(out.spawned[0].args[1], `npm test; echo $? > '${EXIT}'`);
+
+    const named = fastHarness();
+    assert.equal(await run(['tests/mc/a.test.js', '--full'], named.deps), 2);
+    assert.match(named.out.stderr, /--full is the whole gate/u);
+  });
+
+  it('a tree the last whole gate measured green answers GREEN (unchanged since …) with no child', async () => {
+    const { out, deps } = fastHarness({ last: { tree: 'tree-now', base: MB, ref: 'origin/main', exit: 0, red: [], at: '2026-09-25T09:00:00.000Z', log: OLD_LOG } });
+    assert.equal(await run([], deps), 0);
+    assert.equal(out.stdout, `GREEN (unchanged since 2026-09-25T09:00:00.000Z) — the whole gate measured this tree green against origin/main; nothing to run — log: ${OLD_LOG}\n`);
+    assert.deepEqual(out.spawned, []);
+  });
+});

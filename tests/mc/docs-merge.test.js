@@ -184,6 +184,44 @@ describe('mc merge --docs, the verb', () => {
     });
   });
 
+  describe('without --docs, a pull request of documents only is routed here', () => {
+    const sink = () => { let text = ''; return { write: (s) => { text += s; }, get text() { return text; } }; };
+
+    it('lands in the call, says so in one line, and never queues', async () => {
+      const stdout = sink();
+      const stderr = sink();
+      const { gh } = stubGh({ files: ['docs/project/mc/x/PLAN.json', 'docs/technical/a.md'] });
+      let queued = false;
+      const code = await run(['memoro', '12'], { stdout, stderr, gh, resolveRepoPath: async () => '/repo', gate: async () => { queued = true; return 0; } });
+      assert.equal(code, 0);
+      assert.equal(queued, false);
+      assert.equal(stderr.text, 'mc: #12 changes only documents under docs/ (2 files, no script) — landing it as mc merge --docs, now, with no suite\n');
+      assert.match(stdout.text, /merged #12 into main/u);
+    });
+
+    it('code, a script under docs/, or a file list gh cannot read goes to the gate with the resolved repository', async () => {
+      for (const files of [['docs/a.md', 'src/a.js'], ['docs/tool.mjs'], null]) {
+        const gh = files ? stubGh({ files }).gh : () => ({ ok: false, stdout: '', stderr: 'gh: no' });
+        const asked = [];
+        const code = await run(['memoro', '12'], {
+          stdout: sink(), stderr: sink(), gh, resolveRepoPath: async () => '/repo',
+          gate: async (opts, deps) => { asked.push([opts.pr, await deps.resolveRepo('memoro')]); return 7; },
+        });
+        assert.equal(code, 7);
+        assert.deepEqual(asked, [[12, '/repo']]);
+      }
+    });
+
+    it('--check and several pull requests go to the gate without asking gh', async () => {
+      let asked = 0;
+      const gh = () => { asked += 1; return { ok: false, stdout: '', stderr: '' }; };
+      const gate = async () => 0;
+      assert.equal(await run(['memoro', '12', '--check'], { stdout: sink(), stderr: sink(), gh, gate }), 0);
+      assert.equal(await run(['memoro', '12', '13'], { stdout: sink(), stderr: sink(), gh, gate }), 0);
+      assert.equal(asked, 0);
+    });
+  });
+
   it('mc repo merge only points at mc merge now', () => {
     const r = runMcCli(['repo', 'merge', 'x', '1']);
     assert.equal(r.status, 2);

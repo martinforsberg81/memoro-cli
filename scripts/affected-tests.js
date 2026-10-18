@@ -36,7 +36,8 @@
  * what a change reaches is the thing a gate exists to prevent, and there is no
  * version of this script worth having that guesses in that direction.
  *
- * Prints `{"files": [...], "why": {...}}` on stdout. `--why` prints the same
+ * `--changed-path <p>` (repeatable) names the change instead of the diff to
+ * the base. Prints `{"files": [...], "why": {...}}` on stdout. `--why` prints the same
  * thing as prose, for a person deciding whether to trust it.
  */
 import { execFileSync } from 'node:child_process';
@@ -193,11 +194,16 @@ function trackedDirs(all) {
   return dirs;
 }
 
-export function selectAffected({ baseRef = 'origin/main' } = {}) {
+export function selectAffected({ baseRef = 'origin/main', changedPaths = [] } = {}) {
   const all = tracked();
   const trackedSet = new Set(all);
   const testFiles = all.filter((path) => TEST_FILE.test(path));
-  const { mergeBase, paths: changed } = changedAgainst(baseRef);
+  // `--changed-path`, as memoro's `ci.mjs --list` takes it: the paths are named,
+  // not read off the diff — `mc gate`'s incremental run asks what changed
+  // since its last red tree, which no base ref describes.
+  const { mergeBase, paths: changed } = changedPaths.length
+    ? { mergeBase: null, paths: [...new Set(changedPaths)] }
+    : changedAgainst(baseRef);
   const changedSet = new Set(changed);
   // What a literal may name. `ls-files` no longer lists a path the change
   // deleted, but a module that spells one is still its reader — and that
@@ -362,7 +368,8 @@ export function selectAffected({ baseRef = 'origin/main' } = {}) {
 function main(argv) {
   const baseIndex = argv.indexOf('--base-ref');
   const baseRef = baseIndex >= 0 ? argv[baseIndex + 1] : 'origin/main';
-  const result = selectAffected({ baseRef });
+  const changedPaths = argv.flatMap((word, index) => (word === '--changed-path' && argv[index + 1] ? [argv[index + 1].replace(/^\.\//u, '')] : []));
+  const result = selectAffected({ baseRef, changedPaths });
   if (argv.includes('--why')) {
     process.stdout.write(`${result.why.reason === 'full-suite'
       ? `the whole suite: ${result.why.unexplained.length} changed path(s) this script cannot trace — ${result.why.unexplained.slice(0, 5).join(', ')}`

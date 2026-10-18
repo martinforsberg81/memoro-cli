@@ -16,7 +16,12 @@ touches:
   `mc repo merge` was; only the name moved.
 - **`--docs`** — a pull request whose every file is under `docs/`, squash-merged
   without a suite, because there is nothing to run. A script is not a document,
-  under `docs/` or not: one is refused here and goes through the gate.
+  under `docs/` or not: one is refused here and goes through the gate. The flag
+  is not needed: `mc merge <repo> <pr>` reads GitHub's file list first
+  (`prFiles`, `docsOnly` in [`src/mc/docs-merge.js`](../../src/mc/docs-merge.js)),
+  and a pull request that passes the same rule lands this way, in the call,
+  after one line saying so — it is never queued. A file list gh cannot read,
+  `--check` or several pull requests go to the gate as before.
 
 `mc repo merge` is gone rather than aliased: it prints *mc repo merge is now
 mc merge* and exits 2, and it is in neither `mc repo`'s usage nor `mc --help`
@@ -47,7 +52,7 @@ number that is not a number, and the same pull request named twice.
 mc test  <repo> <pr> [<pr>...] [--json]            measure it; merge nothing
 mc test  <repo> --full [--json]                    the whole suite, on the default branch
 mc merge <repo> <pr> [<pr>...] [--check] [--json]   the same round, then squash
-mc merge <repo> <pr> --docs [--json]                docs-only: no suite, squash
+mc merge <repo> <pr> --docs [--json]                docs-only: no suite, squash (also chosen without the flag)
 mc merge <repo> <pr> --watch [--json]               queue it, then follow it to the answer
 mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a job already queued
 ```
@@ -465,6 +470,32 @@ not taken — <why>; measuring the whole selection` and measures as before. The
 round's `gate-rounds.jsonl` line carries `reused`, so the hit rate is counted.
 An operator override in `repo-gates.json` that omits `select_changed_path`
 turns it off, and the round says so as `DECLARATION SHADOWED`.
+
+**`mc gate`'s fast paths** ([`src/mc/gate-fast.js`](../../src/mc/gate-fast.js)).
+A session's `mc gate` with no files first reads the diff from `git merge-base
+HEAD <base>` to the worktree — committed, staged, unstaged and untracked, renames
+as both sides. Empty, it answers `GREEN — nothing changed against <base>`; every
+path a document under `docs/` and none a script (the `--docs` rule), it answers
+`GREEN — docs only, nothing to run — 0s`. Neither starts a child or records a
+green. Otherwise it takes the worktree's tree (`git add -A` and `git write-tree`
+into a copy of the index, so untracked files count and the real index is
+untouched). A whole gate writes `mc-gate-last.json` beside the lock when it ends
+on the tree it started on: the tree, the merge-base and ref, the exit code, the
+red test files (`redFiles` in [`src/mc/gate-local.js`](../../src/mc/gate-local.js):
+the spec reporter's `test at <file>`, a `not ok` block's TAP `location:`, a stack
+frame under a failing line) and the red command gates. The next `mc gate` on the
+same merge-base answers `GREEN (unchanged since <at>)` when that gate was green on
+this exact tree. When it was red and named red files, it runs only those files,
+what the primary checkout's declared `select` picks with `--changed-path <p>` for
+each path changed since that tree (memoro's `ci.mjs --list` and this
+repository's `affected-tests.js` both take it), and the command gates that
+selection names, as `npm run <script>`. The verdict reads `GREEN INCREMENTAL — …;
+not the whole gate`, it records no ruling-44 green and it leaves
+`mc-gate-last.json` as it was. Any doubt — another merge-base, no `select`, a
+selector that fails, a red with no red file, a red command gate the selection
+does not name — and the whole gate runs. `mc gate --full` always runs it. The
+whole gate's child gets `MC_GATE_FAIL_FAST=1`, which a repository's runner may
+honour; an incremental run and named files do not.
 
 **The command gates the selection names run beside the suite** (merge-throughput,
 ruling 34). Until then they ran after it: 65 s mean on top of every round that

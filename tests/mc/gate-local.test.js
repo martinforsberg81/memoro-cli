@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { FAILURE_LINES, OUTPUT_CAP, failingNames, gateCommand, gateLines, namePattern, namedCommand, rerunLine, summarizeGate, testFlags } from '../../src/mc/gate-local.js';
+import { FAILURE_LINES, OUTPUT_CAP, failingNames, gateCommand, gateLines, namePattern, namedCommand, redFiles, rerunLine, summarizeGate, testFlags } from '../../src/mc/gate-local.js';
 
 describe('gateCommand', () => {
   it('is npm run ci with the base where there is a ci script, npm test otherwise, null with neither', () => {
@@ -140,3 +140,87 @@ describe('gateLines', () => {
   });
 });
 
+
+describe('redFiles', () => {
+  // The closing summary of node's spec reporter, as memoro's ci prints it
+  // (a gate log of 2026-10-18), with a passing file's chatter around it.
+  const SPEC = [
+    '✔ a succession fails without a contracting same-module predecessor (3.597ms)',
+    '[ERROR] [compute-canary] check failed { requested: \'render_pdf\' }',
+    '✖ every JavaScriptCore result says what the JavaScript engine\'s says (2524.093417ms)',
+    'ℹ tests 3',
+    'ℹ fail 2',
+    '✖ failing tests:',
+    '',
+    'test at tests/architecture/card-corpus.test.js:519:1',
+    '✖ every JavaScriptCore result says what the JavaScript engine\'s says (2524.093417ms)',
+    '  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:',
+    '      at TestContext.<anonymous> (file:///Users/m/memoro/tests/architecture/card-corpus.test.js:530:12)',
+    '      at file:///Users/m/memoro/tests/_helpers/corpus.mjs:44:3',
+    '',
+    'test at tests/ui/media-viewer-openers.test.js:88:3',
+    '✖ markdown picture: a click opens MediaViewer (6952.554334ms)',
+    '',
+    'test at tests/architecture/card-corpus.test.js:600:1',
+    '✖ a second test in the same file (1ms)',
+  ].join('\n');
+
+  it('names each failing file from the spec summary once, in order, and no helper', () => {
+    assert.deepEqual(redFiles(SPEC, { root: '/Users/m/memoro' }), [
+      'tests/architecture/card-corpus.test.js',
+      'tests/ui/media-viewer-openers.test.js',
+    ]);
+  });
+
+  it('reads TAP: only a not-ok block\'s location, made relative to the root', () => {
+    const tap = [
+      'TAP version 13',
+      'ok 1 - passes',
+      '  ---',
+      "  location: '/w/x/tests/mc/a.test.js:3:1'",
+      '  ...',
+      'not ok 2 - fails',
+      '  ---',
+      "  location: '/w/x/tests/mc/b.test.js:9:1'",
+      "  failureType: 'testCodeFailure'",
+      '  ...',
+      'ok 3 - passes again',
+      '  ---',
+      "  location: '/w/x/tests/mc/c.test.mjs:1:1'",
+      '  ...',
+      'not ok 4 - /w/x/tests/mc/d.test.mjs',
+      '  ---',
+      "  location: '/w/x/tests/mc/d.test.mjs:1:1'",
+    ].join('\n');
+    assert.deepEqual(redFiles(tap, { root: '/w/x' }), ['tests/mc/b.test.js', 'tests/mc/d.test.mjs']);
+  });
+
+  it('a file that failed outside any test is named by its ✖ line', () => {
+    assert.deepEqual(redFiles('✖ tests/mc/broken.test.js (12ms)\n  SyntaxError: Unexpected token\n'), ['tests/mc/broken.test.js']);
+  });
+
+  it('is empty for a red with no test file in it — a failed command gate, a crash', () => {
+    assert.deepEqual(redFiles('Memoro CI result\n  status: fail\n  command sql:reference:postgres: fail in 1.41 s\n'), []);
+    assert.deepEqual(redFiles('Error: Cannot find module \'x\'\n    at node:internal/modules/cjs/loader:1:1\n'), []);
+    assert.deepEqual(redFiles(''), []);
+  });
+
+  it('keeps nothing outside the worktree or under node_modules', () => {
+    const text = '✖ x\n    at f (/elsewhere/tests/a.test.js:1:1)\n    at g (file:///w/x/node_modules/p/tests/b.test.js:2:2)\n';
+    assert.deepEqual(redFiles(text, { root: '/w/x' }), []);
+  });
+});
+
+describe('namedCommand flags', () => {
+  it('declared flags replace the test script\'s', () => {
+    assert.equal(namedCommand({ scripts: { test: 'node scripts/testing/ci.mjs' } }, ['tests/a.test.js'], { flags: ['--import', './tests/_helpers/browser-paths.mjs'] }).run,
+      'node --test --import ./tests/_helpers/browser-paths.mjs tests/a.test.js');
+  });
+});
+
+describe('gateLines label', () => {
+  it('stands right after the verdict', () => {
+    assert.match(gateLines({ ok: true, counts: { tests: 1, fail: 0 }, gates: [], failures: [], more: 0 }, { command: 'node --test 1 file', seconds: 1, logPath: '/l', label: 'INCREMENTAL — x' }),
+      /^GREEN INCREMENTAL — x — node --test 1 file — 1 tests, 0 failed — 1s\n/u);
+  });
+});

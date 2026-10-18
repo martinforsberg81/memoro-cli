@@ -49,6 +49,21 @@ export function firstScript(files) {
   return (files || []).map((f) => (typeof f === 'string' ? f : f.path)).find((p) => SCRIPT_EXTENSIONS.some((ext) => String(p).endsWith(ext))) || null;
 }
 
+/**
+ * True when there are files and every one is a document under docs/ and none
+ * a script — the rule this door lands by. `mc merge` without `--docs` routes a
+ * pull request that passes it here, and `mc gate` answers such a diff at once.
+ */
+export function docsOnly(files) {
+  return (files || []).length > 0 && !firstNonDoc(files) && !firstScript(files);
+}
+
+/** GitHub's file list for a pull request, or null when gh cannot read it. */
+export function prFiles(pr, { repoPath, gh = ghRunner(repoPath) } = {}) {
+  const info = view(gh, pr, 'files');
+  return Array.isArray(info?.files) ? info.files.map((f) => f.path) : null;
+}
+
 export async function runDocsMerge({
   repoPath, pr, gh = ghRunner(repoPath), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {}, now = () => new Date(),
 } = {}) {

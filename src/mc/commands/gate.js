@@ -2,6 +2,7 @@
  * `mc gate` — run this worktree's own gate, and read only the verdict.
  *
  *   mc gate                   the repository's gate on the tree you stand in
+ *   mc gate --full            the whole gate, never a fast path
  *   mc gate --base <ref>      measured against another base than origin/main
  *   mc gate --json            the summary as one object
  *   mc gate --budget <s>      answer after at most s seconds (default 540); the gate keeps running
@@ -21,6 +22,12 @@
  * the gate runs on, and `mc gate --wait` (or a later call) prints the verdict
  * from the same log.
  *
+ * Before it starts one, it looks for a fast path (`gate-fast.js`): nothing
+ * changed against the base, a docs-only change, a tree a whole gate already
+ * measured green, or — after a red — an INCREMENTAL run of the red files and
+ * what the change since selects. `--full` skips them. The whole gate's child
+ * gets `MC_GATE_FAIL_FAST=1`, which a repository's runner may honour.
+ *
  * One gate per worktree: a lock beside the git directory names the running
  * gate's pid and log, and a second `mc gate` there refuses while that pid lives.
  *
@@ -39,6 +46,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
+import { planGate, recordLast, snapshotTree } from '../gate-fast.js';
 import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
 import { GATE_MEASUREMENT_VERSION, recordGreen, selectionHash } from '../gate-greens.js';
 import { tryGit } from '../git.js';
@@ -73,6 +81,7 @@ const SYSTEM = {
   select: (command, { cwd, env }) => spawnSync('sh', ['-c', command], { cwd, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
   recordGreen: (entry, { env }) => recordGreen({ root: mcHome(env), entry }),
   holder: ({ cwd, env }) => currentHolder({ cwd, env }).name,
+  snapshotTree,
 };
 
 export async function run(argv, deps = {}) {
@@ -81,11 +90,12 @@ export async function run(argv, deps = {}) {
   const env = deps.env || process.env;
   const cwd = deps.cwd || process.cwd();
   const io = { ...SYSTEM, ...deps };
-  const scanned = scanArgs(argv, { booleans: ['--json', '--wait'], strictValues: ['--base', '--budget', '--test-name-pattern'] });
+  const scanned = scanArgs(argv, { booleans: ['--json', '--wait', '--full'], strictValues: ['--base', '--budget', '--test-name-pattern'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const files = scanned.positional;
   const pattern = scanned.flags['test-name-pattern'];
   if (pattern != null && !files.length) { stderr.write(`mc: --test-name-pattern goes with test files (mc gate <files…> --test-name-pattern <p>)\n${usage()}`); return 2; }
+  if (files.length && scanned.flags.full) { stderr.write(`mc: --full is the whole gate — it takes no test files\n${usage()}`); return 2; }
   if (files.length && scanned.flags.wait) { stderr.write(`mc: --wait takes no test files — it waits for the gate running here\n${usage()}`); return 2; }
   const budget = scanned.flags.budget == null ? DEFAULT_BUDGET : Number(scanned.flags.budget);
   if (!(budget > 0)) { stderr.write(`mc: --budget takes seconds, a positive number (${scanned.flags.budget})\n${usage()}`); return 2; }
@@ -117,9 +127,17 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
+  const fast = files.length ? {} : planGate(io, { root, gitDir, base, full: scanned.flags.full, env, manifest });
+  if (fast.answer) {
+    stdout.write(scanned.flags.json ? `${JSON.stringify(fast.answer.json, null, 2)}\n` : `${fast.answer.text}\n`);
+    return 0;
+  }
+  const chosen = fast.incremental?.command || command;
+  const whole = !files.length && !fast.incremental;
+
   // The whole gate against origin/main is the one a merge round can take.
-  const recordable = files.length ? null : greenToRecord(io, { root, env, base });
-  const childEnv = { ...(recordable?.env || env), CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
+  const recordable = whole ? greenToRecord(io, { root, env, base }) : null;
+  const childEnv = { ...(recordable?.env || env), CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', ...(whole ? { MC_GATE_FAIL_FAST: '1' } : {}) };
 
   const startedAt = io.now();
   const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
@@ -129,7 +147,7 @@ export async function run(argv, deps = {}) {
   try {
     io.mkdir(dir);
     const fd = io.open(logPath);
-    child = io.spawn('sh', ['-c', `${command.run}; echo $? > '${logPath}.exit'`], {
+    child = io.spawn('sh', ['-c', `${chosen.run}; echo $? > '${logPath}.exit'`], {
       cwd: root, env: childEnv, detached: true, stdio: ['ignore', fd, fd],
     });
     io.close(fd);
@@ -140,7 +158,8 @@ export async function run(argv, deps = {}) {
   child.unref();
   io.write(`${logPath}.pid`, `${child.pid}\n`);
   const lock = {
-    pid: child.pid, log: logPath, started: startedAt.toISOString(), command: { ...command, base },
+    pid: child.pid, log: logPath, started: startedAt.toISOString(), command: { ...chosen, base },
+    ...(whole && fast.snapshot ? { snapshot: fast.snapshot } : {}),
     ...(recordable?.green ? { green: recordable.green } : {}),
   };
   io.write(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
@@ -225,7 +244,7 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout, ro
   const outcome = await waitForExit(io, { log: lock.log, pid: lock.pid, since: waitedFrom, budget });
   const seconds = Math.round((io.now().getTime() - Date.parse(lock.started)) / 1000);
   if (outcome.budget) {
-    stdout.write(`RUNNING — ${lock.command.run} — ${seconds}s so far, still running (pid ${lock.pid})\nlog: ${lock.log} — mc gate --wait waits for it and prints the verdict\n`);
+    stdout.write(`RUNNING${lock.command.label ? ' INCREMENTAL' : ''} — ${lock.command.shown || lock.command.run} — ${seconds}s so far, still running (pid ${lock.pid})\nlog: ${lock.log} — mc gate --wait waits for it and prints the verdict\n`);
     return 3;
   }
   io.remove(lockPath);
@@ -236,10 +255,12 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout, ro
   const output = readText(io, lock.log);
   const summary = summarizeGate(output, { exitCode: outcome.code });
   const recorded = summary.ok ? remember(io, { lock, root, env }) : false;
+  if (lock.snapshot) recordLast(io, { lock, lockPath, root, output, code: outcome.code, gates: summary.gates });
+  const shown = lock.command.shown || lock.command.run;
   if (json) {
-    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, base: lock.command.base, seconds, log: lock.log, exit: outcome.code, recorded }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, ...(lock.command.label ? { incremental: lock.command.label } : {}), script: lock.command.script, base: lock.command.base, seconds, log: lock.log, exit: outcome.code, recorded }, null, 2)}\n`);
   } else {
-    stdout.write(`${gateLines(summary, { command: lock.command.run, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}\n`);
+    stdout.write(`${gateLines(summary, { command: shown, label: lock.command.label, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}\n`);
     if (recorded) stdout.write(`recorded: tree ${lock.green.tree.slice(0, 7)} green — mc merge does not measure it again while the tree and selection match\n`);
   }
   return summary.ok ? 0 : 1;
@@ -284,12 +305,16 @@ function readText(io, path) {
 export function usage() {
   return [
     'usage — mc gate                       this worktree\'s own gate: npm run ci -- --base-ref origin/main, or npm test\n',
+    '        mc gate --full                the whole gate: no docs-only, unchanged or incremental fast path\n',
     '        mc gate --base <ref>          measured against another base\n',
     '        mc gate --json                the summary as one object\n',
     '        mc gate --budget <s>          answer after at most s seconds, default 540; the gate keeps running\n',
     '        mc gate --wait                wait for the gate running here and print its verdict\n',
     '        mc gate <test files…> [--test-name-pattern <p>]   the named files with this repository\'s node --test flags; the same log, budget and summary\n',
     '\n',
+    'Fast paths, without --full: nothing changed against the base, or only docs/ (no scripts), answers GREEN at once;\n',
+    'a tree the last whole gate here measured green answers GREEN (unchanged since …); after a red whole gate, only the\n',
+    'red files plus what the declared select picks for the paths changed since run, marked INCREMENTAL — never the whole gate.\n',
     'Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, and the path of the whole output.\n',
     'Exit 0 green, 1 red, 2 nothing to run or already running, 3 still running.\n',
   ].join('');
