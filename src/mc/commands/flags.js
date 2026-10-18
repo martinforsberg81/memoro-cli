@@ -18,13 +18,18 @@
  * `strictValues` is for flags where a silently-missing value is the failure
  * mode the flag exists to prevent: the very next word is the value whatever
  * it looks like, another flag or the end of the line is an error.
+ *
+ * `repeatable` is `strictValues` for a flag given more than once (`mc shot
+ * --click`): each value, in order, in an array that is empty when the flag is
+ * not given.
  */
 export function scanArgs(argv, {
-  booleans = [], values = [], strictValues = [], toolSugar = false,
+  booleans = [], values = [], strictValues = [], repeatable = [], toolSugar = false,
 } = {}) {
   const flags = {};
   for (const name of booleans) flags[key(name)] = false;
   for (const name of [...values, ...strictValues]) flags[key(name)] = null;
+  for (const name of repeatable) flags[key(name)] = [];
   if (toolSugar) flags.tool = null;
   const positional = [];
   const pending = new Set();
@@ -35,13 +40,15 @@ export function scanArgs(argv, {
   for (const arg of argv) {
     if (strictPending) {
       if (arg.startsWith('--')) return result(`${strictPending} needs a value`);
-      flags[key(strictPending)] = arg;
+      if (repeatable.includes(strictPending)) flags[key(strictPending)].push(arg);
+      else flags[key(strictPending)] = arg;
       strictPending = null;
       continue;
     }
     if (booleans.includes(arg)) { flags[key(arg)] = true; continue; }
     if (values.includes(arg)) { pending.add(arg); continue; }
     if (strictValues.includes(arg)) { strictPending = arg; continue; }
+    if (repeatable.includes(arg)) { strictPending = arg; continue; }
     if (toolSugar && arg === '--codex') { flags.tool = 'codex'; continue; }
     if (toolSugar && arg === '--claude') { flags.tool = 'claude'; continue; }
     if (arg.startsWith('--')) return result(`unknown flag: ${arg}`);

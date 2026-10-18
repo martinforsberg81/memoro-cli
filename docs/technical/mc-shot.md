@@ -93,10 +93,22 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   ref's (`-<sha7>` before `.png`), then one `diff  <element>  <field>  <ref> →
   <here>` line per measured value that moved, or that none did. With `--json`:
   `{ here, ref: { ref, commit, result }, diff }`. Refused with `--out` and with
-  a ref that is HEAD while nothing is edited.
+  a ref that is HEAD while nothing is edited. A compare tree is per commit, so
+  `--compare origin/main` after main moved needs a new tree and a new server.
+  The compare server of an older commit of the same worktree name, unused for
+  15 minutes, is stopped first to free its slot (`mc: stopped <id>, the compare
+  server of <sha> idle <n> min, to free its slot`). The ref side waits at most
+  60 s for a slot. A refusal names the compare servers still running, and
+  `--compare <sha>` reuses one of them, with its tree and its database.
+- `--click <selector>`, repeatable: the capture script presses each selector in
+  order, after the page and its window are open and before `--wait-for`,
+  `--scroll` and `--el`. The request carries them as `click`. A result that does
+  not answer `clicked` with one entry per click is refused (exit 1, no path), so
+  until memoro's capture script honours `click` every `--click` is refused. With
+  `--compare`, both sides are pressed and either side's refusal refuses the pair.
 
-The request gains `safe_area`, `wait_for`, `scroll`, `measure` and
-`onboarding`, after `out`; a capture result gains `safe_area` and, when asked,
+The request gains `safe_area`, `wait_for`, `scroll`, `measure`, `onboarding` and
+`click`, after `out`; a capture result gains `safe_area` and, when asked,
 `measure`.
 
 ## mc dev open and mc dev surfaces

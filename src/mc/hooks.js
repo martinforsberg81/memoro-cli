@@ -16,7 +16,8 @@
  * command (`commands/hook.js`) reads stdin and writes the one JSON answer.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 import { defaultRepos } from './brief-collect.js';
@@ -150,7 +151,7 @@ export function sessionStartContext({ cwd, inside, states }) {
   if (!states.length) return null;
   const lines = ['mc — session start'];
   if (!inside) {
-    lines.push(`This session started in ${cwd}, outside the repositories: their CLAUDE.md and .claude/settings.json were NOT loaded.`);
+    lines.push(`This session started in ${cwd}, outside the repositories: their CLAUDE.md was NOT loaded; their PreToolUse hooks are run by mc hook pre-tool.`);
     lines.push(`Read ${states.map((state) => join(state.worktree, 'CLAUDE.md')).join(' and ')} before changing anything, and run commands from inside the worktree.`);
   }
   for (const state of states) {
@@ -236,6 +237,80 @@ export function preToolDecision(input, { inRepo = () => false } = {}) {
   return null;
 }
 
+/*
+ * A session that started outside a repository (a plan directory, a workarea)
+ * never loaded that repository's hooks, and memoro's are its data-access
+ * policy, so mc runs them. `CLAUDE_PROJECT_DIR` is the worktree, so their
+ * `$CLAUDE_PROJECT_DIR/.claude/hooks/...` paths resolve.
+ */
+
+/** The PreToolUse hook commands a worktree's `.claude/settings.json` names for a tool, in file order. */
+export function repoPreToolHooks(worktree, tool, { readFileSync: read = readFileSync } = {}) {
+  let settings;
+  try {
+    settings = JSON.parse(read(join(worktree, '.claude', 'settings.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+  const entries = settings?.hooks?.PreToolUse;
+  if (!Array.isArray(entries)) return [];
+  const matches = (matcher) => {
+    if (matcher === undefined || matcher === null || matcher === '' || matcher === '*') return true;
+    try {
+      return new RegExp(`^(?:${matcher})$`, 'u').test(tool);
+    } catch {
+      return false;
+    }
+  };
+  const commands = [];
+  for (const entry of entries) {
+    if (!entry || !matches(entry.matcher) || !Array.isArray(entry.hooks)) continue;
+    for (const hook of entry.hooks) {
+      if (hook?.type === 'command' && typeof hook.command === 'string' && hook.command) commands.push(hook.command);
+    }
+  }
+  return commands;
+}
+
+/**
+ * The first denial the PreToolUse hooks of the worktrees at `cwd` give a tool
+ * call — `{ id: 'repo-hook', reason }` — or `null`. The worktree `projectDir`
+ * names is skipped: Claude Code already ran its hooks.
+ */
+export function repoHookDecision(input, {
+  cwd, projectDir = null, worktreesAt: find = worktreesAt, readFileSync: read = readFileSync,
+  spawnSync: spawn = spawnSync, env = process.env, findDeps = {},
+} = {}) {
+  const tool = input?.tool_name;
+  if (!tool) return null;
+  const { worktrees } = find(cwd, findDeps);
+  for (const entry of worktrees || []) {
+    if (projectDir && resolve(entry.worktree) === resolve(projectDir)) continue;
+    for (const command of repoPreToolHooks(entry.worktree, tool, { readFileSync: read })) {
+      const r = spawn('/bin/sh', ['-c', command], {
+        cwd: entry.worktree,
+        input: JSON.stringify(input),
+        encoding: 'utf8',
+        timeout: 10_000,
+        env: { ...env, CLAUDE_PROJECT_DIR: entry.worktree },
+      });
+      if (r.status === 2) {
+        return { id: 'repo-hook', reason: `${entry.name} hook: ${String(r.stderr || '').trim() || command}` };
+      }
+      let parsed = null;
+      try {
+        parsed = JSON.parse(String(r.stdout || '').trim());
+      } catch {
+        parsed = null;
+      }
+      if (parsed?.hookSpecificOutput?.permissionDecision === 'deny') {
+        return { id: 'repo-hook', reason: `${entry.name} hook: ${parsed.hookSpecificOutput.permissionDecisionReason || command}` };
+      }
+    }
+  }
+  return null;
+}
+
 /** Whether a path lies inside a worktree of a repository mc knows. */
 export function pathInKnownRepo(path, deps = {}) {
   let dir = resolve(String(path || ''));
@@ -255,4 +330,108 @@ export function inMcTerritory(cwd, deps = {}) {
   const here = resolve(String(cwd || ''));
   if (here === mcRoot || here.startsWith(`${mcRoot}${sep}`)) return true;
   return Boolean((deps.knownRepo || knownRepo)(here, { env }));
+}
+
+/*
+ * The two entries `mc hook install` writes into `~/.claude/settings.json`, and
+ * the ones `--check` and the page compare the file against. `|| true`: a hook
+ * must never stand between a session and its work. `Read` is in the matcher so
+ * the repositories' Read hooks (memoro's block-sqlite-state.sh) answer through
+ * `mc hook pre-tool`.
+ */
+export const MC_HOOKS = Object.freeze([
+  Object.freeze({ event: 'SessionStart', which: 'session-start', matcher: null, command: 'mc hook session-start 2>/dev/null || true' }),
+  Object.freeze({ event: 'PreToolUse', which: 'pre-tool', matcher: 'Bash|Write|Read', command: 'mc hook pre-tool 2>/dev/null || true' }),
+]);
+
+/** Claude Code's user settings file. */
+export function claudeSettingsPath(home = homedir()) {
+  return join(home, '.claude', 'settings.json');
+}
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * The settings file as an object, or `null` when it is missing, unreadable, not
+ * JSON or not a plain object. It never throws, and it never says what it read:
+ * a parse error quotes the file, and the file can hold secrets.
+ */
+export function readClaudeSettings(path, { readFileSync: read = readFileSync } = {}) {
+  let parsed;
+  try {
+    parsed = JSON.parse(read(path, 'utf8'));
+  } catch {
+    return null;
+  }
+  return isPlainObject(parsed) ? parsed : null;
+}
+
+/** Whether a hook is the mc command for `which`: `mc hook <which>` and nothing longer. */
+const isMcHook = (hook, which) => hook?.type === 'command'
+  && typeof hook.command === 'string'
+  && new RegExp(`^mc hook ${which}\\b`, 'u').test(hook.command);
+
+/**
+ * The state of mc's entries in a settings object: `{ ok, problems }`, where a
+ * problem is `{ which, have, want }` — `have` is `null` when there is no entry,
+ * `'twice'` when there are two, else the matcher and command there are.
+ */
+export function hookRegistration(settings) {
+  const problems = [];
+  for (const want of MC_HOOKS) {
+    const entries = Array.isArray(settings?.hooks?.[want.event]) ? settings.hooks[want.event] : [];
+    const mine = entries.filter((entry) => Array.isArray(entry?.hooks) && entry.hooks.some((hook) => isMcHook(hook, want.which)));
+    if (mine.length === 0) {
+      problems.push({ which: want.which, have: null, want });
+    } else if (mine.length > 1) {
+      problems.push({ which: want.which, have: 'twice', want });
+    } else {
+      const matcher = mine[0].matcher || null;
+      const command = mine[0].hooks.find((hook) => isMcHook(hook, want.which)).command;
+      if (matcher !== want.matcher || command !== want.command) {
+        problems.push({ which: want.which, have: { matcher, command }, want });
+      }
+    }
+  }
+  return { ok: problems.length === 0, problems };
+}
+
+/** One short phrase per problem, or `null` when the registration is right. */
+export function hookDrift({ problems }) {
+  if (!problems.length) return null;
+  return problems.map(({ which, have, want }) => {
+    if (have === null) return `${which} not registered`;
+    if (have === 'twice') return `${which} registered twice`;
+    if (have.matcher !== want.matcher) return `${which} on ${have.matcher || 'every tool'}, want ${want.matcher || 'every tool'}`;
+    return `${which} runs another command`;
+  }).join(', ');
+}
+
+/**
+ * The settings object with mc's entries written: the first mc entry for each
+ * event takes the want's matcher and command, the other mc entries for it are
+ * removed, and everything else keeps its value and its order. Returns a copy;
+ * the argument is not changed.
+ */
+export function installHooks(settings) {
+  const next = structuredClone(settings);
+  if (!isPlainObject(next.hooks)) next.hooks = {};
+  for (const want of MC_HOOKS) {
+    if (!Array.isArray(next.hooks[want.event])) next.hooks[want.event] = [];
+    const entries = next.hooks[want.event];
+    const first = entries.find((entry) => Array.isArray(entry?.hooks) && entry.hooks.some((hook) => isMcHook(hook, want.which)));
+    if (!first) {
+      entries.push({ ...(want.matcher ? { matcher: want.matcher } : {}), hooks: [{ type: 'command', command: want.command }] });
+      continue;
+    }
+    if (want.matcher) first.matcher = want.matcher;
+    else delete first.matcher;
+    first.hooks[first.hooks.findIndex((hook) => isMcHook(hook, want.which))] = { type: 'command', command: want.command };
+    next.hooks[want.event] = entries.flatMap((entry) => {
+      if (entry === first || !Array.isArray(entry?.hooks) || !entry.hooks.some((hook) => isMcHook(hook, want.which))) return [entry];
+      const hooks = entry.hooks.filter((hook) => !isMcHook(hook, want.which));
+      return hooks.length ? [{ ...entry, hooks }] : [];
+    });
+  }
+  return next;
 }

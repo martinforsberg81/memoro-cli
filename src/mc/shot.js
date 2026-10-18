@@ -244,7 +244,7 @@ export function outPath({
 export function buildRequest({
   baseUrl, account, signIn, target, element = null, shell = null, full = false, viewport,
   theme = null, locale = null, out, safeArea = null, waitFor = null, scroll = null, measure = null,
-  onboarding = false,
+  onboarding = false, click = null,
 }) {
   return {
     mode: 'capture',
@@ -264,6 +264,7 @@ export function buildRequest({
     scroll,
     measure,
     onboarding: Boolean(onboarding),
+    click: Array.isArray(click) && click.length ? [...click] : null,
   };
 }
 
@@ -287,6 +288,18 @@ export function parseResult(stdout, { status = 0 } = {}) {
     return { ok: false, error: `the capture script exited ${status} and its result has no ok` };
   }
   return { ok: true, result };
+}
+
+/**
+ * A capture asked to click and answered by a script that does not say it
+ * clicked as many: the picture is of the page without the clicks. The sentence,
+ * or null when nothing was asked or every click was answered.
+ */
+export function clickGap(request, result) {
+  const asked = Array.isArray(request?.click) ? request.click : [];
+  if (!asked.length) return null;
+  if (Array.isArray(result?.clicked) && result.clicked.length === asked.length) return null;
+  return `the picture at ${result?.file} was taken without the clicks — this memoro's capture script does not answer clicked, so --click is not supported yet (memoro's scripts/shot/shot.mjs has to honour request.click)`;
 }
 
 /**

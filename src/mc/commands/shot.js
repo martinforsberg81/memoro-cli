@@ -5,7 +5,7 @@
  *           [--full] [--viewport <name|WxH[@dpr]>] [--theme light|dark]
  *           [--locale <code>] [--safe-area <t,r,b,l>] [--wait-for <css>]
  *           [--scroll <css>[@end|@top|@<px>] | @end] [--measure <css> | @<name>]
- *           [--account <name>] [--onboarding] [--me] [--here]
+ *           [--click <selector>]… [--account <name>] [--onboarding] [--me] [--here]
  *           [--compare <ref>] [--out <file.png>] [--open] [--json]
  *   mc shot <dev|prod> --list
  *   mc shot login prod [--paste]
@@ -32,8 +32,8 @@ import { openCommandFor } from '../../lib/device-flow.js';
 import { mcHome } from '../paths.js';
 import { runCompare } from '../shot-compare.js';
 import {
-  SESSION_SECRET, SHELLS, THEMES, accessLine, accountTable, buildLoginRequest, buildRequest, outPath, parseSafeArea,
-  parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture, shotWorktree,
+  SESSION_SECRET, SHELLS, THEMES, accessLine, accountTable, buildLoginRequest, buildRequest, clickGap, outPath,
+  parseSafeArea, parseScroll, parseViewport, readShotDeclaration, resolveAccount, resolveTarget, runCapture, shotWorktree,
 } from '../shot.js';
 import {
   ensureAppServer, readDeclaration, sharedWorktree, tokenFor,
@@ -55,6 +55,7 @@ export async function run(argv, deps = {}) {
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
       '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare',
     ],
+    repeatable: ['--click'],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
@@ -197,6 +198,7 @@ export async function run(argv, deps = {}) {
     scroll: scroll.scroll,
     measure: flags.measure,
     onboarding: resolved?.state === 'fresh',
+    click: flags.click,
   });
   const scrub = scrubber(secrets);
   if (flags.compare) {
@@ -230,6 +232,9 @@ export async function run(argv, deps = {}) {
     stderr.write('mc: the capture script said ok and named no file\n');
     return 1;
   }
+  // A picture asked with clicks is one only if the script says it clicked.
+  const gap = clickGap(request, result);
+  if (gap) { stderr.write(`mc: ${scrub(gap)}\n`); return 1; }
   // A gated target's verdict: the picture is taken either way, and a gate
   // that did not hold makes the exit 1.
   const access = accessLine(result.access);
@@ -391,11 +396,15 @@ export function usage() {
     '          [--measure <css> | @<name>]  print every match\'s box, padding, position, scroll and\n',
     '                                      visibility as one JSON line after the path; a name is\n',
     '                                      one of the surface\'s declared measurements (mc dev surfaces)\n',
+    '          [--click <selector>]        press it after the page and its window are open and before\n',
+    '                                      --wait-for/--scroll/--el; repeatable, in order; a CSS selector\n',
+    '                                      or text=<words>, as memoro\'s capture script reads locators\n',
     '          [--account <name>]          dev only: an account .mc/shot.json declares (seeded by default)\n',
     '          [--onboarding]              dev only: reseed the account and show its onboarding\n',
     '          [--me]                      prod only: signed in as you, from mc shot login prod\n',
     '          [--here]                    the worktree you stand in — the default inside a memoro worktree\n',
     '          [--compare <ref>]           dev only: the same picture and numbers on <ref>, and what moved\n',
+    '                                      --compare <sha> pins the tree and its database\n',
     '          [--out <file.png>] [--open] [--json]\n',
     '        mc shot <dev|prod> --list     the targets and viewports memoro declares\n',
     '        mc shot login prod            sign in once in a browser; mc keeps the session\n',

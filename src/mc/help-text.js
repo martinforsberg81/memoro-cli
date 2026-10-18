@@ -320,13 +320,17 @@ IN FULL
                                     server — the warnings (a merged branch, a
                                     stale one, main, a session started outside
                                     the repository) and the mc toolbox
-  mc hook pre-tool                 For a PreToolUse hook on Bash|Write: gh pr
+  mc hook pre-tool                 For a PreToolUse hook on Bash|Write|Read: gh pr
                                     create, gh pr edit and git push → mc publish, gh pr
                                     merge → mc merge, npm run ci → mc gate, npm
                                     run dev → mc test dev --here --url, a scratch
                                     Playwright script → mc shot. MC_HOOK_ALLOW=1
                                     in the command lets it through. Both read
                                     the hook JSON on stdin and always exit 0
+  mc hook install [--check]        Write mc's two hook entries into
+                                    ~/.claude/settings.json, changing no other
+                                    entry. --check only says whether they are
+                                    there (exit 1 when not)
   mc publish [--title …] [--body-file …] [--base …]
                                     Push the branch you stand on (never force)
                                     and open its pull request, or find the one

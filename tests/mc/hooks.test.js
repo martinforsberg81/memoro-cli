@@ -4,14 +4,15 @@
  * so they are tested without a session or a repository.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/hook.js';
 import {
-  ALLOW_MARK, inMcTerritory, preToolDecision, sessionStartContext, warningsFor, worktreeState, worktreesAt,
+  ALLOW_MARK, hookDrift, hookRegistration, inMcTerritory, installHooks, preToolDecision, readClaudeSettings, repoHookDecision,
+  repoPreToolHooks, sessionStartContext, warningsFor, worktreeState, worktreesAt,
 } from '../../src/mc/hooks.js';
 
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
@@ -63,7 +64,7 @@ describe('mc hook — the worktree a session starts in', () => {
         upstreamGone: false, fetchedAgeH: 0, server: { url: 'http://127.0.0.1:8920' },
       }],
     });
-    assert.match(text, /outside the repositories: their CLAUDE\.md and \.claude\/settings\.json were NOT loaded/u);
+    assert.match(text, /outside the repositories: their CLAUDE\.md was NOT loaded; their PreToolUse hooks are run by mc hook pre-tool/u);
     assert.match(text, /Read \/home\/mc\/plan\/assistant\/memoro\/CLAUDE\.md/u);
     assert.match(text, /b · 0 behind \/ 2 ahead of origin\/main · 1 changed file · dev server http:\/\/127\.0\.0\.1:8920/u);
     assert.match(text, /mc shot dev/u);
@@ -134,6 +135,119 @@ describe('mc hook — shell commands that have an mc verb', () => {
   });
 });
 
+describe('mc hook — a repository\'s own hooks, for a session that started outside it', () => {
+  function repoWithHooks() {
+    const area = mkdtempSync(join(tmpdir(), 'mc-hook-repo-'));
+    const hooks = join(area, 'memoro', '.claude', 'hooks');
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(join(hooks, 'block.sh'), `#!/bin/sh\ninput=$(cat)\ncase "$input" in *'wrangler d1 execute'*) printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Blocked by block.sh"}}';; esac\nexit 0\n`);
+    writeFileSync(join(hooks, 'stop.sh'), `#!/bin/sh\ninput=$(cat)\ncase "$input" in *'git stash pop'*) echo 'stash is shared' >&2; exit 2;; esac\nexit 0\n`);
+    chmodSync(join(hooks, 'block.sh'), 0o755);
+    chmodSync(join(hooks, 'stop.sh'), 0o755);
+    writeFileSync(join(area, 'memoro', '.claude', 'settings.json'), JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: 'Bash',
+            hooks: [
+              { type: 'command', command: '$CLAUDE_PROJECT_DIR/.claude/hooks/block.sh' },
+              { type: 'command', command: '$CLAUDE_PROJECT_DIR/.claude/hooks/stop.sh' },
+            ],
+          },
+          { matcher: 'Read', hooks: [{ type: 'command', command: 'true' }] },
+        ],
+      },
+    }));
+    const find = () => ({ inside: false, worktrees: [{ name: 'memoro', worktree: join(area, 'memoro') }] });
+    return { area, find };
+  }
+
+  it('reads the hook commands a worktree names for a tool, in file order', () => {
+    const { area } = repoWithHooks();
+    assert.deepEqual(repoPreToolHooks(join(area, 'memoro'), 'Bash'), [
+      '$CLAUDE_PROJECT_DIR/.claude/hooks/block.sh', '$CLAUDE_PROJECT_DIR/.claude/hooks/stop.sh',
+    ]);
+    assert.deepEqual(repoPreToolHooks(join(area, 'memoro'), 'Read'), ['true']);
+    assert.deepEqual(repoPreToolHooks(join(area, 'memoro'), 'Write'), []);
+    assert.deepEqual(repoPreToolHooks(area, 'Bash'), [], 'no .claude, no hooks');
+  });
+
+  it('passes a deny on stdout through, named by repository, with $CLAUDE_PROJECT_DIR the worktree', () => {
+    const { area, find } = repoWithHooks();
+    const decision = repoHookDecision(bash('cd memoro && npx wrangler d1 execute memoro-db --remote'), { cwd: area, worktreesAt: find });
+    assert.equal(decision?.id, 'repo-hook');
+    assert.match(decision.reason, /^memoro hook: Blocked by block\.sh/u);
+  });
+
+  it('reads exit 2 as a denial, with stderr as the reason', () => {
+    const { area, find } = repoWithHooks();
+    assert.equal(repoHookDecision(bash('git stash pop'), { cwd: area, worktreesAt: find })?.reason, 'memoro hook: stash is shared');
+  });
+
+  it('lets through what no hook denies, the repository Claude Code loaded itself, and a cwd with no worktrees', () => {
+    const { area, find } = repoWithHooks();
+    assert.equal(repoHookDecision(bash('ls'), { cwd: area, worktreesAt: find }), null);
+    assert.equal(repoHookDecision(bash('npx wrangler d1 execute memoro-db --remote'), {
+      cwd: area, worktreesAt: find, projectDir: join(area, 'memoro'),
+    }), null, 'Claude Code already ran that repository\'s hooks');
+    assert.equal(repoHookDecision(bash('npx wrangler d1 execute memoro-db --remote'), {
+      cwd: area, worktreesAt: () => ({ inside: false, worktrees: [] }),
+    }), null);
+  });
+});
+
+describe('mc hook install — mc\'s own registration', () => {
+  const FOREIGN = { matcher: 'Bash|Read', hooks: [{ type: 'command', command: '/x/block-secret-reads.sh' }] };
+  const OLD = {
+    permissions: { allow: ['Bash'] },
+    hooks: {
+      PreToolUse: [FOREIGN, { matcher: 'Bash|Write', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }] }],
+      SessionStart: [{ hooks: [{ type: 'command', command: 'mc hook session-start 2>/dev/null || true' }] }],
+    },
+  };
+
+  it('names the one entry that is out of date', () => {
+    const before = hookRegistration(OLD);
+    assert.equal(before.problems.length, 1);
+    assert.equal(before.problems[0].which, 'pre-tool');
+    assert.equal(hookDrift(before), 'pre-tool on Bash|Write, want Bash|Write|Read');
+  });
+
+  it('names both entries as missing from settings with no hooks', () => {
+    assert.equal(hookDrift(hookRegistration({})), 'session-start not registered, pre-tool not registered');
+  });
+
+  it('writes mc\'s entries beside the others, and changes nothing else', () => {
+    const next = installHooks(OLD);
+    assert.equal(hookRegistration(next).ok, true);
+    assert.deepEqual(next.hooks.PreToolUse[0], FOREIGN);
+    assert.deepEqual(next.permissions, { allow: ['Bash'] });
+    assert.equal(OLD.hooks.PreToolUse[1].matcher, 'Bash|Write', 'the argument is not changed');
+    assert.deepEqual(installHooks(next), next, 'a second install changes nothing');
+  });
+
+  it('reduces two mc pre-tool entries to one', () => {
+    const next = installHooks({
+      hooks: {
+        PreToolUse: [
+          { matcher: 'Bash', hooks: [{ type: 'command', command: 'mc hook pre-tool' }] },
+          { matcher: 'Write', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }] },
+        ],
+      },
+    });
+    assert.equal(next.hooks.PreToolUse.length, 1);
+    assert.deepEqual(next.hooks.PreToolUse[0], {
+      matcher: 'Bash|Write|Read', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }],
+    });
+  });
+
+  it('reads a missing, unparseable or non-object file as null, and never throws', () => {
+    assert.equal(readClaudeSettings('/nope/settings.json'), null);
+    assert.equal(readClaudeSettings('/whatever/settings.json', { readFileSync: () => '{oops' }), null);
+    assert.equal(readClaudeSettings('/whatever/settings.json', { readFileSync: () => '[1]' }), null);
+  });
+});
+
 describe('mc hook — the door', () => {
   function sink() {
     let text = '';
@@ -148,6 +262,7 @@ describe('mc hook — the door', () => {
       readStdin: async () => JSON.stringify({ cwd: '/home/u/mc/x', ...bash('gh pr create') }),
       inMcTerritory: () => true,
       pathInKnownRepo: () => false,
+      repoHookDecision: () => null,
     });
     assert.equal(code, 0);
     const answer = JSON.parse(stdout.text);
@@ -162,6 +277,21 @@ describe('mc hook — the door', () => {
       stdout: quiet, stderr: sink(), readStdin: async () => JSON.stringify(bash('gh pr create')), inMcTerritory: () => false,
     }), 0);
     assert.equal(quiet.text, '', 'outside mc\'s ground nothing is turned');
+  });
+
+  it('a repository\'s denial wins over the turn to an mc verb', async () => {
+    const stdout = sink();
+    await run(['pre-tool'], {
+      stdout,
+      stderr: sink(),
+      readStdin: async () => JSON.stringify({ cwd: '/home/u/mc/plan/x', ...bash('gh pr create') }),
+      inMcTerritory: () => true,
+      pathInKnownRepo: () => false,
+      repoHookDecision: () => ({ id: 'repo-hook', reason: 'memoro hook: Blocked by block.sh' }),
+    });
+    const answer = JSON.parse(stdout.text);
+    assert.equal(answer.hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(answer.hookSpecificOutput.permissionDecisionReason, 'mc: memoro hook: Blocked by block.sh');
   });
 
   it('answers session start with additional context, and silence where mc has nothing', async () => {

@@ -1,0 +1,112 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "publish-docs-gaps",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/publish-docs-gaps/PLAN.json",
+  "archived": "2026-10-18",
+  "goal": [
+    "`mc publish --body-file <path>` puts the file's text in the pull request's body, on the first publish and on an open pull request alike.",
+    "`mc merge <repo> <pr> --docs` squashes exactly the head whose file list it checked, and refuses with `drift` when the head moved."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`run(['--body-file', 'b.md'])` with `deps.read` returning `File body.` creates the pull request with body `File body.` plus the mark, and on an open pull request edits it to that body.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/publish.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": true,
+      "criterion": "`runDocsMerge` calls `gh pr merge <n> --squash --subject … --match-head-commit <headRefOid>`, and stops at `drift` without calling merge when the head read after the mergeability wait differs from the one read with the files.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/docs-merge.test.js` passes, including the tests named in step 2."
+    }
+  ],
+  "steps": [
+    {
+      "title": "mc publish --body-file is read",
+      "done_when": "`src/mc/commands/publish.js` reads `flags['body-file']`; the two new tests in `tests/mc/publish.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 942,
+      "landed": {
+        "sha": "10797c0c7207df4e0ccc72d5affd7ef51752c5e4",
+        "into": "main",
+        "at": "2026-10-17T13:51:08Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc publish --body-file now reads flags['body-file'] (scanArgs keys flags without leading dashes); flags.bodyFile was always undefined, so a new pull request took the last commit message as its body. Two tests in tests/mc/publish.test.js cover create and open-PR edit. Plan: success_criteria[0] met."
+      ],
+      "sessions": 0,
+      "seconds": 0,
+      "cost_usd": null
+    },
+    {
+      "title": "mc merge --docs pins the squash to the head it checked",
+      "done_when": "`runDocsMerge` passes `--match-head-commit` with the head read beside the file list and stops at `drift` when the head moved; the new tests in `tests/mc/docs-merge.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 944,
+      "landed": {
+        "sha": "34643d11bbeadd029c8885a4514295d78f9bc76e",
+        "into": "main",
+        "at": "2026-10-17T13:56:54Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "runDocsMerge reads headRefOid beside the file list (refusing read when there is none), reads it again after the mergeability wait, refuses drift when it moved, and squashes with --match-head-commit (ruling 43). The archive forge stub in tests/mc/archive-live.test.js and the round-log stub in tests/mc/merge-doc.test.js now answer headRefOid, since the head read is new; docs/technical/mc-merge.md names the new read, drift and the pin."
+      ],
+      "sessions": 1,
+      "seconds": 288,
+      "cost_usd": 0.021222
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-17T13:51:10Z",
+      "kind": "step",
+      "seconds": 185,
+      "land_seconds": null,
+      "pr": null,
+      "turns": 16,
+      "input": 28,
+      "output": 9209,
+      "cache_read": 376106,
+      "cache_write": 26167,
+      "model": null,
+      "note": "success,merged",
+      "session": "a1e61c98-85ae-41a6-ac4a-181290da6992",
+      "cost_usd": 0.011639235
+    },
+    {
+      "ts": "2026-10-17T13:56:03Z",
+      "kind": "step",
+      "seconds": 288,
+      "land_seconds": null,
+      "pr": 944,
+      "turns": 26,
+      "input": 32,
+      "output": 20756,
+      "cache_read": 543480,
+      "cache_write": 43250,
+      "model": null,
+      "note": "success,queued",
+      "session": "1b4882a2-0bf3-4f71-b5f9-16660eb789bd",
+      "cost_usd": 0.02122225
+    }
+  ],
+  "totals": {
+    "sessions": 2,
+    "seconds": 473,
+    "land_seconds": 0,
+    "cost_usd": 0.032861,
+    "cost_unknown": 0,
+    "input": 60,
+    "output": 29965,
+    "cache_read": 919586,
+    "cache_write": 69417,
+    "first": "2026-10-17T13:51:10Z",
+    "landed": "2026-10-17T13:56:54Z"
+  }
+}

@@ -1446,7 +1446,12 @@ function mcLine(lines, c, wide, mc, caches, version) {
   ];
   const long = trailing([...lead, state]);
   const fits = long.reduce((n, part) => n + part.text.length, 0) <= room;
-  heading(lines, c, wide, 'MC', fitting(trailing([...lead, fits ? state : { ...state, text: short }, ...rest]), room), null);
+  heading(lines, c, wide, 'MC', fitting(trailing([
+    ...lead,
+    fits ? state : { ...state, text: short },
+    { text: info.hooks ? `hooks: ${info.hooks} · mc hook install` : '', styles: ['yellow'] },
+    ...rest,
+  ]), room), null);
 }
 
 /* ------------------------------------------------------------------- page */

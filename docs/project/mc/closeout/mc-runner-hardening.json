@@ -1,0 +1,391 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-runner-hardening",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-runner-hardening/PLAN.json",
+  "archived": "2026-10-18",
+  "goal": [
+    "A runner step is not killed, failed or re-dispatched by mc's own bookkeeping: a machine sleep, a resumed session's zero-turn result, a branch whose PR already merged, and a step that has landed each lead to the right state without a person.",
+    "Lane slots are counted truthfully: a dead runner's lane file is swept, and the total cap is read live and holds across every live runner.",
+    "A session started outside a repository is held by that repository's PreToolUse safety hooks, and the daily digest stops counting landings as failures."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A session silent for 5 minutes, then asleep for 26 (the mocked clock jumped by `setTime`), is not killed at wake. `onSleep` gets 26, and the session is killed `stalled` only after 20 more silent minutes. This holds also when the stall timer is the first timer to fire at wake.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run-session.test.js tests/mc/run.test.js` passes, including the two sleep tests and the `machine slept 26 min — stall guard re-armed` assertion named in step 1."
+    },
+    {
+      "met": true,
+      "criterion": "A stream that opens with a `task_notification` and a `result` with `num_turns: 0` keeps stdin open and arms no grace, and `sessionResult` returns null for it. A task-notification result with `num_turns` ≥ 1 still ends the session.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run-session.test.js tests/mc/run-plan.test.js` passes, including the three tests named in step 2."
+    },
+    {
+      "met": true,
+      "criterion": "A step workarea whose branch is at or behind the newest merged pull request's head is moved to `<name>-<n>` from origin/main before its session starts, even when `origin/<branch>` has been deleted and pruned.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/branch-landed.test.js tests/mc/run.test.js` passes, including the `mended()` cases and 'a branch behind its merged pull request\\'s head, whose remote branch is gone, is moved'."
+    },
+    {
+      "met": true,
+      "criterion": "A `ready` or `failed` step whose register entry carries `landed` is written `done` by `queue()` and the runner hands out the next step instead.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js` passes, including the three `sweepLanded` tests (MC_STEP `m:1` when S1 carries `landed`)."
+    },
+    {
+      "met": true,
+      "criterion": "`mc step ready` on a step that carries `landed` exits 1, writes nothing and names `mc step done`.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/commands/step.test.js` passes, including the landed-step refusal test."
+    },
+    {
+      "met": true,
+      "criterion": "A `current-*.json` naming a dead runner pid is moved to `runner/log/dead-<file>-<pid>.json` with one runner.log line by the next `stepsHeld()`, and `drainState` leaves it out of `inFlight`, so `drainLine` and `stopLine` never name it.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/run-control.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": true,
+      "criterion": "`takeSlot` reads `total` from `lanes.json` on every call, so a lowered total holds the next start and a raised one lets a waiting lane go, and it counts the lane files of other live runners beside its own claims, so a runner and its draining predecessor together never exceed the total.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/commands/run-lanes.test.js` passes, including the tests named in step 2."
+    },
+    {
+      "met": true,
+      "criterion": "From a session started in `~/mc/plan/mc`, `mc hook pre-tool` denies `npx wrangler d1 execute memoro-db --remote …` with memoro's `block-prod-wrangler.sh` reason and `git stash pop` with `block-shared-stash.sh`'s, and lets `ls` through.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/hooks.test.js` passes, including the tests named in the step; and `printf '%s' '{\"cwd\":\"'$HOME'/mc/plan/mc\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npx wrangler d1 execute memoro-db --remote --command x\"}}' | CLAUDE_PROJECT_DIR=$HOME/mc/plan/mc mc hook pre-tool` prints a `deny` whose reason contains `block-prod-wrangler.sh`."
+    },
+    {
+      "met": true,
+      "criterion": "`cliRows` counts no runs.tsv row with note `merged` or `pushed` and exit 0, and still counts `red,…`, `nothing` and a `merged` row with a nonzero exit.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/helper-cli-collect.test.js` passes, including 'a merge that landed and a mend that pushed are not findings'."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The stall guard re-arms across a machine sleep instead of killing",
+      "done_when": "`streamSession` in `src/mc/run.js` runs a 30-second heartbeat beside the stall timer, re-arms the guard and calls `onSleep(minutes)` when a gap over three minutes fell inside the silence; the two new tests in `tests/mc/run-session.test.js` and the new assertion in `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 953,
+      "landed": {
+        "sha": "e13d26a89e3870b48c669a52077ab8b537538003",
+        "into": "main",
+        "at": "2026-10-18T13:42:16Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Stall guard re-arms across a machine sleep (step 1). streamSession runs a 30 s heartbeat (SLEEP_TICK_MS) beside the stall timer; a gap over 3 min (SLEEP_GAP_MS) between heartbeat ticks counts as a sleep, and the part of it beyond one tick is kept in slept. The stall callback calls beat() itself before it decides, so a stall timer that comes due first at wake still sees the gap. The guard then calls onSleep(minutes), which watchFor writes to runner.log as 'machine slept N min — stall guard re-armed', and re-arms for a full stallMs instead of killing. Any stdout chunk clears slept. A sleep under three minutes is not counted. Codex sessions have no guard and get no heartbeat. The reported minutes are the gap less one tick, rounded. Verified with the fake-timer tests only; no real sleep was run on this machine. Steps 2 to 8 are untouched."
+      ],
+      "sessions": 1,
+      "seconds": 194,
+      "cost_usd": 0.022904
+    },
+    {
+      "title": "A resumed session's zero-turn task-notification result is not its end",
+      "done_when": "`scan` in `streamSession` (`src/mc/run.js`) and `sessionResult` (`src/mc/run-plan.js`) skip a `result` line whose `num_turns` is 0; the two new tests in `tests/mc/run-session.test.js` and the new test in `tests/mc/run-plan.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 954,
+      "landed": {
+        "sha": "01307af289526d8cddfb136f39510a91f7f3cddd",
+        "into": "main",
+        "at": "2026-10-18T13:52:22Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "A resumed session opens with a task_notification and a zero-turn result (origin.kind task-notification) that answers nothing. scan in streamSession (src/mc/run.js) and sessionResult (src/mc/run-plan.js) now skip a result whose num_turns is 0; a missing num_turns still counts as a turn. Filtering on origin.kind was rejected: 28 of 29 task-notification results on 2026-10-18 are real turn ends after a background task. The whole-JSON fallback in sessionResult also returns null for a lone zero-turn result, so a stream whose only result is that line reads as no-json. Tests: run-session.test.js (two new, streamSession) and run-plan.test.js (one new, readSessionOutput on a stream-json run). Gate green on the full suite."
+      ],
+      "sessions": 1,
+      "seconds": 365,
+      "cost_usd": 0.013004
+    },
+    {
+      "title": "A branch behind its merged pull request's head, with the remote gone, has landed",
+      "done_when": "`landedThroughRemote` in `src/mc/branch-landed.js` reads the merged pull request's `headRefOid` itself (fetching `refs/pull/<n>/head` when the object is missing) instead of requiring `origin/<branch>`; the new tests in `tests/mc/branch-landed.test.js` and `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 955,
+      "landed": {
+        "sha": "1ba66df803c010e46699ebd505d1e53ca42c46f1",
+        "into": "main",
+        "at": "2026-10-18T14:29:04Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "landedThroughRemote (src/mc/branch-landed.js) no longer requires origin/<branch>: it reads the newest merged pull request's headRefOid, and when that object is not local it fetches refs/pull/<n>/head. A local branch at or behind that head, with no commit of its own that the head and origin/main lack, reads as landed, so freshBranch moves it to <name>-<n>. This covers the 2026-10-18 case, sql-schema-drift-3 (memoro #13762), where the mend pushed after the step and the fetch pruned the deleted branch. Tests: the mended() cases in tests/mc/branch-landed.test.js and the moved-when-remote-gone test in tests/mc/run.test.js. The restack test is unchanged and still passes. The conflicting-branch test in run.test.js now needs revList and notInMain, because the remote branch no longer stands in for the answer. mc gate is green (2822 tests, 0 failed)."
+      ],
+      "sessions": 1,
+      "seconds": 736,
+      "cost_usd": 0.047193
+    },
+    {
+      "title": "The runner does not hand out a step that has landed",
+      "done_when": "`queue()` in `src/mc/run.js` writes `done` on a `ready` or `failed` step whose register entry carries `landed`, before any pick, and says so in runner.log; the new tests in `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 956,
+      "landed": {
+        "sha": "ed550eb30e226000d87b46731178fb4841caca98",
+        "into": "main",
+        "at": "2026-10-18T14:37:54Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "queue() now runs sweepLanded before the pick: a ready or failed step whose register entry carries landed is written done (comment says the sha, branch and time), and runner.log says so. running, landing, blocked and done are left alone. Tests in tests/mc/run.test.js cover ready-landed, failed-landed and the control with no landed. mc gate green (npm test 2825 tests, 0 failed, 9 skipped)."
+      ],
+      "sessions": 1,
+      "seconds": 847,
+      "cost_usd": 0.023868
+    },
+    {
+      "title": "mc step ready refuses a step that has landed",
+      "done_when": "`mc step ready <project> <n>` exits 1 without writing when the step's register entry carries `landed`, and names `mc step done`; the new test in `tests/mc/commands/step.test.js` passes; `mc gate` is green.",
+      "status": "done",
+      "pr": 958,
+      "landed": {
+        "sha": "c0120c44f3a0e95c55d44f092d06812d2530b8b7",
+        "into": "main",
+        "at": "2026-10-18T14:39:12Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc step ready refuses a step whose register entry carries landed: it exits 1 before any write, names the landing sha and into/at, and says mc step done. Covered by the landed-step test in tests/mc/commands/step.test.js; the runner's own sweep (step 4) writes such a step done."
+      ],
+      "sessions": 1,
+      "seconds": 340,
+      "cost_usd": 0.009934
+    },
+    {
+      "title": "A lane file whose pid is dead is swept by the runner and left out of the drain",
+      "done_when": "`stepsHeld` in `src/mc/run.js` moves a `current-*.json` naming a dead pid to `runner/log/dead-<file>-<pid>.json` with one line, `drainState` in `src/mc/run-control.js` leaves such a file out of `inFlight`, the new tests in `tests/mc/run.test.js` and `tests/mc/run-control.test.js` pass, and `mc gate` is green.",
+      "status": "done",
+      "pr": 969,
+      "landed": {
+        "sha": "9c5200f8a49939c80885474f2a9ee729fe8b8703",
+        "into": "main",
+        "at": "2026-10-18T17:19:06Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 6 is built and gated. stepsHeld() in src/mc/run.js sweeps a current-*.json that names a dead pid: it moves the file to runner/log/dead-<file>-<pid>.json, says one runner.log line, and leaves the file out of the array it returns. drainState() in src/mc/run-control.js leaves such a file out of inFlight, and every caller now passes alive (stepsOf, progressLines, stopRunner, requestUpdate's state); the runner's drainTick passes isAlive. A file naming this runner's own pid, and a file with no integer pid, are untouched. Verified: run.test.js 233 tests 0 failed, run-control.test.js 57 tests 0 failed, full npm test 2873 passed, 0 failed, 9 skipped. One fixture changed: 'an old runner finishing a long step says what it holds' now lists pid 4242 as live, because the runner's own lane file is now checked against alive; no assertion changed. Known gap: when deps.move is missing or returns false, the fallback removes the file but the runner.log line still says 'moved to log/'; the message is wrong in that rare case and is not fixed here."
+      ],
+      "sessions": 1,
+      "seconds": 1379,
+      "cost_usd": 0.040765
+    },
+    {
+      "title": "The total lane cap is read live and counts every live runner's steps",
+      "done_when": "`takeSlot` in `src/mc/run.js` reads `total` from `lanes.json` on every call and counts this process's slots plus the lane files of other live runners, `createRunner` takes no `total`, `mc run lanes` says the total applies now, the new and changed tests in `tests/mc/run.test.js` and `tests/mc/commands/run-lanes.test.js` pass, and `mc gate` is green.",
+      "status": "done",
+      "pr": 970,
+      "landed": {
+        "sha": "87ceefd646c2e21d500cd544fe2a8fc126546160",
+        "into": "main",
+        "at": "2026-10-18T17:31:40Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "takeSlot (src/mc/run.js) reads lanes.json's total on every call and counts this process's running claims plus the steps other live runners hold by their lane files (stepsHeld, other: true). createRunner takes no total; runLoop reads only per_repo and the start line. mc run lanes says 'the total applies now'. Tests: the two cap tests now set deps.laneCount; three new tests cover a total changed mid-run, a live predecessor's file counting, and a dead runner's file not counting. Verified: mc gate on run.test.js (236 green), run-lanes.test.js (8 green), full mc gate green (2880 tests, 0 failed, 9 skipped)."
+      ],
+      "sessions": 1,
+      "seconds": 1603,
+      "cost_usd": 0.046664
+    },
+    {
+      "title": "mc hook pre-tool applies the repositories' own PreToolUse hooks when the session started outside them",
+      "done_when": "`repoHookDecision` in `src/mc/hooks.js` runs each worktree's `.claude/settings.json` PreToolUse hooks and `mc hook pre-tool` denies with their reason before its own rules; the new tests in `tests/mc/hooks.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 983,
+      "landed": {
+        "sha": "674e8f335b7b4bc0309b7e3d8c8fb2894a9e819a",
+        "into": "main",
+        "at": "2026-10-18T19:29:37Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 207,
+      "cost_usd": 0.515577
+    },
+    {
+      "title": "The mc digest does not count a landed merge or a pushed mend as a failure",
+      "done_when": "`cliRows` in `src/mc/helper-cli-collect.js` skips runs.tsv rows whose note is exactly `merged` or `pushed` with exit 0; the new test in `tests/mc/helper-cli-collect.test.js` passes; `mc gate` is green.",
+      "status": "done",
+      "pr": 985,
+      "landed": {
+        "sha": "833a8bc5a32d1aca9c572e56d0b7e29f213867cf",
+        "into": "main",
+        "at": "2026-10-18T19:37:07Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "cliRows skips runs.tsv rows whose note is exactly merged or pushed with exit 0 (LANDED_NOTES in src/mc/helper-cli-collect.js). Nonzero exit with the same note, red,… and nothing stay findings; the fingerprint is unchanged. Verified by mc gate tests/mc/helper-cli-collect.test.js (16 tests green) and the full mc gate (2986 tests, 0 failed). This was the plan's last step: success_criteria[8] is met and every criterion is met: true."
+      ],
+      "sessions": 1,
+      "seconds": 125,
+      "cost_usd": 0.008492
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-18T13:41:21Z",
+      "kind": "step",
+      "seconds": 194,
+      "land_seconds": null,
+      "pr": 953,
+      "turns": 28,
+      "input": 24,
+      "output": 22582,
+      "cache_read": 484947,
+      "cache_write": 54092,
+      "model": null,
+      "note": "success,queued",
+      "session": "61327523-255c-4ef0-a9bd-378a6e38bdfb",
+      "cost_usd": 0.02290437
+    },
+    {
+      "ts": "2026-10-18T13:47:35Z",
+      "kind": "step",
+      "seconds": 365,
+      "land_seconds": null,
+      "pr": 954,
+      "turns": 25,
+      "input": 20,
+      "output": 11980,
+      "cache_read": 306109,
+      "cache_write": 31608,
+      "model": null,
+      "note": "success,queued",
+      "session": "2a0dce09-834a-4209-8f1f-9b003a9f227f",
+      "cost_usd": 0.013004089999999998
+    },
+    {
+      "ts": "2026-10-18T14:00:07Z",
+      "kind": "step",
+      "seconds": 736,
+      "land_seconds": null,
+      "pr": 955,
+      "turns": 35,
+      "input": 30,
+      "output": 34606,
+      "cache_read": 880477,
+      "cache_write": 168661,
+      "model": null,
+      "note": "success,queued",
+      "session": "6fcf6772-3afc-467a-b5ad-701b550de31b",
+      "cost_usd": 0.047193395000000006
+    },
+    {
+      "ts": "2026-10-18T14:17:28Z",
+      "kind": "step",
+      "seconds": 847,
+      "land_seconds": null,
+      "pr": 956,
+      "turns": 33,
+      "input": 38,
+      "output": 15511,
+      "cache_read": 616942,
+      "cache_write": 79516,
+      "model": null,
+      "note": "success,queued",
+      "session": "bc13d4b8-a8ff-46c0-a74b-9afe7ea6dcee",
+      "cost_usd": 0.02386822
+    },
+    {
+      "ts": "2026-10-18T14:33:03Z",
+      "kind": "step",
+      "seconds": 340,
+      "land_seconds": null,
+      "pr": 958,
+      "turns": 17,
+      "input": 22,
+      "output": 7123,
+      "cache_read": 308950,
+      "cache_write": 26245,
+      "model": null,
+      "note": "success,queued",
+      "session": "a1984b8d-f966-4599-adaf-cbe5701dbc7e",
+      "cost_usd": 0.009933824999999999
+    },
+    {
+      "ts": "2026-10-18T16:59:19Z",
+      "kind": "step",
+      "seconds": 1379,
+      "land_seconds": null,
+      "pr": 969,
+      "turns": 58,
+      "input": 50,
+      "output": 28074,
+      "cache_read": 1190395,
+      "cache_write": 118550,
+      "model": null,
+      "note": "success,queued",
+      "session": "8953a6f4-d02b-4a7f-aad2-0f6e5a441d96",
+      "cost_usd": 0.040764699999999994
+    },
+    {
+      "ts": "2026-10-18T17:26:34Z",
+      "kind": "step",
+      "seconds": 1603,
+      "land_seconds": null,
+      "pr": 970,
+      "turns": 50,
+      "input": 38,
+      "output": 25717,
+      "cache_read": 900262,
+      "cache_write": 198391,
+      "model": null,
+      "note": "success,queued",
+      "session": "4d96bbdd-3bc0-4194-94c9-a6fedb22204c",
+      "cost_usd": 0.04666379500000001
+    },
+    {
+      "ts": "2026-10-18T19:28:34Z",
+      "kind": "step",
+      "seconds": 207,
+      "land_seconds": null,
+      "pr": 983,
+      "turns": 32,
+      "input": 22,
+      "output": 11488,
+      "cache_read": 418522,
+      "cache_write": 40405,
+      "model": null,
+      "note": "success,queued",
+      "session": "39e2a3dd-c0cb-4ab7-9fff-68c8fc15adec",
+      "cost_usd": 0.5155774
+    },
+    {
+      "ts": "2026-10-18T19:36:30Z",
+      "kind": "step",
+      "seconds": 125,
+      "land_seconds": null,
+      "pr": 985,
+      "turns": 18,
+      "input": 22,
+      "output": 6078,
+      "cache_read": 270799,
+      "cache_write": 21939,
+      "model": null,
+      "note": "success,queued",
+      "session": "4bc781cf-4dd9-467a-a0c4-20d663e70202",
+      "cost_usd": 0.008491565
+    }
+  ],
+  "totals": {
+    "sessions": 9,
+    "seconds": 5796,
+    "land_seconds": 0,
+    "cost_usd": 0.728401,
+    "cost_unknown": 0,
+    "input": 266,
+    "output": 163159,
+    "cache_read": 5377403,
+    "cache_write": 739407,
+    "first": "2026-10-18T13:41:21Z",
+    "landed": "2026-10-18T19:37:07Z"
+  }
+}

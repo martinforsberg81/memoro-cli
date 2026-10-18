@@ -26,9 +26,18 @@ warning most.
 ```json
 "hooks": {
   "SessionStart": [{ "hooks": [{ "type": "command", "command": "mc hook session-start 2>/dev/null || true" }] }],
-  "PreToolUse": [{ "matcher": "Bash|Write", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }]
+  "PreToolUse": [{ "matcher": "Bash|Write|Read", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }]
 }
 ```
+
+`mc hook install` writes the block above into that file, changing only the
+entries whose command starts with `mc hook session-start` or `mc hook pre-tool`;
+every other entry is left as it is, and a file that is not JSON is refused and
+left alone. `mc hook install --check` writes nothing and exits 1 when the
+registration has drifted from the block, and the page's MC line names the drift
+as `hooks: … · mc hook install`.
+
+`Read` lets memoro's `block-sqlite-state.sh` answer the Read tool too.
 
 `|| true` because a hook must never stand between a session and its work: an
 mc that does not know the verb yet, or any failure, is silence. The verbs
@@ -50,7 +59,7 @@ it:
 | otherwise 50 or more commits behind `origin/main` | old code — cut a new branch unless this is the work in hand |
 | on `main` or `master` | never commit here |
 | origin fetched 24 h or more ago | the counts may be low — `git fetch origin` |
-| `cwd` is outside the repositories | their `CLAUDE.md` and `.claude/settings.json` were not loaded — read `CLAUDE.md` first |
+| `cwd` is outside the repositories | their `CLAUDE.md` was not loaded — read it first; their `PreToolUse` hooks are run by `mc hook pre-tool` |
 
 Then the toolbox: one line per job, the verb first. The answer is
 `{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }`.
@@ -59,7 +68,17 @@ Outside mc's repositories it prints nothing.
 ## `mc hook pre-tool`
 
 Acts only on mc's ground (under `workRoot()`, or in a worktree of a known
-repository). A `Bash` command is matched on its words:
+repository).
+
+Before its own rules, pre-tool runs the `PreToolUse` hooks in
+`.claude/settings.json` of every worktree `worktreesAt` finds at `cwd`, except
+the one `$CLAUDE_PROJECT_DIR` names (Claude Code already ran that one's), with
+`CLAUDE_PROJECT_DIR` set to that worktree and the hook JSON on stdin. A `deny`
+on stdout or exit 2 is the answer, named by repository (`mc: memoro hook:
+Blocked by …`). A session started in a plan directory or a workarea never
+loaded those hooks itself, and memoro's are its data-access policy.
+
+A `Bash` command is matched on its words:
 
 | Command | Turned to |
 | --- | --- |

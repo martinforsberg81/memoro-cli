@@ -16,6 +16,9 @@ Everything else is done here, with Martin:
 Never put work in the runner to get a review between steps. If step 3 waits on
 Martin seeing step 2, do step 2 here; the plan starts after it, or not at all.
 Mixed work: the reviewed part here first, landed; then a plan for what is left.
+Nor does a plan hold anything for Martin afterwards — no hand check, no
+"Martin's" criterion, no review step: he tests once the project is done, and
+nothing in the plan waits for that.
 
 ## Driving work in this session
 
