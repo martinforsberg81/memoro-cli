@@ -204,6 +204,21 @@ where the new row is written. There is no queue (Martin, 2026-10-09: *"Vi skulle
 kunna låta deploy vara utan kö."*): a second `mc deploy` is refused and run again
 when the first is done.
 
+### The heavy lane is the deploy's while it builds (2026-10-18)
+
+No repository lease, but the machine's heavy gate lock: once the rounds in
+flight are done (`waitForGate`), the deployer takes `gate-running.json` with
+`mode: 'deploy'` and gives it back when the script ends, whatever the outcome
+(`holdHeavyLane` in [`src/mc/commands/deploy.js`](../../src/mc/commands/deploy.js)).
+`mc test`, the nightly loop and the page see a heavy round, and a `mc gate`
+started meanwhile runs [`src/mc/await-deploy.js`](../../src/mc/await-deploy.js)
+in its detached child before its tests, so the wait is in the gate's own log and
+the verb's budget and `--wait` are unchanged. Martin, 2026-10-18: *"Deploy ska ta
+tung lease."* That day the merger waited behind a deploy as it should while
+session gates went on beside the bundle, and the deploy took 40 minutes instead
+of two, the bundle alone 15. A deployer that dies leaves a lock whose pid is
+gone, which is nobody's.
+
 A language run is kept apart the same way. Its record
 (`liveRun`, [`src/mc/language-runs.js`](../../src/mc/language-runs.js)) is read
 in the same places. `mc language` reads the deploy record under the same lock
