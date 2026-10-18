@@ -19,6 +19,7 @@ export const VERB_MODULES = {
   hook: './mc/commands/hook.js',
   publish: './mc/commands/publish.js',
   dev: './mc/commands/dev.js',
+  docker: './mc/commands/docker.js',
   deploy: './mc/commands/deploy.js',
   language: './mc/commands/language.js',
   deps: './mc/commands/deps.js',
