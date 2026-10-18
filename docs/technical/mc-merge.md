@@ -948,6 +948,17 @@ dequeued and its step `done`; a closed one leaves the queue. On 2026-10-10 a
 hand-merged #13372 turned #13373 and #13374 red with its reason, and #13370
 stayed red in `merges.json` after its `--admin` merge.
 
+A job answered before the round — merged, closed, or a restack refused — is
+written to `merges.json` the moment it is answered (`landJob` tells `serve`'s
+`writeAnswer` through `onAnswer`, after the register is written and outside
+any lock), so the page and `mc merge watch` never draw it as landing while
+the others' round runs; a restack red that gets its mend starts it then, as
+soon as the mend line is free. On 2026-10-10 #13400 (closed) and #13397 (a
+restack conflict) read `landing` for the whole 9-minute round of #13375 and
+#13405, and #13397's mend waited 100 s for that round to end after the mend
+before it had. The block after the round writes only what `onAnswer` did not:
+a round that threw.
+
 **A plan's steps land in order.** A job for step n goes only once every
 earlier step of its plan is `done` in the register (`stepsDone` in
 [`src/mc/merge-queue.js`](../../src/mc/merge-queue.js), read by `nextJob` and

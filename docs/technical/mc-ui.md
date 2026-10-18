@@ -536,6 +536,7 @@ person set it to.
 | HELPER | no digest yet, no new errors | grey |
 | BRIEF | proposals, when > 0 | yellow |
 | MC | update available; update requested; up to date | bold yellow, green, grey |
+| MC | a process — the merger, the repo watch — on another commit than the checkout: its pid, its commit, the checkout's | yellow |
 | PROGRAMMES | a project the runner is stepping — `●`, its name | green, bold |
 | PROGRAMMES | a quiet project's name and `next` | plain, plain |
 | PROGRAMMES | the programme heading | bold cyan |

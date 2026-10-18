@@ -436,7 +436,10 @@ export function answersFor(jobs, report) {
  * A batch of jobs for one repository (one job is a batch of one), landed or
  * answered: move the stacked ones onto main, wait while somebody else
  * measures, run one round over all of them, record it, and write each job's
- * own answer. Returns the answers, `[{ job, landed, report }]`.
+ * own answer. Each answer is written to the register and told to `onAnswer`
+ * when it is given, so the queue and the page know an answer given before
+ * the round (a restack refused, merged or closed on GitHub) for the whole
+ * round. Returns the answers, `[{ job, landed, report }]`.
  */
 export async function landJob(batch, {
   root, mergeRound = runMergeRound, sleep, say, gh = null,
@@ -453,6 +456,9 @@ export async function landJob(batch, {
   // Whether a red gets its one mend first (mend.js `mayMend`). Off unless
   // the caller mends: `serve` with a `mend` is what sets such a job aside.
   mayMend = () => false,
+  // Told each answer as it is given, after the register is written: `serve`
+  // writes the queue and starts a mend from it.
+  onAnswer = null,
 } = {}) {
   const t0 = now().getTime();
   const answers = [];
@@ -462,6 +468,15 @@ export async function landJob(batch, {
     await tell(job, landed, report, {
       root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), mending,
     });
+    // Outside any lock: `tell` has let go of the register's, and the queue's
+    // is the same lock, which a second take by this process waits 5 s for.
+    if (onAnswer) {
+      try {
+        await onAnswer({ job, landed, report, ...(mending ? { mending: true } : {}) });
+      } catch (error) {
+        say(`${job.repo} #${job.pr}: the queue could not be told (${error?.message || error}) — written after the round`);
+      }
+    }
   };
   const jobs = [];
   for (const job of [].concat(batch)) {
@@ -578,7 +593,7 @@ function keepRed(report, { root, repo, pr, batch, now }) {
  * on the heavy lane's round.
  */
 export function landerFor(deps) {
-  return (batch, lane) => landJob(batch, { ...deps, lane });
+  return (batch, lane, extra = {}) => landJob(batch, { ...deps, lane, ...extra });
 }
 
 /** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
@@ -662,7 +677,7 @@ export async function serve({
   // merger-run.js: the first line says it, and merger.json keeps the commit.
   version = null,
   take = () => takeMerger({ root, commit: version?.commit || null }), release = () => releaseMerger({ root }),
-  land = (batch, lane) => landJob(batch, { root, say, now, read, lock, lane }),
+  land = (batch, lane, extra = {}) => landJob(batch, { root, say, now, read, lock, lane, ...extra }),
   landed = parentLanded(root, { read }),
   ordered = stepsBeforeDone(root, { read }),
   laneOf = (job) => gateLaneOf(job.repo),
@@ -734,6 +749,10 @@ export async function serve({
   // Jobs in a round now, across the lanes, and whether the stop was said.
   let inFlight = 0;
   let toldStop = false;
+  // Jobs whose answer `writeAnswer` wrote to the queue while their batch was
+  // in flight: the post-round block leaves them as they are.
+  const written = new Set();
+  const keyOf = (job) => `${job.repo}#${job.pr}`;
   // The commit the checkout moved to, once a lane has seen it.
   let movedTo = null;
   let wake = () => {};
@@ -756,6 +775,27 @@ export async function serve({
     try { onMoved?.(version.commit, current); } catch { /* a line, not the merger */ }
     return true;
   }
+
+  // One job's answer written to the queue the moment `landJob` gives it, and
+  // its mend started then (2026-10-10: #13400 closed and #13397 set aside for
+  // a mend read `landing` for the 9 minutes of the others' round). Called
+  // after `tell`, outside any lock, so it takes the queue's lock itself.
+  const writeAnswer = async ({ job, landed: isLanded, report, mending }) => {
+    const at = now().toISOString();
+    const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
+    lock(root, () => {
+      let entries = parseQueue(read(mergesPath(root)));
+      entries = isLanded && report?.ok && report.merged
+        ? dequeue(entries, job)
+        : mending && mends
+        ? markMending(entries, job, { reason, stopped_at: report?.stopped_at || null, started: at })
+        : markRed(entries, job, { reason, answered: at });
+      write(mergesPath(root), entries);
+    });
+    written.add(keyOf(job));
+    if (mending && mends) mends.start(job, report).then(changed);
+    changed();
+  };
 
   const loop = async (lane) => {
     for (;;) {
@@ -822,7 +862,7 @@ export async function serve({
       let answers = null;
       inFlight += batch.length;
       try {
-        const result = await land(batch, lane);
+        const result = await land(batch, lane, { onAnswer: writeAnswer });
         answers = Array.isArray(result) ? result : answersFor(batch, result);
       } catch (error) {
         say(`${job.repo} ${batch.map((item) => `#${item.pr}`).join(' ')}: the round threw — ${error?.stack || error}`);
@@ -835,21 +875,28 @@ export async function serve({
       // job of a batch by its own answer.
       // A red that gets its one mend is set aside as `mending`, and the lane
       // goes on: the mend runs beside it, never awaited here.
+      // What is left here is what `onAnswer` did not write: a round that
+      // threw, or a `land` that does not tell its answers as it gives them.
       const answered = now().toISOString();
-      const toMend = answers.filter((one) => one.mending && mends);
-      lock(root, () => {
-        let entries = parseQueue(read(mergesPath(root)));
-        for (const { job: one, report, mending } of answers) {
-          const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
-          entries = report?.ok && report.merged
-            ? dequeue(entries, one)
-            : mending && mends
-            ? markMending(entries, one, { reason, stopped_at: report?.stopped_at || null, started: answered })
-            : markRed(entries, one, { reason, answered });
-        }
-        write(mergesPath(root), entries);
-      });
+      const left = answers.filter((one) => !written.has(keyOf(one.job)));
+      const toMend = left.filter((one) => one.mending && mends);
+      if (left.length) {
+        lock(root, () => {
+          let entries = parseQueue(read(mergesPath(root)));
+          for (const { job: one, report, mending } of left) {
+            const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
+            entries = report?.ok && report.merged
+              ? dequeue(entries, one)
+              : mending && mends
+              ? markMending(entries, one, { reason, stopped_at: report?.stopped_at || null, started: answered })
+              : markRed(entries, one, { reason, answered });
+          }
+          write(mergesPath(root), entries);
+        });
+      }
       for (const { job: one, report } of toMend) mends.start(one, report).then(changed);
+      // Queued again later, a job is written again.
+      for (const one of batch) written.delete(keyOf(one));
       changed();
     }
   };

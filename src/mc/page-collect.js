@@ -63,10 +63,12 @@ import { HELPER_REPOS, digestDirs, findDigest, proposalsDir } from './helper-col
 import {
   inLine, mergesPath, queueEntries, queueOrder, redEntries, samePr, stepsDone, waitingOn,
 } from './merge-queue.js';
+import { readMerger } from './merger.js';
 import { runningMerges } from './merges-collect.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
 import { nightlyReading } from './nightly-history.js';
+import { watcherState } from './repo-watch.js';
 import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.js';
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
@@ -975,12 +977,17 @@ function proposalSummary(files, named = PROPOSALS_NAMED) {
  * `predecessor` is the runner an update replaced while it is still alive and
  * finishing the steps it held (ruling 28): its pid and those steps' names, so
  * the line can say two runners are running and why.
+ *
+ * `processes` are the other long-lived mc processes (`{ name, pid, commit }`:
+ * the merger, the repo watcher); `behind_checkout` is those whose commit is not
+ * the checkout's — each leaves for the new code at its next safe point.
  */
 export function mcSection({
   process = null, commit = null, head = null, main = null, behind = null, updateText = null, drain = null, now = new Date(),
-  pid = null, predecessor = null,
+  pid = null, predecessor = null, processes = [],
 } = {}) {
   const asked = Date.parse(String(updateText || '').trim());
+  const behindCheckout = head ? processes.filter((p) => p?.commit && !sameCommit(p.commit, head)) : [];
   return {
     up_seconds: process?.alive ? process.up_seconds : null,
     // The runner's own word or nothing: the checkout's HEAD is what the *next*
@@ -991,6 +998,8 @@ export function mcSection({
     behind: Number.isInteger(behind) ? behind : null,
     // Only while two runners overlap; otherwise the line is what it was.
     ...(predecessor ? { pid: Number.isInteger(pid) ? pid : null, predecessor: { pid: predecessor.pid, steps: predecessor.steps || [] } } : {}),
+    // Only while a process is behind; otherwise the line is what it was.
+    ...(behindCheckout.length ? { behind_checkout: behindCheckout } : {}),
     update_requested: updateText == null ? null : {
       at: Number.isNaN(asked) ? null : new Date(asked).toISOString(),
       age_seconds: Number.isNaN(asked) ? null : Math.max(0, Math.round((now.getTime() - asked) / 1000)),
@@ -1626,6 +1635,11 @@ export async function collectPage({
         }
         : null,
       ...mcReading(checkout, runnerFile?.commit ?? null, git),
+      // File reads and a signal 0, as the rest of the page: no network.
+      processes: [
+        (() => { const m = readMerger({ root }); return m ? { name: 'merger', pid: m.pid, commit: m.commit || null } : null; })(),
+        (() => { const w = watcherState({ root: home }); return w.running ? { name: 'repo watch', pid: w.pid, commit: w.commit } : null; })(),
+      ].filter(Boolean),
       updateText: readText(join(root, 'runner', 'UPDATE')),
       drain: drainState({
         paths: controlPaths(root),

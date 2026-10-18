@@ -18,7 +18,7 @@ import { runMcCli } from './_helpers/mc-cli.js';
 import {
   combinedPath, readCombinedSnapshot, repoStatusRoot, writeSnapshot,
 } from '../../src/mc/repo-snapshot.js';
-import { watchRound } from '../../src/mc/repo-watch-loop.js';
+import { watchLoop, watchRound } from '../../src/mc/repo-watch-loop.js';
 
 /** Wait for something the watcher does in its own time. */
 async function until(predicate, { timeoutMs = 30_000, everyMs = 100 } = {}) {
@@ -71,6 +71,8 @@ describe('the watcher', () => {
       const state = json(runMcCli(['repo', 'watch', 'status', '--json'], fx.env));
       assert.equal(state.running, true);
       assert.ok(state.pid > 0);
+      // The commit it started on: the tests run inside the memoro-cli checkout.
+      assert.match(state.commit, /^[0-9a-f]{7,}$/u);
       assert.equal(state.stale, false);
 
       // And now the view is a file read rather than a fetch and a gh round.
@@ -122,6 +124,22 @@ describe('the watcher', () => {
       const names = readdirSync(repoStatusRoot(fx.mcHome)).sort();
       assert.ok(names.includes('all.json'), names.join(', '));
       assert.ok(names.every((name) => name.endsWith('.json')), names.join(', '));
+    } finally { fx.cleanup(); }
+  });
+
+  // The code moved: the watcher leaves after the refresh in flight, and the
+  // successor it starts runs the next one (repo-watch-run.js).
+  it('a loop told after a round that the code moved runs no further round', async () => {
+    const fx = fixture({ name: 'repo-watch' });
+    try {
+      const said = [];
+      let asked = 0;
+      await watchLoop({
+        rounds: 3, intervalMs: 1, root: fx.mcHome, env: { ...process.env, ...fx.env },
+        log: (line) => said.push(line), afterRound: async () => { asked += 1; return true; },
+      });
+      assert.equal(said.filter((line) => /^(wrote|round failed)/u.test(line)).length, 1, said.join('\n'));
+      assert.equal(asked, 1);
     } finally { fx.cleanup(); }
   });
 
