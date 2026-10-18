@@ -45,6 +45,12 @@ THE PAGE
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc deploy --follow               Watch the deploy that is running
+  mc build ios                     Does memoro need a new iOS binary? Builds nothing
+  mc build ios --device            The commit production runs, on the paired iPhone
+  mc build ios --testflight [--no-upload]
+                                    The same, verified, uploaded after one question
+  mc build ios --shipped <build> <sha>
+                                    Record a binary built before mc build existed
   mc language [status <lang>]      Each language's last reading and run; status reads one again
   mc language key [set]            The Cloudflare key the writes get — set reads it from stdin
   mc language run <manifest>       A cutover's acts in order, a question before every write
@@ -371,6 +377,22 @@ IN FULL
                                     and read back by the page and
                                     mc helper. It takes no repository:
                                     memoro-cli is installed, not deployed
+  mc build ios [--json]            Whether memoro needs a new iOS binary,
+                                    without building: the last shipped build,
+                                    the commit production runs, and the native
+                                    paths and packages memoro's .mc/ios.json
+                                    declares that differ between them — or
+                                    that mc deploy is enough. Reads
+                                    ~/mc/runner/log/ios-builds.tsv
+  mc build ios --device            Build the commit production runs and
+                                    install it on the paired iPhone
+  mc build ios --testflight [--no-upload]
+                                   Build, verify the IPA and, after one
+                                    question, upload it to TestFlight;
+                                    --no-upload stops at the verified IPA
+  mc build ios --shipped <build> <sha>
+                                   Record a binary built before the verb
+                                    existed as the last shipped one
   mc language [--json]             Every language with a cached reading or a
                                     manifest: the reading's age, the manifests,
                                     the last run. Offline and instant
