@@ -1234,6 +1234,101 @@ describe('a repository that selects by diff', () => {
     } finally { undeclared.cleanup(); }
   });
 
+  /** A docker fake that records each call, and answers `ensure` with `answer`. */
+  function fakeDocker(answer = { ok: true, started: true, lease: '/l/1.json' }) {
+    const calls = [];
+    return {
+      calls,
+      ensure: async (o) => { calls.push(['ensure', o]); return answer; },
+      release: (path) => { calls.push(['release', path]); return true; },
+    };
+  }
+
+  it('a command gate that needs docker gets the runtime, the labels and its lease back', async () => {
+    // memoro's selector says `needs: ['docker']`: the round starts the runtime for
+    // itself, labels what the gate starts, and gives the lease back when it ends.
+    const docker = fakeDocker();
+    const fx = selecting({
+      files: ['tests/a.test.js'],
+      commands: [
+        { id: 'pg', packageScript: 'sql:reference:postgres', passBaseRef: false, resourceClass: 'heavy', selectedBy: ['pg'], allowUnavailable: true, unavailableExitCode: 69, needs: ['docker'] },
+        { id: 'css-lint', packageScript: 'css:lint', passBaseRef: false, resourceClass: 'standard', selectedBy: ['css-contract'] },
+      ],
+      scripts: {
+        'sql:reference:postgres': 'sh -c \'printf "%s %s %s" "$MC_DOCKER_HOLDER" "$MC_DOCKER_RUN" "$MC_DOCKER_REPO" > "$GATE_MARKS/pg"\' sh',
+        'css:lint': 'sh -c \'printf "%s" "${MC_DOCKER_HOLDER:-none}" > "$GATE_MARKS/css-lint"\' sh',
+      },
+    });
+    try {
+      const report = await fx.report({ docker, holderPid: 4321 });
+      assert.equal(report.ok, true, report.reason);
+      assert.deepEqual(docker.calls, [
+        ['ensure', { pid: 4321, run: 'merge #7', repo: 'repo', root: fx.mcHome }],
+        ['release', '/l/1.json'],
+      ]);
+      assert.equal(fx.mark('pg'), '4321 merge #7 repo');
+      assert.equal(fx.mark('css-lint'), 'none');
+      assert.equal(report.extra_gates.find((gate) => gate.name === 'sql:reference:postgres').docker, 'started');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a runtime that cannot start makes a gate that may be unavailable unavailable, and does not run it', async () => {
+    const docker = fakeDocker({ ok: false, started: true, waited_ms: 1, server: null, lease: null, reason: 'orbctl start failed: boom' });
+    const fx = selecting({
+      files: ['tests/a.test.js'],
+      commands: [
+        { id: 'pg', packageScript: 'sql:reference:postgres', passBaseRef: false, resourceClass: 'heavy', selectedBy: ['pg'], allowUnavailable: true, unavailableExitCode: 69, needs: ['docker'] },
+      ],
+      scripts: { 'sql:reference:postgres': marking('pg', 69) },
+    });
+    try {
+      const report = await fx.report({ docker, holderPid: 4321 });
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(fx.mark('pg'), null, 'the gate ran with no runtime');
+      assert.deepEqual(docker.calls.map(([name]) => name), ['ensure']);
+      const gate = report.extra_gates.find((one) => one.name === 'sql:reference:postgres');
+      assert.equal(gate.unavailable, true);
+      assert.equal(gate.ran, false);
+      assert.equal(gate.exit_code, 69);
+      assert.match(gate.output, /docker could not be started: orbctl start failed: boom/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('the same failure from a gate that did not declare unavailable is red', async () => {
+    const docker = fakeDocker({ ok: false, started: false, waited_ms: 1, server: null, lease: null, reason: 'orbctl start failed: boom' });
+    const fx = selecting({
+      files: ['tests/a.test.js'],
+      commands: [
+        { id: 'pg', packageScript: 'sql:reference:postgres', passBaseRef: false, resourceClass: 'heavy', selectedBy: ['pg'], needs: ['docker'] },
+      ],
+      scripts: { 'sql:reference:postgres': marking('pg', 69) },
+    });
+    try {
+      const report = await fx.report({ docker, holderPid: 4321 });
+      assert.equal(report.stopped_at, 'selected-gate');
+      assert.match(report.reason, /sql:reference:postgres \(exit 69\)/u);
+      assert.equal(fx.mark('pg'), null, 'the gate ran with no runtime');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a selection without needs never asks for docker', async () => {
+    const docker = fakeDocker();
+    const fx = selecting({
+      files: ['tests/a.test.js'],
+      commands: [
+        { id: 'pg', packageScript: 'sql:reference:postgres', passBaseRef: false, resourceClass: 'heavy', selectedBy: ['pg'], allowUnavailable: true, unavailableExitCode: 69 },
+        { id: 'css-lint', packageScript: 'css:lint', passBaseRef: false, resourceClass: 'standard', selectedBy: ['css-contract'] },
+      ],
+      scripts: { 'sql:reference:postgres': marking('pg', 69), 'css:lint': marking('css-lint') },
+    });
+    try {
+      const report = await fx.report({ docker, holderPid: 4321 });
+      assert.equal(report.ok, true, report.reason);
+      assert.deepEqual(docker.calls, []);
+      assert.equal(fx.mark('css-lint'), '');
+    } finally { fx.cleanup(); }
+  });
+
   it('a command gate that fails is red, and the gates after it still run', async () => {
     // ci.mjs wrote the reason down where it makes the same choice about tests:
     // while anything else is red, a skipped command gate hides every contract

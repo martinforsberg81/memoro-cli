@@ -58,6 +58,14 @@ lease. If `docker info` does not answer within its timeout, it gives up and
 takes no lease. A context other than `orbstack` and `desktop-linux` is not one
 mc can start.
 
+**Who takes a lease.** A merge round takes one for itself before a selected
+command gate whose selector entry says `needs: ["docker"]`, with the round's
+pid as the holder and `merge #<pr>` as the run, and releases it when the gate
+ends (the paragraph on command gates that need Docker in
+[`mc-merge.md`](mc-merge.md#what-the-round-measures)). Anything else that needs
+the runtime takes its lease with `mc docker ensure`, and gives it back with
+`mc docker release`.
+
 **No `docker` call while OrbStack is down.** On OrbStack a `docker` call starts
 the VM, so asking the CLI whether the runtime is up would make it so. The
 context comes from `DOCKER_CONTEXT`, `DOCKER_HOST` or `currentContext` in
