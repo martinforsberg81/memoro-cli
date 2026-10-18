@@ -72,7 +72,8 @@ import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
   runningDeploy,
 } from '../deploys.js';
-import { runningRounds } from '../gate-lock.js';
+import { DEPLOY_MODE } from '../await-deploy.js';
+import { releaseGateLock, runningRounds, takeGateLock } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
@@ -820,12 +821,35 @@ export async function waitForGate(job, deps = {}) {
 }
 
 /**
+ * The deploy holds the heavy lane while it builds (Martin, 2026-10-18:
+ * *"Deploy ska ta tung lease"*). Waiting for the rounds in flight was not
+ * enough: on 2026-10-18 the merger waited behind a deploy as it should, but
+ * session `mc gate` runs went on beside the bundle, and the deploy took 40
+ * minutes, the bundle alone 15. So once the gate is free the deployer takes
+ * the heavy gate lock with `mode: 'deploy'`: `mc test` and the merger see a
+ * heavy round, and a `mc gate` started meanwhile waits for it before its tests
+ * (`await-deploy.js`). A round that took the lock between the wait and the
+ * take is waited for again. True when this process holds it; a lock that
+ * could not be written is no reason not to deploy.
+ */
+export async function holdHeavyLane(job, deps = {}) {
+  const take = deps.takeGateLock || takeGateLock;
+  const root = job.lockRoot || mcHome(deps.env || process.env);
+  for (;;) {
+    await waitForGate(job, deps);
+    const held = take({ repo: 'deploy', pr: null, mode: DEPLOY_MODE, root, lane: 'heavy' });
+    if (held.ok) return held.took;
+  }
+}
+
+/**
  * Everything after the yes, in the deployer's own process: the round in
  * flight waited for (`waitForGate`), the worktree fast-forwarded to
  * `origin/main`, the script run there, the row completed with the sha that
- * shipped. Nothing here holds a lease — the worktree is moved by nothing but
- * this, and the merger lands nothing while the row says `running`
- * (rulings 26, 30).
+ * shipped. No repository lease is held — the worktree is moved by nothing
+ * but this, and the merger lands nothing while the row says `running`
+ * (rulings 26, 30) — but the heavy gate lock is, for the whole deploy
+ * (`holdHeavyLane`).
  */
 export async function ship(job, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -834,8 +858,9 @@ export async function ship(job, deps = {}) {
   const git = deps.git || tryGit;
   const { key, sha, worktree, own } = job;
   let tail = '';
+  let holding = false;
   try {
-    await waitForGate(job, { ...deps, stdout });
+    holding = await holdHeavyLane(job, { ...deps, stdout });
     // The one movement of somebody else's checkout this verb may make.
     // `origin/main` is what ships — whatever is on `main` is meant to — so it
     // is fast-forwarded to `origin/main` as it is now, which may be later than
@@ -927,6 +952,8 @@ export async function ship(job, deps = {}) {
     // `running` for a failure mc itself caused, and the throw goes on up.
     recordEnd(key, { outcome: FAILED, stopped_at: readScriptOutput(tail).stopped_at, note: `mc: ${error?.message || error}` }, env);
     throw error;
+  } finally {
+    if (holding) (deps.releaseGateLock || releaseGateLock)({ root: job.lockRoot || mcHome(env), lane: 'heavy' });
   }
 }
 

@@ -50,7 +50,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+import { deployHolding } from '../await-deploy.js';
 import { ensure, needsDocker } from '../docker.js';
 import { planGate, recordLast, snapshotTree } from '../gate-fast.js';
 import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
@@ -66,6 +68,9 @@ import { scanArgs } from './flags.js';
 const DEFAULT_BUDGET = 540;
 /** How often the answer looks for the gate's exit code. */
 const POLL_MS = 2000;
+
+/** What a gate started while a deploy holds the heavy lane runs first (`await-deploy.js`). */
+const AWAIT_DEPLOY = fileURLToPath(new URL('../await-deploy.js', import.meta.url));
 
 /** The machine the verb runs on; a test hands in its own. */
 const SYSTEM = {
@@ -89,6 +94,7 @@ const SYSTEM = {
   holder: ({ cwd, env }) => currentHolder({ cwd, env }).name,
   snapshotTree,
   dockerEnsure: (options) => ensure(options),
+  deployHolding: ({ env }) => deployHolding({ root: mcHome(env) }),
 };
 
 export async function run(argv, deps = {}) {
@@ -153,6 +159,9 @@ export async function run(argv, deps = {}) {
     childEnv.MC_DOCKER_REPO = recordable?.green?.repo || basename(root);
   }
 
+  const deploying = io.deployHolding({ env });
+  if (deploying) stderr.write(`mc: a deploy holds the heavy lane (pid ${deploying.pid}) — this gate starts its tests when it is done\n`);
+
   const startedAt = io.now();
   const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
   const dir = env.MC_SCRATCH || join(tmpdir(), 'mc-gate');
@@ -162,7 +171,10 @@ export async function run(argv, deps = {}) {
     io.mkdir(dir);
     const fd = io.open(logPath);
     // `$$` is this shell's own pid, which is `child.pid`: the lease holder.
-    const script = `${wantsDocker ? 'export MC_DOCKER_HOLDER=$$; ' : ''}${chosen.run}; echo $? > '${logPath}.exit'`;
+    // A deploy holding the heavy lane is waited for inside the child, so the
+    // verb answers within its budget as ever and the wait is in the log.
+    const waitDeploy = deploying ? `'${process.execPath}' '${AWAIT_DEPLOY}'; ` : '';
+    const script = `${wantsDocker ? 'export MC_DOCKER_HOLDER=$$; ' : ''}${waitDeploy}${chosen.run}; echo $? > '${logPath}.exit'`;
     child = io.spawn('sh', ['-c', script], {
       cwd: root, env: childEnv, detached: true, stdio: ['ignore', fd, fd],
     });

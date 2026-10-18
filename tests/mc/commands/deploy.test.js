@@ -896,6 +896,38 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
     assert.equal(order.at(-1), 'build');
   });
 
+  it('the deployer holds the heavy gate lock as a deploy while it builds, and gives it back', async () => {
+    const calls = [];
+    const job = { key: { started: 'x', sha: SHA }, sha: SHA, worktree: MAIN_WT, own: true, root: work };
+    const code = await ship(job, {
+      ...deps(),
+      stdout: io().stdout,
+      runningRound: () => null,
+      readMerger: () => null,
+      takeGateLock: (options) => { calls.push(['take', options.mode, options.lane]); return { ok: true, took: true }; },
+      releaseGateLock: (options) => { calls.push(['release', options.lane]); return true; },
+      spawnDeploy: async () => { calls.push(['build']); return { code: 3 }; },
+    });
+    assert.equal(code, 3);
+    assert.deepEqual(calls, [['take', 'deploy', 'heavy'], ['build'], ['release', 'heavy']], 'held for the build, released even when it fails');
+  });
+
+  it('a round that took the heavy lane between the wait and the take is waited for again', async () => {
+    let takes = 0;
+    const order = [];
+    const job = { key: { started: 'x', sha: SHA }, sha: SHA, worktree: MAIN_WT, own: true, root: work };
+    await ship(job, {
+      ...deps(),
+      stdout: io().stdout,
+      runningRound: () => null,
+      readMerger: () => null,
+      takeGateLock: () => { takes += 1; order.push('take'); return takes === 1 ? { ok: false, running: { pid: 9 } } : { ok: true, took: true }; },
+      releaseGateLock: () => { order.push('release'); return true; },
+      spawnDeploy: async () => { order.push('build'); return { code: 0 }; },
+    });
+    assert.deepEqual(order, ['take', 'take', 'build', 'release']);
+  });
+
   it('^C stops the watching and not the deploy', async () => {
     const signals = new EventEmitter();
     const log = deployLogPath(work);

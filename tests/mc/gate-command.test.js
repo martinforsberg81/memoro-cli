@@ -20,7 +20,7 @@ const OLD_LOG = '/scratch/gate-20260925T095000Z.log';
  * A fake machine. The gate finishes after `finishAfter` sleeps: it writes its
  * log and exit code then, and is no longer alive.
  */
-function harness({ lock = null, manifest = { scripts: { test: 'node --test' } }, live = [], finishAfter = Infinity, code = 0, output = '', tests = [] } = {}) {
+function harness({ lock = null, manifest = { scripts: { test: 'node --test' } }, live = [], finishAfter = Infinity, code = 0, output = '', tests = [], deploy = null } = {}) {
   const files = new Map();
   const alive = new Set(live);
   const out = { stdout: '', stderr: '', spawned: [], dirs: [], removed: [], ticks: 0, unref: false };
@@ -51,6 +51,7 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
       return { pid: CHILD, unref: () => { out.unref = true; } };
     },
     alive: (pid) => alive.has(pid),
+    deployHolding: () => deploy,
     sleep: async (ms) => {
       clock += ms;
       out.ticks += 1;
@@ -88,6 +89,17 @@ describe('mc gate, started', () => {
     assert.equal(out.stdout, `RUNNING — npm test — 10s so far, still running (pid ${CHILD})\nlog: ${LOG} — mc gate --wait waits for it and prints the verdict\n`);
     assert.equal(files.has(LOCK), true);
     assert.deepEqual(out.removed, []);
+  });
+
+  it('a deploy holding the heavy lane is waited for inside the child, and said once', async () => {
+    const { out, deps } = harness({ deploy: { pid: 777, mode: 'deploy' }, finishAfter: 1, output: 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n' });
+    assert.equal(await run([], deps), 0);
+    assert.match(out.spawned[0].args[1], /^'[^']+' '[^']+await-deploy\.js'; npm test; echo \$\? > '/u);
+    assert.equal(out.stderr, 'mc: a deploy holds the heavy lane (pid 777) — this gate starts its tests when it is done\n');
+
+    const free = harness({ finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
+    assert.equal(await run([], free.deps), 0);
+    assert.doesNotMatch(free.out.spawned[0].args[1], /await-deploy/u);
   });
 
   it('a second gate while one is alive refuses with exit 2', async () => {
