@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { inLine, mergesPath, parseQueue, placeOf, queueOrder, queuedFor, samePr, waitingOn } from './merge-queue.js';
-import { readMerger, stepsBeforeDone } from './merger.js';
+import { installedHead, readMerger, stepsBeforeDone } from './merger.js';
 import { workRoot } from './paths.js';
 
 /**
@@ -41,17 +41,19 @@ export const WATCH_TIMEOUT_MIN = 30;
  * resolve, and the loop asks. A queued job whose plan's earlier step is not
  * `done` carries `waits_for: '<project> step <n>'` (`ordered`, merger.js
  * `stepsBeforeDone`). A job that waits while no merger is alive carries
- * `merger: false`.
+ * `merger: false`. A merger whose commit (`merger.json`) is not `head`, the
+ * installed checkout's, carries `code: 'merger on <commit> · main <head>'`.
  */
-export function watchState(entries, { repo, pr, merger = null, ordered = () => true } = {}) {
+export function watchState(entries, { repo, pr, merger = null, ordered = () => true, head = null } = {}) {
   const entry = queuedFor(entries, repo, pr);
   if (!entry) return { kind: 'gone' };
   if (entry.state === 'red') return { kind: 'red', reason: entry.reason, answered: entry.answered };
+  const code = merger?.commit && head && !sameCommit(merger.commit, head) ? `merger on ${merger.commit} · main ${head}` : null;
   if (entry.state === 'landing') {
     const batch = entry.started == null ? [] : entries
       .filter((other) => !samePr(other, entry) && other.state === 'landing' && other.started === entry.started)
       .map((other) => other.pr);
-    return { kind: 'landing', batch, pid: merger?.pid ?? null };
+    return { kind: 'landing', batch, pid: merger?.pid ?? null, ...(code ? { code } : {}) };
   }
   const waits = waitingOn(entries, { ordered }).find((other) => samePr(other.entry, entry)) || null;
   const line = queueOrder(inLine(entries)).filter((other) => other.repo === entry.repo);
@@ -64,7 +66,15 @@ export function watchState(entries, { repo, pr, merger = null, ordered = () => t
     };
   if (state.kind === 'queued' && waits?.step) state.waits_for = `${waits.step.project} step ${waits.step.number}`;
   if (!merger) state.merger = false;
+  if (code) state.code = code;
   return state;
+}
+
+// Two short shas of different lengths name one commit when one starts the other.
+function sameCommit(a, b) {
+  const x = String(a || '');
+  const y = String(b || '');
+  return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
 }
 
 const prs = (numbers) => numbers.map((number) => `#${number}`).join(' ');
@@ -72,17 +82,18 @@ const prs = (numbers) => numbers.map((number) => `#${number}`).join(' ');
 /** The state as a line, whether or not it changed. */
 function lineOf(pr, state) {
   const noMerger = state.merger === false ? ' — no merger is running' : '';
+  const code = state.code ? ` — ${state.code}` : '';
   if (state.kind === 'queued') {
     const where = state.ahead.length ? `behind ${prs(state.ahead)}` : 'next in line';
     const order = state.waits_for ? `, waits for ${state.waits_for}` : '';
-    return `mc: #${pr} queued — place ${state.place}, ${where}${order}${noMerger}`;
+    return `mc: #${pr} queued — place ${state.place}, ${where}${order}${noMerger}${code}`;
   }
-  if (state.kind === 'waiting') return `mc: #${pr} waits for #${state.parent} (stacked on it) to land${noMerger}`;
+  if (state.kind === 'waiting') return `mc: #${pr} waits for #${state.parent} (stacked on it) to land${noMerger}${code}`;
   if (state.kind === 'landing') {
     const pid = state.pid ? ` (pid ${state.pid})` : '';
     return state.batch.length
-      ? `mc: #${pr} landing in a batch with ${prs(state.batch)}${pid}`
-      : `mc: #${pr} landing — the merger has it${pid}`;
+      ? `mc: #${pr} landing in a batch with ${prs(state.batch)}${pid}${code}`
+      : `mc: #${pr} landing — the merger has it${pid}${code}`;
   }
   if (state.kind === 'red') return `mc: #${pr} red — ${state.reason || 'no reason recorded'}; fix it on its branch and mc merge again`;
   return null;
@@ -91,7 +102,7 @@ function lineOf(pr, state) {
 /**
  * The line to print for `next`, or null when nothing a reader cares about
  * changed: same kind, same place, same parent, same step waited for, same
- * batch, same merger.
+ * batch, same merger, same code behind or not.
  */
 export function watchLine(prev, next, { pr = null } = {}) {
   if (!next || next.kind === 'gone') return null;
@@ -100,7 +111,8 @@ export function watchLine(prev, next, { pr = null } = {}) {
     && prev.parent === next.parent
     && (prev.waits_for ?? null) === (next.waits_for ?? null)
     && String(prev.batch ?? '') === String(next.batch ?? '')
-    && (prev.merger === false) === (next.merger === false)) return null;
+    && (prev.merger === false) === (next.merger === false)
+    && (prev.code || null) === (next.code || null)) return null;
   return lineOf(pr ?? next.pr ?? '?', next);
 }
 
@@ -120,6 +132,7 @@ const realSleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); })
 export async function watch({
   repo, pr, timeoutMs = WATCH_TIMEOUT_MIN * 60_000, pollMs = WATCH_POLL_MS,
   readQueue, readMerger, prView, ordered = () => true, now = Date.now, sleep = realSleep, print = () => {},
+  readHead = () => null,
 }) {
   const number = Number(pr);
   const start = now();
@@ -135,7 +148,7 @@ export async function watch({
   };
 
   for (;;) {
-    const state = watchState(readQueue(), { repo, pr: number, merger: readMerger(), ordered });
+    const state = watchState(readQueue(), { repo, pr: number, merger: readMerger(), ordered, head: readHead() });
     if (state.kind === 'gone') {
       const view = prView(repo, number);
       const took = elapsed((now() - start) / 1000);
@@ -196,6 +209,9 @@ export async function followMerge({ repoPath, pr, timeoutMs = WATCH_TIMEOUT_MIN 
     readMerger: deps.readMerger || (() => readMerger({ root })),
     prView: deps.prView || ghPrView(repoPath),
     ordered: deps.ordered || stepsBeforeDone(root),
+    readHead: deps.readHead || (() => installedHead({
+      git: (cwd, args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 5000 }),
+    })),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
     print: json ? () => {} : (line) => stdout.write(`${line}\n`),

@@ -44,7 +44,7 @@ import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { GATE_LANES, runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, heldLanding, markLanding, markMended, markMending, markQueued, markRed, mergesPath, nextBatch, parseQueue,
+  dequeue, enqueue, heldLanding, inLine, markLanding, markMended, markMending, markQueued, markRed, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor, stepsDone,
 } from './merge-queue.js';
 import { MEND_AT_ONCE, mendedReason, mendLine } from './mend.js';
@@ -181,6 +181,42 @@ export function startMerger({
   } finally {
     if (fd != null) try { closeSync(fd); } catch { /* closed */ }
   }
+}
+
+/** After a merger left for new code: a successor on the installed checkout while jobs remain in line, or nothing. Returns the line it said. */
+export function succeed({ root, movedTo = null, read = realRead, start = startMerger, say = () => {} } = {}) {
+  const waiting = inLine(parseQueue(read(mergesPath(root)))).length;
+  if (!waiting) {
+    const line = 'nothing in line — no successor started; the next mc merge starts one';
+    say(line);
+    return line;
+  }
+  const next = start({ root });
+  const line = next.pid
+    ? `successor pid ${next.pid} started on ${movedTo || 'the new code'} for ${waiting} job${waiting === 1 ? '' : 's'} in line`
+    : `no successor started (${next.error || 'no pid'}) — the runner's next pass starts one`;
+  say(line);
+  return line;
+}
+
+/**
+ * The HEAD of the checkout `mc` on PATH runs from: what the next merger would
+ * run. Local, no network. `git(cwd, args)` returns `{ status, stdout }`; it is
+ * handed in, because the merger's own path holds no synchronous child
+ * (child-async.test.js) and `mc merge watch` may.
+ */
+export function installedHead({ env = process.env, git = null } = {}) {
+  const install = sourceLinkedInstallations(env).find((item) => item.command === 'mc');
+  if (!install || !git) return null;
+  const r = git(install.root, ['rev-parse', '--short', 'HEAD']);
+  return r?.status === 0 ? String(r.stdout || '').trim() || null : null;
+}
+
+// Two short shas of different lengths name one commit when one starts the other.
+function sameCommit(a, b) {
+  const x = String(a || '');
+  const y = String(b || '');
+  return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
 }
 
 /**
@@ -615,7 +651,9 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
  * rounds never do. Returns when neither lane has anything to take, or when
  * `stopping()` says so — asked between jobs in each loop: a job in flight is
  * always finished, because a round cut in half is a lease and a lock somebody
- * else has to reap.
+ * else has to reap. Before each batch it also asks `head()`, and a checkout
+ * that has moved past `version.commit` ends it like a stop, between rounds,
+ * with the queue left as it is.
  */
 export async function serve({
   root, read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
@@ -641,6 +679,11 @@ export async function serve({
   mend = null,
   mendAtOnce = MEND_AT_ONCE,
   appendRun = null,
+  // `async () => <short sha> | null` — the checkout's HEAD now; null for a
+  // merger that never leaves for new code.
+  head = null,
+  // `(from, to) => {}` — told once when the merger decides to leave for new code.
+  onMoved = null,
 } = {}) {
   if (!take()) { say('another merger is running — leaving'); return 0; }
   say(version ? `merger ${process.pid} started — ${version.checkout} at ${version.commit}` : `merger ${process.pid} started`);
@@ -691,6 +734,8 @@ export async function serve({
   // Jobs in a round now, across the lanes, and whether the stop was said.
   let inFlight = 0;
   let toldStop = false;
+  // The commit the checkout moved to, once a lane has seen it.
+  let movedTo = null;
   let wake = () => {};
   let woken = new Promise((resolve) => { wake = resolve; });
   const changed = () => {
@@ -698,6 +743,19 @@ export async function serve({
     woken = new Promise((resolve) => { wake = resolve; });
     was();
   };
+  // Whether the checkout has moved past the commit this merger started on.
+  // Said once; a head that cannot be read is no move.
+  async function codeMoved() {
+    if (movedTo) return true;
+    if (!head || !version?.commit || version.commit === 'unknown') return false;
+    let current = null;
+    try { current = await head(); } catch { current = null; }
+    if (!current || sameCommit(current, version.commit)) return false;
+    movedTo = current;
+    say(`code moved ${version.commit} → ${current} — leaving after the rounds in flight; the next start serves on the new code`);
+    try { onMoved?.(version.commit, current); } catch { /* a line, not the merger */ }
+    return true;
+  }
 
   const loop = async (lane) => {
     for (;;) {
@@ -708,6 +766,9 @@ export async function serve({
         if (!toldStop) { toldStop = true; say(`asked to stop — waiting for ${inFlight} job(s) in flight`); }
         leaving = true; changed(); return;
       }
+      // New code in the checkout: no new batch. A round in flight in the
+      // other lane is answered and that lane leaves at the top of its loop.
+      if (await codeMoved()) { leaving = true; changed(); return; }
       const batch = lock(root, () => {
         let entries = parseQueue(read(mergesPath(root)));
         // A job a dead merger was landing whose earlier step is no longer
@@ -795,17 +856,18 @@ export async function serve({
 
   try {
     await Promise.all(lanes.map(loop));
-    // Asked to stop, a mend not started yet is dropped (its entry stays
-    // `mending`, and the next merger puts it back in line); a running one is
-    // waited for, up to its own wall clock.
+    // Asked to stop or leaving for new code, a mend not started yet is
+    // dropped (its entry stays `mending`, and the next merger puts it back in
+    // line); a running one is waited for, up to its own wall clock.
     if (mends) {
-      if (toldStop) mends.stop();
+      if (toldStop || movedTo) mends.stop();
       await mends.idle();
     }
     return 0;
   } finally {
     release();
     if (toldStop) say('left');
+    if (movedTo && !toldStop) say(`left for ${movedTo}`);
   }
 }
 

@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { MAX_MERGE_ATTEMPTS } from '../../src/mc/merge-step.js';
 import {
-  landerFor, landJob, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, sweepMergedReds, takeMerger,
+  landerFor, landJob, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, succeed, sweepMergedReds, takeMerger,
 } from '../../src/mc/merger.js';
 import { registerPath } from '../../src/mc/register.js';
 
@@ -403,6 +403,125 @@ describe('serve — the loop', () => {
     let landed = 0;
     assert.equal(await serve({ root, lock, take: () => false, release, land: async () => { landed += 1; } }), 0);
     assert.equal(landed, 0);
+  });
+
+  it('a merger whose checkout moved takes no new batch, finishes the round in flight and leaves', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null }]));
+    const heads = ['aaa1111', 'bbb2222'];
+    const said = [];
+    const moved = [];
+    const landed = [];
+    const code = await serve({
+      root, lock, take, release, ...ONE_LANE, say: (l) => said.push(l),
+      version: { checkout: '~/memoro-cli', commit: 'aaa1111' },
+      head: async () => heads.shift() ?? 'bbb2222',
+      onMoved: (a, b) => moved.push([a, b]),
+      land: async ([job]) => { landed.push(job.pr); return green; },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(landed, [1]);
+    assert.deepEqual(queue().map((e) => [e.pr, e.state]), [[2, 'queued']]);
+    assert.ok(said.includes('code moved aaa1111 → bbb2222 — leaving after the rounds in flight; the next start serves on the new code'), said.join('\n'));
+    assert.ok(said.includes('left for bbb2222'), said.join('\n'));
+    assert.deepEqual(moved, [['aaa1111', 'bbb2222']]);
+  });
+
+  it('a head that reads the same commit, a longer sha of it, or nothing changes nothing', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    for (const now of ['aaa1111', 'aaa1111ff', null]) {
+      writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null }]));
+      const said = [];
+      const landed = [];
+      await serve({
+        root, lock, take, release, ...ONE_LANE, say: (l) => said.push(l),
+        version: { checkout: '~/memoro-cli', commit: 'aaa1111' },
+        head: async () => now,
+        land: async ([job]) => { landed.push(job.pr); return green; },
+      });
+      assert.deepEqual(landed, [1, 2], `head ${now}`);
+      assert.equal(said.some((l) => l.startsWith('code moved')), false, said.join('\n'));
+    }
+  });
+
+  it('without a version or a head the loop is as before', async () => {
+    // Every other serve test passes neither; this one passes a head alone.
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }, { ...JOB, repo: 'memoro', pr: 2, since: 'b', step: null }]));
+    const landed = [];
+    await serve({
+      root, lock, take, release, ...ONE_LANE, head: async () => 'bbb2222',
+      land: async ([job]) => { landed.push(job.pr); return green; },
+    });
+    assert.deepEqual(landed, [1, 2]);
+  });
+
+  it('a mend not yet started when the code moves is dropped and its entry stays mending', async () => {
+    register();
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: 'a' }, { ...JOB, repo: 'other', pr: 672, since: 'b', step: null }]));
+    const conflict = { ok: false, merged: false, stopped_at: 'merge', reason: 'CONFLICT (content): Merge conflict in a.js' };
+    const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+    const heads = ['aaa1111', 'aaa1111'];
+    const mended = [];
+    // The first mend is held open until the merger has decided to leave; the
+    // ten seconds only keep a merger that never decides from hanging the test.
+    let releaseMend = null;
+    let leaving = false;
+    const m = machine([conflict, conflict]);
+    const say = (line) => {
+      m.said.push(line);
+      if (line.startsWith('code moved')) { leaving = true; releaseMend?.(); }
+    };
+    const code = await serve({
+      root, lock, take, release, ...ONE_LANE, say, now: m.deps.now,
+      sleep: () => pause(5),
+      version: { checkout: '~/memoro-cli', commit: 'aaa1111' },
+      head: async () => heads.shift() ?? 'bbb2222',
+      mendAtOnce: 1,
+      land: landerFor({ ...m.deps, say, mayMend: () => true }),
+      mend: async (job) => {
+        mended.push(job.pr);
+        let guard = null;
+        await new Promise((resolve) => {
+          releaseMend = resolve;
+          if (leaving) resolve();
+          else guard = setTimeout(resolve, 10_000);
+        });
+        clearTimeout(guard);
+        return { outcome: 'nothing', line: 'gave up', status: 0, seconds: 0 };
+      },
+      appendRun: () => {},
+    });
+    assert.equal(code, 0);
+    assert.equal(m.rounds.length, 2, m.said.join('\n'));
+    assert.deepEqual(mended, [671], 'the second mend never ran');
+    assert.equal(queue().find((e) => e.pr === 672).state, 'mending');
+    assert.ok(m.said.includes('left for bbb2222'), m.said.join('\n'));
+  });
+});
+
+describe('succeed — a successor after new code', () => {
+  it('succeed starts a merger only while jobs remain', () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null }]));
+    const said = [];
+    assert.equal(
+      succeed({ root, movedTo: 'bbb2222', start: () => ({ pid: 4321, started: true }), say: (l) => said.push(l) }),
+      'successor pid 4321 started on bbb2222 for 1 job in line',
+    );
+    assert.deepEqual(said, ['successor pid 4321 started on bbb2222 for 1 job in line']);
+    assert.equal(
+      succeed({ root, movedTo: 'bbb2222', start: () => ({ pid: null, error: 'spawn failed' }) }),
+      'no successor started (spawn failed) — the runner\'s next pass starts one',
+    );
+
+    let started = 0;
+    const start = () => { started += 1; return { pid: 4321, started: true }; };
+    writeFileSync(mergesPath(root), JSON.stringify([]));
+    assert.equal(succeed({ root, movedTo: 'bbb2222', start }), 'nothing in line — no successor started; the next mc merge starts one');
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, pr: 1, since: 'a', step: null, state: 'red', reason: 'red: x', answered: 'z' }]));
+    assert.equal(succeed({ root, movedTo: 'bbb2222', start }), 'nothing in line — no successor started; the next mc merge starts one');
+    assert.equal(started, 0);
   });
 });
 

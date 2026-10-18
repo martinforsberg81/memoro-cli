@@ -8,7 +8,9 @@
  * threw.
  *
  * SIGTERM and SIGINT let the jobs in flight finish and then leave; what is
- * still queued waits for the next start. The handler only sets `stopping`:
+ * still queued waits for the next start. A checkout that moves past the
+ * commit this merger started on does the same between rounds, and then starts
+ * a successor on the new code while jobs remain. The handler only sets `stopping`:
  * the rounds run with `signals: false`, so nothing else in this process exits
  * on a signal, and every child process is started without holding the event
  * loop (child-async.js), so the signal is seen when it comes.
@@ -19,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 import { runTool } from './child-async.js';
 import { mayMend, runMend } from './mend.js';
-import { landerFor, runsAppender, serve } from './merger.js';
+import { landerFor, runsAppender, serve, succeed } from './merger.js';
 import { workRoot } from './paths.js';
 
 const argv = process.argv.slice(2);
@@ -39,11 +41,16 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
 
 const gh = (args, options = {}) => runTool('gh', args, { cwd: options.cwd });
 
-// The checkout this script runs from and its commit, read once: the first
-// line of the log says which code serves the queue.
+// The checkout this script runs from and its commit: the first line of the
+// log says which code serves the queue, and `serve` asks again before each
+// batch whether the checkout has moved past it.
 const checkout = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/u, '');
-const read = await runTool('git', ['-C', checkout, 'rev-parse', '--short', 'HEAD']);
-const commit = read.status === 0 ? String(read.stdout).trim() || 'unknown' : 'unknown';
+const headNow = async () => {
+  const r = await runTool('git', ['-C', checkout, 'rev-parse', '--short', 'HEAD'], { timeoutMs: 5000 });
+  return r.status === 0 ? String(r.stdout).trim() || null : null;
+};
+const commit = (await headNow()) || 'unknown';
+let movedTo = null;
 const home = homedir();
 const shown = home && (checkout === home || checkout.startsWith(`${home}/`)) ? `~${checkout.slice(home.length)}` : checkout;
 const appendRun = runsAppender(root, { append: (path, text) => appendFileSync(path, text) });
@@ -54,10 +61,14 @@ const code = await serve({
   say,
   version: { checkout: shown, commit },
   stopping: () => stopping,
+  head: headNow,
+  onMoved: (from, to) => { movedTo = to; },
   gh,
   appendRun,
   // A red the change caused gets one mend session first (ruling 37).
   land: landerFor({ root, say, sleep, gh, appendRun, mayMend }),
   mend: (job, report, { onPid }) => runMend({ root, job, report, deps: { onPid } }),
 });
+// A stop means stop: only a merger that left for new code starts its successor.
+if (movedTo && !stopping) succeed({ root, movedTo, say });
 process.exit(code);
