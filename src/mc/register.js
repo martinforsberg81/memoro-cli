@@ -91,14 +91,25 @@ export function emptyStep() {
 }
 
 /**
+ * A key without a leading ordinal: `5. The close`, `8) The close` and
+ * `Step 3: The close` are `The close`. A planning session renumbers steps when
+ * it inserts some, and the state has to follow the step.
+ */
+export function keyOf(label) {
+  const text = typeof label === 'string' ? label.trim() : '';
+  return text.replace(/^(?:step\s+)?\d+[.:)]\s+/iu, '').trim() || null;
+}
+
+/**
  * What a step is called when its place in `steps[]` moves: the label its
- * title opens with (`W4.1.2 — actions: …` is `W4.1.2`), or the whole title
- * when it has none. A planning session inserts and reorders steps; the state
+ * title opens with (`W4.1.2 — actions: …` is `W4.1.2`, `Step 3: Wire it — …`
+ * is `Wire it`), or the whole title when it has none, without a leading
+ * ordinal (`keyOf`). A planning session inserts and reorders steps; the state
  * has to follow the step and not the slot it stood in.
  */
 export function stepKey(fileStep) {
   const title = typeof fileStep?.title === 'string' ? fileStep.title.trim() : '';
-  return title.split(/\s+[—–-]\s+/u)[0].trim() || null;
+  return keyOf(title.split(/\s+[—–-]\s+/u)[0]);
 }
 
 const int = (value) => (Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : null);
@@ -233,28 +244,39 @@ export function seedEntry(record, now = null) {
 
 /**
  * An entry brought up to the plan it describes. Steps are matched by their
- * key (`stepKey`), so a step a planning session moved keeps its state, a step
- * it inserted is seeded from the file, and one it removed is dropped — the
- * runner cannot hand out a step that is not written. Until 2026-09-18 the
- * match was by index, and moving W4.1.2 behind W4.1.8 re-labelled six steps'
- * state until the register file was edited by hand.
+ * key (`stepKey`, which drops a leading ordinal, so `5. The close` is
+ * `The close`), so a step a planning session moved or renumbered keeps its
+ * state, a step it inserted is seeded from the file, and one it removed is
+ * dropped — the runner cannot hand out a step that is not written. Until
+ * 2026-09-18 the match was by index, and moving W4.1.2 behind W4.1.8
+ * re-labelled six steps' state until the register file was edited by hand.
  *
  * A key the entry does not know, in a slot whose old key the plan no longer
- * has, is that step retitled: it keeps its state. An entry written before
- * keys takes them from the plan by index, which is what it asserted anyway;
- * a plan whose keys are not unique is matched by index as before.
+ * has, is a step put in that slot. It keeps the slot's status, as a re-planned
+ * blocked step is not released (Martin, 2026-10-03), but not its pull request,
+ * branch, stack or red, which were the replaced step's (photo-viewer, memoro
+ * #13580, 2026-10-12: a renumbered close inherited `blocked` and a closed pull
+ * request). Each such slot gets a comment and is listed in `carried`. An entry
+ * written before keys takes them from the plan by index, which is what it
+ * asserted anyway; a plan whose keys are not unique is matched by index as
+ * before.
  *
  * A `running` step that would move is left where it is, with the rest of the
  * entry, until its session ends: the session knows itself as
  * `MC_STEP=<project>:<index>`, and a write to that index has to reach it.
  *
- * Returns `{ entry, changed }` so the caller writes only when something moved.
+ * Returns `{ entry, changed, carried }` so the caller writes only when something moved; `carried` lists `{ index, from, to }` for each slot carried by position.
  */
 export function reconcileEntry(entry, record, now = null) {
   const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
   const keys = steps.map(stepKey);
   const unique = keys.every(Boolean) && new Set(keys).size === keys.length;
-  const keyed = entry.steps.map((state, index) => (state.key ? state : { ...state, key: keys[index] ?? null }));
+  const keyed = entry.steps.map((state, index) => {
+    if (!state.key) return { ...state, key: keys[index] ?? null };
+    const key = keyOf(state.key);
+    return key === state.key ? state : { ...state, key };
+  });
+  const carried = [];
   let next;
   if (!unique) {
     next = steps.map((step, index) => keyed[index] || stepFromPlan(step, now));
@@ -264,17 +286,32 @@ export function reconcileEntry(entry, record, now = null) {
     next = steps.map((step, index) => {
       if (known.has(keys[index])) return keyed[known.get(keys[index])];
       const here = keyed[index];
-      if (here && !wanted.has(here.key)) return { ...here, key: keys[index] };
+      if (here && !wanted.has(here.key)) {
+        carried.push({ index, from: here.key, to: keys[index] });
+        const done = here.status === 'done';
+        return {
+          ...here,
+          key: keys[index],
+          pr: done ? here.pr : null,
+          branch: null,
+          attempts: 0,
+          stacked_on: null,
+          red: null,
+          interrupted: null,
+          comments: [...(here.comments || []), `Carried by position on ${now ?? 'an unknown time'} from '${here.key}': a re-plan put '${keys[index]}' in this slot. Its status stays (Martin, 2026-10-03); the branch, attempts, stack, red and pull request of the step it replaced are cleared${done ? ' except the landed pull request' : ''}.`],
+        };
+      }
       return stepFromPlan(step, now);
     });
     const running = keyed.findIndex((state) => state.status === 'running');
-    if (running >= 0 && next[running]?.key !== keyed[running].key) return { entry, changed: false };
+    if (running >= 0 && next[running]?.key !== keyed[running].key) return { entry, changed: false, carried: [] };
   }
   const changed = next.length !== entry.steps.length || next.some((state, index) => state !== entry.steps[index])
     || entry.plan !== (record.path ?? null) || entry.repo !== (record.repo ?? null) || entry.programme !== (record.programme ?? null);
   return {
     entry: changed ? { ...entry, repo: record.repo ?? entry.repo, programme: record.programme ?? entry.programme, plan: record.path ?? entry.plan, updated: now ?? entry.updated, steps: next } : entry,
     changed,
+    carried,
   };
 }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  STEP_STATES, applyEntry, currentIndex, overlayPlans, parseEntry, parseStepEnv, patchStep, reconcileEntry,
+  STEP_STATES, applyEntry, currentIndex, keyOf, overlayPlans, parseEntry, parseStepEnv, patchStep, reconcileEntry,
   registerPath, seedEntry, stepKey, updateStep,
 } from '../../src/mc/register.js';
 import { PLAN_SCHEMA, PLAN_VERSION, deliverableStep, validatePlan } from '../../src/mc/plan-schema.js';
@@ -158,6 +158,61 @@ test('stepKey is the label a title opens with, or the whole title', () => {
   assert.equal(stepKey({ title: 'The hero object' }), 'The hero object');
   assert.equal(stepKey({ title: 'sql-readiness closes' }), 'sql-readiness closes');
   assert.equal(stepKey({}), null);
+  assert.equal(stepKey({ title: '8. The close' }), 'The close');
+  assert.equal(stepKey({ title: '5) The close' }), 'The close');
+  assert.equal(stepKey({ title: 'Step 3: Wire it — the rest' }), 'Wire it');
+  assert.equal(stepKey({ title: '1.2 thing' }), '1.2 thing');
+  assert.equal(keyOf('5. The close'), 'The close');
+});
+
+test('a renumbered close keeps its state and the steps inserted before it start fresh (photo-viewer, #13580)', () => {
+  const t = (s) => step({ title: s });
+  let entry = seedEntry(record([t('1. A'), t('2. B'), t('3. C'), t('4. D'), t('5. The close')]), 't0');
+  for (const index of [0, 1, 2, 3]) entry = patchStep(entry, index, { status: 'done', pr: index + 1 }, 't1');
+  entry = patchStep(entry, 4, {
+    status: 'blocked',
+    blocked_by: { kind: 'decision', name: 'martin-phone-fling-check' },
+    branch: 'photo-viewer-8',
+    stacked_on: { index: 3, pr: 13527, sha: 'abc' },
+    comment: 'mc merge memoro 13528',
+  }, 't1');
+  const renumbered = reconcileEntry(entry, record([t('1. A'), t('2. B'), t('3. C'), t('4. D'), t('5. The reserve shrinks'), t('6. E'), t('7. F'), t('8. The close')]), 't2');
+  assert.deepEqual(renumbered.entry.steps.map((s) => [s.key, s.status]), [
+    ['A', 'done'], ['B', 'done'], ['C', 'done'], ['D', 'done'], ['The reserve shrinks', 'ready'], ['E', 'ready'], ['F', 'ready'], ['The close', 'blocked'],
+  ]);
+  assert.equal(renumbered.entry.steps[7].branch, 'photo-viewer-8', 'the close keeps its branch');
+  for (const index of [4, 5, 6]) {
+    assert.equal(renumbered.entry.steps[index].branch, null, `step ${index + 1} starts fresh`);
+    assert.deepEqual(renumbered.entry.steps[index].comments, []);
+  }
+  assert.deepEqual(renumbered.carried, []);
+});
+
+test('a slot carried by position keeps its status and loses the replaced step\'s pull request fields', () => {
+  const titled = (label, over = {}) => step({ title: `${label} — what it does`, ...over });
+  let entry = seedEntry(record([titled('A'), titled('B')]), 't0');
+  entry = patchStep(entry, 1, { status: 'failed', reason: 'red', pr: 9, branch: 'p-3', attempts: 2 }, 't1');
+  const carried = reconcileEntry(entry, record([titled('A'), titled('Z')]), 't2');
+  const slot = carried.entry.steps[1];
+  assert.equal(slot.key, 'Z');
+  assert.equal(slot.status, 'failed', 'the slot keeps its status');
+  assert.equal(slot.reason, 'red');
+  assert.equal(slot.pr, null);
+  assert.equal(slot.branch, null);
+  assert.equal(slot.attempts, 0);
+  assert.match(slot.comments.at(-1), /^Carried by position on t2 from 'B'/u);
+  assert.deepEqual(carried.carried, [{ index: 1, from: 'B', to: 'Z' }]);
+});
+
+test('an entry written with numbered keys is read through keyOf and written once', () => {
+  const old = parseEntry(JSON.stringify({ project: 'p', steps: [{ key: '1. A', status: 'done', pr: 3 }, { key: '2. B', status: 'ready' }] }));
+  const plan = record([step({ title: '1. A — x' }), step({ title: '2. B — x' })]);
+  const once = reconcileEntry(old, plan, 't1');
+  assert.deepEqual(once.entry.steps.map((s) => s.key), ['A', 'B']);
+  assert.deepEqual(once.entry.steps.map((s) => s.status), ['done', 'ready']);
+  assert.equal(once.changed, true);
+  assert.deepEqual(once.carried, []);
+  assert.equal(reconcileEntry(once.entry, plan, 't2').changed, false, 'the second read writes nothing');
 });
 
 test('reconcileEntry matches by key: a moved step keeps its state, an inserted one is seeded, a retitled one stays', () => {
@@ -175,6 +230,7 @@ test('reconcileEntry matches by key: a moved step keeps its state, an inserted o
   // A label nobody knows, in the slot of one the plan no longer has: the same step, retitled.
   const renamed = reconcileEntry(entry, record([titled('A1'), titled('B'), titled('C')]), 't2');
   assert.deepEqual(renamed.entry.steps.map((s) => [s.key, s.status]), [['A1', 'done'], ['B', 'failed'], ['C', 'ready']]);
+  assert.equal(renamed.entry.steps[0].pr, 7, 'a done step carried by position keeps its pull request');
 
   // Nothing moved, nothing written.
   assert.equal(reconcileEntry(entry, record([titled('A'), titled('B'), titled('C')]), 't2').changed, false);
