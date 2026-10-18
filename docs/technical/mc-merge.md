@@ -418,6 +418,19 @@ as today. A red outside the lists is red as before. Every flip is in the round's
 line in `gate-rounds.jsonl`. No quarantine: nothing is skipped, and a file that
 flips often is a proposal to fix it, not a longer list.
 
+**A command gate that needs Docker gets the runtime first.** A selected command
+gate whose selector entry carries `needs: ["docker"]` gets `mc docker ensure`'s
+work before it runs: the runtime is started if it is down, and the round takes
+a lease with its own pid as the holder. The gate runs with `MC_DOCKER_HOLDER`
+(that pid), `MC_DOCKER_RUN` (`<mode> #<pr>`, such as `merge #7`) and
+`MC_DOCKER_REPO` (the repository's name) in its environment, so what it starts
+can be labelled for the sweep. The lease is released when the gate ends. If the
+runtime cannot be started, the gate does not run: it is `unavailable` when it
+declared `allowUnavailable`, and red otherwise, with the reason in its
+`output`. The field is read from the selector, not from the declaration, because
+the operator's `repo-gates.json` replaces the whole entry. A gate without `needs`
+is run exactly as before.
+
 An empty selection stops the round: it is not a measurement, and a green from it
 would be the most confident kind of nothing.
 

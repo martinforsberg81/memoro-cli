@@ -71,6 +71,7 @@ import { readRounds, recordRound } from './repo-round-log.js';
 import { UNKNOWN, declarationFor, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, selectionHash } from './gate-greens.js';
+import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -139,6 +140,12 @@ export async function runGate({
   // How the command gates the selection named are run (`commandShell` when
   // null): asynchronous, because they run beside the suite.
   shell: gateShell = null,
+  // The `{ ensure, release }` a command gate that `needs: ['docker']` is given;
+  // null means src/mc/docker.js's own, and a test hands in a fake.
+  docker = null,
+  // The pid a Docker lease and the `mc.holder` label name: the process running
+  // this round, which is the merger's pid in a merge.
+  holderPid = process.pid,
   onProgress = () => {},
   clock = () => Date.now(),
   // Whether the round owns the lease or is running inside somebody else's.
@@ -202,6 +209,9 @@ export async function runGate({
   const wholeSuite = Boolean(full);
   const gateMode = mode || (wholeSuite ? 'full' : 'merge');
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
+  // What a command gate that needs Docker is leased and labelled with.
+  const dockerIo = docker || { ensure: ensureDocker, release: releaseDocker };
+  const dockerLabel = { run: `${gateMode} ${label}`, repo: basename(repoPath) };
 
   const report = {
     schema: GATE_SCHEMA,
@@ -967,6 +977,7 @@ export async function runGate({
       runCommands?.length
         ? runSelectedCommands({
           commands: runCommands, cwd: headDir, env, baseRef: report.base.commit || baseRef, say, timed, clock, shell: runShell,
+          docker: dockerIo, holderPid, dockerLabel, root,
         })
         : Promise.resolve([]),
     ]);
@@ -1006,6 +1017,7 @@ export async function runGate({
       const again = await runSelectedCommands({
         commands: selection.commands.filter((entry) => names.includes(entry.packageScript)),
         cwd: headDir, env, baseRef: report.base.commit || baseRef, say, clock, shell: runShell,
+        docker: dockerIo, holderPid, dockerLabel, root,
         timed: (step, fn) => timed('retry once', fn),
       });
       for (const gate of failedGates) {
@@ -1292,6 +1304,9 @@ async function selectFiles({ command, cwd, env, say }) {
     // missing here" (memoro #13803: `sql:reference:postgres` without Docker
     // exits 69). Null for every gate that did not declare one.
     unavailableExitCode: entry?.allowUnavailable && Number.isInteger(entry?.unavailableExitCode) ? entry.unavailableExitCode : null,
+    // What the gate needs from the machine (memoro's selector: `needs: ['docker']`).
+    // Empty for every gate that says nothing.
+    needs: Array.isArray(entry?.needs) ? entry.needs.map(String) : [],
   }));
   const nameless = commands.filter((entry) => !entry.packageScript);
   if (nameless.length) {
@@ -1399,7 +1414,10 @@ function shellQuote(value) {
  * command takes one — so the gate runs the repository's command rather than an
  * approximation of it.
  */
-async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, clock, shell: run = commandShell }) {
+async function runSelectedCommands({
+  commands, cwd, env, baseRef, say, timed, clock, shell: run = commandShell,
+  docker = null, holderPid = process.pid, dockerLabel = { run: null, repo: null }, root,
+}) {
   const results = [];
   // The one thing the round's environment must not carry in: node sets
   // NODE_TEST_CONTEXT inside a test run, and a command that inherits it
@@ -1411,9 +1429,45 @@ async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, cl
   delete commandEnv.NODE_TEST_CONTEXT;
   for (const entry of commands) {
     const invocation = `npm run ${entry.packageScript}${entry.passBaseRef ? ` -- --base-ref ${baseRef}` : ''}`;
+    // A gate that needs the container runtime is leased to this round before it
+    // runs, and the lease goes back when it ends. A runtime that will not start
+    // means the gate does not run: unavailable where the selector said it may
+    // be, red where it did not.
+    let up = null;
+    if (docker && needsDocker(entry)) {
+      say(`command gate ${entry.packageScript} needs docker — ensuring the runtime`);
+      up = await timed('docker', () => docker.ensure({ pid: holderPid, run: dockerLabel.run, repo: dockerLabel.repo, root }));
+      if (!up.ok) {
+        const unavailable = entry.unavailableExitCode != null;
+        results.push({
+          source: 'selection',
+          name: entry.packageScript,
+          command: invocation,
+          ok: unavailable,
+          exit_code: 69,
+          ran: false,
+          ...(unavailable ? { unavailable: true } : {}),
+          docker: up.reason,
+          duration_ms: 0,
+          resource_class: entry.resourceClass,
+          selected_by: entry.selectedBy,
+          output: `docker could not be started: ${up.reason}`,
+        });
+        say(`command gate ${entry.packageScript}: docker could not be started (${up.reason}) — ${unavailable ? 'unavailable on this machine, not counted red' : 'FAILED'}`);
+        continue;
+      }
+    }
     say(`command gate ${entry.packageScript}`);
     const from = clock();
-    const outcome = await timed('selected gates', async () => run(invocation, { cwd, env: commandEnv }));
+    const gateEnv = up
+      ? { ...commandEnv, MC_DOCKER_HOLDER: String(holderPid), MC_DOCKER_RUN: dockerLabel.run || '', MC_DOCKER_REPO: dockerLabel.repo || '' }
+      : commandEnv;
+    let outcome;
+    try {
+      outcome = await timed('selected gates', async () => run(invocation, { cwd, env: gateEnv }));
+    } finally {
+      if (up) docker.release(up.lease, { root });
+    }
     const duration = clock() - from;
     const ran = outcome.status !== null && outcome.status !== undefined;
     // A gate the selector declared may be unavailable, exiting with exactly
@@ -1433,6 +1487,7 @@ async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, cl
       exit_code: outcome.status ?? null,
       ran,
       ...(unavailable ? { unavailable: true } : {}),
+      ...(up ? { docker: up.started ? 'started' : 'up' } : {}),
       duration_ms: duration,
       resource_class: entry.resourceClass,
       selected_by: entry.selectedBy,

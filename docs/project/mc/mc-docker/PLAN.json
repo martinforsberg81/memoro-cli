@@ -37,7 +37,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/docker-command.test.js tests/mc/help.test.js` passes, including the tests named in step 2."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "In a merge round, a selected command gate with `needs: [\"docker\"]` gets `ensure` before it runs, `MC_DOCKER_HOLDER`, `MC_DOCKER_RUN` and `MC_DOCKER_REPO` in its environment, and its lease released afterwards. If the runtime cannot be started, a gate that declared `allowUnavailable` is `unavailable` with the reason and is not run. A gate without `needs` never calls `ensure`.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js` passes, including the tests named in step 3."
     },
