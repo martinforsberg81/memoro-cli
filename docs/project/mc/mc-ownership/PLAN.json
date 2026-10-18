@@ -34,7 +34,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/helper-turn.test.js tests/mc/commands/helper.test.js tests/mc/page.test.js tests/mc/roles-decisions.test.js` passes, including the tests named in step 1."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "When the runner makes a workarea, it blocks the step as `branch-foreign` if the project's local branch is checked out in a worktree outside the plan home or carries commits not on origin/main. The block names the holder. If the local branch has landed, no worktree holds it and no register step names it, the runner deletes it and creates the workarea from origin/main, and says so in one line.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-branch.test.js tests/mc/run.test.js tests/mc/run-plan.test.js` passes, including the tests named in step 2."
     },
