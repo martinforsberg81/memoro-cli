@@ -287,3 +287,104 @@ export async function ensure({
   m.log('docker-ensured', { pid, run, repo, started, waited_ms });
   return { ok: true, started, waited_ms, server: String(info.stdout ?? '').trim(), lease: path, reason: null };
 }
+
+const DF_TYPES = new Map([
+  ['Images', 'images'], ['Containers', 'containers'], ['Local Volumes', 'volumes'], ['Build Cache', 'build_cache'],
+]);
+
+/** The pid in a `Labels` string (`k=v,k=v`) under `mc.holder`, or null. */
+function holderOf(labels) {
+  const match = /(?:^|,)mc\.holder=(\d+)(?:,|$)/u.exec(String(labels ?? ''));
+  return match ? Number(match[1]) : null;
+}
+
+/** One `docker … --format '{{json .}}'` call as its lines, or null with the reason in `errors`. */
+async function jsonLines(m, args, what, errors) {
+  const result = await m.run('docker', args, { timeoutMs: CALL_TIMEOUT_MS });
+  if (result?.status !== 0) {
+    errors.push(`${what}: ${failure(result)}`);
+    return null;
+  }
+  try {
+    return String(result.stdout ?? '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
+  } catch (error) {
+    errors.push(`${what}: ${error.message}`);
+    return null;
+  }
+}
+
+/** `docker system df` rows as `{ images, containers, volumes, build_cache }`. */
+function diskUsage(rows) {
+  const df = {
+    images: { count: 0, size: '0B' }, containers: { count: 0, size: '0B' }, volumes: { count: 0, size: '0B' }, build_cache: { size: '0B' },
+  };
+  for (const row of rows) {
+    const key = DF_TYPES.get(row.Type);
+    if (key === 'build_cache') df.build_cache = { size: String(row.Size) };
+    else if (key) df[key] = { count: Number(row.TotalCount), size: String(row.Size) };
+  }
+  return df;
+}
+
+/**
+ * What the runtime holds: disk by `docker system df`, containers by `docker ps
+ * -a`, volumes by `docker volume ls`. Call it only while the runtime is up. A
+ * call that fails or times out leaves its part empty and says why in `errors`;
+ * the rest still comes back. An object without an `mc.holder` label is listed,
+ * never judged.
+ */
+export async function inventory({ io = {} } = {}) {
+  const m = { ...SYSTEM, ...io };
+  const errors = [];
+  const df = await jsonLines(m, ['system', 'df', '--format', '{{json .}}'], 'docker system df', errors);
+  const containers = await jsonLines(m, ['ps', '-a', '--format', '{{json .}}'], 'docker ps -a', errors);
+  const volumes = await jsonLines(m, ['volume', 'ls', '--format', '{{json .}}'], 'docker volume ls', errors);
+  return {
+    df: df ? diskUsage(df) : null,
+    containers: (containers ?? []).map((c) => ({
+      id: c.ID, name: c.Names, state: c.State, holder: holderOf(c.Labels),
+    })),
+    volumes: (volumes ?? []).map((v) => ({ name: v.Name, holder: holderOf(v.Labels) })),
+    errors,
+  };
+}
+
+/**
+ * Remove what a holder left behind: containers (with their volumes) and volumes
+ * labelled `mc.holder=<pid>` whose pid is not alive. Nothing unlabelled is ever
+ * passed to `rm`. `dead` names what that is; `removed` names what was removed,
+ * and is empty on a dry run.
+ */
+export async function removeDeadHolders({ dryRun = false, io = {} } = {}) {
+  const m = { ...SYSTEM, ...io };
+  const inv = await inventory({ io });
+  const deadContainers = inv.containers.filter((c) => Number.isInteger(c.holder) && !m.alive(c.holder));
+  const deadVolumes = inv.volumes.filter((v) => Number.isInteger(v.holder) && !m.alive(v.holder));
+  const removed = { containers: [], volumes: [] };
+  const failed = [];
+  if (!dryRun) {
+    for (const c of deadContainers) {
+      const result = await m.run('docker', ['rm', '--force', '--volumes', c.id], { timeoutMs: CALL_TIMEOUT_MS });
+      if (result?.status === 0) removed.containers.push(c.name);
+      else failed.push({ name: c.name, reason: failure(result) });
+    }
+    for (const v of deadVolumes) {
+      const result = await m.run('docker', ['volume', 'rm', v.name], { timeoutMs: CALL_TIMEOUT_MS });
+      if (result?.status === 0) removed.volumes.push(v.name);
+      else failed.push({ name: v.name, reason: failure(result) });
+    }
+  }
+  const unlabelled = (items) => items.filter((x) => !Number.isInteger(x.holder));
+  return {
+    removed,
+    dead: { containers: deadContainers.map((c) => c.name), volumes: deadVolumes.map((v) => v.name) },
+    failed,
+    errors: inv.errors,
+    unlabelled: {
+      containers: unlabelled(inv.containers).length,
+      volumes: unlabelled(inv.volumes).length,
+      running: unlabelled(inv.containers).filter((c) => c.state === 'running').length,
+    },
+    df: inv.df,
+  };
+}

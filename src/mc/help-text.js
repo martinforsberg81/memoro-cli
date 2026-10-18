@@ -55,6 +55,8 @@ THE PAGE
   mc deps bump <repo> <what>       Opens a pull request for one group and lands it through the gate
   mc dev list                      Which dev server runs in which worktree
   mc dev admit <service>           May one more dev server start here?
+  mc docker [ensure|release|prune] The container runtime the gates need: up or
+                                    stopped, its leases, and what it holds
   mc status <name>                 One project, whole
   mc step <project>                Where each step stands, from the register
   mc step failed|blocked|ready|done  Move one step: a session gives up, a
@@ -237,6 +239,27 @@ IN FULL
                                     workerd whose parent is gone — and
                                     registrations whose worktree is gone. The
                                     runner runs it every chore pass
+  mc docker [--json]               The container runtime: up or stopped, and why
+                                    not; the leases on it; what it holds on
+                                    disk; and the containers and volumes mc
+                                    labelled and the ones it did not. With the
+                                    runtime down it runs no docker command,
+                                    because a docker call would start OrbStack
+  mc docker ensure [--pid <n>] [--run <label>] [--repo <name>] [--timeout <s>]
+                                    Start OrbStack or Docker Desktop if it is
+                                    down, wait for docker info (60 s by
+                                    default), and take a lease for the pid —
+                                    the calling shell by default. Exit 69 when
+                                    it cannot be started
+  mc docker release [--pid <n>] [--json]
+                                    Drop the leases of the pid, the calling
+                                    shell by default. It stops nothing: the
+                                    runner stops a runtime mc started once it
+                                    has been idle for 10 minutes
+  mc docker prune [--dry-run] [--json]
+                                    Remove the containers and volumes labelled
+                                    mc.holder whose pid is gone. Unlabelled
+                                    ones are reported and never removed
   mc gate [--base <ref>] [--json] [--budget <s>] [--wait]
                                     The repository's own gate on the tree you
                                     stand in — npm run ci -- --base-ref
