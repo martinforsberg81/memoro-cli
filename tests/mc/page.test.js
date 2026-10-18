@@ -2268,6 +2268,16 @@ describe('MC', () => {
     assert.ok(line.includes(drainLine(drain)), 'the page draws the verb\'s own line');
   });
 
+  it('a merger behind the checkout is named on the MC line', () => {
+    const behind = draw({ commit: 'abc1234', head: 'def5678', behind: 0, behind_checkout: [{ name: 'merger', pid: 95259, commit: '3b51ff90' }] }, 200);
+    assert.ok(behind.includes('merger pid 95259 on 3b51ff90 · checkout def5678'), behind);
+    assert.ok(!draw({ commit: 'abc1234', head: 'def5678', behind: 0, behind_checkout: [] }, 200).includes('merger pid'));
+    // A process on the checkout's own commit, in a longer spelling, is not behind.
+    assert.deepEqual(mcSection({
+      head: 'def5678', processes: [{ name: 'merger', pid: 1, commit: 'def5678aa' }, { name: 'repo watch', pid: 2, commit: '3b51ff90' }],
+    }).behind_checkout, [{ name: 'repo watch', pid: 2, commit: '3b51ff90' }]);
+  });
+
   it('gives the live loop a key that moves with a project and not with a clock', () => {
     const key = (over) => pageKey(pageData({ programmes: programmesSection({ plans: PLANS, areas: [], ...over }) }));
     assert.equal(key({}), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session getting older is not news');

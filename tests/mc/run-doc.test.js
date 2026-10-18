@@ -100,9 +100,11 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.match(beside[1], /`mc run --update`/u);
   });
 
-  it('says the runner never orders its own handover', () => {
-    assert.match(DOC, /`UPDATE` has no other writer/u);
-    assert.doesNotMatch(DOC, /writes `runner\/UPDATE` itself/u);
+  it('says the runner orders its own handover only on a clean checkout that fast-forwards', () => {
+    assert.match(DOC, /writes `runner\/UPDATE` itself/u);
+    assert.match(DOC, /that checkout is clean and fast-forwards/u);
+    assert.match(DOC, /once per origin\/main sha/u);
+    assert.doesNotMatch(DOC, /`UPDATE` has no other writer/u);
   });
 
   it('warns a reader of runs.tsv about a trespass on a step that changed the rules', () => {

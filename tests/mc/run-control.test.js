@@ -16,7 +16,8 @@ import { describe, it } from 'node:test';
 
 import { parseRunArgs, usage } from '../../src/mc/commands/run.js';
 import {
-  agentPlist, childEnv, controlPaths, drainLine, drainState, endNow, handOver, readRunner, requestUpdate, startRunner, stopRunner,
+  agentPlist, childEnv, controlPaths, drainLine, drainState, endNow, handOver, processLines, readRunner, requestUpdate, startRunner,
+  stopRunner,
 } from '../../src/mc/run-control.js';
 
 const ROOT = '/w';
@@ -58,6 +59,10 @@ function fixture({ runner = null, live = [], stop = false, update = false, files
     spawn: ({ bin, args, stdio, env }) => { calls.spawned.push({ bin, args, stdio, ...(env ? { env } : {}) }); return 4242; },
     execPath: '/usr/bin/node',
     entry: '/opt/bin/mc',
+    // The other long-lived processes `mc run --update` names: none, unless a
+    // test says otherwise.
+    readMerger: () => null,
+    watcherState: () => ({ running: false }),
   };
   return { store, calls, deps, alive };
 }
@@ -472,9 +477,9 @@ describe('endNow', () => {
 });
 
 describe('mc run --update', () => {
-  it('writes UPDATE and names the pid that will act on it', () => {
+  it('writes UPDATE and names the pid that will act on it', async () => {
     const fx = fixture({ runner: { pid: 100 }, live: [100] });
-    const out = requestUpdate({ root: ROOT, deps: fx.deps });
+    const out = await requestUpdate({ root: ROOT, deps: fx.deps });
     assert.equal(out.ok, true);
     assert.equal(fx.store[paths.update], '2026-08-30T18:00:00.000Z\n');
     assert.match(out.lines[0], /pid 100 hands over to a new runner at its next look, and only finishes the steps in flight/u);
@@ -498,50 +503,101 @@ describe('mc run --update', () => {
     return asked;
   }
 
-  it('on a runner already on origin/main writes nothing, after a fetch', () => {
+  it('on a runner already on origin/main writes nothing, after a fetch', async () => {
     const fx = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100] });
     const asked = withGit(fx, { main: 'abc12345' });
-    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    const out = await requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
     assert.equal(out.ok, true);
     assert.ok(!(paths.update in fx.store));
     assert.deepEqual(asked, ['/code/mc fetch -q origin', '/code/mc rev-parse --short origin/main']);
     assert.equal(out.lines[0], 'runner pid 100 is already on abc1234 — nothing to update');
     assert.match(out.lines[1], /--force/u);
+    assert.equal(out.lines[2], "merger: none running — the next one starts on the checkout's code");
   });
 
-  it('--force writes UPDATE on a current runner anyway', () => {
+  // A merger can be behind its checkout while the runner is current, so the
+  // runner that has nothing to update still says what the merger will do.
+  it('on a runner already on origin/main still names a merger behind its checkout', async () => {
+    const fx = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100] });
+    fx.deps.git = (_cwd, args) => ({ ok: true, stdout: args.join(' ') === 'rev-parse --short HEAD' ? 'abc1234\n' : args[0] === 'fetch' ? '' : 'abc1234\n' });
+    fx.deps.readMerger = () => ({ pid: 95259, commit: '3b51ff90' });
+    const out = await requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    assert.ok(!(paths.update in fx.store));
+    assert.ok(out.lines.includes('merger: pid 95259 on 3b51ff90, checkout at abc1234 — leaves after its next look and starts its successor on abc1234'), out.lines.join('\n'));
+  });
+
+  it('update names the merger and the watcher, and when each moves', async () => {
+    const fx = fixture({
+      runner: { pid: 100, commit: 'abc1234' }, live: [100],
+      files: { [`${ROOT}/runner/merges.json`]: JSON.stringify([{ repo: 'memoro', pr: 13804, state: 'landing' }, { repo: 'memoro', pr: 13810, state: 'queued' }]) },
+    });
+    fx.deps.git = (_cwd, args) => {
+      const said = args.join(' ');
+      if (said === 'rev-parse --short HEAD') return { ok: true, stdout: '01307af2\n' };
+      if (said === 'rev-parse --short origin/main') return { ok: true, stdout: 'def5678\n' };
+      return { ok: true, stdout: '' };
+    };
+    fx.deps.readMerger = () => ({ pid: 95259, commit: '3b51ff90' });
+    fx.deps.watcherState = () => ({ running: false });
+    const out = await requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    assert.ok(paths.update in fx.store);
+    assert.ok(out.lines.includes('merger: pid 95259 on 3b51ff90, checkout at 01307af2 — leaves after the round of #13804 and starts its successor on 01307af2'), out.lines.join('\n'));
+    assert.ok(out.lines.includes('repo watch: not running'), out.lines.join('\n'));
+
+    const none = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100] });
+    withGit(none, { main: 'def5678' });
+    const bare = await requestUpdate({ root: ROOT, checkout: '/code/mc', deps: none.deps });
+    assert.ok(bare.lines.includes("merger: none running — the next one starts on the checkout's code"), bare.lines.join('\n'));
+  });
+
+  it('processLines: a merger on the checkout\'s code, and a watcher running', () => {
+    const lines = processLines({
+      root: ROOT,
+      head: 'aaa1111',
+      readMergerFn: () => ({ pid: 7, commit: 'aaa1111f' }),
+      watcher: () => ({ running: true, pid: 8, commit: 'aaa1111' }),
+      read: () => null,
+    });
+    assert.deepEqual(lines, [
+      'merger: pid 7 on aaa1111f — leaves after its next look once the checkout moves, and starts its successor on the new code',
+      'repo watch: pid 8 on aaa1111 — leaves after its refresh in flight once the checkout moves, and starts its successor',
+    ]);
+  });
+
+  it('--force writes UPDATE on a current runner anyway', async () => {
     const fx = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100] });
     withGit(fx);
-    const out = requestUpdate({ root: ROOT, force: true, checkout: '/code/mc', deps: fx.deps });
+    const out = await requestUpdate({ root: ROOT, force: true, checkout: '/code/mc', deps: fx.deps });
     assert.equal(fx.store[paths.update], '2026-08-30T18:00:00.000Z\n');
     assert.match(out.lines[0], /^UPDATE written/u);
   });
 
-  it('writes UPDATE when origin/main has moved, and prints the drain it starts', () => {
+  it('writes UPDATE when origin/main has moved, and prints the drain it starts', async () => {
     const fx = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100], files: CURRENTS });
     withGit(fx, { main: 'def5678' });
-    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    const out = await requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
     assert.equal(fx.store[paths.update], '2026-08-30T18:00:00.000Z\n');
     assert.match(out.lines[0], /pid 100 hands over/u);
     assert.match(out.lines[1], /fast-forwards \/code\/mc/u);
-    assert.match(out.lines.at(-1), /^draining since \d\d:\d\d \(0s\) — waiting on claims-entity step 2 \(memoro#2, 30 min\), gmail-ready step 1 \(memoro#5, 14 min\); 6 lanes done$/u);
+    assert.match(out.lines.at(-3), /^draining since \d\d:\d\d \(0s\) — waiting on claims-entity step 2 \(memoro#2, 30 min\), gmail-ready step 1 \(memoro#5, 14 min\); 6 lanes done$/u);
+    assert.deepEqual(out.lines.slice(-2), ["merger: none running — the next one starts on the checkout's code", 'repo watch: not running']);
   });
 
-  it('writes UPDATE when the fetch fails, and says it could not tell', () => {
+  it('writes UPDATE when the fetch fails, and says it could not tell', async () => {
     const fx = fixture({ runner: { pid: 100, commit: 'abc1234' }, live: [100] });
     withGit(fx, { fetches: false });
-    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    const out = await requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
     assert.equal(paths.update in fx.store, true);
     assert.match(out.lines.join('\n'), /could not fetch origin/u);
   });
 
-  it('on a runner already draining prints the drain and writes nothing', () => {
+  it('on a runner already draining prints the drain and writes nothing', async () => {
     const fx = fixture({
       runner: { pid: 100, commit: 'abc1234' }, live: [100],
       files: { ...CURRENTS, [paths.update]: '2026-08-30T17:46:00.000Z\n' },
     });
     const asked = withGit(fx, { main: 'def5678' });
-    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    const out = await requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
     assert.equal(out.ok, true);
     assert.equal(fx.store[paths.update], '2026-08-30T17:46:00.000Z\n', 'the drain keeps its clock');
     assert.deepEqual(asked, [], 'nothing to fetch for an order already given');
@@ -557,7 +613,7 @@ describe('mc run --update', () => {
     fx.deps.laneCount = () => 8;
     const out = await startRunner({ root: ROOT, deps: fx.deps });
     assert.equal(out.ok, false);
-    assert.equal(out.lines[1], requestUpdate({ root: ROOT, deps: fx.deps }).lines[1]);
+    assert.equal(out.lines[1], (await requestUpdate({ root: ROOT, deps: fx.deps })).lines[1]);
     assert.match(out.lines[1], /^draining since/u);
   });
 
@@ -571,9 +627,9 @@ describe('mc run --update', () => {
     assert.equal(drainLine({ ...state, draining: false }), null);
   });
 
-  it('refuses with no runner up — a runner started now reads the new code anyway', () => {
+  it('refuses with no runner up — a runner started now reads the new code anyway', async () => {
     const fx = fixture();
-    const out = requestUpdate({ root: ROOT, deps: fx.deps });
+    const out = await requestUpdate({ root: ROOT, deps: fx.deps });
     assert.equal(out.ok, false);
     assert.equal(out.code, 2);
     assert.ok(!(paths.update in fx.store));
@@ -583,10 +639,10 @@ describe('mc run --update', () => {
   // A stopping runner will never pick again, so it is not told to update:
   // the checkout is fast-forwarded and a new runner takes over from it, with
   // the flags the old one ran with.
-  it('on a stopping runner fast-forwards and takes over, with its flags', () => {
+  it('on a stopping runner fast-forwards and takes over, with its flags', async () => {
     const fx = fixture({ runner: { pid: 100, takeover: true, args: ['--no-merge'] }, live: [100], stop: true });
     const asked = withGit(fx);
-    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    const out = await requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
     assert.equal(out.ok, true);
     assert.ok(!(paths.update in fx.store));
     assert.ok(!(paths.stop in fx.store), 'STOP is still there for the new runner to read');
@@ -595,10 +651,10 @@ describe('mc run --update', () => {
     assert.match(out.lines.join('\n'), /pid 100 was stopping — a new runner takes over/u);
   });
 
-  it('on a stopping runner older than take-over refuses, and writes nothing', () => {
+  it('on a stopping runner older than take-over refuses, and writes nothing', async () => {
     const fx = fixture({ runner: { pid: 100 }, live: [100], stop: true });
     withGit(fx);
-    const out = requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
+    const out = await requestUpdate({ root: ROOT, checkout: '/code/mc', deps: fx.deps });
     assert.equal(out.ok, false);
     assert.match(out.lines[0], /older than take-over/u);
     assert.deepEqual(fx.calls.spawned, []);

@@ -58,6 +58,7 @@ export function watcherState({ root = mcHome(), now = Date.now() } = {}) {
     running,
     pid: running ? pid : null,
     started_at: running ? record?.started_at || null : null,
+    commit: running ? record?.commit || null : null,
     interval_ms: Number(record?.interval_ms) || snapshot.interval_ms || DEFAULT_INTERVAL_MS,
     // A pid file whose process is gone is the ordinary aftermath of a reboot
     // or a kill -9, and worth saying out loud: it is the difference between
@@ -101,8 +102,24 @@ export function startWatcher({ intervalMs = DEFAULT_INTERVAL_MS, root = mcHome()
     started_at: new Date().toISOString(),
     interval_ms: intervalMs,
     runner: RUNNER,
+    commit: checkoutHead(),
   });
   return { ok: true, pid: child.pid, interval_ms: intervalMs, log };
+}
+
+/**
+ * The commit mc's checkout holds now, short, or null when it is not one. A
+ * watcher runs the code it was started on, so this is what it started on when
+ * read at its start, and what its successor would run when read later.
+ */
+export function checkoutHead({
+  dir = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/u, ''), run = execFileSync,
+} = {}) {
+  try {
+    return String(run('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'], {
+      encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
+    })).trim() || null;
+  } catch { return null; }
 }
 
 /**

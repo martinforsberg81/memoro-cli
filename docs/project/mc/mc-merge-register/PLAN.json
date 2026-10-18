@@ -36,7 +36,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/merger.test.js tests/mc/merge-watch.test.js` passes, including 'a merger whose checkout moved takes no new batch, finishes the round in flight and leaves', 'succeed starts a merger only while jobs remain' and 'a merger behind its checkout is named on the line'."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The runner writes UPDATE itself when origin/main of mc's checkout has moved past its commit and the checkout can fast-forward; the repo watcher leaves after a refresh and starts its successor when its checkout moved; `mc run --update` prints one line per long-lived process; the page's MC line names any process behind its checkout.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/run-control.test.js tests/mc/repo-watch.test.js tests/mc/page.test.js` passes, including the tests named in step 2."
     },

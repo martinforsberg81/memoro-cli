@@ -239,6 +239,12 @@ export const SLEEP_TICK_MS = 30 * 1000;
 /** A gap between two heartbeats longer than this means the runner did not run: the machine slept. Above `sh()`'s 120 s, so a synchronous wait is never taken for one. */
 export const SLEEP_GAP_MS = 3 * 60 * 1000;
 
+/** Short shas of two lengths name one commit when one starts the other. */
+function sameCommit(a, b) {
+  const [x, y] = [String(a).trim(), String(b).trim()];
+  return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
+}
+
 /* ------------------------------------------------------------ real deps */
 
 function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
@@ -944,6 +950,9 @@ export function createRunner({
   // lanes that happened to look.
   let stopSeen = false;
   const stopRequested = () => stopSeen || (stopSeen = deps.exists(paths.stop));
+  // The origin/main shas `noticeNewCode` has already spoken about, so a
+  // checkout that cannot be handed over is said once, not every pass.
+  const codeNoticed = new Set();
   // Held from the moment a handover begins: `handOver` removes UPDATE as its
   // first act, and a runner that has handed over takes nothing new for the
   // rest of its life (`runLoop`, ruling 28). Let go only when the handover
@@ -3175,6 +3184,9 @@ export function createRunner({
     await runHelperDay();
     await runIntakeDrain();
     const { plans } = queue();
+    // `queue()` has just fetched every repository, mc's own checkout among
+    // them, so origin/main is as fresh as it gets without another fetch.
+    noticeNewCode();
     tidyQueue(plans);
     writeUnreadable(plans);
     const quiet = paths.currents().length === 0;
@@ -3255,6 +3267,28 @@ export function createRunner({
     writeJson(paths.runner, marked);
     say(`pid ${before.pid}, the runner this one took over from, has finished what it held and exited`);
   };
+  /**
+   * New code on origin/main of mc's own checkout is an UPDATE this runner
+   * writes itself (Martin, 2026-10-18): landing a pull request is enough, and
+   * the handover that follows is the ordinary one (ruling 28). Only on a
+   * checkout that is clean and fast-forwards — a handover there would start
+   * the successor on the old code — and one line per origin/main sha.
+   */
+  function noticeNewCode() {
+    const dir = mcCheckout({ exists: deps.exists });
+    if (!dir || !marked?.commit || updateRequested()) return;
+    const main = gitOut(dir, ['rev-parse', '--short', 'origin/main']);
+    if (!main || sameCommit(main, marked.commit) || codeNoticed.has(main)) return;
+    codeNoticed.add(main);
+    const dirty = gitOut(dir, ['status', '--porcelain']);
+    const ff = deps.git(dir, ['merge-base', '--is-ancestor', 'HEAD', 'origin/main']).ok;
+    if (dirty || !ff) {
+      say(`update: origin/main is ${main} and this runner is on ${marked.commit}, but ${dir} ${dirty ? 'has uncommitted changes' : 'has diverged from origin/main'} — not handing over; mc run --update once it is clean`);
+      return;
+    }
+    deps.write(paths.update, `${stamp()}\n`);
+    say(`update: origin/main is ${main} and this runner is on ${marked.commit} — UPDATE written by the runner; it hands over at its next look`);
+  }
   // A lane file another live runner holds is not a leftover: it is the
   // runner a handover replaced, still in that step.
   //

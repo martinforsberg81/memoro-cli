@@ -1400,6 +1400,10 @@ function programmesLines(lines, c, wide, programmes, expand) {
  * and the one it replaced finishing what it held. The line names both —
  * `pid N on <commit> · pid M finishing 2 steps (a, b)`.
  *
+ * A merger or repo watcher whose commit is not the checkout's is named in
+ * yellow — `merger pid N on <commit> · checkout <head>` — until it has left
+ * for the new code.
+ *
  * It replaced the line about how old the PR cache is, which was the last thing
  * on the page every time and never the thing anybody came for.
  */
@@ -1433,6 +1437,7 @@ function mcLine(lines, c, wide, mc, caches, version) {
         : '',
       styles: ['grey'],
     },
+    ...(info.behind_checkout || []).map((p) => ({ text: `${p.name} pid ${p.pid} on ${p.commit} · checkout ${info.head}`, styles: ['yellow'] })),
     { text: caches?.offline ? 'offline — plans as last fetched' : '', styles: ['grey'] },
   ];
   const long = trailing([...lead, state]);

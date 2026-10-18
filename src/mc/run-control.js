@@ -57,6 +57,7 @@ import { fileURLToPath } from 'node:url';
 
 import { defaultRepos } from './brief-collect.js';
 import { readLaneCount } from './lane-count.js';
+import { mergesPath, parseQueue } from './merge-queue.js';
 import { ageWords } from './page-cache.js';
 import { workRoot } from './paths.js';
 import { pidAlive } from './status-collect.js';
@@ -705,6 +706,37 @@ function waitingOn(steps) {
 }
 
 /**
+ * What `mc run --update` says about the other long-lived mc processes, one
+ * line each: the merger (merger.js) and the repo watcher (repo-watch.js).
+ * Neither is told anything — each leaves between units of work once mc's
+ * checkout has moved past the commit it started on, and starts its
+ * successor. `head` is the checkout's commit, or a function that reads it,
+ * asked only when a merger is there to compare.
+ */
+export function processLines({
+  root, head = null, readMergerFn = () => null, watcher = () => ({ running: false }),
+  read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
+} = {}) {
+  const lines = [];
+  const m = readMergerFn({ root });
+  if (m) {
+    const landing = parseQueue(read(mergesPath(root))).filter((e) => e.state === 'landing').map((e) => `#${e.pr}`);
+    const after = landing.length ? `the round of ${landing.join(' ')}` : 'its next look';
+    const at = typeof head === 'function' ? head() : head;
+    lines.push(at && m.commit && !(at.startsWith(m.commit) || m.commit.startsWith(at))
+      ? `merger: pid ${m.pid} on ${m.commit}, checkout at ${at} — leaves after ${after} and starts its successor on ${at}`
+      : `merger: pid ${m.pid} on ${m.commit || '?'} — leaves after ${after} once the checkout moves, and starts its successor on the new code`);
+  } else {
+    lines.push("merger: none running — the next one starts on the checkout's code");
+  }
+  const w = watcher();
+  lines.push(w?.running
+    ? `repo watch: pid ${w.pid} on ${w.commit || '?'} — leaves after its refresh in flight once the checkout moves, and starts its successor`
+    : 'repo watch: not running');
+  return lines;
+}
+
+/**
  * `mc run --update` — the order, left where the runner reads it. Three
  * answers: nothing to update (the runner already runs origin/main), already
  * draining (the drain, not a second UPDATE), or UPDATE written. A second
@@ -712,9 +744,24 @@ function waitingOn(steps) {
  * had just started on origin/main drained all six lanes for nothing.
  * `force` writes it on a current runner, for a restart wanted for another
  * reason — a new `lanes.json`, say.
+ *
+ * The runner moves now; the merger and the repo watcher at their next safe
+ * point, each starting a successor on the new code — and every answer but
+ * the refusal ends with one line per process saying so (`processLines`),
+ * because a merger can be behind its checkout while the runner is current.
+ * The runner writes UPDATE itself once origin/main moves (run.js
+ * `noticeNewCode`), so this only makes it immediate.
  */
-export function requestUpdate({ root = null, force = false, checkout = null, deps = realControlDeps() } = {}) {
-  const paths = controlPaths(root ?? workRoot(deps.env));
+export async function requestUpdate({ root = null, force = false, checkout = null, deps = realControlDeps() } = {}) {
+  const work = root ?? workRoot(deps.env);
+  const paths = controlPaths(work);
+  // Loaded here rather than at the top: the page imports this module, and
+  // the merger's module graph is not something a page draw should pay for.
+  const readMergerFn = deps.readMerger ?? (await import('./merger.js')).readMerger;
+  const watcher = deps.watcherState ?? (await import('./repo-watch.js')).watcherState;
+  const others = (dir) => processLines({
+    root: work, head: dir ? () => head(dir, deps) : null, readMergerFn, watcher, read: (path) => deps.read(path),
+  });
   const state = () => drainState({ paths, read: deps.read, list: deps.list, now: deps.now(), lanes: deps.laneCount?.() ?? null });
   const reading = runnerState({ paths, deps });
   const { held } = reading;
@@ -728,7 +775,7 @@ export function requestUpdate({ root = null, force = false, checkout = null, dep
     const dir = checkout ?? mcCheckout({ exists: deps.exists });
     const moved = dir && canTakeOver(reading) ? fastForward(dir, deps) : null;
     const out = takeOver({ state: reading, argv: reading.live.args || [], paths, deps });
-    return moved ? { ...out, lines: [moved, ...out.lines] } : out;
+    return { ...out, lines: [...(moved ? [moved] : []), ...out.lines, ...others(dir)] };
   }
   if (!held?.alive) {
     return {
@@ -743,7 +790,8 @@ export function requestUpdate({ root = null, force = false, checkout = null, dep
     };
   }
   if (deps.exists(paths.update)) {
-    return { ok: true, code: 0, lines: [`UPDATE is already written — pid ${held.pid} is draining`, drainLine(state())] };
+    const dir = checkout ?? mcCheckout({ exists: deps.exists });
+    return { ok: true, code: 0, lines: [`UPDATE is already written — pid ${held.pid} is draining`, drainLine(state()), ...others(dir)] };
   }
   const dir = checkout ?? mcCheckout({ exists: deps.exists });
   const lines = [];
@@ -759,6 +807,7 @@ export function requestUpdate({ root = null, force = false, checkout = null, dep
         lines: [
           `runner pid ${held.pid} is already on ${held.commit} — nothing to update`,
           'mc run --update --force restarts it anyway',
+          ...others(dir),
         ],
       };
     }
@@ -770,6 +819,7 @@ export function requestUpdate({ root = null, force = false, checkout = null, dep
     ? `it fast-forwards ${dir} first, so the new runner is the newest code`
     : 'mc is not running from a git checkout, so there is nothing to fast-forward — it restarts on what it holds');
   lines.push(drainLine(state()));
+  lines.push(...others(dir));
   return { ok: true, code: 0, lines };
 }
 
