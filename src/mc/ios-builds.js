@@ -111,6 +111,25 @@ export function recordEnd(key, fields = {}, env = process.env) {
   });
 }
 
+/**
+ * Name the builder's process on the row `recordStart` wrote before it was
+ * started. Only a row still `running`: a builder that already completed its
+ * row is not reopened. The completed row, or null when nothing was written.
+ */
+export function recordPid(key, pid, env = process.env) {
+  return locked(env, () => {
+    const text = readFile(env);
+    const header = fileHeader(text);
+    const rows = parseIosBuilds(text);
+    const index = rows.findLastIndex((row) => row.started === key?.started && row.sha === key?.sha);
+    if (index === -1 || rows[index].outcome !== RUNNING || rows[index].ended) return null;
+    rows[index] = { ...rows[index], pid: String(pid) };
+    const body = rows.map((row) => tsvRow(row, header)).join('\n');
+    writeFileAtomic(iosBuildsPath(env), `${header.join('\t')}\n${body}\n`);
+    return rows[index];
+  });
+}
+
 /** The build in progress on this machine: the last `running` row with no
  * `ended` whose process is still there, or null. */
 export function runningIosBuild(env = process.env, { alive = processAlive } = {}) {

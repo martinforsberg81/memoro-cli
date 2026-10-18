@@ -384,8 +384,15 @@ IN FULL
                                     declares that differ between them — or
                                     that mc deploy is enough. Reads
                                     ~/mc/runner/log/ios-builds.tsv
-  mc build ios --device            Build the commit production runs and
-                                    install it on the paired iPhone
+  mc build ios --device [--sha <ref>] [--device-id <id>]
+                                   Build the commit production runs (or an
+                                    older one it contains) in its own
+                                    process, holding the heavy lane, read the
+                                    app back against .mc/ios.json and install
+                                    it on the paired iPhone. The terminal
+                                    follows ~/mc/runner/log/ios-build.log;
+                                    ^C stops watching, not the build
+  mc build ios --follow            Watch the iOS build that is running
   mc build ios --testflight [--no-upload]
                                    Build, verify the IPA and, after one
                                     question, upload it to TestFlight;

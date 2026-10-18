@@ -13,8 +13,11 @@
  * when the deploy is done. The verb's budget and `mc gate --wait` are
  * unchanged — a gate that waited is a gate that is still running.
  *
- * Only a deploy's hold is waited for. A merge round in the heavy lane is not:
- * sessions have always gated beside the merger.
+ * An iOS build holds the lane the same way (`buildIos` in `ios-build.js`,
+ * `mode: 'ios-build'`): `xcodebuild` and a cold `npm ci` pin the cores as the
+ * bundle does, so a gate waits for either. Only those holds are waited for. A
+ * merge round in the heavy lane is not: sessions have always gated beside the
+ * merger.
  */
 import { runningRound } from './gate-lock.js';
 import { mcHome } from './paths.js';
@@ -22,28 +25,43 @@ import { mcHome } from './paths.js';
 /** The `mode` a deployer writes into the heavy gate lock. */
 export const DEPLOY_MODE = 'deploy';
 
+/** The `mode` an iOS builder writes into the heavy gate lock. */
+export const IOS_BUILD_MODE = 'ios-build';
+
+/** The holds of the heavy lane a gate waits for: a deploy's and an iOS build's. */
+export const HEAVY_HOLD_MODES = [DEPLOY_MODE, IOS_BUILD_MODE];
+
+/** What holds the lane, in the words a waiting line uses. */
+export function holdName(round) {
+  return round?.mode === IOS_BUILD_MODE ? 'iOS build' : 'deploy';
+}
+
 /** How often the waiting gate looks again. */
 export const DEPLOY_POLL_MS = 5 * 1000;
 
-/** The deploy holding the heavy lane now, or null. A dead deployer's lock is nobody's. */
+/** The deploy or iOS build holding the heavy lane now, or null. A dead holder's lock is nobody's. */
 export function deployHolding({ root = mcHome(), alive } = {}) {
   const round = runningRound({ root, lane: 'heavy', ...(alive ? { alive } : {}) });
-  return round?.mode === DEPLOY_MODE ? round : null;
+  return HEAVY_HOLD_MODES.includes(round?.mode) ? round : null;
 }
 
-/** Wait until no deploy holds the heavy lane; say so once. Resolves with how many polls it slept. */
+/** Wait until no deploy or iOS build holds the heavy lane; say so once. Resolves with how many polls it slept. */
 export async function awaitDeploy({
   holding = () => deployHolding(),
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   write = (line) => process.stdout.write(line),
 } = {}) {
   let polls = 0;
+  let name = 'deploy';
   for (let held = holding(); held; held = holding()) {
-    if (!polls) write(`mc gate: waiting for the deploy (pid ${held.pid}${held.since ? `, since ${held.since}` : ''}) — the tests start when it is done\n`);
+    if (!polls) {
+      name = holdName(held);
+      write(`mc gate: waiting for the ${name} (pid ${held.pid}${held.since ? `, since ${held.since}` : ''}) — the tests start when it is done\n`);
+    }
     polls += 1;
     await sleep(DEPLOY_POLL_MS);
   }
-  if (polls) write('mc gate: the deploy is done — starting\n');
+  if (polls) write(`mc gate: the ${name} is done — starting\n`);
   return polls;
 }
 

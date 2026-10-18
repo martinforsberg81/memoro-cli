@@ -52,7 +52,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { deployHolding } from '../await-deploy.js';
+import { deployHolding, IOS_BUILD_MODE } from '../await-deploy.js';
 import { ensure, needsDocker } from '../docker.js';
 import { planGate, recordLast, snapshotTree } from '../gate-fast.js';
 import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
@@ -69,7 +69,7 @@ const DEFAULT_BUDGET = 540;
 /** How often the answer looks for the gate's exit code. */
 const POLL_MS = 2000;
 
-/** What a gate started while a deploy holds the heavy lane runs first (`await-deploy.js`). */
+/** What a gate started while a deploy or an iOS build holds the heavy lane runs first (`await-deploy.js`). */
 const AWAIT_DEPLOY = fileURLToPath(new URL('../await-deploy.js', import.meta.url));
 
 /** The machine the verb runs on; a test hands in its own. */
@@ -160,7 +160,10 @@ export async function run(argv, deps = {}) {
   }
 
   const deploying = io.deployHolding({ env });
-  if (deploying) stderr.write(`mc: a deploy holds the heavy lane (pid ${deploying.pid}) — this gate starts its tests when it is done\n`);
+  if (deploying) {
+    const what = deploying.mode === IOS_BUILD_MODE ? 'an iOS build' : 'a deploy';
+    stderr.write(`mc: ${what} holds the heavy lane (pid ${deploying.pid}) — this gate starts its tests when it is done\n`);
+  }
 
   const startedAt = io.now();
   const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');

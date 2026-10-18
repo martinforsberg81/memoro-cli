@@ -72,7 +72,7 @@ import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
   runningDeploy,
 } from '../deploys.js';
-import { DEPLOY_MODE } from '../await-deploy.js';
+import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { releaseGateLock, runningRounds, takeGateLock } from '../gate-lock.js';
 import { mainWorktree, tryGit } from '../git.js';
 import { baseUrl } from '../helper-collect.js';
@@ -802,6 +802,7 @@ export async function waitForGate(job, deps = {}) {
   const round = deps.runningRound || (() => Object.values(rounds() || {}).find(Boolean) || null);
   const merger = deps.readMerger || (() => readMerger({ root }));
   const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
+  const deploy = (deps.mode ?? DEPLOY_MODE) === DEPLOY_MODE;
   let said = false;
   for (;;) {
     const running = round();
@@ -812,12 +813,13 @@ export async function waitForGate(job, deps = {}) {
       continue;
     }
     if (!said) {
-      stdout.write(`mc: waiting for the gate round of ${running.repo || 'a repository'} #${running.pr ?? '?'}${running.lane ? ` in the ${running.lane} lane` : ''} (pid ${running.pid}) to finish — the merger starts no other while this deploy runs\n`);
+      const after = deploy ? 'the merger starts no other while this deploy runs' : `the ${holdName({ mode: deps.mode })} takes the heavy lane after it`;
+      stdout.write(`mc: waiting for the gate round of ${running.repo || 'a repository'} #${running.pr ?? '?'}${running.lane ? ` in the ${running.lane} lane` : ''} (pid ${running.pid}) to finish — ${after}\n`);
       said = true;
     }
     await sleep(GATE_POLL_MS);
   }
-  if (said) stdout.write('mc: the gate is free — deploying alone; the merge queue goes on after it\n');
+  if (said) stdout.write(deploy ? 'mc: the gate is free — deploying alone; the merge queue goes on after it\n' : 'mc: the gate is free — building with the heavy lane held\n');
 }
 
 /**
@@ -831,13 +833,17 @@ export async function waitForGate(job, deps = {}) {
  * (`await-deploy.js`). A round that took the lock between the wait and the
  * take is waited for again. True when this process holds it; a lock that
  * could not be written is no reason not to deploy.
+ *
+ * An iOS build holds it the same way, as `deps.mode` `'ios-build'`
+ * (`buildIos`, ios-build.js): the two exclude each other through this lock.
  */
 export async function holdHeavyLane(job, deps = {}) {
   const take = deps.takeGateLock || takeGateLock;
   const root = job.lockRoot || mcHome(deps.env || process.env);
+  const mode = deps.mode ?? DEPLOY_MODE;
   for (;;) {
     await waitForGate(job, deps);
-    const held = take({ repo: 'deploy', pr: null, mode: DEPLOY_MODE, root, lane: 'heavy' });
+    const held = take({ repo: mode, pr: null, mode, root, lane: 'heavy' });
     if (held.ok) return held.took;
   }
 }
@@ -977,15 +983,28 @@ export function deployLogPath(root) {
  * terminal, then `mc deploy` again.
  */
 export function startDeployerDefault(job, { env = process.env, spawnProcess = spawn } = {}) {
-  const log = deployLogPath(job.root);
+  return startDetached(job, {
+    script: join('src', 'mc', 'deploy-run.js'), fallback: DEPLOYER_RUN, log: deployLogPath(job.root),
+    cwd: job.worktree, env, spawnProcess,
+  });
+}
+
+/**
+ * `node <script> <job as JSON>`, detached in its own process group, stdin
+ * closed, its output truncated into `log`. The script is the installed mc's,
+ * like the merger's: never the asking tree's. `{ pid, log }`, or
+ * `{ pid: null, error }`. The deployer's start, and the iOS builder's.
+ */
+export function startDetached(job, {
+  script, fallback, log, cwd, env = process.env, spawnProcess = spawn,
+}) {
   let fd = null;
   try {
     mkdirSync(dirname(log), { recursive: true });
     fd = openSync(log, 'w', 0o644);
-    // The installed mc's deployer, like the merger's: never the asking tree's.
-    const run = installedScript(join('src', 'mc', 'deploy-run.js'), DEPLOYER_RUN, env);
+    const run = installedScript(script, fallback, env);
     const child = spawnProcess(process.execPath, [run.path, JSON.stringify(job)], {
-      cwd: job.worktree, detached: true, stdio: ['ignore', fd, fd], env,
+      cwd, detached: true, stdio: ['ignore', fd, fd], env,
     });
     child.unref();
     return { pid: child.pid ?? null, log };
@@ -1005,6 +1024,25 @@ const FOLLOW_POLL_MS = 500;
  * nothing else. Exit 0 for `deployed`, 1 otherwise, 130 when stopped.
  */
 export async function followDeploy({ log, pid, key = null, env = process.env, stdout = process.stdout, deps = {} }) {
+  const stopped = await followLog({
+    log, pid, stdout, deps, stopped: `the deploy goes on (pid ${pid}); mc deploy --follow watches again`,
+  });
+  if (stopped !== null) return stopped;
+  // By its start alone: the deployer completes the row with the sha that
+  // shipped, which is not the key's when `main` moved after the question.
+  const rows = readDeploys(env);
+  const row = key
+    ? rows.findLast((r) => r.started === key.started)
+    : rows.findLast((r) => String(r.pid) === String(pid));
+  return row?.outcome === DEPLOYED ? 0 : 1;
+}
+
+/**
+ * The watching itself, shared with `mc build ios`: the log as it grows until
+ * `pid` is gone. 130 after a ^C, saying `mc: stopped watching — <stopped>`;
+ * null once the process has ended and the log is drained.
+ */
+export async function followLog({ log, pid, stdout = process.stdout, deps = {}, stopped: goesOn }) {
   const alive = deps.alive || processAlive;
   const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
   const signals = deps.signals || process;
@@ -1021,7 +1059,7 @@ export async function followDeploy({ log, pid, key = null, env = process.env, st
     for (;;) {
       drain();
       if (stopped) {
-        stdout.write(`\nmc: stopped watching — the deploy goes on (pid ${pid}); mc deploy --follow watches again\n`);
+        stdout.write(`\nmc: stopped watching — ${goesOn}\n`);
         return 130;
       }
       if (!alive(pid)) break;
@@ -1031,13 +1069,7 @@ export async function followDeploy({ log, pid, key = null, env = process.env, st
   } finally {
     for (const signal of STOP_SIGNALS) signals.off(signal, onStop);
   }
-  // By its start alone: the deployer completes the row with the sha that
-  // shipped, which is not the key's when `main` moved after the question.
-  const rows = readDeploys(env);
-  const row = key
-    ? rows.findLast((r) => r.started === key.started)
-    : rows.findLast((r) => String(r.pid) === String(pid));
-  return row?.outcome === DEPLOYED ? 0 : 1;
+  return null;
 }
 
 /** `mc deploy --follow`: the deploy going on now, watched; or a line saying none is. */
