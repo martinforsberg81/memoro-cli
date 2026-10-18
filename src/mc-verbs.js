@@ -21,6 +21,7 @@ export const VERB_MODULES = {
   dev: './mc/commands/dev.js',
   docker: './mc/commands/docker.js',
   deploy: './mc/commands/deploy.js',
+  build: './mc/commands/build.js',
   language: './mc/commands/language.js',
   deps: './mc/commands/deps.js',
   prs: './mc/commands/prs.js',
