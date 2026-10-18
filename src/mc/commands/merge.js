@@ -6,6 +6,9 @@
  * documentation-only pull request without the suite — see docs-merge.js.
  */
 import { docsMergeLines, runDocsMerge } from '../docs-merge.js';
+import { landedPatch, stepForMerge } from '../merge-step.js';
+import { workRoot } from '../paths.js';
+import { listEntries, readEntry, updateStep } from '../register.js';
 import { WATCH_TIMEOUT_MIN, followMerge } from '../merge-watch.js';
 import { recordRound } from '../repo-round-log.js';
 import { currentHolder } from '../work-identity.js';
@@ -37,11 +40,44 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
+  // The body is read for the step's remainder, not kept in the round log.
+  const { body = null } = report;
+  delete report.body;
   report.holder = currentHolder();
   recordRound(report, { mode: 'docs' });
+  const booked = report.merged ? bookDocsLanding(report, body, deps) : null;
   if (opts.json) { stdout.write(`${JSON.stringify(report, null, 2)}\n`); return report.ok ? 0 : 1; }
   for (const line of docsMergeLines(report)) stdout.write(`${line}\n`);
+  if (booked) stdout.write(`mc: ${booked}\n`);
   return report.ok ? 0 : 1;
+}
+
+/**
+ * A docs-only pull request that is a step's lands here without the merger,
+ * so the verb books it as the merger books a green round: the step is
+ * `done` with its pull request. Without this the step stayed `running`, the
+ * runner found no open pull request on the branch GitHub had deleted, and
+ * wrote the step `failed` (msr-core-finish-measure steps 1 and 3, #13772 and
+ * #13784, 2026-10-18). The step is found as the gate's door finds it
+ * (`stepForMerge`); a planning session's pull request is nobody's step and
+ * books nothing. A step already `done` or `blocked` is left as it is, as the
+ * merger leaves it. Returns the line to print, or null.
+ */
+function bookDocsLanding(report, body, deps) {
+  const root = deps.root || workRoot(deps.env || process.env);
+  const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
+  for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
+  try {
+    const step = stepForMerge({ env: deps.env || process.env, head: report.branch, entries: listEntries(root, io) });
+    if (!step) return null;
+    const standing = readEntry(root, step.project, io)?.steps?.[step.index];
+    if (standing?.status === 'done' || standing?.status === 'blocked') return null;
+    const stamp = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
+    updateStep({ root, project: step.project, index: step.index, patch: landedPatch({ pr: report.pr.number, report, now: stamp, body }), now: stamp, ...io });
+    return `${step.project} step ${step.index + 1} is done`;
+  } catch (error) {
+    return `the landing is not booked on its step (${error?.message || error}) — mc step done <project> <n> --pr ${report.pr.number}`;
+  }
 }
 
 /** `mc merge watch <repo> <pr> [--timeout <min>] [--json]` — the arguments. */

@@ -56,12 +56,15 @@ export async function runDocsMerge({
   const report = { repo: repoPath, pr: { number: pr }, mode: 'docs', ok: false, merged: false, stopped_at: null, reason: null, files: [], merge_commit: null, started_at: started.toISOString() };
   const finish = (stopped, reason) => ({ ...report, stopped_at: stopped, reason, duration_ms: now() - started });
 
-  const info = view(gh, pr, 'number,title,state,isDraft,baseRefName,files,headRefOid');
+  const info = view(gh, pr, 'number,title,state,isDraft,baseRefName,headRefName,body,files,headRefOid');
   if (!info) return finish('read', `gh could not read #${pr}`);
   const head = info.headRefOid || null;
   report.head = head;
   if (!head) return finish('read', `gh gave no head for #${pr}`);
   report.pr = { number: info.number, title: info.title, base: info.baseRefName };
+  // The branch and the body name the step the verb books the landing on.
+  report.branch = info.headRefName || null;
+  report.body = info.body || null;
   report.files = (info.files || []).map((f) => f.path);
   if (info.state !== 'OPEN') return finish('state', `#${pr} is ${String(info.state).toLowerCase()}, not open`);
   if (info.isDraft) return finish('draft', `#${pr} is a draft`);
