@@ -47,7 +47,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js` passes, including the tests named in step 4."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Each chore pass of the runner removes dead leases and labelled leftovers whose holder is gone, and stops an OrbStack that mc started once 10 minutes have passed since the last release with no lease, no live dev server and no running unlabelled container. With the runtime down it runs no `docker` command.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/docker.test.js tests/mc/run.test.js` passes, including the tests named in step 5."
     },

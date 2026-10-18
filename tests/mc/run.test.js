@@ -690,6 +690,37 @@ test('a reaper that throws is said, and the chore pass goes on', async () => {
   assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/old-20260911T090000Z']);
 });
 
+test('the chore pass runs the docker sweep and says its line', async () => {
+  const f = fixture();
+  let passes = 0;
+  f.deps.dockerSweep = async () => {
+    passes += 1;
+    return { line: 'docker: swept 1 lease(s) whose pid is gone' };
+  };
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.equal(passes, 2);
+  assert.match(f.files['/w/runner/log/runner.log'], /docker: swept 1 lease\(s\) whose pid is gone/u);
+});
+
+test('a docker sweep with nothing to say says nothing', async () => {
+  const f = fixture();
+  f.deps.dockerSweep = async () => ({ line: null });
+  await createRunner({ deps: f.deps }).chores();
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] ?? '', /docker:/u);
+});
+
+test('a docker sweep that throws is said, and the chore pass goes on', async () => {
+  const f = fixture({ now: '2026-09-19T10:00:00Z' });
+  f.dirs.add('/w/runner/scratch/old-20260911T090000Z');
+  f.scratchAges['/w/runner/scratch/old-20260911T090000Z'] = Date.parse('2026-09-10T10:00:00Z');
+  f.deps.dockerSweep = async () => { throw new Error('orbctl status timed out'); };
+  await createRunner({ deps: f.deps }).chores();
+  assert.match(f.files['/w/runner/log/runner.log'], /docker: sweep failed — orbctl status timed out/u);
+  assert.deepEqual(f.calls.rmScratch, ['/w/runner/scratch/old-20260911T090000Z']);
+});
+
 test('one step: worktree made from origin/main, session through the adapter, PR merged, row logged', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, gh: { alpha: { number: 77, title: 'Alpha step' } } });
   f.deps.session = (call) => { f.calls.sessions.push(call); return landsItself(f, 'alpha', 77)(call); };

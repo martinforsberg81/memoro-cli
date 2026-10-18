@@ -299,6 +299,13 @@ project used to.
 5. **Close** the workareas whose project is finished — whose archive PR merged
    in 4, or whose plan an earlier archive already took off `main`, which
    `project_log.md` is what still knows.
+6. **Docker, swept** (`sweepDocker`, `docker.js`), every pass: leases whose pid
+   is gone are removed, containers and volumes labelled `mc.holder` with a dead
+   pid are removed, and an OrbStack that `mc docker ensure` started is stopped
+   with `orbctl stop` once 10 minutes have passed since the last release with
+   no lease, no live dev server and no running unlabelled container. While
+   OrbStack is down only `orbctl status` runs; every call has a timeout; a
+   failure is one `docker: sweep failed` line.
 
 **No step starts on a disk with no room.** Every pass reads the free space of
 the volume where `MC_SCRATCH` is made (`diskRoom`, `deps.freeBytes` on

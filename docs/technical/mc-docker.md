@@ -101,6 +101,39 @@ it and `src/mc/docker.js` does the work.
   `mc.holder` whose pid is gone. It never removes an unlabelled object: those
   are counted and reported. With the runtime down it does nothing.
 
+## The idle stop
+
+The runner's chore pass (`chores()`, `run.js`) calls `sweepDocker` on every
+`--idle-sleep`, after the dev-process reaper. The merger cannot: `serve` exits
+when its queue is empty. One sweep:
+
+- **Reads the leases**, which removes those whose pid is gone. A gate that was
+  killed has released by dying, and nothing else reads the leases on a timer.
+- **Asks `orbctl status`, and nothing more while OrbStack is down.** A `docker`
+  call would start the VM the sweep is trying to keep off. The state file gets
+  the runtime and the live leases, `started_by_mc: false` and no `idle_stop`.
+- **Removes labelled leftovers** (`removeDeadHolders`): containers and volumes
+  labelled `mc.holder` whose pid is gone. `--rm` plus a forced remove does not
+  survive SIGKILL, which is how 113 volumes piled up.
+- **Stops OrbStack with `orbctl stop`** once `IDLE_GRACE_MS` (10 minutes) have
+  passed since `last_release_at`, and only when every condition holds:
+  - `started_by_mc` is true: `ensure` started it. A runtime Martin started is
+    his, and stays up.
+  - No lease is alive: a gate is using it.
+  - No dev server `listServers` reports is alive: dev servers use Docker too
+    (wrangler's `cloudflare-dev/*sandbox` containers, `workerd-memoro-*-proxy`).
+  - No unlabelled container is running: mc does not know whose it is, so it
+    does not take the VM from under it.
+
+  Only OrbStack is stopped; Docker Desktop is started, never stopped. Inside
+  the grace the state file's `idle_stop` says when the stop is due.
+
+Every call has a timeout (`CALL_TIMEOUT_MS`): the chore pass runs one thing
+after another, and a hung `docker` call would stall the archives and the
+nightly behind it. The runner says one `docker: …` line when the sweep did
+something, and a sweep that throws is one `docker: sweep failed — <reason>`
+line; the pass goes on.
+
 ## Why
 
 On 2026-10-18 memoro's gate `sql:reference:postgres` exited 69 ('no Docker
