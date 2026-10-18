@@ -14,8 +14,24 @@ start to finish, and know when it is done? If not, it is not a step
 - **Before writing:** do every investigation yourself — read the code,
   measure, try it — so each step stands on an answer. No step whose content
   depends on what an earlier step finds: the plan ends at that earlier step.
-- **No review in a plan:** no "show Martin", "decide whether", "evaluate",
-  "propose". Anything he must see is done in session first.
+- **Nothing in a plan is Martin's:** no step, `done_when`, criterion or
+  `check` that waits on him. No "show Martin", "Martin's check", "at his
+  terminal", "by hand", "decide whether", "evaluate", "propose", and no
+  review step — there is no such step yet. Anything he must see or decide is
+  done in session, before the plan lands; he tests once the project is done.
+  - **Every `check` is the step's to run.** A live check on this machine —
+    a service stopped and started, a build, an install on the paired phone,
+    a wait for the runner's next chore pass — is commands the last step
+    runs, not a hand check. Write them as commands.
+  - **A check the last step's own branch cannot reach is not a criterion.**
+    The merge door refuses the last step until every criterion is `met`, so
+    a check that needs this plan landed first (the runner updated, the page
+    redrawn from main) never passes. Measure it from the branch
+    (`node src/mc-cli.js …`), or leave it out.
+  - **Work outside this plan comes first.** A criterion that needs another
+    project's code on main is not written until that code is on main; a
+    person's act (a sign-in, a production migration, a store submission) is
+    named in `out_of_scope` and is never a criterion.
 - **Each step:** `instruction` as long as the work needs — interface, order,
   edge cases, the trap. `done_when`: one checkable sentence. Name the file
   behind every claim, and only files you opened.
