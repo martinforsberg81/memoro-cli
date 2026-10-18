@@ -4,13 +4,14 @@
  *
  * The other tree is a detached worktree of `<ref>` under
  * `~/.memoro/mc/compare/`, kept and reused while its commit is the asked one
- * and pruned after a day without a server. Each tree runs its own server; both
+ * and pruned once unused for a day with no server — here, and by `mc tidy`.
+ * A directory's mtime does not move when it is reused, so a reuse touches it. Each tree runs its own server; both
  * captures run with this worktree's script and declaration, because the script
  * is only a browser client and the ref's own may not know a measurement or a
  * request field this tree declares.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, utimesSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { mcHome } from './paths.js';
@@ -39,7 +40,11 @@ export function compareTree(worktree, ref, deps = {}) {
 
   const dir = join(root, `${basename(worktree)}-${sha.slice(0, 10)}`);
   const reused = existsSync(dir) && String(git(['-C', dir, 'rev-parse', 'HEAD']).stdout || '').trim() === sha;
-  if (!reused) {
+  if (reused) {
+    // Last use is the directory's mtime, for the prune below and `mc tidy`'s (C).
+    const at = deps.now ? deps.now() : new Date();
+    try { (deps.touch || utimesSync)(dir, at, at); } catch { /* an untouched tree is pruned a day early, at worst */ }
+  } else {
     mkdirSync(root, { recursive: true });
     prune(worktree, root, { git, keep: dir, deps });
     if (existsSync(dir)) git(['-C', worktree, 'worktree', 'remove', '--force', dir]);

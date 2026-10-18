@@ -37,7 +37,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
-| `mc tidy [--apply] [--json] [--days <n>]` | What mc may remove, per root of ruling 39, written to `~/mc/runner/tidy/<stamp>.json` first — every target and keep with its rule; `--apply` removes only that file's targets, each re-checked. `--days` (default 14, at least 1) is how old a loose transcript must be. |
+| `mc tidy [--apply] [--json] [--days <n>]` | What mc may remove, per root of ruling 39, written to `~/mc/runner/tidy/<stamp>.json` first — every target and keep with its rule; `--apply` removes only that file's targets, each re-checked. `--days` (default 14, at least 1) is how old a loose transcript must be. Rule C removes `mc shot --compare` trees under `~/.memoro/mc/compare/` unused for a day with no dev server, by `git worktree remove` in their repository. |
 | `mc work tidy [--apply] [--days <n>] [--json]` | The same as `mc tidy`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so a reader can tell a stopped session from a dead one; `mc work <name>` removes it. |
 | `mc work list` | The page, as bare `mc work` is. |
@@ -97,7 +97,8 @@ too (`tidy.js`: `gatherTidyFacts` reads, the pure `tidyPlan` decides,
 removal: its realpath under its kind's root, its rule on fresh facts; a check
 that fails or throws keeps it. The rules — P (an archived project's local
 files), G (planning transcripts past 72 hours), X (a planning area's landed
-extra worktree), L (T1–T5 transcripts and leftovers); W, S and R are listed
+extra worktree), L (T1–T5 transcripts and leftovers), C (a `mc shot --compare`
+tree unused for a day with no dev server); W, S and R are listed
 and never removed — are in
 [`docs/technical/mc-tidy.md`](technical/mc-tidy.md) § *mc tidy*. A work area,
 a planning area's `memoro/` and `memoro-cli/`, and every `memory/` under

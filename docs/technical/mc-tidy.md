@@ -284,6 +284,17 @@ inside touched within `--days` is a leftover and goes.
 the rule `foreign-worktree` and never removed. After an apply,
 `git worktree prune` runs on both repositories.
 
+**C — `mc shot --compare` trees.** The detached worktrees `shot-compare.js`
+makes under `~/.memoro/mc/compare/` (`tidyRoots().compare`, under mc's home,
+not the work root). One goes when it has not been used for `COMPARE_KEEP_MS`
+(a day) and no live dev server stands in it (`serversFor`). Last use is the
+directory's mtime, and that is only true because `compareTree` touches the
+directory when it reuses one (a reuse writes nothing in it). The tree is
+removed with `git worktree remove`, without `--force`, run in the repository
+git names as its owner (`rev-parse --git-common-dir`), read again at the
+apply. A tree with edits, or one whose server started after the list was
+written, stays. These trees are no longer listed as `foreign-worktree`.
+
 ### The list file
 
 Every run, the dry run too, writes `~/mc/runner/tidy/<yyyymmddThhmmssZ>.json`

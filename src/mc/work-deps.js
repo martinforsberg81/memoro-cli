@@ -54,18 +54,29 @@
  * branch which adds a dependency does not get it until it lands; the session
  * on that branch installs it itself, and nothing here stops it.
  *
- * ## The gate's candidate resolves the same directory
+ * ## The gate's candidate resolves the same directory — until it differs
  *
  * The merge gate builds its throwaway worktree under the work root too
  * (`paths.js`, `WORK_GATE` beside `WORK_DEPS`), so the tree is two parents
  * above the candidate and there is one copy of it rather than one per place
- * that runs the tests. The round calls this on the candidate itself and names
- * the repository with `repoName`: a pull request that changes the lockfile is
- * measured against a tree installed from *its* lockfile, which is the one
- * reading of "what this change does to the suite" that is not a lie. The
- * shared tree then stands at that pull request's lockfile until the next
- * caller moves it — one directory, one lockfile, and the price of that is
- * paid here rather than hidden.
+ * that runs the tests. The round calls this on the candidate itself, names
+ * the repository with `repoName` and passes `ownTree`: the candidate's own
+ * directory. A candidate whose lockfile is the one the shared tree holds
+ * resolves through it and nothing runs. One whose lockfile differs gets
+ * `npm ci` in its own checkout instead (`installed-own`), so it is measured
+ * against a tree installed from *its* lockfile — and the shared tree, which
+ * every live session resolves through, is never flipped under them by a
+ * merge round. Until 2026-10-18 the round reinstalled the shared tree at the
+ * pull request's lockfile and left it there.
+ *
+ * ## Installed means installed
+ *
+ * `npm ci` reads the two copies in the work root, so they are written before
+ * it runs — and an install that then failed used to leave them matching, so
+ * the next caller read `current` over a broken tree. A tree is current only
+ * when it carries `INSTALLED_MARK`, written inside it after a successful
+ * install with the hash of the two files it was installed from; `npm ci`
+ * empties `node_modules` first, so a failed one leaves no mark.
  *
  * ## One repository's tree, named rather than inferred
  *
@@ -76,6 +87,7 @@
  * own. A repository that is not on this list is left alone and told so.
  */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -96,6 +108,14 @@ import {
  * than an edit to this line.
  */
 export const SHARED_TREE_REPOS = Object.freeze(['memoro-cli']);
+
+/** The file inside the tree that says a successful install made it, and from what. */
+export const INSTALLED_MARK = '.mc-installed';
+
+/** What the mark holds: sha256 over the lockfile, NUL, the manifest copy. */
+export function installedHash(lock, manifest) {
+  return createHash('sha256').update(lock).update('\0').update(manifest).digest('hex');
+}
 
 /**
  * What gets written to the work root: the repository's manifest, minus the
@@ -124,9 +144,14 @@ export function workDepsManifest(text) {
  * from the other end — it measures whether the candidate resolves anything
  * (`dependency-tree.js`) rather than trusting what this returned. `state` is
  * one of `not-shared`, `no-manifest`, `no-lockfile`, `no-dependencies`,
- * `current`, `installed`, `failed`.
+ * `current`, `installed`, `installed-own`, `failed`.
+ *
+ * `ownTree` is the merge gate's: a directory to run `npm ci` in, with its own
+ * two files, when the shared tree is not current for them — instead of
+ * reinstalling the shared tree. The shared tree and its copies are then left
+ * exactly as they were.
  */
-export function ensureWorkDeps({ repo, repoName = null, env = process.env, install = npmCi } = {}) {
+export function ensureWorkDeps({ repo, repoName = null, env = process.env, install = npmCi, ownTree = null } = {}) {
   const name = String(repoName || repo || '').replace(/\/+$/u, '').split('/').pop() || '';
   const path = workDepsPath(env);
   if (!SHARED_TREE_REPOS.includes(name)) {
@@ -143,24 +168,39 @@ export function ensureWorkDeps({ repo, repoName = null, env = process.env, insta
     if (!Object.keys(JSON.parse(wanted).dependencies || {}).length) {
       return { ok: true, state: 'no-dependencies', path, why: `${name} declares no dependencies` };
     }
-    if (existsSync(path) && read(workDepsLockPath(env)) === lock && read(workDepsManifestPath(env)) === wanted) {
+    const hash = installedHash(lock, wanted);
+    if (existsSync(path) && read(join(path, INSTALLED_MARK)) === `${hash}\n`
+      && read(workDepsLockPath(env)) === lock && read(workDepsManifestPath(env)) === wanted) {
       return { ok: true, state: 'current', path, why: `${name}'s lockfile is the one this tree was installed from` };
+    }
+    if (ownTree) {
+      const own = join(ownTree, 'node_modules');
+      const installedOwn = { ok: true, state: 'installed-own', path: own, why: `${name}'s lockfile here is not the one the shared tree holds, so it was installed in ${ownTree} and the shared tree was left alone` };
+      return settle(install(ownTree), () => installedOwn, own);
     }
     mkdirSync(workRoot(env), { recursive: true });
     writeFileSync(workDepsManifestPath(env), wanted);
     writeFileSync(workDepsLockPath(env), lock);
     const installed = { ok: true, state: 'installed', path, why: `${name}'s lockfile changed` };
-    // The merge gate's install returns a promise, so the merger's process is
-    // not held for the ten minutes `npm ci` may take; `mc work add` keeps the
-    // synchronous one and gets its answer synchronously.
-    const pending = install(workRoot(env));
-    if (typeof pending?.then === 'function') {
-      return pending.then(() => installed, (error) => ({ ok: false, state: 'failed', path, why: whyItFailed(error) }));
-    }
-    return installed;
+    // The mark goes in only once npm said yes; a failed install leaves none.
+    return settle(install(workRoot(env)), () => { writeFileSync(join(path, INSTALLED_MARK), `${hash}\n`); return installed; }, path);
   } catch (error) {
     return { ok: false, state: 'failed', path, why: whyItFailed(error) };
   }
+}
+
+/**
+ * The install's outcome, as a promise when `install` returned one, as the
+ * result otherwise. The merge gate's install returns a promise, so the
+ * merger's process is not held for the ten minutes `npm ci` may take;
+ * `mc work add` keeps the synchronous one and gets its answer synchronously.
+ */
+function settle(pending, done, path) {
+  const failed = (error) => ({ ok: false, state: 'failed', path, why: whyItFailed(error) });
+  if (typeof pending?.then === 'function') {
+    return pending.then(() => { try { return done(); } catch (error) { return failed(error); } }, failed);
+  }
+  return done();
 }
 
 function read(path) {

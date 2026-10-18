@@ -10,12 +10,17 @@
  * clonefile: the blocks are shared until written) instead of an install.
  *
  * The key is what `npm ci` reads and what it builds for: the candidate's
- * `package-lock.json` bytes, its `package.json` bytes and `process.version`.
- * Anything else differing is a miss, and a miss is `npm ci` as it always
- * was. Only `npm ci` on darwin, and only for a `package.json` with no
- * `postinstall` or `prepare` script — with one, `npm ci` writes outside
- * `node_modules` and a clone of `node_modules` is not what it would have
- * left. A cache that cannot be read, cloned or written never stops a round:
+ * `package-lock.json` bytes, the fields of its `package.json` that change an
+ * install (`INSTALL_FIELDS`), node's major version and module ABI, and the
+ * platform and architecture. Until 2026-10-18 it hashed the whole manifest
+ * and the full node version, so a version bump, a new script or a node patch
+ * release was a miss and a 15-300 s `npm ci` for an identical tree. Anything
+ * in the key differing is a miss, and a miss is `npm ci` as it always was.
+ * Only `npm ci` on darwin, and only for a `package.json` with no lifecycle
+ * script npm ci runs (`preinstall`, `install`, `postinstall`, `prepare`) —
+ * with one, `npm ci` may write outside `node_modules`, a clone of
+ * `node_modules` is not what it would have left, and scripts are not in the
+ * key. A cache that cannot be read, cloned or written never stops a round:
  * every failure is said and becomes the install it replaced.
  */
 import { createHash } from 'node:crypto';
@@ -29,12 +34,23 @@ import { workGateCachePath } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 
 /**
- * Entries kept per repository. One for main's lockfile and one for a pull
- * request that changed it. The disk was 98 % full on 2026-10-09 and memoro's
- * tree is about 500 MB as a copy; clones share blocks on APFS until written,
- * so they cost far less, but more than two is a cost nothing measured asks for.
+ * Entries kept per repository. Two (main's lockfile and one pull request's)
+ * thrashed once a dependency bump and main both moved within a few rounds:
+ * the third key evicted main's, and main's next round installed again. Four
+ * keeps main's across a couple of lockfile-changing pull requests. memoro's
+ * tree is about 500 MB as a copy, but clones share blocks on APFS until
+ * written, so an entry costs far less than that.
  */
-export const PREPARE_CACHE_KEEP = 2;
+export const PREPARE_CACHE_KEEP = 4;
+
+/** The `package.json` fields that change what `npm ci` installs, in key order. */
+export const INSTALL_FIELDS = Object.freeze([
+  'dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'overrides',
+  'engines', 'workspaces', 'packageManager', 'bundleDependencies', 'bundledDependencies',
+]);
+
+/** The lifecycle scripts `npm ci` runs for the root package; one of them keeps the cache out. */
+const INSTALL_SCRIPTS = Object.freeze(['preinstall', 'install', 'postinstall', 'prepare']);
 
 const CACHED_PREPARE = 'npm ci';
 
@@ -42,12 +58,24 @@ export function prepareCacheDir({ repoPath, env = process.env } = {}) {
   return join(workGateCachePath(env), repoFileSlug(repoPath));
 }
 
-/** sha256 over lockfile, NUL, manifest, NUL, node version — first 16 hex. */
-export function prepareCacheKey({ lock, manifest, node = process.version }) {
+/**
+ * sha256 over the lockfile, NUL, the install fields of the manifest (as JSON,
+ * in `INSTALL_FIELDS` order, absent ones left out), NUL, node's major version
+ * and module ABI, platform and architecture — first 16 hex. `manifest` is the
+ * file's bytes or text; one that does not parse throws, and the caller runs
+ * the install.
+ */
+export function prepareCacheKey({
+  lock, manifest, node = process.version, abi = process.versions.modules, platform = process.platform, arch = process.arch,
+}) {
+  const parsed = JSON.parse(String(manifest));
+  const fields = {};
+  for (const field of INSTALL_FIELDS) if (parsed[field] !== undefined) fields[field] = parsed[field];
+  const major = String(node).replace(/^v/u, '').split('.')[0];
   return createHash('sha256')
     .update(lock).update('\0')
-    .update(manifest).update('\0')
-    .update(String(node))
+    .update(JSON.stringify(fields)).update('\0')
+    .update(`node ${major} abi ${abi} ${platform} ${arch}`)
     .digest('hex').slice(0, 16);
 }
 
@@ -85,11 +113,12 @@ export async function prepareCandidate({
   try {
     const manifestBytes = read(join(headDir, 'package.json'));
     const scripts = JSON.parse(String(manifestBytes)).scripts || {};
-    if (scripts.postinstall || scripts.prepare) {
-      say('prepare: the package.json has a postinstall or prepare script, so the cache is not used');
+    const script = INSTALL_SCRIPTS.find((name) => scripts[name]);
+    if (script) {
+      say(`prepare: the package.json has a ${script} script, so the cache is not used`);
       return { ...(await install()), cached: false };
     }
-    key = prepareCacheKey({ lock: read(join(headDir, 'package-lock.json')), manifest: manifestBytes, node });
+    key = prepareCacheKey({ lock: read(join(headDir, 'package-lock.json')), manifest: manifestBytes, node, platform });
   } catch (error) {
     say(`prepare: the cache key could not be read (${error.message}) — running ${prepare}`);
     return { ...(await install()), cached: false };

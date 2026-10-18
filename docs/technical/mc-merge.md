@@ -344,19 +344,25 @@ rounds on 2026-10-09/10, 332 s at the worst, and most rounds install the
 lockfile the round before installed. After a green `npm ci` the round stores
 the candidate's `node_modules` under
 `<work root>/gate-cache/<repo slug>/<key>/` (`WORK_GATE_CACHE`), where the key
-is the first 16 hex of sha256 over the candidate's `package-lock.json`, its
-`package.json` and `process.version`. A candidate with the same key gets a
+is the first 16 hex of sha256 over the candidate's `package-lock.json`, the
+install-affecting fields of its `package.json` (`INSTALL_FIELDS`: the four
+dependency maps, `overrides`, `engines`, `workspaces`, `packageManager`,
+`bundleDependencies`), node's major version and module ABI, and the platform
+and architecture. (Until 2026-10-18 the whole manifest and the full node
+version were hashed, so a version bump or a node patch release was a miss.) A candidate with the same key gets a
 clone of the stored tree — `cp -cR`, APFS clonefile, blocks shared until
 written — no prepare shell, and the line `prepare: cloned node_modules from
 the cache (<key>)`; the time stays under the round's `prepare` timing. Any
 other key is a miss and runs `npm ci` as before. The cache is used only for
-`npm ci`, on darwin, and for a `package.json` without a `postinstall` or
-`prepare` script (with one, `npm ci` writes outside `node_modules`). A key
+`npm ci`, on darwin, and for a `package.json` without a `preinstall`,
+`install`, `postinstall` or `prepare` script (with one, `npm ci` may write
+outside `node_modules`, and scripts are not in the key). A key
 that cannot be read, a clone that fails or a store that fails is said and
 becomes the `npm ci` it replaced; the cache never stops a round. At most
-`PREPARE_CACHE_KEEP` (2) entries are kept per repository, oldest evicted: one
-for main's lockfile and one for a pull request that changed it — the disk was
-98 % full on 2026-10-09 and memoro's tree is about 500 MB as a copy.
+`PREPARE_CACHE_KEEP` (4) entries are kept per repository, oldest evicted. It
+was 2, one for main's lockfile and one for a pull request that changed it,
+and a second lockfile-changing pull request evicted main's. memoro's tree is
+about 500 MB as a copy, but clones share blocks until written.
 Measured at close-out (74 memoro rounds, 2026-10-10 18:01 – 2026-10-11 08:11
 UTC): 72 hits at 6.8 s median (7.4 s mean), 2 misses at 22.7 s median.
 
