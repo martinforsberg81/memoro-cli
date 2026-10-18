@@ -771,6 +771,73 @@ describe('already merged or closed on GitHub (merger-hardening step 2)', () => {
     assert.equal(sweeps, 1);
     assert.deepEqual(order, ['sweep', 1]);
   });
+
+  /** `serve` over 11, 12 and 13 with `landJob` as its `land`; `seen` is the queue as the round starts. */
+  async function serveSeeing(m, gh, { landOver = {}, serveOver = {}, jobs = [jobFor(11, 0), jobFor(12, 1), jobFor(13, 2)], after = () => {} } = {}) {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify(jobs));
+    const at = { seen: null, entries: null };
+    await serve({
+      root, lock, take: () => true, release: () => {}, ...ONE_LANE, gh, say: m.deps.say, now: m.deps.now,
+      land: (batch, lane, extra) => landJob(batch, {
+        ...m.deps, ...landOver, ...extra,
+        mergeRound: async (options) => {
+          at.entries = queue();
+          at.seen = at.entries.map((e) => [e.pr, e.state]);
+          const report = await m.deps.mergeRound(options);
+          after();
+          return report;
+        },
+      }),
+      ...serveOver,
+    });
+    return at;
+  }
+
+  it('a member closed on GitHub is red in merges.json while the others\' round runs', async () => {
+    registerBatch();
+    const { gh } = stubGh({ 11: OPEN, 12: CLOSED, 13: OPEN });
+    const m = machine([two], { gh });
+    const { seen, entries } = await serveSeeing(m, gh);
+    assert.deepEqual(seen, [[11, 'landing'], [12, 'red'], [13, 'landing']]);
+    assert.equal(entries.find((e) => e.pr === 12).reason, 'closed: #12 was closed on GitHub without merging');
+    assert.deepEqual(queue().map((e) => [e.pr, e.state]), [[12, 'red']]);
+  });
+
+  it('a member already merged is gone from merges.json while the round runs', async () => {
+    registerBatch();
+    const { gh } = stubGh({ 11: OPEN, 12: MERGED, 13: OPEN });
+    const m = machine([two], { gh });
+    const { seen } = await serveSeeing(m, gh);
+    assert.deepEqual(seen, [[11, 'landing'], [13, 'landing']]);
+    assert.deepEqual(queue(), []);
+  });
+
+  it('a restack refusal that gets its mend is mending, and its mend has started, before the round ends', async () => {
+    registerBatch();
+    const { gh } = stubGh({ 11: OPEN, 12: OPEN, 13: OPEN });
+    const m = machine([two], { gh });
+    let roundDone = false;
+    let roundEnded = () => {};
+    const ended = new Promise((resolve) => { roundEnded = resolve; });
+    const mendStarted = [];
+    const stacked = { ...jobFor(12, 1), branch: 'mb-12', parent: { project: null, index: null, pr: 5, sha: 'abc' } };
+    const { seen } = await serveSeeing(m, gh, {
+      jobs: [jobFor(11, 0), stacked, jobFor(13, 2)],
+      after: () => { roundDone = true; roundEnded(); },
+      landOver: {
+        moveOntoMain: (job) => (job.pr === 12 ? { ok: false, reason: 'moving #12 onto main after #5 landed conflicts in a.js' } : { ok: true, moved: true }),
+        mayMend: (job) => job.pr === 12,
+      },
+      serveOver: {
+        // Held until the round ends, so the queue the round sees is the
+        // mending one and not what the mend's settling wrote after it.
+        mend: async (job) => { mendStarted.push([job.pr, roundDone]); await ended; return { outcome: 'nothing', line: 'gave up', status: 0, seconds: 0 }; },
+      },
+    });
+    assert.deepEqual(mendStarted, [[12, false]]);
+    assert.ok(seen.some(([pr, state]) => pr === 12 && state === 'mending'), JSON.stringify(seen));
+  });
 });
 
 describe('lanes (merge-throughput step 2)', () => {
