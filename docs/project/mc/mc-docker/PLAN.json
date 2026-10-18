@@ -52,7 +52,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/docker.test.js tests/mc/run.test.js` passes, including the tests named in step 5."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The page draws one `docker` line from `state.json` (runtime, live leases, images, idle stop), and draws nothing when the file is absent.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/page.test.js` passes, including the tests named in step 6."
     },

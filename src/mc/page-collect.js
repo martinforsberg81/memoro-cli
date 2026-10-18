@@ -34,6 +34,7 @@
  * language   — the language side, from files `mc language` leaves: each
  *              cached reading's numbers, the newest run, and the gap a stopped
  *              run left open (`languageState`, language-runs.js).
+ * docker     — the runtime, its leases, images and idle stop, from state.json.
  *
  * Plus `caches` (what the two read-through caches did) and `notes` (whatever
  * could not be read).
@@ -56,6 +57,7 @@ import {
   DAY_MS, defaultRepos, listProgrammes, proposalSystem, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
+import { statePath } from './docker.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
 import { readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
@@ -1328,6 +1330,32 @@ function readJson(path) {
 }
 
 /**
+ * The container runtime, from the state file `mc docker` and the runner write
+ * (docker.js). Null when there is no file, and then the page has no docker
+ * line. The leases are filtered by `alive` (`pidAlive` unless a test says
+ * otherwise), because the file may be older than a holder's death: a lease
+ * whose pid is gone is held by nobody, whatever the file still says.
+ * `idle_stop_seconds` is set only while the runtime is up and no lease is
+ * alive, the only state in which the idle stop can come.
+ */
+export function dockerSection({ state, now = new Date(), alive = pidAlive } = {}) {
+  if (!state?.runtime) return null;
+  const leases = (state.leases || []).filter((lease) => alive(lease.pid));
+  const stopAt = Date.parse(state.idle_stop);
+  const savedAt = Date.parse(state.at);
+  return {
+    kind: state.runtime.kind,
+    up: state.runtime.up,
+    leases: leases.map((lease) => ({ pid: lease.pid, run: lease.run, repo: lease.repo })),
+    images: state.inventory?.df?.images?.count ?? null,
+    idle_stop_seconds: state.runtime.up && leases.length === 0 && Number.isFinite(stopAt)
+      ? Math.max(0, Math.round((stopAt - now) / 1000))
+      : null,
+    as_of_seconds: Number.isFinite(savedAt) ? Math.max(0, Math.round((now - savedAt) / 1000)) : null,
+  };
+}
+
+/**
  * The tmux sessions that are a workarea, with when each was opened.
  * `#{session_created}` is epoch seconds, which is how long somebody has had
  * this open — the one thing about a live area the page can know for 5 ms.
@@ -1627,6 +1655,8 @@ export async function collectPage({
       }),
       now,
     }),
+    // File reads only, as the rest of the page: the runtime is never asked.
+    docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
     intake: intakeSection({ digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), now }),
     programmes,
     // File reads only, as DEPLOY's are: the page never runs a read.
