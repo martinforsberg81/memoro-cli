@@ -24,6 +24,9 @@
  *
  * Returns `{ freed, holder, why }`: `holder` is the plan directory that held
  * the branch, `why` says why it was not freed (null when no worktree held it).
+ *
+ * What is left after that is `claimProjectBranch`'s: whether the branch is the
+ * runner's to use at all.
  */
 import { sep } from 'node:path';
 
@@ -48,6 +51,34 @@ export function freePlanBranch({ repo, branch, planRoot, git, gh }) {
   if (!git(holder, ['checkout', '-q', '--detach'])?.ok) return { freed: false, holder, why: 'could not detach' };
   if (!git(repo, ['branch', '-D', branch])?.ok) return { freed: false, holder, why: 'could not delete the branch' };
   return { freed: true, holder, why: null };
+}
+
+/**
+ * A project's branch name is the runner's. Asked after `freePlanBranch`, before
+ * the runner makes the step's workarea, and answers one of four verdicts:
+ * `absent` (no such local branch), `own` (a register step names it as its
+ * `branch`), `recreated` (it had landed and no worktree held it, so it was
+ * deleted) and `foreign` (anything else, with the `holder` and `why`).
+ *
+ * A landed leftover is replaced rather than checked out: its head is the
+ * pre-squash commit, behind main and without the plan, and `morning-calls`
+ * step 1 would have started on it on 2026-10-14 had no worktree held it. An
+ * `ahead` or `unknown` one is never touched, because it may be someone's work.
+ */
+export function claimProjectBranch({ repo, branch, plan = null, registered = false, git }) {
+  const out = (cwd, args) => {
+    const r = git(cwd, args);
+    return r?.ok ? String(r.stdout ?? '').trimEnd() : null;
+  };
+  if (!git(repo, ['rev-parse', '-q', '--verify', `refs/heads/${branch}`])?.ok) return { verdict: 'absent', holder: null, why: null };
+  if (plan?.holder && !plan.freed) return { verdict: 'foreign', holder: plan.holder, why: plan.why || 'checked out there' };
+  if (registered) return { verdict: 'own', holder: null, why: null };
+  const landed = branchLanded(repo, branch, { run: (args) => out(repo, args) });
+  if (landed === 'landed') {
+    if (!git(repo, ['branch', '-D', branch])?.ok) return { verdict: 'foreign', holder: null, why: 'it has landed and could not be deleted' };
+    return { verdict: 'recreated', holder: null, why: null };
+  }
+  return { verdict: 'foreign', holder: null, why: landed === 'ahead' ? 'it has commits that are not on origin/main' : 'whether it has landed could not be told' };
 }
 
 /** The worktree `git worktree list --porcelain` shows on `refs/heads/<branch>`. */

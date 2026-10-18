@@ -156,6 +156,8 @@ describe('the picker', () => {
   });
 });
 
+const BRANCH_RULE = 'A plan\'s pull request goes from a branch named `plan/<project>`, never `<project>`: that name is the runner\'s.';
+
 describe('the prompt', () => {
   it('names the programme and where it stands — and waits for Martin', () => {
     const launch = planLaunch({
@@ -185,14 +187,25 @@ describe('the prompt', () => {
   // could look. The role has a body since #656, so the shared text arrives
   // through `instructionsFor` like everyone else's and this is the prompt and
   // nothing but.
+  //
+  // The one line exempt is the branch rule (2026-10-18, `mc-ownership`): it
+  // says which name a plan's pull request may not take, not that one comes.
   it('predicts nothing about the deliverable or how it lands', () => {
     const { prompt } = planLaunch({
       programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
     });
     assert.ok(!prompt.includes(sharedRoleText()), 'the shared text is the overlay\'s to carry now');
+    const rest = prompt.split('\n').filter((line) => line !== BRANCH_RULE).join('\n');
     for (const guess of ['PLAN.json', '<project>', 'PR', 'pull request', 'mc merge', 'push', 'programme document', 'Then stop']) {
-      assert.ok(!prompt.includes(guess), `the prompt should not predict "${guess}": ${prompt}`);
+      assert.ok(!rest.includes(guess), `the prompt should not predict "${guess}": ${prompt}`);
     }
+  });
+
+  // A planning session opened its pull request from a branch named after the
+  // project and held it in a scratchpad worktree (`morning-calls`, 2026-10-14).
+  it('names the plan pull request\'s branch `plan/<project>`, never the project\'s', () => {
+    const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan') });
+    assert.ok(prompt.split('\n').includes(BRANCH_RULE), prompt);
   });
 
   // The rules every role session shares reach this one the way they reach the

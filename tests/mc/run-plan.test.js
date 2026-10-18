@@ -1048,7 +1048,7 @@ test('stepOfPr: the step that names the pull request, and the deliverable one be
  */
 test('WORKAREA_BLOCKS: the persistent refusals, under names a plan can carry', () => {
   assert.deepEqual(Object.keys(WORKAREA_BLOCKS).sort(),
-    ['branch', 'dirty', 'role-missing', 'sync', 'tool-missing', 'worktree']);
+    ['branch', 'branch-foreign', 'dirty', 'role-missing', 'sync', 'tool-missing', 'worktree']);
   // Every key is a word the runner already refuses in, so the two lists cannot
   // drift into naming different things.
   const refusals = RUN_REFUSALS.map((item) => item.reason);

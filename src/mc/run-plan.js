@@ -186,6 +186,7 @@ export function queueFileText(names) {
 export const RUN_REFUSALS = Object.freeze([
   { reason: 'stop', read: true },
   { reason: 'worktree', read: false, why: 'the round makes a missing worktree; that `git worktree add` failed is the outcome of that action' },
+  { reason: 'branch-foreign', read: false, why: 'whose the project branch is, is asked of git and the register while the round makes the worktree, and the reading makes no worktree' },
   { reason: 'dirty', read: true },
   { reason: 'prs-unknown', read: true },
   { reason: 'in-flight', read: true },
@@ -230,6 +231,7 @@ export const REFUSAL = Object.freeze(Object.fromEntries(RUN_REFUSALS.map((item) 
 export const WORKAREA_BLOCKS = Object.freeze({
   dirty: 'dirty-worktree',
   worktree: 'worktree-missing',
+  'branch-foreign': 'branch-foreign',
   branch: 'branch-unmovable',
   sync: 'merge-uncommittable',
   'role-missing': 'role-missing',

@@ -4136,6 +4136,16 @@ test('a project already in flight in one lane is skipped by another', async () =
  * the last test below asserts every name has one.
  */
 
+/** A project branch a planning session holds in its scratchpad (`morning-calls`, 2026-10-14). */
+const scratchHeld = () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, refs: { memoro: ['m'] }, session: okSession() });
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => (args[0] === 'worktree' && args[1] === 'list'
+    ? { ok: true, stdout: 'worktree /home/memoro\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/scratchpad/wt3\nHEAD eb261c5d6a\nbranch refs/heads/m\n' }
+    : git(cwd, args));
+  return f;
+};
+
 const BLOCKS = [
   {
     block: 'dirty-worktree',
@@ -4154,6 +4164,13 @@ const BLOCKS = [
       return f;
     },
     detail: /git worktree add failed \(no space left on device\)/u,
+  },
+  {
+    block: 'branch-foreign',
+    reason: 'branch-foreign',
+    what: 'a project branch checked out in a worktree the runner does not own',
+    make: scratchHeld,
+    detail: /branch m is not the runner's: checked out at \/tmp\/scratchpad\/wt3 \(not a plan directory\) — remove that worktree or delete the branch/u,
   },
   {
     block: 'branch-unmovable',
@@ -4258,6 +4275,24 @@ for (const kase of BLOCKS) {
     assert.equal(f.calls.git.some((c) => c[1] === 'worktree' && c[2] === 'add' && String(c[4] || '').includes('/runner/block/')), false, 'no block worktree');
   });
 }
+
+test('a landed project branch no worktree holds is deleted and the step starts from origin/main', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, refs: { memoro: ['m'] }, landed: ['m'], session: okSession() });
+  const runner = createRunner({ deps: f.deps });
+  await runner.runStep('m', runner.queue());
+  assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'branch' && c[2] === '-D' && c[3] === 'm'), 'the leftover is deleted');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: local branch m had landed and no worktree held it — deleted, the workarea starts from origin\/main/u);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('an unlanded project branch no worktree holds blocks as branch-foreign', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, refs: { memoro: ['m'] }, session: okSession() });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('m', runner.queue()), 'skipped:branch-foreign');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /branch m is not the runner's: no worktree holds it \(it has commits that are not on origin\/main\)/u);
+  assert.equal(f.calls.git.some((c) => c[1] === 'branch' && c[2] === '-D'), false, 'the branch is kept');
+});
 
 test('every workarea block has a case above', () => {
   const covered = new Set(BLOCKS.map((kase) => kase.block));
@@ -4406,6 +4441,11 @@ const CASES = [
       f.deps.addWorktree = () => ({ ok: false, reason: 'no space left on device' });
       return f;
     },
+  },
+  {
+    reason: 'branch-foreign',
+    what: 'the project branch is held by a worktree the runner does not own',
+    make: scratchHeld,
   },
   {
     reason: 'dirty',

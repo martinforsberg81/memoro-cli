@@ -183,6 +183,12 @@ project and stayed on it: the runner's `addWorktree` (`src/mc/work-area.js`)
 found that branch, git refused to check it out a second time, and the step went
 `blocked` on `worktree-missing` until somebody detached the planning tree.
 
+Since 2026-10-14 the role and the launch prompt also name the pull request's
+branch `plan/<project>`, and the runner refuses a project-named branch it did
+not make as `branch-foreign` instead of failing inside `git worktree add`: the
+planning session for `morning-calls` had opened its pull request from a branch
+named after the project and kept it checked out in a scratchpad worktree.
+
 The prompt rides as the **last positional argument**, which is how both tools
 take opening words, and only for a new conversation. It names the programme
 and where the session stands, and then waits: the reading list and the

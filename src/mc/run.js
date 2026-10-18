@@ -137,7 +137,7 @@ import { readDeps } from './deps.js';
 import {
   RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
-import { freePlanBranch } from './plan-branch.js';
+import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
@@ -2308,6 +2308,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // the project's branch after its pull request landed (plan-branch.js).
       const plan = freePlanBranch({ repo: repo.path, branch: name, planRoot: planHome(deps.env), git: deps.git, gh: deps.gh });
       if (plan.freed) say(`${name}: ${plan.holder} still held ${name}, which has landed — detached there and the branch deleted`);
+      // A project's branch is the runner's name, and one it did not make is never checked out (2026-10-14, `morning-calls`).
+      const registered = (readEntry(root, name, { read: deps.read })?.steps || []).some((step) => step?.branch === name);
+      const claim = claimProjectBranch({ repo: repo.path, branch: name, plan, registered, git: deps.git });
+      if (claim.verdict === 'foreign') return block(REFUSAL['branch-foreign'], `branch ${name} is not the runner's: ${claim.holder ? `checked out at ${claim.holder}` : 'no worktree holds it'} (${claim.why}) — remove that worktree or delete the branch, then mc step ready`);
+      if (claim.verdict === 'recreated') say(`${name}: local branch ${name} had landed and no worktree held it — deleted, the workarea starts from origin/main`);
       const added = deps.addWorktree({ name: areaName(name), repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
       if (!added.ok) return block(REFUSAL.worktree, `git worktree add failed (${added.reason})`);
     }

@@ -476,10 +476,18 @@ fault that is a moment's, and not the project's, is waited out.
 |---|---|---|
 | `dirty-worktree` | `dirty` | 4 — the comment names up to five of the files |
 | `worktree-missing` | `worktree` | 2 — `git worktree add` failed; git's reason |
+| `branch-foreign` | `branch-foreign` | 2 — the project's local branch is held by a worktree the runner did not free, or has commits not on origin/main and no register step names it; the holder is named |
 | `branch-unmovable` | `branch` | 8 — `<name>-<n>` could not be made |
 | `merge-uncommittable` | `sync` | 9 — every conflict resolved and the commit refused; a merge git refused with no conflict at all (unrelated histories, a stale `index.lock`); a `PLAN.json` neither the plan's rule nor `main`'s copy could settle |
 | `role-missing` | `role-missing` | 10 |
 | `tool-missing` | `tool-missing` | 10 — the adapter's hint |
+
+A landed local branch named after the project that no worktree holds and no
+register step names is not a block: it is deleted, the workarea is created from
+origin/main, and runner.log says so in one line (`claimProjectBranch`,
+`plan-branch.js`). Checked out as it stood, its head is the pre-squash commit,
+behind main and without the plan — where `morning-calls` step 1 would have
+started on 2026-10-14 had the planning session's scratchpad not held it.
 
 The names are `WORKAREA_BLOCKS` (`run-plan.js`), keyed by the refusal word so
 the two lists are one. Where a merge is in progress when the fault is met, it is
