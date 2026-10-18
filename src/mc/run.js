@@ -118,6 +118,7 @@ import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-lan
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
+import { sweepDocker } from './docker.js';
 import { deliverableStep, readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -516,6 +517,8 @@ export function realDeps(env = process.env) {
     stopServersUnder,
     // The chore pass's reaper: dev processes nobody owns any more.
     reapDevServers: () => reapDevServers({ dryRun: false }),
+    // The chore pass's Docker sweep (docker.js): dead leases, labelled leftovers, the idle stop.
+    dockerSweep: () => sweepDocker({}),
     // The two files that say a runner is here and a step is in flight. Whole
     // or not at all: `mc status` reads them while they are being written.
     writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
@@ -3193,6 +3196,7 @@ export function createRunner({
     const archives = quiet ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
     closeWorkareas(plans, archives.flatMap((a) => a.landed), archivedProjects());
     await reapOrphans();
+    await sweepDockerChore();
     sweepScratch();
     await runTidyDaily();
     // Last, and not beside the two chores above: it is the long one, and the
@@ -3216,6 +3220,23 @@ export function createRunner({
       if (reaped.length) say(`reap: ${reaped.length} orphaned dev process(es) removed`);
     } catch (error) {
       say(`reap: failed — ${error?.message || error}`);
+    }
+  }
+
+  /**
+   * The container runtime's sweep (`sweepDocker`, `docker.js`): dead leases,
+   * labelled leftovers, and the idle stop of an OrbStack mc started. A sweep
+   * failure never stops a pass: it is said and the pass goes on. Only when a
+   * deps object carries one — a test fixture without `dockerSweep` touches no
+   * Docker on the machine running the suite.
+   */
+  async function sweepDockerChore() {
+    if (!deps.dockerSweep) return;
+    try {
+      const outcome = await deps.dockerSweep();
+      if (outcome?.line) say(outcome.line);
+    } catch (error) {
+      say(`docker: sweep failed — ${error?.message || error}`);
     }
   }
 

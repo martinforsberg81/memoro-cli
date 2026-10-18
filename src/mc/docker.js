@@ -31,6 +31,7 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
+import { listServers } from './dev-servers.js';
 import { log } from './logger.js';
 import { mcHome } from './paths.js';
 import { pidAlive } from './status-collect.js';
@@ -386,5 +387,68 @@ export async function removeDeadHolders({ dryRun = false, io = {} } = {}) {
       running: unlabelled(inv.containers).filter((c) => c.state === 'running').length,
     },
     df: inv.df,
+  };
+}
+
+/**
+ * The runner's chore pass (`chores()`, `run.js`): leases whose pid is gone,
+ * labelled leftovers of a dead holder, and the idle stop. While the runtime is
+ * down only `orbctl status` runs — a `docker` call would start the VM this is
+ * trying to keep off. The idle stop stops only an OrbStack `ensure` started,
+ * `IDLE_GRACE_MS` after the last release, and never while a lease is alive, a
+ * dev server is alive (wrangler's sandboxes run in Docker too) or an
+ * unlabelled container is running. Resolves `{ up, swept, removed, stopped,
+ * line }`; `line` is null when nothing happened.
+ */
+export async function sweepDocker({ root = mcHome(), env = process.env, io = {}, servers = () => listServers().servers } = {}) {
+  const m = { ...SYSTEM, ...io };
+  const { leases, swept } = liveLeases({ root, io });
+  const leaseRows = leases.map(({ path: _path, ...lease }) => lease);
+  const rt = await runtimeOf({ env, io });
+  if (!rt.up) {
+    writeState({ runtime: rt, leases: leaseRows, started_by_mc: false, idle_stop: null }, { root, io });
+    return {
+      up: false, swept, removed: null, stopped: false, line: swept.length ? `docker: swept ${swept.length} lease(s) whose pid is gone` : null,
+    };
+  }
+
+  const pruned = await removeDeadHolders({ io });
+  const state = readState({ root }) || {};
+  const liveServers = servers().filter((s) => s.live !== false);
+  const idle = leases.length === 0 && liveServers.length === 0 && pruned.unlabelled.running === 0;
+  const ours = rt.kind === 'orbstack' && state.started_by_mc === true && Boolean(state.last_release_at);
+  const releasedAt = ours ? Date.parse(state.last_release_at) : Number.NaN;
+  const idleMs = m.now() - releasedAt;
+
+  const parts = [];
+  if (swept.length) parts.push(`swept ${swept.length} lease(s) whose pid is gone`);
+  const { containers, volumes } = pruned.removed;
+  if (containers.length || volumes.length) {
+    parts.push(`removed ${containers.length} container(s) and ${volumes.length} volume(s) labelled by a holder that is gone`);
+  }
+
+  let stopped = false;
+  let stopFailed = null;
+  if (idle && ours && idleMs >= IDLE_GRACE_MS) {
+    const result = await m.run('orbctl', ['stop'], { timeoutMs: CALL_TIMEOUT_MS });
+    if (result?.status === 0) {
+      writeState({ runtime: { ...rt, up: false }, leases: [], started_by_mc: false, idle_stop: null }, { root, io });
+      m.log('docker-idle-stop', { idle_ms: idleMs });
+      stopped = true;
+      parts.push(`idle ${Math.round(idleMs / 60000)} min with no lease, no dev server and no unlabelled container running — orbctl stop`);
+    } else {
+      stopFailed = `docker: orbctl stop failed — ${failure(result)}`;
+    }
+  }
+  if (!stopped) {
+    writeState({
+      runtime: rt,
+      leases: leaseRows,
+      inventory: { df: pruned.df, unlabelled: pruned.unlabelled },
+      idle_stop: idle && ours && Number.isFinite(releasedAt) ? new Date(releasedAt + IDLE_GRACE_MS).toISOString() : null,
+    }, { root, io });
+  }
+  return {
+    up: !stopped, swept, removed: pruned.removed, stopped, line: stopFailed ?? (parts.length ? `docker: ${parts.join(' · ')}` : null),
   };
 }

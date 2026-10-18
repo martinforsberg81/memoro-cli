@@ -12,7 +12,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  currentContext, ensure, inventory, leasesDir, liveLeases, needsDocker, readState, release, releasePid, runtimeOf, takeLease,
+  currentContext, ensure, inventory, leasesDir, liveLeases, needsDocker, readState, release, releasePid, runtimeOf, sweepDocker, takeLease,
+  writeState,
 } from '../../src/mc/docker.js';
 import { fakeIo, INFO } from './_helpers/docker-io.js';
 
@@ -42,6 +43,27 @@ async function startsStopped(root) {
   });
   const result = await ensure({ pid: 5000, run: 'merge #7', repo: 'memoro', root, env: {}, io: fake.io });
   return { ...fake, result };
+}
+
+const EMPTY = { status: 0, stdout: '' };
+
+/** An OrbStack that is up and holds nothing, with `orbctl stop` answering. */
+function idleUp({ live = [], ps = EMPTY } = {}) {
+  return fakeIo({
+    live,
+    answers: {
+      'orbctl status': { status: 0, stdout: 'Running\n' },
+      'docker system df --format {{json .}}': EMPTY,
+      'docker ps -a --format {{json .}}': ps,
+      'docker volume ls --format {{json .}}': EMPTY,
+      'docker rm --force --volumes c1': { status: 0 },
+      'orbctl stop': { status: 0 },
+    },
+  });
+}
+
+function argvs(calls) {
+  return calls.map((call) => call.argv.join(' '));
 }
 
 async function neverAnswers(root) {
@@ -192,4 +214,94 @@ describe('docker.js', () => {
     assert.equal(inv.errors.length, 1);
     assert.match(inv.errors[0], /docker volume ls: ETIMEDOUT/u);
   });
+
+  it('with OrbStack down the sweep runs no docker command and sweeps dead leases', () => withRoot(async (root) => {
+    const { io, calls } = fakeIo({ answers: { 'orbctl status': { status: 0, stdout: 'Stopped\n' } } });
+    takeLease({ pid: 41100, root, io });
+    const result = await sweepDocker({ root, env: {}, io, servers: () => [] });
+    assert.equal(result.up, false);
+    assert.equal(result.stopped, false);
+    assert.equal(result.line, 'docker: swept 1 lease(s) whose pid is gone');
+    assert.ok(calls.every((call) => call.argv[0] !== 'docker'));
+    assert.equal(readState({ root }).started_by_mc, false);
+  }));
+
+  it('an OrbStack mc started, idle past the grace, is stopped', () => withRoot(async (root) => {
+    writeState({ started_by_mc: true, last_release_at: '2026-10-18T11:49:00.000Z' }, { root });
+    const { io, calls, logged } = idleUp();
+    const result = await sweepDocker({ root, env: {}, io, servers: () => [] });
+    assert.equal(result.stopped, true);
+    assert.ok(argvs(calls).includes('orbctl stop'));
+    assert.match(result.line, /docker: idle 11 min with no lease, no dev server and no unlabelled container running — orbctl stop/u);
+    assert.equal(readState({ root }).started_by_mc, false);
+    assert.ok(logged.some((entry) => entry.event === 'docker-idle-stop' && entry.idle_ms === 11 * 60_000));
+    for (const call of calls) assert.ok(Number.isFinite(call.timeoutMs), `${call.argv.join(' ')} has no timeout`);
+  }));
+
+  it('inside the grace it is not stopped and the state says when', () => withRoot(async (root) => {
+    writeState({ started_by_mc: true, last_release_at: '2026-10-18T11:55:00.000Z' }, { root });
+    const { io, calls } = idleUp();
+    const result = await sweepDocker({ root, env: {}, io, servers: () => [] });
+    assert.equal(result.stopped, false);
+    assert.equal(result.line, null);
+    assert.ok(!argvs(calls).includes('orbctl stop'));
+    assert.equal(readState({ root }).idle_stop, '2026-10-18T12:05:00.000Z');
+  }));
+
+  it('a live dev server holds it up', () => withRoot(async (root) => {
+    writeState({ started_by_mc: true, last_release_at: '2026-10-18T11:49:00.000Z' }, { root });
+    const { io, calls } = idleUp();
+    const result = await sweepDocker({ root, env: {}, io, servers: () => [{ instance_id: 'memoro-app', live: true }] });
+    assert.equal(result.stopped, false);
+    assert.ok(!argvs(calls).includes('orbctl stop'));
+    assert.equal(readState({ root }).idle_stop, null);
+  }));
+
+  it('a running unlabelled container holds it up', () => withRoot(async (root) => {
+    writeState({ started_by_mc: true, last_release_at: '2026-10-18T11:49:00.000Z' }, { root });
+    const ps = { status: 0, stdout: '{"ID":"c1","Names":"workerd-x","State":"running","Labels":""}\n' };
+    const { io, calls } = idleUp({ ps });
+    const result = await sweepDocker({ root, env: {}, io, servers: () => [] });
+    assert.equal(result.stopped, false);
+    assert.ok(!argvs(calls).includes('orbctl stop'));
+    assert.ok(calls.every((call) => !call.argv.includes('rm')));
+    assert.equal(readState({ root }).inventory.unlabelled.running, 1);
+  }));
+
+  it('a runtime mc did not start is never stopped', () => withRoot(async (root) => {
+    writeState({ started_by_mc: false, last_release_at: '2026-10-18T11:49:00.000Z' }, { root });
+    const { io, calls } = idleUp();
+    const result = await sweepDocker({ root, env: {}, io, servers: () => [] });
+    assert.equal(result.stopped, false);
+    assert.ok(!argvs(calls).includes('orbctl stop'));
+  }));
+
+  it('a live lease holds it up', () => withRoot(async (root) => {
+    writeState({ started_by_mc: true, last_release_at: '2026-10-18T11:49:00.000Z' }, { root });
+    const { io, calls } = idleUp({ live: [5000] });
+    takeLease({ pid: 5000, root, io });
+    const result = await sweepDocker({ root, env: {}, io, servers: () => [] });
+    assert.equal(result.stopped, false);
+    assert.ok(!argvs(calls).includes('orbctl stop'));
+    assert.deepEqual(readState({ root }).leases.map((lease) => lease.pid), [5000]);
+  }));
+
+  it('labelled leftovers of a dead holder are removed in the sweep', () => withRoot(async (root) => {
+    const ps = { status: 0, stdout: '{"ID":"c1","Names":"pg-ref","State":"exited","Labels":"mc.holder=41100,mc.run=merge"}\n' };
+    const { io, calls } = idleUp({ ps });
+    const result = await sweepDocker({ root, env: {}, io, servers: () => [] });
+    assert.ok(argvs(calls).includes('docker rm --force --volumes c1'));
+    assert.match(result.line, /removed 1 container\(s\) and 0 volume\(s\)/u);
+    assert.equal(result.stopped, false);
+  }));
+
+  it('an orbctl stop that fails is said', () => withRoot(async (root) => {
+    writeState({ started_by_mc: true, last_release_at: '2026-10-18T11:49:00.000Z' }, { root });
+    const { io } = idleUp();
+    const failing = { ...io, run: async (tool, args, opts) => (tool === 'orbctl' && args[0] === 'stop' ? { status: 1, stderr: 'vm busy\n' } : io.run(tool, args, opts)) };
+    const result = await sweepDocker({ root, env: {}, io: failing, servers: () => [] });
+    assert.equal(result.stopped, false);
+    assert.equal(result.line, 'docker: orbctl stop failed — vm busy');
+    assert.equal(readState({ root }).started_by_mc, true);
+  }));
 });
