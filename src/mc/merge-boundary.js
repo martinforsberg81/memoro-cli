@@ -33,7 +33,8 @@
  */
 import { spawnSync } from 'node:child_process';
 
-import { readPlanText, unauthorisedChanges } from './plan-schema.js';
+import { readPlanText, unauthorisedChanges, unmetCriteria, unmetWords } from './plan-schema.js';
+import { stepForMerge } from './merge-step.js';
 import { projectForBranch } from './project-prs.js';
 import { stepOfPr } from './run-plan.js';
 
@@ -127,4 +128,63 @@ export async function planBoundary({ repoPath, pr, git, gh, from = null, index =
     verdict ||= { checked: true, ok, problems };
   }
   return verdict || notChecked;
+}
+
+/**
+ * The last step is where a plan becomes done, and done means its success
+ * criteria met (Martin, 2026-10-18), so the last step's pull request does not
+ * land while its plan leaves one `met: false`: the session measures, or fails
+ * visibly (`mc step failed`). photo-analysis was archived on 2026-10-11 with
+ * three criteria unmet on main.
+ *
+ * Its own function rather than part of `planBoundary`: that one passes a
+ * byte-identical plan without reading it — exactly a last step that never
+ * touched `met` — and a docs-only pull request, the usual close-out, never
+ * reaches it. So `mc merge`, `mc merge --docs` and the runner's own queueing
+ * each call this. The step is the one handed in (the register's), else the
+ * one the pull request is (`stepForMerge`); nobody's step is not checked.
+ * Fails open like `planBoundary` on anything it cannot read.
+ *
+ * `{ checked, ok, problems }`, and `unmet` (1-based) on a refusal.
+ */
+export async function criteriaDoor({ repoPath, pr, git, gh, step = undefined, env = process.env, entries = [] } = {}) {
+  const askGit = git || run('git');
+  const askGh = gh || run('gh');
+
+  const asked = askGh(['pr', 'view', String(pr), '--json', 'headRefName,baseRefName'], { cwd: repoPath });
+  if (asked?.status !== 0) return notChecked;
+  let raw = null;
+  try { raw = JSON.parse(asked.stdout); } catch { return notChecked; }
+  const head = raw?.headRefName;
+  const base = raw?.baseRefName;
+  if (!head || !base) return notChecked;
+
+  const target = step !== undefined ? step : stepForMerge({ env, head, entries });
+  if (!target) return notChecked;
+
+  const fetched = askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+  if (fetched?.status !== 0) return notChecked;
+  const tree = askGit(['ls-tree', '-r', '--name-only', `origin/${base}`, '--', 'docs/project'], { cwd: repoPath });
+  if (tree?.status !== 0) return notChecked;
+  const project = target.project || projectForBranch(head, names(tree.stdout));
+  if (!project) return notChecked;
+  const path = String(tree.stdout || '').split('\n').find((p) => {
+    const parts = p.split('/');
+    return parts.length === 5 && parts[3] === project && parts[4] === 'PLAN.json';
+  });
+  if (!path) return notChecked;
+
+  const headShow = askGit(['show', `origin/${head}:${path}`], { cwd: repoPath });
+  if (headShow?.status !== 0) return notChecked;
+  const { plan } = readPlanText(headShow.stdout);
+  if (!plan || !Array.isArray(plan.steps)) return notChecked;
+  if (target.index !== plan.steps.length - 1) return { checked: true, ok: true, problems: [] };
+  const unmet = unmetCriteria(plan);
+  if (!unmet.length) return { checked: true, ok: true, problems: [] };
+  return {
+    checked: true,
+    ok: false,
+    unmet,
+    problems: [`step ${target.index + 1} is the plan's last, and ${unmetWords(unmet)} in this pull request — or mc step failed --reason "…" naming what could not be measured`],
+  };
 }

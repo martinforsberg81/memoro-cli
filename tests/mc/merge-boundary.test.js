@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
 
-import { planBoundary } from '../../src/mc/merge-boundary.js';
+import { criteriaDoor, planBoundary } from '../../src/mc/merge-boundary.js';
 
 const PATH = 'docs/project/mc/step-lands-itself/PLAN.json';
 
@@ -226,4 +226,21 @@ it('the register\'s step index is the one judged, not the plan\'s first unfinish
   assert.deepEqual(await planBoundary({ repoPath: '/x', pr: 671, git, gh, index: 2 }), { checked: true, ok: true, problems: [] });
   const guessed = await planBoundary({ repoPath: '/x', pr: 671, git, gh });
   assert.equal(guessed.ok, false, 'without the index the plan names step 2 (index 1), and step 3\'s edit is a trespass');
+});
+
+it('criteriaDoor refuses the last step while a criterion is unmet', async () => {
+  const last = { project: 'step-lands-itself', index: 1 };
+  const { git, gh } = tools({});
+  const refused = await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: last });
+  assert.equal(refused.checked, true);
+  assert.equal(refused.ok, false);
+  assert.deepEqual(refused.unmet, [1]);
+  assert.ok(refused.problems[0].startsWith('step 2 is the plan\'s last, and success criterion 1 is not met on main'), refused.problems[0]);
+
+  const measured = tools({ head: plan({ success_criteria: [{ met: true, criterion: 'x', check: 'y' }] }) });
+  assert.deepEqual(await criteriaDoor({ repoPath: '/x', pr: 671, ...measured, step: last }), { checked: true, ok: true, problems: [] });
+  assert.deepEqual(await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: { ...last, index: 0 } }), { checked: true, ok: true, problems: [] }, 'not the last step');
+  assert.equal((await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: null })).checked, false, 'nobody\'s step');
+  const ghDown = () => ({ status: 1, stdout: '' });
+  assert.equal((await criteriaDoor({ repoPath: '/x', pr: 671, git, gh: ghDown, step: last })).checked, false, 'fails open');
 });

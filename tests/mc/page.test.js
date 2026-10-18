@@ -56,7 +56,7 @@ function planRecord({ repo, programme, project, status, title, done = 0, blocked
     goal: ['One thing.'],
     contract: ['Not without Martin.'],
     out_of_scope: ['Everything else.'],
-    success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
+    success_criteria: [{ met: status === 'done', criterion: 'It is done.', check: 'The gate is green.' }],
     documents: [],
     steps,
   };

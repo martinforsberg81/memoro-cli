@@ -20,7 +20,7 @@
 import { spawnSync } from 'node:child_process';
 import { basename } from 'node:path';
 
-import { planBoundary } from '../merge-boundary.js';
+import { criteriaDoor, planBoundary } from '../merge-boundary.js';
 import { followMerge } from '../merge-watch.js';
 import { stepForMerge } from '../merge-step.js';
 import { projectForBranch } from '../project-prs.js';
@@ -430,6 +430,26 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
     }, { mode });
     for (const problem of boundary.problems) stderr.write(`mc: plan-trespass — ${problem}\n`);
     return 1;
+  }
+  // The plan's last step lands only with every success criterion met
+  // (Martin, 2026-10-18) — `criteriaDoor`.
+  if (step) {
+    const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, step: { project: step.project, index: step.index } });
+    if (door.checked && !door.ok) {
+      const now = deps.now ? deps.now() : new Date();
+      recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
+      recordRound({
+        ok: false,
+        stopped_at: 'unmet-criteria',
+        reason: door.problems.join('; '),
+        repo: repoPath,
+        pr: { number: opts.pr },
+        started_at: now.toISOString(),
+        finished_at: now.toISOString(),
+      }, { mode });
+      for (const problem of door.problems) stderr.write(`mc: unmet-criteria — ${problem}\n`);
+      return 1;
+    }
   }
 
   let queued;

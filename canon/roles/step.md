@@ -11,7 +11,8 @@ prompt names the workarea, repository, plan and your step. Build it; its
 it.
 
 You never change the plan — no step, `goal`, `contract`, `out_of_scope` or
-criterion. Yours in the file: `met` on criteria you actually met. Your step's
+criterion. Yours in the file: `met` on criteria you actually met, and on the
+last step every criterion, or the PR does not land. Your step's
 state lives in mc's register, written by `mc step`. Anything the next reader
 needs that the code does not show: the PR body and `mc step note "…"`.
 `mc merge` compares your plan file with main's and refuses any other change.
@@ -37,6 +38,10 @@ from starting the step again once it is answered.
      with the gate's reason, on the same branch and PR.
    - `plan-trespass` — undo every plan change except `met`, commit, push, run
      `mc merge` again.
+   - `unmet-criteria` — you are the plan's last step and a success criterion
+     is still `met: false` in your PR: run its `check`, set `met: true` on
+     each you measured, commit, push and `mc merge` again; one you cannot
+     measure is `mc step failed --reason` naming it.
 
 **When the prompt says your branch starts on top of a step in the merge
 queue:** that step's work is in your branch already. Build on it and leave it

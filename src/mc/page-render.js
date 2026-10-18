@@ -65,6 +65,8 @@ const STATUS_TONE = {
   failed: ['red', 'bold'],
   blocked: ['red'],
   done: ['grey'],
+  // Steps all done, a criterion not met: somebody has to measure.
+  unmet: ['yellow', 'bold'],
   // A plan that does not parse is not a quiet state: the runner will refuse it
   // at the door, and nobody will be told unless the page says so.
   invalid: ['red', 'bold'],

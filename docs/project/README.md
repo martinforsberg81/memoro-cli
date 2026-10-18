@@ -114,7 +114,10 @@ do it, and know when it is finished? A step that has to stop and ask costs a
 session, a failed step, and a person reading a transcript to find out why.
 
 The plan has **no status of its own**: it is the state of the first step that is
-not done, and a plan whose steps are all done is done. The runner looks at that
+not done. A plan whose steps are all done is done when every success criterion
+is `met: true`, and `unmet` otherwise — the page and `mc status` name the
+criteria by number (Martin, 2026-10-18: success criteria and done belong
+together). The runner archives only a done plan. The runner looks at that
 first unfinished step and no other — steps are an order, and skipping a stopped
 one to reach a later `ready` step is how a plan gets half-built in an order
 nobody chose.

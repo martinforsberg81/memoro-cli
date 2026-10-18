@@ -399,7 +399,11 @@ export function planSummary(plan) {
 
 /**
  * The plan's state, derived rather than declared: the first step that is not
- * done decides. A plan whose steps are all done is done.
+ * done decides. A plan whose steps are all done is done only when every
+ * success criterion is met (Martin, 2026-10-18: "success criteria and done
+ * belong together"); otherwise it is `unmet`, with the criteria's 1-based
+ * numbers in `unmet`. photo-analysis was archived on 2026-10-11 with three
+ * criteria `met: false`, because done was read off the steps alone.
  *
  * The runner considers that first unfinished step and no other. Steps are an
  * order, and skipping over a stopped one to reach a later `ready` step is how a
@@ -412,7 +416,11 @@ export function planState(plan) {
   const index = steps.findIndex((step) => step?.status !== 'done' && step?.status !== 'landing');
   if (index === -1) {
     const landing = steps.findIndex((step) => step?.status === 'landing');
-    if (landing === -1) return { status: 'done', index: -1, step: null };
+    if (landing === -1) {
+      const unmet = unmetCriteria(plan);
+      if (unmet.length) return { status: 'unmet', index: -1, step: null, unmet };
+      return { status: 'done', index: -1, step: null };
+    }
     return { status: 'landing', index: landing, step: steps[landing] };
   }
   const step = steps[index];
@@ -425,6 +433,20 @@ export function planState(plan) {
     if (landing >= 0) return { status: 'landing', index: landing, step: steps[landing] };
   }
   return { status: STATUSES.has(step?.status) ? step.status : 'invalid', index, step };
+}
+
+/** The 1-based numbers of the success criteria that are not `met: true`. */
+export function unmetCriteria(plan) {
+  const criteria = Array.isArray(plan?.success_criteria) ? plan.success_criteria : [];
+  return criteria.map((criterion, i) => (criterion?.met === true ? null : i + 1)).filter(Boolean);
+}
+
+/** What an `unmet` plan is waiting for, as one clause: the criteria by number, and what makes them met. */
+export function unmetWords(unmet) {
+  const numbers = Array.isArray(unmet) ? unmet : [];
+  return numbers.length === 1
+    ? `success criterion ${numbers[0]} is not met on main — measure it and set met: true in a pull request, or add a step that does`
+    : `success criteria ${numbers.join(', ')} are not met on main — measure them and set met: true in a pull request, or add a step that does`;
 }
 
 /** "every step `done`", "all steps are done", "steps 1–3 are `done`". */
@@ -446,6 +468,7 @@ export function deliverableStep(plan) {
 
   const state = planState(plan);
   if (state.status === 'done') return { step: null, index: -1, reason: 'done', why: 'every step is done', problems: [] };
+  if (state.status === 'unmet') return { step: null, index: -1, reason: 'unmet', why: `every step is done, but ${unmetWords(state.unmet)}`, problems: [] };
   if (state.status !== 'ready') {
     const waiting = state.step?.blocked_by;
     // Why it failed, from the register (ruling 45 § 4): the page and `mc status` say it.

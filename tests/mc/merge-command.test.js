@@ -49,7 +49,7 @@ const entryNow = () => JSON.parse(readFileSync(registerPath(root, 'merge-queue')
  * the pull request's branch, the door is open unless told otherwise, and the
  * merger is started by a fake that counts.
  */
-function deps({ env = {}, head = null, boundary = null, merger = { pid: 777, started: true }, mergeable = undefined, git = undefined, cwd = undefined } = {}) {
+function deps({ env = {}, head = null, boundary = null, door = null, merger = { pid: 777, started: true }, mergeable = undefined, git = undefined, cwd = undefined } = {}) {
   const out = { out: '', err: '' };
   const starts = [];
   let ranRound = false;
@@ -67,6 +67,7 @@ function deps({ env = {}, head = null, boundary = null, merger = { pid: 777, sta
       env: { MC_WORK_ROOT: root, ...env },
       gh: (args) => (args[1] === 'view' && head ? { status: 0, stdout: JSON.stringify({ headRefName: head, mergeable }) } : { status: 1, stdout: '' }),
       planBoundary: async () => boundary || { checked: false },
+      criteriaDoor: async () => door || { checked: false },
       lock: (_root, fn) => fn(),
       git,
       cwd,
@@ -178,6 +179,20 @@ describe('a plan-trespass stops mc merge at the door', () => {
     assert.deepEqual(queue(), []);
     assert.equal(d.starts.length, 0);
     assert.equal(entryNow().steps[1].status, 'running', 'the session that called fixes it, still on the step');
+  });
+
+  it('the last step with an unmet criterion is refused at the door and nothing is queued', async () => {
+    register();
+    const d = deps({
+      env: { MC_STEP: 'merge-queue:1' },
+      door: { checked: true, ok: false, unmet: [1], problems: ['step 2 is the plan\'s last, and success criterion 1 is not met on main'] },
+    });
+    const code = await gate({ repo: 'memoro-cli', pr: 671 }, d.io);
+    assert.equal(code, 1);
+    assert.match(d.out.err, /^mc: unmet-criteria — step 2 is the plan's last/mu);
+    assert.deepEqual(queue(), []);
+    assert.equal(d.starts.length, 0);
+    assert.equal(entryNow().steps[1].status, 'running', 'the session that called measures, still on the step');
   });
 });
 
