@@ -31,7 +31,7 @@ import {
   existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 import { stripAnsi } from '../lib/prompt.js';
 import { IOS_BUILD_MODE } from './await-deploy.js';
@@ -307,9 +307,9 @@ export function builtApp(derived) {
 }
 
 /** A command, waited for: `{ code, stdout, stderr, error }`. */
-export function runSync(argv, { cwd, env = process.env, timeoutMs = 60_000 } = {}) {
+export function runSync(argv, { cwd, env = process.env, timeoutMs = 60_000, input } = {}) {
   const r = spawnSync(argv[0], argv.slice(1), {
-    cwd, env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024,
+    cwd, env, input, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024,
   });
   return {
     code: r.error ? 127 : (r.status ?? 1), stdout: r.stdout || '', stderr: r.stderr || '', error: r.error?.message || null,
@@ -449,15 +449,41 @@ export async function devicePreflight({
  * more than the highest, or `{ ok: false, line }`. Never a file to fall back
  * on: a number from anywhere else is one two binaries could share.
  */
-export function listBuilds({ repoPath, declaration, run = runSync, env = process.env }) {
-  const r = run([].concat(declaration.list_builds), { cwd: repoPath, env, timeoutMs: 2 * MIN });
+export function listBuilds({
+  repoPath, declaration, rev = null, run = runSync, git = gitRead, env = process.env,
+}) {
   const refuse = (why) => ({ ok: false, line: `App Store Connect did not answer (${why}) — no build number can be chosen` });
+  const command = atRev([].concat(declaration.list_builds), { repoPath, rev, git });
+  if (command.missing) return refuse(command.missing);
+  const r = run(command.argv, { cwd: command.cwd, input: command.input, env, timeoutMs: 2 * MIN });
   if (r.code !== 0) return refuse(String(r.error || r.stderr || r.stdout || '').trim().split('\n')[0].trim() || `exit ${r.code}`);
   let json;
   try { json = JSON.parse(r.stdout); } catch { return refuse(`${declaration.list_builds.join(' ')} printed no JSON`); }
   if (!Array.isArray(json?.builds)) return refuse(`${declaration.list_builds.join(' ')} printed no builds[]`);
   const versions = json.builds.map((b) => Number.parseInt(String(b?.version ?? ''), 10)).filter(Number.isInteger);
   return { ok: true, versions, next: Math.max(0, ...versions) + 1 };
+}
+
+/**
+ * A declared `node <script> …`, run as `rev` has the script rather than as
+ * memoro's working tree does. The declaration is read from `origin/main`, but
+ * the checkout is Martin's and can stand on any branch: on 2026-10-18 it was
+ * `camera-test`, 23 commits behind, whose `asc-list-builds.mjs` had no
+ * `--json`. The source goes in on stdin, with the script's own directory as
+ * the cwd so its packages and relative imports resolve as they would from the
+ * file. Anything that is not `node <relative path>` runs as declared.
+ */
+export function atRev(argv, { repoPath, rev = null, git = gitRead }) {
+  if (!rev || argv[0] !== 'node' || !argv[1] || argv[1].startsWith('-') || isAbsolute(argv[1])) {
+    return { argv, cwd: repoPath, input: undefined };
+  }
+  const source = git(repoPath, ['show', `${rev}:${argv[1]}`]);
+  if (source === null) return { missing: `${argv[1]} is not on ${rev}` };
+  return {
+    argv: ['node', '--input-type=module', '-', ...argv.slice(2)],
+    cwd: join(repoPath, dirname(argv[1])),
+    input: `${source}\n`,
+  };
 }
 
 /** `plutil -convert json` of a plist, parsed; throws when it will not convert. */
@@ -792,7 +818,9 @@ export async function buildIos(job, deps = {}) {
     // (k) The number asked again: one uploaded meanwhile is not this binary's
     // to take, and a stamped binary is not renumbered.
     at = 'number-taken';
-    const again = (deps.listBuilds || listBuilds)({ repoPath, declaration, run: deps.run || runSync, env });
+    const again = (deps.listBuilds || listBuilds)({
+      repoPath, declaration, rev: 'origin/main', run: deps.run || runSync, git: deps.git || gitRead, env,
+    });
     if (!again.ok) return fail('number-taken', again.line);
     if (again.versions.includes(number)) {
       return fail('number-taken', `build ${number} is in App Store Connect by now — this binary carries ${number} and is not renumbered; build again`);

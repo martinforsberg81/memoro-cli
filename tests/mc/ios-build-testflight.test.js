@@ -17,7 +17,7 @@ import { join } from 'node:path';
 
 import { run } from '../../src/mc/commands/build.js';
 import {
-  archivedApp, archivePaths, buildIos, buildPaths, deliveryId, listBuilds, pruneArchives,
+  archivedApp, archivePaths, atRev, buildIos, buildPaths, deliveryId, listBuilds, pruneArchives,
 } from '../../src/mc/ios-build.js';
 import { readIosBuilds, recordStart } from '../../src/mc/ios-builds.js';
 
@@ -40,6 +40,9 @@ const DECLARATION = {
   native_dependency_prefixes: ['@capacitor/'],
 };
 
+const LIST_SOURCE = "console.log('list on main');\n";
+const STDIN_LIST = ['node', '--input-type=module', '-', '--json'];
+
 const SHA = '3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d';
 const NEXT = 43;
 const UUID = '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0';
@@ -56,6 +59,8 @@ function makeRepo() {
   mkdirSync(join(repo, '.mc'));
   writeFileSync(join(repo, '.mc', 'ios.json'), JSON.stringify(DECLARATION));
   writeFileSync(join(repo, 'a.txt'), 'one\n');
+  mkdirSync(join(repo, 'scripts'));
+  writeFileSync(join(repo, 'scripts', 'list.mjs'), LIST_SOURCE);
   sh(repo, 'add', '-A');
   sh(repo, 'commit', '-q', '-m', 'one');
   const head = sh(repo, 'rev-parse', 'HEAD');
@@ -74,12 +79,12 @@ const ASC = JSON.stringify({ builds: [{ version: '40' }, { version: '42' }, { ve
 function fakeRun({ asc = { code: 0, stdout: ASC, stderr: '' }, identities = ['Apple Development: T (X)', 'Apple Distribution: T (Y)'] } = {}) {
   const calls = [];
   const fn = (argv, options = {}) => {
-    calls.push({ argv, cwd: options.cwd });
+    calls.push({ argv, cwd: options.cwd, input: options.input });
     if (argv[1] === 'xcodebuild') return { code: 0, stdout: 'Xcode 26.6\n', stderr: '' };
     if (argv[0] === 'security') {
       return { code: 0, stdout: `${identities.map((id, i) => `  ${i + 1}) ABCDEF "${id}"`).join('\n')}\n`, stderr: '' };
     }
-    if (argv.join(' ') === DECLARATION.list_builds.join(' ')) return asc;
+    if (argv.join(' ') === DECLARATION.list_builds.join(' ') || argv.join(' ') === STDIN_LIST.join(' ')) return asc;
     return { code: 1, stdout: '', stderr: `unexpected ${argv.join(' ')}` };
   };
   fn.calls = calls;
@@ -115,12 +120,36 @@ describe('the number from App Store Connect', () => {
     assert.deepEqual(asked, { ok: true, versions: [40, 42, 7, 41], next: 43 });
   });
 
-  it('asks in memoro\'s checkout with the declared argv', async () => {
+  it('asks with origin/main\'s script, not the checkout\'s working tree', async () => {
     const t = await testflight();
     const call = t.runFake.calls.find((c) => c.argv[0] === 'node');
-    assert.deepEqual(call.argv, DECLARATION.list_builds);
-    assert.equal(call.cwd, t.repo);
+    assert.deepEqual(call.argv, STDIN_LIST);
+    assert.equal(call.cwd, join(t.repo, 'scripts'));
+    assert.equal(call.input, LIST_SOURCE);
     assert.equal(t.started[0].build, NEXT);
+  });
+
+  it('runs the script as the rev has it, even when the working tree is on another branch', () => {
+    const { repo } = makeRepo();
+    sh(repo, 'checkout', '-q', '-b', 'elsewhere');
+    writeFileSync(join(repo, 'scripts', 'list.mjs'), "console.log('old');\n");
+    sh(repo, 'commit', '-qam', 'old');
+    const command = atRev(DECLARATION.list_builds, { repoPath: repo, rev: 'origin/main' });
+    assert.deepEqual(command, { argv: STDIN_LIST, cwd: join(repo, 'scripts'), input: LIST_SOURCE });
+  });
+
+  it('refuses a script the rev does not have', async () => {
+    const asked = listBuilds({
+      repoPath: '/repos/memoro', declaration: DECLARATION, rev: 'origin/main', run: fakeRun(), git: () => null,
+    });
+    assert.deepEqual(asked, {
+      ok: false, line: 'App Store Connect did not answer (scripts/list.mjs is not on origin/main) — no build number can be chosen',
+    });
+  });
+
+  it('runs anything but node <relative path> as declared', () => {
+    const argv = ['npm', 'run', 'asc:list'];
+    assert.deepEqual(atRev(argv, { repoPath: '/r', rev: 'origin/main', git: () => 'x' }), { argv, cwd: '/r', input: undefined });
   });
 
   it('exits 1 when App Store Connect does not answer, and builds nothing', async () => {
@@ -229,6 +258,7 @@ function builder({
     plutil: (path) => { events.push(path.includes('/Payload/') ? 'IPA read-back' : 'read-back'); return plist(path); },
     readFile: () => JSON.stringify({ server: { url: 'https://example.test' }, packageClassList: ['MemoroCameraPlugin'] }),
     codesign: () => ({ ok: true, detail: '' }),
+    git: () => LIST_SOURCE.trim(),
     codesignDisplay: () => `Executable=/x/App\nIdentifier=test.bundle\n${authority}\nAuthority=Apple Worldwide Developer Relations Certification Authority\n`,
     run: (argv) => {
       events.push(`asc ${argv.join(' ')}`);
@@ -247,7 +277,7 @@ describe('buildIos --testflight — the builder', () => {
     assert.equal(code, 0, b.stderr.text);
     assert.deepEqual(b.events.slice(b.events.indexOf('npm run cap:build')), [
       'npm run cap:build', 'xcodebuild archive', 'read-back', 'xcodebuild -exportArchive', 'unzip', 'IPA read-back',
-      `asc ${DECLARATION.list_builds.join(' ')}`, 'upload',
+      `asc ${STDIN_LIST.join(' ')}`, 'upload',
     ]);
     const { worktree, derived, spm } = buildPaths(b.env);
     const { archive, exportDir } = archivePaths(NEXT, b.env);

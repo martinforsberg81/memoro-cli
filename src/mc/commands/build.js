@@ -217,7 +217,7 @@ async function buildTestflight(opts, deps) {
   }
   for (const warning of pre.warnings) stderr.write(`mc: ${warning}\n`);
   const { sha, live, repoPath, declaration } = pre;
-  const asc = (deps.listBuilds || listBuilds)({ repoPath, declaration, run: deps.run, env });
+  const asc = (deps.listBuilds || listBuilds)({ repoPath, declaration, rev: 'origin/main', run: deps.run, git: deps.git, env });
   if (!asc.ok) {
     stderr.write(`mc: ${asc.line}\n`);
     return 1;
