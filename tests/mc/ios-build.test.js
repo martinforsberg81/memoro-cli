@@ -182,13 +182,13 @@ describe('mc build ios — the question', () => {
     assert.match(out, /a new binary is needed/u);
   });
 
-  it('refuses another platform, and the builds that are not here yet', async () => {
+  it('refuses another platform, and flags without their build', async () => {
     const { repo, second } = makeRepo();
     assert.equal((await ask({ repo, live: second, argv: ['android'] })).code, 2);
-    const testflight = await ask({ repo, live: second, argv: ['ios', '--testflight', '--no-upload'] });
-    assert.equal(testflight.code, 2);
-    assert.match(testflight.err, /not yet: mc-build-ios step 3/u);
-    assert.equal((await ask({ repo, live: second, argv: ['ios', '--sha', second] })).code, 2, '--sha goes with --device');
+    const noUpload = await ask({ repo, live: second, argv: ['ios', '--no-upload'] });
+    assert.equal(noUpload.code, 2);
+    assert.match(noUpload.err, /--no-upload goes with --testflight/u);
+    assert.equal((await ask({ repo, live: second, argv: ['ios', '--sha', second] })).code, 2, '--sha goes with --device or --testflight');
   });
 
   it('reads production through the injected fetch, and null when it fails', async () => {

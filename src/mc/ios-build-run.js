@@ -2,7 +2,7 @@
 /**
  * The iOS builder process itself (`buildIos` in `ios-build.js`).
  *
- * Started detached by `mc build ios --device`, never by hand, the way
+ * Started detached by `mc build ios --device` or `--testflight`, never by hand, the way
  * `deploy-run.js` is. Its one argument is the job as JSON; its stdout and
  * stderr are `ios-build.log`, which the terminal that asked reads as it
  * grows. A signal it receives is passed on to the command running now, and

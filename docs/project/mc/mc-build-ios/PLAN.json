@@ -25,22 +25,22 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "The question alone: `mc build ios` answers within 60 s, builds nothing and touches no worktree. It names the last shipped build (number and commit), the commit production runs, and the native paths and native packages that differ between them, or `no native change since build <n> — mc deploy is enough`.",
       "check": "From any directory: `time mc build ios; echo exit $?` prints those lines and exit 0 in under 60 s, and `git -C ~/.memoro/mc/build/memoro rev-parse HEAD` is unchanged (or the directory does not exist)."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A device build lands on the phone, headless and paired. `mc build ios --device` builds the commit production runs and installs it on the paired iPhone, and the register row says `installed` with that sha. No GUI app starts.",
       "check": "With the iPhone paired and unlocked, in a terminal: `mc build ios --device` ends with `mc: installed memoro me <version> (<build>) from <sha> on <device>`. In a second terminal throughout: `while sleep 5; do pgrep -x Xcode; pgrep -x Simulator; done` prints nothing. Afterwards, `xcrun devicectl device info apps --device <id> --bundle-id app.meetmemoro.memoro` shows the app, `tail -1 ~/mc/runner/log/ios-builds.tsv` has outcome `installed`, and its sha equals `curl -s https://meetmemoro.app/api/version`'s `commit_full`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A TestFlight build is verified before any upload. `mc build ios --testflight --no-upload` produces an IPA whose own Info.plist says the build number chosen from App Store Connect, the production commit and the declared bundle id, signed by Apple Distribution.",
       "check": "`mc build ios --testflight --no-upload` ends with `mc: built <ipa> — memoro me <version> (<n>) from <sha>; not uploaded`. Then `unzip -p <ipa> 'Payload/App.app/Info.plist' | plutil -extract CFBundleVersion raw -` prints `<n>`, and the same with `MemoroBuildCommit` prints the sha. `<n>` is one more than the highest `version` in memoro's `node scripts/asc-list-builds.mjs --json`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The refusals that keep the pairing true. A `--sha` that production does not contain is refused before anything is built. So is a second build while one runs. A built app whose read-back disagrees with the declaration is never installed or uploaded.",
       "check": "`mc build ios --device --sha origin/main` refuses with `production runs <live>, which does not contain <sha> — mc deploy first` whenever origin/main is ahead of production. The read-back refusal is covered by the tests named in step 3."
     }
