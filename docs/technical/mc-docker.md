@@ -65,6 +65,26 @@ context comes from `DOCKER_CONTEXT`, `DOCKER_HOST` or `currentContext` in
 context only `orbctl status` is asked. Only `ensure` runs `docker` against a
 runtime that may be down.
 
+## The verb
+
+`mc docker` is the one door to the runtime; `src/mc/commands/docker.js` answers
+it and `src/mc/docker.js` does the work.
+
+- `mc docker [--json]` reads the state: up or stopped and why, the live leases,
+  disk by `docker system df`, and the containers and volumes labelled
+  `mc.holder` and the ones that carry no label. With the runtime down it runs
+  no `docker` command, because a `docker` call would start OrbStack.
+- `mc docker ensure [--pid <n>] [--run <label>] [--repo <name>] [--timeout <s>]`
+  starts OrbStack or Docker Desktop if it is down, waits for `docker info` (60 s
+  by default), and takes a lease for the pid, the calling shell by default. It
+  exits 69 (`EX_UNAVAILABLE`) when the runtime cannot be started.
+- `mc docker release [--pid <n>]` drops the leases of that pid. It stops
+  nothing; the runner stops a runtime mc started once it has been idle for
+  10 minutes.
+- `mc docker prune [--dry-run]` removes the containers and volumes labelled
+  `mc.holder` whose pid is gone. It never removes an unlabelled object: those
+  are counted and reported. With the runtime down it does nothing.
+
 ## Why
 
 On 2026-10-18 memoro's gate `sql:reference:postgres` exited 69 ('no Docker

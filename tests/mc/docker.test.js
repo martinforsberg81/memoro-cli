@@ -12,39 +12,9 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  currentContext, ensure, leasesDir, liveLeases, needsDocker, readState, release, releasePid, runtimeOf, takeLease,
+  currentContext, ensure, inventory, leasesDir, liveLeases, needsDocker, readState, release, releasePid, runtimeOf, takeLease,
 } from '../../src/mc/docker.js';
-
-const INFO = 'docker info --format {{.ServerVersion}}';
-
-function fakeIo({ answers = {}, live = [], context = 'orbstack' } = {}) {
-  const calls = [];
-  const logged = [];
-  const used = new Map();
-  let clock = Date.parse('2026-10-18T12:00:00Z');
-  const io = {
-    run: async (tool, args, opts = {}) => {
-      calls.push({ argv: [tool, ...args], timeoutMs: opts.timeoutMs });
-      const key = [tool, ...args].join(' ');
-      const answer = answers[key];
-      if (!Array.isArray(answer)) return answer ?? { status: 1, stderr: `no answer for ${key}\n` };
-      const index = used.get(key) ?? 0;
-      used.set(key, index + 1);
-      return answer[Math.min(index, answer.length - 1)];
-    },
-    readFile: (path) => {
-      if (path === '/home/u/.docker/config.json') return JSON.stringify({ currentContext: context });
-      throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
-    },
-    home: '/home/u',
-    alive: (pid) => live.includes(pid),
-    now: () => clock,
-    sleep: async (ms) => { clock += ms; },
-    platform: 'darwin',
-    log: (event, fields) => { logged.push({ event, ...fields }); },
-  };
-  return { io, calls, logged };
-}
+import { fakeIo, INFO } from './_helpers/docker-io.js';
 
 function withRoot(body) {
   const root = mkdtempSync(join(tmpdir(), 'mc-docker-'));
@@ -205,5 +175,21 @@ describe('docker.js', () => {
     const broken = { ...io, readFile: () => { throw new Error('EACCES'); } };
     assert.equal(currentContext({ env: {}, io: broken }), 'default');
     assert.equal(currentContext({ env: {}, io: { ...io, readFile: () => '{not json' } }), 'default');
+  });
+
+  it('inventory reads holders from labels and records what failed', async () => {
+    const { io } = fakeIo({
+      answers: {
+        'docker system df --format {{json .}}': { status: 0, stdout: '{"Type":"Images","TotalCount":"1","Size":"1GB"}\n' },
+        'docker ps -a --format {{json .}}': { status: 0, stdout: '{"ID":"a","Names":"a","State":"exited","Labels":"mc.holder=41100"}\n' },
+        'docker volume ls --format {{json .}}': { status: null, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) },
+      },
+    });
+    const inv = await inventory({ io });
+    assert.deepEqual(inv.containers, [{ id: 'a', name: 'a', state: 'exited', holder: 41100 }]);
+    assert.deepEqual(inv.volumes, []);
+    assert.equal(inv.df.images.count, 1);
+    assert.equal(inv.errors.length, 1);
+    assert.match(inv.errors[0], /docker volume ls: ETIMEDOUT/u);
   });
 });
