@@ -64,7 +64,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/run-control.test.js` passes, including the tests named in step 1."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`takeSlot` reads `total` from `lanes.json` on every call, so a lowered total holds the next start and a raised one lets a waiting lane go, and it counts the lane files of other live runners beside its own claims, so a runner and its draining predecessor together never exceed the total.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/commands/run-lanes.test.js` passes, including the tests named in step 2."
     },

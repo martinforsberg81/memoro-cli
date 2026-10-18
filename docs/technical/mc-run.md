@@ -1056,11 +1056,14 @@ which is what `~/.memoro/mc/lanes.json` held until 2026-09-05 — runs one lane
 per repository, two sessions, exactly what it ran before the total existed. Set,
 both bind and the smaller wins: `per_repo`
 structurally, because there are that many lane loops per repository, and
-`total` as an in-process claim each lane takes at the last moment before it
-launches a session (`takeSlot`/`waitForSlot`, run.js) and drops in the same
-`finally` that removes its current file. It is a claim rather than a count of
-`current-*.json` because a file is written after a step begins, and two lanes
-counting files in the same tick would both see the same free slot. A lane with
+`total` read live from `lanes.json` at each `takeSlot` (run.js), so a new value
+applies to the next start of a step with no restart. The count is this
+process's own claims, taken at the last moment before a lane launches a session
+and dropped in the same `finally` that removes its current file, plus the steps
+other live runners hold by their lane files — a predecessor finishing after a
+handover. Own steps are claims rather than a count of `current-*.json` because
+a file is written after a step begins, and two lanes counting files in the same
+tick would both see the same free slot. A lane with
 no slot polls every 15 s and says one line when the wait begins, and gives the
 wait up on STOP or UPDATE — the drain promises that from the moment UPDATE is
 read no lane starts a step. There is no ordering rule between waiting lanes:
