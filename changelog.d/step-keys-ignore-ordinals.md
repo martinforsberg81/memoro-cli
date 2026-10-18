@@ -1,0 +1,3 @@
+section: Fixed
+
+- **A renumbered step keeps its state, and a step put in a replaced slot does not inherit the replaced step's pull request.** A step's register key was its title's label, so `5. The close` renumbered to `8. The close` became a new step, and the register gave the old close's entry to whatever now stood in its slot: memoro's photo-viewer step 5 was `blocked` on the old close's branch and stack, and a comment told the next session to merge a closed pull request. The key now drops a leading ordinal (`5.`, `8)`, `Step 3:`). A slot carried by position keeps its status and loses the replaced step's pull request, branch, stack, attempts and red, with a comment saying so; a done step keeps its pull request.

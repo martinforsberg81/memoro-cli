@@ -1404,7 +1404,7 @@ ending and its pull request landing.
 
 So the state lives in **the register**: one file per project under
 `~/mc/runner/projects/`, written whole and atomically under one lock
-(`register.js`), one entry per step keyed by the step's index in the plan —
+(`register.js`), one entry per step, matched to the plan by the step's key (`stepKey`: the label before ` — `, a leading ordinal such as `5.` dropped; a re-plan that puts a new step in a slot whose old key is gone keeps the slot's status and clears the replaced step's pull request, branch, stack and red, with a comment) —
 `status` (`ready` · `running` · `done` · `failed` · `blocked`), `pr`, `branch`,
 `blocked_by`, `reason`, `comments`, `session` (pid, start, model, lane while
 running), `attempts`, `landed` (sha and time). The plan on main still says what

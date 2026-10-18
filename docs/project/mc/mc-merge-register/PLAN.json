@@ -51,7 +51,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-schema.test.js tests/mc/merge-boundary.test.js tests/mc/merge-command.test.js tests/mc/docs-merge.test.js tests/mc/run.test.js` passes, including the tests named in step 4."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`stepKey` drops a leading ordinal, so a renumbered step keeps its state and the steps inserted before it start fresh; a slot carried by position keeps its status and loses the replaced step's pull request fields, with a comment saying so.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/register.test.js` passes, including the photo-viewer renumbering test named in step 5."
     },
