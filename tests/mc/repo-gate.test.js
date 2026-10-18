@@ -1201,6 +1201,39 @@ describe('a repository that selects by diff', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('a command gate exiting with its declared unavailable code is reported unavailable, not red', async () => {
+    // memoro #13803: `sql:reference:postgres` without Docker exits 69 and the
+    // selector marks it `allowUnavailable`. The same exit from a gate that did
+    // not declare it is still red.
+    const fx = selecting({
+      files: ['tests/a.test.js'],
+      commands: [
+        { id: 'pg', packageScript: 'sql:reference:postgres', passBaseRef: false, resourceClass: 'heavy', selectedBy: ['pg'], allowUnavailable: true, unavailableExitCode: 69 },
+        { id: 'css-lint', packageScript: 'css:lint', passBaseRef: false, resourceClass: 'standard', selectedBy: ['css-contract'] },
+      ],
+      scripts: { 'sql:reference:postgres': marking('pg', 69), 'css:lint': marking('css-lint') },
+    });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, true, report.reason);
+      const gates = report.extra_gates.filter((gate) => gate.source === 'selection');
+      assert.deepEqual(gates.map((gate) => [gate.name, gate.ok, Boolean(gate.unavailable)]), [
+        ['sql:reference:postgres', true, true], ['css:lint', true, false],
+      ]);
+    } finally { fx.cleanup(); }
+
+    const undeclared = selecting({
+      files: ['tests/a.test.js'],
+      commands: [{ id: 'pg', packageScript: 'sql:reference:postgres', passBaseRef: false, resourceClass: 'heavy', selectedBy: ['pg'] }],
+      scripts: { 'sql:reference:postgres': marking('pg', 69) },
+    });
+    try {
+      const report = await undeclared.report();
+      assert.equal(report.stopped_at, 'selected-gate');
+      assert.match(report.reason, /sql:reference:postgres \(exit 69\)/u);
+    } finally { undeclared.cleanup(); }
+  });
+
   it('a command gate that fails is red, and the gates after it still run', async () => {
     // ci.mjs wrote the reason down where it makes the same choice about tests:
     // while anything else is red, a skipped command gate hides every contract
