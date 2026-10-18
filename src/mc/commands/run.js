@@ -64,6 +64,8 @@ const USAGE = [
   '        mc run start --if-was-running  only after a runner that died (the login agent\'s start)',
   '        mc run stop [--force]       after the steps in flight, or now',
   '        mc run --update [--force]   new code, new process; the old one finishes its steps',
+  '                                    the runner moves now, the merger and the repo watcher at their',
+  '                                    next safe point, each starting a successor on the new code',
   '                                    already on origin/main: nothing written (--force writes anyway)',
   '                                    already draining: the drain, and the steps it waits on',
   `        mc run lanes [<n>] [--total <n>|none]`,

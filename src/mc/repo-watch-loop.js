@@ -37,10 +37,13 @@ export async function watchRound({
  * keep an answer fresh; a repository that cannot be read this minute is a
  * degraded section in the snapshot, never a reason to stop watching the
  * others.
+ *
+ * `afterRound`, when given, is asked after every round whether to leave: true
+ * ends the loop there, with no further round (the code moved, repo-watch-run.js).
  */
 export async function watchLoop({
   intervalMs = DEFAULT_INTERVAL_MS, root = mcHome(), env = process.env,
-  rounds = Infinity, shouldStop = () => false, log = () => {},
+  rounds = Infinity, shouldStop = () => false, log = () => {}, afterRound = null,
 } = {}) {
   for (let round = 0; round < rounds && !shouldStop(); round += 1) {
     try {
@@ -48,6 +51,9 @@ export async function watchLoop({
       log(`wrote ${outcome.repos} repositories in ${Math.round(outcome.took_ms / 100) / 10}s`);
     } catch (error) {
       log(`round failed: ${error?.message || String(error)}`);
+    }
+    if (afterRound) {
+      try { if (await afterRound()) break; } catch { /* a check, not the loop */ }
     }
     if (shouldStop()) break;
     // The next round starts an interval after this one finished, not on a

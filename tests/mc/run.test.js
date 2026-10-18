@@ -1999,6 +1999,59 @@ test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', 
 });
 
 /**
+ * Landing a pull request is enough (Martin, 2026-10-18): the chore pass reads
+ * origin/main of mc's own checkout — fetched by `queue()` a moment before —
+ * and a runner behind it writes UPDATE itself, on a checkout that is clean and
+ * fast-forwards. Once per origin/main sha.
+ */
+function newCodeFixture({ status = '', ff = true } = {}) {
+  const f = fixture({});
+  const checkout = mcCheckout({ exists: () => true });
+  f.files[`${checkout}/.git`] = '';
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => {
+    if (cwd !== checkout) return git(cwd, args);
+    const said = args.join(' ');
+    if (said === 'rev-parse --short HEAD') return { ok: true, stdout: 'aaa1111\n' };
+    if (said === 'rev-parse --short origin/main') return { ok: true, stdout: 'bbb2222\n' };
+    if (said === 'status --porcelain') return { ok: true, stdout: status };
+    if (said === 'merge-base --is-ancestor HEAD origin/main') return { ok: ff, stdout: '' };
+    return git(cwd, args);
+  };
+  const runner = createRunner({ deps: f.deps });
+  runner.markRunner();
+  return { f, runner };
+}
+
+test('a runner whose origin/main moved writes UPDATE itself, once', async () => {
+  const { f, runner } = newCodeFixture();
+  await runner.chores();
+  assert.ok('/w/runner/UPDATE' in f.files, 'no UPDATE written for new code on origin/main');
+  const said = /update: origin\/main is bbb2222 and this runner is on aaa1111 — UPDATE written by the runner/gu;
+  assert.equal(f.files['/w/runner/log/runner.log'].match(said)?.length, 1);
+  // The handover removes it; the same origin/main is not news a second time.
+  delete f.files['/w/runner/UPDATE'];
+  await runner.chores();
+  assert.equal('/w/runner/UPDATE' in f.files, false, 'UPDATE written again for the same origin/main');
+  assert.equal(f.files['/w/runner/log/runner.log'].match(said)?.length, 1);
+});
+
+test('a dirty checkout is said once and not handed over', async () => {
+  const { f, runner } = newCodeFixture({ status: ' M x.js\n' });
+  await runner.chores();
+  await runner.chores();
+  assert.equal('/w/runner/UPDATE' in f.files, false, 'a dirty checkout was handed over');
+  assert.equal(f.files['/w/runner/log/runner.log'].match(/has uncommitted changes — not handing over/gu)?.length, 1);
+});
+
+test('a checkout that has diverged from origin/main is not handed over', async () => {
+  const { f, runner } = newCodeFixture({ ff: false });
+  await runner.chores();
+  assert.equal('/w/runner/UPDATE' in f.files, false);
+  assert.match(f.files['/w/runner/log/runner.log'], /has diverged from origin\/main — not handing over/u);
+});
+
+/**
  * `mc run start` on a stopping runner, from that runner's side: runner.json
  * comes to name another live pid while a step is in flight. The runner takes
  * nothing new, says who took over, finishes its step, and leaves the

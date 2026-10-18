@@ -102,11 +102,23 @@ the rules; each lane reads them before it picks.
   will not fast-forward — local work, or diverged — is said out loud and
   handed over anyway: the restart was asked for. On a runner that is stopping,
   `--update` is a take-over as `start` is, after the fast-forward and with the
-  flags the old runner ran with (`args` in runner.json). `UPDATE` has no other writer: the runner never orders its own
-  handover. It did for a while — a landing under `src/mc/` or `canon/` wrote
-  the file — and with most memoro-cli landings touching those trees it
-  drained the lanes after nearly every merge. Removed 2026-09-19; Martin
-  runs `--update` when he wants the new code.
+  flags the old runner ran with (`args` in runner.json). `--update` prints
+  one line per long-lived process besides the runner: the merger and the
+  repo watcher, each with its pid, the commit it runs on, and when it moves.
+- **The runner writes `runner/UPDATE` itself** between picks (`noticeNewCode`
+  in `chores`) when origin/main of the checkout mc runs from has moved past
+  the commit in `runner.json` and that checkout is clean and fast-forwards —
+  once per origin/main sha, so landing a pull request is enough. A checkout
+  with local work or one that has diverged is said once in `runner.log` and
+  not handed over; `mc run --update` once it is clean. The merger and the
+  repo watcher follow the checkout the same way: each leaves between units of
+  work — the merger after its round, the watcher after its refresh — once
+  the checkout's HEAD has moved, and starts its successor on the new code.
+  `--update` only makes it immediate. Until 2026-09-19 a landing under
+  `src/mc/` or `canon/` wrote the file whatever the checkout looked like, and
+  with most memoro-cli landings touching those trees it drained the lanes
+  after nearly every merge; from then until 2026-10-18 nothing but `--update`
+  wrote it.
 
 **The login agent.** Every `mc run start` that spawns a runner writes
 `~/Library/LaunchAgents/se.memoro.mc-runner.plist` when its text differs
