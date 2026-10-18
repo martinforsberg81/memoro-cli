@@ -42,7 +42,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js` passes, including the tests named in step 3."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A whole `mc gate` whose selection names a command with `needs: [\"docker\"]` (and an INCREMENTAL one whose commands do) runs `ensure` with the detached child's pid as the holder, and the child exports `MC_DOCKER_HOLDER=$$`. A selection without one calls nothing.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js` passes, including the tests named in step 4."
     },

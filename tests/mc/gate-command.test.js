@@ -175,15 +175,16 @@ describe('mc gate <test files…>', () => {
 describe('mc gate, a green remembered for the merger (ruling 44)', () => {
   const SELECTION = { files: ['tests/b.test.js', 'tests/a.test.js'], commands: [{ id: 'lint', packageScript: 'lint', passBaseRef: true }] };
   const GREEN = 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n';
+  const NEEDS_DOCKER = { files: ['tests/a.test.js'], commands: [{ id: 'pg', packageScript: 'sql:reference:postgres', needs: ['docker'] }] };
 
   /**
    * The harness of a worktree of `/repo/x` whose primary checkout declares a
    * selector. `porcelain` answers `git status --porcelain` before and after
    * the gate, `tree` answers `HEAD^{tree}` the same way.
    */
-  function remembering({ select = 'node select.js', porcelain = ['', ''], tree = ['tree1234abcd', 'tree1234abcd'], code = 0, output = GREEN } = {}) {
+  function remembering({ select = 'node select.js', selection = SELECTION, porcelain = ['', ''], tree = ['tree1234abcd', 'tree1234abcd'], code = 0, output = GREEN } = {}) {
     const machine = harness({ finishAfter: 1, code, output });
-    const asked = { selects: [], greens: [] };
+    const asked = { selects: [], greens: [], ensures: [] };
     let status = 0;
     let trees = 0;
     const plain = machine.deps.git;
@@ -198,7 +199,7 @@ describe('mc gate, a green remembered for the merger (ruling 44)', () => {
     machine.deps.declaration = (path) => ({ ok: true, name: 'x', declaration: { select, path } });
     machine.deps.select = (command, opts) => {
       asked.selects.push({ command, ...opts });
-      return { status: 0, stdout: JSON.stringify(SELECTION) };
+      return { status: 0, stdout: JSON.stringify(selection) };
     };
     machine.deps.recordGreen = (entry) => { asked.greens.push(entry); };
     machine.deps.holder = () => 'gate-memory';
@@ -272,6 +273,36 @@ describe('mc gate, a green remembered for the merger (ruling 44)', () => {
     deps.select = () => ({ status: 1, stdout: '' });
     assert.equal(await run([], deps), 0);
     assert.deepEqual(asked.greens, []);
+  });
+
+  it('a selection with a command that needs docker ensures the runtime for the detached child', async () => {
+    const { out, deps, asked } = remembering({ selection: NEEDS_DOCKER });
+    deps.dockerEnsure = async (options) => { asked.ensures.push(options); return { ok: true, started: true, lease: '/l' }; };
+    assert.equal(await run([], deps), 0);
+    assert.equal(asked.ensures.length, 1);
+    assert.equal(asked.ensures[0].pid, CHILD);
+    assert.equal(asked.ensures[0].run, 'gate x');
+    assert.equal(asked.ensures[0].repo, 'x');
+    assert.equal(asked.ensures[0].root, '/home');
+    assert.ok(out.spawned[0].args[1].startsWith('export MC_DOCKER_HOLDER=$$; npm test; echo $?'));
+    assert.equal(out.spawned[0].opts.env.MC_DOCKER_RUN, 'gate x');
+    assert.match(out.stderr, /docker: started for this gate \(lease for pid 4242\)/u);
+  });
+
+  it('a selection without docker ensures nothing and spawns as before', async () => {
+    const { out, deps, asked } = remembering();
+    deps.dockerEnsure = async () => { throw new Error('a gate without needs must not ensure'); };
+    assert.equal(await run([], deps), 0);
+    assert.deepEqual(asked.ensures, []);
+    assert.deepEqual(out.spawned[0].args, ['-c', `npm test; echo $? > '${EXIT}'`]);
+  });
+
+  it('a runtime that cannot start is said and the gate still runs', async () => {
+    const { out, deps } = remembering({ selection: NEEDS_DOCKER });
+    deps.dockerEnsure = async () => ({ ok: false, reason: 'orbctl start failed: boom' });
+    assert.equal(await run([], deps), 0);
+    assert.equal(out.spawned.length, 1);
+    assert.match(out.stderr, /mc: docker could not be started — orbctl start failed: boom; the gate runs on/u);
   });
 });
 

@@ -26,6 +26,7 @@ import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { needsDocker } from './docker.js';
 import { DOCS_PREFIX, docsOnly } from './docs-merge.js';
 import { namedCommand, redFiles } from './gate-local.js';
 import { mcHome } from './paths.js';
@@ -146,9 +147,10 @@ export function incrementalPlan(io, { root, env, base, last, tree, manifest }) {
     + ` + ${selected.length} selected for ${changed.length} path${changed.length === 1 ? '' : 's'} changed since`
     + `${commands.length ? ` + command${commands.length === 1 ? '' : 's'} ${scripts.join(', ')}` : ''}`
     + '; not the whole gate (mc gate --full)';
+  // `docker` is set when a command it runs needs the runtime: `mc gate` leases it for the child.
   return {
     command: { run, script: null, source: 'incremental', files, shown, label },
-    red, selected, changed, commands: scripts,
+    red, selected, changed, commands: scripts, docker: commands.some(needsDocker),
   };
 }
 

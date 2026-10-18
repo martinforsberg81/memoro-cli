@@ -147,6 +147,12 @@ describe('incremental after a red', () => {
     const m = machine({ diff: ['src/a.js'], last: red({ red_commands: ['lint'] }), since: ['src/a.js'], selection: { files: [], commands: [{ packageScript: 'lint' }] } });
     assert.deepEqual(incrementalPlan(m.io, { root: ROOT, env: {}, base: 'origin/main', last: red({ red_commands: ['lint'] }), tree: 'tree-now', manifest: MANIFEST }).commands, ['lint']);
   });
+
+  it('the incremental plan says when a command it runs needs docker', () => {
+    const incrementalWith = (commands) => plan(machine({ diff: ['src/a.js'], last: red(), since: ['src/a.js'], selection: { files: [], commands } })).incremental;
+    assert.equal(incrementalWith([{ packageScript: 'sql:reference:postgres', needs: ['docker'] }]).docker, true);
+    assert.equal(incrementalWith([{ packageScript: 'lint' }]).docker, false);
+  });
 });
 
 describe('recordLast', () => {
