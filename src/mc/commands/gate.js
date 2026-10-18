@@ -40,12 +40,18 @@
  * asked exactly as the merger asks it — the primary checkout's declaration,
  * its selection state directory, the same `origin/main` — and the gate runs
  * with that state too. Anything else, and `mc merge` measures again.
+ *
+ * A selection that names a command with `needs: ['docker']` (the whole gate's,
+ * or an INCREMENTAL run's) leases the container runtime for the detached gate's
+ * pid (`docker.js`), and the gate exports `MC_DOCKER_HOLDER`. Nothing here
+ * releases that lease: it ends with the gate's pid.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
+import { ensure, needsDocker } from '../docker.js';
 import { planGate, recordLast, snapshotTree } from '../gate-fast.js';
 import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
 import { GATE_MEASUREMENT_VERSION, recordGreen, selectionHash } from '../gate-greens.js';
@@ -82,6 +88,7 @@ const SYSTEM = {
   recordGreen: (entry, { env }) => recordGreen({ root: mcHome(env), entry }),
   holder: ({ cwd, env }) => currentHolder({ cwd, env }).name,
   snapshotTree,
+  dockerEnsure: (options) => ensure(options),
 };
 
 export async function run(argv, deps = {}) {
@@ -137,7 +144,14 @@ export async function run(argv, deps = {}) {
 
   // The whole gate against origin/main is the one a merge round can take.
   const recordable = whole ? greenToRecord(io, { root, env, base }) : null;
+  // A dirty tree or another base leaves `green` null: the selector is not run
+  // there, so such a whole gate does not ensure the runtime.
+  const wantsDocker = whole ? Boolean(recordable?.green?.docker) : Boolean(fast.incremental?.docker);
   const childEnv = { ...(recordable?.env || env), CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', ...(whole ? { MC_GATE_FAIL_FAST: '1' } : {}) };
+  if (wantsDocker) {
+    childEnv.MC_DOCKER_RUN = `gate ${basename(root)}`;
+    childEnv.MC_DOCKER_REPO = recordable?.green?.repo || basename(root);
+  }
 
   const startedAt = io.now();
   const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
@@ -147,7 +161,9 @@ export async function run(argv, deps = {}) {
   try {
     io.mkdir(dir);
     const fd = io.open(logPath);
-    child = io.spawn('sh', ['-c', `${chosen.run}; echo $? > '${logPath}.exit'`], {
+    // `$$` is this shell's own pid, which is `child.pid`: the lease holder.
+    const script = `${wantsDocker ? 'export MC_DOCKER_HOLDER=$$; ' : ''}${chosen.run}; echo $? > '${logPath}.exit'`;
+    child = io.spawn('sh', ['-c', script], {
       cwd: root, env: childEnv, detached: true, stdio: ['ignore', fd, fd],
     });
     io.close(fd);
@@ -157,6 +173,19 @@ export async function run(argv, deps = {}) {
   }
   child.unref();
   io.write(`${logPath}.pid`, `${child.pid}\n`);
+  // The ensure runs after the spawn: memoro's heavy command gates start only
+  // after the test batches, so a start of up to 60 s falls inside the gate's
+  // own time. Nothing is released here; the lease ends with the child's pid.
+  if (wantsDocker) {
+    let up;
+    try {
+      up = await io.dockerEnsure({ pid: child.pid, run: childEnv.MC_DOCKER_RUN, repo: childEnv.MC_DOCKER_REPO, root: mcHome(env), env });
+    } catch (error) {
+      up = { ok: false, reason: error.message };
+    }
+    if (!up.ok) stderr.write(`mc: docker could not be started — ${up.reason}; the gate runs on, and a gate that needs docker will say unavailable\n`);
+    else if (up.started) stderr.write(`docker: started for this gate (lease for pid ${child.pid})\n`);
+  }
   const lock = {
     pid: child.pid, log: logPath, started: startedAt.toISOString(), command: { ...chosen, base },
     ...(whole && fast.snapshot ? { snapshot: fast.snapshot } : {}),
@@ -209,6 +238,7 @@ function greenToRecord(io, { root, env, base }) {
       files: parsed.files.map(String).filter(Boolean).sort(),
       commands: [...new Set((Array.isArray(parsed.commands) ? parsed.commands : [])
         .map((entry) => String(entry?.packageScript ?? '')).filter(Boolean))].sort(),
+      docker: (Array.isArray(parsed.commands) ? parsed.commands : []).some(needsDocker),
     },
   };
 }
