@@ -35,12 +35,12 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/shot-compare.test.js tests/mc/test-environment.test.js` passes, including the `stopSuperseded` tests and 'a refused ref server waits at most 60 s and names the running compare servers'."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`ensureDevServer` refuses a registered server whose process cwd is known and is not the worktree, and neither stops it nor starts another. `mc dev list` marks it `(runs in <cwd> — not this worktree's)` and its `--json` output is unchanged.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/dev-servers.test.js tests/mc/test-environment.test.js` passes, including 'a server registered for this worktree whose process runs elsewhere is refused, and neither stopped nor replaced'; and on this machine `mc dev list` prints no `runs in` for a server whose `lsof -a -p <pid> -d cwd` is its worktree."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc shot dev <target> --click A --click B` sends `click: [\"A\", \"B\"]` in the request. A result without a `clicked` list of the same length exits 1 with the sentence of step 4 and prints no path on stdout, also on either side of `--compare`.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/shot.test.js tests/mc/shot-compare.test.js tests/mc/commands/flags.test.js` passes, including the `--click` tests named in step 4."
     }

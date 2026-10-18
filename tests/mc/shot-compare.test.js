@@ -204,7 +204,7 @@ function sink() {
   return { write: (chunk) => { text += chunk; return true; }, get text() { return text; } };
 }
 
-async function compare(argv, { measures = {}, warnings = {}, refuse = null, running = [] } = {}) {
+async function compare(argv, { measures = {}, warnings = {}, refuse = null, running = [], clicked = {} } = {}) {
   const waits = [];
   const home = mkdtempSync(join(tmpdir(), 'mc-shot-compare-cmd-'));
   const worktree = join(home, 'memoro');
@@ -249,7 +249,10 @@ async function compare(argv, { measures = {}, warnings = {}, refuse = null, runn
       const side = request.base_url.endsWith('8787') ? 'here' : 'ref';
       return {
         ok: true,
-        result: { ok: true, file: request.out, url: `${request.base_url}/app/assistant`, measure: measures[side], warnings: warnings[side] || [] },
+        result: {
+          ok: true, file: request.out, url: `${request.base_url}/app/assistant`, measure: measures[side], warnings: warnings[side] || [],
+          ...(clicked[side] && request.click ? { clicked: request.click } : {}),
+        },
       };
     },
   });
@@ -385,6 +388,21 @@ describe('mc shot dev --compare', () => {
       'diff  footer.assistant-layout__footer  rect.bottom  810 → 776',
       'mc: warning — ref: 2 elements match',
     ]);
+  });
+
+  it('--click is pressed on both trees, and a ref side that does not say so refuses the pair', async () => {
+    const both = await compare(['dev', 'assistant', '--click', '.tab', '--compare', 'origin/main'], {
+      clicked: { here: true, ref: true },
+    });
+    assert.equal(both.code, 0, both.stderr);
+    assert.deepEqual(both.captures.map((item) => item.request.click), [['.tab'], ['.tab']]);
+
+    const refOnly = await compare(['dev', 'assistant', '--click', '.tab', '--compare', 'origin/main'], {
+      clicked: { here: true },
+    });
+    assert.equal(refOnly.code, 1);
+    assert.match(refOnly.stderr, /mc: origin\/main: the picture at /u);
+    assert.equal(refOnly.stdout, '');
   });
 
   it('says the numbers are the same when a measure was asked and nothing moved, and nothing without one', async () => {

@@ -15,7 +15,7 @@ import { describe, it } from 'node:test';
 
 import { run, servedTree, usage } from '../../src/mc/commands/shot.js';
 import {
-  accessLine, buildRequest, outPath, parseResult, parseSafeArea, parseScroll, parseViewport, resolveAccount, resolveTarget,
+  accessLine, buildRequest, clickGap, outPath, parseResult, parseSafeArea, parseScroll, parseViewport, resolveAccount, resolveTarget,
   slug, targetRequires,
 } from '../../src/mc/shot.js';
 
@@ -39,7 +39,7 @@ if (how === 'not-signed-in') {
 if (request.mode === 'login') { console.log(JSON.stringify({ ok: true, session: '${COOKIE}' })); process.exit(0); }
 writeFileSync(request.out, Buffer.from('89504e470d0a1a0a', 'hex'));
 console.log('some progress on stdout');
-console.log(JSON.stringify({ ok: true, file: request.out, url: request.base_url + '/app/', subject: request.element ? 'element' : request.shell ? 'shell' : 'page', selector: request.element, width: 10, height: 10, safe_area: request.safe_area, ...(request.measure ? { measure: [{ element: 'main.window-view__content', rect: { top: 0, bottom: 844 } }] } : {}), warnings: how === 'warn' ? ['2 elements match; the first was captured'] : [] }));
+console.log(JSON.stringify({ ok: true, file: request.out, url: request.base_url + '/app/', subject: request.element ? 'element' : request.shell ? 'shell' : 'page', selector: request.element, width: 10, height: 10, safe_area: request.safe_area, ...(request.measure ? { measure: [{ element: 'main.window-view__content', rect: { top: 0, bottom: 844 } }] } : {}), warnings: how === 'warn' ? ['2 elements match; the first was captured'] : [], ...(request.click && how !== 'no-clicked' ? { clicked: request.click } : {}) }));
 `;
 
 const SHOT_JSON = {
@@ -198,10 +198,25 @@ describe('mc shot — the pieces', () => {
     });
     assert.deepEqual(Object.keys(request), [
       'mode', 'base_url', 'account', 'sign_in', 'target', 'element', 'shell', 'full_page', 'viewport', 'theme', 'locale', 'out',
-      'safe_area', 'wait_for', 'scroll', 'measure', 'onboarding',
+      'safe_area', 'wait_for', 'scroll', 'measure', 'onboarding', 'click',
     ]);
     assert.equal(request.onboarding, false);
     assert.equal(request.full_page, false);
+    assert.equal(request.click, null);
+  });
+
+  it('click reaches the request in order, and nothing asked is a null click', () => {
+    const base = { baseUrl: 'http://127.0.0.1:8787', account: 'seeded', signIn: { kind: 'url', url: 'u' }, target: { name: 'home' }, viewport: 'desktop', out: '/o.png' };
+    assert.deepEqual(buildRequest({ ...base, click: ['.tab', 'text=Save'] }).click, ['.tab', 'text=Save']);
+    assert.equal(buildRequest({ ...base, click: [] }).click, null);
+  });
+
+  it('clickGap is silent when every click is answered, and names the picture when one is not', () => {
+    const request = { click: ['.tab', 'text=Save'] };
+    assert.equal(clickGap(request, { file: '/o.png', clicked: ['.tab', 'text=Save'] }), null);
+    assert.equal(clickGap({ click: null }, { file: '/o.png' }), null, 'nothing asked, nothing to say');
+    assert.match(clickGap(request, { file: '/o.png' }), /^the picture at \/o\.png was taken without the clicks/u);
+    assert.match(clickGap(request, { file: '/o.png', clicked: ['.tab'] }), /without the clicks/u, 'one answer short');
   });
 });
 
@@ -326,6 +341,30 @@ describe('mc shot — the run', () => {
     assert.match(result.stdout, /mc: warning — 2 elements match; the first was captured/u);
     assert.deepEqual(opened.map((o) => [o.cmd, o.args]), [['open', [join(fx.home, 'pics', 'a.png')]]]);
     assert.equal(opened[0].options.detached, true);
+  });
+
+  it('--click repeats in order into the request, and the path is printed once the script says it clicked', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', 'home', '--click', '.tab', '--click', 'text=Save'], fx);
+    assert.equal(result.code, 0, result.stderr);
+    const { request } = sideOf(fx);
+    assert.deepEqual(request.click, ['.tab', 'text=Save']);
+    assert.equal(result.stdout.split('\n')[0], request.out);
+  });
+
+  it('a script that does not say it clicked is refused, and no path is printed', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', 'home', '--click', '.tab'], fx, { behaviour: 'no-clicked' });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /mc: the picture at .* was taken without the clicks/u);
+    assert.equal(result.stdout, '');
+  });
+
+  it('without --click nothing is asked of the script, so a script that answers no clicks still captures', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', 'home'], fx, { behaviour: 'no-clicked' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(sideOf(fx).request.click, null);
   });
 });
 
