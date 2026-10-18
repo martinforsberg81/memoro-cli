@@ -208,7 +208,7 @@ export function helperLaunch({ proposalsPath = proposalsDir(), role = null, now 
   const prompt = [
     `Today is ${date}. Martin is here with something that is broken, or something he wants better.`,
     'Take his report. Ask only what you cannot read for yourself, then write it into',
-    `\`${proposalsPath}\` as \`${date}-<slug>.md\` in the shape your role gives.`,
+    `\`${proposalsPath}\` as \`${date}-<mc|memoro>-<slug>.md\` in the shape your role gives.`,
     '',
     'Open by asking what he has. Write nothing until you have it.',
   ].join('\n');

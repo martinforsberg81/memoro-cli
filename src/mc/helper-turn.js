@@ -7,7 +7,7 @@
  * he has in it by hand. This is the turn that empties it one file at a time: a
  * fresh, headless session with the `intake` role from `canon/roles/intake.md`,
  * standing in `~/mc/intake/`, given one filename and asked for one outcome —
- * one `~/mc/proposals/<date>-<slug>.md`, or none.
+ * one `~/mc/proposals/<date>-<system>-<slug>.md`, or none.
  *
  * `drainIntake` at the bottom is what makes that an inbox rather than a pile:
  * the oldest files, one turn each, every one archived under
@@ -37,7 +37,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { defaultRepos, listProposals, planFields } from './brief-collect.js';
+import { defaultRepos, listProposals, planFields, proposalSystem } from './brief-collect.js';
 import { intakeArchiveDir, intakeDir, proposalsDir } from './helper-collect.js';
 import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
@@ -87,12 +87,13 @@ export function repoOfFile(file) {
  * works for a file that is not text.
  */
 export function helperPrompt({ file, proposalsPath = proposalsDir(), projectLog = null, plans = [], proposals = [], repo = null, now = new Date() }) {
+  const tagOf = (repo) => (repo === 'memoro-cli' ? 'mc' : 'memoro');
   const date = now.toISOString().slice(0, 10);
   const name = basename(String(file || ''));
-  // `repo:` is the frontmatter key everything downstream routes on. A turn
-  // left to infer it from a digest's contents would get it right most days,
-  // and the days it did not would be a proposal filed against the wrong
-  // system — so a file whose name says which repository it is keeps saying so.
+  // The filename's system is what the page counts by and what a person filters
+  // on. A turn left to infer it from a digest would get it right most days, and
+  // the days it did not would file a proposal against the wrong system — so a
+  // file whose name says which repository it is keeps saying so.
   const known = repo || repoOfFile(name);
   const out = [
     `Today is ${date}. One file in the directory you are standing in is yours this turn:`,
@@ -105,17 +106,17 @@ export function helperPrompt({ file, proposalsPath = proposalsDir(), projectLog 
     '',
   ];
   if (known) {
-    out.push(`It is **${known}**'s, so a proposal you write about it has \`repo: ${known}\` in its frontmatter.`);
+    out.push(`It is **${known}**'s, so a proposal you write about it is named \`${date}-${tagOf(known)}-<slug>.md\`.`);
     out.push(known === 'memoro-cli'
       ? 'memoro-cli has no server: its production is this machine — mc itself, its runner, its verbs and the logs it keeps about its own rounds.'
       : 'memoro\'s production is the deployed service.');
   } else {
-    out.push('Nothing in that name says which system the file belongs to, so decide it from what you read and say which',
-      'in the proposal: `memoro` is the deployed service, `memoro-cli` is mc itself on this machine.');
+    out.push('Nothing in that name says which system the file belongs to, so decide it from what you read and put it in the name:',
+      '`mc` for memoro-cli (mc itself on this machine), `memoro` for the deployed service.');
   }
   out.push(
     '',
-    `One file, one outcome: either **one** proposal in \`${proposalsPath}\`, named \`${date}-<slug>.md\`,`,
+    `One file, one outcome: either **one** proposal in \`${proposalsPath}\`, named \`${date}-<mc|memoro>-<slug>.md\`,`,
     'or none at all. Not two from one file — one report is one proposal — and no proposal is the right',
     'answer whenever the file does not warrant one. Say in one line which you did and why, then stop.',
     '',
@@ -139,10 +140,13 @@ export function helperPrompt({ file, proposalsPath = proposalsDir(), projectLog 
 
 /* -------------------------------------------------------------------- turn */
 
+// The names come from the before/after listing in `runHelperTurn`, and a name without a system is said and left alone, because guessing it is the parse that was removed.
 /** What the turn produced, in the one line a runner log and a person share. */
 export function describeTurn({ wrote = [], waiting = [] }) {
   if (!wrote.length) return `no proposal — nothing in the file warranted one (${waiting.length} still waiting)`;
-  return `${wrote.length} proposal${wrote.length === 1 ? '' : 's'}, ${waiting.length} waiting`;
+  const line = `${wrote.length} proposal${wrote.length === 1 ? '' : 's'}, ${waiting.length} waiting`;
+  const untagged = wrote.filter((p) => typeof p?.file === 'string' && !proposalSystem(p.file)).map((p) => `proposal ${p.file} names no system (mc|memoro)`);
+  return untagged.length ? `${line} — ${untagged.join('; ')}` : line;
 }
 
 function realSession({ bin, args, cwd, timeoutMs, env }) {

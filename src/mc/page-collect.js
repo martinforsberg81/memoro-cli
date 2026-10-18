@@ -53,7 +53,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
-  DAY_MS, defaultRepos, listProgrammes, runsSince, summariseRuns,
+  DAY_MS, defaultRepos, listProgrammes, proposalSystem, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { deployAlive, lastAttempt, lastDeploy } from './deploys.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
@@ -936,7 +936,7 @@ export function intakeSection({ digests = [], proposals = [], now = new Date(), 
       first,
     };
   });
-  return { repos, digests: repos.length, proposals: proposals.length, proposal_files: proposalSummary(proposals) };
+  return { repos, digests: repos.length, proposals: proposals.length, by_system: proposalCounts(proposals), proposal_files: proposalSummary(proposals) };
 }
 
 /** How many of the newest proposals BRIEF names. */
@@ -944,9 +944,9 @@ export const PROPOSALS_NAMED = 3;
 
 /**
  * What lies in `~/mc/proposals`, as BRIEF's one line says it: how far back the
- * pile reaches and the newest few by name. A proposal is `<date>-<slug>.md`, and
- * the slug is the only title mc has without opening the file — which is enough
- * to recognise one, and reading 109 files for a line is not.
+ * pile reaches and the newest few by name. A proposal is `<date>-<system>-<slug>.md`,
+ * and what follows the date is the only title mc has without opening the file —
+ * which is enough to recognise one, and reading 109 files for a line is not.
  */
 function proposalSummary(files, named = PROPOSALS_NAMED) {
   const dated = files
@@ -958,6 +958,13 @@ function proposalSummary(files, named = PROPOSALS_NAMED) {
     newest: dated.at(-1)?.date ?? null,
     newest_names: dated.slice(-named).reverse().map((item) => item.name),
   };
+}
+
+/** The proposals by the system their filename names; a name with none is `untagged`, which is where the naming rule was not followed. */
+function proposalCounts(files) {
+  const counts = { mc: 0, memoro: 0, untagged: 0 };
+  for (const file of files) counts[proposalSystem(file) || 'untagged'] += 1;
+  return counts;
 }
 
 /* ---------------------------------------------------------------------- MC */

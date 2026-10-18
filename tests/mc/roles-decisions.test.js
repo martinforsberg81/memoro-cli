@@ -142,7 +142,7 @@ describe('the rules every session gets, whichever role it is', () => {
   // — a session that is only told which directory picks the one it saw last.
   it('says why a finding is a proposal and not intake', () => {
     const told = toldTo('worker');
-    assert.match(told, /~\/mc\/proposals\/<date>-<slug>\.md/u);
+    assert.match(told, /~\/mc\/proposals\/<date>-<system>-<slug>\.md/u);
     assert.match(told, phrase('drained one file'));
     assert.match(told, phrase('asks a second session to work it out again'));
   });

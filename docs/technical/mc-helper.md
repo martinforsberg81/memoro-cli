@@ -364,27 +364,14 @@ confident summary of a file somebody saw the first page of.
 `proposals/` before and after and reports the difference. A turn that says it
 filed three and filed none is reported as having filed none.
 
-Its output is zero or more `~/mc/proposals/<date>-<slug>.md`:
-
-    ---
-    name: <slug>
-    repo: memoro | memoro-cli
-    kind: project | step
-    project: <existing project — only when kind is step>
-    ---
-
-    # <one line: what is wrong, or what is missing>
-
-    ## Evidence      — what the file said, quoted
-    ## Proposal      — a new project whose step 1 investigates, or one step
-    ## Done when     — one line
-
-That is the shape the desk writes and the shape to aim at, but it is not fixed
-and nothing enforces it: **mc does not read a proposal.** `listProposals`
-returns filenames and never opens one, so a turn that wrote `system:` and
-`source:` instead of `repo:` — which one did, on 2026-09-05, for a note whose
-name said no repository — costs a reader a second and nothing else. The roles
-say the inside of a proposal is prose and not a form.
+Its output is zero or more `~/mc/proposals/<date>-<system>-<slug>.md`, system
+`mc` or `memoro`, with prose inside. The turn is told the system when the
+digest's name says it (`errors-<repo>-<date>.md`); a file whose name says
+nothing is decided from what the turn reads, and the turn puts the system in
+the name. `describeTurn` names a new file whose name carries no system, and
+that file is never renamed: mc does not guess a system from its text, because
+that is the parse `listProposals` was rewritten to avoid. **mc does not read a
+proposal** — `listProposals` returns filenames and never opens one.
 
 The role's judgement rules are in the role file, and
 three of them matter enough to repeat: what was already there yesterday has

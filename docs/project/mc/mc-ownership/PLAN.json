@@ -29,7 +29,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "Every role and prompt that names a proposal file names it `<date>-<system>-<slug>.md` with system `mc` or `memoro`. A new proposal from an intake turn whose name has no system gets `proposal <file> names no system (mc|memoro)` on the turn's line. The page's BRIEF line splits the count, for example `2 proposals · mc 1 · untagged 1`.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/helper-turn.test.js tests/mc/commands/helper.test.js tests/mc/page.test.js tests/mc/roles-decisions.test.js` passes, including the tests named in step 1."
     },

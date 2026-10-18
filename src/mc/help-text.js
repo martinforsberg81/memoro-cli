@@ -462,10 +462,10 @@ IN FULL
   mc helper                        The desk: a session in ~/mc/helper/ that
                                     takes your report of a bug or something
                                     that should be better and writes it into
-                                    ~/mc/proposals/<date>-<x>.md. It
-                                    reads no digest, touches no proposal that
-                                    is already there, and fixes nothing — you
-                                    pick it up at mc brief or mc plan
+                                    ~/mc/proposals/<date>-<mc|memoro>-<x>.md.
+                                    It reads no digest, touches no proposal
+                                    that is already there, and fixes nothing
+                                    — you pick it up at mc brief or mc plan
                                     (--codex|--claude, --model <m> as usual)
   mc helper --intake               The eye on production: the daily digest,
                                     then one headless turn that reads it and
