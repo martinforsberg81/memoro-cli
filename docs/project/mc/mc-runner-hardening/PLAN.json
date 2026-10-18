@@ -74,7 +74,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/hooks.test.js` passes, including the tests named in the step; and `printf '%s' '{\"cwd\":\"'$HOME'/mc/plan/mc\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"npx wrangler d1 execute memoro-db --remote --command x\"}}' | CLAUDE_PROJECT_DIR=$HOME/mc/plan/mc mc hook pre-tool` prints a `deny` whose reason contains `block-prod-wrangler.sh`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`cliRows` counts no runs.tsv row with note `merged` or `pushed` and exit 0, and still counts `red,…`, `nothing` and a `merged` row with a nonzero exit.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/helper-cli-collect.test.js` passes, including 'a merge that landed and a mend that pushed are not findings'."
     }
