@@ -46,10 +46,7 @@
     }
   ],
   "documents": [
-    {
-      "label": "How mc deploy runs in its own process and holds the heavy lane",
-      "path": "../../../technical/mc-deploy.md"
-    }
+    { "label": "How mc deploy runs in its own process and holds the heavy lane", "path": "../../../technical/mc-deploy.md" }
   ],
   "steps": [
     {
@@ -75,10 +72,7 @@
       "title": "mc build ios --device: the builder in its own process, the heavy lane, the read-back, the install",
       "status": "ready",
       "done_when": "`mc build ios --device` runs its preflights in the asking process, then starts the builder detached with its log at `~/mc/runner/log/ios-build.log`, and the terminal follows it (^C stops watching only). The builder holds the heavy lane as `mode: 'ios-build'`, builds the commit production runs in `~/.memoro/mc/build/memoro` with a real `npm ci`, reads the built app back against the declaration, and installs it with `devicectl`. `mc gate` waits for a build as it waits for a deploy. The tests below are green, and success criterion 2 is checked by hand if the phone is paired.",
-      "runner": {
-        "model": "opus",
-        "effort": "high"
-      },
+      "runner": { "model": "opus", "effort": "high" },
       "instruction": [
         "Read first: `src/mc/commands/deploy.js` (`run`, `startDeployerDefault`, `followDeploy`, `holdHeavyLane`, `waitForGate`, `ship`), `src/mc/deploy-run.js`, `src/mc/await-deploy.js` and `src/mc/gate-lock.js`. The builder is the deployer's shape: a detached process with the job as JSON, its output in one log, a row written before it starts and completed when it ends. `holdHeavyLane` is on main since #974 (2026-10-18).",
         "Heavy lane for builds too: in `src/mc/await-deploy.js`, export `HEAVY_HOLD_MODES = ['deploy', 'ios-build']` and make `deployHolding` true for either mode (keep its name and exports; update its comment and the waiting line to `waiting for the <deploy|iOS build> (pid …)`, chosen from the lock's mode). `holdHeavyLane(job, deps)` in `commands/deploy.js` takes `mode` from `deps.mode ?? DEPLOY_MODE`; the builder passes `'ios-build'`. Extend `tests/mc/await-deploy.test.js` with an `ios-build` hold that is waited for.",
@@ -107,10 +101,7 @@
       "title": "mc build ios --testflight: the number from App Store Connect, archive, export, the IPA read back, the question, the upload",
       "status": "ready",
       "done_when": "`--testflight` chooses the build number from App Store Connect, archives and exports with the declaration's ExportOptions.plist, reads the number, commit and Distribution signature back out of the IPA itself, asks before uploading, uploads with memoro's upload script, records the row, and prints the `asc:attach-build` command without running it. `--no-upload` stops at the verified IPA. Old archives are pruned to the last five. The tests below are green, success criteria 3 and 4 are checked as far as this machine allows, and every `success_criteria[].met` that was checked is true.",
-      "runner": {
-        "model": "opus",
-        "effort": "high"
-      },
+      "runner": { "model": "opus", "effort": "high" },
       "instruction": [
         "Why: the documented manual procedure (memoro `docs/releases/README.md` § Submitting an iOS build) had three traps. The build number was a committed constant, so two different trees could carry one number. The local ExportOptions.plist let Xcode rewrite `CFBundleVersion` at export (`manageAppVersionAndBuildNumber`). And nothing checked that the IPA said what was meant. memoro's `ios-build-declaration` project gives this step a tracked ExportOptions.plist with that switch off, the `MEMORO_IOS_BUILD_NUMBER` override, and `asc-list-builds.mjs --json`.",
         "The number, in the asking process after the step-2 preflights. Instead of the `Apple Development` check, require an `Apple Distribution:` identity. Run the declaration's `list_builds` argv with cwd the memoro checkout (its script reads App Store Connect credentials itself; mc never reads `.dev.vars` or any key). Parse `builds[].version` as integers and set `next = max + 1`. If the call fails, exit 1 with `App Store Connect did not answer (<first stderr line>) — no build number can be chosen`. Never fall back to a file.",
