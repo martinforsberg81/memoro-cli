@@ -1288,6 +1288,10 @@ async function selectFiles({ command, cwd, env, say }) {
     passBaseRef: Boolean(entry?.passBaseRef),
     resourceClass: entry?.resourceClass ? String(entry.resourceClass) : null,
     selectedBy: Array.isArray(entry?.selectedBy) ? entry.selectedBy.map(String) : [],
+    // The exit code the selector says means "this gate's environment is
+    // missing here" (memoro #13803: `sql:reference:postgres` without Docker
+    // exits 69). Null for every gate that did not declare one.
+    unavailableExitCode: entry?.allowUnavailable && Number.isInteger(entry?.unavailableExitCode) ? entry.unavailableExitCode : null,
   }));
   const nameless = commands.filter((entry) => !entry.packageScript);
   if (nameless.length) {
@@ -1412,6 +1416,12 @@ async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, cl
     const outcome = await timed('selected gates', async () => run(invocation, { cwd, env: commandEnv }));
     const duration = clock() - from;
     const ran = outcome.status !== null && outcome.status !== undefined;
+    // A gate the selector declared may be unavailable, exiting with exactly
+    // that code: not a pass and not a red, but a gate this machine cannot run
+    // (memoro's own `npm run ci` reads it the same way). It is reported as
+    // unavailable and does not stop the round; under GitHub Actions the
+    // repository's CI still fails on it.
+    const unavailable = ran && entry.unavailableExitCode != null && outcome.status === entry.unavailableExitCode;
     results.push({
       // Which of the two kinds of gate this is. One list, because a reader
       // wants one list; the field is what tells an operator's declaration
@@ -1419,9 +1429,10 @@ async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, cl
       source: 'selection',
       name: entry.packageScript,
       command: invocation,
-      ok: ran && outcome.status === 0,
+      ok: ran && (outcome.status === 0 || unavailable),
       exit_code: outcome.status ?? null,
       ran,
+      ...(unavailable ? { unavailable: true } : {}),
       duration_ms: duration,
       resource_class: entry.resourceClass,
       selected_by: entry.selectedBy,
@@ -1430,7 +1441,7 @@ async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, cl
       output: trim(outcome.stderr) || trim(outcome.stdout) || null,
     });
     const last = results[results.length - 1];
-    say(`command gate ${entry.packageScript}: ${last.ok ? 'passed' : `FAILED (exit ${last.exit_code})`} in ${seconds(duration)}`);
+    say(`command gate ${entry.packageScript}: ${unavailable ? 'unavailable on this machine, not counted red' : last.ok ? 'passed' : `FAILED (exit ${last.exit_code})`} in ${seconds(duration)}`);
   }
   return results;
 }
