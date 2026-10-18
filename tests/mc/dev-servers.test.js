@@ -12,14 +12,14 @@
  * rule about text.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  admission, admit, checkManifest, freeMemoryPercent, listServers, registerManifest, serversUnder,
-  stopServersUnder, unregisterManifest,
+  admission, admit, checkManifest, freeMemoryPercent, listServers, processCwd, registerManifest, serversUnder,
+  stopServersUnder, strayCwd, unregisterManifest,
 } from '../../src/mc/dev-servers.js';
 import { run } from '../../src/mc/commands/dev.js';
 import { setLogPath } from '../../src/mc/logger.js';
@@ -465,6 +465,62 @@ describe('admit — waiting for a slot', () => {
     const other = capture();
     assert.equal(await run(['list', '--wait', '5'], { stdout: capture(), stderr: other }), 2);
     assert.match(other.text(), /belong to mc dev admit/u);
+  });
+});
+
+describe('a server that runs somewhere else', () => {
+  it('processCwd reads lsof\'s n line, and null on any failure', () => {
+    const asked = [];
+    const run = (command, args, options) => {
+      asked.push({ command, args, options });
+      return { status: 0, stdout: 'p123\nfcwd\nn/Users/x/memoro\n' };
+    };
+    assert.equal(processCwd(123, { run }), '/Users/x/memoro');
+    assert.equal(asked[0].command, 'lsof');
+    assert.deepEqual(asked[0].args, ['-a', '-p', '123', '-d', 'cwd', '-Fn']);
+
+    assert.equal(processCwd(123, { run: () => ({ status: 1, stdout: '' }) }), null);
+    assert.equal(processCwd(123, { run: () => ({ status: 0, stdout: 'p123\n' }) }), null);
+    assert.equal(processCwd(123, { run: () => { throw new Error('no lsof'); } }), null);
+  });
+
+  it('strayCwd: its own worktree, a symlink to it and an unknown cwd are not stray; another directory is', () => {
+    const a = scratch();
+    const b = scratch();
+    const link = join(scratch(), 'link');
+    symlinkSync(a, link);
+
+    assert.equal(strayCwd({ pid: 1, worktree_path: a }, { cwdOf: () => a }), null);
+    assert.equal(strayCwd({ pid: 1, worktree_path: a }, { cwdOf: () => link }), null);
+    assert.equal(strayCwd({ pid: 1, worktree_path: a }, { cwdOf: () => null }), null);
+    assert.deepEqual(strayCwd({ pid: 1, worktree_path: a }, { cwdOf: () => b }), { cwd: b });
+    assert.equal(strayCwd({ worktree_path: a }, { cwdOf: () => b }), null);
+  });
+
+  it('mc dev list marks a stray server in text and leaves --json alone', async () => {
+    const root = scratch();
+    const worktree = scratch();
+    await run(['register', writeSource(worktree), '--json'], { stdout: capture(), stderr: capture(), root });
+
+    const text = capture();
+    assert.equal(await run(['list'], { stdout: text, stderr: capture(), root, processCwd: () => '/somewhere/else' }), 0);
+    assert.match(text.text(), /  \(runs in \/somewhere\/else — not this worktree's\)\n/u);
+
+    const home = capture();
+    assert.equal(await run(['list'], { stdout: home, stderr: capture(), root, processCwd: () => worktree }), 0);
+    assert.doesNotMatch(home.text(), /runs in/u);
+
+    const json = capture();
+    const code = await run(['list', '--json'], {
+      stdout: json,
+      stderr: capture(),
+      root,
+      processCwd: () => { throw new Error('not for json'); },
+    });
+    assert.equal(code, 0);
+    const { servers } = JSON.parse(json.text());
+    assert.equal(servers.length, 1);
+    assert.equal(Object.keys(servers[0]).some((key) => key.includes('cwd')), false);
   });
 });
 

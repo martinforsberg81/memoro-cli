@@ -49,6 +49,8 @@ something is serving; it never says it is serving the tree you are about to
 judge, and on a machine running four lanes those are different servers with
 identical shapes.
 
+A registration is still a claim. Since 2026-10-18 `ensureDevServer` also reads the registered process's working directory (`lsof -d cwd`) and refuses a server whose process runs outside the worktree it is registered for, without stopping it: on 2026-10-08 a server registered for a workarea ran in the shared checkout and served its three-week-old frontend. `mc dev list` marks such a server `(runs in <cwd> — not this worktree's)`; `--json` is unchanged. A cwd that cannot be read is trusted.
+
 ## Declarative project definition
 
 A repository may declare its development services in `.mc/dev.json`. Version 1

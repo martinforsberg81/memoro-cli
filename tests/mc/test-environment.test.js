@@ -629,6 +629,7 @@ describe('bringing one up', () => {
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       freeMemory: () => null,
       now,
       sleep,
@@ -646,6 +647,33 @@ describe('bringing one up', () => {
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 
+  it('a server registered for this worktree whose process runs elsewhere is refused, and neither stopped nor replaced', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const { now, sleep } = clock();
+    registerServer(root, worktree, { port: 8900 });
+    let spawned = 0;
+    let stopped = 0;
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      freeMemory: () => null,
+      now,
+      sleep,
+      processCwd: () => '/elsewhere/memoro',
+      spawn: () => { spawned += 1; return { unref() {} }; },
+      stopServer: () => { stopped += 1; return { ok: true }; },
+      fetch: async () => ({ ok: true }),
+    });
+
+    assert.equal(ensured.ok, false);
+    assert.equal(ensured.error, `dev-8900 is registered for ${worktree} but its process runs in /elsewhere/memoro — not reused; mc dev stop dev-8900, then run this again`);
+    assert.equal(spawned, 0);
+    assert.equal(stopped, 0);
+
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
   it('gives up in seconds when nothing registers at all', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
@@ -654,6 +682,7 @@ describe('bringing one up', () => {
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       freeMemory: () => null,
       now,
       sleep,
@@ -676,6 +705,7 @@ describe('bringing one up', () => {
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       freeMemory: () => null,
       now,
       sleep,
@@ -702,6 +732,7 @@ describe('bringing one up', () => {
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       freeMemory: () => null,
       fetch: async () => ({ ok: true }),
       spawn: () => { spawned += 1; return { unref() {} }; },
@@ -754,6 +785,7 @@ describe('two tiers', () => {
     const started = [];
     const ensured = await ensureDevServer(worktree, TIERED_DECLARATION, {
       root,
+      processCwd: () => null,
       freeMemory: () => null,
       service: 'memoro-static',
       sleep: async () => {},
@@ -841,6 +873,7 @@ describe('a service built from a tree that is gone', () => {
     const spawned = [];
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       freeMemory: () => null,
       git: git('bbbbbbbbbb2222'),
       stopServer: (server) => { stopped.push(server.instance_id); return { ok: true, instance_id: server.instance_id }; },
@@ -867,6 +900,7 @@ describe('a service built from a tree that is gone', () => {
     let spawned = 0;
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       freeMemory: () => null,
       git: git('aaaaaaaaaa1111'),
       fetch: async () => ({ ok: true }),
@@ -892,6 +926,7 @@ describe('a live server that does not answer', () => {
     try {
       const ensured = await ensureDevServer(worktree, DECLARATION, {
         root,
+        processCwd: () => null,
         freeMemory: () => null,
         stopServer: (server) => {
           stopped.push(server.instance_id);
@@ -937,6 +972,7 @@ describe('a live server that does not answer', () => {
     let spawned = 0;
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       freeMemory: () => null,
       stopServer: () => { stops += 1; return { ok: true }; },
       sleep: async () => {},
@@ -959,6 +995,7 @@ describe('a live server that does not answer', () => {
     let sleeps = 0;
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       freeMemory: () => null,
       stopServer: () => ({ ok: false, error: 'exited 1' }),
       sleep: async () => { sleeps += 1; },
@@ -1027,6 +1064,7 @@ describe('admission before a start', () => {
     let spawned = 0;
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       admit: async () => ({
         ok: false,
         reason: 'cap',
@@ -1054,6 +1092,7 @@ describe('admission before a start', () => {
     let env = null;
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
+      processCwd: () => null,
       now: () => 0,
       sleep: async () => {},
       admit: async (question) => { asked = question; return { ok: true }; },

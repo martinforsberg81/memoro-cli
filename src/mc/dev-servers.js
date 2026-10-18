@@ -33,7 +33,7 @@
  * be tested with a temporary directory and no dev server anywhere.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
@@ -447,6 +447,38 @@ export function serversUnder(path, { root = devServersRoot() } = {}) {
     const where = resolve(server.worktree_path);
     return where === base || where.startsWith(base + sep);
   });
+}
+
+/** The working directory of a running process, as lsof reads it, or null when it cannot be read. */
+export function processCwd(pid, { run = spawnSync } = {}) {
+  try {
+    const asked = run('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8', timeout: 5000 });
+    if (asked?.status !== 0) return null;
+    const line = String(asked.stdout || '').split('\n').find((item) => item.startsWith('n'));
+    return line ? line.slice(1) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A registered server whose process runs somewhere other than its worktree:
+ * `{ cwd }`, or null when it runs there or when that cannot be read — unknown
+ * is trusted, as a manifest without built_from is.
+ */
+export function strayCwd(server, { cwdOf = processCwd } = {}) {
+  if (!server?.pid || !server.worktree_path) return null;
+  const cwd = cwdOf(server.pid);
+  if (!cwd) return null;
+  return real(cwd) === real(server.worktree_path) ? null : { cwd };
+}
+
+function real(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
 }
 
 /**
