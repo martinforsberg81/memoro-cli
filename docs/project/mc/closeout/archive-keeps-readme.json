@@ -1,0 +1,112 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "archive-keeps-readme",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/archive-keeps-readme/PLAN.json",
+  "archived": "2026-10-18",
+  "goal": [
+    "When the runner archives a done project, its README stays on main as `docs/project/<programme>/closeout/<name>.md`, beside the closeout record.",
+    "No relative Markdown link under `docs/project/` or `docs/technical/` is left pointing into a directory the archive removed: in the same commit it points at `closeout/<name>.md` or `closeout/<name>.json`."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`rewriteArchivedLinks` rewrites a README link (anchor kept), a directory link, a `PLAN.json` link and a link to another removed file to the right closeout path, relative to the file it is in, and leaves kept files, other links and fenced code alone.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/archive-plan.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": true,
+      "criterion": "Archiving against real git leaves `docs/project/mc/closeout/documented.md` on main with the README's text, and a document on main that linked to `../mc/documented/README.md#close` and `../mc/documented/PLAN.json` links to `../mc/closeout/documented.md#close` and `../mc/closeout/documented.json`, all in the archive's one commit.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/archive-live.test.js tests/mc/run.test.js` passes, including the assertions named in step 2."
+    }
+  ],
+  "steps": [
+    {
+      "title": "A link into an archived directory, rewritten to its closeout",
+      "done_when": "`closeoutReadmePath` and `rewriteArchivedLinks` are exported, the new tests in `tests/mc/archive-plan.test.js` and `tests/mc/closeout.test.js` pass, and `mc gate` is green.",
+      "status": "done",
+      "pr": 943,
+      "landed": {
+        "sha": "4480f5f37f2f16e71c62d967848c62e228935e1a",
+        "into": "main",
+        "at": "2026-10-17T13:51:53Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "rewriteArchivedLinks(text, { from, to, archived }) and closeoutReadmePath(programme, project) are exported (src/mc/archive-plan.js, src/mc/closeout.js). Nothing calls them yet: step 2 wires them into archiveIn. A directory link that holds a kept file is left alone, beyond the spec: the directory is still there after the archive, so pointing it at the closeout would break it. Fenced code is skipped; inline code spans are not special-cased. Gate green on this tree: 2742 tests, 0 failed, 9 skipped."
+      ],
+      "sessions": 1,
+      "seconds": 199,
+      "cost_usd": 0.022781
+    },
+    {
+      "title": "The archive moves the README and rewrites the links in its own commit",
+      "done_when": "`archiveIn` copies each archived project's README to `closeout/<name>.md` and rewrites the links under `docs/project/` and `docs/technical/` in the archive commit; the new assertions in `tests/mc/archive-live.test.js` pass; `docs/project/README.md`, `docs/technical/mc-run.md` and `docs/technical/mc-tidy.md` say so; `mc gate` is green.",
+      "status": "done",
+      "pr": 946,
+      "landed": {
+        "sha": "94c27474f53e237f1d6f8ce3a15c0041ec91d56a",
+        "into": "main",
+        "at": "2026-10-17T14:03:29Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "archiveIn copies each archived project's README to closeout/<project>.md in the archive commit (read before git rm; kept READMEs stay), then relinks every .md under docs/project and docs/technical that points into an archived directory via rewriteArchivedLinks, using git ls-files for the list. closeoutBackfill and writeCloseout are unchanged. Verified: archive-live asserts the closeout README, the relinked technical doc and the untouched external link; mc gate green on the whole tree (2743 tests, 0 failed)."
+      ],
+      "sessions": 1,
+      "seconds": 247,
+      "cost_usd": 0.024731
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-17T13:51:15Z",
+      "kind": "step",
+      "seconds": 199,
+      "land_seconds": null,
+      "pr": 943,
+      "turns": 25,
+      "input": 26,
+      "output": 22284,
+      "cache_read": 509759,
+      "cache_write": 52314,
+      "model": null,
+      "note": "success,queued",
+      "session": "be8b304a-40b8-4c92-89ee-db57be9cc796",
+      "cost_usd": 0.02278144
+    },
+    {
+      "ts": "2026-10-17T14:00:16Z",
+      "kind": "step",
+      "seconds": 247,
+      "land_seconds": null,
+      "pr": 946,
+      "turns": 40,
+      "input": 32,
+      "output": 24522,
+      "cache_read": 661944,
+      "cache_write": 46776,
+      "model": null,
+      "note": "success,queued",
+      "session": "bcd4c07d-c144-4b1d-adc9-58573ce5ce84",
+      "cost_usd": 0.024730639999999998
+    }
+  ],
+  "totals": {
+    "sessions": 2,
+    "seconds": 446,
+    "land_seconds": 0,
+    "cost_usd": 0.047512,
+    "cost_unknown": 0,
+    "input": 58,
+    "output": 46806,
+    "cache_read": 1171703,
+    "cache_write": 99090,
+    "first": "2026-10-17T13:51:15Z",
+    "landed": "2026-10-17T14:03:29Z"
+  }
+}

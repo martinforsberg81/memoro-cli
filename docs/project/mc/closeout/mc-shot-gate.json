@@ -1,0 +1,194 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-shot-gate",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-shot-gate/PLAN.json",
+  "archived": "2026-10-18",
+  "goal": [
+    "`mc gate <files…>` runs named test files with the `node --test` flags the repository declares (`pr_tests_flags`), so a memoro test that imports `/js/…` runs in a session as it runs in memoro's own runner.",
+    "`mc shot dev --compare <ref>` does not wait a quarter of an hour for a slot that mc's own superseded compare server holds: an idle superseded compare server is stopped, the ref side waits at most 60 s, and a refusal names the compare servers already running.",
+    "A dev server registered for a worktree whose process runs in another directory is never reused for that worktree, and `mc dev list` says so.",
+    "`mc shot` takes `--click <selector>`, repeatable, and never presents a picture taken without the clicks as one taken with them."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`mc gate <files…>` in a worktree whose primary checkout declares `pr_tests_flags` runs `node --test <those flags> <files>`; without a declaration it runs the flags of the `test` script, as today.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js tests/mc/gate-fast.test.js` passes, including 'named files run with the declared pr_tests_flags, which replace the test script\\'s' and 'declaredTestFlags reads the primary checkout\\'s declaration'."
+    },
+    {
+      "met": true,
+      "criterion": "Before starting the ref server, `--compare` stops a compare server of the same worktree name idle for more than 15 minutes, and leaves one idle for less, one of another name and a light one alone. The ref side asks admission for at most 60 s, and a `cap` refusal prints a line naming every running compare server's sha and URL.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/shot-compare.test.js tests/mc/test-environment.test.js` passes, including the `stopSuperseded` tests and 'a refused ref server waits at most 60 s and names the running compare servers'."
+    },
+    {
+      "met": true,
+      "criterion": "`ensureDevServer` refuses a registered server whose process cwd is known and is not the worktree, and neither stops it nor starts another. `mc dev list` marks it `(runs in <cwd> — not this worktree's)` and its `--json` output is unchanged.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/dev-servers.test.js tests/mc/test-environment.test.js` passes, including 'a server registered for this worktree whose process runs elsewhere is refused, and neither stopped nor replaced'; and on this machine `mc dev list` prints no `runs in` for a server whose `lsof -a -p <pid> -d cwd` is its worktree."
+    },
+    {
+      "met": true,
+      "criterion": "`mc shot dev <target> --click A --click B` sends `click: [\"A\", \"B\"]` in the request. A result without a `clicked` list of the same length exits 1 with the sentence of step 4 and prints no path on stdout, also on either side of `--compare`.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/shot.test.js tests/mc/shot-compare.test.js tests/mc/commands/flags.test.js` passes, including the `--click` tests named in step 4."
+    }
+  ],
+  "steps": [
+    {
+      "title": "`mc gate <files…>` runs named files with the declared pr_tests_flags",
+      "done_when": "`src/mc/gate-fast.js` exports `primaryCheckoutDeclaration` and `declaredTestFlags`, `primaryDeclaration` uses the first, `src/mc/commands/gate.js` passes `declaredTestFlags(io, { root, env })` to `namedCommand` for named files; the new tests in `tests/mc/gate-command.test.js` and `tests/mc/gate-fast.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 980,
+      "landed": {
+        "sha": "7052e1edfba1cbdacdf983a49f49c6935360e582",
+        "into": "main",
+        "at": "2026-10-18T18:51:46Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc gate <files…> now runs named files with the repository's declared pr_tests_flags (read from the primary checkout, via primaryCheckoutDeclaration, which primaryDeclaration also uses), else the test script's flags as before. Verified: mc gate on the three gate test files green (72 tests, incl. the two new named tests and declaredTestFlags), and mc gate (whole) green, 2971 tests. Steps 2–4 are untouched; step 2 and later read the same gate-fast.js and commands/flags.js files only where noted in their done_when."
+      ],
+      "sessions": 1,
+      "seconds": 142,
+      "cost_usd": 0.0253
+    },
+    {
+      "title": "`--compare` stops a superseded idle compare server and waits at most 60 s for a slot",
+      "done_when": "`src/mc/shot-compare.js` exports `COMPARE_ADMIT_WAIT_SECONDS`, `COMPARE_IDLE_MS`, `stopSuperseded` and `runningCompares`, and `runCompare` stops superseded idle compare servers, asks admission for at most 60 s and prints the running-compare line on a `cap` refusal; `ensureDevServer` and `ensureAppServer` carry `refused`; `mc shot` usage has the `--compare <sha>` sentence; the new tests in `tests/mc/shot-compare.test.js` and `tests/mc/test-environment.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 981,
+      "landed": {
+        "sha": "0e4fba3232c62afc8f6b77a58cd5f4d6a556c7c2",
+        "into": "main",
+        "at": "2026-10-18T18:55:08Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Built as the step says. Code commit b8d2ebb3 holds src, tests, the changelog fragment and PLAN met on criterion 1; docs commit 6570d31b is last and touches only docs/technical/mc-shot.md and docs/mc-command-matrix.md. Verified: node --test on tests/mc/shot-compare.test.js, tests/mc/test-environment.test.js and tests/mc/shot.test.js, 113 pass; the new stopSuperseded, runningCompares and refused-ref tests are among them; mc gate GREEN, 2976 tests. The here side of mc shot still waits 900 s: only runCompare passes admitWaitSeconds 60. stopSuperseded stops nothing when the asked tree is already served. Step 3 (dev-servers) also edits ensureDevServer in src/mc/test-environment.js, where this step put the refused field on the admission return and on ensureAppServer's error return."
+      ],
+      "sessions": 1,
+      "seconds": 233,
+      "cost_usd": 0.096679
+    },
+    {
+      "title": "A dev server whose process runs outside its registered worktree is refused and flagged",
+      "done_when": "`src/mc/dev-servers.js` exports `processCwd` and `strayCwd`; `ensureDevServer` refuses a registered server whose process cwd is known and is not the worktree, without stopping it or starting another; `mc dev list` text marks such a server and `--json` is unchanged; the new tests in `tests/mc/dev-servers.test.js` and `tests/mc/test-environment.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 982,
+      "landed": {
+        "sha": "e8ad631630d00ea3c2bc92c48995efb41e5dc457",
+        "into": "main",
+        "at": "2026-10-18T18:58:19Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "ensureDevServer now refuses a registered server whose process cwd (lsof -d cwd, via processCwd) is known and not the worktree; strayCwd is the predicate and it compares realpaths. mc dev list text marks such a server '(runs in <cwd> — not this worktree's)'; --json never calls lsof. Not measured: the 'mc dev list on this machine' clause of success_criteria[2] — no dev server was registered on 2026-10-18, so that criterion stays met: false. Next session: a live registration is needed to close it."
+      ],
+      "sessions": 1,
+      "seconds": 185,
+      "cost_usd": 0.027511
+    },
+    {
+      "title": "`mc shot --click <selector>`, repeatable, refused when the capture script does not say it clicked",
+      "done_when": "`scanArgs` takes `repeatable`, `mc shot` reads `--click` with it, `buildRequest` sends `click` after `onboarding`, `clickGap` in `src/mc/shot.js` is checked after every capture in `src/mc/commands/shot.js` and on both sides in `src/mc/shot-compare.js`; the new tests in `tests/mc/commands/flags.test.js`, `tests/mc/shot.test.js` and `tests/mc/shot-compare.test.js` pass; every `success_criteria[].met` in this plan is true; `mc gate` is green.",
+      "status": "done",
+      "pr": 984,
+      "landed": {
+        "sha": "866beae72a150f4777478301e10c8991b50cef80",
+        "into": "main",
+        "at": "2026-10-18T19:35:51Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 4 is built: scanArgs takes repeatable, mc shot --click repeats into request.click (after onboarding, null without the flag), and clickGap in src/mc/shot.js is checked after every capture in src/mc/commands/shot.js and on both sides in src/mc/shot-compare.js. A result that does not answer clicked with one entry per click is refused: exit 1, no path on stdout, and a sentence on stderr that names the picture and the missing capture-script support. memoro scripts/shot/shot.mjs does not honour request.click yet (its side is out of scope here, proposal in ~/mc/proposals/2026-10-18-memoro-shot-click-and-fresh-bundle.md), so until it does every --click ends in that refusal, by design. Criteria 2 (stray cwd) and 3 (--click) are met in PLAN.json and were checked: criterion 2 by the named dev-servers refusal test plus lsof on the live measure server pid 9005, whose cwd is its own worktree with no runs-in marker in mc dev list; criterion 3 by the step test files (71 passing). mc gate is GREEN (2989 tests, 0 failed, 9 skipped)."
+      ],
+      "sessions": 1,
+      "seconds": 346,
+      "cost_usd": 0.061801
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-18T18:51:05Z",
+      "kind": "step",
+      "seconds": 142,
+      "land_seconds": null,
+      "pr": 980,
+      "turns": 27,
+      "input": 28,
+      "output": 16165,
+      "cache_read": 809019,
+      "cache_write": 72999,
+      "model": null,
+      "note": "success,queued",
+      "session": "39fc7109-c4b3-451a-8357-1bea8cd397b6",
+      "cost_usd": 0.025300365
+    },
+    {
+      "ts": "2026-10-18T18:55:03Z",
+      "kind": "step",
+      "seconds": 233,
+      "land_seconds": null,
+      "pr": 981,
+      "turns": 50,
+      "input": 38,
+      "output": 38520,
+      "cache_read": 1439664,
+      "cache_write": 98301,
+      "model": null,
+      "note": "success,queued",
+      "session": "cf1d51ed-7272-478b-a780-96cec631d528",
+      "cost_usd": 0.096678505
+    },
+    {
+      "ts": "2026-10-18T18:58:11Z",
+      "kind": "step",
+      "seconds": 185,
+      "land_seconds": null,
+      "pr": 982,
+      "turns": 49,
+      "input": 38,
+      "output": 26714,
+      "cache_read": 789515,
+      "cache_write": 50042,
+      "model": null,
+      "note": "success,queued",
+      "session": "eb728bdd-2bcd-44a1-bd2e-be071f85a435",
+      "cost_usd": 0.027511199999999996
+    },
+    {
+      "ts": "2026-10-18T19:34:23Z",
+      "kind": "step",
+      "seconds": 346,
+      "land_seconds": null,
+      "pr": 984,
+      "turns": 69,
+      "input": 36,
+      "output": 49717,
+      "cache_read": 987466,
+      "cache_write": 173610,
+      "model": null,
+      "note": "success,queued",
+      "session": "2d1e9511-e48d-4216-90f5-ab67bbe7a0f0",
+      "cost_usd": 0.061801315
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 906,
+    "land_seconds": 0,
+    "cost_usd": 0.211291,
+    "cost_unknown": 0,
+    "input": 140,
+    "output": 131116,
+    "cache_read": 4025664,
+    "cache_write": 394952,
+    "first": "2026-10-18T18:51:05Z",
+    "landed": "2026-10-18T19:35:51Z"
+  }
+}
