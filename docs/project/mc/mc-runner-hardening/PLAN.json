@@ -59,7 +59,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/commands/step.test.js` passes, including the landed-step refusal test."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A `current-*.json` naming a dead runner pid is moved to `runner/log/dead-<file>-<pid>.json` with one runner.log line by the next `stepsHeld()`, and `drainState` leaves it out of `inFlight`, so `drainLine` and `stopLine` never name it.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/run-control.test.js` passes, including the tests named in step 1."
     },
