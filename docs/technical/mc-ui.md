@@ -477,6 +477,7 @@ through all three sections.
 | `failed` | red bold |
 | `blocked` | red |
 | `done` | grey |
+| `unmet` | yellow bold |
 | `invalid` | red bold |
 | no plan on main | grey |
 

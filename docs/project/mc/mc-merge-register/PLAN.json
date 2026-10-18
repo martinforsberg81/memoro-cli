@@ -46,7 +46,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/merger.test.js` passes, including the three tests named in step 3."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A plan whose steps are all done and whose criteria are not all met reads `unmet` with the criterion numbers, is neither archived nor closed, and is said once by the runner; `mc merge` and `mc merge --docs` refuse the last step's pull request while it leaves a criterion `met: false`.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-schema.test.js tests/mc/merge-boundary.test.js tests/mc/merge-command.test.js tests/mc/docs-merge.test.js tests/mc/run.test.js` passes, including the tests named in step 4."
     },

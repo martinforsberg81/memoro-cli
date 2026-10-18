@@ -97,7 +97,7 @@ function record(project, second, repo = 'memoro') {
     goal: ['g'],
     contract: ['c'],
     out_of_scope: ['o'],
-    success_criteria: [{ met: false, criterion: 'x', check: 'y' }],
+    success_criteria: [{ met: second?.status === 'done', criterion: 'x', check: 'y' }],
     documents: [],
     steps: [
       { title: 'S1 — one', status: 'done', done_when: 'one', instruction: [], pr: null, blocked_by: null },

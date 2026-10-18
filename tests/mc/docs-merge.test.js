@@ -129,7 +129,7 @@ describe('mc merge --docs, the verb', () => {
   // `running`, and the runner, finding no open pull request on the deleted
   // branch, wrote it `failed`.
   describe('books the landing on the step whose pull request it is', () => {
-    function landing({ branch, status = 'running', env = {}, body = '' }) {
+    function landing({ branch, status = 'running', env = {}, body = '', criteriaDoor = undefined }) {
       const root = mkdtempSync(join(tmpdir(), 'mc-docs-merge-'));
       mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
       writeFileSync(registerPath(root, 'measure'), JSON.stringify({
@@ -141,16 +141,32 @@ describe('mc merge --docs, the verb', () => {
       }));
       let out = '';
       const stdout = { write: (s) => { out += s; } };
-      const { gh } = stubGh({ files: ['docs/project/msr-core/a.md'], branch, body });
+      const { gh, calls } = stubGh({ files: ['docs/project/msr-core/a.md'], branch, body });
       return run(['memoro', '12', '--docs'], {
         stdout, stderr: stdout, gh, root, env, lock: (_root, fn) => fn(),
         resolveRepoPath: async () => '/repo', now: () => new Date('2026-10-18T07:10:28Z'),
+        ...(criteriaDoor ? { criteriaDoor } : {}),
       }).then((code) => {
         const step = JSON.parse(readFileSync(registerPath(root, 'measure'), 'utf8')).steps[1];
         rmSync(root, { recursive: true, force: true });
-        return { code, out, step };
+        return { code, out, step, calls };
       });
     }
+
+    it('a docs-only last step with an unmet criterion is refused before it lands', async () => {
+      const asked = [];
+      const criteriaDoor = async (options) => {
+        asked.push(options);
+        return { checked: true, ok: false, unmet: [1], problems: ['step 2 is the plan\'s last, and success criterion 1 is not met on main'] };
+      };
+      const { code, out, step, calls } = await landing({ branch: 'measure-3', criteriaDoor });
+      assert.equal(code, 1);
+      assert.match(out, /unmet-criteria — /u);
+      assert.equal(step.status, 'running');
+      assert.equal(calls.some((c) => c[0] === 'pr' && c[1] === 'merge'), false, 'nothing was merged');
+      assert.equal(asked[0].pr, 12);
+      assert.ok(asked[0].entries.some((entry) => entry.project === 'measure'), 'the door is handed the register to find the step');
+    });
 
     it('makes the step on the pull request\'s branch done, with the pull request and the landing', async () => {
       const { code, out, step } = await landing({ branch: 'measure-3' });

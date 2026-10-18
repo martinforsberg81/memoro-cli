@@ -459,7 +459,7 @@ function runRows(files) {
  * saying nothing a session could act on, which is the fault the schema exists
  * to stop.
  */
-function plan({ status = 'ready', title = 'The one step', done_when = 'do x', runner, steps, documents = [] } = {}) {
+function plan({ status = 'ready', title = 'The one step', done_when = 'do x', runner, steps, documents = [], met = status === 'done' } = {}) {
   const stopped = status === 'blocked';
   return JSON.stringify({
     schema: 'mc-plan',
@@ -467,7 +467,7 @@ function plan({ status = 'ready', title = 'The one step', done_when = 'do x', ru
     goal: ['One thing is true when this is done.'],
     contract: ['Not without Martin.'],
     out_of_scope: ['Everything else.'],
-    success_criteria: [{ met: false, criterion: 'It is done.', check: 'The row is in runs.tsv.' }],
+    success_criteria: [{ met, criterion: 'It is done.', check: 'The row is in runs.tsv.' }],
     documents,
     ...(runner ? { runner } : {}),
     steps: steps || [{
@@ -1679,6 +1679,20 @@ test('a plan trespass found at the runner\'s door is the step\'s red: ready agai
   assert.equal(step.attempts, 1);
   assert.equal(step.pr, 9);
   assert.equal(step.reason, 'plan-trespass — steps[1] changed');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,red\t-\t\w+\n/u);
+});
+
+test('the last step with an unmet criterion, found at the runner\'s door, is the step\'s red: ready again, nothing queued', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession() });
+  f.deps.planBoundary = async () => ({ checked: true, ok: true, problems: [] });
+  f.deps.criteriaDoor = async () => ({ checked: true, ok: false, unmet: [1], problems: ['step 1 is the plan\'s last'] });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.rounds.length, 0);
+  const step = registerOf(f, 'm').steps[0];
+  assert.equal(step.status, 'ready');
+  assert.equal(step.attempts, 1);
+  assert.equal(step.pr, 9);
+  assert.equal(step.reason, 'unmet-criteria — step 1 is the plan\'s last');
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,red\t-\t\w+\n/u);
 });
 
@@ -3112,6 +3126,22 @@ test('a done plan is archived in the round it is read: directory removed, row wr
   assert.match(runnerLog, /archive: memoro prog\/over removed — row added to project_log\.md/u);
   assert.doesNotMatch(runnerLog, /over: status done, skip/u, 'the plan is gone, so there is no skip line to read');
   assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/step/alpha/memoro'], 'the ready plan still had its step');
+});
+
+test('a plan with every step done and a criterion unmet is not archived, and is said once', async () => {
+  const f = fixture({
+    plans: { memoro: { over: plan({ status: 'done', met: false }) } },
+    projectLog: { memoro: LOG_HEAD },
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await round(runner);
+  await round(runner);
+  assert.deepEqual(f.calls.rm, [], 'an unmet plan is not done, so not archived');
+  assert.equal(f.calls.gh.some((c) => c[2] === 'create'), false, 'no archive pull request');
+  const said = f.files['/w/runner/log/runner.log'].split('\n')
+    .filter((line) => /over: every step is done, but success criterion 1 is not met on main/u.test(line));
+  assert.equal(said.length, 1, said.join('\n'));
 });
 
 test('a row its close-out already wrote is kept: only the directory goes, and there is still exactly one row', async () => {

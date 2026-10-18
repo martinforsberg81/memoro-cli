@@ -15,6 +15,7 @@ import {
   readPlanText,
   deliverableStep,
   planState,
+  planSummary,
   unauthorisedChanges,
   validatePlan,
   PLAN_SCHEMA,
@@ -313,6 +314,20 @@ describe('the plan has no status of its own', () => {
     assert.equal(deliverableStep(plan({ steps: [done, long] })).why, `step 2 failed: ${'x'.repeat(199)}…; mc step ready starts it again`);
     const bare = { ...failed, reason: null };
     assert.equal(deliverableStep(plan({ steps: [done, bare] })).why, 'step 2 failed; mc step ready starts it again', 'without a reason, today\'s text');
+  });
+
+  it('every step done with a criterion unmet is unmet, with its numbers', () => {
+    const steps = plan().steps.map((step) => ({ ...step, status: 'done', instruction: [] }));
+    const criterion = (met) => ({ met, criterion: 'The hero draws a visual object.', check: 'Seen in the running app.' });
+    const unmet = plan({ steps, success_criteria: [criterion(true), criterion(false), criterion(false)] });
+    assert.deepEqual(planState(unmet), { status: 'unmet', index: -1, step: null, unmet: [2, 3] });
+    assert.equal(planSummary(unmet).status, 'unmet');
+    assert.equal(planSummary(unmet).next, 'every step is done, but success criteria 2, 3 are not met on main — measure them and set met: true in a pull request, or add a step that does');
+    assert.equal(deliverableStep(unmet).reason, 'unmet');
+    const met = plan({ steps, success_criteria: [criterion(true), criterion(true), criterion(true)] });
+    assert.equal(planState(met).status, 'done');
+    const one = plan({ steps, success_criteria: [criterion(true), criterion(false)] });
+    assert.equal(planSummary(one).next, 'every step is done, but success criterion 2 is not met on main — measure it and set met: true in a pull request, or add a step that does');
   });
 });
 

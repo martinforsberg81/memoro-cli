@@ -127,6 +127,26 @@ runner relies on the same function rather than keeping its own copy.
 hiccup must not turn every merge into a trespass stop — and it fails closed
 only for a genuine trespass or a head plan that no longer parses.
 
+**The plan's last step lands only with its criteria met.** A plan is done when
+every step is done and every success criterion is `met: true` (Martin,
+2026-10-18), and the last step is where it becomes done. So after the plan
+boundary, `criteriaDoor({ repoPath, pr, git, gh, step })` in the same file
+reads the head's `PLAN.json` and refuses the pull request of the plan's last
+step while a criterion there is not `met: true`: `mc: unmet-criteria —
+<problem>` on stderr, exit 1, nothing queued. `mc merge` records it in
+`gate-rounds.jsonl` with `stopped_at: 'unmet-criteria'`. It is its own check,
+not part of `planBoundary`, because that one passes a byte-identical plan —
+exactly a last step that never touched `met` — and because a docs-only pull
+request, the usual close-out, never reaches the plan boundary: `mc merge
+--docs` (and a docs-only pull request routed there) asks `criteriaDoor` before
+it merges, finding the step as `stepForMerge` does. The runner's own queueing
+of a session's open pull request (`landForSession`) asks it too, and a refusal
+there is the step's red, `ready` again with reason `unmet-criteria — …`. A
+pull request that is nobody's step, or any step but the last, passes; like the
+plan boundary it fails open on anything it cannot read. The session measures
+each criterion's `check` and sets `met: true`, or ends with `mc step failed`
+naming what it could not measure.
+
 **Known gap:** the door checks one pull request. `mc merge <repo> <pr1>
 <pr2>` — a batch — does not run it; a batch is out of this step's scope, not a
 believed-safe case.

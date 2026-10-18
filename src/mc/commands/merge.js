@@ -8,6 +8,7 @@
  * flag, landing in the call instead of queueing.
  */
 import { docsMergeLines, docsOnly, prFiles, runDocsMerge } from '../docs-merge.js';
+import { criteriaDoor } from '../merge-boundary.js';
 import { landedPatch, stepForMerge } from '../merge-step.js';
 import { workRoot } from '../paths.js';
 import { listEntries, readEntry, updateStep } from '../register.js';
@@ -49,6 +50,17 @@ export async function run(argv, deps = {}) {
     const files = (deps.prFiles || prFiles)(opts.pr, { repoPath, gh: deps.gh });
     if (!docsOnly(files)) return (deps.gate || gate)(opts, { stdout, stderr, resolveRepo: async () => repoPath });
     stderr.write(`mc: #${opts.pr} changes only documents under docs/ (${files.length} file${files.length === 1 ? '' : 's'}, no script) — landing it as mc merge --docs, now, with no suite\n`);
+  }
+  // The door `mc merge` has for the plan's last step (`criteriaDoor`), here
+  // too: a docs-only close-out is the usual last step. A planning session's
+  // pull request is nobody's step, and passes.
+  const root = deps.root || workRoot(deps.env || process.env);
+  const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
+  for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
+  const door = await (deps.criteriaDoor || criteriaDoor)({ repoPath, pr: opts.pr, gh: deps.gh, git: deps.git, env: deps.env || process.env, entries: listEntries(root, io) });
+  if (door.checked && !door.ok) {
+    for (const problem of door.problems) stderr.write(`mc: unmet-criteria — ${problem}\n`);
+    return 1;
   }
   const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
   // The body is read for the step's remainder, not kept in the round log.
