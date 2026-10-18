@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import {
   STEP_STATES, applyEntry, currentIndex, keyOf, overlayPlans, parseEntry, parseStepEnv, patchStep, reconcileEntry,
-  registerPath, seedEntry, stepKey, updateStep,
+  registerLogPath, registerPath, seedEntry, stepKey, updateStep, whoAmI,
 } from '../../src/mc/register.js';
 import { PLAN_SCHEMA, PLAN_VERSION, deliverableStep, validatePlan } from '../../src/mc/plan-schema.js';
 
@@ -16,7 +16,7 @@ const plan = (steps) => ({
 });
 const record = (steps, over = {}) => ({ repo: 'memoro', programme: 'prog', project: 'p', path: 'docs/project/prog/p/PLAN.json', legacy: false, plan: plan(steps), problems: [], ...over });
 
-/** An in-memory register: `files` is the disk, and the lock is nobody's. */
+/** An in-memory register: `files` is the disk, and the lock and the log are nobody's. */
 function disk(initial = {}) {
   const files = { ...initial };
   return {
@@ -25,6 +25,8 @@ function disk(initial = {}) {
       read: (path) => files[path] ?? null,
       write: (path, value) => { files[path] = `${JSON.stringify(value, null, 2)}\n`; },
       lock: (_root, fn) => fn(),
+      append: () => {},
+      by: () => ({}),
     },
   };
 }
@@ -281,4 +283,58 @@ test('patchStep refuses a time or deploy blocker the plan schema would refuse', 
   assert.throws(() => patchStep(entry, 1, { status: 'blocked', blocked_by: { kind: 'deploy', name: 'deploy-step-2', step: 2 } }), /blocked_by\.step/u);
   assert.throws(() => patchStep(entry, 2, { status: 'blocked', blocked_by: { kind: 'deploy', name: 'deploy-step-1', step: 1, hours: -2 } }), /blocked_by\.hours/u);
   assert.throws(() => patchStep(entry, 1, { status: 'blocked', blocked_by: { kind: 'project', name: 'y', at: '2026-10-14T08:00:00Z' } }), /only a time blocker/u);
+});
+
+test('updateStep appends one line naming the process', () => {
+  const { io } = disk();
+  const lines = [];
+  const append = (path, line) => lines.push([path, line]);
+  const by = () => ({ pid: 7, ppid: 6, parent: 'zsh', run: 'run_x', argv: { verb: 'step', sub: 'ready' }, cwd: '/home/m/memoro', mc_step: null });
+  overlayPlans([record([step(), step()])], { root: '/w', ...io, append, by });
+  updateStep({ root: '/w', project: 'p', index: 0, patch: { status: 'done', pr: 3 }, ...io, append, by });
+  updateStep({ root: '/w', project: 'p', index: 0, patch: { status: 'ready' }, ...io, append, by });
+  assert.equal(lines.length, 3, 'the seed, then one line per write');
+  assert.ok(lines.every(([path]) => path === registerLogPath('/w')));
+  const parsed = lines.map(([, line]) => JSON.parse(line));
+  assert.equal(parsed[0].event, 'seed');
+  assert.deepEqual(parsed[0].statuses, ['ready', 'ready']);
+  const last = parsed.at(-1);
+  assert.equal(last.event, 'step');
+  assert.equal(last.project, 'p');
+  assert.equal(last.index, 0);
+  assert.equal(last.from, 'done');
+  assert.equal(last.to, 'ready');
+  assert.deepEqual(last.fields, ['status']);
+  assert.equal(last.by.parent, 'zsh');
+  assert.equal(last.by.argv.sub, 'ready');
+});
+
+test('a log that cannot be written never fails the write', () => {
+  const { files, io } = disk();
+  const broken = () => { throw new Error('disk full'); };
+  const [seeded] = overlayPlans([record([step()])], { root: '/w', ...io, append: broken });
+  assert.equal(seeded.plan.steps[0].status, 'ready', 'the seed is written and read');
+  const entry = updateStep({ root: '/w', project: 'p', index: 0, patch: { status: 'done' }, ...io, append: broken });
+  assert.equal(entry.steps[0].status, 'done');
+  assert.equal(parseEntry(files[registerPath('/w', 'p')]).steps[0].status, 'done');
+});
+
+test('whoAmI names this process', () => {
+  const who = whoAmI();
+  assert.equal(who.pid, process.pid);
+  assert.equal(who.ppid, process.ppid);
+  assert.match(who.run, /^run_/u);
+  assert.ok(who.argv && typeof who.argv === 'object');
+});
+
+test('a re-plan that carries a slot is logged with what it carried', () => {
+  const { io } = disk();
+  const titled = (label) => step({ title: `${label} — what it does` });
+  const lines = [];
+  const append = (path, line) => lines.push(JSON.parse(line));
+  overlayPlans([record([titled('A'), titled('B')])], { root: '/w', ...io, now: 't0' });
+  overlayPlans([record([titled('A'), titled('Z')])], { root: '/w', ...io, append, now: 't2' });
+  const last = lines.at(-1);
+  assert.equal(last.event, 'reconcile');
+  assert.deepEqual(last.carried, [{ index: 1, from: 'B', to: 'Z' }]);
 });
