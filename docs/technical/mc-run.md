@@ -431,7 +431,11 @@ this GitHub at this moment, in this order (`runStepClaimed`):
    is the branch's tip. It is: nothing came after the landing, and the branch
    is moved the same way (`step-cost-2` ran on a landed branch on 2026-09-11
    for want of this). A different tip, no merged pull request or a `gh` that
-   fails leaves it. A branch that has *not* landed carries work and is left
+   fails leaves it. A branch whose tip is at or behind the newest merged pull
+   request's head counts as landed, with nothing of its own beyond that head and
+   origin/main. The head is read from GitHub and fetched as `refs/pull/<n>/head`
+   when it is missing locally, because the remote branch is deleted on merge and
+   pruned by the fetch (`sql-schema-drift-3`, 2026-10-18). A branch that has *not* landed carries work and is left
    exactly where it is.
 9. **`git merge origin/main`** — **never** a rebase, which is what nights 1–2
    of the shell runner cost to learn (`syncMain`, below).

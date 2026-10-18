@@ -72,19 +72,26 @@ export function mergedPullAtTip(dir, branch, { gh = null, tip } = {}) {
 }
 
 /**
- * The newest pull request merged from `branch`, when it landed through the
- * merger's restack: `{ number, merged_at }`. The merger (`restack`,
- * merger.js) replays a branch onto main in a worktree of its own and pushes
- * a new head, so the workarea's local tip is that head's ancestor in content
- * but not in sha, and `mergedPullAtTip` says no. 2026-10-17: `publish-handover`
- * step 6 started on `publish-handover-7` nine minutes after #929 had landed
- * from it — head 97addbd7 on the remote, aec79c2a in the workarea.
+ * The newest pull request merged from `branch`, when it landed and the local
+ * branch carries nothing of its own beyond that landing: `{ number, merged_at }`.
  *
- * So: the newest merged pull request's head must be `origin/<branch>` (read
- * after the caller's fetch), and the local branch must carry no commit of
- * its own that head lacks by patch, other than what origin/main already
- * has. Anything else — no remote ref, a different one, a commit left over,
- * a git or GitHub call failing — is `null`: a question that fails means keep.
+ * The merged head is not always the workarea's tip, in two ways. The merger
+ * (`restack`, merger.js) replays a branch onto main and pushes a new head, so
+ * the tip is that head's ancestor in content but not in sha, and
+ * `mergedPullAtTip` says no (2026-10-17: `publish-handover-7`, #929, head
+ * 97addbd7 on the remote, aec79c2a in the workarea). And a mend the merger
+ * pushes after the step's session has ended moves the head past the tip
+ * (2026-10-18: `sql-schema-drift-3`, #13762, the step's 932ea680 under the
+ * mend's e55b07e3). GitHub deletes the head branch on merge and the fetch
+ * prunes it, so `origin/<branch>` may be gone: the merged head is read from
+ * GitHub's answer, and when its object is not local it is fetched as
+ * `refs/pull/<n>/head`, which GitHub keeps after the branch is deleted.
+ *
+ * So: the local branch must carry no commit of its own that the merged head
+ * lacks by patch, other than what origin/main already has. A branch at or
+ * behind the merged head reads as landed. Anything else — no merged pull
+ * request, no head, a head that cannot be fetched, a commit left over, a git
+ * or GitHub call failing — is `null`: a question that fails means keep.
  *
  * `run(args)` returns git's trimmed stdout, or null on failure.
  */
@@ -101,9 +108,13 @@ export function landedThroughRemote(dir, branch, { gh = null, run = null } = {})
   try { merged = JSON.parse(String(asked.stdout || '[]')); } catch { return null; }
   if (!Array.isArray(merged) || !merged.length) return null;
   const newest = merged.reduce((a, b) => (String(b.mergedAt || '') > String(a.mergedAt || '') ? b : a));
-  const remote = git(['rev-parse', `origin/${branch}`]);
-  if (!remote || !newest.headRefOid || remote.trim() !== newest.headRefOid) return null;
-  const own = git(['rev-list', '--no-merges', '--cherry-pick', '--right-only', `${newest.headRefOid}...${branch}`]);
+  const head = newest.headRefOid;
+  if (!head) return null;
+  if (git(['cat-file', '-e', `${head}^{commit}`]) === null) {
+    git(['fetch', '-q', 'origin', `refs/pull/${newest.number}/head`]);
+    if (git(['cat-file', '-e', `${head}^{commit}`]) === null) return null;
+  }
+  const own = git(['rev-list', '--no-merges', '--cherry-pick', '--right-only', `${head}...${branch}`]);
   if (own === null || own === undefined) return null;
   for (const sha of String(own).split('\n').map((s) => s.trim()).filter(Boolean)) {
     if (git(['merge-base', '--is-ancestor', sha, 'origin/main']) === null) return null;
