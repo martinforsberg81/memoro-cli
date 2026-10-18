@@ -44,7 +44,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run-session.test.js tests/mc/run-plan.test.js` passes, including the three tests named in step 2."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A step workarea whose branch is at or behind the newest merged pull request's head is moved to `<name>-<n>` from origin/main before its session starts, even when `origin/<branch>` has been deleted and pruned.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/branch-landed.test.js tests/mc/run.test.js` passes, including the `mended()` cases and 'a branch behind its merged pull request\\'s head, whose remote branch is gone, is moved'."
     },

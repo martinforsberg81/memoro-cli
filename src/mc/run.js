@@ -1167,15 +1167,18 @@ export function createRunner({
    * merged pull request from this branch whose head is the branch's tip means
    * nothing came after the landing (`mergedAtTip`).
    *
-   * The merger restacks a branch before it lands it (`restack`, merger.js):
-   * the head it pushes is not the workarea's tip, so `mergedAtTip` says no.
+   * The merger restacks a branch before it lands it (`restack`, merger.js),
+   * and a mend it pushes after the step's session has ended moves the head
+   * too: the head is not the workarea's tip, so `mergedAtTip` says no.
    * `publish-handover` step 6 started on `publish-handover-7` on 2026-10-17
    * nine minutes after #929 had landed from it, and its publish was refused.
-   * So on `unknown`, and on `ahead` too — a restacked branch whose local tip
-   * merged main can read so — the remote is asked as well
-   * (`landedThroughRemote`): the merged pull request's head is
-   * `origin/<branch>`, and the local tip carries nothing of its own beyond it
-   * and origin/main.
+   * `sql-schema-drift-3` started on 2026-10-18 on a branch #13762 had merged
+   * from: the mend had pushed two commits after the step's own, and the fetch
+   * pruned the deleted remote branch. So on `unknown`, and on `ahead` too — a
+   * restacked branch whose local tip merged main can read so — the merged head
+   * is asked for as well (`landedThroughRemote`): it is read from GitHub and
+   * fetched as `refs/pull/<n>/head` when it is not local, and the local tip
+   * carries nothing of its own beyond it and origin/main.
    *
    * Returns `{ ok, moved, why }`: `moved` is the new branch, or null when the
    * workarea was already somewhere it could push from.

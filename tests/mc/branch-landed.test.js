@@ -243,10 +243,53 @@ function restacked() {
   return { root, repo, head, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
+/**
+ * A mend after the step (2026-10-18, `sql-schema-drift-3`, #13762): `feat`
+ * carries A locally and on origin. Then a second clone pushes B on top — the
+ * mend — as the pull request's head, and deletes the remote branch on merge.
+ * `fetched` lets the workarea see B before the branch goes; `pullRef` says
+ * whether GitHub kept `refs/pull/13762/head`.
+ */
+function mended({ fetched = false, pullRef = true } = {}) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'mc-mended-')));
+  const origin = join(root, 'origin.git');
+  const repo = join(root, 'repo');
+  git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
+  mkdirSync(repo);
+  git(repo, ['init', '-q', '-b', 'main']);
+  git(repo, ['remote', 'add', 'origin', origin]);
+  writeFileSync(join(repo, 'base.txt'), 'base\n');
+  git(repo, ['add', 'base.txt']);
+  git(repo, ['commit', '-q', '-m', 'root']);
+  git(repo, ['push', '-q', 'origin', 'main']);
+  git(repo, ['switch', '-qc', 'feat']);
+  writeFileSync(join(repo, 'a.txt'), 'a\n');
+  git(repo, ['add', 'a.txt']);
+  git(repo, ['commit', '-q', '-m', 'A']);
+  git(repo, ['push', '-q', 'origin', 'feat']);
+  git(root, ['clone', '-q', origin, 'other']);
+  const other = join(root, 'other');
+  git(other, ['switch', '-q', 'feat']);
+  writeFileSync(join(other, 'b.txt'), 'b\n');
+  git(other, ['add', 'b.txt']);
+  git(other, ['commit', '-q', '-m', 'B']);
+  const head = git(other, ['rev-parse', 'HEAD']);
+  git(other, ['push', '-q', 'origin', 'feat']);
+  if (pullRef) git(other, ['push', '-q', 'origin', `${head}:refs/pull/13762/head`]);
+  if (fetched) git(repo, ['fetch', '-q', 'origin']);
+  git(other, ['push', '-q', 'origin', '--delete', 'feat']);
+  git(repo, ['fetch', '-q', '--prune', 'origin']);
+  return { root, repo, head, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+const hasCommit = (repo, sha) => {
+  try { git(repo, ['cat-file', '-e', `${sha}^{commit}`]); return true; } catch { return false; }
+};
+
 describe('landedThroughRemote', () => {
-  const pulls = (head) => () => ({ ok: true, stdout: JSON.stringify([
+  const pulls = (head, number = 929) => () => ({ ok: true, stdout: JSON.stringify([
     { number: 7, mergedAt: '2026-10-01T00:00:00Z', headRefOid: 'old' },
-    { number: 929, mergedAt: '2026-10-17T06:23:00Z', headRefOid: head },
+    { number, mergedAt: '2026-10-17T06:23:00Z', headRefOid: head },
   ]) });
 
   it('answers when origin/<branch> is the merged head and the local tip carries nothing else', () => {
@@ -275,11 +318,45 @@ describe('landedThroughRemote', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('is null when origin/<branch> is not the merged pull request\'s head', () => {
+  it('is null when the local branch carries a commit neither the merged head nor origin/main has', () => {
     const fx = restacked();
     try {
       const other = git(fx.repo, ['rev-parse', 'origin/main']);
       assert.equal(landedThroughRemote(fx.repo, 'feat', { gh: pulls(other) }), null);
+    } finally { fx.cleanup(); }
+  });
+
+  it('answers when the merged head was pushed after the step and its remote branch was pruned', () => {
+    const fx = mended({ fetched: true });
+    try {
+      assert.throws(() => git(fx.repo, ['rev-parse', '--verify', 'origin/feat']), 'the remote branch is gone');
+      assert.deepEqual(landedThroughRemote(fx.repo, 'feat', { gh: pulls(fx.head, 13762) }), { number: 13762, merged_at: '2026-10-17T06:23:00Z' });
+    } finally { fx.cleanup(); }
+  });
+
+  it('fetches the merged head from refs/pull/<n>/head when it is not local', () => {
+    const fx = mended();
+    try {
+      assert.equal(hasCommit(fx.repo, fx.head), false, 'the merged head is not local at first');
+      assert.deepEqual(landedThroughRemote(fx.repo, 'feat', { gh: pulls(fx.head, 13762) }), { number: 13762, merged_at: '2026-10-17T06:23:00Z' });
+      assert.equal(hasCommit(fx.repo, fx.head), true, 'and fetched by the call');
+    } finally { fx.cleanup(); }
+  });
+
+  it('is null when the merged head is neither local nor under refs/pull', () => {
+    const fx = mended({ pullRef: false });
+    try {
+      assert.equal(landedThroughRemote(fx.repo, 'feat', { gh: pulls(fx.head, 13762) }), null);
+    } finally { fx.cleanup(); }
+  });
+
+  it('is null when the local branch carries a commit after the merged head', () => {
+    const fx = mended({ fetched: true });
+    try {
+      writeFileSync(join(fx.repo, 'c.txt'), 'c\n');
+      git(fx.repo, ['add', 'c.txt']);
+      git(fx.repo, ['commit', '-q', '-m', 'C']);
+      assert.equal(landedThroughRemote(fx.repo, 'feat', { gh: pulls(fx.head, 13762) }), null);
     } finally { fx.cleanup(); }
   });
 });

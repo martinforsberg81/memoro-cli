@@ -26,7 +26,7 @@ const areaOf = (path) => { const parts = String(path).split('/'); return parts[2
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -318,6 +318,11 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       if (args[0] === 'merge-tree') return { ok: true, stdout: landed.includes(args.at(-1)) ? 'basetree' : 'othertree' };
       // Where a stacked branch left its base, and the replay onto the squash
       // that landed under it. `rebaseFails` names the branches that conflict.
+      // A branch's commits that the merged head lacks (`rev-list`, the range
+      // `<head>...<branch>`), and which of them origin/main already has by
+      // patch. `revList` answers the first, `notInMain` the second.
+      if (args[0] === 'rev-list') { const range = args.find((a) => a.includes('...')); if (range in revList) return { ok: true, stdout: revList[range] }; }
+      if (args[0] === 'merge-base' && args[1] === '--is-ancestor' && notInMain.includes(args[2])) return { ok: false, stdout: '' };
       if (args[0] === 'merge-base') return { ok: true, stdout: `forked-${args.at(-1)}` };
       if (args[0] === 'rebase') return { ok: !rebaseFails.includes(args.at(-1)), stdout: '', stderr: 'CONFLICT' };
       // The branches that already exist, local and on the remote — what
@@ -882,13 +887,30 @@ test('a conflicting branch with a commit after its merged pull request is left w
   const f = fixture({
     areas: { beta: { repo: 'memoro', programme: 'prog', plan: ready } },
     plans: { memoro: { beta: ready } },
-    conflicted: ['beta'], tips: { beta: 'bbb222' },
+    conflicted: ['beta'], tips: { beta: 'bbb222' }, revList: { 'aaa111...beta': 'bbb222' }, notInMain: ['bbb222'],
     merged: { beta: [{ number: 693, mergedAt: '2026-09-10T10:00:00Z', headRefOid: 'aaa111' }] },
     session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
   });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
   assert.deepEqual(f.calls.checkouts, []);
+});
+
+test('a branch behind its merged pull request\'s head, whose remote branch is gone, is moved to `<name>-<n>` from origin/main', async () => {
+  // 2026-10-18: `sql-schema-drift-3`. The mend pushed e55b07e3 after the step's
+  // own commit 932ea680, and the deleted remote branch is no longer there to ask.
+  const f = fixture({
+    areas: { beta: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { beta: ready } },
+    conflicted: ['beta'], refs: { beta: ['beta', 'beta-2'] }, tips: { beta: '932ea680' },
+    merged: { beta: [{ number: 13762, mergedAt: '2026-10-17T22:04:34Z', headRefOid: 'e55b07e3' }] },
+    session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass();
+  assert.deepEqual(f.calls.checkouts, [['/w/beta/memoro', 'beta-3']]);
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/beta/memoro' && c.includes('rev-list') && c.includes('e55b07e3...beta')));
+  assert.match(f.files['/w/runner/log/runner.log'], /beta: beta has already landed — moved to beta-3 from origin\/main/u);
 });
 
 test('a conflicting branch is left where it is when GitHub cannot be asked, or has merged nothing', async () => {
