@@ -27,7 +27,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`ensure` starts a stopped OrbStack, waits for `docker info`, and writes one lease file per holder under `~/.memoro/mc/docker/leases/`. It gives up after its timeout without a lease. A lease whose pid is dead is removed by the next reader and counts as a release. Every `docker` and `orbctl` call carries a timeout.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/docker.test.js` passes, including the tests named in step 1."
     },
