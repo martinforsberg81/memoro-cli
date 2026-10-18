@@ -1155,6 +1155,14 @@ slow or a suite was long. A codex session gets neither: its prompt is an
 argument, stdin is closed, and nothing watches it — `codex exec` reads no
 messages and has no stall guard written for it yet.
 
+On 2026-10-17 two live sessions were killed `stalled` a minute after the Mac
+woke from a 26-minute sleep: Node's timer clock counts sleep on macOS, so the
+stall timer came due while the machine slept and fired at the wake. Now a
+heartbeat every 30 s (`SLEEP_TICK_MS`) reads the wall clock, a gap over three
+minutes (`SLEEP_GAP_MS`) between its ticks is a sleep, and a guard that fires
+with a sleep inside its silence re-arms for a full `stall_minutes`, with the
+line `<name>: machine slept <n> min — stall guard re-armed` in `runner.log`.
+
 stdout and stderr are collected here rather than by `maxBuffer` — capped at
 256 MiB, because a session that floods stdout will not parse either way.
 

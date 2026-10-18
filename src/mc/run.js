@@ -234,6 +234,10 @@ export const UPDATE_POLL_MS = 30 * 1000;
 export const DRAIN_TICK_MS = 10 * 60 * 1000;
 /** How often a lane held back by the total cap looks for a free slot again. */
 export const TOTAL_POLL_MS = 15 * 1000;
+/** How often a session's heartbeat reads the wall clock (`streamSession`). */
+export const SLEEP_TICK_MS = 30 * 1000;
+/** A gap between two heartbeats longer than this means the runner did not run: the machine slept. Above `sh()`'s 120 s, so a synchronous wait is never taken for one. */
+export const SLEEP_GAP_MS = 3 * 60 * 1000;
 
 /* ------------------------------------------------------------ real deps */
 
@@ -263,7 +267,11 @@ function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
  * is silent for as long as the task runs, so when the stall guard fires with
  * one alive it writes `onQuiet(minutes, tasks)` instead of killing, once per
  * silence: a session that answers it has shown it is alive, and one that does
- * not is killed at the next `stallMs`.
+ * not is killed at the next `stallMs`. A machine that slept is not a silent
+ * session: a heartbeat every `SLEEP_TICK_MS` reads the wall clock, and when the
+ * guard fires with a gap over `SLEEP_GAP_MS` inside the silence (the stall
+ * timer can be the first to wake, so it looks too), it calls `onSleep(minutes)`
+ * and re-arms for a full `stallMs` instead of killing.
  *
  * Codex (no `prompt`) keeps its positional prompt with stdin closed, and gets
  * neither a check-in nor a stall guard: nothing kills it.
@@ -285,7 +293,7 @@ function sh(cmd, args, { cwd, timeout = 120_000, env } = {}) {
  * `ANTHROPIC_AUTH_TOKEN` even when the runner's own environment has them, so
  * its billing follows the mode and nothing else (step-credits, ruling 38).
  */
-export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn }) {
+export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = null, checkInMs = 0, stallMs = 0, resultGraceMs = RESULT_GRACE_MS, checkIn = null, onQuiet = null, onSleep = null, onSpawn = null, logPath = null, spawn: spawnFn = spawn }) {
   return new Promise((resolve) => {
     const piped = prompt != null;
     let childEnv = env;
@@ -334,7 +342,18 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
     // already been asked about them.
     let tasks = [];
     let asked = false;
-    const stop = () => { clearTimeout(stallTimer); clearTimeout(graceTimer); clearInterval(checkInTimer); };
+    // The heartbeat: a gap between two of its ticks over `SLEEP_GAP_MS` is a
+    // sleep inside the silence, counted in `slept` until the guard reads it.
+    let lastBeat = Date.now();
+    let slept = 0;
+    let beatTimer = null;
+    const beat = () => {
+      const now = Date.now();
+      const gap = now - lastBeat;
+      lastBeat = now;
+      if (gap > SLEEP_GAP_MS) slept += gap - SLEEP_TICK_MS;
+    };
+    const stop = () => { clearTimeout(stallTimer); clearTimeout(graceTimer); clearInterval(checkInTimer); clearInterval(beatTimer); };
     const send = (text) => {
       if (!piped || resultSeen || settled || !child.stdin?.writable) return;
       child.stdin.write(userMessageLine(text));
@@ -344,6 +363,16 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
       clearTimeout(stallTimer);
       stallTimer = setTimeout(() => {
         if (settled) return;
+        // The gap is read here, before anything is decided: at wake the stall
+        // timer can fire before the heartbeat tick that would have seen it.
+        beat();
+        if (slept > 0) {
+          const minutes = Math.round(slept / 60_000);
+          slept = 0;
+          try { onSleep?.(minutes); } catch { /* a log line, not the session */ }
+          armStall();
+          return;
+        }
         if (tasks.length && onQuiet && !asked) {
           asked = true;
           send(onQuiet(Math.round(stallMs / 60_000), tasks));
@@ -380,6 +409,7 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
     const scan = (chunk) => {
       logChunk(chunk);
       asked = false;
+      slept = 0;
       armStall();
       if (!piped || resultSeen) return;
       const text = partial + decoder.write(chunk);
@@ -410,6 +440,7 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
         }, checkInMs);
       }
     }
+    if (stallMs) beatTimer = setInterval(beat, SLEEP_TICK_MS);
     armStall();
     child.on('error', (error) => {
       failure = error;
@@ -1288,6 +1319,7 @@ export function createRunner({
         say(`${name}: silent ${minutes} min with ${tasks.length} background task(s) running — asked, not killed`);
         return quietPrompt({ minutes, tasks });
       },
+      onSleep: (minutes) => { say(`${name}: machine slept ${minutes} min — stall guard re-armed`); },
     };
   }
 

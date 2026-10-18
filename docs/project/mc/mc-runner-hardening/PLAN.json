@@ -34,7 +34,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A session silent for 5 minutes, then asleep for 26 (the mocked clock jumped by `setTime`), is not killed at wake. `onSleep` gets 26, and the session is killed `stalled` only after 20 more silent minutes. This holds also when the stall timer is the first timer to fire at wake.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run-session.test.js tests/mc/run.test.js` passes, including the two sleep tests and the `machine slept 26 min — stall guard re-armed` assertion named in step 1."
     },
