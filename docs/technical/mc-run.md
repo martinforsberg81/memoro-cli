@@ -1489,6 +1489,19 @@ one of three outcomes:
 (or `--on-project`, `--until`, `--after-deploy`), `ready`, `done`. `ready` is refused while the step's pull request is open — a
 step set ready over an open pull request would be run again on top of it.
 
+**The register's log.** Every register write also appends one JSON line to
+`~/mc/runner/log/register.log` (`register.js`, `logWrite`): the step that
+moved, its status before and after, the pull request it carries, and the
+process that moved it — pid, the command of its parent, its run id, the shape
+of its arguments (flag names, never their values or free text), its directory
+and `MC_STEP`. A seed and a re-plan that carried a slot are lines too. The file
+rotates at 4 MB into one `.1`, and `mc tidy` keeps it: its per-project rule
+matches `<project>-<timestamp>` files only. It exists because on 2026-10-12 a
+hand-typed `mc step ready log-page 1` moved a landed step back to `ready`, the
+runner ran it twice, and the register that could have said who did it was
+tidied away with its project; until then the only record was `mc.log`, which
+keeps no parent process.
+
 ## Sleeping and stopping
 
 - **`~/mc/runner/STOP`** — checked by every lane before it picks and at the top

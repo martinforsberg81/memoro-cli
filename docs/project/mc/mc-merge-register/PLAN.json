@@ -56,7 +56,7 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/register.test.js` passes, including the photo-viewer renumbering test named in step 5."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Every register write appends one JSON line to `~/mc/runner/log/register.log` naming the process (pid, ppid, parent, run id, argv shape, cwd, MC_STEP), and a log that cannot be written never fails the write.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/register.test.js` passes, including the tests named in step 6."
     }

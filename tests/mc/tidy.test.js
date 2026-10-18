@@ -19,7 +19,7 @@ import { parseArgs } from '../../src/mc/commands/work.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import { registerPath } from '../../src/mc/register.js';
 import {
-  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, runTidy, tidyPlan,
+  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, runTidy, sessionLogRe, tidyPlan,
 } from '../../src/mc/tidy.js';
 import * as workTidy from '../../src/mc/work-tidy.js';
 
@@ -110,6 +110,9 @@ describe('--days', () => {
     }
     assert.equal(parseTidyArgs(['--apply', '--json']).apply, true);
     assert.equal(parseTidyArgs(['--apply', '--json']).json, true);
+  });
+  it('register.log is not a session log, so tidy keeps it', () => {
+    assert.equal(sessionLogRe('register').test('register.log'), false);
   });
   it('work-tidy.js is tidy.js', () => {
     assert.equal(workTidy.runTidy, runTidy);
