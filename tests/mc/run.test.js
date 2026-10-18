@@ -1741,6 +1741,64 @@ test('the step after a landing one starts at once, on a branch on top of it', as
   assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 is landing \(#9\) — m-2 starts on top of it/u);
 });
 
+/**
+ * `log-page` step 1, 2026-10-12: it landed as memoro #13590 and stood `ready`
+ * again with `landed` still on it, and the runner started it twice. A landed
+ * step is written `done` before the pick, so the next step is handed out.
+ */
+test('a ready step that has landed is done, and the next step starts', async () => {
+  const f = fixture({ plans: { memoro: { m: twoSteps } } });
+  f.files['/w/runner/projects/m.json'] = JSON.stringify({
+    project: 'm', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/m/PLAN.json',
+    steps: [
+      { key: 'S1', status: 'ready', pr: null, branch: 'm-3', comments: [], attempts: 0, landed: { sha: '583009b1aa', into: 'main', at: '2026-10-12T06:28:21Z' } },
+      { key: 'S2', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+      { key: 'S3', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+    ],
+  });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return okSession()(call); };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions[0].env.MC_STEP, 'm:1');
+  const [first] = registerOf(f, 'm').steps;
+  assert.equal(first.status, 'done');
+  assert.match(first.comments.at(-1), /^Set done by the runner on/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 landed as 583009b into main but stood ready — done, not handed out again/u);
+});
+
+test('a failed step that has landed is done, and the next step starts', async () => {
+  const f = fixture({ plans: { memoro: { m: twoSteps } } });
+  f.files['/w/runner/projects/m.json'] = JSON.stringify({
+    project: 'm', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/m/PLAN.json',
+    steps: [
+      { key: 'S1', status: 'failed', pr: null, branch: 'm-3', reason: 'the session ended success (rc 0) with no pull request', comments: [], attempts: 1, landed: { sha: '583009b1aa', into: 'main', at: '2026-10-12T06:28:21Z' } },
+      { key: 'S2', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+      { key: 'S3', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+    ],
+  });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return okSession()(call); };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions[0].env.MC_STEP, 'm:1');
+  const [first] = registerOf(f, 'm').steps;
+  assert.equal(first.status, 'done');
+  assert.match(first.comments.at(-1), /^Set done by the runner on/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 landed as 583009b into main but stood failed — done, not handed out again/u);
+});
+
+test('a ready step with no landing is still handed out first', async () => {
+  const f = fixture({ plans: { memoro: { m: twoSteps } } });
+  f.files['/w/runner/projects/m.json'] = JSON.stringify({
+    project: 'm', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/m/PLAN.json',
+    steps: [
+      { key: 'S1', status: 'ready', pr: null, branch: null, comments: [], attempts: 0, landed: null },
+      { key: 'S2', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+      { key: 'S3', status: 'ready', pr: null, branch: null, comments: [], attempts: 0 },
+    ],
+  });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return okSession()(call); };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions[0].env.MC_STEP, 'm:0');
+});
+
 test('a step the merger sent back below a landing one is taken first, on its own branch', async () => {
   const f = fixture({
     plans: { memoro: { m: twoSteps } },
