@@ -1,0 +1,182 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "plan-source",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/plan-source/PLAN.json",
+  "archived": "2026-10-19",
+  "goal": [
+    "Every reader that finds or reads a plan by its place in a repository goes through one module, `src/mc/plan-source.js`, which alone knows the layout `docs/project/<programme>/<project>/PLAN.json`. Plans are still read from origin/main and from a step worktree exactly as today. This is the first half of moving plans out of the repositories (ruling 48, `docs/project/mc/mc-project.md`); the second half changes only this module."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`src/mc/plan-source.js` holds the plan layout, and `listPlans`, `listProgrammes`, `findMainPlan`, the runner's `planOf`, `tidy`'s facts and `helperGround` use it. `helperGround` lists PLAN.json plans.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-source.test.js tests/mc/brief-collect.test.js tests/mc/helper-turn.test.js tests/mc/status-project.test.js tests/mc/run.test.js tests/mc/tidy.test.js tests/architecture/plan-paths.test.js` passes."
+    },
+    {
+      "met": true,
+      "criterion": "No file under `src/mc/` outside `plan-source.js` gains a literal `'PLAN.json'` or `'PLAN.md'`: the count per file is a ratchet.",
+      "check": "`node --test tests/architecture/plan-paths.test.js` passes, and `grep -c \"'PLAN\\.json'\\|'PLAN\\.md'\" src/mc/brief-collect.js src/mc/status-project.js src/mc/helper-turn.js src/mc/tidy.js` prints 0 for each."
+    }
+  ],
+  "steps": [
+    {
+      "title": "plan-source.js: the plan layout in one module",
+      "done_when": "`src/mc/plan-source.js` exports `PROJECT_DIR`, `PLAN_FILE`, `LEGACY_PLAN_FILE`, `planPath`, `parsePlanPath`, `lsTreeArgs`, `plansInTree`, `projectNames`, `findPlan` and `planIn`, `tests/mc/plan-source.test.js` covers each, and `mc gate tests/mc/plan-source.test.js` is green.",
+      "status": "done",
+      "pr": 995,
+      "landed": {
+        "sha": "cf9a15e26b3cb167e7dcba9f80657aa65846de0a",
+        "into": "main",
+        "at": "2026-10-19T07:30:46Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "src/mc/plan-source.js is the one module that knows the plan layout: PROJECT_DIR, PLAN_FILE, LEGACY_PLAN_FILE, planPath, parsePlanPath, lsTreeArgs, plansInTree, projectNames, findPlan (the body of findMainPlan, with git passed in) and planIn (the body of planOf, with list/exists/read passed in). No caller changed yet: findMainPlan in status-project.js and planOf in run.js still carry their own copies, for step 2 to point at findPlan and planIn. helperGround and listPlans are step 1's sibling in step 2 of the project, not here.",
+        "Correction to the note above: the sentence about helperGround and listPlans was wrong. Those two readers move in step 2 (listPlans, listProgrammes, helperGround through plan-source.js), not in step 1, and step 1 changes no caller."
+      ],
+      "sessions": 1,
+      "seconds": 185,
+      "cost_usd": 0.018353
+    },
+    {
+      "title": "listPlans, listProgrammes and the helper's ground read through plan-source",
+      "done_when": "`listPlans` and `listProgrammes` in `src/mc/brief-collect.js` use `plan-source.js`, `planRecords` is exported from `brief-collect.js`, `helperGround` lists PLAN.json plans through it, `listPlansOnMain` is gone, the tests in `tests/mc/brief-collect.test.js` and `tests/mc/helper-turn.test.js` pass, and `mc gate` is green.",
+      "status": "done",
+      "pr": 996,
+      "landed": {
+        "sha": "7c8e4800a5a12144912614764d9780dd75434fb0",
+        "into": "main",
+        "at": "2026-10-19T07:35:08Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "listPlans and listProgrammes read through plan-source.js; planRecords is the per-project loop of listPlans, exported from brief-collect.js. helperGround lists PLAN.json plans as well as PLAN.md through plansInTree and planRecords, so the intake turn now sees current plans; listPlansOnMain is gone. Verified: mc gate on the four affected test files (73 tests green) and the full mc gate (3050 tests green). Success criteria are not marked met: they belong to the last step."
+      ],
+      "sessions": 1,
+      "seconds": 172,
+      "cost_usd": 0.021062
+    },
+    {
+      "title": "mc status, the runner's planOf and tidy read through plan-source",
+      "done_when": "`findMainPlan` delegates to `findPlan`, `planOf` in `src/mc/run.js` to `planIn`, `tidy.js` takes its `ls-tree` arguments and plan directory from `plan-source.js`, `tests/mc/status-project.test.js`, `tests/mc/run.test.js` and `tests/mc/tidy.test.js` pass unchanged, and `mc gate` is green.",
+      "status": "done",
+      "pr": 997,
+      "landed": {
+        "sha": "19a700b5998702ae9a3ebad6831a8f83a5888135",
+        "into": "main",
+        "at": "2026-10-19T07:36:44Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "steps[2]: findMainPlan now delegates to findPlan (status-project.js), the runner's planOf delegates to planIn (run.js; readPlanText dropped from run.js's import as it had no other use there), and tidy's origin/main ls-tree and fallback plan directory come from lsTreeArgs and planPath (tidy.js). Behaviour is unchanged: findPlan and planIn carry the same matching, the same first-match order and the same legacy PLAN.md report. No test was changed. Verified: mc gate on tests/mc/status-project.test.js, tests/mc/run.test.js and tests/mc/tidy.test.js is green (293 tests), and the full mc gate is green (3050 tests, 0 failed, 9 skipped). The ratchet check for brief-collect, status-project, helper-turn and tidy belongs to steps[3]; the plan's success criteria stay met: false until then."
+      ],
+      "sessions": 1,
+      "seconds": 161,
+      "cost_usd": 0.012166
+    },
+    {
+      "title": "A ratchet: the plan file's name stays in plan-source",
+      "done_when": "`tests/architecture/plan-paths.test.js` passes on this tree and fails when a new `'PLAN.json'` literal is added to any other file under `src/mc/`, both success criteria are `met: true`, and `mc gate` is green.",
+      "status": "done",
+      "pr": 998,
+      "landed": {
+        "sha": "54c682ced109d5de4f164ddfe2df64db25d30a3f",
+        "into": "main",
+        "at": "2026-10-19T08:08:08Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "plan-source step 4: tests/architecture/plan-paths.test.js is the ratchet on 'PLAN.json' / 'PLAN.md' literals under src/mc/ (outside plan-source.js). ALLOWED at the time: merge-boundary.js 3, plan-merge.js 1, page-render.js 1, run.js 2. Those are the readers that go when plans leave the repositories; a row is lowered or deleted when its file stops naming the plan file. The ratchet only stops a count rising. Bite-checked with a literal in tidy.js. Both success criteria met; criterion 0's check 346/346."
+      ],
+      "sessions": 1,
+      "seconds": 220,
+      "cost_usd": 0.011616
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-19T07:30:38Z",
+      "kind": "step",
+      "seconds": 185,
+      "land_seconds": null,
+      "pr": 995,
+      "turns": 18,
+      "input": 22,
+      "output": 19219,
+      "cache_read": 329341,
+      "cache_write": 43580,
+      "model": null,
+      "note": "success,queued",
+      "session": "5b6509bb-6460-4180-b092-9ec5d6ce18f6",
+      "cost_usd": 0.01835261
+    },
+    {
+      "ts": "2026-10-19T07:33:34Z",
+      "kind": "step",
+      "seconds": 172,
+      "land_seconds": null,
+      "pr": 996,
+      "turns": 22,
+      "input": 20,
+      "output": 17620,
+      "cache_read": 492641,
+      "cache_write": 58591,
+      "model": null,
+      "note": "success,queued",
+      "session": "924e6458-b385-447e-a1b3-175f8a1c1def",
+      "cost_usd": 0.021062285
+    },
+    {
+      "ts": "2026-10-19T07:36:26Z",
+      "kind": "step",
+      "seconds": 161,
+      "land_seconds": null,
+      "pr": 997,
+      "turns": 29,
+      "input": 24,
+      "output": 10726,
+      "cache_read": 342025,
+      "cache_write": 27039,
+      "model": null,
+      "note": "success,queued",
+      "session": "1b8df90c-a4a4-4434-beb1-b57fb2e77403",
+      "cost_usd": 0.012165525000000002
+    },
+    {
+      "ts": "2026-10-19T08:07:23Z",
+      "kind": "step",
+      "seconds": 220,
+      "land_seconds": null,
+      "pr": 998,
+      "turns": 17,
+      "input": 24,
+      "output": 8681,
+      "cache_read": 307889,
+      "cache_write": 33554,
+      "model": null,
+      "note": "success,queued",
+      "session": "a1b33161-2f7f-4f9d-b129-19de6a7cb4d6",
+      "cost_usd": 0.011616040000000001
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 738,
+    "land_seconds": 0,
+    "cost_usd": 0.063196,
+    "cost_unknown": 0,
+    "input": 90,
+    "output": 56246,
+    "cache_read": 1471896,
+    "cache_write": 162764,
+    "first": "2026-10-19T07:30:38Z",
+    "landed": "2026-10-19T08:08:08Z"
+  }
+}
