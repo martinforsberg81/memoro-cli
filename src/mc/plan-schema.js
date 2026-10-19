@@ -75,6 +75,7 @@ export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 const PLAN_KEYS = Object.freeze([
   'schema',
   'version',
+  'repo',
   'goal',
   'contract',
   'out_of_scope',
@@ -335,6 +336,11 @@ export function validatePlan(value) {
 
   if (value.schema !== PLAN_SCHEMA) problems.push(`schema: must be "${PLAN_SCHEMA}"`);
   if (value.version !== PLAN_VERSION) problems.push(`version: must be ${PLAN_VERSION}`);
+  // A plan under `~/mc/programs/` names the repository its steps run in; a plan
+  // in a repository has none, because the repository it is in is the answer.
+  if (value.repo !== undefined && !(typeof value.repo === 'string' && NAME_RE.test(value.repo))) {
+    problems.push('repo: the repository the steps run in, by name — memoro or memoro-cli');
+  }
 
   if (!prose(value.goal)) problems.push('goal: at least one paragraph — what is true when this project is done');
   // Both directions of the boundary. A boundary nobody wrote down is one every

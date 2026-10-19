@@ -3,13 +3,13 @@
  * repository's plans, and the two finders that read a plan by its place.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  LEGACY_PLAN_FILE, PLAN_FILE, PROJECT_DIR, findPlan, lsTreeArgs, parsePlanPath, planIn, planPath, plansInTree, projectNames,
+  LEGACY_PLAN_FILE, PLAN_FILE, PROJECT_DIR, findPlan, lsTreeArgs, parsePlanPath, planIn, planPath, plansInTree, programsPlans, projectNames,
 } from '../../src/mc/plan-source.js';
 
 /** A listing as `git ls-tree` prints it: one path a line, a newline at the end. */
@@ -196,5 +196,45 @@ describe('planIn', () => {
 
   it('is null for a project with no plan in any programme', () => {
     assert.equal(planIn('/w', 'nothing-here', filesOf({ [at('mc', 'x', PLAN_FILE)]: text })), null);
+  });
+});
+
+describe('programsPlans', () => {
+  it('lists the plans under ~/mc/programs/ with their text and the repository each names', () => {
+    scratch((root) => {
+      const home = join(root, 'programs');
+      const put = (rel, body) => {
+        mkdirSync(join(home, dirname(rel)), { recursive: true });
+        writeFileSync(join(home, rel), body);
+      };
+      put('mc/x/PLAN.json', '{"repo":"memoro-cli"}');
+      put('mc/y/PLAN.json', 'not json');
+      put('mc/memoro/README.md', '# a worktree');
+      put('.hidden/z/PLAN.json', '{"repo":"memoro"}');
+      put('mc/notes.md', 'notes');
+      assert.deepEqual(programsPlans({ home }), [
+        { path: join(home, 'mc', 'x', PLAN_FILE), programme: 'mc', project: 'x', file: 'PLAN.json', text: '{"repo":"memoro-cli"}', repo: 'memoro-cli' },
+        { path: join(home, 'mc', 'y', PLAN_FILE), programme: 'mc', project: 'y', file: 'PLAN.json', text: 'not json', repo: null },
+      ]);
+    });
+  });
+
+  it('is empty for a home that does not exist', () => {
+    scratch((root) => {
+      assert.deepEqual(programsPlans({ home: join(root, 'programs') }), []);
+    });
+  });
+
+  it('takes the directory listing and the reads it is handed', () => {
+    const files = { '/p/mc/x/PLAN.json': '{"repo":"memoro"}', '/p/mc/y/PLAN.json': '{"repo":3}' };
+    const dirs = { '/p': ['mc'], '/p/mc': ['x', 'y', 'z'] };
+    assert.deepEqual(programsPlans({
+      home: '/p',
+      list: (path) => dirs[path] ?? [],
+      read: (path) => files[path] ?? null,
+    }), [
+      { path: '/p/mc/x/PLAN.json', programme: 'mc', project: 'x', file: 'PLAN.json', text: '{"repo":"memoro"}', repo: 'memoro' },
+      { path: '/p/mc/y/PLAN.json', programme: 'mc', project: 'y', file: 'PLAN.json', text: '{"repo":3}', repo: null },
+    ]);
   });
 });
