@@ -277,6 +277,39 @@ describe('the ground', () => {
     assert.deepEqual(ground.notes, []);
   });
 
+  it('lists PLAN.json plans too', async () => {
+    const { repos: list } = repos();
+    const path = 'docs/project/mc/mc-x/PLAN.json';
+    const plan = JSON.stringify({
+      schema: 'mc-plan',
+      version: 1,
+      goal: ['g'],
+      contract: ['c'],
+      out_of_scope: ['o'],
+      success_criteria: [{ met: false, criterion: 'x', check: 'y' }],
+      documents: [],
+      steps: [
+        { title: 'S1 — one', status: 'done', done_when: 'one', instruction: [], pr: null, blocked_by: null },
+        { title: 'S2 — two', status: 'ready', done_when: 'two', instruction: ['Do it.'], pr: null, blocked_by: null },
+      ],
+    });
+    const git = async (cwd, args) => {
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'ls-tree') return path;
+      if (args[1] === `origin/main:${path}`) return plan;
+      return null;
+    };
+    const ground = await helperGround({ env: {}, repos: list, git });
+    assert.equal(ground.plans.length, 1);
+    const [record] = ground.plans;
+    assert.equal(record.repo, 'memoro');
+    assert.equal(record.programme, 'mc');
+    assert.equal(record.project, 'mc-x');
+    assert.equal(record.path, path);
+    assert.equal(record.status, 'ready');
+    assert.ok(record.next, 'the next step is named');
+  });
+
   it('notes what it could not read instead of pretending the list is complete', async () => {
     const { repos: list } = repos();
     const ground = await helperGround({ env: {}, repos: list, git: async () => null });
