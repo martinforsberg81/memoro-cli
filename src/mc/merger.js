@@ -44,7 +44,7 @@ import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { GATE_LANES, runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, heldLanding, inLine, markLanding, markMended, markMending, markQueued, markRed, mergesPath, nextBatch, parseQueue,
+  dequeue, enqueue, heldLanding, inLine, markLanding, markMended, markMending, markQueued, markRed, markRequeued, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor, stepsDone,
 } from './merge-queue.js';
 import { MEND_AT_ONCE, mendedReason, mendLine } from './mend.js';
@@ -464,15 +464,17 @@ export async function landJob(batch, {
   const answers = [];
   const answer = async (job, landed, report) => {
     const mending = !landed && mayMend(job, report);
-    answers.push({ job, landed, report, ...(mending ? { mending: true } : {}) });
+    const requeued = !landed && !mending && mayRequeue(job, report);
+    const flags = { ...(mending ? { mending: true } : {}), ...(requeued ? { requeued: true } : {}) };
+    answers.push({ job, landed, report, ...flags });
     await tell(job, landed, report, {
-      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), mending,
+      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), mending, requeued,
     });
     // Outside any lock: `tell` has let go of the register's, and the queue's
     // is the same lock, which a second take by this process waits 5 s for.
     if (onAnswer) {
       try {
-        await onAnswer({ job, landed, report, ...(mending ? { mending: true } : {}) });
+        await onAnswer({ job, landed, report, ...flags });
       } catch (error) {
         say(`${job.repo} #${job.pr}: the queue could not be told (${error?.message || error}) — written after the round`);
       }
@@ -596,12 +598,33 @@ export function landerFor(deps) {
   return (batch, lane, extra = {}) => landJob(batch, { ...deps, lane, ...extra });
 }
 
+/**
+ * The stops that are put back in line instead of answered: a red that passed
+ * alone on both commits (`red-under-load`) and a file killed from outside
+ * the round (`file-killed`), each after the merger has already measured it
+ * twice. Answered red, the step went back to `ready` and the runner started a
+ * session to "fix it on the same pull request" that found nothing to fix —
+ * note-steps #13897 paid two on 2026-10-19. Back in line instead, after
+ * `REQUEUE_DELAY_MS` so the load has a chance to pass, at most
+ * `MAX_REQUEUES` times; then answered red as before.
+ */
+export const REQUEUE_STOPS = Object.freeze(['red-under-load', 'file-killed']);
+export const MAX_REQUEUES = 2;
+export const REQUEUE_DELAY_MS = 15 * 60_000;
+
+/** Whether this answer is a requeue: one of `REQUEUE_STOPS`, with requeues left. */
+export function mayRequeue(job, report) {
+  return Boolean(report) && !report.ok && REQUEUE_STOPS.includes(report.stopped_at) && (job?.requeues || 0) < MAX_REQUEUES;
+}
+
 /** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
-async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, mending = false }) {
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, mending = false, requeued = false }) {
   const label = `${job.repo} #${job.pr}`;
   // Set aside for its one mend: the step stays `landing`, so the runner
   // leaves it alone, and the mend's outcome is what writes the register.
   say(mending ? `${label}: ${report?.reason || report?.stopped_at || 'red'} — mending (one try)`
+    : requeued
+    ? `${label}: ${report?.stopped_at}: ${report?.reason || 'red only under load'} — back in line in ${Math.round(REQUEUE_DELAY_MS / 60_000)} min (requeue ${(job.requeues || 0) + 1} of ${MAX_REQUEUES}), no session started`
     : landed && report?.already_merged
     ? `${label}: already merged on GitHub as ${String(report.merge_commit || '').slice(0, 7)} — answered landed`
     : landed
@@ -614,7 +637,8 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   // Its last red is nobody's to read any more.
   if (landed) removeRedDetail({ root, repo: job.repo, pr: job.pr });
 
-  if (job.step && !mending) {
+  // A requeued step stays `landing`: the runner leaves it alone, and the next round answers it.
+  if (job.step && !mending && !requeued) {
     const stamp = now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
     const io = { read, lock, ...(write ? { write } : {}) };
     try {
@@ -741,7 +765,7 @@ export async function serve({
     try { await sweeping; } finally { sweeping = null; }
   };
   await sweepReds();
-  const batchIn = (entries, lane) => nextBatch(entries, { landed, ordered, lane, laneOf });
+  const batchIn = (entries, lane) => nextBatch(entries, { landed, ordered, lane, laneOf, now: now().getTime() });
   // What the loops share: which of them has nothing, whether the merger is
   // leaving, and a wake-up for a loop waiting on the other.
   const idle = new Set();
@@ -780,13 +804,15 @@ export async function serve({
   // its mend started then (2026-10-10: #13400 closed and #13397 set aside for
   // a mend read `landing` for the 9 minutes of the others' round). Called
   // after `tell`, outside any lock, so it takes the queue's lock itself.
-  const writeAnswer = async ({ job, landed: isLanded, report, mending }) => {
+  const writeAnswer = async ({ job, landed: isLanded, report, mending, requeued }) => {
     const at = now().toISOString();
     const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
     lock(root, () => {
       let entries = parseQueue(read(mergesPath(root)));
       entries = isLanded && report?.ok && report.merged
         ? dequeue(entries, job)
+        : requeued
+        ? markRequeued(entries, job, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
         : mending && mends
         ? markMending(entries, job, { reason, stopped_at: report?.stopped_at || null, started: at })
         : markRed(entries, job, { reason, answered: at });
@@ -883,10 +909,12 @@ export async function serve({
       if (left.length) {
         lock(root, () => {
           let entries = parseQueue(read(mergesPath(root)));
-          for (const { job: one, report, mending } of left) {
+          for (const { job: one, report, mending, requeued } of left) {
             const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
             entries = report?.ok && report.merged
               ? dequeue(entries, one)
+              : requeued
+              ? markRequeued(entries, one, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
               : mending && mends
               ? markMending(entries, one, { reason, stopped_at: report?.stopped_at || null, started: answered })
               : markRed(entries, one, { reason, answered });

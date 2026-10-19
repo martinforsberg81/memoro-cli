@@ -394,6 +394,28 @@ printing JSON with a `files` array, run in the candidate worktree. With one, the
 round measures the test files the change reaches; without one, the whole suite,
 exactly as it always did.
 
+**A selected run takes the free cores.** `realTests` passes
+`--test-concurrency=<testLanes()>`: `cores - 1 - round(loadavg()[0])`, between 2
+and `cores - 1`, or `MC_TEST_LANES` — unless the repository's own flags already
+name a concurrency. On 2026-10-19 rounds ran 7 lanes at load averages of 40–97
+on eight cores, and the whole-tree readers went red only under load. A session's
+`mc gate` also waits while a merge round holds the heavy lane (`MERGE_MODE` in
+`HEAVY_HOLD_MODES`, `await-deploy.js`), as it waits for a deploy: a verdict is
+expensive to repeat, a session's gate is cheap to delay. A gate already running
+is not paused.
+
+**A suite runs in its own environment, and for at most an hour.** The round
+hands a suite the caller's environment without `NODE_TEST_CONTEXT`,
+`MC_WORK_ROOT` and `MC_HOME` (`suiteEnv` in `src/mc/repo-gate.js`): the last two
+are the runner's real `~/mc`, and `tests/_isolate-home.mjs` replaces them only
+when they are unset, so memoro-cli's runner tests once read the real programmes
+and one of them waited for a STOP it never wrote. A suite, a selected run, or a
+file measured alone that is still running after `MC_GATE_SUITE_MINUTES` (default
+60) is killed with its process group, and the round stops with `ran past N min
+and was stopped — a test that never ends` instead of holding the lane. Before
+2026-10-19 nothing bounded it, and memoro-cli #1009 held the light lane for
+hours with no line in the log.
+
 **One tree, and the verdict is its own red.** Ruled by Martin on 2026-08-31: a
 round evaluates the diff, and whether main was already red is not the round's
 question. Until then the round built a second worktree at the base, ran the same
@@ -720,17 +742,34 @@ files alone on the candidate head (`redAt` in
 [`src/mc/selector-miss.js`](../../src/mc/selector-miss.js), with the round's
 own runner and flags). Red there, and the round is `red` as before, with the
 line `red alone on the candidate too — this change broke them`. Green there
-too, and the round stops `stopped_at: 'red-under-load'`, `<files> red in the
-round, green alone on the base and on the candidate — measured again`, with
-`report.under_load_files` naming them. A red file whose own entries are
+too, and the files count green (Martin, 2026-10-19): with at most three of them
+(`GREEN_ALONE_MAX`) the round goes on as for a `retry_once` flip, saying
+`counted green — <files> passed alone on the base and the candidate`, with
+`report.green_alone` (`{ files, names }`, also on the round's line) and
+`report.under_load_files` naming them; a genuinely order-dependent test is the
+nightly full run's to catch. With more than three, the round stops
+`stopped_at: 'red-under-load'`, `<files> red in the round, green alone on the
+base and on the candidate — measured again`. A red file whose own entries are
 cancelled tests and none failed (`cancelledFiles` in `tap-red.js`: a `before`
 hook that ran out of time, as memoro's `build-bundle.test.js` on #13470) is
 taken out of the red without any re-run, as if it had passed alone; with
 nothing else red the round is `red-under-load`. A file with a failed test stays
 red whatever else it has. The merger runs a `red-under-load` round once more,
-saying `<files> red only under load — measuring again`; a second one is
-answered red with its reason and `red under load in two rounds running`. It is
-never counted green, and it is not a mend stop.
+saying `<files> red only under load — measuring again`. A second one — and a
+second `file-killed` — is put back in line rather than answered
+(`REQUEUE_STOPS`, `mayRequeue` in `merger.js`): the entry is `queued` again with
+its place kept, `requeues` one higher and `not_before` fifteen minutes on
+(`markRequeued`, `merge-queue.js`), the step stays `landing`, no attempt is
+counted and no session is started — the merger says `back in line in 15 min
+(requeue n of 2), no session started`. After two requeues it is answered red
+with its reason and `red under load in two rounds running`, as before. Until
+2026-10-19 the second one was answered red at once, the step went back to
+`ready`, and the runner started a session to fix the pull request that found
+nothing to fix (note-steps #13897 paid two). It is never counted green, and it
+is not a mend stop. Its failures are kept under
+`runner/merge-red/<repo>-<pr>-<stop>-<time>.txt` (`loadRedPath`), which a
+landing does not remove, and the round's line in `gate-rounds.jsonl` carries
+`under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
 
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,

@@ -67,6 +67,10 @@ function normalise(entry) {
     since: entry.since ?? null,
     state: JOB_STATES.includes(entry.state) ? entry.state : 'queued',
     started: entry.started ?? null,
+    // A red only under load is put back in line rather than answered
+    // (`markRequeued`): how often, and not before when it is taken again.
+    requeues: Number.isInteger(entry.requeues) && entry.requeues > 0 ? entry.requeues : 0,
+    not_before: entry.state === 'queued' && typeof entry.not_before === 'string' ? entry.not_before : null,
     // A red answer's words and when it came (`markRed`).
     reason: entry.state === 'red' && typeof entry.reason === 'string' ? entry.reason : null,
     answered: entry.state === 'red' ? entry.answered ?? null : null,
@@ -157,6 +161,9 @@ export function markMended(entries, job, { outcome = 'pushed', at = null } = {})
 /** The jobs the merger may take: `queued`, or `landing` under a merger that died. */
 const takeable = (entry) => entry.state === 'queued' || entry.state === 'landing';
 
+/** A queued job put back with a `not_before` still ahead of `now` (epoch ms) waits; null `now` waits for nothing. */
+const due = (now) => (entry) => now == null || !entry.not_before || !(Date.parse(entry.not_before) > now);
+
 /** The entries the merger still has to land: everything not answered red. */
 export function inLine(entries) {
   return entries.filter((entry) => entry.state !== 'red');
@@ -187,8 +194,8 @@ export function queueOrder(entries) {
  * `done` (`ordered`, merger.js `stepsBeforeDone`), parent or none — and that
  * holds for a `landing` one too. Null when there is nothing the merger may take.
  */
-export function nextJob(entries, { landed = () => true, ordered = () => true } = {}) {
-  const line = queueOrder(inLine(entries).filter(takeable));
+export function nextJob(entries, { landed = () => true, ordered = () => true, now = null } = {}) {
+  const line = queueOrder(inLine(entries).filter(takeable).filter(due(now)));
   const mayGo = mayGoIn(entries, landed, ordered);
   return line.find((entry) => entry.state === 'landing' && ordered(entry))
     || line.find(mayGo)
@@ -243,15 +250,15 @@ export const MERGE_BATCH_MAX = 4;
  * A job's parent is in its own repository, so in its own lane.
  */
 export function nextBatch(entries, {
-  landed = () => true, ordered = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = () => 'heavy',
+  landed = () => true, ordered = () => true, max = MERGE_BATCH_MAX, lane = null, laneOf = () => 'heavy', now = null,
 } = {}) {
   const mine = lane ? entries.filter((entry) => (laneOf(entry) || 'heavy') === lane) : entries;
-  const line = queueOrder(inLine(mine).filter(takeable));
+  const line = queueOrder(inLine(mine).filter(takeable).filter(due(now)));
   // A resumed member whose earlier step is no longer `done` is not landed:
   // the merger puts it back in line (`heldLanding`).
   const landing = line.filter((entry) => entry.state === 'landing' && ordered(entry));
   if (landing.length) return landing.filter((entry) => entry.repo === landing[0].repo);
-  const first = nextJob(mine, { landed, ordered });
+  const first = nextJob(mine, { landed, ordered, now });
   if (!first) return [];
   const mayGo = mayGoIn(mine, landed, ordered);
   const batch = [first];
@@ -289,6 +296,18 @@ export function heldLanding(entries, { ordered = () => true } = {}) {
 /** The entry back in line, as `queued`, its place (`since`) kept. */
 export function markQueued(entries, job) {
   return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'queued', started: null } : entry));
+}
+
+/**
+ * The entry back in line after a round that was red only under load: `queued`,
+ * its place kept, one more `requeues`, and not taken before `notBefore` (an ISO
+ * instant). No session is started for it and no attempt counted: there is
+ * nothing in the change to fix (gate-round-under-load, 2026-10-19).
+ */
+export function markRequeued(entries, job, { notBefore = null } = {}) {
+  return entries.map((entry) => (samePr(entry, job)
+    ? { ...entry, state: 'queued', started: null, requeues: (entry.requeues || 0) + 1, not_before: notBefore }
+    : entry));
 }
 
 /** The entry with `state` and `started` moved. */

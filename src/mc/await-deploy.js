@@ -15,9 +15,11 @@
  *
  * An iOS build holds the lane the same way (`buildIos` in `ios-build.js`,
  * `mode: 'ios-build'`): `xcodebuild` and a cold `npm ci` pin the cores as the
- * bundle does, so a gate waits for either. Only those holds are waited for. A
- * merge round in the heavy lane is not: sessions have always gated beside the
- * merger.
+ * bundle does, so a gate waits for either. And since 2026-10-19 a merge round
+ * (`mode: 'merge'`, merger.js): a verdict shared eight cores with every step
+ * session's gate, went red only under load and cost the change two rounds and
+ * a session (proposal gate-round-under-load). A session's gate is cheap to
+ * delay; a verdict is not. A gate already running is not paused.
  */
 import { runningRound } from './gate-lock.js';
 import { mcHome } from './paths.js';
@@ -28,12 +30,15 @@ export const DEPLOY_MODE = 'deploy';
 /** The `mode` an iOS builder writes into the heavy gate lock. */
 export const IOS_BUILD_MODE = 'ios-build';
 
-/** The holds of the heavy lane a gate waits for: a deploy's and an iOS build's. */
-export const HEAVY_HOLD_MODES = [DEPLOY_MODE, IOS_BUILD_MODE];
+/** The `mode` the merger writes into the gate lock for a merge round. */
+export const MERGE_MODE = 'merge';
+
+/** The holds of the heavy lane a gate waits for: a deploy's, an iOS build's and a merge round's. */
+export const HEAVY_HOLD_MODES = [DEPLOY_MODE, IOS_BUILD_MODE, MERGE_MODE];
 
 /** What holds the lane, in the words a waiting line uses. */
 export function holdName(round) {
-  return round?.mode === IOS_BUILD_MODE ? 'iOS build' : 'deploy';
+  return round?.mode === IOS_BUILD_MODE ? 'iOS build' : round?.mode === MERGE_MODE ? 'merge round' : 'deploy';
 }
 
 /** How often the waiting gate looks again. */

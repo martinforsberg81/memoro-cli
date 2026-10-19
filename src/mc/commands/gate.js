@@ -55,7 +55,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { deployHolding, IOS_BUILD_MODE } from '../await-deploy.js';
+import { deployHolding, IOS_BUILD_MODE, MERGE_MODE } from '../await-deploy.js';
 import { ensure, needsDocker } from '../docker.js';
 import { declaredTestFlags, planGate, recordLast, snapshotTree } from '../gate-fast.js';
 import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
@@ -63,7 +63,7 @@ import { GATE_MEASUREMENT_VERSION, recordGreen, selectionHash } from '../gate-gr
 import { tryGit } from '../git.js';
 import { mcHome } from '../paths.js';
 import { declarationFor } from '../repo-gate-table.js';
-import { selectionStateDir } from '../repo-gate.js';
+import { selectionStateDir, testLanes } from '../repo-gate.js';
 import { currentHolder } from '../work-identity.js';
 import { scanArgs } from './flags.js';
 
@@ -156,7 +156,8 @@ export async function run(argv, deps = {}) {
   // A dirty tree or another base leaves `green` null: the selector is not run
   // there, so such a whole gate does not ensure the runtime.
   const wantsDocker = whole ? Boolean(recordable?.green?.docker) : Boolean(fast.incremental?.docker);
-  const childEnv = { ...(recordable?.env || env), CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', ...(whole ? { MC_GATE_FAIL_FAST: '1' } : {}) };
+  // The free cores, not the core count, as a merge round's run has them (`testLanes`).
+  const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...(recordable?.env || env), CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', ...(whole ? { MC_GATE_FAIL_FAST: '1' } : {}) };
   if (wantsDocker) {
     childEnv.MC_DOCKER_RUN = `gate ${basename(root)}`;
     childEnv.MC_DOCKER_REPO = recordable?.green?.repo || basename(root);
@@ -164,7 +165,7 @@ export async function run(argv, deps = {}) {
 
   const deploying = io.deployHolding({ env });
   if (deploying) {
-    const what = deploying.mode === IOS_BUILD_MODE ? 'an iOS build' : 'a deploy';
+    const what = deploying.mode === IOS_BUILD_MODE ? 'an iOS build' : deploying.mode === MERGE_MODE ? 'a merge round' : 'a deploy';
     stderr.write(`mc: ${what} holds the heavy lane (pid ${deploying.pid}) — this gate starts its tests when it is done\n`);
   }
 

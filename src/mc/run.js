@@ -118,9 +118,9 @@ import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-lan
 import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collect.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
-import { sweepDocker } from './docker.js';
+import { sweepDocker, tidyDocker } from './docker.js';
 import { deliverableStep, unauthorisedChanges } from './plan-schema.js';
-import { planIn } from './plan-source.js';
+import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
 import { releaseDue } from './step-release.js';
@@ -136,7 +136,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import {
-  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
+  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planHome, programsHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
 import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
@@ -245,6 +245,13 @@ export const SLEEP_GAP_MS = 3 * 60 * 1000;
 function sameCommit(a, b) {
   const [x, y] = [String(a).trim(), String(b).trim()];
   return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
+}
+
+/** The tail of the tidy line for `tidyDocker`'s answer: empty when Docker was down or not asked. */
+export function dockerNote(docker) {
+  if (!docker?.pruned?.length) return '';
+  const parts = docker.pruned.map((item) => (item.ok ? `${item.what} ${item.reclaimed || '0B'}` : `${item.what} failed — ${item.detail}`));
+  return ` · docker: ${parts.join(', ')}`;
 }
 
 /* ------------------------------------------------------------ real deps */
@@ -576,10 +583,11 @@ export function realDeps(env = process.env) {
     // `mc deps <repo>`'s reading, saved where `mc deps` and the page read it.
     // A dependency so a test drives the chore without npm or a remote.
     readDeps: (options) => readDeps({ env, refresh: true, ...options }),
-    // `mc tidy --apply` (tidy.js): its list written, then removed from. A
-    // dependency so a fixture without it removes nothing on the machine
-    // running the suite.
-    tidy: () => runTidy({ apply: true, env }),
+    // `mc tidy --apply` (tidy.js): its list written, then removed from, and
+    // Docker's images and build cache unused for three days on a runtime that
+    // is already up (`tidyDocker`). A dependency so a fixture without it
+    // removes nothing on the machine running the suite.
+    tidy: async () => ({ ...runTidy({ apply: true, env }), docker: await tidyDocker({ apply: true, env }) }),
     // runner.log to runner.log.1 past the limit (logger.js).
     rotate: (path, maxBytes) => rotateIfLarge(path, maxBytes),
     // The one door work lands through: the merger's queue (ruling 30), the
@@ -636,6 +644,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // stepped and closed where it stands (`stepAreaName`, paths.js).
   const areaName = (name) => stepAreaName(name, { root, exists: deps.exists, list: deps.list });
   const areaPath = (name) => join(root, areaName(name));
+  // The plans under `~/mc/programs/`, read through the runner's own env and
+  // file reads: the default `programsPlans()` reads the process's env, and a
+  // suite run by the merger inherits MC_WORK_ROOT from the runner, so the
+  // runner's tests queued the real programmes' projects beside their fixture's
+  // and one hung for hours waiting for a STOP it never wrote (2026-10-19).
+  const programs = () => programsPlans({ home: programsHome(deps.env), list: deps.list, read: deps.read });
   const paths = {
     queue: join(root, 'queue.md'),
     log: join(root, 'runner', 'log'),
@@ -885,7 +899,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function sweepLanding(plans) {
     const pending = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
     const mayGo = pending.length && nextJob(pending, {
-      landed: parentLanded(root, { read: deps.read }), ordered: stepsBeforeDone(root, { read: deps.read }),
+      landed: parentLanded(root, { read: deps.read }), ordered: stepsBeforeDone(root, { read: deps.read }), now: deps.now().getTime(),
     });
     if (mayGo && deps.startMerger && !readMerger({ root, alive })) {
       const started = deps.startMerger({ root });
@@ -1048,7 +1062,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * 2026-09-08.
    */
   function planOf(worktree, name) {
-    return planIn(worktree, name, { list: deps.list, exists: deps.exists, read: deps.read });
+    return planIn(worktree, name, { list: deps.list, exists: deps.exists, read: deps.read, programs });
   }
 
   /** memoro | memoro-cli | null — an existing workarea first, then the main trees. */
@@ -1966,8 +1980,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (forDisk) { lastDiskTidyAt = now; diskSkippedAt = null; }
     const took = () => Math.round((deps.now().getTime() - now) / 1000);
     let outcome = null;
+    let docker = null;
     let failure = null;
-    try { outcome = (await deps.tidy())?.outcome || null; } catch (error) { failure = error?.message || String(error); }
+    try {
+      const ran = await deps.tidy();
+      outcome = ran?.outcome || null;
+      docker = ran?.docker || null;
+    } catch (error) { failure = error?.message || String(error); }
     const freed = outcome?.freed || 0;
     const items = outcome?.removed || 0;
     const kept = outcome?.kept || 0;
@@ -1979,7 +1998,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const why = forDisk ? 'a lane skipped for disk' : 'daily';
     say(failure
       ? `tidy (${why}): failed — ${failure}`
-      : `tidy (${why}): freed ${(freed / 1e9).toFixed(2)} GB in ${items} items, kept ${kept} on re-check`);
+      : `tidy (${why}): freed ${(freed / 1e9).toFixed(2)} GB in ${items} items, kept ${kept} on re-check${dockerNote(docker)}`);
     return failure ? 'failed' : 'ran';
   }
 
@@ -2939,7 +2958,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // because a `running` step with no process is one nothing will finish;
       // a `ready` or `failed` step the register says has landed is done here,
       // so it is never handed out again.
-      plans.push(...sweepLanded(sweepLanding(sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register)))));
+      plans.push(...sweepLanded(sweepLanding(sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut), programs }), register)))));
       archived.push(...listArchived(repo, { git: gitOut }));
       // A repository whose last ask failed is not asked again until its
       // backoff has run out (github-backoff.js): every ask at a locked keychain

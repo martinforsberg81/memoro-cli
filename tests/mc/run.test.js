@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, SCRATCH_KEEP_MS, TIDY_DISK_MIN_INTERVAL_MS, createRunner, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, SCRATCH_KEEP_MS, TIDY_DISK_MIN_INTERVAL_MS, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { checkpoint } from '../../src/mc/checkpoint.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
@@ -81,6 +81,11 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     // running the suite: `runLoop` reads it at start, and without this a test
     // would answer to whatever `mc run lanes` was last set to on this laptop.
     laneCount: () => ({ per_repo: 1, total: null }),
+    // Stay-awake from the fixture too: the real one spawns `caffeinate -w` and
+    // runs `pmset`, and every unattended runLoop here left a caffeinate behind
+    // for as long as the test file lived (17 in one hung run, 2026-10-19).
+    keepAwake: () => ({ ok: true, pid: 0, flags: [], note: 'fixture' }),
+    onACPower: () => true,
     tmuxHas: (name) => live.includes(name.replace(/^mc-/u, '')),
     // The liveness test the loop's own refusal uses. A table, not `ps`: a
     // fixture pid that happened to be a real process on the machine running
@@ -2891,6 +2896,18 @@ test('tidy runs once a day by its own row, and notes what it freed', async () =>
   assert.match(f.files['/w/runner/log/runner.log'], /tidy \(daily\): freed 2\.50 GB in 40 items, kept 1 on re-check/u);
 });
 
+test('the tidy line says what Docker reclaimed, and nothing when Docker was down', async () => {
+  const f = fixture({ now: '2026-08-29T10:00:00Z', runs: DEPS_HEADER + tidyRowAt('2026-08-28T09:00:00Z') });
+  f.deps.tidy = async () => ({
+    outcome: { freed: 0, removed: 0, kept: 0 },
+    docker: { up: true, pruned: [{ what: 'images', ok: true, reclaimed: '12.4GB' }, { what: 'build cache', ok: false, detail: 'busy' }] },
+  });
+  await createRunner({ deps: f.deps }).chores();
+  assert.match(f.files['/w/runner/log/runner.log'], /kept 0 on re-check · docker: images 12\.4GB, build cache failed — busy/u);
+  assert.equal(dockerNote({ up: false, pruned: [] }), '');
+  assert.equal(dockerNote(null), '');
+});
+
 test('a lane skipped for disk runs tidy in the next chore pass, at most once an hour', async () => {
   let clock = Date.parse('2026-08-29T10:00:00Z');
   const f = fixture({ plans: { memoro: { alpha: ready } }, runs: DEPS_HEADER + tidyRowAt('2026-08-29T09:00:00Z') });
@@ -3777,7 +3794,7 @@ test('a pull request from the branch the worktree stands on is the project\'s, w
  * took nothing at all while the third waited behind the first lane. Neither
  * lane waits for the other, and the claim is what keeps them off one project.
  */
-test('runLoop: two lanes on one repository take the next two runnable names, never the same one', async () => {
+test('runLoop: two lanes on one repository take the next two runnable names, never the same one', async (t) => {
   const f = fixture({
     plans: { memoro: { a: ready, b: plan({ status: 'blocked' }), c: ready, d: ready } },
     session: okSession(),
@@ -3789,6 +3806,9 @@ test('runLoop: two lanes on one repository take the next two runnable names, nev
   let currents = [];
   let release = null;
   const held = new Promise((resolve) => { release = resolve; });
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { f.files['/w/runner/STOP'] = ''; release(); });
   f.deps.session = async (call) => {
     const name = areaOf(call.cwd);
     starts.push(name);
@@ -3844,10 +3864,13 @@ function liveLanes(plans, per) {
   return { f, starts, release };
 }
 
-test('runLoop: a per_repo raised while the runner runs starts the new lane', async () => {
+test('runLoop: a per_repo raised while the runner runs starts the new lane', async (t) => {
   const turns = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((resolve) => { setImmediate(resolve); }); };
   let per = 1;
   const { f, starts, release } = liveLanes({ a: ready, b: ready }, () => per);
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { f.files['/w/runner/STOP'] = ''; release(); });
   const run = runLoop({ deps: f.deps });
   await turns();
   assert.deepEqual(starts, ['a'], 'one lane, one step');
@@ -3864,10 +3887,13 @@ test('runLoop: a per_repo raised while the runner runs starts the new lane', asy
   assert.equal(await run, 0);
 });
 
-test('runLoop: a per_repo lowered while the runner runs ends the lane above it after its step', async () => {
+test('runLoop: a per_repo lowered while the runner runs ends the lane above it after its step', async (t) => {
   const turns = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((resolve) => { setImmediate(resolve); }); };
   let per = 2;
   const { f, starts, release } = liveLanes({ a: ready, b: ready, c: ready }, () => per);
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { f.files['/w/runner/STOP'] = ''; release(); });
   const run = runLoop({ deps: f.deps });
   await turns();
   assert.deepEqual(starts, ['a', 'b'], 'two lanes, two steps');
@@ -3927,8 +3953,11 @@ function laneRace({ total, openPrs = {} }) {
  * the picture that started the project — six rows in the RUNNER block from a
  * setting that says three.
  */
-test('runLoop: no total set — every lane starts, exactly as before', async () => {
+test('runLoop: no total set — every lane starts, exactly as before', async (t) => {
   const r = laneRace({ total: null });
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { r.stop(); r.release(); });
   const run = runLoop({ deps: r.f.deps });
   await turns();
   assert.equal(r.state.peak, 4, `four steps in flight at once: ${r.state.starts.join(', ')}`);
@@ -3946,8 +3975,11 @@ test('runLoop: no total set — every lane starts, exactly as before', async () 
  * sessions block: every lane that could start piles up against the cap at
  * once rather than passing through it one at a time.
  */
-test('runLoop: a total of 2 — four lanes, a blocking step, and two sessions', async () => {
+test('runLoop: a total of 2 — four lanes, a blocking step, and two sessions', async (t) => {
   const r = laneRace({ total: 2 });
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { r.stop(); r.release(); });
   const run = runLoop({ deps: r.f.deps });
   await turns();
   assert.equal(r.state.peak, 2, `only the total ever ran at once: ${r.state.starts.join(', ')}`);

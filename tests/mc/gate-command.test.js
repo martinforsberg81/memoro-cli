@@ -91,6 +91,19 @@ describe('mc gate, started', () => {
     assert.deepEqual(out.removed, []);
   });
 
+  it('the gate\'s child is told the lanes to use, unless its environment already names them', async () => {
+    const { out, deps } = harness({ finishAfter: 1, output: 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n' });
+    assert.equal(await run([], deps), 0);
+    assert.match(out.spawned[0].opts.env.MC_TEST_LANES, /^[1-9]\d*$/u);
+  });
+
+  it('a merge round holding the heavy lane is waited for like a deploy, and named', async () => {
+    const { out, deps } = harness({ deploy: { pid: 778, mode: 'merge' }, finishAfter: 1, output: 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n' });
+    assert.equal(await run([], deps), 0);
+    assert.match(out.spawned[0].args[1], /await-deploy\.js/u);
+    assert.equal(out.stderr, 'mc: a merge round holds the heavy lane (pid 778) — this gate starts its tests when it is done\n');
+  });
+
   it('a deploy holding the heavy lane is waited for inside the child, and said once', async () => {
     const { out, deps } = harness({ deploy: { pid: 777, mode: 'deploy' }, finishAfter: 1, output: 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n' });
     assert.equal(await run([], deps), 0);

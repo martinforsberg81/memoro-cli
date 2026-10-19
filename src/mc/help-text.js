@@ -117,7 +117,12 @@ IN FULL
   mc tidy [--apply] [--json] [--days <n>]
                                     What mc may remove, per root, written to a
                                     list under ~/mc/runner/tidy/ first; --apply
-                                    removes from that list after asking again
+                                    removes from that list after asking again.
+                                    Docker images and build cache unused for
+                                    3 days go too, if the runtime is up
+  mc tidy --docker [--apply] [--json]
+                                    Docker only; with --apply it starts the
+                                    runtime when it is down
   mc repo status [repo]            One repository seen whole: main, what the
                                     last full run found on it and since when,
                                     the open pull requests and how far behind

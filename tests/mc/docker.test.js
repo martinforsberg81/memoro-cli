@@ -12,8 +12,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  currentContext, ensure, inventory, leasesDir, liveLeases, needsDocker, readState, release, releasePid, runtimeOf, sweepDocker, takeLease,
-  writeState,
+  currentContext, ensure, inventory, leasesDir, liveLeases, needsDocker, PRUNE_TIMEOUT_MS, readState, release, releasePid, runtimeOf,
+  sweepDocker, takeLease, tidyDocker, TIDY_KEEP_FILTER, writeState,
 } from '../../src/mc/docker.js';
 import { fakeIo, INFO } from './_helpers/docker-io.js';
 
@@ -303,5 +303,84 @@ describe('docker.js', () => {
     assert.equal(result.stopped, false);
     assert.equal(result.line, 'docker: orbctl stop failed — vm busy');
     assert.equal(readState({ root }).started_by_mc, true);
+  }));
+});
+
+describe('tidyDocker — mc tidy\'s images and build cache', () => {
+  const IMAGES = `docker image prune --all --force --filter ${TIDY_KEEP_FILTER}`;
+  const BUILDER = `docker builder prune --all --force --filter ${TIDY_KEEP_FILTER}`;
+  const DF = 'docker system df --format {{json .}}';
+  const running = { 'orbctl status': { status: 0, stdout: 'Running\n' } };
+
+  it('a dry run prunes nothing and reports what df calls reclaimable', () => withRoot(async (root) => {
+    const { io, calls } = fakeIo({
+      answers: {
+        ...running,
+        [DF]: { status: 0, stdout: '{"Type":"Images","TotalCount":"21","Reclaimable":"15.2GB (89%)"}\n{"Type":"Build Cache","Reclaimable":"3.1GB"}\n' },
+      },
+    });
+    const answer = await tidyDocker({ root, io });
+    assert.deepEqual(answer.reclaimable, { images: '15.2GB (89%)', build_cache: '3.1GB' });
+    assert.deepEqual(answer.pruned, []);
+    assert.ok(calls.every((call) => !call.argv.includes('prune')));
+  }));
+
+  it('an apply prunes images, then build cache, unused for three days, and says what each reclaimed', () => withRoot(async (root) => {
+    const { io, calls, logged } = fakeIo({
+      answers: {
+        ...running,
+        [IMAGES]: { status: 0, stdout: 'Deleted Images:\nuntagged: x\n\nTotal reclaimed space: 12.4GB\n' },
+        [BUILDER]: { status: 0, stdout: 'ID\tRECLAIMABLE\nabc\ttrue\nTotal:\t2.1GB\n' },
+      },
+    });
+    const answer = await tidyDocker({ apply: true, root, io });
+    assert.equal(TIDY_KEEP_FILTER, 'until=72h');
+    assert.deepEqual(answer.pruned, [
+      { what: 'images', ok: true, reclaimed: '12.4GB', detail: null },
+      { what: 'build cache', ok: true, reclaimed: '2.1GB', detail: null },
+    ]);
+    assert.deepEqual(calls.slice(1).map((call) => call.argv.join(' ')), [IMAGES, BUILDER]);
+    assert.ok(calls.slice(1).every((call) => call.timeoutMs === PRUNE_TIMEOUT_MS));
+    assert.equal(logged.at(-1).event, 'docker-tidy');
+  }));
+
+  it('a prune that fails is a line, and the other still runs', () => withRoot(async (root) => {
+    const { io } = fakeIo({
+      answers: { ...running, [IMAGES]: { status: 1, stderr: 'a prune operation is already running\n' }, [BUILDER]: { status: 0, stdout: 'Total:\t0B\n' } },
+    });
+    const answer = await tidyDocker({ apply: true, root, io });
+    assert.deepEqual(answer.pruned.map((item) => [item.what, item.ok, item.detail]), [
+      ['images', false, 'a prune operation is already running'],
+      ['build cache', true, null],
+    ]);
+  }));
+
+  it('a stopped OrbStack is asked only orbctl status — apply or not, unless start is given', () => withRoot(async (root) => {
+    for (const apply of [false, true]) {
+      const { io, calls } = fakeIo({ answers: { 'orbctl status': { status: 0, stdout: 'Stopped\n' } } });
+      const answer = await tidyDocker({ apply, root, io });
+      assert.equal(answer.up, false);
+      assert.match(answer.reason, /orbstack is not running/u);
+      assert.deepEqual(calls.map((call) => call.argv.join(' ')), ['orbctl status']);
+    }
+  }));
+
+  it('with start it is started, pruned, and its lease released', () => withRoot(async (root) => {
+    const { io, calls } = fakeIo({
+      live: [5000],
+      answers: {
+        'orbctl status': { status: 0, stdout: 'Stopped\n' },
+        'orbctl start': { status: 0 },
+        [INFO]: { status: 0, stdout: '28.0.1\n' },
+        [IMAGES]: { status: 0, stdout: 'Total reclaimed space: 1GB\n' },
+        [BUILDER]: { status: 0, stdout: 'Total:\t0B\n' },
+      },
+    });
+    const answer = await tidyDocker({ apply: true, start: { pid: 5000, run: 'mc tidy --docker' }, root, io });
+    assert.equal(answer.up, true);
+    assert.equal(answer.pruned.length, 2);
+    assert.ok(calls.some((call) => call.argv.join(' ') === 'orbctl start'));
+    assert.deepEqual(leaseFiles(root), [], 'the lease is released');
+    assert.equal(readState({ root }).started_by_mc, true, 'so the idle stop stops it again');
   }));
 });

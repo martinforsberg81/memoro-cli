@@ -28,6 +28,22 @@ export function mergeRedPath(root, repo, pr) {
   return join(root, 'runner', 'merge-red', `${repo}-${pr}.txt`);
 }
 
+/**
+ * The stops whose failures are kept besides `red`: a red only under load and a
+ * file killed from outside the round. Kept under a name of their own, with the
+ * round's time, because the pull request is put back in line and may land —
+ * and a landing removes `mergeRedPath` — while whether it failed for a
+ * different reason under load than alone is what a later reader needs
+ * (gate-round-under-load, 2026-10-19).
+ */
+export const KEPT_LOAD_STOPS = Object.freeze(['red-under-load', 'file-killed']);
+
+/** Where a load stop's failures are kept: `<repo>-<pr>-<stop>-<time>.txt`, never removed by a landing. */
+export function loadRedPath(root, repo, pr, stop, now = new Date()) {
+  const stamp = now.toISOString().replace(/[:.]/gu, '-');
+  return join(root, 'runner', 'merge-red', `${repo}-${pr}-${stop}-${stamp}.txt`);
+}
+
 /** The gate's verdict a report carries: a merge round's `gate`, or the report itself. */
 const gateOf = (report) => report?.gate || report || {};
 
@@ -113,9 +129,11 @@ export function redDetailText(report, { repo, pr, now = new Date() } = {}) {
  * never fail it.
  */
 export function writeRedDetail({ root, repo, pr, report, now = new Date() }) {
-  if (!report || report.ok || report.stopped_at !== 'red') return null;
+  if (!report || report.ok) return null;
+  const load = KEPT_LOAD_STOPS.includes(report.stopped_at);
+  if (report.stopped_at !== 'red' && !load) return null;
   try {
-    const path = mergeRedPath(root, repo, pr);
+    const path = load ? loadRedPath(root, repo, pr, report.stopped_at, now) : mergeRedPath(root, repo, pr);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, redDetailText(report, { repo, pr, now }));
     return path;

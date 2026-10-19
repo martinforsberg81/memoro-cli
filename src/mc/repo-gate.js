@@ -50,6 +50,7 @@
  * and so is any red the probe does not call main's.
  */
 import { spawn } from 'node:child_process';
+import { availableParallelism, loadavg } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
@@ -769,6 +770,18 @@ export async function runGate({
             if (ran.ok && !ran.red.length) {
               say('green alone on the candidate too — red only under load');
               report.under_load_files = [...result.red_files, ...cancelled];
+              // Green alone on both commits is the verdict the round exists
+              // for: the change did not break them (Martin, 2026-10-19). Up to
+              // GREEN_ALONE_MAX files they count green and the round goes on;
+              // more than that is a round that measured nothing, and stops.
+              if (report.under_load_files.length <= GREEN_ALONE_MAX) {
+                report.green_alone = { files: report.under_load_files, names: [...result.red] };
+                say(`counted green — ${report.under_load_files.join(', ')} passed alone on the base and the candidate`);
+                result.red = [];
+                result.red_files = [];
+                result.red_tests = [];
+                return null;
+              }
               return finish('red-under-load', underLoadReason({ alone: result.red_files, cancelled }));
             }
             say(ran.ok ? 'red alone on the candidate too — this change broke them'
@@ -1223,6 +1236,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
   const at = await git(['rev-parse', 'HEAD'], { cwd });
   const run = await suite({ cwd, command, onLine: (line) => say(line) });
   const totals = tapTotals(run.tap);
+  if (run.timedOut) return { ok: false, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the suite did not run to the end' };
   }
@@ -1514,6 +1528,7 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
   const commit = at?.status === 0 ? String(at.stdout || '').trim() : null;
   const run = await tests({ cwd, files, flags, onLine: (line) => say(line) });
   const totals = tapTotals(run.tap);
+  if (run.timedOut) return { ok: false, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the selected files did not run to the end' };
   }
@@ -1981,19 +1996,87 @@ function nodeTestFlags(cwd) {
   return flags;
 }
 
-function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env } = {}) {
+/**
+ * How long a suite may run before the round stops it: an hour, or
+ * `MC_GATE_SUITE_MINUTES`. Nothing bounded it before, and a test that never
+ * ends held the light lane for two and a half hours on 2026-10-19 (memoro-cli
+ * #1009, a runLoop test waiting for a STOP it never wrote) with no line in
+ * the log, because the TAP's detail comes only when a file finishes. A run
+ * stopped here never prints its summary, so the round stops on it rather than
+ * counting it red (`measure`, `measureSelected`).
+ */
+/**
+ * The most files a round counts green because they passed alone on the base
+ * and on the candidate after being red in it (`green_alone`). More than that,
+ * and the round stops `red-under-load` as before.
+ */
+export const GREEN_ALONE_MAX = 3;
+
+/**
+ * How many test files a selected run takes at once: the free cores, not the
+ * core count. `cores - 1 - round(load1)`, between 2 and `cores - 1`; a round
+ * started at load 40 on eight cores runs 2, not 7, and stops starving the
+ * whole-tree readers that went red only under load (gate-round-under-load).
+ * `MC_TEST_LANES` overrides it.
+ */
+export function testLanes({ cores = availableParallelism(), load = loadavg()[0], env = process.env } = {}) {
+  const set = Number(env.MC_TEST_LANES);
+  if (Number.isInteger(set) && set > 0) return set;
+  const most = Math.max(1, cores - 1);
+  return Math.max(Math.min(2, most), Math.min(most, most - Math.round(Number(load) || 0)));
+}
+
+export function suiteTimeoutMs(env = process.env) {
+  const minutes = Number(env.MC_GATE_SUITE_MINUTES);
+  return (Number.isFinite(minutes) && minutes > 0 ? minutes : 60) * 60_000;
+}
+
+/**
+ * The environment a suite runs in: the caller's, without what belongs to the
+ * caller alone. `NODE_TEST_CONTEXT` makes a suite think it is nested and skip
+ * its files (`realSuite`). `MC_WORK_ROOT` and `MC_HOME` are the runner's own
+ * `~/mc`: `tests/_isolate-home.mjs` points them at a throwaway directory only
+ * when they are unset, so a round the merger started handed every test the
+ * real programmes, and memoro-cli's runner tests queued the real projects
+ * beside their fixture's (2026-10-19).
+ */
+export function suiteEnv(env) {
+  const clean = { ...env };
+  for (const key of ['NODE_TEST_CONTEXT', 'MC_WORK_ROOT', 'MC_HOME']) delete clean[key];
+  return clean;
+}
+
+/**
+ * Kills a suite that ran past its time, with everything it started: the child
+ * leads its own process group (`detached`), and the group is what is killed,
+ * since npm, a shell and node's per-file runners sit between it and the test.
+ */
+function stopAfter(child, ms, onStop) {
+  const timer = setTimeout(() => {
+    onStop();
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
+  }, ms);
+  timer.unref?.();
+  return () => clearTimeout(timer);
+}
+
+function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }) } = {}) {
   return new Promise((resolve) => {
-    const clean = { ...env };
-    delete clean.NODE_TEST_CONTEXT;
+    const clean = suiteEnv(env);
     const inherited = String(clean.NODE_OPTIONS || '')
       .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
       .trim();
     // Declared flags first; the test-script heuristic only when none are.
-    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...(flags.length ? flags : nodeTestFlags(cwd)), ...files], {
+    const declared = flags.length ? flags : nodeTestFlags(cwd);
+    const concurrency = declared.some((flag) => String(flag).startsWith('--test-concurrency')) ? [] : [`--test-concurrency=${lanes}`];
+    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...concurrency, ...declared, ...files], {
       cwd,
       env: { ...clean, NODE_OPTIONS: inherited },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
+    let timedOut = false;
+    const settle = stopAfter(child, timeoutMs, () => { timedOut = true; });
     let tap = '';
     let pending = '';
     child.stdout.setEncoding('utf8');
@@ -2006,8 +2089,8 @@ function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.en
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => { /* the verdict is in the TAP */ });
-    child.on('error', (error) => resolve({ code: -1, tap, error: error.message }));
-    child.on('close', (code) => resolve({ code, tap }));
+    child.on('error', (error) => { settle(); resolve({ code: -1, tap, error: error.message }); });
+    child.on('close', (code) => { settle(); resolve({ code, tap, timedOut, timeoutMs, lanes: concurrency.length ? lanes : null }); });
   });
 }
 
@@ -2076,7 +2159,7 @@ function nameSome(names) {
  * `suiteCommand` stopped making; the default keeps that behaviour for a caller
  * that names nothing.
  */
-function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env } = {}) {
+function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env) } = {}) {
   return new Promise((resolve) => {
     // The suite is started in a clean test context, not this process's.
     //
@@ -2086,8 +2169,7 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     // unfinished-run guard turns that into a stop rather than a false green,
     // but the round could never run at all. Which is exactly what happened the
     // first time this module's own live test tried to gate a repository.
-    const clean = { ...env };
-    delete clean.NODE_TEST_CONTEXT;
+    const clean = suiteEnv(env);
     // And any reporter the caller's own environment was already asking for.
     // Node rejects a second `--test-reporter` without a matching destination
     // (`ERR_INVALID_ARG_VALUE`) and the suite dies before running a thing — so
@@ -2099,9 +2181,14 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     const child = spawn(command, {
       cwd,
       shell: true,
-      env: { ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
+      // The lane count for a suite that runs its own runner (memoro's
+      // `runner.mjs` reads it); a caller that set one keeps it.
+      env: { MC_TEST_LANES: String(testLanes({ env })), ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
+    let timedOut = false;
+    const settle = stopAfter(child, timeoutMs, () => { timedOut = true; });
 
     let tap = '';
     let pending = '';
@@ -2118,7 +2205,7 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => { /* npm's own noise; the verdict is in the TAP */ });
 
-    child.on('error', (error) => resolve({ code: -1, tap, error: error.message }));
-    child.on('close', (code) => resolve({ code, tap }));
+    child.on('error', (error) => { settle(); resolve({ code: -1, tap, error: error.message }); });
+    child.on('close', (code) => { settle(); resolve({ code, tap, timedOut, timeoutMs }); });
   });
 }
