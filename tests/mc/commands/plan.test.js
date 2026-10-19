@@ -68,9 +68,9 @@ describe('the plan role', () => {
   it('carries the plan-writing rules by reference, not by copy', () => {
     const { overlay } = readCanonRole('plan');
     assert.match(overlay, /^@include _plan-writing\.md$/mu);
-    assert.doesNotMatch(overlay, /readPlanText/u);
+    assert.doesNotMatch(overlay, /`mc project send` is the validation/u);
     const told = instructionsFor('claude-code', overlay);
-    assert.match(told, /readPlanText/u);
+    assert.match(told, /`mc project send` is the validation/u);
     assert.doesNotMatch(told, /@include/u);
   });
 

@@ -5,13 +5,15 @@ nobody watching. Every step must pass one test: can that session build it
 start to finish, and know when it is done? If not, it is not a step
 (ruling 19).
 
-- **Where:** plans live in mc, not in a repository (ruling 48):
-  `~/mc/programs/<programme>/<project>/PLAN.json`, with a top-level `"repo":
-  "memoro"` or `"memoro-cli"` naming where the steps run. `<project>` becomes
-  the runner's branch and workarea; create neither. Write it to a temporary
-  file beside it, validate, then `mv` it into place: the runner reads the
-  directory, so a plan whose first unfinished step is `ready` is run as soon
-  as it is there, and moving it in is the handover. No branch, no pull request.
+- **Where:** a plan is written with `mc project` verbs, never by editing a
+  file (ruling 48): `mc project new <programme>/<project> --repo memoro|memoro-cli
+  --goal … --contract … --out-of-scope …`, then `mc project criterion add` per
+  criterion, `mc project step add` per step (`--model haiku|opus`,
+  `--done-when`, `--instruction-file <md>` with the step's paragraphs,
+  `--after <repo>:<project>` for a dependency), then `mc project send
+  <project>`, which checks the whole plan and hands it to the runner.
+  `mc project <project>` shows a draft and what send would refuse. No branch,
+  no pull request.
 - **Shape:** `src/mc/plan-schema.js`; what each field is for:
   `docs/project/README.md` § *What a PLAN.json is*. Read them; do not guess.
 - **Before writing:** do every investigation yourself — read the code,
@@ -38,7 +40,7 @@ start to finish, and know when it is done? If not, it is not a step
 - **Each step:** `instruction` as long as the work needs — interface, order,
   edge cases, the trap. `done_when`: one checkable sentence. Name the file
   behind every claim, and only files you opened.
-- **Model per step (ruling 42):** every step names `runner.model`. Haiku is
+- **Model per step (ruling 42):** every step names `--model haiku` or `opus`. Haiku is
   the first choice: `{ "model": "haiku", "effort": "high" }` for a step
   whose `instruction` says exactly what changes, where and in what order,
   and whose `done_when` passes or fails on its own — a test, a grep, an
@@ -65,9 +67,7 @@ start to finish, and know when it is done? If not, it is not a step
   with a surface, measured in the running app. All frozen: a step session
   records a met criterion with mc project criterion met, never in the file.
 - **Leave out:** the case for the plan, history, what the code already shows.
-- **Validate before moving it in:**
-  `node --input-type=module -e "import {readPlanText} from '$HOME/memoro-cli/src/mc/plan-schema.js'; import {readFileSync} from 'node:fs'; console.log(readPlanText(readFileSync(process.argv[1],'utf8')).problems)" <PLAN.json>`
-  must print `[]`. ``mc status <project>`` shows it.
+- **Validate:** `mc project send` is the validation; it refuses and says why.
 - **Proposals consumed:** move them to `~/mc/proposals/archive/` in the same
   move, name them in the PR body, and carry into the plan everything it needs
   from them — nobody reads the archive (ruling 22).

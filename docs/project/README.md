@@ -17,6 +17,14 @@ with a top-level `repo` field naming the repository its steps run in. A plan of
 the same name in this directory is shadowed by it and no longer read; the copies
 here go with project 3 of ruling 48.
 
+Since `project-verbs` a plan is written only through `mc project new`, `edit`,
+`criterion add`, `step add`, `step edit` and `send`. Until it is sent it is
+`DRAFT.json`, which nothing reads; `send` checks it whole and renames it to
+`PLAN.json`. The verbs refuse a step without `--model haiku|opus`, the words
+`Martin`, `by hand`, `manually` or `a person` in a done-when or a check, a
+dependency written anywhere but `--after <repo>:<project>`, and a change to a
+sent plan's goal, contract or out of scope, or to a step that has started.
+
 A plan is instructions for a headless session that has read nothing else, with
 nobody watching. `mc run` hands it the step it is to do, and it opens a PR and
 lands it through `mc merge` itself (ruling 21). That

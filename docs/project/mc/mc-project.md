@@ -46,6 +46,8 @@ Prose keeps only what needs judgement.
 - Backup of mc's state waits until this has landed. (memoro-cli is mc's repository, but it holds mc's code; plans in
   it would be the same mix again.)
 - Sessions outside this machine (`/remote-control`) need no special handling.
+- Project 2 keeps a step's prose in `PLAN.json`'s `instruction`; the `steps/` files come later. An unsent plan is
+  `DRAFT.json` and `send` renames it to `PLAN.json`. `mc status <name>` stays, beside `mc project <name>`.
 
 ## Structure
 
