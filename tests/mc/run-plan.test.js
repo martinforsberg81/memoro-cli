@@ -343,9 +343,9 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
   assert.match(p, /`x` workarea of memoro/u);
   assert.match(p, /Your step is `steps\[1\]` — 2, "The hero object"/u);
   assert.match(p, /Done when: the object draws in both themes/u);
-  // The boundary is in the prompt as well as the role, because it is what the
-  // runner checks on the way back in.
-  assert.match(p, /another step, the goal, the contract or the scope/u);
+  // The criteria's door is in the prompt as well as the role, because it is what
+  // the runner checks on the way back in.
+  assert.match(p, /refuses the pull request until every criterion is met there/u);
   assert.match(p, /`mc step blocked --on <decision-name> --reason "…"`/u, 'it still says how to stop on a question it cannot answer');
   // Ruling 21: state is the register's. A prompt that sends it to the file
   // sends it nowhere (memoro #11723 showed `ready` for six days).
@@ -359,8 +359,8 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
   // at 12:27. Both are checked on the way back in, so both are said here.
   assert.doesNotMatch(p, /merge origin\/main` is in progress/u, 'no conflict, no preamble');
   assert.match(p, /--on-project/u);
-  assert.match(p, /exactly one thing is yours: `met`/u);
-  assert.match(p, /Your plan is on disk in this worktree at `docs\/project\/p\/x\/PLAN\.json`/u);
+  assert.match(p, /Nothing in the plan file is yours/u);
+  assert.match(p, /Your plan is at `docs\/project\/p\/x\/PLAN\.json`/u);
   // The runner only ever starts a plan whose first unfinished step is ready, so
   // a step is never handed an answered decision to apply (Martin, 2026-08-29).
   assert.doesNotMatch(p, /Decisions answered by Martin/u);
@@ -726,7 +726,7 @@ test('checkInPrompt: names the minutes, the count and a blocker the project can 
   const text = checkInPrompt({ project: 'step-cost', minutes: 60, count: 1 });
   assert.match(text, /running for 60 minutes \(this is check-in number 1\)/u);
   assert.match(text, /say so in one line and go on/u);
-  assert.match(text, /"kind": "decision", "name": "step-cost-check-in"/u);
+  assert.match(text, /`mc step blocked --on step-cost-check-in --reason "…"`/u);
   assert.match(text, /Do not start anything new/u);
   assert.match('step-cost-check-in', NAME_RE, 'the blocker name must pass the plan schema');
   assert.equal(userMessageLine('hi'), '{"type":"user","message":{"role":"user","content":"hi"}}\n');

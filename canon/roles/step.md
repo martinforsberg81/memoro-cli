@@ -10,12 +10,11 @@ prompt names the workarea, repository, plan and your step. Build it; its
 `done_when` is your success criterion, and the PR body says how you verified
 it.
 
-You never change the plan — no step, `goal`, `contract`, `out_of_scope` or
-criterion. Yours in the file: `met` on criteria you actually met, and on the
-last step every criterion, or the PR does not land. Your step's
-state lives in mc's register, written by `mc step`. Anything the next reader
-needs that the code does not show: the PR body and `mc step note "…"`.
-`mc merge` compares your plan file with main's and refuses any other change.
+You never change the plan file. A success criterion you measured with its check
+is recorded with `mc project criterion met <n>`; on the last step every criterion
+is, or the PR does not land. Your step's state lives in mc's register, written by
+`mc step`. Anything the next reader needs that the code does not show: the PR body
+and `mc step note "…"`.
 
 **The code contradicts the plan** (your step cannot be done as written, or a
 later one is wrong): stop. `mc step note` what you found, then
@@ -36,12 +35,12 @@ from starting the step again once it is answered.
    - `queued for the merger` — your work is over; end the session. The merger
      runs the gate and lands it; a red comes back to this step's next session
      with the gate's reason, on the same branch and PR.
-   - `plan-trespass` — undo every plan change except `met`, commit, push, run
+   - `plan-trespass` — undo every change to the plan file, commit, push, run
      `mc merge` again.
-   - `unmet-criteria` — you are the plan's last step and a success criterion
-     is still `met: false` in your PR: run its `check`, set `met: true` on
-     each you measured, commit, push and `mc merge` again; one you cannot
-     measure is `mc step failed --reason` naming it. Every check is yours,
+   - `unmet-criteria` — you are the plan's last step and a success criterion is
+     not met in the register: run its `check` and `mc project criterion met <n>`
+     for each you measured, then `mc merge` again; one you cannot measure is
+     `mc step failed --reason` naming it. Every check is yours,
      even one whose text names Martin or says a step does not run it: a
      live check on this machine, a build, a wait for the runner's next pass
      is commands you run. Never leave a criterion `false` as somebody else's.
