@@ -34,6 +34,12 @@
  * them (`seedEntry`). After that the file's copies are ignored, and they go
  * from the schema when the last reader of them does.
  *
+ * The register also holds whether each success criterion is met (ruling 48):
+ * the plan says what a criterion *is*, the register whether it *holds*. An
+ * entry's `criteria` are seeded from the file's `met` once, matched to the
+ * plan's criteria by their text, and written by `mc project criterion met`
+ * (`updateCriterion`); a file's `met` is not read after that.
+ *
  * Every write to the register also appends one line to `runner/log/register.log`
  * (`registerLogPath`): what changed and which process made it — its pid, its
  * parent's command, its run id, the shape of its arguments (`invocationShape`,
@@ -206,6 +212,9 @@ export function normaliseEntry(value) {
     plan: typeof value.plan === 'string' ? value.plan : null,
     updated: typeof value.updated === 'string' ? value.updated : null,
     steps: Array.isArray(value.steps) ? value.steps.map(normaliseStep) : [],
+    criteria: Array.isArray(value.criteria)
+      ? value.criteria.filter(plain).map((c) => ({ criterion: String(c.criterion ?? ''), met: c.met === true, at: typeof c.at === 'string' ? c.at : null }))
+      : null,
   };
 }
 
@@ -242,6 +251,27 @@ function stepFromPlan(fileStep, now) {
   };
 }
 
+/** The criteria as the plan file says them: the seed for an entry that has none. */
+export function criteriaFromPlan(plan) {
+  return (Array.isArray(plan?.success_criteria) ? plan.success_criteria : []).map((c) => ({ criterion: String(c?.criterion ?? ''), met: c?.met === true, at: null }));
+}
+
+/**
+ * The criteria an entry holds, brought up to the plan's: each criterion of the
+ * plan takes the held one with its text (the first not yet taken, so a text
+ * the plan repeats is matched in order), and a text the register has not seen
+ * takes the file's `met`. A held criterion the plan no longer has is dropped.
+ */
+function reconcileCriteria(held, plan) {
+  const fromFile = criteriaFromPlan(plan);
+  if (!Array.isArray(held)) return fromFile;
+  const free = [...held];
+  return fromFile.map((criterion) => {
+    const at = free.findIndex((c) => c.criterion === criterion.criterion);
+    return at < 0 ? criterion : free.splice(at, 1)[0];
+  });
+}
+
 /**
  * The entry a plan seen for the first time gets: its own steps' state, read
  * off the file once. `record` is a `listPlans` record — `repo`, `programme`,
@@ -258,6 +288,7 @@ export function seedEntry(record, now = null) {
     plan: record.path ?? null,
     updated: now,
     steps: steps.map((step) => stepFromPlan(step, now)),
+    criteria: criteriaFromPlan(record?.plan),
   };
 }
 
@@ -325,10 +356,12 @@ export function reconcileEntry(entry, record, now = null) {
     const running = keyed.findIndex((state) => state.status === 'running');
     if (running >= 0 && next[running]?.key !== keyed[running].key) return { entry, changed: false, carried: [] };
   }
+  const criteria = reconcileCriteria(entry.criteria, record?.plan);
   const changed = next.length !== entry.steps.length || next.some((state, index) => state !== entry.steps[index])
-    || entry.plan !== (record.path ?? null) || entry.repo !== (record.repo ?? null) || entry.programme !== (record.programme ?? null);
+    || entry.plan !== (record.path ?? null) || entry.repo !== (record.repo ?? null) || entry.programme !== (record.programme ?? null)
+    || JSON.stringify(criteria) !== JSON.stringify(entry.criteria);
   return {
-    entry: changed ? { ...entry, repo: record.repo ?? entry.repo, programme: record.programme ?? entry.programme, plan: record.path ?? entry.plan, updated: now ?? entry.updated, steps: next } : entry,
+    entry: changed ? { ...entry, repo: record.repo ?? entry.repo, programme: record.programme ?? entry.programme, plan: record.path ?? entry.plan, updated: now ?? entry.updated, steps: next, criteria } : entry,
     changed,
     carried,
   };
@@ -357,6 +390,13 @@ export function applyEntry(record, entry) {
     };
   });
   const plan = { ...record.plan, steps };
+  if (Array.isArray(entry.criteria) && Array.isArray(record.plan.success_criteria)) {
+    // Matched by text, not index: `run.js`'s `standing` applies an entry it has not reconciled.
+    plan.success_criteria = record.plan.success_criteria.map((c) => {
+      const held = entry.criteria.find((e) => e.criterion === c?.criterion);
+      return held ? { ...c, met: held.met } : c;
+    });
+  }
   return { ...record, plan, ...planSummary(plan) };
 }
 
@@ -398,6 +438,24 @@ export function patchStep(entry, index, patch = {}, now = null) {
   next.updated = now;
   const steps = entry.steps.map((step, i) => (i === index ? next : step));
   return { ...entry, updated: now, steps };
+}
+
+/**
+ * One success criterion's `met` and when it was set. `number` is the
+ * criterion's place in the plan, from 1. An entry the register has never
+ * seeded holds no criteria, and a number outside the ones it holds is refused.
+ */
+export function markCriterion(entry, number, met, now = null) {
+  const criteria = Array.isArray(entry.criteria) ? entry.criteria : null;
+  const n = criteria ? criteria.length : 0;
+  if (!Number.isInteger(number) || number < 1 || number > n) {
+    throw new Error(`${entry.project}: no success criterion ${number} — the register holds ${n}`);
+  }
+  return {
+    ...entry,
+    updated: now,
+    criteria: criteria.map((c, i) => (i === number - 1 ? { ...c, met: met === true, at: now } : c)),
+  };
 }
 
 /** The first step that is not done, or -1: the one `mc step` means when no index is given. */
@@ -531,6 +589,22 @@ export function updateStep({ root, project, index, patch, read = realRead, write
     const was = entry.steps[index];
     const made = next.steps[index];
     logWrite(root, append, by, { event: 'step', project, index, key: made.key, from: was.status, to: made.status, pr: made.pr ?? null, fields: Object.keys(patch) });
+    return next;
+  });
+}
+
+/**
+ * One criterion's `met` changed, on disk: read, mark, write, under the
+ * register's lock — `updateStep` for a criterion, and the same refusals. Each
+ * write appends a `criterion` line to `register.log` (`logWrite`).
+ */
+export function updateCriterion({ root, project, number, met, read = realRead, write = realWrite, lock = realLock, now = null, append = realAppend, by = whoAmI }) {
+  return lock(root, () => {
+    const entry = readEntry(root, project, { read });
+    if (!entry) throw new Error(`${project}: not in the register at ${registerPath(root, project)}`);
+    const next = markCriterion(entry, number, met, now);
+    write(registerPath(root, project), next);
+    logWrite(root, append, by, { event: 'criterion', project, number, from: entry.criteria[number - 1].met, to: next.criteria[number - 1].met });
     return next;
   });
 }

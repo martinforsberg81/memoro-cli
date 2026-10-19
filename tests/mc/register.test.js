@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  STEP_STATES, applyEntry, currentIndex, keyOf, overlayPlans, parseEntry, parseStepEnv, patchStep, reconcileEntry,
-  registerLogPath, registerPath, seedEntry, stepKey, updateStep, whoAmI,
+  STEP_STATES, applyEntry, criteriaFromPlan, currentIndex, keyOf, markCriterion, normaliseEntry, overlayPlans, parseEntry, parseStepEnv,
+  patchStep, reconcileEntry, registerLogPath, registerPath, seedEntry, stepKey, updateCriterion, updateStep, whoAmI,
 } from '../../src/mc/register.js';
 import { PLAN_SCHEMA, PLAN_VERSION, deliverableStep, validatePlan } from '../../src/mc/plan-schema.js';
 
@@ -337,4 +337,87 @@ test('a re-plan that carries a slot is logged with what it carried', () => {
   const last = lines.at(-1);
   assert.equal(last.event, 'reconcile');
   assert.deepEqual(last.carried, [{ index: 1, from: 'B', to: 'Z' }]);
+});
+
+const criterion = (text, met) => ({ criterion: text, check: 'c', met });
+/** A record whose one step is titled `A`, with the given success criteria. */
+const withCriteria = (list, steps = [step({ title: 'A — x' })]) => {
+  const rec = record(steps);
+  rec.plan.success_criteria = list;
+  return rec;
+};
+
+test('normaliseEntry keeps the criteria the register holds, and reads an entry without them as never seeded', () => {
+  const entry = normaliseEntry({
+    project: 'p', criteria: [{ criterion: 'x', met: true, at: '2026-10-19T08:00:00Z' }, { criterion: 'y', met: 'yes', at: 3 }, null],
+  });
+  assert.deepEqual(entry.criteria, [{ criterion: 'x', met: true, at: '2026-10-19T08:00:00Z' }, { criterion: 'y', met: false, at: null }]);
+  assert.equal(normaliseEntry({ project: 'p' }).criteria, null);
+  assert.deepEqual(criteriaFromPlan(withCriteria([criterion('x', true)]).plan), [{ criterion: 'x', met: true, at: null }]);
+  assert.deepEqual(criteriaFromPlan({}), []);
+});
+
+test('seedEntry seeds the criteria from the file\'s met, once', () => {
+  const entry = seedEntry(withCriteria([criterion('x', true), criterion('y', false)]), 't0');
+  assert.deepEqual(entry.criteria, [{ criterion: 'x', met: true, at: null }, { criterion: 'y', met: false, at: null }]);
+});
+
+test('reconcileEntry seeds criteria on an entry that has none, keeps a held met, takes the file\'s for a new text, drops a removed one', () => {
+  const rec = withCriteria([criterion('x', false), criterion('y', false)]);
+  const old = { ...seedEntry(rec, 't0'), criteria: null };
+  const seeded = reconcileEntry(old, rec, 't1');
+  assert.equal(seeded.changed, true);
+  assert.deepEqual(seeded.entry.criteria, [{ criterion: 'x', met: false, at: null }, { criterion: 'y', met: false, at: null }]);
+
+  const marked = markCriterion(seeded.entry, 1, true, 't2');
+  const kept = reconcileEntry(marked, withCriteria([criterion('x', false), criterion('y', false)]), 't3');
+  assert.equal(kept.changed, false, 'a met the register holds is not overwritten by the file');
+  assert.equal(kept.entry.criteria[0].met, true);
+
+  const moved = reconcileEntry(marked, withCriteria([criterion('x', false), criterion('z', true)]), 't3');
+  assert.equal(moved.changed, true);
+  assert.deepEqual(moved.entry.criteria, [{ criterion: 'x', met: true, at: 't2' }, { criterion: 'z', met: true, at: null }]);
+});
+
+test('applyEntry lays the held met over the file\'s criteria by text, so a plan whose steps are done is done', () => {
+  const rec = withCriteria([criterion('x', false), criterion('y', false)], [step({ title: 'A — x', status: 'done' })]);
+  const entry = seedEntry(rec, 't0');
+  assert.equal(applyEntry(rec, entry).status, 'unmet');
+  const held = markCriterion(markCriterion(entry, 1, true, 't1'), 2, true, 't1');
+  const out = applyEntry(rec, held);
+  assert.deepEqual(out.plan.success_criteria.map((c) => c.met), [true, true]);
+  assert.equal(out.status, 'done');
+  assert.equal(rec.plan.success_criteria[0].met, false, 'the file\'s own criteria are untouched');
+
+  const partial = applyEntry(rec, { ...entry, criteria: [{ criterion: 'x', met: true, at: null }] });
+  assert.deepEqual(partial.plan.success_criteria.map((c) => c.met), [true, false], 'a criterion it holds no text for stays as the file says');
+  assert.equal(partial.status, 'unmet');
+});
+
+test('markCriterion sets one criterion\'s met and when, and refuses a number the register does not hold', () => {
+  const entry = seedEntry(withCriteria([criterion('x', false), criterion('y', false)]), 't0');
+  const marked = markCriterion(entry, 2, true, 't1');
+  assert.deepEqual(marked.criteria, [{ criterion: 'x', met: false, at: null }, { criterion: 'y', met: true, at: 't1' }]);
+  assert.equal(marked.updated, 't1');
+  assert.equal(entry.criteria[1].met, false, 'the entry it was given is not changed');
+  assert.throws(() => markCriterion(entry, 0, true), /no success criterion 0 — the register holds 2/u);
+  assert.throws(() => markCriterion(entry, 3, true), /no success criterion 3 — the register holds 2/u);
+  assert.throws(() => markCriterion({ ...entry, criteria: null }, 1, true), /no success criterion 1 — the register holds 0/u);
+});
+
+test('updateCriterion writes the criterion and appends one criterion line naming the change', () => {
+  const { files, io } = disk();
+  overlayPlans([withCriteria([criterion('x', false), criterion('y', false)])], { root: '/w', ...io, now: 't0' });
+  const lines = [];
+  const append = (path, line) => lines.push(JSON.parse(line));
+  const next = updateCriterion({ root: '/w', project: 'p', number: 2, met: true, ...io, append, now: 't1' });
+  assert.equal(next.criteria[1].met, true);
+  assert.equal(parseEntry(files[registerPath('/w', 'p')]).criteria[1].met, true, 'written');
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].event, 'criterion');
+  assert.equal(lines[0].project, 'p');
+  assert.equal(lines[0].number, 2);
+  assert.equal(lines[0].from, false);
+  assert.equal(lines[0].to, true);
+  assert.throws(() => updateCriterion({ root: '/w', project: 'ghost', number: 1, met: true, ...io }), /ghost: not in the register/u);
 });
