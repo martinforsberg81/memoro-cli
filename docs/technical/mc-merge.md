@@ -394,6 +394,18 @@ printing JSON with a `files` array, run in the candidate worktree. With one, the
 round measures the test files the change reaches; without one, the whole suite,
 exactly as it always did.
 
+**A suite runs in its own environment, and for at most an hour.** The round
+hands a suite the caller's environment without `NODE_TEST_CONTEXT`,
+`MC_WORK_ROOT` and `MC_HOME` (`suiteEnv` in `src/mc/repo-gate.js`): the last two
+are the runner's real `~/mc`, and `tests/_isolate-home.mjs` replaces them only
+when they are unset, so memoro-cli's runner tests once read the real programmes
+and one of them waited for a STOP it never wrote. A suite, a selected run, or a
+file measured alone that is still running after `MC_GATE_SUITE_MINUTES` (default
+60) is killed with its process group, and the round stops with `ran past N min
+and was stopped — a test that never ends` instead of holding the lane. Before
+2026-10-19 nothing bounded it, and memoro-cli #1009 held the light lane for
+hours with no line in the log.
+
 **One tree, and the verdict is its own red.** Ruled by Martin on 2026-08-31: a
 round evaluates the diff, and whether main was already red is not the round's
 question. Until then the round built a second worktree at the base, ran the same

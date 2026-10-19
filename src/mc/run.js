@@ -120,7 +120,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker } from './docker.js';
 import { deliverableStep, unauthorisedChanges } from './plan-schema.js';
-import { planIn } from './plan-source.js';
+import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
 import { releaseDue } from './step-release.js';
@@ -136,7 +136,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import {
-  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
+  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planHome, programsHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
 import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
@@ -636,6 +636,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // stepped and closed where it stands (`stepAreaName`, paths.js).
   const areaName = (name) => stepAreaName(name, { root, exists: deps.exists, list: deps.list });
   const areaPath = (name) => join(root, areaName(name));
+  // The plans under `~/mc/programs/`, read through the runner's own env and
+  // file reads: the default `programsPlans()` reads the process's env, and a
+  // suite run by the merger inherits MC_WORK_ROOT from the runner, so the
+  // runner's tests queued the real programmes' projects beside their fixture's
+  // and one hung for hours waiting for a STOP it never wrote (2026-10-19).
+  const programs = () => programsPlans({ home: programsHome(deps.env), list: deps.list, read: deps.read });
   const paths = {
     queue: join(root, 'queue.md'),
     log: join(root, 'runner', 'log'),
@@ -1048,7 +1054,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * 2026-09-08.
    */
   function planOf(worktree, name) {
-    return planIn(worktree, name, { list: deps.list, exists: deps.exists, read: deps.read });
+    return planIn(worktree, name, { list: deps.list, exists: deps.exists, read: deps.read, programs });
   }
 
   /** memoro | memoro-cli | null — an existing workarea first, then the main trees. */
@@ -2939,7 +2945,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // because a `running` step with no process is one nothing will finish;
       // a `ready` or `failed` step the register says has landed is done here,
       // so it is never handed out again.
-      plans.push(...sweepLanded(sweepLanding(sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register)))));
+      plans.push(...sweepLanded(sweepLanding(sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut), programs }), register)))));
       archived.push(...listArchived(repo, { git: gitOut }));
       // A repository whose last ask failed is not asked again until its
       // backoff has run out (github-backoff.js): every ask at a locked keychain

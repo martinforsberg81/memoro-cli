@@ -81,6 +81,11 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     // running the suite: `runLoop` reads it at start, and without this a test
     // would answer to whatever `mc run lanes` was last set to on this laptop.
     laneCount: () => ({ per_repo: 1, total: null }),
+    // Stay-awake from the fixture too: the real one spawns `caffeinate -w` and
+    // runs `pmset`, and every unattended runLoop here left a caffeinate behind
+    // for as long as the test file lived (17 in one hung run, 2026-10-19).
+    keepAwake: () => ({ ok: true, pid: 0, flags: [], note: 'fixture' }),
+    onACPower: () => true,
     tmuxHas: (name) => live.includes(name.replace(/^mc-/u, '')),
     // The liveness test the loop's own refusal uses. A table, not `ps`: a
     // fixture pid that happened to be a real process on the machine running
@@ -3777,7 +3782,7 @@ test('a pull request from the branch the worktree stands on is the project\'s, w
  * took nothing at all while the third waited behind the first lane. Neither
  * lane waits for the other, and the claim is what keeps them off one project.
  */
-test('runLoop: two lanes on one repository take the next two runnable names, never the same one', async () => {
+test('runLoop: two lanes on one repository take the next two runnable names, never the same one', async (t) => {
   const f = fixture({
     plans: { memoro: { a: ready, b: plan({ status: 'blocked' }), c: ready, d: ready } },
     session: okSession(),
@@ -3789,6 +3794,9 @@ test('runLoop: two lanes on one repository take the next two runnable names, nev
   let currents = [];
   let release = null;
   const held = new Promise((resolve) => { release = resolve; });
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { f.files['/w/runner/STOP'] = ''; release(); });
   f.deps.session = async (call) => {
     const name = areaOf(call.cwd);
     starts.push(name);
@@ -3844,10 +3852,13 @@ function liveLanes(plans, per) {
   return { f, starts, release };
 }
 
-test('runLoop: a per_repo raised while the runner runs starts the new lane', async () => {
+test('runLoop: a per_repo raised while the runner runs starts the new lane', async (t) => {
   const turns = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((resolve) => { setImmediate(resolve); }); };
   let per = 1;
   const { f, starts, release } = liveLanes({ a: ready, b: ready }, () => per);
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { f.files['/w/runner/STOP'] = ''; release(); });
   const run = runLoop({ deps: f.deps });
   await turns();
   assert.deepEqual(starts, ['a'], 'one lane, one step');
@@ -3864,10 +3875,13 @@ test('runLoop: a per_repo raised while the runner runs starts the new lane', asy
   assert.equal(await run, 0);
 });
 
-test('runLoop: a per_repo lowered while the runner runs ends the lane above it after its step', async () => {
+test('runLoop: a per_repo lowered while the runner runs ends the lane above it after its step', async (t) => {
   const turns = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((resolve) => { setImmediate(resolve); }); };
   let per = 2;
   const { f, starts, release } = liveLanes({ a: ready, b: ready, c: ready }, () => per);
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { f.files['/w/runner/STOP'] = ''; release(); });
   const run = runLoop({ deps: f.deps });
   await turns();
   assert.deepEqual(starts, ['a', 'b'], 'two lanes, two steps');
@@ -3927,8 +3941,11 @@ function laneRace({ total, openPrs = {} }) {
  * the picture that started the project — six rows in the RUNNER block from a
  * setting that says three.
  */
-test('runLoop: no total set — every lane starts, exactly as before', async () => {
+test('runLoop: no total set — every lane starts, exactly as before', async (t) => {
   const r = laneRace({ total: null });
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { r.stop(); r.release(); });
   const run = runLoop({ deps: r.f.deps });
   await turns();
   assert.equal(r.state.peak, 4, `four steps in flight at once: ${r.state.starts.join(', ')}`);
@@ -3946,8 +3963,11 @@ test('runLoop: no total set — every lane starts, exactly as before', async () 
  * sessions block: every lane that could start piles up against the cap at
  * once rather than passing through it one at a time.
  */
-test('runLoop: a total of 2 — four lanes, a blocking step, and two sessions', async () => {
+test('runLoop: a total of 2 — four lanes, a blocking step, and two sessions', async (t) => {
   const r = laneRace({ total: 2 });
+  // A failed assert must not leave the loop polling for a STOP nobody writes:
+  // the file then never exits, and the merger's round waits on it for hours.
+  t.after(() => { r.stop(); r.release(); });
   const run = runLoop({ deps: r.f.deps });
   await turns();
   assert.equal(r.state.peak, 2, `only the total ever ran at once: ${r.state.starts.join(', ')}`);

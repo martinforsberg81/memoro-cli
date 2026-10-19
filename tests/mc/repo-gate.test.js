@@ -27,7 +27,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate, selectionState, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { gateRoot, runGate, selectionState, suiteEnv, suiteTimeoutMs, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
@@ -515,7 +515,8 @@ describe('what the suite inherits, and what it must not', () => {
     const source = readFileSync(join(here, '..', '..', 'src', 'mc', 'repo-gate.js'), 'utf8');
     const runner = source.slice(source.indexOf('function realSuite'));
 
-    assert.match(runner, /delete clean\.NODE_TEST_CONTEXT/u, 'the test context is passed through');
+    assert.match(runner, /const clean = suiteEnv\(env\)/u, 'the test context is passed through');
+    assert.equal(suiteEnv({ NODE_TEST_CONTEXT: 'child' }).NODE_TEST_CONTEXT, undefined);
     assert.match(runner, /--test-reporter\(-destination\)\?/u, 'an inherited reporter is passed through');
 
     // The rule the two lines add up to, applied to the strings themselves.
@@ -2728,4 +2729,18 @@ describe('the round awaits its children (merger-hardening step 4)', () => {
       assert.deepEqual({ SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') }, before, 'and takes it off again');
     } finally { fx.cleanup(); }
   });
+});
+
+describe('the suite\'s environment and its time', () => {
+  it('suiteEnv: a suite never inherits the runner\'s own ~/mc or a nested test context', () => {
+  const env = suiteEnv({ MC_WORK_ROOT: '/Users/me/mc', MC_HOME: '/Users/me/.memoro/mc', NODE_TEST_CONTEXT: 'child', MC_REPOS_HOME: '/Users/me', PATH: '/bin' });
+  assert.deepEqual(env, { MC_REPOS_HOME: '/Users/me', PATH: '/bin' });
+});
+
+  it('suiteTimeoutMs: an hour, or MC_GATE_SUITE_MINUTES when it is a positive number', () => {
+  assert.equal(suiteTimeoutMs({}), 60 * 60_000);
+  assert.equal(suiteTimeoutMs({ MC_GATE_SUITE_MINUTES: '5' }), 5 * 60_000);
+  assert.equal(suiteTimeoutMs({ MC_GATE_SUITE_MINUTES: '0' }), 60 * 60_000);
+  assert.equal(suiteTimeoutMs({ MC_GATE_SUITE_MINUTES: 'soon' }), 60 * 60_000);
+});
 });
