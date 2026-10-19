@@ -74,7 +74,7 @@ test('criterion names a project the register does not hold, and exits 1', async 
 
 test('anything but criterion met or unmet is usage, exit 2', async () => {
   const f = fixture();
-  assert.equal(await run(['frobnicate'], f.deps), 2);
+  assert.equal(await run(['criterion', 'frobnicate'], f.deps), 2);
   assert.equal(await run(['criterion'], f.deps), 2);
   assert.match(f.err.join(''), /^usage/u);
   assert.equal(f.out.length, 0);
@@ -799,5 +799,166 @@ test('step edit whose done-when names a person or a dependency, or whose instruc
       `mc: cannot read ${join(f.home, 'missing.md')}\n`,
     ]);
     assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('send renames a complete draft to PLAN.json byte for byte, and says the runner takes step 1', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    const draft = readFileSync(f.draft('alpha'), 'utf8');
+    const plan = join(f.home, 'mc', 'alpha', 'PLAN.json');
+    assert.equal(await run(['send', 'alpha'], f.deps), 0);
+    assert.equal(existsSync(f.draft('alpha')), false);
+    assert.equal(readFileSync(plan, 'utf8'), draft);
+    assert.deepEqual(f.out, [`mc: alpha sent — ${plan}\n`, 'the runner takes step 1 on its next pass\n']);
+  } finally { f.cleanup(); }
+});
+
+test('send of a draft whose first step waits on a project says what it waits for, and moves the draft', async () => {
+  const f = draftFixture();
+  try {
+    f.deps.programs = () => [{ project: 'other', repo: 'memoro-cli' }];
+    await draftWithCriterion(f);
+    assert.equal(await run([...STEP, '--after', 'memoro-cli:other', '--instruction-file', instructionFile(f)], f.deps), 0);
+    f.out.length = 0;
+    assert.equal(await run(['send', 'alpha'], f.deps), 0);
+    assert.deepEqual(f.out, [`mc: alpha sent — ${join(f.home, 'mc', 'alpha', 'PLAN.json')}\n`, 'step 1 waits: project other\n']);
+    assert.equal(existsSync(f.draft('alpha')), false);
+  } finally { f.cleanup(); }
+});
+
+test('send refuses a draft with no step, names the problem, and moves nothing, exit 1', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithCriterion(f);
+    const draft = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['send', 'alpha'], f.deps), 1);
+    assert.match(f.err.join(''), /^mc: alpha is not sent:\n {2}steps: [^\n]+\n$/u);
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), draft);
+    assert.equal(existsSync(join(f.home, 'mc', 'alpha', 'PLAN.json')), false);
+    assert.equal(f.out.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('send refuses a plan that names a model for itself, or a step model that is not haiku or opus, exit 1', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    plan.runner = { model: 'haiku' };
+    writeFileSync(f.draft('alpha'), `${JSON.stringify(plan, null, 2)}\n`);
+    assert.equal(await run(['send', 'alpha'], f.deps), 1);
+    assert.match(f.err.join(''), /runner\.model: a plan names no model/u);
+    f.err.length = 0;
+    delete plan.runner;
+    plan.steps[0].runner.model = 'sonnet';
+    writeFileSync(f.draft('alpha'), `${JSON.stringify(plan, null, 2)}\n`);
+    assert.equal(await run(['send', 'alpha'], f.deps), 1);
+    assert.match(f.err.join(''), /steps\[1\]\.runner\.model: haiku or opus/u);
+    assert.equal(existsSync(join(f.home, 'mc', 'alpha', 'PLAN.json')), false);
+  } finally { f.cleanup(); }
+});
+
+test('send of a project already sent, or of a name mc does not hold, is refused, exit 1, and writes nothing', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    assert.equal(await run(['send', 'alpha'], f.deps), 0);
+    f.out.length = 0;
+    assert.equal(await run(['send', 'alpha'], f.deps), 1);
+    assert.equal(f.err.at(-1), `mc: alpha is sent already — ${join(f.home, 'mc', 'alpha', 'PLAN.json')}\n`);
+    assert.equal(await run(['send', 'nope'], f.deps), 1);
+    assert.equal(f.err.at(-1), `mc: no project nope under ${f.home}\n`);
+    assert.equal(f.out.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('send given a flag, or with no project, is usage, exit 2, and the draft is untouched', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    const draft = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['send', 'alpha', '--json'], f.deps), 2);
+    assert.equal(f.err.join(''), 'mc: send takes no --json\n');
+    assert.equal(await run(['send'], f.deps), 2);
+    assert.match(f.err.at(-1), /^usage/u);
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), draft);
+  } finally { f.cleanup(); }
+});
+
+test('mc project <draft> prints the draft as it stands, and the send that would take it, exit 0', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    assert.equal(await run(['alpha'], f.deps), 0);
+    assert.deepEqual(f.out, [
+      'alpha — draft · memoro-cli · mc\n',
+      `  file   ${f.draft('alpha')}\n`,
+      '\n',
+      'It runs.\n',
+      '\n',
+      'CRITERIA\n',
+      '  1  It runs.\n',
+      '\n',
+      'STEPS\n',
+      '  1  One  haiku\n',
+      '\n',
+      'send: mc project send alpha\n',
+    ]);
+  } finally { f.cleanup(); }
+});
+
+test('mc project <draft> that send would refuse says what, and names no send, exit 0', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithCriterion(f);
+    assert.equal(await run(['alpha'], f.deps), 0);
+    const text = f.out.join('');
+    assert.match(text, /\nsend would refuse:\n {2}steps: [^\n]+\n$/u);
+    assert.doesNotMatch(text, /send: mc project send/u);
+  } finally { f.cleanup(); }
+});
+
+test('mc project <draft> shows a step waiting on another project, and send names the same wait', async () => {
+  const f = draftFixture();
+  try {
+    f.deps.programs = () => [{ project: 'other', repo: 'memoro-cli' }];
+    await draftWithCriterion(f);
+    assert.equal(await run([...STEP, '--after', 'memoro-cli:other', '--instruction-file', instructionFile(f)], f.deps), 0);
+    f.out.length = 0;
+    assert.equal(await run(['alpha'], f.deps), 0);
+    assert.match(f.out.join(''), /\n {2}1 {2}One {2}haiku\n {2}waits for other\n/u);
+    assert.equal(f.out.at(-1), 'send: mc project send alpha\n');
+  } finally { f.cleanup(); }
+});
+
+test('mc project <draft> given --json or --offline, or a flag of its own, is refused, exit 2; with no name it is usage', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    assert.equal(await run(['alpha', '--json'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: alpha is a draft — it has no --json\n');
+    assert.equal(await run(['alpha', '--offline'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: alpha is a draft — it has no --offline\n');
+    assert.equal(await run(['alpha', '--repo', 'memoro-cli'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: alpha takes no --repo\n');
+    assert.equal(await run([], f.deps), 2);
+    assert.match(f.err.at(-1), /^usage/u);
+    assert.equal(f.out.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('mc project <name> for a sent plan, or a name with no plan here, is mc status <name>, with --json and --offline passed on, and its exit code returned', async () => {
+  const f = draftFixture();
+  try {
+    sentStep(f, [{ key: 'One', status: 'ready' }]);
+    const calls = [];
+    const deps = { ...f.deps, statusProject: async (argv) => { calls.push(argv); return 3; } };
+    assert.equal(await run(['sent'], deps), 3);
+    assert.equal(await run(['sent', '--json', '--offline'], deps), 3);
+    assert.equal(await run(['mc-status'], deps), 3);
+    assert.deepEqual(calls, [['sent'], ['sent', '--json', '--offline'], ['mc-status']]);
+    assert.equal(f.out.length, 0);
   } finally { f.cleanup(); }
 });
