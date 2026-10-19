@@ -1,9 +1,12 @@
 /**
  * `mc project` — mc's own verbs over a project (ruling 48, `docs/project/mc/mc-project.md`).
  *
- * For now it records whether a success criterion is met: the register's, never
- * a pull request's. Whoever measured a criterion by its check says so here.
+ * It writes a plan's draft and records whether a success criterion is met: the
+ * register's, never a pull request's. Whoever measured a criterion by its check
+ * says so here.
  *
+ *   mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json
+ *   mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft's goal, contract or out of scope
  *   mc project criterion met [<project>] <n>     record that success criterion <n> holds
  *   mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold
  *   mc project import [--apply]                  copy every plan on origin/main that is not under ~/mc/programs/ there
@@ -15,12 +18,17 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { defaultRepos, listRepoPlans } from '../brief-collect.js';
-import { readPlanText } from '../plan-schema.js';
+import { defaultRepos, listArchived, listPlans, listRepoPlans } from '../brief-collect.js';
+import { NAME_RE, PLAN_SCHEMA, PLAN_VERSION, readPlanText } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
+import { DRAFT_FILE, draftProblems, findProjectDir, readDraftOrPlan, withPlanLock, writePlanFile } from '../plan-write.js';
 import { parseStepEnv, readEntry, updateCriterion } from '../register.js';
 import { programsHome, workRoot } from '../paths.js';
 import { scanArgs } from './flags.js';
+
+/** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
+const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope'];
+const EDIT_FLAGS = ['--goal', '--contract', '--out-of-scope'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -31,18 +39,36 @@ export async function run(argv, deps = {}) {
   const io = { read: deps.read, write: deps.write, lock: deps.lock };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
 
-  const scanned = scanArgs(argv, { booleans: ['--apply'], strictValues: [] });
+  const scanned = scanArgs(argv, {
+    booleans: ['--apply'],
+    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title'],
+    repeatable: ['--contract', '--out-of-scope'],
+  });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const [noun, verb, ...rest] = scanned.positional;
   if (noun === 'import') {
     if (scanned.positional.length !== 1) { stderr.write(usage()); return 2; }
+    const extra = onlyFlags(scanned, ['--apply']);
+    if (extra) { stderr.write(`mc: import takes no ${extra}\n`); return 2; }
     return importPlans(scanned.flags.apply, { ...deps, env, stdout, stderr });
   }
   if (scanned.flags.apply) { stderr.write(usage()); return 2; }
+  if (noun === 'new') {
+    const extra = onlyFlags(scanned, NEW_FLAGS);
+    if (extra) { stderr.write(`mc: new takes no ${extra}\n`); return 2; }
+    return newPlan(scanned, { ...deps, env, stdout, stderr });
+  }
+  if (noun === 'edit') {
+    const extra = onlyFlags(scanned, EDIT_FLAGS);
+    if (extra) { stderr.write(`mc: edit takes no ${extra}\n`); return 2; }
+    return editPlan(scanned, { ...deps, env, stdout, stderr });
+  }
   if (noun !== 'criterion' || (verb !== 'met' && verb !== 'unmet') || rest.length < 1 || rest.length > 2) {
     stderr.write(usage());
     return 2;
   }
+  const extra = onlyFlags(scanned, []);
+  if (extra) { stderr.write(`mc: criterion ${verb} takes no ${extra}\n`); return 2; }
   const [project, number] = rest.length === 2 ? rest : [parseStepEnv(env.MC_STEP)?.project, rest[0]];
   if (!project) { stderr.write('mc: which project? mc project criterion met <project> <n>, or MC_STEP in a runner session\n'); return 2; }
   if (!/^\d+$/u.test(number)) { stderr.write(`mc: ${number} is not a criterion number — 1 is the plan's first\n`); return 2; }
@@ -57,6 +83,140 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${error?.message || error}\n`);
     return 1;
   }
+}
+
+/**
+ * `mc project new <programme>/<project>` — writes a draft plan, `DRAFT.json`,
+ * beside where `PLAN.json` will be. The name must be free: no draft or plan of
+ * that project under the programmes home, and no repository's plan or closeout
+ * of that name on origin/main. Nothing is fetched to decide it.
+ */
+function newPlan(scanned, deps) {
+  const { env, stdout, stderr } = deps;
+  const home = deps.home || programsHome(env);
+  const repos = deps.repos || defaultRepos(env);
+  const records = deps.listPlans || listPlans;
+  const archived = deps.listArchived || listArchived;
+  const { flags } = scanned;
+
+  const target = scanned.positional.slice(1);
+  if (target.length !== 1) { stderr.write(usage()); return 2; }
+  const parts = target[0].split('/');
+  if (parts.length !== 2 || !NAME_RE.test(parts[0]) || !NAME_RE.test(parts[1])) {
+    stderr.write(`mc: ${target[0]} is not <programme>/<project> — lower-case letters, digits and hyphens\n`);
+    return 2;
+  }
+  const [programme, project] = parts;
+
+  const given = {
+    '--repo': flags.repo !== null,
+    '--goal': flags.goal !== null,
+    '--contract': flags.contract.length > 0,
+    '--out-of-scope': flags['out-of-scope'].length > 0,
+  };
+  const absent = Object.keys(given).filter((flag) => !given[flag]);
+  if (absent.length) { stderr.write(`mc: new needs ${absent.join(', ')}\n`); return 2; }
+  const repoNames = repos.map((repo) => repo.name);
+  if (!repoNames.includes(flags.repo)) {
+    stderr.write(`mc: ${flags.repo} is not a repository mc knows — ${repoNames.join(', ')}\n`);
+    return 2;
+  }
+
+  const found = findProjectDir(home, project);
+  if (found) { stderr.write(`mc: ${project} exists — ${found.file}\n`); return 1; }
+  for (const repo of repos) {
+    if (records(repo).some((record) => record.project === project) || archived(repo).includes(project)) {
+      stderr.write(`mc: ${project} is a project of ${repo.name} already\n`);
+      return 1;
+    }
+  }
+
+  const plan = {
+    schema: PLAN_SCHEMA,
+    version: PLAN_VERSION,
+    repo: flags.repo,
+    goal: [flags.goal],
+    contract: flags.contract,
+    out_of_scope: flags['out-of-scope'],
+    success_criteria: [],
+    documents: [],
+    steps: [],
+  };
+  const issues = draftProblems(plan);
+  if (issues.length) {
+    for (const issue of issues) stderr.write(`mc: ${issue}\n`);
+    return 1;
+  }
+  const dir = join(home, programme, project);
+  const file = join(dir, DRAFT_FILE);
+  try {
+    withPlanLock(dir, () => writePlanFile(file, plan));
+  } catch (error) {
+    stderr.write(`mc: ${error?.message || error}\n`);
+    return 1;
+  }
+  stdout.write(`mc: ${programme}/${project} drafted — ${file}\n`);
+  stdout.write(`next: mc project criterion add ${project} "…" --check "<command>"\n`);
+  return 0;
+}
+
+/**
+ * `mc project edit <project>` — changes a draft's goal, contract or out of scope:
+ * each flag given replaces that field whole. A sent plan (`PLAN.json`) has those
+ * three frozen, so it is refused here, as is a project mc does not hold.
+ */
+function editPlan(scanned, deps) {
+  const { env, stdout, stderr } = deps;
+  const home = deps.home || programsHome(env);
+  const { flags } = scanned;
+
+  const target = scanned.positional.slice(1);
+  if (target.length !== 1) { stderr.write(usage()); return 2; }
+  const [project] = target;
+  const changed = [];
+  if (flags.goal !== null) changed.push('goal');
+  if (flags.contract.length > 0) changed.push('contract');
+  if (flags['out-of-scope'].length > 0) changed.push('out_of_scope');
+  if (changed.length === 0) { stderr.write('mc: edit needs --goal, --contract or --out-of-scope\n'); return 2; }
+
+  const found = findProjectDir(home, project);
+  if (!found) { stderr.write(`mc: no project ${project} under ${home}\n`); return 1; }
+  if (found.sent) { stderr.write(`mc: ${project} is sent — its goal, contract and out of scope are frozen\n`); return 1; }
+
+  let problems;
+  try {
+    problems = withPlanLock(found.dir, () => {
+      const plan = readDraftOrPlan(found.file);
+      if (flags.goal !== null) plan.goal = [flags.goal];
+      if (flags.contract.length > 0) plan.contract = flags.contract;
+      if (flags['out-of-scope'].length > 0) plan.out_of_scope = flags['out-of-scope'];
+      const issues = draftProblems(plan);
+      if (issues.length === 0) writePlanFile(found.file, plan);
+      return issues;
+    });
+  } catch (error) {
+    stderr.write(`mc: ${error?.message || error}\n`);
+    return 1;
+  }
+  if (problems.length) {
+    for (const problem of problems) stderr.write(`mc: ${problem}\n`);
+    return 1;
+  }
+  stdout.write(`mc: ${project} — ${changed.join(', ')}\n`);
+  return 0;
+}
+
+/**
+ * The first flag `scanned` was given that `allowed` does not name, with its
+ * dashes, or null when every flag given is allowed. A repeatable flag counts as
+ * given when its array is not empty.
+ */
+function onlyFlags(scanned, allowed) {
+  for (const [key, value] of Object.entries(scanned.flags)) {
+    const given = Array.isArray(value) ? value.length > 0 : value !== null && value !== false;
+    if (given && !allowed.includes(`--${key}`)) return `--${key}`;
+  }
+  return null;
 }
 
 /**
@@ -140,7 +300,9 @@ function writeTextFile(path, text) {
 
 export function usage() {
   return [
-    'usage — mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
+    'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json\n',
+    '        mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft\'s goal, contract or out of scope\n',
+    '        mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
     '        mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold\n',
     '        the project defaults to MC_STEP\'s in a runner session\n',
     '        mc project import [--apply]                  copy every plan on origin/main that is not under ~/mc/programs/ there, with its repo — without --apply it shows what would go\n',

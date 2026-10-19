@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { listRepoPlans } from '../../../src/mc/brief-collect.js';
 import { run } from '../../../src/mc/commands/project.js';
 import { PLAN_SCHEMA, PLAN_VERSION, readPlanText } from '../../../src/mc/plan-schema.js';
+import { draftProblems } from '../../../src/mc/plan-write.js';
 import { parseEntry, registerPath } from '../../../src/mc/register.js';
 
 const ROOT = '/work';
@@ -229,5 +230,144 @@ test('a write that throws is reported, and the command exits 1', async () => {
     const deps = { ...f.deps, writeText: () => { throw new Error('disk full'); } };
     assert.equal(await run(['import', '--apply'], deps), 1);
     assert.equal(f.err.join(''), 'mc: disk full\n');
+  } finally { f.cleanup(); }
+});
+
+/**
+ * A temp home with one repository, `memoro-cli`, and no plans or closeouts on
+ * its origin/main unless a case says otherwise. `draft` is where a project's
+ * DRAFT.json lands under `mc/`.
+ */
+function draftFixture({ listPlans = () => [], listArchived = () => [] } = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'mc-draft-'));
+  const out = []; const err = [];
+  const deps = {
+    env: {}, home, repos: [{ name: 'memoro-cli', path: join(home, 'memoro-cli') }], listPlans, listArchived,
+    stdout: { write: (t) => out.push(t) }, stderr: { write: (t) => err.push(t) },
+  };
+  return {
+    deps, out, err, home,
+    draft: (project) => join(home, 'mc', project, 'DRAFT.json'),
+    cleanup: () => rmSync(home, { recursive: true, force: true }),
+  };
+}
+
+const NEW = ['new', 'mc/alpha', '--repo', 'memoro-cli', '--goal', 'It runs.', '--contract', 'First.', '--contract', 'Second.', '--out-of-scope', 'Else.'];
+
+test('new writes a draft that draftProblems accepts, with its paragraphs in order', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.deepEqual(draftProblems(plan), []);
+    assert.deepEqual(plan, {
+      schema: PLAN_SCHEMA, version: PLAN_VERSION, repo: 'memoro-cli', goal: ['It runs.'],
+      contract: ['First.', 'Second.'], out_of_scope: ['Else.'], success_criteria: [], documents: [], steps: [],
+    });
+    assert.equal(existsSync(join(f.home, 'mc', 'alpha', 'PLAN.json')), false);
+    assert.deepEqual(f.out, [
+      `mc: mc/alpha drafted — ${f.draft('alpha')}\n`,
+      'next: mc project criterion add alpha "…" --check "<command>"\n',
+    ]);
+    assert.equal(f.err.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('new twice refuses the second, exit 1, and leaves the draft as it was', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(NEW, f.deps), 1);
+    assert.equal(f.err.join(''), `mc: alpha exists — ${f.draft('alpha')}\n`);
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('new refuses a name a repository already holds as a plan, exit 1', async () => {
+  const f = draftFixture({ listPlans: () => [{ project: 'alpha', programme: 'mc' }] });
+  try {
+    assert.equal(await run(NEW, f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha is a project of memoro-cli already\n');
+    assert.equal(existsSync(f.draft('alpha')), false);
+  } finally { f.cleanup(); }
+});
+
+test('new refuses a name a repository has closed out, exit 1', async () => {
+  const f = draftFixture({ listArchived: () => ['alpha'] });
+  try {
+    assert.equal(await run(NEW, f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha is a project of memoro-cli already\n');
+    assert.equal(existsSync(f.draft('alpha')), false);
+  } finally { f.cleanup(); }
+});
+
+test('new refuses a bad name, a missing flag and an unknown repo, exit 2', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(['new', 'mc/Bad_Name', '--repo', 'memoro-cli', '--goal', 'x', '--contract', 'x', '--out-of-scope', 'x'], f.deps), 2);
+    assert.match(f.err.join(''), /mc\/Bad_Name is not <programme>\/<project>/u);
+
+    assert.equal(await run(['new', 'mc/alpha', '--repo', 'memoro-cli', '--contract', 'x', '--out-of-scope', 'x'], f.deps), 2);
+    assert.match(f.err.join(''), /mc: new needs --goal/u);
+
+    assert.equal(await run(['new', 'mc/alpha', '--repo', 'nowhere', '--goal', 'x', '--contract', 'x', '--out-of-scope', 'x'], f.deps), 2);
+    assert.match(f.err.join(''), /mc: nowhere is not a repository mc knows — memoro-cli/u);
+
+    assert.equal(await run([...NEW, '--apply'], f.deps), 2);
+    assert.equal(existsSync(f.draft('alpha')), false);
+  } finally { f.cleanup(); }
+});
+
+test('edit changes the goal of a draft and keeps the rest', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['edit', 'alpha', '--goal', 'Changed.'], f.deps), 0);
+    assert.equal(f.out.at(-1), 'mc: alpha — goal\n');
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.deepEqual(plan.goal, ['Changed.']);
+    assert.deepEqual(plan.contract, ['First.', 'Second.']);
+    assert.deepEqual(plan.out_of_scope, ['Else.']);
+    assert.equal(plan.repo, 'memoro-cli');
+    assert.deepEqual(draftProblems(plan), []);
+  } finally { f.cleanup(); }
+});
+
+test('edit on a directory holding PLAN.json is refused, exit 1, and the plan is untouched', async () => {
+  const f = draftFixture();
+  try {
+    const dir = join(f.home, 'mc', 'sent');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'PLAN.json'), repoPlan('sent'));
+    assert.equal(await run(['edit', 'sent', '--goal', 'Changed.'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: sent is sent — its goal, contract and out of scope are frozen\n');
+    assert.equal(readFileSync(join(dir, 'PLAN.json'), 'utf8'), repoPlan('sent'));
+  } finally { f.cleanup(); }
+});
+
+test('edit with no field flag is usage, exit 2; a project mc does not hold is exit 1', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['edit', 'alpha'], f.deps), 2);
+    assert.match(f.err.join(''), /mc: edit needs --goal, --contract or --out-of-scope/u);
+    assert.equal(await run(['edit', 'nope', '--goal', 'x'], f.deps), 1);
+    assert.equal(f.err.at(-1), `mc: no project nope under ${f.home}\n`);
+  } finally { f.cleanup(); }
+});
+
+test('criterion met given a flag it does not take is refused, exit 2, and the register is untouched', async () => {
+  const f = fixture();
+  assert.equal(await run(['criterion', 'met', 'p', '2', '--goal', 'x'], f.deps), 2);
+  assert.match(f.err.join(''), /mc: criterion met takes no --goal/u);
+  assert.equal(f.entry().criteria[1].met, false);
+});
+
+test('import given a flag it does not take is refused, exit 2', async () => {
+  const f = importFixture();
+  try {
+    assert.equal(await run(['import', '--goal', 'x'], f.deps), 2);
+    assert.equal(f.err.join(''), 'mc: import takes no --goal\n');
   } finally { f.cleanup(); }
 });
