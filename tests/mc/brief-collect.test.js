@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  listPlans, listProposals, parseCatFileBatch, parsePlanFrontmatter, planFields, runsFor, showBatch,
+  listArchived, listPlans, listProposals, parseCatFileBatch, parsePlanFrontmatter, planFields, runsFor, showBatch,
 } from '../../src/mc/brief-collect.js';
 
 const RUNS = [
@@ -82,6 +82,26 @@ describe('PLAN.md frontmatter', () => {
     assert.equal(texts.get('a'), plan, 'a multi-byte plan survives the split');
     assert.equal(texts.has('origin/main:gone.md'), false);
     assert.equal(texts.get('c'), 'hi!', 'the walk stayed in step after the miss');
+  });
+});
+
+describe('archived projects', () => {
+  it('lists the closeout records on a ref, and not the markdown or what is nested under closeout/', () => {
+    const git = (cwd, args) => {
+      if (args[0] === 'ls-tree') return [
+        'docs/project/README.md',
+        'docs/project/mc/closeout/a.json',
+        'docs/project/mc/closeout/a.md',
+        'docs/project/mc/b/PLAN.json',
+        'docs/project/mc/closeout/notes/c.json',
+      ].join('\n');
+      return null;
+    };
+    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git }), ['a']);
+  });
+
+  it('is empty when the ref cannot be read', () => {
+    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git: () => null }), []);
   });
 });
 

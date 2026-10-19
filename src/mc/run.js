@@ -115,7 +115,7 @@ import {
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-landed.js';
-import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
+import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collect.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker } from './docker.js';
@@ -2929,6 +2929,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   function queue({ only = null } = {}) {
     let plans = [];
+    const archived = [];
     const prs = [];
     const prsFailed = [];
     const askedRepos = [];
@@ -2947,6 +2948,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // a `ready` or `failed` step the register says has landed is done here,
       // so it is never handed out again.
       plans.push(...sweepLanded(sweepLanding(sweepRunning(overlayPlans(listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }), register)))));
+      archived.push(...listArchived(repo, { git: gitOut }));
       // A repository whose last ask failed is not asked again until its
       // backoff has run out (github-backoff.js): every ask at a locked keychain
       // left a modal and a process behind (2026-09-20). It starts nothing
@@ -2977,8 +2979,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
     }
     // A blocked step whose wait is over — a time, an earlier step's deploy
-    // plus a delay, another project done — is `ready` again, written by the
-    // runner and said (ruling 35). After the loop, because a `project`
+    // plus a delay, another project done or archived — is `ready` again,
+    // written by the runner and said (ruling 35). After the loop, because a `project`
     // blocker may name a project in the other repository. A deploy counts
     // when its sha contains the landed one, asked of memoro's checkout, which
     // was fetched just above; a git that cannot answer releases nothing.
@@ -2986,6 +2988,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     plans = releaseDue(plans, {
       root,
       now: deps.now(),
+      archived,
       deploys: parseDeploys(deps.read(deploysPath(deps.env)) || ''),
       contains: (sha, rowSha) => Boolean(memoro) && deps.git(memoro.path, ['merge-base', '--is-ancestor', sha, rowSha]).ok === true,
       update: (project, index, patch) => updateStep({ root, project, index, patch, read: deps.read, write: writeJson, lock: register.lock, now: stamp() }),

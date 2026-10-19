@@ -16,12 +16,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`blockerDue` releases a `project` blocker whose project is archived, with the reason `project <name> is archived`, and `describeWait` says `on project <name> — archived`. `releaseDue` releases such a step in the register. A blocker on a project that is neither on main nor archived stays blocked.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/step-release.test.js tests/mc/brief-collect.test.js` passes, including the tests named in step 1."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`listArchived` reads the archived projects of this machine's memoro-cli checkout from origin/main.",
       "check": "From the branch: `node --input-type=module -e \"import {listArchived} from './src/mc/brief-collect.js'; import {homedir} from 'node:os'; const n = listArchived({name:'memoro-cli', path: homedir() + '/memoro-cli'}); if (!n.includes('mc-runner-hardening')) { console.error(n); process.exit(1); }\"` exits 0."
     }
