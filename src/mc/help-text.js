@@ -67,7 +67,8 @@ THE PAGE
   mc step <project>                Where each step stands, from the register
   mc step failed|blocked|ready|done  Move one step: a session gives up, a
                                     person starts it again
-  mc work <name>                   Open that workarea, ~/mc/work/<name>
+  mc project criterion met <p> <n> A success criterion holds: the register, not the plan file
+  mc work <name>                  Open that workarea, ~/mc/work/<name>
 
 IN FULL
   mc status <name>                 One project: its PLAN.md frontmatter and
