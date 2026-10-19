@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, SCRATCH_KEEP_MS, TIDY_DISK_MIN_INTERVAL_MS, createRunner, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { DISK_MIN_BYTES, MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, SCRATCH_KEEP_MS, TIDY_DISK_MIN_INTERVAL_MS, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { checkpoint } from '../../src/mc/checkpoint.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
@@ -2894,6 +2894,18 @@ test('tidy runs once a day by its own row, and notes what it freed', async () =>
   assert.equal(rows.length, 2, 'the old row and the new one');
   assert.deepEqual({ exit: rows[1].exit, note: rows[1].note }, { exit: '0', note: 'freed=2500000000,items=40,kept=1' });
   assert.match(f.files['/w/runner/log/runner.log'], /tidy \(daily\): freed 2\.50 GB in 40 items, kept 1 on re-check/u);
+});
+
+test('the tidy line says what Docker reclaimed, and nothing when Docker was down', async () => {
+  const f = fixture({ now: '2026-08-29T10:00:00Z', runs: DEPS_HEADER + tidyRowAt('2026-08-28T09:00:00Z') });
+  f.deps.tidy = async () => ({
+    outcome: { freed: 0, removed: 0, kept: 0 },
+    docker: { up: true, pruned: [{ what: 'images', ok: true, reclaimed: '12.4GB' }, { what: 'build cache', ok: false, detail: 'busy' }] },
+  });
+  await createRunner({ deps: f.deps }).chores();
+  assert.match(f.files['/w/runner/log/runner.log'], /kept 0 on re-check · docker: images 12\.4GB, build cache failed — busy/u);
+  assert.equal(dockerNote({ up: false, pruned: [] }), '');
+  assert.equal(dockerNote(null), '');
 });
 
 test('a lane skipped for disk runs tidy in the next chore pass, at most once an hour', async () => {

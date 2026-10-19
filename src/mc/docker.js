@@ -391,6 +391,76 @@ export async function removeDeadHolders({ dryRun = false, io = {} } = {}) {
 }
 
 /**
+ * How old an image or a build-cache entry must be before `mc tidy` prunes it.
+ * Martin, 2026-10-19: images and build cache older than a few days, in `mc
+ * tidy`. Three days, so what this week's deploys and dev servers built stays.
+ */
+export const TIDY_KEEP_FILTER = 'until=72h';
+/** One prune: Docker walks every layer, which takes longer than a status call. */
+export const PRUNE_TIMEOUT_MS = 5 * 60_000;
+
+const PRUNES = [
+  { what: 'images', args: ['image', 'prune', '--all', '--force', '--filter', TIDY_KEEP_FILTER] },
+  { what: 'build cache', args: ['builder', 'prune', '--all', '--force', '--filter', TIDY_KEEP_FILTER] },
+];
+
+/** `Total reclaimed space: 1.2GB` (image prune) or `Total:\t1.2GB` (builder prune). */
+function reclaimedOf(text) {
+  return /Total(?: reclaimed space)?:\s*(\S+)/u.exec(String(text ?? ''))?.[1] ?? null;
+}
+
+/**
+ * `mc tidy`'s Docker half: images and build cache unused for three days.
+ * Docker itself never prunes an image a container uses, so a running gate or
+ * dev server keeps its own.
+ *
+ * Without `apply` it prunes nothing and reports `docker system df`'s
+ * reclaimable sizes — an upper bound, since those ignore the three days. A
+ * runtime that is down is never started here, apply or not: on OrbStack the
+ * prune would itself start the VM. `start` is `ensure` for a person who asked
+ * for Docker by name (`mc tidy --docker --apply`); its lease is released
+ * before this resolves. Resolves `{ up, runtime, apply, reclaimable, pruned,
+ * reason }` and never throws.
+ */
+export async function tidyDocker({
+  apply = false, start = null, root = mcHome(), env = process.env, io = {},
+} = {}) {
+  const m = { ...SYSTEM, ...io };
+  const rt = await runtimeOf({ env, io });
+  const answer = { up: rt.up, runtime: rt, apply, reclaimable: null, pruned: [], reason: null };
+  let lease = null;
+  if (!rt.up) {
+    if (!apply || !start) return { ...answer, reason: `${rt.kind} is not running${rt.reason ? ` — ${rt.reason}` : ''}` };
+    const ensured = await ensure({ ...start, root, env, io });
+    if (!ensured.ok) return { ...answer, reason: `could not be started — ${ensured.reason}` };
+    lease = ensured.lease;
+    answer.up = true;
+  }
+  try {
+    if (!apply) {
+      const errors = [];
+      const rows = await jsonLines(m, ['system', 'df', '--format', '{{json .}}'], 'docker system df', errors);
+      if (!rows) return { ...answer, reason: errors.join('; ') };
+      const of = (type) => String(rows.find((row) => row.Type === type)?.Reclaimable ?? '0B');
+      return { ...answer, reclaimable: { images: of('Images'), build_cache: of('Build Cache') } };
+    }
+    for (const { what, args } of PRUNES) {
+      const result = await m.run('docker', args, { timeoutMs: PRUNE_TIMEOUT_MS });
+      const said = `${result?.stdout ?? ''}${result?.stderr ?? ''}`;
+      answer.pruned.push(result?.status === 0
+        ? { what, ok: true, reclaimed: reclaimedOf(said), detail: null }
+        : { what, ok: false, reclaimed: null, detail: failure(result) });
+    }
+    m.log('docker-tidy', { pruned: answer.pruned.map(({ what, ok, reclaimed }) => ({ what, ok, reclaimed })) });
+    return answer;
+  } catch (error) {
+    return { ...answer, reason: String(error?.message || error) };
+  } finally {
+    if (lease) release(lease, { root, io });
+  }
+}
+
+/**
  * The runner's chore pass (`chores()`, `run.js`): leases whose pid is gone,
  * labelled leftovers of a dead holder, and the idle stop. While the runtime is
  * down only `orbctl status` runs — a `docker` call would start the VM this is
