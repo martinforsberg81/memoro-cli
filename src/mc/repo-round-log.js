@@ -127,6 +127,13 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     // (`exact`, or `delta` with what it ran again — ruling 47), so the hit
     // rate is counted from the log rather than guessed. Null when it measured.
     reused: gate?.reused || null,
+    // What a load stop measured: the files red only under load, how they ran
+    // alone on the candidate, and the files killed or wholly cancelled — so a
+    // file that is red under load again and again is found from the log.
+    under_load_files: report.under_load_files || gate?.under_load_files || null,
+    head_alone: report.head_alone || gate?.head_alone || null,
+    killed_files: (report.killed_files || gate?.killed_files)?.length ? (report.killed_files || gate.killed_files) : null,
+    cancelled_files: (report.cancelled_files || gate?.cancelled_files)?.length ? (report.cancelled_files || gate.cancelled_files) : null,
     // A red round's files and where the merger kept its failures
     // (`runner/merge-red/`, ruling 44). A batch that fell back is one line for
     // all its pull requests: the files of every own round, and each one's

@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  MERGE_BATCH_MAX, dequeue, enqueue, heldLanding, markLanding, markQueued, markRed, mergesPath, nextBatch, nextJob,
+  MERGE_BATCH_MAX, dequeue, enqueue, heldLanding, markLanding, markQueued, markRed, markRequeued, mergesPath, nextBatch, nextJob,
   parseQueue, placeOf, queueEntries, queueOrder, queuedFor, stepsDone, waitingOn,
 } from '../../src/mc/merge-queue.js';
 
@@ -188,4 +188,18 @@ test('a resumed landing batch drops a member whose earlier step is no longer don
   const alone = markLanding(enqueue([], job({ repo: 'memoro', pr: 2, step: { project: 'mq', index: 2 } })), { repo: 'memoro', pr: 2 }, 's');
   assert.deepEqual(nextBatch(alone, { ordered }), [], 'a landing job alone and out of order is not landed');
   assert.equal(nextJob(alone, { ordered }), null);
+});
+
+test('a requeued job keeps its place, counts the requeue, and is not taken before not_before', () => {
+  const entries = queueEntries([job({ pr: 1, since: 'a', state: 'landing' }), job({ pr: 2, since: 'b' })]);
+  const back = queueEntries(markRequeued(entries, { repo: 'memoro-cli', pr: 1 }, { notBefore: '2026-10-19T20:15:00.000Z' }));
+  assert.equal(back[0].state, 'queued');
+  assert.equal(back[0].requeues, 1);
+  assert.equal(back[0].since, 'a', 'its place is kept');
+  const at = (iso) => Date.parse(iso);
+  assert.deepEqual(nextBatch(back, { now: at('2026-10-19T20:05:00Z') }).map((e) => e.pr), [2], 'the one behind it goes first');
+  assert.equal(nextJob(back, { now: at('2026-10-19T20:05:00Z') }).pr, 2);
+  assert.deepEqual(nextBatch(back, { now: at('2026-10-19T20:15:00Z') }).map((e) => e.pr), [1, 2], 'due, it is first again');
+  assert.deepEqual(nextBatch(back).map((e) => e.pr), [1, 2], 'no now waits for nothing');
+  assert.equal(queueEntries(markRequeued(back, { repo: 'memoro-cli', pr: 1 }))[0].requeues, 2);
 });

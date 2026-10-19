@@ -891,7 +891,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function sweepLanding(plans) {
     const pending = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
     const mayGo = pending.length && nextJob(pending, {
-      landed: parentLanded(root, { read: deps.read }), ordered: stepsBeforeDone(root, { read: deps.read }),
+      landed: parentLanded(root, { read: deps.read }), ordered: stepsBeforeDone(root, { read: deps.read }), now: deps.now().getTime(),
     });
     if (mayGo && deps.startMerger && !readMerger({ root, alive })) {
       const started = deps.startMerger({ root });
