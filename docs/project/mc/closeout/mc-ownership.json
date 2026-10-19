@@ -1,0 +1,198 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-ownership",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-ownership/PLAN.json",
+  "archived": "2026-10-19",
+  "goal": [
+    "mc owns the names it reads and writes. A proposal's filename says which system it is for, so the page counts proposals by system and a new proposal without the tag is named the moment it is written.",
+    "The runner makes a step's workarea only on a project branch it owns. A branch held by someone else's worktree, or carrying someone else's commits, blocks the step as `branch-foreign` and names the holder. A landed leftover branch is replaced by a fresh one from origin/main.",
+    "mc writes and checks its own hook registration in `~/.claude/settings.json` (`mc hook install [--check]`), and the page says when that registration has drifted.",
+    "A `per_repo` lane count changed with `mc run lanes` takes effect in a running runner without `mc run --update`."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "Every role and prompt that names a proposal file names it `<date>-<system>-<slug>.md` with system `mc` or `memoro`. A new proposal from an intake turn whose name has no system gets `proposal <file> names no system (mc|memoro)` on the turn's line. The page's BRIEF line splits the count, for example `2 proposals · mc 1 · untagged 1`.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/helper-turn.test.js tests/mc/commands/helper.test.js tests/mc/page.test.js tests/mc/roles-decisions.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": true,
+      "criterion": "When the runner makes a workarea, it blocks the step as `branch-foreign` if the project's local branch is checked out in a worktree outside the plan home or carries commits not on origin/main. The block names the holder. If the local branch has landed, no worktree holds it and no register step names it, the runner deletes it and creates the workarea from origin/main, and says so in one line.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-branch.test.js tests/mc/run.test.js tests/mc/run-plan.test.js` passes, including the tests named in step 2."
+    },
+    {
+      "met": true,
+      "criterion": "`mc hook install` writes the SessionStart entry and the PreToolUse entry on `Bash|Write|Read` into `~/.claude/settings.json`. It leaves every other entry untouched, writes nothing on a second run and refuses a file that is not JSON. `--check` exits 1 on drift and 0 otherwise. The page's MC line names the drift and `mc hook install`.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/hooks.test.js tests/mc/commands/hook-install.test.js tests/mc/page.test.js` passes, including the tests named in step 3. `mc hook install --check` exits 0 on this machine after `mc hook install`."
+    },
+    {
+      "met": true,
+      "criterion": "A running runner starts a new lane within one poll when `per_repo` is raised. When `per_repo` is lowered, a lane whose number is now above it ends after the step it is in and starts nothing more. `mc run lanes` says both numbers apply now.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/commands/run-lanes.test.js` passes, including the tests named in step 4."
+    }
+  ],
+  "steps": [
+    {
+      "title": "A proposal's filename names its system, and mc counts and checks by it",
+      "done_when": "The role files, `helperPrompt`, `helperLaunch` and the help text name proposals `<date>-<system>-<slug>.md`; `proposalSystem` in `src/mc/brief-collect.js` reads the tag; `describeTurn` names an untagged new proposal; the page's BRIEF line splits the count by system; the new and changed tests in `tests/mc/helper-turn.test.js`, `tests/mc/commands/helper.test.js`, `tests/mc/page.test.js` and `tests/mc/roles-decisions.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 965,
+      "landed": {
+        "sha": "c28bd9ac9eab4389fa83ff61374ec68ed5872c38",
+        "into": "main",
+        "at": "2026-10-18T15:43:30Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 1 done as built: proposals are named <date>-<mc|memoro>-<slug>.md; mc reads the system from the basename only (proposalSystem in brief-collect.js); describeTurn names untagged new files without renaming them; BRIEF splits by system with untagged in yellow. Three existing fixtures changed beyond the step list (helper.test.js drain stub name, page.test.js 'prints the sections in order' regex, palette SNAPSHOT row). Verified: targeted gate 193 green, full gate 2863 green. Existing untagged proposals in ~/mc/proposals/ are not renamed, so BRIEF shows untagged N until they are archived or renamed."
+      ],
+      "sessions": 1,
+      "seconds": 780,
+      "cost_usd": 0.217064
+    },
+    {
+      "title": "The runner refuses a project branch it does not own (`branch-foreign`)",
+      "done_when": "`claimProjectBranch` in `src/mc/plan-branch.js` is asked before `addWorktree` in `runStepClaimed` (`src/mc/run.js`); a project branch held outside the plan home, or ahead of origin/main and named by no register step, blocks the step as `branch-foreign` naming the holder; a landed, unheld, unregistered one is deleted and the workarea made from origin/main with one runner.log line; `canon/roles/plan.md` and `planLaunch` name the PR branch `plan/<project>`; the new tests in `tests/mc/plan-branch.test.js`, `tests/mc/run.test.js` and `tests/mc/run-plan.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 973,
+      "landed": {
+        "sha": "3d2456928cb3ea75995fa50b5b005f16324f29e3",
+        "into": "main",
+        "at": "2026-10-18T17:46:25Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "planLaunch's new branch-rule line contains '<project>' and 'pull request', which the guard test 'predicts nothing about the deliverable' in tests/mc/commands/plan.test.js forbade; the guard now exempts exactly that line (BRANCH_RULE) and a new test asserts it is present."
+      ],
+      "sessions": 1,
+      "seconds": 882,
+      "cost_usd": 1.157249
+    },
+    {
+      "title": "`mc hook install [--check]` writes and checks mc's hook registration, and the page names drift",
+      "done_when": "`MC_HOOKS`, `hookRegistration`, `installHooks`, `hookDrift` and `readClaudeSettings` exist in `src/mc/hooks.js`; `mc hook install` writes mc's two entries into `~/.claude/settings.json` idempotently and `--check` exits 1 on drift; `mcSection` carries `hooks` and the page's MC line names it; the new tests in `tests/mc/hooks.test.js`, `tests/mc/commands/hook-install.test.js` and `tests/mc/page.test.js` pass; the help text and the matrix row are in their own final commit; `mc gate` is green.",
+      "status": "done",
+      "pr": 987,
+      "landed": {
+        "sha": "34453c24e541c79075714b09609a74cc135d2c91",
+        "into": "main",
+        "at": "2026-10-18T19:48:39Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Blocked on `mc-runner-hardening` step 8 (`mc hook pre-tool applies the repositories' own PreToolUse hooks when the session started outside them`). That step changes `src/mc/hooks.js`, `src/mc/commands/hook.js` `usage()` and the documented matcher to `Bash|Write|Read`. Set this step `ready` with `mc step ready mc-ownership 3` once that step has merged.",
+        "Released 2026-10-18T19:42:07Z: project mc-runner-hardening is done",
+        "mc hook install [--check] writes and checks mc's two entries in ~/.claude/settings.json (MC_HOOKS, hookRegistration, installHooks, hookDrift, readClaudeSettings in src/mc/hooks.js). The page's MC line carries hooks: <drift> · mc hook install when the registration has drifted. Criterion 2 in PLAN.json stays met:false until the live-file check (mc hook install --check exits 0 after mc hook install on this machine) has run after the merge; the tests and a scratch-HOME run pass. Known edge: an entry holding two mc hooks for one event is not repaired by installHooks; mc never writes that shape. The write leaves the settings file at mode 0600."
+      ],
+      "sessions": 1,
+      "seconds": 304,
+      "cost_usd": 0.066711
+    },
+    {
+      "title": "A `per_repo` changed with `mc run lanes` takes effect in a running runner",
+      "done_when": "`runLoop` in `src/mc/run.js` keeps a live set of lane loops: a raised `per_repo` starts the new lanes within one poll, and a lane whose index is at or above a lowered `per_repo` exits between passes; `mc run lanes` and `lane-count.js` say both numbers apply now; the new tests in `tests/mc/run.test.js` and the changed ones in `tests/mc/commands/run-lanes.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 990,
+      "landed": {
+        "sha": "8883c85998662e2ae87273e67af775602ef53af5",
+        "into": "main",
+        "at": "2026-10-19T04:41:12Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Blocked on `mc-runner-hardening` step 7 (`The total lane cap is read live and counts every live runner's steps`). That step changes `createRunner`'s slot code, the `runLoop` comment, the `mc run lanes` lines and the `lane-count.js` header that this step rewrites. Set this step `ready` with `mc step ready mc-ownership 4` once that step has merged. If step 3 is still blocked then, it is a different blocker, and this step does not depend on step 3's code.",
+        "Set ready on 2026-10-19T04:32:34Z: mc-runner-hardening delivered and archived (#986); step 7 capNow on main",
+        "runLoop's first reconcile() starts every lane even with STOP or UPDATE present at start, a departure from the plan's 'return at once'. With the plan's version, an UPDATE present at start left the live set empty, so the exit loop ended at once and the lanes the chore loop started later were never awaited. That failed 'UPDATE file: a handover that does not start keeps this runner going'. Later reconcile calls refuse on STOP, UPDATE or handover as designed."
+      ],
+      "sessions": 1,
+      "seconds": 325,
+      "cost_usd": 0.917784
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-18T15:32:09Z",
+      "kind": "step",
+      "seconds": 780,
+      "land_seconds": null,
+      "pr": 965,
+      "turns": 100,
+      "input": 50,
+      "output": 59388,
+      "cache_read": 1606948,
+      "cache_write": 219780,
+      "model": null,
+      "note": "success,queued",
+      "session": "fe394282-fccc-4cf5-96d3-cb8903701f12",
+      "cost_usd": 0.21706350999999996
+    },
+    {
+      "ts": "2026-10-18T17:42:05Z",
+      "kind": "step",
+      "seconds": 882,
+      "land_seconds": null,
+      "pr": 973,
+      "turns": 55,
+      "input": 38,
+      "output": 16635,
+      "cache_read": 874584,
+      "cache_write": 129896,
+      "model": null,
+      "note": "success,queued",
+      "session": "3cd5d743-563e-4315-b9a3-ee2f0e76f369",
+      "cost_usd": 1.1572488000000003
+    },
+    {
+      "ts": "2026-10-18T19:48:36Z",
+      "kind": "step",
+      "seconds": 304,
+      "land_seconds": null,
+      "pr": 987,
+      "turns": 53,
+      "input": 40,
+      "output": 55759,
+      "cache_read": 1340986,
+      "cache_write": 101416,
+      "model": null,
+      "note": "success,queued",
+      "session": "d3a6eb64-8d0a-42e9-b505-5634aac00ecf",
+      "cost_usd": 0.06671128
+    },
+    {
+      "ts": "2026-10-19T04:40:22Z",
+      "kind": "step",
+      "seconds": 325,
+      "land_seconds": null,
+      "pr": 990,
+      "turns": 53,
+      "input": 42,
+      "output": 19499,
+      "cache_read": 1005882,
+      "cache_write": 65292,
+      "model": null,
+      "note": "success,queued",
+      "session": "3182b926-d34e-405b-9da7-9e6e1c8ebfdb",
+      "cost_usd": 0.9177843999999998
+    }
+  ],
+  "totals": {
+    "sessions": 4,
+    "seconds": 2291,
+    "land_seconds": 0,
+    "cost_usd": 2.358808,
+    "cost_unknown": 0,
+    "input": 170,
+    "output": 151281,
+    "cache_read": 4828400,
+    "cache_write": 516384,
+    "first": "2026-10-18T15:32:09Z",
+    "landed": "2026-10-19T04:41:12Z"
+  }
+}
