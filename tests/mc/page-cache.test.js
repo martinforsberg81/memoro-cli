@@ -101,6 +101,32 @@ describe('plans.json', () => {
     assert.equal(JSON.parse(fs.held[path]).memoro.shape, PLANS_SHAPE, 'and it is stamped on the way back in');
   });
 
+  /**
+   * The sha does not move when a file under `~/mc/programs/` is edited, so the
+   * programs plan is read on every call and never written into the cache.
+   */
+  it('reads ~/mc/programs/ on every call, and keeps it out of the cache', () => {
+    const fs = files();
+    const shas = { '/r/memoro': 'aaa' };
+    const PROGRAM = JSON.stringify({
+      schema: 'mc-plan', version: 1, repo: 'memoro', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
+      success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
+      steps: [{ title: 'S1 — one', status: 'ready', done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
+    });
+    let text = PROGRAM;
+    const programs = () => [{ path: '/w/programs/mc/memoro/PLAN.json', programme: 'mc', project: 'memoro', file: 'PLAN.json', text, repo: 'memoro' }];
+    const first = loadPlans({ root: ROOT, repos: [REPOS[0]], now: NOW, git: fakeGit(shas, []), batch: batchOf([]), programs, ...fs });
+    assert.deepEqual(first.plans.map((p) => [p.path, p.status]), [['/w/programs/mc/memoro/PLAN.json', 'ready']]);
+
+    text = '{'; // the same file, edited in place: the sha is unchanged
+    const calls = [];
+    const second = loadPlans({ root: ROOT, repos: [REPOS[0]], now: NOW, git: fakeGit(shas, calls), batch: batchOf(calls), programs, ...fs });
+    assert.deepEqual(second.sources, [{ repo: 'memoro', sha: 'aaa', cached: true }]);
+    assert.deepEqual(second.plans.map((p) => [p.path, p.status]), [['/w/programs/mc/memoro/PLAN.json', 'invalid']]);
+    const cached = JSON.parse(fs.held[cachePath(ROOT, 'plans.json')]).memoro.plans;
+    assert.deepEqual(cached.map((p) => p.path), ['docs/project/mc/memoro/PLAN.md'], 'the repository record only');
+  });
+
   it('reads a repository without a sha straight through and files nothing under it', () => {
     const fs = files();
     const calls = [];

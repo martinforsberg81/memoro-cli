@@ -310,6 +310,28 @@ describe('the ground', () => {
     assert.ok(record.next, 'the next step is named');
   });
 
+  it('lays ~/mc/programs/ over the repository, and the plan there keeps its absolute path', async () => {
+    const { repos: list } = repos();
+    const programPath = '/w/programs/mc/mc-x/PLAN.json';
+    const programText = JSON.stringify({
+      schema: 'mc-plan', version: 1, repo: 'memoro', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
+      success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
+      steps: [{ title: 'S1 — one', status: 'ready', done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
+    });
+    const git = async (cwd, args) => {
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'ls-tree') return 'docs/project/mc/mc-x/PLAN.md\ndocs/project/mc/mc-y/PLAN.md';
+      if (args[1] === 'origin/main:docs/project/mc/mc-y/PLAN.md') return '---\nstatus: ready\nnext: "Step 2"\n---\n# y';
+      return null;
+    };
+    const programs = () => [{ path: programPath, programme: 'mc', project: 'mc-x', file: 'PLAN.json', text: programText, repo: 'memoro' }];
+    const ground = await helperGround({ env: {}, repos: list, git, programs });
+    assert.deepEqual(ground.plans.map((p) => [p.project, p.path, p.status]), [
+      ['mc-x', programPath, 'ready'],
+      ['mc-y', 'docs/project/mc/mc-y/PLAN.md', 'ready'],
+    ]);
+  });
+
   it('notes what it could not read instead of pretending the list is complete', async () => {
     const { repos: list } = repos();
     const ground = await helperGround({ env: {}, repos: list, git: async () => null });

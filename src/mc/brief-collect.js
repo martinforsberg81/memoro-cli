@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { planSummary, readPlanText } from './plan-schema.js';
-import { PLAN_FILE, PROJECT_DIR, lsTreeArgs, plansInTree } from './plan-source.js';
+import { PLAN_FILE, PROJECT_DIR, lsTreeArgs, plansInTree, programsPlans } from './plan-source.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -134,12 +134,38 @@ export function listProgrammes(repo, { ref = 'origin/main', git = runGit } = {})
  * the tests can stay off the real one; `showBatch` turns such a git into a
  * batch reader.
  */
-export function listPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch } = {}) {
+export function listRepoPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch } = {}) {
   const tree = git(repo.path, lsTreeArgs(ref));
   if (tree == null) return [];
   const entries = plansInTree(tree);
   const texts = batch(repo.path, entries.map((e) => `${ref}:${e.path}`));
   return planRecords(repo.name, entries, (path) => texts.get(`${ref}:${path}`) || '');
+}
+
+/**
+ * The records of one repository with `~/mc/programs/` laid over them. A project
+ * under the programs tree is the plan, and its repository copy is not read
+ * (ruling 48); a programs plan whose `repo` is not this repository is another
+ * repository's, so it is left out here, and it still takes its project's
+ * repository record out of this list. `records` is `listRepoPlans`'s.
+ */
+export function withProgrammePlans(repoName, records, { programs = programsPlans } = {}) {
+  const all = programs();
+  const moved = new Set(all.map((e) => e.project));
+  const own = all.filter((e) => e.repo === repoName);
+  const texts = new Map(own.map((e) => [e.path, e.text]));
+  return [
+    ...planRecords(repoName, own, (path) => texts.get(path) || ''),
+    ...records.filter((r) => !moved.has(r.project)),
+  ];
+}
+
+/**
+ * The plans of one repository as the readers see them: `~/mc/programs/` first,
+ * then the repository's own on the ref (`listRepoPlans`, `withProgrammePlans`).
+ */
+export function listPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch, programs = programsPlans } = {}) {
+  return withProgrammePlans(repo.name, listRepoPlans(repo, { ref, git, batch }), { programs });
 }
 
 /**

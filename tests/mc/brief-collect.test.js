@@ -11,6 +11,7 @@ import { describe, it } from 'node:test';
 
 import {
   listArchived, listPlans, listProposals, parseCatFileBatch, parsePlanFrontmatter, planFields, runsFor, showBatch,
+  withProgrammePlans,
 } from '../../src/mc/brief-collect.js';
 
 const RUNS = [
@@ -82,6 +83,47 @@ describe('PLAN.md frontmatter', () => {
     assert.equal(texts.get('a'), plan, 'a multi-byte plan survives the split');
     assert.equal(texts.has('origin/main:gone.md'), false);
     assert.equal(texts.get('c'), 'hi!', 'the walk stayed in step after the miss');
+  });
+});
+
+describe('the plans under ~/mc/programs/', () => {
+  // A plan that parses, with one step ready. Its top-level `repo` is what makes it a programs plan.
+  const PROGRAM_TEXT = JSON.stringify({
+    schema: 'mc-plan', version: 1, repo: 'memoro-cli', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
+    success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
+    steps: [{ title: 'S1 — one', status: 'ready', done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
+  });
+  const program = (project, repo) => ({
+    path: `/w/programs/mc/${project}/PLAN.json`, programme: 'mc', project, file: 'PLAN.json', text: PROGRAM_TEXT, repo,
+  });
+  const fromRepo = (project) => ({
+    repo: 'memoro-cli', programme: 'mc', project, path: `docs/project/mc/${project}/PLAN.md`, status: 'ready', next: 'from the repository',
+  });
+
+  it('puts a plan of this repository first, with its absolute path, and drops the repository copy of the same project', () => {
+    const out = withProgrammePlans('memoro-cli', [fromRepo('mc-x'), fromRepo('mc-y')], { programs: () => [program('mc-x', 'memoro-cli')] });
+    assert.deepEqual(out.map((r) => [r.project, r.path, r.repo]), [
+      ['mc-x', '/w/programs/mc/mc-x/PLAN.json', 'memoro-cli'], ['mc-y', 'docs/project/mc/mc-y/PLAN.md', 'memoro-cli'],
+    ]);
+    assert.match(out[0].next, /done when one/u, 'the programs plan is read, not the repository record');
+  });
+
+  it('leaves out a plan of another repository, and still drops that project\'s repository copy here', () => {
+    const out = withProgrammePlans('memoro-cli', [fromRepo('mc-x'), fromRepo('mc-y')], { programs: () => [program('mc-x', 'memoro')] });
+    assert.deepEqual(out.map((r) => r.project), ['mc-y']);
+  });
+
+  it('returns the records unchanged when nothing is under ~/mc/programs/', () => {
+    const records = [fromRepo('mc-x')];
+    assert.deepEqual(withProgrammePlans('memoro-cli', records, { programs: () => [] }), records);
+  });
+
+  it('lists a repository\'s plans with the programs plans laid over them', () => {
+    const git = (cwd, args) => (args[0] === 'ls-tree' ? 'docs/project/mc/mc-x/PLAN.md\ndocs/project/mc/mc-y/PLAN.md' : null);
+    const plans = listPlans({ name: 'memoro-cli', path: '/nowhere' }, { git, batch: () => new Map(), programs: () => [program('mc-x', 'memoro-cli')] });
+    assert.deepEqual(plans.map((p) => [p.project, p.path]), [
+      ['mc-x', '/w/programs/mc/mc-x/PLAN.json'], ['mc-y', 'docs/project/mc/mc-y/PLAN.md'],
+    ]);
   });
 });
 
