@@ -740,9 +740,21 @@ hook that ran out of time, as memoro's `build-bundle.test.js` on #13470) is
 taken out of the red without any re-run, as if it had passed alone; with
 nothing else red the round is `red-under-load`. A file with a failed test stays
 red whatever else it has. The merger runs a `red-under-load` round once more,
-saying `<files> red only under load — measuring again`; a second one is
-answered red with its reason and `red under load in two rounds running`. It is
-never counted green, and it is not a mend stop.
+saying `<files> red only under load — measuring again`. A second one — and a
+second `file-killed` — is put back in line rather than answered
+(`REQUEUE_STOPS`, `mayRequeue` in `merger.js`): the entry is `queued` again with
+its place kept, `requeues` one higher and `not_before` fifteen minutes on
+(`markRequeued`, `merge-queue.js`), the step stays `landing`, no attempt is
+counted and no session is started — the merger says `back in line in 15 min
+(requeue n of 2), no session started`. After two requeues it is answered red
+with its reason and `red under load in two rounds running`, as before. Until
+2026-10-19 the second one was answered red at once, the step went back to
+`ready`, and the runner started a session to fix the pull request that found
+nothing to fix (note-steps #13897 paid two). It is never counted green, and it
+is not a mend stop. Its failures are kept under
+`runner/merge-red/<repo>-<pr>-<stop>-<time>.txt` (`loadRedPath`), which a
+landing does not remove, and the round's line in `gate-rounds.jsonl` carries
+`under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
 
 **A project log with a row twice is red.** Once the candidate is built, before
 its dependencies or its selection, the round reads the candidate's `docs/project/project_log.md` (`duplicateRow`,

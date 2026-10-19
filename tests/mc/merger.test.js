@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { MAX_MERGE_ATTEMPTS } from '../../src/mc/merge-step.js';
 import {
-  landerFor, landJob, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, succeed, sweepMergedReds, takeMerger,
+  landerFor, landJob, MAX_REQUEUES, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, succeed, sweepMergedReds, takeMerger,
 } from '../../src/mc/merger.js';
 import { registerPath } from '../../src/mc/register.js';
 
@@ -232,10 +232,22 @@ describe('landJob — one job, landed or answered', () => {
     assert.equal(stepNow().status, 'done');
   });
 
-  it('killed twice is answered red with that reason, and nothing is mended', async () => {
+  it('killed twice is put back in line, with no session and no attempt counted', async () => {
     register();
     const m = machine([killed, killed, green]);
     const answers = await landJob(JOB, m.deps);
+    assert.equal(m.rounds.length, 2, 'once more, not on and on');
+    assert.equal(answers[0].requeued, true);
+    const step = stepNow();
+    assert.equal(step.status, 'landing', 'the runner leaves it alone; the next round answers it');
+    assert.equal(step.attempts, 0);
+    assert.ok(m.said.some((line) => /back in line in 15 min \(requeue 1 of 2\), no session started/u.test(line)));
+  });
+
+  it('killed twice once the requeues are spent is answered red with that reason, and nothing is mended', async () => {
+    register();
+    const m = machine([killed, killed, green]);
+    const answers = await landJob({ ...JOB, requeues: MAX_REQUEUES }, m.deps);
     assert.equal(m.rounds.length, 2, 'once more, not on and on');
     assert.equal(answers[0].landed, false);
     assert.equal(answers[0].report.stopped_at, 'file-killed');
@@ -261,10 +273,20 @@ describe('landJob — one job, landed or answered', () => {
     assert.equal(stepNow().status, 'done');
   });
 
-  it('red under load twice is answered red, saying the files passed alone on base and head', async () => {
+  it('red under load twice is put back in line, not handed to a session', async () => {
     register();
     const m = machine([underLoad, underLoad, green]);
     const answers = await landJob(JOB, m.deps);
+    assert.equal(answers[0].requeued, true);
+    assert.equal(answers[0].report.stopped_at, 'red-under-load');
+    assert.equal(stepNow().status, 'landing');
+    assert.equal(stepNow().attempts, 0);
+  });
+
+  it('red under load twice once the requeues are spent is answered red, saying the files passed alone on base and head', async () => {
+    register();
+    const m = machine([underLoad, underLoad, green]);
+    const answers = await landJob({ ...JOB, requeues: MAX_REQUEUES }, m.deps);
     assert.equal(m.rounds.length, 2, 'once more, not on and on');
     assert.equal(answers[0].landed, false);
     assert.equal(answers[0].report.stopped_at, 'red-under-load');
