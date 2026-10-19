@@ -64,7 +64,7 @@ carries:
   `workarea` is the runner's own and the only kind it writes: a step `mc run`
   could not start because of a fault in the workarea or on this machine that a
   person has to fix, with the name from its fixed list (`dirty-worktree`,
-  `worktree-missing`, `branch-unmovable`, `merge-uncommittable`, `role-missing`,
+  `worktree-missing`, `branch-foreign`, `branch-unmovable`, `merge-uncommittable`, `role-missing`,
   `tool-missing`) and the workarea named in the step's last
   comment. It is answered by fixing the workarea and `mc step ready`, not by a
   decision.

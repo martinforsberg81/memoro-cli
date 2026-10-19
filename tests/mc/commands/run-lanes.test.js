@@ -81,20 +81,20 @@ test('lanes: the positional sets per_repo and --total sets the total, neither to
 
   const per = await mc.lanes('4');
   assert.equal(per.code, 0);
-  assert.equal(per.out[0], 'lanes 4 per repository, no total cap (up to 8 across 2 repositories) from the next start');
-  assert.match(per.out.at(-1), /mc run --update takes the new ones after the step it is in/u);
+  assert.equal(per.out[0], 'lanes 4 per repository, no total cap (up to 8 across 2 repositories) — the total applies now, per repository from the next start');
+  assert.match(per.out.at(-1), /a running runner takes the total at its next start of a step; a new per-repository count takes mc run --update, after the step it is in/u);
   assert.deepEqual(readLaneCount({ root: mc.root }), { per_repo: 4, total: null });
 
   const total = await mc.lanes('--total', '3');
-  assert.equal(total.out[0], 'lanes 4 per repository, 3 in total from the next start');
+  assert.equal(total.out[0], 'lanes 4 per repository, 3 in total — the total applies now, per repository from the next start');
   assert.deepEqual(readLaneCount({ root: mc.root }), { per_repo: 4, total: 3 }, 'the total left per_repo alone');
 
   const both = await mc.lanes('2', '--total', '3');
-  assert.equal(both.out[0], 'lanes 2 per repository, 3 in total from the next start');
+  assert.equal(both.out[0], 'lanes 2 per repository, 3 in total — the total applies now, per repository from the next start');
   assert.deepEqual(readLaneCount({ root: mc.root }), { per_repo: 2, total: 3 });
 
   const none = await mc.lanes('--total', 'none');
-  assert.equal(none.out[0], 'lanes 2 per repository, no total cap (up to 4 across 2 repositories) from the next start');
+  assert.equal(none.out[0], 'lanes 2 per repository, no total cap (up to 4 across 2 repositories) — the total applies now, per repository from the next start');
   assert.deepEqual(readLaneCount({ root: mc.root }), { per_repo: 2, total: null });
 });
 

@@ -13,7 +13,10 @@ You stand in `~/mc/plan/<programme>/`, a checkout of each repository on branch
 `plan/<programme>`. It is not a workarea and the runner cannot see it; you
 share only a
 `PLAN.json` on `main` with it. Never check out a branch named after a project:
-the runner cannot make that project's workarea while you hold it.
+the runner cannot make that project's workarea while you hold it. Your pull
+request's branch is `plan/<project>`, and a worktree you make for it is removed
+once it is pushed. A project-named branch the runner did not make blocks its
+first step as `branch-foreign`.
 
 Yours: thinking the programme through with Martin — reading
 `docs/project/<programme>/` and the code, and doing every investigation,

@@ -34,18 +34,32 @@
  * them (`seedEntry`). After that the file's copies are ignored, and they go
  * from the schema when the last reader of them does.
  *
+ * Every write to the register also appends one line to `runner/log/register.log`
+ * (`registerLogPath`): what changed and which process made it — its pid, its
+ * parent's command, its run id, the shape of its arguments (`invocationShape`,
+ * which keeps flag names and drops their values and free text) and its
+ * directory. The register keeps no history, and on 2026-10-12 `log-page` step 1
+ * landed as memoro #13590 and stood `ready` again that evening, so the runner
+ * ran it twice; the only record of the hand-typed `mc step ready` that moved it
+ * was `mc.log`, which keeps no parent process and rotates. The file is not a
+ * session log, so `mc tidy` keeps it when it removes a project's own files. A
+ * log that cannot be written never fails the write.
+ *
  * Everything below the IO line is pure over entries and plan records, so the
  * rules are tested without a file.
  */
-import { closeSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import { invocationShape, rotateIfLarge, runId } from './logger.js';
 import { BLOCKER_KINDS, NAME_RE, blockerFieldProblems, planSummary } from './plan-schema.js';
 
 export const REGISTER_SCHEMA = 'mc-register';
 export const REGISTER_VERSION = 1;
 export const REGISTER_DIR = 'projects';
+export const REGISTER_LOG_MAX_BYTES = 4 * 1024 * 1024;
 
 /**
  * Where a step stands. `ready` the runner may hand it out; `running` a
@@ -80,6 +94,11 @@ export function registerPath(root, project) {
   return join(registerDir(root), `${project}.json`);
 }
 
+/** The register's own log, one JSON line per write (see the header). */
+export function registerLogPath(root) {
+  return join(root, 'runner', 'log', 'register.log');
+}
+
 /* --------------------------------------------------------------- entries */
 
 /** A step nobody has touched: ready, on nothing, with nothing to say. */
@@ -91,14 +110,25 @@ export function emptyStep() {
 }
 
 /**
+ * A key without a leading ordinal: `5. The close`, `8) The close` and
+ * `Step 3: The close` are `The close`. A planning session renumbers steps when
+ * it inserts some, and the state has to follow the step.
+ */
+export function keyOf(label) {
+  const text = typeof label === 'string' ? label.trim() : '';
+  return text.replace(/^(?:step\s+)?\d+[.:)]\s+/iu, '').trim() || null;
+}
+
+/**
  * What a step is called when its place in `steps[]` moves: the label its
- * title opens with (`W4.1.2 — actions: …` is `W4.1.2`), or the whole title
- * when it has none. A planning session inserts and reorders steps; the state
+ * title opens with (`W4.1.2 — actions: …` is `W4.1.2`, `Step 3: Wire it — …`
+ * is `Wire it`), or the whole title when it has none, without a leading
+ * ordinal (`keyOf`). A planning session inserts and reorders steps; the state
  * has to follow the step and not the slot it stood in.
  */
 export function stepKey(fileStep) {
   const title = typeof fileStep?.title === 'string' ? fileStep.title.trim() : '';
-  return title.split(/\s+[—–-]\s+/u)[0].trim() || null;
+  return keyOf(title.split(/\s+[—–-]\s+/u)[0]);
 }
 
 const int = (value) => (Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : null);
@@ -233,28 +263,39 @@ export function seedEntry(record, now = null) {
 
 /**
  * An entry brought up to the plan it describes. Steps are matched by their
- * key (`stepKey`), so a step a planning session moved keeps its state, a step
- * it inserted is seeded from the file, and one it removed is dropped — the
- * runner cannot hand out a step that is not written. Until 2026-09-18 the
- * match was by index, and moving W4.1.2 behind W4.1.8 re-labelled six steps'
- * state until the register file was edited by hand.
+ * key (`stepKey`, which drops a leading ordinal, so `5. The close` is
+ * `The close`), so a step a planning session moved or renumbered keeps its
+ * state, a step it inserted is seeded from the file, and one it removed is
+ * dropped — the runner cannot hand out a step that is not written. Until
+ * 2026-09-18 the match was by index, and moving W4.1.2 behind W4.1.8
+ * re-labelled six steps' state until the register file was edited by hand.
  *
  * A key the entry does not know, in a slot whose old key the plan no longer
- * has, is that step retitled: it keeps its state. An entry written before
- * keys takes them from the plan by index, which is what it asserted anyway;
- * a plan whose keys are not unique is matched by index as before.
+ * has, is a step put in that slot. It keeps the slot's status, as a re-planned
+ * blocked step is not released (Martin, 2026-10-03), but not its pull request,
+ * branch, stack or red, which were the replaced step's (photo-viewer, memoro
+ * #13580, 2026-10-12: a renumbered close inherited `blocked` and a closed pull
+ * request). Each such slot gets a comment and is listed in `carried`. An entry
+ * written before keys takes them from the plan by index, which is what it
+ * asserted anyway; a plan whose keys are not unique is matched by index as
+ * before.
  *
  * A `running` step that would move is left where it is, with the rest of the
  * entry, until its session ends: the session knows itself as
  * `MC_STEP=<project>:<index>`, and a write to that index has to reach it.
  *
- * Returns `{ entry, changed }` so the caller writes only when something moved.
+ * Returns `{ entry, changed, carried }` so the caller writes only when something moved; `carried` lists `{ index, from, to }` for each slot carried by position.
  */
 export function reconcileEntry(entry, record, now = null) {
   const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
   const keys = steps.map(stepKey);
   const unique = keys.every(Boolean) && new Set(keys).size === keys.length;
-  const keyed = entry.steps.map((state, index) => (state.key ? state : { ...state, key: keys[index] ?? null }));
+  const keyed = entry.steps.map((state, index) => {
+    if (!state.key) return { ...state, key: keys[index] ?? null };
+    const key = keyOf(state.key);
+    return key === state.key ? state : { ...state, key };
+  });
+  const carried = [];
   let next;
   if (!unique) {
     next = steps.map((step, index) => keyed[index] || stepFromPlan(step, now));
@@ -264,17 +305,32 @@ export function reconcileEntry(entry, record, now = null) {
     next = steps.map((step, index) => {
       if (known.has(keys[index])) return keyed[known.get(keys[index])];
       const here = keyed[index];
-      if (here && !wanted.has(here.key)) return { ...here, key: keys[index] };
+      if (here && !wanted.has(here.key)) {
+        carried.push({ index, from: here.key, to: keys[index] });
+        const done = here.status === 'done';
+        return {
+          ...here,
+          key: keys[index],
+          pr: done ? here.pr : null,
+          branch: null,
+          attempts: 0,
+          stacked_on: null,
+          red: null,
+          interrupted: null,
+          comments: [...(here.comments || []), `Carried by position on ${now ?? 'an unknown time'} from '${here.key}': a re-plan put '${keys[index]}' in this slot. Its status stays (Martin, 2026-10-03); the branch, attempts, stack, red and pull request of the step it replaced are cleared${done ? ' except the landed pull request' : ''}.`],
+        };
+      }
       return stepFromPlan(step, now);
     });
     const running = keyed.findIndex((state) => state.status === 'running');
-    if (running >= 0 && next[running]?.key !== keyed[running].key) return { entry, changed: false };
+    if (running >= 0 && next[running]?.key !== keyed[running].key) return { entry, changed: false, carried: [] };
   }
   const changed = next.length !== entry.steps.length || next.some((state, index) => state !== entry.steps[index])
     || entry.plan !== (record.path ?? null) || entry.repo !== (record.repo ?? null) || entry.programme !== (record.programme ?? null);
   return {
     entry: changed ? { ...entry, repo: record.repo ?? entry.repo, programme: record.programme ?? entry.programme, plan: record.path ?? entry.plan, updated: now ?? entry.updated, steps: next } : entry,
     changed,
+    carried,
   };
 }
 
@@ -366,6 +422,50 @@ export function parseStepEnv(value) {
 const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 const realWrite = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 });
 const realList = (dir) => { try { return readdirSync(dir); } catch { return []; } };
+const realAppend = (path, line) => {
+  mkdirSync(dirname(path), { recursive: true });
+  rotateIfLarge(path, REGISTER_LOG_MAX_BYTES);
+  appendFileSync(path, line, { mode: 0o644 });
+};
+
+let parentSeen;
+/** The command of this process's parent, asked of `ps` once per process. */
+function parentName() {
+  if (parentSeen !== undefined) return parentSeen;
+  try {
+    const found = spawnSync('ps', ['-o', 'comm=', '-p', String(process.ppid)], { encoding: 'utf8', timeout: 2000 });
+    parentSeen = found.status === 0 ? String(found.stdout || '').trim() || null : null;
+  } catch { parentSeen = null; }
+  return parentSeen;
+}
+
+/**
+ * Who is making a register write: this process, its parent's command, its
+ * run id, the shape of its invocation (`invocationShape`: flag names, no
+ * values, no free text) and its directory. `mc_step` is `MC_STEP`, when a
+ * session has one.
+ */
+export function whoAmI() {
+  return {
+    pid: process.pid,
+    ppid: process.ppid,
+    parent: parentName(),
+    run: runId(),
+    argv: invocationShape(process.argv.slice(2)),
+    cwd: process.cwd(),
+    mc_step: process.env.MC_STEP || null,
+  };
+}
+
+/**
+ * One line to `register.log`, after a write that has happened. Never throws:
+ * a log that cannot be written never fails the write it describes.
+ */
+function logWrite(root, append, by, fields) {
+  try {
+    append(registerLogPath(root), `${JSON.stringify({ at: new Date().toISOString(), ...fields, by: by() })}\n`);
+  } catch { /* the log never fails the write */ }
+}
 
 export function readEntry(root, project, { read = realRead } = {}) {
   return parseEntry(read(registerPath(root, project)));
@@ -391,9 +491,10 @@ export function listEntries(root, { list = realList, read = realRead } = {}) {
  * parsed plan (legacy, unreadable) passes through untouched.
  *
  * `root` null means no register — the fixtures that hand a reader plans
- * without a work root get the file's own state, as they always did.
+ * without a work root get the file's own state, as they always did. A seed,
+ * and a re-plan that moved something, is appended to `register.log` (`logWrite`).
  */
-export function overlayPlans(plans, { root = null, read = realRead, write = realWrite, now = null } = {}) {
+export function overlayPlans(plans, { root = null, read = realRead, write = realWrite, now = null, append = realAppend, by = whoAmI } = {}) {
   if (!root) return plans;
   return plans.map((record) => {
     if (!record?.plan || record.legacy) return record;
@@ -401,9 +502,14 @@ export function overlayPlans(plans, { root = null, read = realRead, write = real
     if (!entry) {
       entry = seedEntry(record, now);
       write(registerPath(root, record.project), entry);
+      logWrite(root, append, by, { event: 'seed', project: record.project, steps: entry.steps.length, statuses: entry.steps.map((s) => s.status) });
     } else {
       const brought = reconcileEntry(entry, record, now);
-      if (brought.changed) { entry = brought.entry; write(registerPath(root, record.project), entry); }
+      if (brought.changed) {
+        entry = brought.entry;
+        write(registerPath(root, record.project), entry);
+        logWrite(root, append, by, { event: 'reconcile', project: record.project, carried: brought.carried || [] });
+      }
     }
     return applyEntry(record, entry);
   });
@@ -413,14 +519,18 @@ export function overlayPlans(plans, { root = null, read = realRead, write = real
  * One step's state changed, on disk: read, patch, write, under the
  * register's lock. Returns the entry as written. Throws when there is no
  * entry — a project the register has never seen is not one a caller may
- * move a step of by hand; a reader seeds it first.
+ * move a step of by hand; a reader seeds it first. Each write appends a line
+ * to `register.log` naming this process (`logWrite`).
  */
-export function updateStep({ root, project, index, patch, read = realRead, write = realWrite, lock = realLock, now = null }) {
+export function updateStep({ root, project, index, patch, read = realRead, write = realWrite, lock = realLock, now = null, append = realAppend, by = whoAmI }) {
   return lock(root, () => {
     const entry = readEntry(root, project, { read });
     if (!entry) throw new Error(`${project}: not in the register at ${registerPath(root, project)}`);
     const next = patchStep(entry, index, patch, now);
     write(registerPath(root, project), next);
+    const was = entry.steps[index];
+    const made = next.steps[index];
+    logWrite(root, append, by, { event: 'step', project, index, key: made.key, from: was.status, to: made.status, pr: made.pr ?? null, fields: Object.keys(patch) });
     return next;
   });
 }

@@ -20,7 +20,7 @@ const OLD_LOG = '/scratch/gate-20260925T095000Z.log';
  * A fake machine. The gate finishes after `finishAfter` sleeps: it writes its
  * log and exit code then, and is no longer alive.
  */
-function harness({ lock = null, manifest = { scripts: { test: 'node --test' } }, live = [], finishAfter = Infinity, code = 0, output = '', tests = [] } = {}) {
+function harness({ lock = null, manifest = { scripts: { test: 'node --test' } }, live = [], finishAfter = Infinity, code = 0, output = '', tests = [], deploy = null } = {}) {
   const files = new Map();
   const alive = new Set(live);
   const out = { stdout: '', stderr: '', spawned: [], dirs: [], removed: [], ticks: 0, unref: false };
@@ -51,6 +51,7 @@ function harness({ lock = null, manifest = { scripts: { test: 'node --test' } },
       return { pid: CHILD, unref: () => { out.unref = true; } };
     },
     alive: (pid) => alive.has(pid),
+    deployHolding: () => deploy,
     sleep: async (ms) => {
       clock += ms;
       out.ticks += 1;
@@ -88,6 +89,17 @@ describe('mc gate, started', () => {
     assert.equal(out.stdout, `RUNNING — npm test — 10s so far, still running (pid ${CHILD})\nlog: ${LOG} — mc gate --wait waits for it and prints the verdict\n`);
     assert.equal(files.has(LOCK), true);
     assert.deepEqual(out.removed, []);
+  });
+
+  it('a deploy holding the heavy lane is waited for inside the child, and said once', async () => {
+    const { out, deps } = harness({ deploy: { pid: 777, mode: 'deploy' }, finishAfter: 1, output: 'ℹ tests 1\nℹ pass 1\nℹ fail 0\n' });
+    assert.equal(await run([], deps), 0);
+    assert.match(out.spawned[0].args[1], /^'[^']+' '[^']+await-deploy\.js'; npm test; echo \$\? > '/u);
+    assert.equal(out.stderr, 'mc: a deploy holds the heavy lane (pid 777) — this gate starts its tests when it is done\n');
+
+    const free = harness({ finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
+    assert.equal(await run([], free.deps), 0);
+    assert.doesNotMatch(free.out.spawned[0].args[1], /await-deploy/u);
   });
 
   it('a second gate while one is alive refuses with exit 2', async () => {
@@ -145,6 +157,26 @@ describe('mc gate <test files…>', () => {
     assert.equal(await run(['a.test.js'], deps), 0);
     assert.equal(out.spawned[0].args[1], `node --test --import ./tests/_isolate-home.mjs a.test.js; echo $? > '${EXIT}'`);
     assert.match(out.stdout, /^GREEN — node --test --import \.\/tests\/_isolate-home\.mjs a\.test\.js — 1 tests, 0 failed — 2s\n/u);
+  });
+
+  it('named files run with the declared pr_tests_flags, which replace the test script\'s', async () => {
+    const { out, deps } = harness({ manifest: { scripts: { test: 'node scripts/testing/ci.mjs' } }, tests: ['tests/x.test.js'], finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
+    const plain = deps.git;
+    deps.git = (cwd, args) => (args.includes('--git-common-dir') ? '/repo/x/.git' : plain(cwd, args));
+    const asked = [];
+    deps.declaration = (path) => { asked.push(path); return { ok: true, declaration: { pr_tests_flags: ['--import', './tests/_helpers/browser-paths.mjs'] } }; };
+    assert.equal(await run(['tests/x.test.js'], deps), 0);
+    assert.equal(out.spawned[0].args[1], `node --test --import ./tests/_helpers/browser-paths.mjs tests/x.test.js; echo $? > '${EXIT}'`);
+    assert.deepEqual(asked, ['/repo/x']);
+  });
+
+  it('a declaration without pr_tests_flags leaves the test script\'s flags', async () => {
+    const { out, deps } = harness({ manifest: { scripts: { test: TEST_SCRIPT } }, tests: ['a.test.js'], finishAfter: 1, output: 'ℹ tests 1\nℹ fail 0\n' });
+    const plain = deps.git;
+    deps.git = (cwd, args) => (args.includes('--git-common-dir') ? '/repo/x/.git' : plain(cwd, args));
+    deps.declaration = () => ({ ok: true, declaration: { select: 'node select.js' } });
+    assert.equal(await run(['a.test.js'], deps), 0);
+    assert.equal(out.spawned[0].args[1], `node --test --import ./tests/_isolate-home.mjs a.test.js; echo $? > '${EXIT}'`);
   });
 
   it('a missing file refuses before running', async () => {

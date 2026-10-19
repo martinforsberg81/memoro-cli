@@ -147,6 +147,28 @@ describe('the four sources', () => {
     } finally { g.cleanup(); }
   });
 
+  it('a merge that landed and a mend that pushed are not findings', () => {
+    const g = ground();
+    try {
+      runs(g, [
+        // `merger.js` writes `merged` and `mend.js` writes `pushed` for a landing:
+        // 563 and 52 such rows in one day, every one exit 0, all bumped before this.
+        '2026-08-30T09:00:00Z\tzeta\tmerge\t0\t100\t7\t-\t-\t-\t-\t-\t-\tmerged',
+        '2026-08-30T09:10:00Z\teta\tmend\t0\t100\t7\t-\t-\t-\t-\t-\t-\tpushed',
+        // The same notes with a nonzero exit are still findings.
+        '2026-08-30T09:20:00Z\ttheta\tmerge\t1\t100\t7\t-\t-\t-\t-\t-\t-\tred,red',
+        '2026-08-30T09:30:00Z\tiota\tmerge\t1\t100\t7\t-\t-\t-\t-\t-\t-\tmerged',
+        '2026-08-30T09:40:00Z\tkappa\tmend\t1\t100\t7\t-\t-\t-\t-\t-\t-\tnothing',
+      ]);
+      const messages = collect(g).rows.map((r) => r.message);
+      assert.equal(messages.some((m) => /zeta/u.test(m)), false, 'a landed merge is not a finding');
+      assert.equal(messages.some((m) => /\beta\b/u.test(m)), false, 'a pushed mend is not a finding');
+      assert.ok(messages.some((m) => /theta.*red,red.*exit N/u.test(m)));
+      assert.ok(messages.some((m) => /iota.*merged.*exit N/u.test(m)), 'merged with a nonzero exit is still a finding');
+      assert.ok(messages.some((m) => /kappa.*nothing.*exit N/u.test(m)));
+    } finally { g.cleanup(); }
+  });
+
   it('a source that will not read is a note, never an empty digest', () => {
     const g = ground();
     try {

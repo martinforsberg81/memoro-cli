@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  STEP_STATES, applyEntry, currentIndex, overlayPlans, parseEntry, parseStepEnv, patchStep, reconcileEntry,
-  registerPath, seedEntry, stepKey, updateStep,
+  STEP_STATES, applyEntry, currentIndex, keyOf, overlayPlans, parseEntry, parseStepEnv, patchStep, reconcileEntry,
+  registerLogPath, registerPath, seedEntry, stepKey, updateStep, whoAmI,
 } from '../../src/mc/register.js';
 import { PLAN_SCHEMA, PLAN_VERSION, deliverableStep, validatePlan } from '../../src/mc/plan-schema.js';
 
@@ -16,7 +16,7 @@ const plan = (steps) => ({
 });
 const record = (steps, over = {}) => ({ repo: 'memoro', programme: 'prog', project: 'p', path: 'docs/project/prog/p/PLAN.json', legacy: false, plan: plan(steps), problems: [], ...over });
 
-/** An in-memory register: `files` is the disk, and the lock is nobody's. */
+/** An in-memory register: `files` is the disk, and the lock and the log are nobody's. */
 function disk(initial = {}) {
   const files = { ...initial };
   return {
@@ -25,6 +25,8 @@ function disk(initial = {}) {
       read: (path) => files[path] ?? null,
       write: (path, value) => { files[path] = `${JSON.stringify(value, null, 2)}\n`; },
       lock: (_root, fn) => fn(),
+      append: () => {},
+      by: () => ({}),
     },
   };
 }
@@ -158,6 +160,61 @@ test('stepKey is the label a title opens with, or the whole title', () => {
   assert.equal(stepKey({ title: 'The hero object' }), 'The hero object');
   assert.equal(stepKey({ title: 'sql-readiness closes' }), 'sql-readiness closes');
   assert.equal(stepKey({}), null);
+  assert.equal(stepKey({ title: '8. The close' }), 'The close');
+  assert.equal(stepKey({ title: '5) The close' }), 'The close');
+  assert.equal(stepKey({ title: 'Step 3: Wire it — the rest' }), 'Wire it');
+  assert.equal(stepKey({ title: '1.2 thing' }), '1.2 thing');
+  assert.equal(keyOf('5. The close'), 'The close');
+});
+
+test('a renumbered close keeps its state and the steps inserted before it start fresh (photo-viewer, #13580)', () => {
+  const t = (s) => step({ title: s });
+  let entry = seedEntry(record([t('1. A'), t('2. B'), t('3. C'), t('4. D'), t('5. The close')]), 't0');
+  for (const index of [0, 1, 2, 3]) entry = patchStep(entry, index, { status: 'done', pr: index + 1 }, 't1');
+  entry = patchStep(entry, 4, {
+    status: 'blocked',
+    blocked_by: { kind: 'decision', name: 'martin-phone-fling-check' },
+    branch: 'photo-viewer-8',
+    stacked_on: { index: 3, pr: 13527, sha: 'abc' },
+    comment: 'mc merge memoro 13528',
+  }, 't1');
+  const renumbered = reconcileEntry(entry, record([t('1. A'), t('2. B'), t('3. C'), t('4. D'), t('5. The reserve shrinks'), t('6. E'), t('7. F'), t('8. The close')]), 't2');
+  assert.deepEqual(renumbered.entry.steps.map((s) => [s.key, s.status]), [
+    ['A', 'done'], ['B', 'done'], ['C', 'done'], ['D', 'done'], ['The reserve shrinks', 'ready'], ['E', 'ready'], ['F', 'ready'], ['The close', 'blocked'],
+  ]);
+  assert.equal(renumbered.entry.steps[7].branch, 'photo-viewer-8', 'the close keeps its branch');
+  for (const index of [4, 5, 6]) {
+    assert.equal(renumbered.entry.steps[index].branch, null, `step ${index + 1} starts fresh`);
+    assert.deepEqual(renumbered.entry.steps[index].comments, []);
+  }
+  assert.deepEqual(renumbered.carried, []);
+});
+
+test('a slot carried by position keeps its status and loses the replaced step\'s pull request fields', () => {
+  const titled = (label, over = {}) => step({ title: `${label} — what it does`, ...over });
+  let entry = seedEntry(record([titled('A'), titled('B')]), 't0');
+  entry = patchStep(entry, 1, { status: 'failed', reason: 'red', pr: 9, branch: 'p-3', attempts: 2 }, 't1');
+  const carried = reconcileEntry(entry, record([titled('A'), titled('Z')]), 't2');
+  const slot = carried.entry.steps[1];
+  assert.equal(slot.key, 'Z');
+  assert.equal(slot.status, 'failed', 'the slot keeps its status');
+  assert.equal(slot.reason, 'red');
+  assert.equal(slot.pr, null);
+  assert.equal(slot.branch, null);
+  assert.equal(slot.attempts, 0);
+  assert.match(slot.comments.at(-1), /^Carried by position on t2 from 'B'/u);
+  assert.deepEqual(carried.carried, [{ index: 1, from: 'B', to: 'Z' }]);
+});
+
+test('an entry written with numbered keys is read through keyOf and written once', () => {
+  const old = parseEntry(JSON.stringify({ project: 'p', steps: [{ key: '1. A', status: 'done', pr: 3 }, { key: '2. B', status: 'ready' }] }));
+  const plan = record([step({ title: '1. A — x' }), step({ title: '2. B — x' })]);
+  const once = reconcileEntry(old, plan, 't1');
+  assert.deepEqual(once.entry.steps.map((s) => s.key), ['A', 'B']);
+  assert.deepEqual(once.entry.steps.map((s) => s.status), ['done', 'ready']);
+  assert.equal(once.changed, true);
+  assert.deepEqual(once.carried, []);
+  assert.equal(reconcileEntry(once.entry, plan, 't2').changed, false, 'the second read writes nothing');
 });
 
 test('reconcileEntry matches by key: a moved step keeps its state, an inserted one is seeded, a retitled one stays', () => {
@@ -175,6 +232,7 @@ test('reconcileEntry matches by key: a moved step keeps its state, an inserted o
   // A label nobody knows, in the slot of one the plan no longer has: the same step, retitled.
   const renamed = reconcileEntry(entry, record([titled('A1'), titled('B'), titled('C')]), 't2');
   assert.deepEqual(renamed.entry.steps.map((s) => [s.key, s.status]), [['A1', 'done'], ['B', 'failed'], ['C', 'ready']]);
+  assert.equal(renamed.entry.steps[0].pr, 7, 'a done step carried by position keeps its pull request');
 
   // Nothing moved, nothing written.
   assert.equal(reconcileEntry(entry, record([titled('A'), titled('B'), titled('C')]), 't2').changed, false);
@@ -225,4 +283,58 @@ test('patchStep refuses a time or deploy blocker the plan schema would refuse', 
   assert.throws(() => patchStep(entry, 1, { status: 'blocked', blocked_by: { kind: 'deploy', name: 'deploy-step-2', step: 2 } }), /blocked_by\.step/u);
   assert.throws(() => patchStep(entry, 2, { status: 'blocked', blocked_by: { kind: 'deploy', name: 'deploy-step-1', step: 1, hours: -2 } }), /blocked_by\.hours/u);
   assert.throws(() => patchStep(entry, 1, { status: 'blocked', blocked_by: { kind: 'project', name: 'y', at: '2026-10-14T08:00:00Z' } }), /only a time blocker/u);
+});
+
+test('updateStep appends one line naming the process', () => {
+  const { io } = disk();
+  const lines = [];
+  const append = (path, line) => lines.push([path, line]);
+  const by = () => ({ pid: 7, ppid: 6, parent: 'zsh', run: 'run_x', argv: { verb: 'step', sub: 'ready' }, cwd: '/home/m/memoro', mc_step: null });
+  overlayPlans([record([step(), step()])], { root: '/w', ...io, append, by });
+  updateStep({ root: '/w', project: 'p', index: 0, patch: { status: 'done', pr: 3 }, ...io, append, by });
+  updateStep({ root: '/w', project: 'p', index: 0, patch: { status: 'ready' }, ...io, append, by });
+  assert.equal(lines.length, 3, 'the seed, then one line per write');
+  assert.ok(lines.every(([path]) => path === registerLogPath('/w')));
+  const parsed = lines.map(([, line]) => JSON.parse(line));
+  assert.equal(parsed[0].event, 'seed');
+  assert.deepEqual(parsed[0].statuses, ['ready', 'ready']);
+  const last = parsed.at(-1);
+  assert.equal(last.event, 'step');
+  assert.equal(last.project, 'p');
+  assert.equal(last.index, 0);
+  assert.equal(last.from, 'done');
+  assert.equal(last.to, 'ready');
+  assert.deepEqual(last.fields, ['status']);
+  assert.equal(last.by.parent, 'zsh');
+  assert.equal(last.by.argv.sub, 'ready');
+});
+
+test('a log that cannot be written never fails the write', () => {
+  const { files, io } = disk();
+  const broken = () => { throw new Error('disk full'); };
+  const [seeded] = overlayPlans([record([step()])], { root: '/w', ...io, append: broken });
+  assert.equal(seeded.plan.steps[0].status, 'ready', 'the seed is written and read');
+  const entry = updateStep({ root: '/w', project: 'p', index: 0, patch: { status: 'done' }, ...io, append: broken });
+  assert.equal(entry.steps[0].status, 'done');
+  assert.equal(parseEntry(files[registerPath('/w', 'p')]).steps[0].status, 'done');
+});
+
+test('whoAmI names this process', () => {
+  const who = whoAmI();
+  assert.equal(who.pid, process.pid);
+  assert.equal(who.ppid, process.ppid);
+  assert.match(who.run, /^run_/u);
+  assert.ok(who.argv && typeof who.argv === 'object');
+});
+
+test('a re-plan that carries a slot is logged with what it carried', () => {
+  const { io } = disk();
+  const titled = (label) => step({ title: `${label} — what it does` });
+  const lines = [];
+  const append = (path, line) => lines.push(JSON.parse(line));
+  overlayPlans([record([titled('A'), titled('B')])], { root: '/w', ...io, now: 't0' });
+  overlayPlans([record([titled('A'), titled('Z')])], { root: '/w', ...io, append, now: 't2' });
+  const last = lines.at(-1);
+  assert.equal(last.event, 'reconcile');
+  assert.deepEqual(last.carried, [{ index: 1, from: 'B', to: 'Z' }]);
 });

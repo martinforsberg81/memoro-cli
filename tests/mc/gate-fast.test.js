@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { LAST_FILE, changedAgainst, docsOnly, incrementalPlan, planGate, recordLast, snapshotTree } from '../../src/mc/gate-fast.js';
+import { LAST_FILE, changedAgainst, declaredTestFlags, docsOnly, incrementalPlan, planGate, recordLast, snapshotTree } from '../../src/mc/gate-fast.js';
 import { tryGit } from '../../src/mc/git.js';
 
 const ROOT = '/w/x';
@@ -242,5 +242,18 @@ describe('the selector answers --changed-path (scripts/affected-tests.js)', () =
       assert.deepEqual(run().files, ['tests/a.test.js', 'tests/b.test.js']);
       assert.deepEqual(run('--changed-path', 'src/b.js').files, ['tests/b.test.js']);
     } finally { rmSync(fx, { recursive: true, force: true }); }
+  });
+});
+
+describe('declaredTestFlags', () => {
+  it('declaredTestFlags reads the primary checkout\'s declaration', () => {
+    const io = (answer) => ({ git: (cwd, args) => (args.includes('--git-common-dir') ? '/repo/x/.git' : null), declaration: answer });
+    assert.deepEqual(declaredTestFlags(io(() => ({ ok: true, declaration: { pr_tests_flags: ['--import', './a.mjs'] } })), { root: '/w/x', env: {} }), ['--import', './a.mjs']);
+    assert.equal(declaredTestFlags(io(() => ({ ok: true, declaration: {} })), { root: '/w/x', env: {} }), null);
+    assert.equal(declaredTestFlags(io(() => ({ ok: true, declaration: { pr_tests_flags: [] } })), { root: '/w/x', env: {} }), null);
+    assert.equal(declaredTestFlags(io(() => ({ ok: false, reason: 'x' })), { root: '/w/x', env: {} }), null);
+    assert.equal(declaredTestFlags(io(() => { throw new Error('bad file'); }), { root: '/w/x', env: {} }), null);
+    const noCommon = { git: () => null, declaration: () => ({ ok: true, declaration: { pr_tests_flags: ['--import', './a.mjs'] } }) };
+    assert.equal(declaredTestFlags(noCommon, { root: '/w/x', env: {} }), null);
   });
 });

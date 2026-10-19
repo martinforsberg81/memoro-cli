@@ -41,7 +41,10 @@ from starting the step again once it is answered.
    - `unmet-criteria` — you are the plan's last step and a success criterion
      is still `met: false` in your PR: run its `check`, set `met: true` on
      each you measured, commit, push and `mc merge` again; one you cannot
-     measure is `mc step failed --reason` naming it.
+     measure is `mc step failed --reason` naming it. Every check is yours,
+     even one whose text names Martin or says a step does not run it: a
+     live check on this machine, a build, a wait for the runner's next pass
+     is commands you run. Never leave a criterion `false` as somebody else's.
 
 **When the prompt says your branch starts on top of a step in the merge
 queue:** that step's work is in your branch already. Build on it and leave it

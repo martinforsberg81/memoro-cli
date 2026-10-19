@@ -32,7 +32,7 @@ import { join, resolve } from 'node:path';
 import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
 import { defaultRepos } from './brief-collect.js';
 import {
-  admit, holdersText, listServers, refusalText, stopServer,
+  admit, holdersText, listServers, processCwd, refusalText, stopServer, strayCwd,
 } from './dev-servers.js';
 import { log } from './logger.js';
 
@@ -314,6 +314,10 @@ export function editedSince(server, worktree, deps = {}) {
  * the wrapper to register itself and for its health endpoint to answer — both,
  * because a registration is a claim and a 200 is the evidence, and each gets
  * its own window: see REGISTER_TIMEOUT_MS and READY_TIMEOUT_MS.
+ *
+ * A registration whose process runs in another directory (`strayCwd`) is
+ * refused, never reused and never stopped: it is somebody's server, and only a
+ * person knows whose.
  */
 export async function ensureDevServer(worktree, declaration, deps = {}) {
   const now = deps.now || (() => Date.now());
@@ -325,6 +329,13 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   const service = deps.service || serviceFor(declaration, 'app');
 
   const running = servingWorktree(worktree, { root, service });
+  const stray = running ? strayCwd(running, { cwdOf: deps.processCwd || processCwd }) : null;
+  if (stray) {
+    log('dev-server-stray', {
+      instance_id: running.instance_id, service: running.service ?? null, worktree_path: running.worktree_path ?? null, server_pid: running.pid ?? null, cwd: stray.cwd,
+    });
+    return { ok: false, error: `${running.instance_id} is registered for ${worktree} but its process runs in ${stray.cwd} — not reused; mc dev stop ${running.instance_id}, then run this again` };
+  }
   let restartedFrom = null;
   let replacedHung = null;
   if (running && !(await answers(running, { fetch: fetchImpl, sleep, attempts: 2, delayMs: 2000, timeoutMs: 5000 }))) {
@@ -378,7 +389,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       onWaiting: deps.onWaiting,
       ...(deps.freeMemory ? { freeMemory: deps.freeMemory } : {}),
     });
-    if (!admitted.ok) return { ok: false, error: refusalText(admitted) };
+    if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted };
   }
 
   const [command, ...args] = start.argv;
@@ -453,7 +464,7 @@ export async function ensureAppServer(worktree, declaration, { json = false, std
     // minute with who holds the slots, so the wait has a name on it.
     onWaiting: json ? null : (verdict) => stdout.write(`mc: waiting for a slot — held by ${holdersText(verdict)}\n`),
   });
-  if (!ensured.ok) return { ok: false, error: ensured.error };
+  if (!ensured.ok) return { ok: false, error: ensured.error, ...(ensured.refused ? { refused: ensured.refused } : {}) };
   const { server } = ensured;
   const baseUrl = String(server.url).replace(/\/+$/u, '');
   if (!json) {

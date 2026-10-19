@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { freePlanBranch } from '../../src/mc/plan-branch.js';
+import { claimProjectBranch, freePlanBranch } from '../../src/mc/plan-branch.js';
 
 const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const raw = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim();
@@ -89,5 +89,48 @@ describe('freePlanBranch', () => {
     const p = planned();
     const r = freePlanBranch({ repo: p.repo, branch: 'other', planRoot: p.planRoot, git, gh: noGh });
     assert.deepEqual(r, { freed: false, holder: null, why: null });
+  });
+});
+
+/**
+ * Whether the project's branch is the runner's to use (2026-10-14): a planning
+ * session held `morning-calls` in a scratchpad worktree, and with no holder the
+ * step would have started on the planning branch's pre-squash head.
+ */
+describe('claimProjectBranch', () => {
+  it('a branch nobody has is absent', () => {
+    const p = planned();
+    assert.deepEqual(claimProjectBranch({ repo: p.repo, branch: 'other', git }), { verdict: 'absent', holder: null, why: null });
+  });
+
+  it('a branch held outside the plan home is foreign', () => {
+    const p = planned({ under: 'elsewhere/scratchpad' });
+    const plan = freePlanBranch({ repo: p.repo, branch: 'proj', planRoot: p.planRoot, git, gh: noGh });
+    assert.deepEqual(claimProjectBranch({ repo: p.repo, branch: 'proj', plan, git }), { verdict: 'foreign', holder: p.holder, why: 'not a plan directory' });
+  });
+
+  it('a landed branch no worktree holds is deleted', () => {
+    const p = planned();
+    raw(p.repo, ['worktree', 'remove', p.holder]);
+    const r = claimProjectBranch({ repo: p.repo, branch: 'proj', git });
+    assert.equal(r.verdict, 'recreated');
+    assert.equal(git(p.repo, ['rev-parse', '--verify', 'refs/heads/proj']).ok, false, 'the branch is gone');
+    assert.ok(git(p.repo, ['worktree', 'add', '-q', '-b', 'proj', join(p.root, 'step'), 'origin/main']).ok, 'the step can have it from origin/main');
+  });
+
+  it('an unlanded branch no worktree holds is foreign and kept', () => {
+    const p = planned({ landed: false });
+    raw(p.repo, ['worktree', 'remove', p.holder]);
+    const r = claimProjectBranch({ repo: p.repo, branch: 'proj', git });
+    assert.deepEqual(r, { verdict: 'foreign', holder: null, why: 'it has commits that are not on origin/main' });
+    assert.ok(git(p.repo, ['rev-parse', '--verify', 'refs/heads/proj']).ok, 'the branch is kept');
+  });
+
+  it('a branch the register names is the runner\'s own', () => {
+    const p = planned({ landed: false });
+    raw(p.repo, ['worktree', 'remove', p.holder]);
+    const r = claimProjectBranch({ repo: p.repo, branch: 'proj', registered: true, git });
+    assert.equal(r.verdict, 'own');
+    assert.ok(git(p.repo, ['rev-parse', '--verify', 'refs/heads/proj']).ok, 'the branch is kept');
   });
 });

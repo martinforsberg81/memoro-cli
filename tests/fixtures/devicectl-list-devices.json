@@ -1,0 +1,58 @@
+{
+  "info": {
+    "arguments": ["devicectl", "list", "devices", "--json-output", "/tmp/devices.json"],
+    "commandType": "devicectl.list.devices",
+    "environment": { "TERM": "xterm-256color" },
+    "jsonVersion": 3,
+    "outcome": "success",
+    "version": "506.6"
+  },
+  "result": {
+    "devices": [
+      {
+        "capabilities": [],
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "isMobileDeviceOnly": false,
+          "lastConnectionDate": "2026-10-18T17:43:00.000Z",
+          "pairingState": "paired",
+          "potentialHostnames": [
+            "Test-iPhone.coredevice.local",
+            "00000000-0000-0000-0000-000000000001.coredevice.local"
+          ],
+          "transportType": "localNetwork",
+          "tunnelState": "disconnected",
+          "tunnelTransportProtocol": "tcp"
+        },
+        "deviceProperties": {
+          "bootedFromSnapshot": true,
+          "ddiServicesAvailable": false,
+          "developerModeStatus": "enabled",
+          "name": "Test iPhone",
+          "osBuildUpdate": "23G100",
+          "osVersionNumber": "26.6.2"
+        },
+        "hardwareProperties": {
+          "cpuType": { "name": "arm64e", "subType": 2, "type": 16777228 },
+          "deviceType": "iPhone",
+          "ecid": 0,
+          "hardwareModel": "D28AP",
+          "internalStorageCapacity": 128000000000,
+          "isProductionFused": true,
+          "marketingName": "iPhone 14 Plus",
+          "platform": "iOS",
+          "productType": "iPhone14,8",
+          "reality": "physical",
+          "serialNumber": "XXXXXXXXXX",
+          "supportedCPUTypes": [{ "name": "arm64e", "subType": 2, "type": 16777228 }],
+          "supportedDeviceFamilies": [1],
+          "thinningProductType": "iPhone14,8",
+          "udid": "00008110-000000000000000A"
+        },
+        "identifier": "00000000-0000-0000-0000-000000000001",
+        "tags": [],
+        "visibilityClass": "default"
+      }
+    ]
+  }
+}

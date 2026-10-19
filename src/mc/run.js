@@ -104,7 +104,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
@@ -137,7 +137,7 @@ import { readDeps } from './deps.js';
 import {
   RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
-import { freePlanBranch } from './plan-branch.js';
+import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
@@ -628,13 +628,7 @@ export function realDeps(env = process.env) {
 
 /* --------------------------------------------------------------- runner */
 
-export function createRunner({
-  merge = true, deps = realDeps(),
-  // `lanes.json`'s second number, or null for no cap — read once by `runLoop`
-  // and handed here, because the count of steps in flight has to be one count
-  // for the whole process and this is the one object every lane shares.
-  total = null,
-} = {}) {
+export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const root = workRoot(deps.env);
   // A project's runner area, by name relative to the root and as a path:
   // `step/<project>`, or `<project>` for an area from before `step/` that is
@@ -2140,16 +2134,22 @@ export function createRunner({
 
   /**
    * The machine's cap: at most `total` steps in flight anywhere, over every
-   * repository at once, when `mc run lanes --total` has set one.
+   * repository at once, when `mc run lanes --total` has set one. The total is
+   * read from `lanes.json` each time a slot is taken, so a new one applies to
+   * the next start of a step without a restart.
    *
    * `per_repo` needs nothing like this because it is structural — there are
    * exactly that many lane loops on each repository, so no one has to count.
    * A total cannot be: the lanes are independent loops over two repositories
-   * and nothing about their shape says three. So it is a claim, and it lives
-   * in this process beside `claims` below, for the reason that one does. A
-   * count of `current-*.json` files would be the wrong instrument: the file
-   * is written after the step begins, so two lanes reading it in one tick
-   * both see a free slot and both start.
+   * and nothing about their shape says three. So it is a count, in two parts.
+   * This process's own steps are claims, held in `running` beside `claims`
+   * below, for the reason that one does. A count of `current-*.json` files
+   * would be the wrong instrument for them: the file is written after the step
+   * begins, so two lanes reading it in one tick both see a free slot and both
+   * start. Another live runner's steps are counted by their lane files
+   * (`stepsHeld`), because after a handover that runner takes no new step and
+   * its count only falls — a predecessor finishing its last step while the
+   * successor starts is how two runners held up to twice the cap (ruling 28).
    *
    * Nothing is counted at all when no total is set. An operator who has never
    * set one gets exactly what they got before this existed, which is what
@@ -2172,10 +2172,21 @@ export function createRunner({
    * watched what the cap actually does.
    */
   let running = 0;
-  const cap = Number.isInteger(total) && total > 0 ? total : null;
-  /** Take a slot, or don't — in one tick, with no await between the test and the take. */
+  let seen = { held: 0, cap: null };
+  /** The total as `lanes.json` says it now: an integer above 0, or null for no cap. */
+  function capNow() {
+    const total = (deps.laneCount || readLaneCount)()?.total;
+    return Number.isInteger(total) && total > 0 ? total : null;
+  }
+  /**
+   * Take a slot, or don't — in one tick, with no await between the test and the
+   * take. `stepsHeld` reads its files synchronously, so that holds here too.
+   */
   function takeSlot() {
-    if (cap !== null && running >= cap) return false;
+    const cap = capNow();
+    const held = cap === null ? running : running + stepsHeld().filter((h) => h.other).length;
+    seen = { held, cap };
+    if (cap !== null && held >= cap) return false;
     running += 1;
     return true;
   }
@@ -2193,7 +2204,7 @@ export function createRunner({
    */
   async function waitForSlot(name) {
     if (takeSlot()) return 'ok';
-    say(`${name}: ${running} of ${cap} steps in flight on this machine — waiting for a lane`);
+    say(`${name}: ${seen.held} of ${seen.cap} steps in flight on this machine — waiting for a lane`);
     for (;;) {
       await deps.sleep(TOTAL_POLL_MS);
       if (stopRequested()) return 'stop';
@@ -2297,6 +2308,11 @@ export function createRunner({
       // the project's branch after its pull request landed (plan-branch.js).
       const plan = freePlanBranch({ repo: repo.path, branch: name, planRoot: planHome(deps.env), git: deps.git, gh: deps.gh });
       if (plan.freed) say(`${name}: ${plan.holder} still held ${name}, which has landed — detached there and the branch deleted`);
+      // A project's branch is the runner's name, and one it did not make is never checked out (2026-10-14, `morning-calls`).
+      const registered = (readEntry(root, name, { read: deps.read })?.steps || []).some((step) => step?.branch === name);
+      const claim = claimProjectBranch({ repo: repo.path, branch: name, plan, registered, git: deps.git });
+      if (claim.verdict === 'foreign') return block(REFUSAL['branch-foreign'], `branch ${name} is not the runner's: ${claim.holder ? `checked out at ${claim.holder}` : 'no worktree holds it'} (${claim.why}) — remove that worktree or delete the branch, then mc step ready`);
+      if (claim.verdict === 'recreated') say(`${name}: local branch ${name} had landed and no worktree held it — deleted, the workarea starts from origin/main`);
       const added = deps.addWorktree({ name: areaName(name), repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
       if (!added.ok) return block(REFUSAL.worktree, `git worktree add failed (${added.reason})`);
     }
@@ -3030,15 +3046,24 @@ export function createRunner({
    * The steps in flight on this machine, one per `current-*.json`: its
    * `name`, the `pid` of the runner holding it, and `other` when that is a
    * live runner that is not this one — the runner a handover replaced,
-   * finishing what it held. A file naming a dead pid is nobody's.
+   * finishing what it held. A file naming a dead pid is nobody's: it is moved
+   * to `runner/log/` and said, not returned — a lane killed with its runner
+   * never reaches the `finally` that removes its file (`runStep`).
    */
   function stepsHeld() {
-    return paths.currents().map((path) => {
+    return paths.currents().flatMap((path) => {
       let held = null;
       try { held = JSON.parse(deps.read(path) ?? ''); } catch { held = null; }
       const owner = Number(held?.pid);
       const known = Number.isInteger(owner) && owner > 0;
-      return { path, name: held?.name || null, pid: known ? owner : null, other: known && owner !== pid && alive(owner) };
+      const foreign = known && owner !== pid;
+      if (foreign && !alive(owner)) {
+        const to = join(paths.log, `dead-${basename(path, '.json')}-${owner}.json`);
+        if (!deps.move?.(path, to)) remove(path);
+        say(`lane file ${basename(path)} names pid ${owner}, which is gone — ${held?.name || 'no step'}${Number.isInteger(held?.step) ? ` step ${held.step}` : ''}; moved to log/${basename(to)}`);
+        return [];
+      }
+      return [{ path, name: held?.name || null, pid: known ? owner : null, other: foreign }];
     });
   }
 
@@ -3366,13 +3391,12 @@ export async function runLoop({
   awake = true,
   deps = realDeps(),
 } = {}) {
-  // Both numbers, read once, before anything is started: `per_repo` is how
-  // many lane loops each repository gets and `total` is how many steps this
-  // machine will have in flight at once. A running runner keeps what it was
-  // started with — `mc run --update` (or stop and start) is how a new value
-  // takes effect, and the verb says so when it writes.
+  // `per_repo` is read once, before anything is started: it is how many lane
+  // loops each repository gets, and a running runner keeps it until `mc run
+  // --update` (or stop and start). `total` is not read here: `takeSlot` reads
+  // it each time a step is about to start, so a new total applies at once.
   const laneSetting = (deps.laneCount || readLaneCount)();
-  const runner = createRunner({ merge, deps, total: laneSetting.total });
+  const runner = createRunner({ merge, deps });
   // runner.json read before it is written. `markRunner()` below is a
   // statement, not a claim anyone checked, so until now a second `mc run` in
   // the same work root simply overwrote the first and became invisible to
@@ -3555,7 +3579,7 @@ export async function runLoop({
       const drainPaths = { dir: dirname(runner.paths.update), update: runner.paths.update, runner: runner.paths.runner };
       const drainTick = () => {
         if (!handedOver) return;
-        const state = drainState({ paths: drainPaths, read: deps.read, list: deps.list, now: deps.now() });
+        const state = drainState({ paths: drainPaths, read: deps.read, list: deps.list, now: deps.now(), alive: isAlive });
         const own = state.inFlight.filter((held) => held.pid === runner.pid);
         if (own.length === 0) return;
         const now = deps.now().getTime();

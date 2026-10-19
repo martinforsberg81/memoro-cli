@@ -45,6 +45,12 @@ THE PAGE
   mc merge <repo> <pr>             The same measurement, then the merge
   mc deploy [--dry-run]            memoro's main to production, after one question
   mc deploy --follow               Watch the deploy that is running
+  mc build ios                     Does memoro need a new iOS binary? Builds nothing
+  mc build ios --device            The commit production runs, on the paired iPhone
+  mc build ios --testflight [--no-upload]
+                                    The same, verified, uploaded after one question
+  mc build ios --shipped <build> <sha>
+                                    Record a binary built before mc build existed
   mc language [status <lang>]      Each language's last reading and run; status reads one again
   mc language key [set]            The Cloudflare key the writes get — set reads it from stdin
   mc language run <manifest>       A cutover's acts in order, a question before every write
@@ -314,13 +320,17 @@ IN FULL
                                     server — the warnings (a merged branch, a
                                     stale one, main, a session started outside
                                     the repository) and the mc toolbox
-  mc hook pre-tool                 For a PreToolUse hook on Bash|Write: gh pr
+  mc hook pre-tool                 For a PreToolUse hook on Bash|Write|Read: gh pr
                                     create, gh pr edit and git push → mc publish, gh pr
                                     merge → mc merge, npm run ci → mc gate, npm
                                     run dev → mc test dev --here --url, a scratch
                                     Playwright script → mc shot. MC_HOOK_ALLOW=1
                                     in the command lets it through. Both read
                                     the hook JSON on stdin and always exit 0
+  mc hook install [--check]        Write mc's two hook entries into
+                                    ~/.claude/settings.json, changing no other
+                                    entry. --check only says whether they are
+                                    there (exit 1 when not)
   mc publish [--title …] [--body-file …] [--base …]
                                     Push the branch you stand on (never force)
                                     and open its pull request, or find the one
@@ -371,6 +381,29 @@ IN FULL
                                     and read back by the page and
                                     mc helper. It takes no repository:
                                     memoro-cli is installed, not deployed
+  mc build ios [--json]            Whether memoro needs a new iOS binary,
+                                    without building: the last shipped build,
+                                    the commit production runs, and the native
+                                    paths and packages memoro's .mc/ios.json
+                                    declares that differ between them — or
+                                    that mc deploy is enough. Reads
+                                    ~/mc/runner/log/ios-builds.tsv
+  mc build ios --device [--sha <ref>] [--device-id <id>]
+                                   Build the commit production runs (or an
+                                    older one it contains) in its own
+                                    process, holding the heavy lane, read the
+                                    app back against .mc/ios.json and install
+                                    it on the paired iPhone. The terminal
+                                    follows ~/mc/runner/log/ios-build.log;
+                                    ^C stops watching, not the build
+  mc build ios --follow            Watch the iOS build that is running
+  mc build ios --testflight [--no-upload]
+                                   Build, verify the IPA and, after one
+                                    question, upload it to TestFlight;
+                                    --no-upload stops at the verified IPA
+  mc build ios --shipped <build> <sha>
+                                   Record a binary built before the verb
+                                    existed as the last shipped one
   mc language [--json]             Every language with a cached reading or a
                                     manifest: the reading's age, the manifests,
                                     the last run. Offline and instant

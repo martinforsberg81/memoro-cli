@@ -583,6 +583,7 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
     endRun(run, { outcome: 'stopped' }, env);
 
     const data = await collectPage({
+      claudeSettings: () => null,
       env,
       now: NOW,
       repos: [],
@@ -1998,6 +1999,7 @@ describe('collectPage', () => {
       const gh = [];
       const merged = [];
       const run = (over = {}) => collectPage({
+        claudeSettings: () => null,
         env: { MC_WORK_ROOT: root, MC_HOME: root },
         now: NOW,
         repos,
@@ -2084,6 +2086,7 @@ describe('collectPage', () => {
     const asked = [];
     const gitArgs = [];
     const data = await collectPage({
+      claudeSettings: () => null,
       env: { MC_WORK_ROOT: root, MC_HOME: root },
       now: NOW,
       repos: [],
@@ -2154,6 +2157,7 @@ describe('collectPage', () => {
     let saved = null;
     let fields = null;
     const data = await collectPage({
+      claudeSettings: () => null,
       env: { MC_WORK_ROOT: root, MC_HOME: root },
       now: NOW,
       repos: [{ name: 'memoro-cli', path: process.cwd() }],
@@ -2192,6 +2196,7 @@ describe('collectPage', () => {
       { name: 'memoro', path: join(root, 'docx-editor', 'memoro-cli') },
     ];
     const data = await collectPage({
+      claudeSettings: () => null,
       env: { MC_WORK_ROOT: root, MC_HOME: root },
       now: NOW,
       repos,
@@ -2215,6 +2220,7 @@ describe('collectPage', () => {
     const calls = [];
     const repos = [{ name: 'memoro-cli', path: join(root, 'mc-ui', 'memoro-cli') }];
     const data = await collectPage({
+      claudeSettings: () => null,
       env: { MC_WORK_ROOT: root, MC_HOME: root },
       now: NOW,
       repos,
@@ -2278,6 +2284,11 @@ describe('MC', () => {
   const draw = (mc, columns = 120) => rowWith(renderPageLines(pageData({ mc }), { columns, version: '0.7.11', now: NOW }), '  MC  ');
   const UP = { alive: true, up_seconds: 7200 };
 
+  it('names hook drift and the verb that mends it', () => {
+    assert.match(draw(mcSection({ process: UP, commit: 'abc1234', behind: 0, hooks: 'pre-tool on Bash|Write, want Bash|Write|Read', now: NOW }), 200), /^ {2}MC {2}0\.7\.11 · up to date · hooks: pre-tool on Bash\|Write, want Bash\|Write\|Read · mc hook install · runner up 120 min · on abc1234$/u);
+    assert.equal('hooks' in mcSection({ process: UP, now: NOW }), false);
+  });
+
   it('counts what origin/main has that the runner does not, from the runner\'s own commit', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-page-mc-'));
     mkdirSync(join(root, 'runner'), { recursive: true });
@@ -2285,6 +2296,7 @@ describe('MC', () => {
     writeFileSync(join(root, 'runner', 'UPDATE'), '2026-08-29T11:48:00.000Z\n');
     const asked = [];
     const data = await collectPage({
+      claudeSettings: () => ({ hooks: {} }),
       env: { MC_WORK_ROOT: root, MC_HOME: root }, now: NOW, repos: [], offline: true, alive: live,
       run: () => ({ status: 1, stdout: '' }),
       checkout: '/code/memoro-cli',
@@ -2299,6 +2311,8 @@ describe('MC', () => {
     // Measured from the commit the runner started on, not from the checkout's
     // HEAD: a checkout pulled by hand is new, and the runner beside it is not.
     assert.ok(asked.includes('rev-list --count abc1234..origin/main'), asked.join(' | '));
+    assert.equal(data.mc.hooks, 'session-start not registered, pre-tool not registered');
+    delete data.mc.hooks;
     assert.deepEqual(data.mc, {
       up_seconds: 7200, commit: 'abc1234', head: 'fff0000', main: 'def5678', behind: 3,
       update_requested: { at: '2026-08-29T11:48:00.000Z', age_seconds: 720, in_flight: [], lanes: 0 },

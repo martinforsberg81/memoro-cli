@@ -347,6 +347,7 @@ export function planLaunch({ programme, repos = [], role }) {
     `You stand in \`~/mc/plan/${programme}/\`, with ${beside} beside you — each a`,
     `worktree on branch \`plan/${programme}\`. This is not a workarea: nothing`,
     '`mc run` does can reach it.',
+    'A plan\'s pull request goes from a branch named `plan/<project>`, never `<project>`: that name is the runner\'s.',
     '',
     'Martin is at the terminal. Wait for him.',
   ];

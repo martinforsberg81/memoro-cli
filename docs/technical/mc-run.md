@@ -476,10 +476,18 @@ fault that is a moment's, and not the project's, is waited out.
 |---|---|---|
 | `dirty-worktree` | `dirty` | 4 — the comment names up to five of the files |
 | `worktree-missing` | `worktree` | 2 — `git worktree add` failed; git's reason |
+| `branch-foreign` | `branch-foreign` | 2 — the project's local branch is held by a worktree the runner did not free, or has commits not on origin/main and no register step names it; the holder is named |
 | `branch-unmovable` | `branch` | 8 — `<name>-<n>` could not be made |
 | `merge-uncommittable` | `sync` | 9 — every conflict resolved and the commit refused; a merge git refused with no conflict at all (unrelated histories, a stale `index.lock`); a `PLAN.json` neither the plan's rule nor `main`'s copy could settle |
 | `role-missing` | `role-missing` | 10 |
 | `tool-missing` | `tool-missing` | 10 — the adapter's hint |
+
+A landed local branch named after the project that no worktree holds and no
+register step names is not a block: it is deleted, the workarea is created from
+origin/main, and runner.log says so in one line (`claimProjectBranch`,
+`plan-branch.js`). Checked out as it stood, its head is the pre-squash commit,
+behind main and without the plan — where `morning-calls` step 1 would have
+started on 2026-10-14 had the planning session's scratchpad not held it.
 
 The names are `WORKAREA_BLOCKS` (`run-plan.js`), keyed by the refusal word so
 the two lists are one. Where a merge is in progress when the fault is met, it is
@@ -1068,11 +1076,14 @@ which is what `~/.memoro/mc/lanes.json` held until 2026-09-05 — runs one lane
 per repository, two sessions, exactly what it ran before the total existed. Set,
 both bind and the smaller wins: `per_repo`
 structurally, because there are that many lane loops per repository, and
-`total` as an in-process claim each lane takes at the last moment before it
-launches a session (`takeSlot`/`waitForSlot`, run.js) and drops in the same
-`finally` that removes its current file. It is a claim rather than a count of
-`current-*.json` because a file is written after a step begins, and two lanes
-counting files in the same tick would both see the same free slot. A lane with
+`total` read live from `lanes.json` at each `takeSlot` (run.js), so a new value
+applies to the next start of a step with no restart. The count is this
+process's own claims, taken at the last moment before a lane launches a session
+and dropped in the same `finally` that removes its current file, plus the steps
+other live runners hold by their lane files — a predecessor finishing after a
+handover. Own steps are claims rather than a count of `current-*.json` because
+a file is written after a step begins, and two lanes counting files in the same
+tick would both see the same free slot. A lane with
 no slot polls every 15 s and says one line when the wait begins, and gives the
 wait up on STOP or UPDATE — the drain promises that from the moment UPDATE is
 read no lane starts a step. There is no ordering rule between waiting lanes:
@@ -1266,7 +1277,9 @@ thing it writes into a repository: a blocked step (below).
   the worktree, and it is
   written immediately before the session starts, rewritten with the count at
   each check-in, and removed in a `finally`
-  however that session returns, so a step that throws still clears it.
+  however that session returns, so a step that throws still clears it. A file
+  whose runner pid is gone is moved to `runner/log/dead-<file>-<pid>.json` by
+  the next runner that reads it, and the drain and stop lines leave it out.
   Readers — the page's RUNNER block, `mc status <name>` — glob
   `current-*.json` rather than opening one fixed path, which is why the block
   is a list of lines and not a line.
@@ -1404,7 +1417,7 @@ ending and its pull request landing.
 
 So the state lives in **the register**: one file per project under
 `~/mc/runner/projects/`, written whole and atomically under one lock
-(`register.js`), one entry per step keyed by the step's index in the plan —
+(`register.js`), one entry per step, matched to the plan by the step's key (`stepKey`: the label before ` — `, a leading ordinal such as `5.` dropped; a re-plan that puts a new step in a slot whose old key is gone keeps the slot's status and clears the replaced step's pull request, branch, stack and red, with a comment) —
 `status` (`ready` · `running` · `done` · `failed` · `blocked`), `pr`, `branch`,
 `blocked_by`, `reason`, `comments`, `session` (pid, start, model, lane while
 running), `attempts`, `landed` (sha and time). The plan on main still says what
@@ -1475,6 +1488,19 @@ one of three outcomes:
 **What a person writes there** is `mc step`: `failed --reason`, `blocked --on`
 (or `--on-project`, `--until`, `--after-deploy`), `ready`, `done`. `ready` is refused while the step's pull request is open — a
 step set ready over an open pull request would be run again on top of it.
+
+**The register's log.** Every register write also appends one JSON line to
+`~/mc/runner/log/register.log` (`register.js`, `logWrite`): the step that
+moved, its status before and after, the pull request it carries, and the
+process that moved it — pid, the command of its parent, its run id, the shape
+of its arguments (flag names, never their values or free text), its directory
+and `MC_STEP`. A seed and a re-plan that carried a slot are lines too. The file
+rotates at 4 MB into one `.1`, and `mc tidy` keeps it: its per-project rule
+matches `<project>-<timestamp>` files only. It exists because on 2026-10-12 a
+hand-typed `mc step ready log-page 1` moved a landed step back to `ready`, the
+runner ran it twice, and the register that could have said who did it was
+tidied away with its project; until then the only record was `mc.log`, which
+keeps no parent process.
 
 ## Sleeping and stopping
 

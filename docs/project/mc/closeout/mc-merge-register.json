@@ -1,0 +1,270 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-merge-register",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-merge-register/PLAN.json",
+  "archived": "2026-10-18",
+  "goal": [
+    "A long-lived mc process runs the code on main: the merger, the repo watcher and the runner each notice, between units of work, that the checkout has moved past the commit they started on, finish what is in flight and hand over to a successor on the new code; `mc run --update` says what each will do, and the page shows any process behind its checkout.",
+    "The merger writes what it already knows when it knows it: an answer given before a round reaches `merges.json` at once, and a mend starts as soon as the mend line is free.",
+    "A plan is done when every step is done and every success criterion is met, and the door keeps a last step from landing with a criterion unmet.",
+    "A re-plan moves a step's register state with the step, not with its slot, and every register write leaves a line saying which process made it."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "A merger whose checkout HEAD differs from the commit it started on takes no new batch, finishes the round in flight, leaves the queue as it is, exits 0, and starts its successor when jobs remain; `mc merge watch` says `merger on <commit> · main <commit>` while they differ.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/merger.test.js tests/mc/merge-watch.test.js` passes, including 'a merger whose checkout moved takes no new batch, finishes the round in flight and leaves', 'succeed starts a merger only while jobs remain' and 'a merger behind its checkout is named on the line'."
+    },
+    {
+      "met": true,
+      "criterion": "The runner writes UPDATE itself when origin/main of mc's checkout has moved past its commit and the checkout can fast-forward; the repo watcher leaves after a refresh and starts its successor when its checkout moved; `mc run --update` prints one line per long-lived process; the page's MC line names any process behind its checkout.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/run-control.test.js tests/mc/repo-watch.test.js tests/mc/page.test.js` passes, including the tests named in step 2."
+    },
+    {
+      "met": true,
+      "criterion": "While a batch's round runs, a member answered before it (closed, already merged, a restack refused) is already `red`, gone or `mending` in `merges.json`, and a mending member's mend has started.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/merger.test.js` passes, including the three tests named in step 3."
+    },
+    {
+      "met": true,
+      "criterion": "A plan whose steps are all done and whose criteria are not all met reads `unmet` with the criterion numbers, is neither archived nor closed, and is said once by the runner; `mc merge` and `mc merge --docs` refuse the last step's pull request while it leaves a criterion `met: false`.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-schema.test.js tests/mc/merge-boundary.test.js tests/mc/merge-command.test.js tests/mc/docs-merge.test.js tests/mc/run.test.js` passes, including the tests named in step 4."
+    },
+    {
+      "met": true,
+      "criterion": "`stepKey` drops a leading ordinal, so a renumbered step keeps its state and the steps inserted before it start fresh; a slot carried by position keeps its status and loses the replaced step's pull request fields, with a comment saying so.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/register.test.js` passes, including the photo-viewer renumbering test named in step 5."
+    },
+    {
+      "met": true,
+      "criterion": "Every register write appends one JSON line to `~/mc/runner/log/register.log` naming the process (pid, ppid, parent, run id, argv shape, cwd, MC_STEP), and a log that cannot be written never fails the write.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/register.test.js` passes, including the tests named in step 6."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The merger leaves for new code between rounds and starts its successor",
+      "done_when": "`serve` in `src/mc/merger.js` reads the checkout's HEAD before it takes each batch and, when it differs from `version.commit`, says so once, takes nothing new, lets the lanes in flight finish and returns 0 with the queue untouched; `merger-run.js` then calls the new `succeed`, which starts a merger only while jobs remain; `mc merge watch` names a merger behind its checkout; the new tests in `tests/mc/merger.test.js` and `tests/mc/merge-watch.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 960,
+      "landed": {
+        "sha": "2870348368fb67ce00b933d7f2b36e30b8a658bf",
+        "into": "main",
+        "at": "2026-10-18T15:01:34Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "installedHead in merger.js takes its git handed in (default null): child-async.test.js forbids spawnSync in merger.js, so merge-watch.js's followMerge passes the synchronous git. Steps 2–3 touching merger.js must keep it free of sync children."
+      ],
+      "sessions": 1,
+      "seconds": 910,
+      "cost_usd": 1.370706
+    },
+    {
+      "title": "mc run --update reaches every long-lived process, the runner and the repo watcher follow new code by themselves, and the page names a process behind its checkout",
+      "done_when": "The runner writes UPDATE itself in `chores` when origin/main of mc's checkout has moved past its commit and the checkout is clean and can fast-forward; `repo-watch-run.js` leaves after a refresh when its checkout's HEAD moved and starts its successor; `requestUpdate` in `src/mc/run-control.js` adds one line per long-lived process; the page's MC line names any process whose commit differs from the checkout's; the new tests in `tests/mc/run.test.js`, `tests/mc/run-control.test.js`, `tests/mc/repo-watch.test.js` and `tests/mc/page.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 962,
+      "landed": {
+        "sha": "66a22366b72b6cde3fc94f8edfd02dd2665568e3",
+        "into": "main",
+        "at": "2026-10-18T15:15:10Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "run-doc.test.js 'says the runner never orders its own handover' encoded the 2026-09-19 rule this step replaces; rewritten to assert the new rule (runner writes UPDATE itself only on a clean, fast-forwarding checkout, once per sha). requestUpdate lazy-imports merger.js/repo-watch.js instead of realControlDeps keys so the page does not load the merger graph."
+      ],
+      "sessions": 1,
+      "seconds": 1078,
+      "cost_usd": 2.309572
+    },
+    {
+      "title": "The merger writes an answer given before the round to merges.json at once, and a mend starts when the mend line frees",
+      "done_when": "`landJob` in `src/mc/merger.js` calls a new `onAnswer` after each `tell`, outside any lock; `serve` writes that one job's entry (`dequeue`, `markMending` or `markRed`) and starts its mend at once, and its post-round loop skips jobs already written; the three new tests in `tests/mc/merger.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 963,
+      "landed": {
+        "sha": "6ee08ed557968ddcb43ef621f733c00e6aa6fea7",
+        "into": "main",
+        "at": "2026-10-18T15:30:44Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 786,
+      "cost_usd": 0.907927
+    },
+    {
+      "title": "A plan is done only when its criteria are met: an unmet state, and a door for the last step",
+      "done_when": "`planState` in `src/mc/plan-schema.js` returns `unmet` with the 1-based criterion numbers when every step is done and a criterion is not `met: true`; `deliverableStep` and `planSummary` say why; the page and `mc status` show it; the runner says it once; nothing archives or closes it; the new `criteriaDoor` in `src/mc/merge-boundary.js` refuses the plan's last step's pull request in `mc merge`, `mc merge --docs` and the runner's own queueing while it leaves a criterion unmet; the new tests pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 967,
+      "landed": {
+        "sha": "cd137304c2b8df5f195cde3071370f1e0648dc76",
+        "into": "main",
+        "at": "2026-10-18T17:08:45Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 2940,
+      "cost_usd": 3.558014
+    },
+    {
+      "title": "Step keys ignore a leading ordinal, and a slot carried by position loses the replaced step's pull request fields",
+      "done_when": "`stepKey` in `src/mc/register.js` drops a leading ordinal through a new exported `keyOf`; `reconcileEntry` compares stored keys through `keyOf`, and its positional fallback keeps the slot's status, clears `pr`, `branch`, `attempts`, `stacked_on`, `red` and `interrupted` (keeping `pr` on a done step), appends one comment, and returns `carried`; the new tests in `tests/mc/register.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 971,
+      "landed": {
+        "sha": "b3bae47dc24ea86ab45000d88a5f2ee60c3785ae",
+        "into": "main",
+        "at": "2026-10-18T17:39:55Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Keys ignore a leading ordinal: stepKey now returns keyOf(label), so '5. The close', '8) The close' and 'Step 3: The close' are 'The close', and '1.2 thing' is unchanged. reconcileEntry reads stored keys through keyOf and writes a cleaned key once. Its positional fallback (a key the entry does not know, in a slot whose old key the plan lost) keeps the slot's status and reason and landed, clears branch, attempts, stacked_on, red and interrupted, clears pr unless the step is done, appends one comment, and returns carried: [{ index, from, to }] (overlayPlans ignores it until step 6). The done-step branch and attempts clearing follows the done_when prose, not its code sketch. Verified: mc gate tests/mc/register.test.js is green (19 tests), and the full mc gate is green (2895 tests, 0 failed, 9 skipped). Criterion 4 is met: true. Criterion 5 and step 6 are untouched."
+      ],
+      "sessions": 1,
+      "seconds": 961,
+      "cost_usd": 0.045511
+    },
+    {
+      "title": "Every register write appends one line to runner/log/register.log naming the process",
+      "done_when": "`updateStep` and `overlayPlans` in `src/mc/register.js` append one JSON line per write to `~/mc/runner/log/register.log` with `at`, `project`, the event, the step and `by` (`pid`, `ppid`, `parent`, `run`, `argv`, `cwd`, `mc_step`), never throwing; the new tests in `tests/mc/register.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 976,
+      "landed": {
+        "sha": "3fee18d437953ac22773e77aed9300a13fc0e832",
+        "into": "main",
+        "at": "2026-10-18T18:09:49Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Every register write now appends one JSON line to runner/log/register.log (register.js: updateStep and overlayPlans, through logWrite): the step, from and to status, pr and the fields patched, or the seed or re-plan with what it carried. Each line names the writer by whoAmI: pid, ppid, parent command (ps, read once per process), run id, invocationShape of argv, cwd and MC_STEP. The log rotates at 4 MB via rotateIfLarge and never fails a write. mc tidy keeps it because sessionLogRe does not match register.log (asserted in tidy.test.js). The brief named a sessionLogRe test in tidy.test.js that did not exist, so the assertion is a new test there. Tests: tests/mc/register.test.js has the four named tests; disk() stubs append and by so existing tests do not touch the real log."
+      ],
+      "sessions": 1,
+      "seconds": 235,
+      "cost_usd": 0.031608
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-18T14:54:33Z",
+      "kind": "step",
+      "seconds": 910,
+      "land_seconds": null,
+      "pr": 960,
+      "turns": 62,
+      "input": 48,
+      "output": 22665,
+      "cache_read": 1328368,
+      "cache_write": 130308,
+      "model": null,
+      "note": "success,queued",
+      "session": "df386420-9021-4bcc-acc4-db275a7ed57a",
+      "cost_usd": 1.3707056
+    },
+    {
+      "ts": "2026-10-18T15:12:43Z",
+      "kind": "step",
+      "seconds": 1078,
+      "land_seconds": null,
+      "pr": 962,
+      "turns": 113,
+      "input": 108,
+      "output": 38668,
+      "cache_read": 3580800,
+      "cache_write": 127877,
+      "model": null,
+      "note": "success,queued",
+      "session": "da756644-d2c3-4715-b241-452b13483c9b",
+      "cost_usd": 2.309571799999999
+    },
+    {
+      "ts": "2026-10-18T15:26:00Z",
+      "kind": "step",
+      "seconds": 786,
+      "land_seconds": null,
+      "pr": 963,
+      "turns": 32,
+      "input": 36,
+      "output": 12911,
+      "cache_read": 792089,
+      "cache_write": 98229,
+      "model": null,
+      "note": "success,queued",
+      "session": "f03cb052-6165-4087-938e-715b0bd44524",
+      "cost_usd": 0.9079268
+    },
+    {
+      "ts": "2026-10-18T16:30:46Z",
+      "kind": "step",
+      "seconds": 2940,
+      "land_seconds": null,
+      "pr": 967,
+      "turns": 104,
+      "input": 88,
+      "output": 30651,
+      "cache_read": 2959235,
+      "cache_write": 470559,
+      "model": null,
+      "note": "success,queued",
+      "session": "ebed6079-28f1-4e3c-acb9-432e750f90b3",
+      "cost_usd": 3.558013999999999
+    },
+    {
+      "ts": "2026-10-18T17:31:05Z",
+      "kind": "step",
+      "seconds": 961,
+      "land_seconds": null,
+      "pr": 971,
+      "turns": 30,
+      "input": 26,
+      "output": 30864,
+      "cache_read": 839357,
+      "cache_write": 173464,
+      "model": null,
+      "note": "success,queued",
+      "session": "197d5398-4e62-4c3f-9937-5e8318078739",
+      "cost_usd": 0.045511170000000004
+    },
+    {
+      "ts": "2026-10-18T18:08:25Z",
+      "kind": "step",
+      "seconds": 235,
+      "land_seconds": null,
+      "pr": 976,
+      "turns": 40,
+      "input": 20,
+      "output": 32474,
+      "cache_read": 556231,
+      "cache_write": 78454,
+      "model": null,
+      "note": "success,queued",
+      "session": "e007bf39-17e9-41ec-a258-374835f3e2f0",
+      "cost_usd": 0.03160806
+    }
+  ],
+  "totals": {
+    "sessions": 6,
+    "seconds": 6910,
+    "land_seconds": 0,
+    "cost_usd": 8.223337,
+    "cost_unknown": 0,
+    "input": 326,
+    "output": 168233,
+    "cache_read": 10056080,
+    "cache_write": 1078891,
+    "first": "2026-10-18T14:54:33Z",
+    "landed": "2026-10-18T18:09:49Z"
+  }
+}

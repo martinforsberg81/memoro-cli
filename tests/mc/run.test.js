@@ -2043,6 +2043,34 @@ test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', 
   assert.equal('/w/runner/current-memoro.json' in f.files, false, 'the killed runner\'s in-flight file outlived it');
 });
 
+test('a lane file naming a dead pid is moved to runner/log and said once', () => {
+  const f = fixture({ plans: { memoro: {} }, session: okSession(), livePids: [7000] });
+  f.files['/w/runner/current-memoro-2.json'] = JSON.stringify({ name: 'msr-core-residue', step: 4, pid: 41100, lane: 2 });
+  f.files['/w/runner/current-memoro-1.json'] = JSON.stringify({ name: 'a', step: 1, pid: 7000, lane: 1 });
+  const runner = createRunner({ deps: f.deps });
+  const held = runner.stepsHeld();
+  assert.equal(held.length, 1);
+  assert.equal(held[0].pid, 7000);
+  assert.equal(held[0].other, true);
+  assert.equal('/w/runner/current-memoro-2.json' in f.files, false);
+  assert.equal(f.files['/w/runner/log/dead-current-memoro-2-41100.json'], JSON.stringify({ name: 'msr-core-residue', step: 4, pid: 41100, lane: 2 }));
+  assert.deepEqual(f.calls.moved, [['/w/runner/current-memoro-2.json', '/w/runner/log/dead-current-memoro-2-41100.json']]);
+  assert.match(f.files['/w/runner/log/runner.log'], /lane file current-memoro-2\.json names pid 41100, which is gone — msr-core-residue step 4; moved to log\/dead-current-memoro-2-41100\.json/u);
+  runner.stepsHeld();
+  assert.equal(f.files['/w/runner/log/runner.log'].match(/lane file current-memoro-2\.json/gu).length, 1);
+});
+
+test('a lane file with no pid is not swept', () => {
+  const f = fixture({ plans: { memoro: {} }, session: okSession() });
+  f.files['/w/runner/current-memoro.json'] = '{}';
+  const held = createRunner({ deps: f.deps }).stepsHeld();
+  assert.equal(held.length, 1);
+  assert.equal(held[0].pid, null);
+  assert.equal(held[0].other, false);
+  assert.equal('/w/runner/current-memoro.json' in f.files, true);
+  assert.deepEqual(f.calls.moved, []);
+});
+
 /**
  * Landing a pull request is enough (Martin, 2026-10-18): the chore pass reads
  * origin/main of mc's own checkout — fetched by `queue()` a moment before —
@@ -3884,7 +3912,8 @@ test('a lane held back by the total goes through when the slot frees', async () 
   const held = new Promise((resolve) => { release = resolve; });
   f.deps.session = async (call) => { starts.push(areaOf(call.cwd)); await held; return inner(call); };
   f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
-  const runner = createRunner({ deps: f.deps, total: 1 });
+  f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
+  const runner = createRunner({ deps: f.deps });
   const world = runner.queue();
   const first = runner.runStep('a', world, { lane: 0 });
   await turns(4);
@@ -3900,6 +3929,73 @@ test('a lane held back by the total goes through when the slot frees', async () 
 });
 
 /**
+ * `mc run lanes --total` applies to the next start, not the next restart: the
+ * total is read each time a slot is taken. Lowered, it holds the next start;
+ * raised, the lane that was waiting goes.
+ */
+test('a total changed while the runner runs applies to the next slot', async () => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
+  let total = 2;
+  f.deps.laneCount = () => ({ per_repo: 1, total });
+  const inner = f.deps.session;
+  const starts = [];
+  let release = null;
+  const held = new Promise((resolve) => { release = resolve; });
+  f.deps.session = async (call) => { starts.push(areaOf(call.cwd)); await held; return inner(call); };
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  const first = runner.runStep('a', world, { lane: 0 });
+  await turns(4);
+  total = 1;
+  const second = runner.runStep('b', world, { lane: 1 });
+  await turns();
+  assert.deepEqual(starts, ['a'], 'a lowered total holds the next start');
+  assert.match(f.files['/w/runner/log/runner.log'], /b: 1 of 1 steps in flight on this machine — waiting for a lane/u);
+  total = 2;
+  await turns();
+  assert.deepEqual(starts, ['a', 'b'], 'a raised total lets the waiting lane go');
+  release();
+  assert.equal(await first, 'ran');
+  assert.equal(await second, 'ran');
+});
+
+/**
+ * Another runner's steps count against the total while its lane files exist:
+ * after a handover the predecessor finishes what it holds, and the successor
+ * must not start beside it past the cap. Its file going is the slot coming back.
+ */
+test('a live predecessor\'s steps count against the total', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [7000] });
+  f.files['/w/runner/current-memoro-cli.json'] = JSON.stringify({ name: 'z', step: 1, pid: 7000, lane: 0 });
+  f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  const a = runner.runStep('a', world, { lane: 0 });
+  await turns();
+  assert.equal(f.calls.sessions.length, 0, 'the predecessor holds the one slot');
+  assert.match(f.files['/w/runner/log/runner.log'], /a: 1 of 1 steps in flight on this machine — waiting for a lane/u);
+  delete f.files['/w/runner/current-memoro-cli.json'];
+  await turns();
+  assert.equal(f.calls.sessions.length, 1, 'the slot came back when the predecessor\'s file went');
+  assert.equal(await a, 'ran');
+});
+
+/** A dead runner's lane file is swept by `stepsHeld` and counts for nothing. */
+test('a dead runner\'s lane file does not count against the total', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), livePids: [] });
+  f.files['/w/runner/current-memoro-cli.json'] = JSON.stringify({ name: 'z', step: 1, pid: 7001, lane: 0 });
+  f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  const runner = createRunner({ deps: f.deps });
+  const world = runner.queue();
+  assert.equal(await runner.runStep('a', world, { lane: 0 }), 'ran');
+  assert.equal(f.calls.sessions.length, 1, 'the session started without waiting');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /waiting for a lane/u);
+});
+
+/**
  * A lane waiting for a slot when an UPDATE arrives starts nothing. The drain
  * is meant to end within one step's length: a lane that waited out somebody
  * else's step and then launched its own would make it two.
@@ -3912,7 +4008,8 @@ test('a lane waiting for a slot gives the wait up on UPDATE, and starts no step'
   const held = new Promise((resolve) => { release = resolve; });
   f.deps.session = async (call) => { starts.push(areaOf(call.cwd)); await held; return inner(call); };
   f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
-  const runner = createRunner({ deps: f.deps, total: 1 });
+  f.deps.laneCount = () => ({ per_repo: 1, total: 1 });
+  const runner = createRunner({ deps: f.deps });
   const world = runner.queue();
   const first = runner.runStep('a', world, { lane: 0 });
   await turns(4);
@@ -3973,7 +4070,7 @@ test('runLoop: an UPDATE hands over at once — the old runner starts no step, f
  * are polling.
  */
 test('runLoop: an old runner finishing a long step says what it holds every ten minutes, once for the runner', async () => {
-  const f = fixture({ plans: { memoro: { a: ready }, 'memoro-cli': {} }, session: okSession() });
+  const f = fixture({ plans: { memoro: { a: ready }, 'memoro-cli': {} }, session: okSession(), livePids: [4242] });
   const t0 = new Date('2026-08-26T12:00:00Z').getTime();
   let clock = t0;
   f.deps.now = () => new Date(clock);
@@ -4039,6 +4136,16 @@ test('a project already in flight in one lane is skipped by another', async () =
  * the last test below asserts every name has one.
  */
 
+/** A project branch a planning session holds in its scratchpad (`morning-calls`, 2026-10-14). */
+const scratchHeld = () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, refs: { memoro: ['m'] }, session: okSession() });
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => (args[0] === 'worktree' && args[1] === 'list'
+    ? { ok: true, stdout: 'worktree /home/memoro\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/scratchpad/wt3\nHEAD eb261c5d6a\nbranch refs/heads/m\n' }
+    : git(cwd, args));
+  return f;
+};
+
 const BLOCKS = [
   {
     block: 'dirty-worktree',
@@ -4057,6 +4164,13 @@ const BLOCKS = [
       return f;
     },
     detail: /git worktree add failed \(no space left on device\)/u,
+  },
+  {
+    block: 'branch-foreign',
+    reason: 'branch-foreign',
+    what: 'a project branch checked out in a worktree the runner does not own',
+    make: scratchHeld,
+    detail: /branch m is not the runner's: checked out at \/tmp\/scratchpad\/wt3 \(not a plan directory\) — remove that worktree or delete the branch/u,
   },
   {
     block: 'branch-unmovable',
@@ -4161,6 +4275,24 @@ for (const kase of BLOCKS) {
     assert.equal(f.calls.git.some((c) => c[1] === 'worktree' && c[2] === 'add' && String(c[4] || '').includes('/runner/block/')), false, 'no block worktree');
   });
 }
+
+test('a landed project branch no worktree holds is deleted and the step starts from origin/main', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, refs: { memoro: ['m'] }, landed: ['m'], session: okSession() });
+  const runner = createRunner({ deps: f.deps });
+  await runner.runStep('m', runner.queue());
+  assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'branch' && c[2] === '-D' && c[3] === 'm'), 'the leftover is deleted');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: local branch m had landed and no worktree held it — deleted, the workarea starts from origin\/main/u);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('an unlanded project branch no worktree holds blocks as branch-foreign', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, refs: { memoro: ['m'] }, session: okSession() });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('m', runner.queue()), 'skipped:branch-foreign');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /branch m is not the runner's: no worktree holds it \(it has commits that are not on origin\/main\)/u);
+  assert.equal(f.calls.git.some((c) => c[1] === 'branch' && c[2] === '-D'), false, 'the branch is kept');
+});
 
 test('every workarea block has a case above', () => {
   const covered = new Set(BLOCKS.map((kase) => kase.block));
@@ -4309,6 +4441,11 @@ const CASES = [
       f.deps.addWorktree = () => ({ ok: false, reason: 'no space left on device' });
       return f;
     },
+  },
+  {
+    reason: 'branch-foreign',
+    what: 'the project branch is held by a worktree the runner does not own',
+    make: scratchHeld,
   },
   {
     reason: 'dirty',

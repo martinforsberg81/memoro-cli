@@ -8,11 +8,14 @@
  *   mc gate --budget <s>      answer after at most s seconds (default 540); the gate keeps running
  *   mc gate --wait            wait for the gate running here and print its verdict
  *   mc gate <files…> [--test-name-pattern <p>]
- *                             the named test files, with the repository's node --test flags
+ *                             the named test files, with the node --test flags the repository declares
+ *                             (pr_tests_flags), else those of its test script
  *
  * What runs is the repository's, read from its `package.json` (`gate-local.js`):
  * `npm run ci -- --base-ref origin/main` where there is a `ci` script, else
- * `npm test`; named files run `node --test` with the flags of its `test` script.
+ * `npm test`; named files run `node --test` with the declared `pr_tests_flags`
+ * (read from the primary checkout, as the incremental gate reads it), else the
+ * flags of its `test` script.
  * The gate is a detached child whose output goes to a file — under
  * `$MC_SCRATCH` in a runner session, the system temp directory otherwise — as
  * it is written, so the log is readable while the gate runs; when it ends it
@@ -50,9 +53,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+import { deployHolding, IOS_BUILD_MODE } from '../await-deploy.js';
 import { ensure, needsDocker } from '../docker.js';
-import { planGate, recordLast, snapshotTree } from '../gate-fast.js';
+import { declaredTestFlags, planGate, recordLast, snapshotTree } from '../gate-fast.js';
 import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
 import { GATE_MEASUREMENT_VERSION, recordGreen, selectionHash } from '../gate-greens.js';
 import { tryGit } from '../git.js';
@@ -66,6 +71,9 @@ import { scanArgs } from './flags.js';
 const DEFAULT_BUDGET = 540;
 /** How often the answer looks for the gate's exit code. */
 const POLL_MS = 2000;
+
+/** What a gate started while a deploy or an iOS build holds the heavy lane runs first (`await-deploy.js`). */
+const AWAIT_DEPLOY = fileURLToPath(new URL('../await-deploy.js', import.meta.url));
 
 /** The machine the verb runs on; a test hands in its own. */
 const SYSTEM = {
@@ -89,6 +97,7 @@ const SYSTEM = {
   holder: ({ cwd, env }) => currentHolder({ cwd, env }).name,
   snapshotTree,
   dockerEnsure: (options) => ensure(options),
+  deployHolding: ({ env }) => deployHolding({ root: mcHome(env) }),
 };
 
 export async function run(argv, deps = {}) {
@@ -125,7 +134,7 @@ export async function run(argv, deps = {}) {
   let manifest = null;
   try { manifest = JSON.parse(io.read(join(root, 'package.json'), 'utf8')); } catch { manifest = null; }
   const base = scanned.flags.base || 'origin/main';
-  const command = files.length ? namedCommand(manifest, files, { pattern }) : gateCommand(manifest, { base });
+  const command = files.length ? namedCommand(manifest, files, { pattern, flags: declaredTestFlags(io, { root, env }) }) : gateCommand(manifest, { base });
   if (!command) { stderr.write(`mc: ${root} has no ci or test script in package.json — nothing to run\n`); return 2; }
 
   const held = readLock(io, lockPath);
@@ -153,6 +162,12 @@ export async function run(argv, deps = {}) {
     childEnv.MC_DOCKER_REPO = recordable?.green?.repo || basename(root);
   }
 
+  const deploying = io.deployHolding({ env });
+  if (deploying) {
+    const what = deploying.mode === IOS_BUILD_MODE ? 'an iOS build' : 'a deploy';
+    stderr.write(`mc: ${what} holds the heavy lane (pid ${deploying.pid}) — this gate starts its tests when it is done\n`);
+  }
+
   const startedAt = io.now();
   const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
   const dir = env.MC_SCRATCH || join(tmpdir(), 'mc-gate');
@@ -162,7 +177,10 @@ export async function run(argv, deps = {}) {
     io.mkdir(dir);
     const fd = io.open(logPath);
     // `$$` is this shell's own pid, which is `child.pid`: the lease holder.
-    const script = `${wantsDocker ? 'export MC_DOCKER_HOLDER=$$; ' : ''}${chosen.run}; echo $? > '${logPath}.exit'`;
+    // A deploy holding the heavy lane is waited for inside the child, so the
+    // verb answers within its budget as ever and the wait is in the log.
+    const waitDeploy = deploying ? `'${process.execPath}' '${AWAIT_DEPLOY}'; ` : '';
+    const script = `${wantsDocker ? 'export MC_DOCKER_HOLDER=$$; ' : ''}${waitDeploy}${chosen.run}; echo $? > '${logPath}.exit'`;
     child = io.spawn('sh', ['-c', script], {
       cwd: root, env: childEnv, detached: true, stdio: ['ignore', fd, fd],
     });
@@ -340,7 +358,7 @@ export function usage() {
     '        mc gate --json                the summary as one object\n',
     '        mc gate --budget <s>          answer after at most s seconds, default 540; the gate keeps running\n',
     '        mc gate --wait                wait for the gate running here and print its verdict\n',
-    '        mc gate <test files…> [--test-name-pattern <p>]   the named files with this repository\'s node --test flags; the same log, budget and summary\n',
+    '        mc gate <test files…> [--test-name-pattern <p>]   the named test files, with the node --test flags the repository declares (pr_tests_flags), else those of its test script; the same log, budget and summary\n',
     '\n',
     'Fast paths, without --full: nothing changed against the base, or only docs/ (no scripts), answers GREEN at once;\n',
     'a tree the last whole gate here measured green answers GREEN (unchanged since …); after a red whole gate, only the\n',

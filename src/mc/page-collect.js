@@ -76,6 +76,7 @@ import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
 import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, mcHome, workRoot } from './paths.js';
+import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
 import { overlayPlans, readEntry } from './register.js';
 import { readTailEntries } from './conversations.js';
@@ -993,7 +994,7 @@ function proposalCounts(files) {
  */
 export function mcSection({
   process = null, commit = null, head = null, main = null, behind = null, updateText = null, drain = null, now = new Date(),
-  pid = null, predecessor = null, processes = [],
+  pid = null, predecessor = null, processes = [], hooks = null,
 } = {}) {
   const asked = Date.parse(String(updateText || '').trim());
   const behindCheckout = head ? processes.filter((p) => p?.commit && !sameCommit(p.commit, head)) : [];
@@ -1005,6 +1006,8 @@ export function mcSection({
     head: head || null,
     main: main || null,
     behind: Number.isInteger(behind) ? behind : null,
+    // Only while mc's hook registration in ~/.claude/settings.json has drifted.
+    ...(hooks ? { hooks } : {}),
     // Only while two runners overlap; otherwise the line is what it was.
     ...(predecessor ? { pid: Number.isInteger(pid) ? pid : null, predecessor: { pid: predecessor.pid, steps: predecessor.steps || [] } } : {}),
     // Only while a process is behind; otherwise the line is what it was.
@@ -1481,6 +1484,8 @@ export async function collectPage({
   // The checkout mc itself runs from, or null. Injected so a test never reads
   // the real one.
   checkout = mcCheckout(),
+  // Injected so that no test reads the real file; an env without HOME means none is read.
+  claudeSettings = () => (env.HOME ? readClaudeSettings(claudeSettingsPath(env.HOME)) : null),
 } = {}) {
   const root = workRoot(env);
   // mc's own home — the gate locks, lanes.json, the dependency and nightly
@@ -1677,6 +1682,7 @@ export async function collectPage({
         (() => { const m = readMerger({ root }); return m ? { name: 'merger', pid: m.pid, commit: m.commit || null } : null; })(),
         (() => { const w = watcherState({ root: home }); return w.running ? { name: 'repo watch', pid: w.pid, commit: w.commit } : null; })(),
       ].filter(Boolean),
+      hooks: (() => { const settings = claudeSettings(); return settings ? hookDrift(hookRegistration(settings)) : null; })(),
       updateText: readText(join(root, 'runner', 'UPDATE')),
       drain: drainState({
         paths: controlPaths(root),
