@@ -37,9 +37,9 @@ import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { defaultRepos, listProposals, planRecords, proposalSystem } from './brief-collect.js';
+import { defaultRepos, listProposals, planRecords, proposalSystem, withProgrammePlans } from './brief-collect.js';
 import { intakeArchiveDir, intakeDir, proposalsDir } from './helper-collect.js';
-import { lsTreeArgs, plansInTree } from './plan-source.js';
+import { lsTreeArgs, plansInTree, programsPlans } from './plan-source.js';
 import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
@@ -172,10 +172,11 @@ function realGit(cwd, args) {
 
 /**
  * The ground the turn judges the digest against, read from the two main
- * checkouts on origin/main. A repository that is not here is simply absent —
- * the turn is told what it was given, never that a list is complete.
+ * checkouts on origin/main, with `~/mc/programs/` laid over them. A repository
+ * that is not here is simply absent — the turn is told what it was given, never
+ * that a list is complete.
  */
-export async function helperGround({ env = process.env, repos = defaultRepos(env), git = realGit } = {}) {
+export async function helperGround({ env = process.env, repos = defaultRepos(env), git = realGit, programs = programsPlans } = {}) {
   const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
   await Promise.all(present.map((repo) => git(repo.path, ['fetch', '-q', 'origin'])));
   const plans = [];
@@ -192,7 +193,7 @@ export async function helperGround({ env = process.env, repos = defaultRepos(env
     const bodies = await Promise.all(entries.map((entry) => git(repo.path, ['show', `origin/main:${entry.path}`])));
     const texts = new Map(entries.map((entry, i) => [entry.path, bodies[i] || '']));
     const records = planRecords(repo.name, entries, (path) => texts.get(path) || '');
-    plans.push(...records.map((r) => ({
+    plans.push(...withProgrammePlans(repo.name, records, { programs }).map((r) => ({
       repo: r.repo, programme: r.programme, project: r.project, path: r.path, status: r.status ?? null, next: r.next ?? null,
     })));
   }

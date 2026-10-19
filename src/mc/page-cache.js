@@ -29,7 +29,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
-import { catFileBatch, listPlans } from './brief-collect.js';
+import { catFileBatch, listRepoPlans, withProgrammePlans } from './brief-collect.js';
+import { programsPlans } from './plan-source.js';
 
 export const PLANS_FILE = 'plans.json';
 export const PRS_FILE = 'prs.json';
@@ -66,6 +67,10 @@ const seconds = (iso, now) => {
  * Every plan of every repository, from the cache where the sha still matches
  * and from git where it does not.
  *
+ * The cache holds only the repository's own plans. `~/mc/programs/` changes
+ * without origin/main's sha moving, so those are read from disk on every call
+ * and laid over the cached records (`withProgrammePlans`).
+ *
  * A repository whose `rev-parse` fails — no checkout, no origin/main — is
  * read straight through and not cached: there is no key to file it under.
  */
@@ -78,6 +83,7 @@ export function loadPlans({
   batch = catFileBatch,
   read = readFileSync,
   write = writeJsonAtomic,
+  programs = programsPlans,
 } = {}) {
   const path = cachePath(root, PLANS_FILE);
   const cache = readJson(path, read) || {};
@@ -88,12 +94,12 @@ export function loadPlans({
     const sha = git(repo.path, ['rev-parse', ref]);
     const entry = sha ? cache[repo.name] : null;
     if (entry && entry.sha === sha && entry.shape === PLANS_SHAPE && Array.isArray(entry.plans)) {
-      plans.push(...entry.plans);
+      plans.push(...withProgrammePlans(repo.name, entry.plans, { programs }));
       sources.push({ repo: repo.name, sha, cached: true });
       continue;
     }
-    const fresh = listPlans(repo, { ref, git, batch });
-    plans.push(...fresh);
+    const fresh = listRepoPlans(repo, { ref, git, batch });
+    plans.push(...withProgrammePlans(repo.name, fresh, { programs }));
     sources.push({ repo: repo.name, sha, cached: false });
     if (sha) { cache[repo.name] = { sha, shape: PLANS_SHAPE, read: now.toISOString(), plans: fresh }; dirty = true; }
   }
