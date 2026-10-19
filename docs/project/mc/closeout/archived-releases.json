@@ -1,0 +1,76 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "archived-releases",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/archived-releases/PLAN.json",
+  "archived": "2026-10-19",
+  "goal": [
+    "A step blocked on another project is released by the runner when that project has been archived, not only while its plan is on main and done. An archived project is one with `docs/project/<programme>/closeout/<project>.json` on origin/main of either repository; the archive writes that file only for a done plan."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`blockerDue` releases a `project` blocker whose project is archived, with the reason `project <name> is archived`, and `describeWait` says `on project <name> — archived`. `releaseDue` releases such a step in the register. A blocker on a project that is neither on main nor archived stays blocked.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/step-release.test.js tests/mc/brief-collect.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": true,
+      "criterion": "`listArchived` reads the archived projects of this machine's memoro-cli checkout from origin/main.",
+      "check": "From the branch: `node --input-type=module -e \"import {listArchived} from './src/mc/brief-collect.js'; import {homedir} from 'node:os'; const n = listArchived({name:'memoro-cli', path: homedir() + '/memoro-cli'}); if (!n.includes('mc-runner-hardening')) { console.error(n); process.exit(1); }\"` exits 0."
+    }
+  ],
+  "steps": [
+    {
+      "title": "A project blocker is released when its project is archived",
+      "done_when": "`listArchived` exists in `src/mc/brief-collect.js`, `blockerDue`, `describeWait` and `releaseDue` in `src/mc/step-release.js` take `archived`, the runner passes it, the new tests in `tests/mc/step-release.test.js` and `tests/mc/brief-collect.test.js` pass, and `mc gate` is green.",
+      "status": "done",
+      "pr": 993,
+      "landed": {
+        "sha": "d6b70bd693790092adc7a94e46c8b86c189d7351",
+        "into": "main",
+        "at": "2026-10-19T07:19:17Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "A project blocker is released when its project is archived: listArchived (brief-collect.js) reads docs/project/<programme>/closeout/<project>.json from origin/main of each repository; blockerDue, describeWait and releaseDue take archived, and the runner passes it. A project on main and done keeps its reason; one only archived says 'project <name> is archived'. describeWait's waitContext in mc step still passes no plans, so it says 'on project <name>' there, as before."
+      ],
+      "sessions": 1,
+      "seconds": 203,
+      "cost_usd": 0.020366
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-19T07:18:00Z",
+      "kind": "step",
+      "seconds": 203,
+      "land_seconds": null,
+      "pr": 993,
+      "turns": 41,
+      "input": 28,
+      "output": 17437,
+      "cache_read": 513843,
+      "cache_write": 52052,
+      "model": null,
+      "note": "success,queued",
+      "session": "b41f4495-3db9-4acc-a0af-f9c57f0276c0",
+      "cost_usd": 0.02036623
+    }
+  ],
+  "totals": {
+    "sessions": 1,
+    "seconds": 203,
+    "land_seconds": 0,
+    "cost_usd": 0.020366,
+    "cost_unknown": 0,
+    "input": 28,
+    "output": 17437,
+    "cache_read": 513843,
+    "cache_write": 52052,
+    "first": "2026-10-19T07:18:00Z",
+    "landed": "2026-10-19T07:19:17Z"
+  }
+}
