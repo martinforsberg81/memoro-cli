@@ -68,6 +68,7 @@ THE PAGE
   mc step failed|blocked|ready|done  Move one step: a session gives up, a
                                     person starts it again
   mc project criterion met <p> <n> A success criterion holds: the register, not the plan file
+  mc project import [--apply]      Copy each plan on origin/main not under ~/mc/programs/ there
   mc work <name>                  Open that workarea, ~/mc/work/<name>
 
 IN FULL
