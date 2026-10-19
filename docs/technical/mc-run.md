@@ -1036,8 +1036,9 @@ does not wait for one that is busy.
   never within one.
 
 **A repository may have more than one — `mc run lanes <n>`.** The count lives in
-`~/.memoro/mc/lanes.json` (`lane-count.js`), 1 to 8, default 1, read once at
-start; a running runner takes a new count on `mc run --update`. With n above
+`~/.memoro/mc/lanes.json` (`lane-count.js`), 1 to 8, default 1, read live: a
+raised count starts the new lanes within one poll (`UPDATE_POLL_MS`), a lowered
+one ends each lane above it after the step it is in. With n above
 one, n loops run on each repository, tagged `memoro#1`, `memoro#2`, and **every
 one of them takes from the same ordered list**. What keeps two of them off one
 project is **the claim**: `claims` in `run.js` is one set for the process, a
@@ -1094,7 +1095,8 @@ first if a cap turns out to starve one side.
 **Which pair is chosen decides whether that hazard can bite at all**, and this
 is the one arithmetic worth knowing about the two numbers together. `per_repo`
 is structural — there are exactly that many lane loops per repository, so one
-repository can never hold more than `per_repo` slots — while `total` is one
+repository can never hold more than `per_repo` slots; the number of loops
+follows lanes.json, so it binds within one poll of a change — while `total` is one
 counter for the machine. With two repositories, whatever one of them holds, the
 other always has at least `total − per_repo` slots it cannot be shut out of.
 `per_repo 3, total 3` therefore guarantees a repository nothing: memoro can
