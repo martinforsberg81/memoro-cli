@@ -394,6 +394,16 @@ printing JSON with a `files` array, run in the candidate worktree. With one, the
 round measures the test files the change reaches; without one, the whole suite,
 exactly as it always did.
 
+**A selected run takes the free cores.** `realTests` passes
+`--test-concurrency=<testLanes()>`: `cores - 1 - round(loadavg()[0])`, between 2
+and `cores - 1`, or `MC_TEST_LANES` — unless the repository's own flags already
+name a concurrency. On 2026-10-19 rounds ran 7 lanes at load averages of 40–97
+on eight cores, and the whole-tree readers went red only under load. A session's
+`mc gate` also waits while a merge round holds the heavy lane (`MERGE_MODE` in
+`HEAVY_HOLD_MODES`, `await-deploy.js`), as it waits for a deploy: a verdict is
+expensive to repeat, a session's gate is cheap to delay. A gate already running
+is not paused.
+
 **A suite runs in its own environment, and for at most an hour.** The round
 hands a suite the caller's environment without `NODE_TEST_CONTEXT`,
 `MC_WORK_ROOT` and `MC_HOME` (`suiteEnv` in `src/mc/repo-gate.js`): the last two
@@ -732,9 +742,14 @@ files alone on the candidate head (`redAt` in
 [`src/mc/selector-miss.js`](../../src/mc/selector-miss.js), with the round's
 own runner and flags). Red there, and the round is `red` as before, with the
 line `red alone on the candidate too — this change broke them`. Green there
-too, and the round stops `stopped_at: 'red-under-load'`, `<files> red in the
-round, green alone on the base and on the candidate — measured again`, with
-`report.under_load_files` naming them. A red file whose own entries are
+too, and the files count green (Martin, 2026-10-19): with at most three of them
+(`GREEN_ALONE_MAX`) the round goes on as for a `retry_once` flip, saying
+`counted green — <files> passed alone on the base and the candidate`, with
+`report.green_alone` (`{ files, names }`, also on the round's line) and
+`report.under_load_files` naming them; a genuinely order-dependent test is the
+nightly full run's to catch. With more than three, the round stops
+`stopped_at: 'red-under-load'`, `<files> red in the round, green alone on the
+base and on the candidate — measured again`. A red file whose own entries are
 cancelled tests and none failed (`cancelledFiles` in `tap-red.js`: a `before`
 hook that ran out of time, as memoro's `build-bundle.test.js` on #13470) is
 taken out of the red without any re-run, as if it had passed alone; with

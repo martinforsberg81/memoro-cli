@@ -19,7 +19,7 @@ describe('a gate behind a deploy', () => {
     try {
       assert.equal(deployHolding({ root }), null);
       takeGateLock({ repo: 'memoro', pr: 1, mode: 'merge', root, lane: 'heavy' });
-      assert.equal(deployHolding({ root }), null, 'a merge round is not waited for');
+      assert.equal(deployHolding({ root })?.mode, 'merge', 'a merge round is waited for too');
       rmSync(join(root, 'gate-running.json'));
       takeGateLock({ repo: 'deploy', mode: DEPLOY_MODE, root, lane: 'heavy' });
       assert.equal(deployHolding({ root })?.pid, process.pid);
@@ -47,7 +47,7 @@ describe('a gate behind a deploy', () => {
   });
 
   it('waits for an iOS build that holds the heavy lane, and names it', async () => {
-    assert.deepEqual(HEAVY_HOLD_MODES, ['deploy', 'ios-build']);
+    assert.deepEqual(HEAVY_HOLD_MODES, ['deploy', 'ios-build', 'merge']);
     const root = mkdtempSync(join(tmpdir(), 'mc-await-ios-'));
     try {
       takeGateLock({ repo: IOS_BUILD_MODE, pr: null, mode: IOS_BUILD_MODE, root, lane: 'heavy' });
