@@ -33,6 +33,7 @@ export const VERB_MODULES = {
   roles: './mc/commands/roles.js',
   log: './mc/commands/log.js',
   step: './mc/commands/step.js',
+  project: './mc/commands/project.js',
 };
 
 /**
