@@ -173,6 +173,24 @@ export function listPlans(repo, { ref = 'origin/main', git = runGit, batch = cat
 }
 
 /**
+ * The archived projects of one repository on a ref: the names of its
+ * `docs/project/<programme>/closeout/<project>.json` files. That record is
+ * what `mc run` writes when it archives a plan (`closeoutPath` in `closeout.js`),
+ * and the archive takes only a done plan, so a project with one was delivered.
+ * `listPlans` never returns these paths: it takes `PLAN.json` and `PLAN.md` in
+ * `parts[4]` and nothing else. A `closeout/<project>.md` is not a name, and a
+ * file nested deeper under `closeout/` is not one either.
+ */
+export function listArchived(repo, { ref = 'origin/main', git = runGit } = {}) {
+  const tree = git(repo.path, ['ls-tree', '-r', '--name-only', ref, '--', 'docs/project']);
+  if (tree == null) return [];
+  return tree.split('\n')
+    .map((path) => path.split('/'))
+    .filter((parts) => parts.length === 5 && parts[3] === 'closeout' && parts[4].endsWith('.json'))
+    .map((parts) => parts[4].slice(0, -'.json'.length));
+}
+
+/**
  * `git cat-file --batch` output, split back into one text per input line.
  *
  * The stream is `<oid> <type> <size>\n<size bytes>\n` per object, or

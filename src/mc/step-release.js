@@ -11,17 +11,19 @@
  *
  * `blockerDue` and `describeWait` are pure; `releaseDue` writes the register
  * through what its caller hands it. The caller hands in the clock, the plans,
- * the register, the deploy log and the ancestor question:
+ * the archive, the register, the deploy log and the ancestor question:
  *
  *   now        a Date
  *   plans      the plan records `queue()` holds, across both repositories
+ *   archived   the project names archived on origin/main (`listArchived`)
  *   stepsOf()  this project's register steps, in plan order
  *   deploys    `readDeploys()` rows (deploys.js)
  *   contains(sha, rowSha)  is `sha` in the tree `rowSha` deployed —
  *              `git merge-base --is-ancestor sha rowSha` in the checkout
  *
- * A `project` blocker is due only when that project's plan is on main and
- * `done`. One that is not on main may have been abandoned rather than
+ * A `project` blocker is due when that project's plan is on main and `done`,
+ * or when the project is archived (`closeout/<project>.json` on main, read by
+ * `listArchived`). One that is neither may have been abandoned rather than
  * delivered, and only a person can tell which (`stale-blockers.js`).
  */
 import { DEPLOYED } from './deploys.js';
@@ -110,7 +112,9 @@ export function blockerDue(step, context = {}) {
   }
   if (blocker.kind === 'project') {
     const done = (context.plans || []).some((record) => record?.project === blocker.name && record.status === 'done');
-    return done ? { due: true, why: `project ${blocker.name} is done` } : { due: false };
+    if (done) return { due: true, why: `project ${blocker.name} is done` };
+    if ((context.archived || []).includes(blocker.name)) return { due: true, why: `project ${blocker.name} is archived` };
+    return { due: false };
   }
   return { due: false };
 }
@@ -119,8 +123,8 @@ export function blockerDue(step, context = {}) {
  * What a blocked step waits for and how long it has left, as `mc step` and
  * the page say it: `on deploy of step 3 + 24h — 7h40m left`, `on deploy of
  * step 3 — not deployed yet`, `on deploy of step 3 — step 3 not landed`,
- * `until 2026-10-14 08:00Z — 3d left`, `on project y — not done`. Any other
- * kind is `on <kind> <name>`, as before.
+ * `until 2026-10-14 08:00Z — 3d left`, `on project y — not done`,
+ * `on project y — archived`. Any other kind is `on <kind> <name>`, as before.
  */
 export function describeWait(step, context = {}) {
   const blocker = step?.blocked_by;
@@ -141,6 +145,7 @@ export function describeWait(step, context = {}) {
   }
   if (blocker.kind === 'project' && Array.isArray(context.plans)) {
     const record = context.plans.find((item) => item?.project === blocker.name);
+    if (!record && (context.archived || []).includes(blocker.name)) return `on project ${blocker.name} — archived`;
     if (!record) return `on project ${blocker.name} — not on main`;
     return `on project ${blocker.name} — ${record.status === 'done' ? 'done' : 'not done'}`;
   }
@@ -164,7 +169,7 @@ export function describeWait(step, context = {}) {
  *                                  `read`, `write` and `lock` by default
  */
 export function releaseDue(plans = [], {
-  root, now = new Date(), deploys = [], contains = () => false,
+  root, now = new Date(), archived = [], deploys = [], contains = () => false,
   read, write, lock = (_root, fn) => fn(), say = () => {}, update = null,
 } = {}) {
   const at = now.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -177,7 +182,7 @@ export function releaseDue(plans = [], {
       const entry = readEntry(root, record.project, { read });
       const step = entry?.steps[index];
       if (step?.status !== 'blocked') return record;
-      const found = blockerDue(step, { now, plans, stepsOf: () => entry.steps, deploys, contains });
+      const found = blockerDue(step, { now, plans, archived, stepsOf: () => entry.steps, deploys, contains });
       if (!found.due) return record;
       release(record.project, index, { status: 'ready', blocked_by: null, reason: null, comment: `Released ${at}: ${found.why}` });
       say(`${record.project} step ${index + 1}: released — ${found.why}`);

@@ -67,6 +67,10 @@ test('project: due when its plan on main is done; not when it is not done, nor w
   assert.equal(describeWait(step, open), 'on project y — not done');
   assert.deepEqual(blockerDue(step, context()), { due: false });
   assert.equal(describeWait(step, context()), 'on project y — not on main');
+
+  const archived = context({ archived: ['y'] });
+  assert.deepEqual(blockerDue(step, archived), { due: true, why: 'project y is archived' });
+  assert.equal(describeWait(step, archived), 'on project y — archived');
 });
 
 test('decision and workarea are a person\'s: never due', () => {
@@ -145,6 +149,20 @@ test('releaseDue: a project blocker on a project in the other repository is rele
   const out = releaseDue(w.plans, { root: ROOT, now: NOW, read: w.read, write: w.write, say: w.say });
   assert.equal(out.find((r) => r.project === 'x').status, 'ready');
   assert.deepEqual(w.entry('x').steps[1].comments, ['Released 2026-10-11T17:00:00Z: project y is done']);
+});
+
+test('releaseDue: a project blocker on an archived project is released', () => {
+  const w = world([record('x', { status: 'blocked', blocked_by: { kind: 'project', name: 'y' } })]);
+  const out = releaseDue(w.plans, { root: ROOT, now: NOW, archived: ['y'], read: w.read, write: w.write, say: w.say });
+  assert.equal(out.find((r) => r.project === 'x').status, 'ready');
+  assert.deepEqual(w.entry('x').steps[1].comments, ['Released 2026-10-11T17:00:00Z: project y is archived']);
+});
+
+test('releaseDue: a project blocker on a project neither on main nor archived stays blocked', () => {
+  const w = world([record('x', { status: 'blocked', blocked_by: { kind: 'project', name: 'y' } })]);
+  const out = releaseDue(w.plans, { root: ROOT, now: NOW, archived: ['z'], read: w.read, write: w.write, say: w.say });
+  assert.equal(out.find((r) => r.project === 'x').status, 'blocked');
+  assert.equal(w.entry('x').steps[1].status, 'blocked');
 });
 
 test('releaseDue: a deploy blocker is released once the landed step is deployed and the hours have passed', () => {
