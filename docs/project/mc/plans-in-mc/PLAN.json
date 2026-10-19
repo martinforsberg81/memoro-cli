@@ -1,0 +1,201 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "Plans are read from `~/mc/programs/<programme>/<project>/PLAN.json` (ruling 48, `docs/project/mc/mc-project.md`): `src/mc/plan-source.js` and `listPlans` in `src/mc/brief-collect.js` read that tree first, and a project there shadows a plan of the same name in a repository. A plan there names its repository in a top-level `repo` field. `mc project import` copies every plan on origin/main into the tree, and the active ones have been imported on this machine.",
+    "Whether a success criterion is met lives in the register (`~/mc/runner/projects/<project>.json`, `src/mc/register.js`), written by `mc project criterion met <project> <n>`, never in a pull request. The merge door (`criteriaDoor`) and every reader of a plan's done/unmet state read it from there."
+  ],
+  "contract": [
+    "Where no plan is under `~/mc/programs/`, every reader returns exactly what it returns today: the repository plans on origin/main.",
+    "A plan under `~/mc/programs/` wins over the repository copy of the same project name. The repository copy stays where it is; nothing in this project deletes or changes a plan in a repository.",
+    "`met` already true in a plan file is carried into the register the first time the register sees the criteria; after that the file's `met` is not read.",
+    "The register's existing step fields, `mc step` and its output are unchanged. `listPlans`, `listProgrammes`, `findMainPlan`, `findPlan` and `planIn` keep their signatures; new options are optional."
+  ],
+  "out_of_scope": [
+    "The verbs that write a plan (`mc project new`, `criterion add`, `step add`, `send`, `mc project <name>`) and the refusals at write time: project 2 of ruling 48.",
+    "Archiving and discarding a plan that lives under `~/mc/programs/`, removing the repository copies, `plan-merge.js`, `merge-boundary.js`'s `planBoundary`, `mc merge --docs` and the docs fast path: project 3. Until then a done plan under `~/mc/programs/` stays listed as done and is not archived, and its repository copy stays with it.",
+    "The `steps/` files and moving worktrees (`~/mc/plan/<programme>/`, `~/mc/step/<project>/`, `PLAN_HOME`, `STEP_HOME`) under `~/mc/programs/`.",
+    "`listProgrammes` and `listArchived`: programmes and closeouts are still read from the repositories.",
+    "The step prompt's quoting of the plan file's step `comments` instead of the register's (`planExcerpt`, `src/mc/run-plan.js`)."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "The register holds each criterion's `met`, `mc project criterion met` writes it, and the merge door and `planSummary`'s done/unmet read it from the register.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/register.test.js tests/mc/commands/project.test.js tests/mc/merge-boundary.test.js tests/mc/run-plan.test.js` passes."
+    },
+    {
+      "met": false,
+      "criterion": "Every plan reader reads `~/mc/programs/` first, and a project there shadows the repository copy.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-source.test.js tests/mc/brief-collect.test.js tests/mc/page-cache.test.js tests/mc/helper-turn.test.js tests/mc/status-project.test.js tests/mc/run.test.js tests/mc/tidy.test.js tests/mc/mend.test.js tests/mc/plan-schema.test.js tests/architecture/plan-paths.test.js` passes."
+    },
+    {
+      "met": false,
+      "criterion": "The active plans of both repositories are under `~/mc/programs/` on this machine, and this project is read from there.",
+      "check": "From the last step's branch: `node src/mc-cli.js project import` prints `nothing to import`, and `node src/mc-cli.js status plans-in-mc` prints a `plan` row ending in `programs/mc/plans-in-mc/PLAN.json (origin/main)`."
+    }
+  ],
+  "documents": [
+    { "label": "The concept", "path": "../mc-project.md" },
+    { "label": "Rulings", "path": "../rulings.md" },
+    { "label": "The first half", "path": "../plan-source/PLAN.json" },
+    { "label": "Plans and steps", "path": "../../README.md" }
+  ],
+  "steps": [
+    {
+      "title": "The register holds the criteria's met",
+      "status": "ready",
+      "done_when": "`src/mc/register.js` exports `criteriaFromPlan`, `markCriterion` and `updateCriterion`, `seedEntry`, `reconcileEntry`, `normaliseEntry` and `applyEntry` carry `criteria`, the new cases in `tests/mc/register.test.js` pass with every existing one unchanged, and `mc gate` is green.",
+      "instruction": [
+        "All in `src/mc/register.js`; extend the header comment with one paragraph: the register also holds whether each success criterion is met (ruling 48) — the plan says what a criterion *is*, the register whether it *holds*; seeded from the file's `met` once, matched by the criterion's text, written by `mc project criterion met`.",
+        "1. Shape. An entry gains `criteria`: `null` (never seeded) or an array of `{ criterion, met, at }` — `criterion` the criterion's text, `met` a boolean, `at` an ISO string or `null`. In `normaliseEntry`, after `steps`: `criteria: Array.isArray(value.criteria) ? value.criteria.filter(plain).map((c) => ({ criterion: String(c.criterion ?? ''), met: c.met === true, at: typeof c.at === 'string' ? c.at : null })) : null`. (`plain` is already in the file.)",
+        "2. `export function criteriaFromPlan(plan)`: `(Array.isArray(plan?.success_criteria) ? plan.success_criteria : []).map((c) => ({ criterion: String(c?.criterion ?? ''), met: c?.met === true, at: null }))`. One-line JSDoc: the criteria as the plan file says them, the seed for an entry that has none.",
+        "3. `seedEntry`: add `criteria: criteriaFromPlan(record?.plan)` after `steps`.",
+        "4. `reconcileEntry`: compute `const criteria = reconcileCriteria(entry.criteria, record?.plan)` with a private helper: when `entry.criteria` is not an array return `criteriaFromPlan(plan)`; otherwise, for each plan criterion in order, take the first entry criterion with the same `criterion` text that has not been taken yet, else the file's own (`criteriaFromPlan` of that one criterion). Add `|| JSON.stringify(criteria) !== JSON.stringify(entry.criteria)` to `changed`, and `criteria` to the returned changed entry. The early `return { entry, changed: false, carried: [] }` for a moving running step stays as it is.",
+        "5. `applyEntry`: when `Array.isArray(entry.criteria)` and `Array.isArray(record.plan.success_criteria)`, the plan's `success_criteria` become `record.plan.success_criteria.map((c) => { const held = entry.criteria.find((e) => e.criterion === c?.criterion); return held ? { ...c, met: held.met } : c; })`, set on `plan` beside `steps` before `planSummary(plan)`. Matched by text, not index, because `run.js`'s `standing` applies an entry that has not been reconciled.",
+        "6. `export function markCriterion(entry, number, met, now = null)`: `number` is 1-based. When `entry.criteria` is not an array, or `number` is not an integer from 1 to its length, throw `new Error(`${entry.project}: no success criterion ${number} — the register holds ${n}`)` with `n` the length (0 for none). Otherwise return `{ ...entry, updated: now, criteria }` with that one criterion `{ ...c, met: met === true, at: now }`.",
+        "7. `export function updateCriterion({ root, project, number, met, read = realRead, write = realWrite, lock = realLock, now = null, append = realAppend, by = whoAmI })`: the shape of `updateStep` directly above it — under `lock`, `readEntry`, throw the same `not in the register` error when there is none, `markCriterion`, `write(registerPath(root, project), next)`, `logWrite(root, append, by, { event: 'criterion', project, number, from: <old met>, to: <new met> })`, return `next`.",
+        "8. `tests/mc/register.test.js`, new cases in the file's style: `normaliseEntry` keeps `criteria` and gives `null` without it; `seedEntry` seeds `criteria` from the file's `met`; `reconcileEntry` seeds `criteria` on an entry that has `null`, keeps a held `met: true` when the file says `false`, takes the file's for a new text, drops a removed one, and reports `changed`; `applyEntry` with a held `met: true` turns a plan whose steps are all done from `unmet` to `done` (`status`), and leaves a criterion it holds no text for as the file says; `markCriterion` sets `met` and `at` and throws for 0, for one past the end and for `criteria: null`; `updateCriterion` with in-memory `read`/`write`/`lock`/`append` writes the entry and appends one `criterion` log line.",
+        "9. `mc gate tests/mc/register.test.js`, then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "mc project criterion met: the verb that writes it",
+      "status": "ready",
+      "done_when": "`mc project criterion met <project> <n>` and `mc project criterion unmet <project> <n>` write the register through `updateCriterion`, the project defaults to `MC_STEP`'s in a runner session, `tests/mc/commands/project.test.js` passes, `tests/mc/help.test.js` passes, and `mc gate` is green.",
+      "instruction": [
+        "1. New `src/mc/commands/project.js`, in the style of `src/mc/commands/step.js` (header comment, `run(argv, deps = {})` returning an exit code, `usage()`). Header: `mc project` is where mc's own verbs over a project live (ruling 48, `docs/project/mc/mc-project.md`); for now it records whether a success criterion is met — the register's, never a pull request's. Imports: `parseStepEnv`, `readEntry`, `updateCriterion` from `../register.js`, `workRoot` from `../paths.js`, `scanArgs` from `./flags.js`.",
+        "2. `run`: `stdout`, `stderr`, `env`, `root = deps.root || workRoot(env)`, `now` and the `io` object of `read`/`write`/`lock` built exactly as at the top of `step.js`'s `run`. `scanArgs(argv, { booleans: [], strictValues: [] })`; on `error` print `mc: <error>` and the usage, return 2. Positional `[noun, verb, ...rest]`: anything but `criterion` followed by `met` or `unmet` → usage on stderr, return 2. `rest` is `<project> <n>` or `<n>` alone; with `<n>` alone the project is `parseStepEnv(env.MC_STEP)?.project`, and when there is none print `mc: which project? mc project criterion met <project> <n>, or MC_STEP in a runner session` and return 2. `<n>` that is not `/^\\d+$/u` → `mc: <n> is not a criterion number — 1 is the plan's first`, return 2. `readEntry(root, project, io)` null → `mc: <project> is not in the register`, return 1. Then `updateCriterion({ root, project, number, met: verb === 'met', now, ...io })`; print `mc: <project> criterion <n> — met` (or `— not met`), return 0; a thrown error prints `mc: <message>` and returns 1.",
+        "3. `usage()` returns: `mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check` and a second line for `unmet`, and a third: `the project defaults to MC_STEP's in a runner session`.",
+        "4. `src/mc-verbs.js`: add `project: './mc/commands/project.js',` to `VERB_MODULES` after `step`. `src/mc/help-text.js`: after the two `mc step` lines in the short list, add `  mc project criterion met <p> <n>  A success criterion holds: the register, not the plan file`, padded like its neighbours. Run `node --test tests/mc/help.test.js`; if it names another place a verb must be listed, add it there.",
+        "5. `tests/mc/commands/project.test.js` in the style of `tests/mc/commands/step.test.js`, with an in-memory register (`read`/`write`/`lock` deps, an entry holding `criteria: [{ criterion: 'a', met: false, at: null }, { criterion: 'b', met: false, at: null }]`): `criterion met p 2` → exit 0, the written entry's second criterion `met: true`, `at` the injected now, and the output line; `criterion unmet p 2` after it → `met: false`; `criterion met 1` with `env.MC_STEP = 'p:0'` writes `p`; without `MC_STEP` → exit 2; `criterion met p 3` → exit 1 naming `no success criterion 3`; `criterion met p x` → exit 2; an unknown project → exit 1; `frobnicate` → exit 2.",
+        "6. `mc gate tests/mc/commands/project.test.js tests/mc/help.test.js`, then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "plan-source reads ~/mc/programs/",
+      "status": "ready",
+      "done_when": "`src/mc/paths.js` exports `PROGRAMS_HOME` and `programsHome` and `STATE_HOMES` holds `programs`, the plan schema accepts a top-level `repo`, `src/mc/plan-source.js` exports `programsPlans`, the new cases in `tests/mc/plan-source.test.js` and `tests/mc/plan-schema.test.js` pass, no caller is changed, and `mc gate` is green.",
+      "instruction": [
+        "1. `src/mc/paths.js`, after `WORK_HOME`/`workHome`: `export const PROGRAMS_HOME = 'programs';` and `export function programsHome(env = process.env) { return join(workRoot(env), PROGRAMS_HOME); }`, with a JSDoc in the style of `STEP_HOME`'s: `~/mc/programs/` — mc's programmes, projects and plans, `programs/<programme>/<project>/PLAN.json` (ruling 48). Add `PROGRAMS_HOME` to `STATE_HOMES` so `listStrays` (`src/mc/work-area.js`) does not call it a stray.",
+        "2. `src/mc/plan-schema.js`: add `'repo'` to `PLAN_KEYS` after `'version'`. In `validatePlan`, after the version check: `if (value.repo !== undefined && !(typeof value.repo === 'string' && NAME_RE.test(value.repo))) problems.push('repo: the repository the steps run in, by name — memoro or memoro-cli');`. Optional: a plan in a repository has none. `tests/mc/plan-schema.test.js`: a valid plan with `repo: 'memoro-cli'` has no problems; `repo: 'Not a name'` and `repo: 3` each give the `repo:` problem.",
+        "3. `src/mc/plan-source.js`: extend the header: the module now knows two places — `~/mc/programs/<programme>/<project>/PLAN.json` (`programsHome`, ruling 48), read from disk, and the repositories' `docs/project/`, read from origin/main — and a plan under `~/mc/programs/` names its repository in `repo`. Import `readdirSync`, `readFileSync` from `node:fs` and `programsHome` from `./paths.js` (paths imports nothing from `src/mc`).",
+        "4. In `plan-source.js`, add `export function programsPlans({ home = programsHome(), list = listDirs, read = readText } = {})` with two private helpers: `listDirs(path)` = the names of the directories in `path` (`readdirSync(path, { withFileTypes: true })`, `isDirectory()`, names not starting with `.`, sorted), `[]` when it throws; `readText(path)` = `readFileSync(path, 'utf8')`, `null` when it throws. For each `programme` of `list(home)` and each `project` of `list(join(home, programme))`: `path = join(home, programme, project, PLAN_FILE)`, `text = read(path)`, skip when `null`; `repo` is `JSON.parse(text).repo` when that is a string, else `null` (a parse error is `null` too). Return `{ path, programme, project, file: PLAN_FILE, text, repo }` for each, in order. The programme's own worktrees (`programs/<programme>/memoro/`) hold no `PLAN.json` directly and are skipped by that alone. JSDoc: every plan under `~/mc/programs/`, with its text; the shape `plansInTree` gives plus `text` and `repo`; `path` is absolute.",
+        "5. `tests/mc/plan-source.test.js`: `programsPlans` over a real temp directory (`mkdtempSync`) holding `mc/x/PLAN.json` with `{\"repo\":\"memoro-cli\"}`, `mc/y/PLAN.json` that is not JSON, `mc/memoro/README.md`, `.hidden/z/PLAN.json`, and a file `mc/notes.md`: two entries, `x` with `repo: 'memoro-cli'` and `y` with `repo: null`, absolute paths, `file: 'PLAN.json'`; and `[]` for a home that does not exist. Also one case with in-memory `list`/`read`.",
+        "6. Change no caller. `mc gate tests/mc/plan-source.test.js tests/mc/plan-schema.test.js tests/architecture/plan-paths.test.js`, then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "listPlans, the page's cache and the helper read ~/mc/programs/ first",
+      "status": "ready",
+      "done_when": "`listPlans` returns the `~/mc/programs/` plans of its repository and drops the repository plans they shadow, `loadPlans` in `src/mc/page-cache.js` caches only the repository part, `helperGround` lists the `~/mc/programs/` plans, the new cases in `tests/mc/brief-collect.test.js`, `tests/mc/page-cache.test.js` and `tests/mc/helper-turn.test.js` pass with the existing ones unchanged, and `mc gate` is green.",
+      "instruction": [
+        "1. `src/mc/brief-collect.js`: rename today's `listPlans` body into `export function listRepoPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch } = {})` — the plans in the repository on the ref, as today; keep the JSDoc on it. Below it add `export function withProgrammePlans(repoName, records, { programs = programsPlans } = {})`: `const all = programs(); const moved = new Set(all.map((e) => e.project)); const own = all.filter((e) => e.repo === repoName); const texts = new Map(own.map((e) => [e.path, e.text]));` return `[...planRecords(repoName, own, (path) => texts.get(path) || ''), ...records.filter((r) => !moved.has(r.project))]`. JSDoc: a project under `~/mc/programs/` is the plan, and its repository copy is not read (ruling 48); a programs plan whose `repo` is not this repository is another repository's. Then `export function listPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch, programs = programsPlans } = {})` returns `withProgrammePlans(repo.name, listRepoPlans(repo, { ref, git, batch }), { programs })`, with a one-line JSDoc. Import `programsPlans` from `./plan-source.js`.",
+        "2. `src/mc/page-cache.js`, `loadPlans`: the cached value must not hold `~/mc/programs/` plans, which change without the repository's sha moving. Call `listRepoPlans` where it calls `listPlans` today, keep caching that, and push `withProgrammePlans(repo.name, <cached or fresh repo records>, { programs })` into `plans` in both the cached and the fresh branch; add `programs = programsPlans` to its options. `PLANS_SHAPE` stays: the cached value is the same shape as before. A repo with no sha (read straight through) gets `withProgrammePlans` too.",
+        "3. `src/mc/helper-turn.js`, `helperGround`: add the option `programs = programsPlans` (import from `./plan-source.js`) and replace the `plans.push(...records.map(…))` line's `records` with `withProgrammePlans(repo.name, records, { programs })` (import it from `./brief-collect.js`). A repository that could not be listed still gets its note and no plans.",
+        "4. Tests, each with an injected `programs` returning fixtures (never the real `~/mc/programs/`): `tests/mc/brief-collect.test.js` — `withProgrammePlans` puts a programs plan of this repo first with `path` absolute and `repo` this repo's name, drops a repository record of the same project, leaves a programs plan of another repo out and still drops that project's repository record here, and returns `records` unchanged for `programs: () => []`; `listPlans` with `programs` passes it through. `tests/mc/page-cache.test.js` — two `loadPlans` calls with the same sha and a `programs` whose plan's status changes between them: the second returns the new status, and the written cache holds no programs record. `tests/mc/helper-turn.test.js` — `helperGround` with a `programs` holding one plan of `memoro` (`repo: 'memoro'`, a valid plan text): `ground.plans` holds its record with the absolute `path`, and a repository record of the same project is gone.",
+        "5. Grep `src/mc` for other `listPlans(` callers (`run.js`, `archive-programme.js`, `commands/plan.js`, `commands/step.js`): they keep calling `listPlans` and get the programs plans with no change. `archive-programme.js` filters by `.programme` and removes repository directories; confirm with a read that a programs record in its list does not make it touch anything under `~/mc/programs/`, and if it would, have it call `listRepoPlans` instead.",
+        "6. `mc gate tests/mc/brief-collect.test.js tests/mc/page-cache.test.js tests/mc/helper-turn.test.js tests/mc/commands/plan.test.js tests/mc/commands/step.test.js tests/mc/run.test.js`, then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "findPlan, planIn, mend and tidy read ~/mc/programs/ first",
+      "status": "ready",
+      "done_when": "`findPlan` and `planIn` return a `~/mc/programs/` plan before a repository's, `mend.js`'s `stepOnMain` reads an absolute register `plan` from disk, `tidy.js` counts an existing absolute plan as still there, `archiveDone` in `src/mc/run.js` leaves a plan with an absolute path alone, the new cases in `tests/mc/plan-source.test.js`, `tests/mc/mend.test.js` and `tests/mc/tidy.test.js` pass, every existing case in `tests/mc/status-project.test.js` and `tests/mc/run.test.js` passes unchanged, and `mc gate` is green.",
+      "instruction": [
+        "1. `src/mc/plan-source.js`, `findPlan(repos, name, { ref = 'origin/main', git, programs = programsPlans })`: before the loop over repos, `const held = programs().find((e) => e.project === name)`. When `held` and a repo in `repos` has `repo.name === held.repo` and `existsSync(join(repo.path, '.git'))`: `const tree = git(repo.path, lsTreeArgs(ref))`, and return `{ repo: repo.name, path: repo.path, programme: held.programme, plan: held.path, text: held.text, names: [...new Set([...projectNames(tree), ...programs().filter((e) => e.repo === repo.name).map((e) => e.project)])] }` (`projectNames(null)` is `[]`). When `held` names no repo in `repos`, return `null`: the plan is another repository's, and its repository copy is not read. Otherwise the loop as today. Add the programs names to `names` in the repository branch too, the same way, since a pull request is matched by the longest project name its branch begins with.",
+        "2. `planIn(tree, name, { list, exists, read, programs = programsPlans })`: first `const held = programs().find((e) => e.project === name)`; when found, `const { plan, problems } = readPlanText(held.text)` and return `{ path: held.path, programme: held.programme, text: held.text, plan, problems, legacy: false }`. Otherwise as today. The runner's `planAt` check in `src/mc/run.js` (`plan?.path?.startsWith(`${worktree}/`)`) is `null` for an absolute path outside the worktree; leave it.",
+        "3. `src/mc/mend.js`, `stepOnMain`: when `isAbsolute(plan)` (import from `node:path`), the text is `read(plan)` (the `read` already passed in) instead of `git show`; `null` text returns `null`. Otherwise as today.",
+        "4. `src/mc/tidy.js`, facts collection: when `entry.plan` is absolute, `item.plan_on_main = existsSync(entry.plan)` (or the module's existing exists helper) and the repository tree is not consulted for it; `in_log` and `closeout_on_main` stay as they are.",
+        "4b. `src/mc/run.js`, `archiveDone`: `const done = donePlans(plans, repo.name).filter((plan) => !isAbsolute(plan.path || ''));` (import `isAbsolute` from `node:path` if it is not imported), with a comment: a plan under `~/mc/programs/` is archived by `mc project archive` (ruling 48, a later project), not here — its repository copy, if any, stays with it until then; without this the archive would remove the repository copy, write a closeout from that stale copy and then find nothing to remove every round. Add a case to `tests/mc/run.test.js` beside the existing `archiveDone` tests if there are any (grep `archive`), asserting a done record with an absolute `path` is not archived; if the existing tests give no fixture for it, a unit-level test of the filter is enough.",
+        "5. Tests with injected `programs` (never the real tree): `tests/mc/plan-source.test.js` — `findPlan` returns the programs record (absolute `plan`, its `text`, `names` holding both the tree's and the programs' projects) before a repository plan of the same name, `null` when the programs plan names a repo not in `repos`, and today's record when `programs` is empty; `planIn` returns the programs plan before a worktree plan and today's when empty. `tests/mc/mend.test.js` — a register entry whose `plan` is absolute is read with `read`, not `git show`. `tests/mc/tidy.test.js` — an entry with an absolute `plan` that exists is `plan_on_main: true`, one that does not is `false`.",
+        "6. `mc gate tests/mc/plan-source.test.js tests/mc/status-project.test.js tests/mc/run.test.js tests/mc/mend.test.js tests/mc/tidy.test.js`; `status-project` and `run` must pass unchanged — a failure there means the change altered behaviour with no programs plan: fix the code. Then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The merge door reads met from the register",
+      "status": "ready",
+      "done_when": "`criteriaDoor` judges the plan on the base (a `~/mc/programs/` plan first) with the register's criteria laid over it and never the pull request's copy, `unmetWords` names `mc project criterion met`, `tests/mc/merge-boundary.test.js` and `tests/mc/plan-schema.test.js` pass, and `mc gate` is green.",
+      "instruction": [
+        "1. `src/mc/merge-boundary.js`, `criteriaDoor`: add options `root = workRoot(env)`, `read` (default: the register's own reader — pass nothing to `readEntry` when not given) and `programs = programsPlans`. After the project is known, the plan is: the `programs()` entry with `project === project`, its `text`; else today's path lookup in the `ls-tree` of `origin/${base}`, shown at `origin/${base}:${path}` — the base, not the head: the pull request no longer carries `met`. Parse with `readPlanText` as today. Then `const entry = readEntry(root, project, read ? { read } : {})` and judge `entry ? applyEntry({ plan }, entry).plan : plan` with `unmetCriteria`. The `head` show goes. Update the JSDoc: `met` is the register's (ruling 48), written by `mc project criterion met`; the door reads the plan on the base with the register over it. Imports: `applyEntry`, `readEntry` from `./register.js`, `workRoot` from `./paths.js`, `programsPlans` from `./plan-source.js` — check none of them imports `merge-boundary.js` (`grep -n merge-boundary src/mc/register.js src/mc/paths.js src/mc/plan-source.js` prints nothing).",
+        "2. The refusal text: `step ${n} is the plan's last, and ${unmetWords(unmet)} — or mc step failed --reason \"…\" naming what could not be measured`. In `src/mc/plan-schema.js`, `unmetWords`: one criterion → `success criterion ${n} is not met — run its check and record it with mc project criterion met <project> ${n}, or add a step that does`; several → `success criteria ${list} are not met — run their checks and record each with mc project criterion met <project> <n>, or add a step that does`. Grep `src` and `tests` for the old `set met: true in a pull request` and `is not met on main` and update every place that quotes it (assertions included: they quote the words, not the behaviour).",
+        "3. `tests/mc/merge-boundary.test.js`, `criteriaDoor refuses the last step while a criterion is unmet`: pass `root: '/r'`, `programs: () => []` and a `read` that returns `null` (no entry) in the refusing case, and assert `problems[0]` starts with `step 2 is the plan's last, and success criterion 1 is not met`. Replace the `measured` case: the plan on main has `met: false`, and `read` returns a register entry (`JSON.stringify` of `{ project: 'step-lands-itself', steps: [], criteria: [{ criterion: 'x', met: true, at: null }] }`) → ok. Add: a head plan with `met: true` and no register entry is still refused (the pull request's copy is not read); a `programs` entry for the project whose text has `met: false` is judged instead of the repository copy (the ls-tree tree may be empty). The not-last, nobody's-step and fails-open cases stay.",
+        "4. `mc gate tests/mc/merge-boundary.test.js tests/mc/plan-schema.test.js tests/mc/docs-merge.test.js tests/mc/commands/merge.test.js tests/mc/run.test.js` (skip a file that does not exist), then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The step's words: met is a verb, and the plan is wherever plan-source says",
+      "status": "ready",
+      "done_when": "`canon/roles/step.md`, `stepPrompt` and `checkInPrompt` in `src/mc/run-plan.js` and `planExcerpt`'s criteria say what step instruction 1–3 says, `tests/mc/run-plan.test.js` passes, `mc roles` (or the roles test) passes, and `mc gate` is green.",
+      "instruction": [
+        "1. `canon/roles/step.md`: the paragraph beginning `You never change the plan` becomes: `You never change the plan file. A success criterion you measured with its check is recorded with mc project criterion met <n>; on the last step every criterion is, or the PR does not land. Your step's state lives in mc's register, written by mc step. Anything the next reader needs that the code does not show: the PR body and mc step note \"…\".` (keep the backticks around verbs as the file does). In the `mc merge` list: `plan-trespass` becomes `undo every change to the plan file, commit, push, run mc merge again.`; `unmet-criteria` becomes `you are the plan's last step and a success criterion is not met in the register: run its check and mc project criterion met <n> for each you measured, then mc merge again; one you cannot measure is mc step failed --reason naming it.` followed by the existing sentences from `Every check is yours` to the end of that item, unchanged.",
+        "2. `src/mc/run-plan.js`, `stepPrompt`: the lines `Your plan is on disk in this worktree at \\`${planPath}\\`;` become `Your plan is at \\`${planPath}\\` — read it, never edit it;`. The paragraph from `In the plan file exactly one thing is yours` to `refuses the pull request if you changed` / `another step, the goal, the contract or the scope.` becomes: `Nothing in the plan file is yours. A success criterion you measured with its check is recorded with \\`mc project criterion met <n>\\` — the register, not the file; on the plan's last step \\`mc merge\\` refuses the pull request until every criterion is met there.` Keep the line wrapping style of the array.",
+        "3. `checkInPrompt`: `set your step \\`blocked\\` with \\`blocked_by: …\\`` and `and in its \\`comments\\` what you found…` become: `run \\`mc step note \"…\"\\` with what you found and what the next session should do differently, then \\`mc step blocked --on ${project}-check-in --reason \"…\"\\`, open the pull request, and stop.` `planExcerpt` is unchanged: it prints `met:` from the plan it is handed.",
+        "4. `src/mc/run.js`, where `stepPrompt` is called (around `planPath: plan.path`): pass `plan: standing(plan).plan` instead of `plan: plan.plan` only for the criteria — i.e. build `const handed = { ...plan.plan, success_criteria: standing(plan).plan?.success_criteria ?? plan.plan.success_criteria }` and pass `plan: handed`, so `met` in the prompt is the register's while the steps quoted stay the file's (the comment above `standing` says why). Extend that comment by one sentence saying the criteria's `met` is the exception.",
+        "5. `tests/mc/run-plan.test.js` line ~363: the assertion becomes `/Your plan is at `docs\\/project\\/p\\/x\\/PLAN\\.json`/u`. Run `node --test tests/mc/run-plan.test.js` and update only assertions that quote a sentence this step rewrote. If a test checks role files (`grep -rl \"step.md\" tests`), run it too.",
+        "6. `mc gate tests/mc/run-plan.test.js tests/mc/run.test.js`, then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "mc project import",
+      "status": "ready",
+      "done_when": "`mc project import` lists, and `mc project import --apply` writes, every repository plan on origin/main that is not yet under `~/mc/programs/`, with `repo` set, refusing nothing it would overwrite; `tests/mc/commands/project.test.js` covers it; and `mc gate` is green.",
+      "instruction": [
+        "1. `src/mc/commands/project.js`: a second form, `mc project import [--apply]` (add `--apply` to `scanArgs`'s `booleans`). Deps, injectable for the tests: `repos` (default `defaultRepos(env)` from `../brief-collect.js`), `listRepoPlans` (default from `../brief-collect.js`), `programs` (default `programsPlans` from `../plan-source.js`), `home` (default `programsHome(env)` from `../paths.js`), `fetch` (default: `spawnSync('git', ['-C', repo.path, 'fetch', '-q', 'origin'])` per repo, its status ignored), `writeText` (default: `mkdirSync(dirname(path), { recursive: true })` then `writeFileSync(tmp)` and `renameSync(tmp, path)`, with `tmp` = `${path}.${process.pid}.tmp`).",
+        "2. For each repo whose `join(repo.path, '.git')` exists: `fetch(repo)`, then `listRepoPlans(repo)`. Keep a record when `!record.legacy && record.plan` and its `project` is not among `programs()` projects; a record with `problems.length` is reported `skip <repo>:<programme>/<project> — does not read: <first problem>` and not imported. For each kept record, the new text: parse the original text (`git show origin/main:<path>` is already in `record` as `plan`), and write `JSON.stringify({ schema, version, repo: repo.name, ...rest }, null, 2) + '\\n'` where `{ schema, version, ...rest } = record.plan` — `repo` third, everything else in the plan's order. Run it through `readPlanText`; if it has problems, report `skip … — <first problem>`. Target `join(home, record.programme, record.project, PLAN_FILE)` (`PLAN_FILE` from `../plan-source.js`). Two repositories holding one project name: the first in `repos` order is imported, the second reported `skip <repo>:<…> — <project> is <first repo>'s`.",
+        "3. Output: without `--apply`, one line per plan `would import <repo>:<programme>/<project> → <target>` and a last line `mc project import --apply to write them`; with `--apply`, `imported …` per plan. When nothing is kept, print `nothing to import` and return 0. A target that exists is never written (it is a programs plan by then and was filtered; the check is for a file that is not valid JSON — report `skip … — <target> exists`). Return 0, or 1 when a write throws (print `mc: <message>`). The register is not touched: its entry is brought up to the new `path` by the next reader (`reconcileEntry`).",
+        "4. `usage()` gains `mc project import [--apply]        copy every plan on origin/main that is not under ~/mc/programs/ there, with its repo — without --apply it shows what would go`. `src/mc/help-text.js` gains the same line under the `mc project criterion` line.",
+        "5. Tests in `tests/mc/commands/project.test.js`, every dep injected, `home` a temp directory: two repos, one plan each plus a legacy record and a record with problems; dry run prints two `would import` lines and writes nothing; `--apply` writes two files whose JSON has `repo` third and otherwise equals the plan, and whose `readPlanText` problems are `[]`; a project already in `programs()` is not imported; the same project in both repos is imported from the first and skipped in the second; nothing kept prints `nothing to import`.",
+        "6. `mc gate tests/mc/commands/project.test.js tests/mc/help.test.js`, then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`. Do not run the import against the real `~/mc/programs/` in this step."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Import on this machine, and plans are written under ~/mc/programs/",
+      "status": "ready",
+      "done_when": "`~/mc/programs/` holds every active plan of memoro and memoro-cli, `canon/roles/_plan-writing.md` and `docs/project/README.md` say plans are written there, all three success criteria are met in the register through `mc project criterion met`, and `mc gate` is green.",
+      "instruction": [
+        "1. From this worktree, on this machine: `node src/mc-cli.js project import` and read the list: it must name every `PLAN.json` that `git -C <repo> ls-tree -r --name-only origin/main -- docs/project` shows in `~/memoro` (or the memoro checkout `defaultRepos` names) and in this repository, minus any already under `~/mc/programs/`. Then `node src/mc-cli.js project import --apply`. Then `node src/mc-cli.js project import` again must print `nothing to import`. A `skip` line for a plan that does not read is reported in the PR body, not fixed.",
+        "2. `node src/mc-cli.js status plans-in-mc` must print a `plan` row ending in `programs/mc/plans-in-mc/PLAN.json (origin/main)`, and `node src/mc-cli.js step plans-in-mc` must still show this project's steps with their states (the register entry follows the new path through `reconcileEntry` on the next read).",
+        "3. `canon/roles/_plan-writing.md`: the `**Where:**` item becomes: plans live in mc, not in a repository (ruling 48): `~/mc/programs/<programme>/<project>/PLAN.json`, with a top-level `\"repo\": \"memoro\"` or `\"memoro-cli\"` naming where the steps run. Write it to a temporary file beside it, validate, then `mv` it into place: the runner reads the directory, so a plan whose first unfinished step is `ready` is run as soon as it is there, and moving it in is the handover. No branch, no pull request. The `**Validate before pushing:**` item becomes `**Validate before moving it in:**` with the same command, and its last sentence becomes: ``mc status <project>`` shows it. In the `**Overall:**` item, `All frozen: a step session writes only met.` becomes `All frozen: a step session records a met criterion with mc project criterion met, never in the file.`; and in the `A check the last step's own branch cannot reach` item, `every criterion is met` becomes `every criterion is met in the register`. Keep the rest.",
+        "4. `docs/project/README.md`: at the top of `## What a PLAN.json is`, one paragraph: since `plans-in-mc` a plan lives under `~/mc/programs/<programme>/<project>/PLAN.json` with a `repo` field, and a plan of the same name in this directory is shadowed by it and no longer read; the copies here go with project 3 of ruling 48. In the `success_criteria` bullet, add: whether a criterion is met is the register's, written by `mc project criterion met <project> <n>`; the file's `met` is read once, when the register first sees the criteria.",
+        "5. Run the three success criteria's checks from this branch. For each that passes: `node src/mc-cli.js project criterion met plans-in-mc <n>`. Then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
