@@ -1,0 +1,52 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "A step blocked on another project is released by the runner when that project has been archived, not only while its plan is on main and done. An archived project is one with `docs/project/<programme>/closeout/<project>.json` on origin/main of either repository; the archive writes that file only for a done plan."
+  ],
+  "contract": [
+    "`decision` and `workarea` blockers are never released by the runner.",
+    "A `project` blocker naming a project that is neither on main nor archived is not released.",
+    "`listPlans` (`src/mc/brief-collect.js`) returns exactly what it returns today."
+  ],
+  "out_of_scope": [
+    "`src/mc/stale-blockers.js`: nothing in `src/` calls `staleBlockers`.",
+    "`mc step`'s `waitContext` (`src/mc/commands/step.js`): it passes no plans, so a project wait is said as `on project <name>` there, as today.",
+    "Moving plans out of the repositories (the `mc project` concept, `docs/project/mc/mc-project.md`)."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`blockerDue` releases a `project` blocker whose project is archived, with the reason `project <name> is archived`, and `describeWait` says `on project <name> — archived`. `releaseDue` releases such a step in the register. A blocker on a project that is neither on main nor archived stays blocked.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/step-release.test.js tests/mc/brief-collect.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": false,
+      "criterion": "`listArchived` reads the archived projects of this machine's memoro-cli checkout from origin/main.",
+      "check": "From the branch: `node --input-type=module -e \"import {listArchived} from './src/mc/brief-collect.js'; import {homedir} from 'node:os'; const n = listArchived({name:'memoro-cli', path: homedir() + '/memoro-cli'}); if (!n.includes('mc-runner-hardening')) { console.error(n); process.exit(1); }\"` exits 0."
+    }
+  ],
+  "documents": [
+    { "label": "Rulings", "path": "../rulings.md" },
+    { "label": "Plans and steps", "path": "../../README.md" }
+  ],
+  "steps": [
+    {
+      "title": "A project blocker is released when its project is archived",
+      "status": "ready",
+      "done_when": "`listArchived` exists in `src/mc/brief-collect.js`, `blockerDue`, `describeWait` and `releaseDue` in `src/mc/step-release.js` take `archived`, the runner passes it, the new tests in `tests/mc/step-release.test.js` and `tests/mc/brief-collect.test.js` pass, and `mc gate` is green.",
+      "instruction": [
+        "Why: on 2026-10-19 `mc-ownership` step 4 was `blocked_by: { kind: \"project\", name: \"mc-runner-hardening\" }`. `blockerDue` (`src/mc/step-release.js`, the `blocker.kind === 'project'` branch) is due only when a record in `context.plans` has that project with `status === 'done'`. `mc-runner-hardening` was archived by #986 to `docs/project/mc/closeout/mc-runner-hardening.json`, so it was in no record and the step stayed blocked until `mc step ready` was typed. The archive (`src/mc/archive-plan.js`, `donePlans`) only archives a plan whose status is `done`, so a closeout file means delivered.",
+        "1. `src/mc/brief-collect.js`: add and export `listArchived(repo, { ref = 'origin/main', git = runGit } = {})` directly after `listPlans`. It runs `git(repo.path, ['ls-tree', '-r', '--name-only', ref, '--', 'docs/project'])`, returns `[]` when that is `null`, and otherwise returns the project names of the paths that split on `/` into exactly five parts with `parts[3] === 'closeout'` and `parts[4]` ending in `.json`: the name is `parts[4]` without `.json`. A `closeout/<name>.md` (ruling 46) is not a name. Give it a one-paragraph JSDoc in the file's style: what an archived project is (the closeout record, `src/mc/closeout.js` `closeoutPath`) and that `listPlans` never returns these paths, because it takes only `PLAN.json`/`PLAN.md` in `parts[4]`. Do not change `listPlans`.",
+        "2. `src/mc/step-release.js`: in `blockerDue`'s `project` branch, after the existing `done` check, add: when `(context.archived || []).includes(blocker.name)`, return `{ due: true, why: `project ${blocker.name} is archived` }`. A record on main that is done keeps its existing reason. In `describeWait`'s `project` branch, when no record is found and `(context.archived || []).includes(blocker.name)`, return `on project ${blocker.name} — archived` before the `not on main` line. `releaseDue` takes a new option `archived = []` and passes it into the context it gives `blockerDue` (`{ now, plans, archived, stepsOf: …, deploys, contains }`). Rewrite the last paragraph of the file's header comment (the one starting `A \\`project\\` blocker is due only when`) to: a `project` blocker is due when that project's plan is on main and `done`, or when the project is archived (`closeout/<project>.json` on main, `listArchived`); one that is neither may have been abandoned, and only a person can tell. Add `archived` to the list of what the caller hands in.",
+        "3. `src/mc/run.js`: import `listArchived` with `listPlans` from `./brief-collect.js` (line 118). Beside `let plans = [];` (around line 2931) declare `const archived = [];`. In the repository loop, directly after the `plans.push(...sweepLanded(…listPlans(repo, …)…))` line (around line 2949), add `archived.push(...listArchived(repo, { git: gitOut }));`. In the `releaseDue(plans, { … })` call (around line 2986) pass `archived`. Extend the comment above that call: another project done, or archived.",
+        "4. Tests. `tests/mc/step-release.test.js`: extend the test `project: due when its plan on main is done; …` with `const archived = context({ archived: ['y'] });` asserting `blockerDue(step, archived)` deep-equals `{ due: true, why: 'project y is archived' }` and `describeWait(step, archived)` equals `on project y — archived`; keep the existing asserts. Add a test `releaseDue: a project blocker on an archived project is released` beside `releaseDue: a project blocker on a project in the other repository is released`, using `world([record('x', { status: 'blocked', blocked_by: { kind: 'project', name: 'y' } })])` and `releaseDue(w.plans, { root: ROOT, now: NOW, archived: ['y'], read: w.read, write: w.write, say: w.say })`: `x` comes back `ready` and its step 2 comments are `['Released 2026-10-11T17:00:00Z: project y is archived']`. Add a test that the same blocker with `archived: ['z']` stays `blocked`. `tests/mc/brief-collect.test.js`: import `listArchived` and add a test with a fake `git` whose `ls-tree` returns `docs/project/README.md`, `docs/project/mc/closeout/a.json`, `docs/project/mc/closeout/a.md`, `docs/project/mc/b/PLAN.json`, `docs/project/mc/closeout/notes/c.json` (one per line): `listArchived` returns `['a']`; and with a `git` returning `null` it returns `[]`.",
+        "5. Run `mc gate tests/mc/step-release.test.js tests/mc/brief-collect.test.js`, then the second success criterion's command from the branch, set both criteria `met: true`, then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}

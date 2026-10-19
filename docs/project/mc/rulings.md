@@ -1626,3 +1626,40 @@ matched.
    exactly.
 5. **The hit rate is measured.** `reused` — `{ mode: 'exact' | 'delta', … }`
    — is in the round's report and in its line in `gate-rounds.jsonl`.
+
+## 48 · mc owns programmes, projects and plans; the repositories get only results
+
+`ruling · 2026-10-19` · raised by Martin in the `mc` programme session,
+carried by the proposal `2026-10-19-mc-project`
+
+> "Det måste bli mycket enklare att skriva en projekt-plan och att då den
+> iväg … mc är så pass utbyggd nu att nu är det dags att vi syr ihop detta
+> till en helhet." (Martin, 2026-10-19)
+
+1. **No session writes a plan file; mc does, through `mc project` verbs.**
+   "Vi har bytt från md till json en gång redan. Jag tror lösningen är någon
+   helt annan än att byta tillbaka. Jag tror lösningen kan ligga i mc." The
+   file format becomes mc's own.
+2. **Plans leave the product repositories.** "Med ett smart 'mc project'
+   system så kommer det synas även om det ligger lokalt i mc. Frågan är alltså
+   vad som faktiskt ska ligga i repot." The repositories keep code,
+   `docs/technical/`, product rulings and one `project_log.md` row per
+   delivered project.
+3. **The structure:** "mc/program x/projekt y/ repo x, repo y, + planfil och
+   stegfiler", under `~/mc/programs/` ("Den senare").
+4. **The programme session is the foundation; there are no project
+   sessions.** "mc plan <program> sessionen såsom det är nu är fundamentet.
+   Det är projekt-sessioner vi inte ska ha."
+5. **Every step names `haiku` or `opus`, no default; no `why_opus`**
+   ("Stryk why opus").
+6. **`discard` removes the whole project directory; `archive` is the way out
+   for a project that is done.** "Om man tar bort ett projekt så är väl hela
+   tanken att hela projektet ska bort … För plan har vi archive istället."
+   "Vi har redan ett verb discard, skapa inte drop."
+7. **Out of scope for now:** follow-ups ("Uppföljningar är ett senare
+   bekymmer"), backup of `~/mc` ("låt oss vänta med backup-arbetet och landa
+   detta först"), sessions outside this machine.
+
+The concept in full: [`mc-project.md`](mc-project.md). Carried by
+`archived-releases` (a blocker fix needed under the current layout) and the
+`mc project` projects that follow it.
