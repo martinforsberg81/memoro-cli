@@ -118,7 +118,7 @@ import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-lan
 import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collect.js';
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
-import { sweepDocker } from './docker.js';
+import { sweepDocker, tidyDocker } from './docker.js';
 import { deliverableStep, unauthorisedChanges } from './plan-schema.js';
 import { planIn } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
@@ -245,6 +245,13 @@ export const SLEEP_GAP_MS = 3 * 60 * 1000;
 function sameCommit(a, b) {
   const [x, y] = [String(a).trim(), String(b).trim()];
   return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
+}
+
+/** The tail of the tidy line for `tidyDocker`'s answer: empty when Docker was down or not asked. */
+export function dockerNote(docker) {
+  if (!docker?.pruned?.length) return '';
+  const parts = docker.pruned.map((item) => (item.ok ? `${item.what} ${item.reclaimed || '0B'}` : `${item.what} failed — ${item.detail}`));
+  return ` · docker: ${parts.join(', ')}`;
 }
 
 /* ------------------------------------------------------------ real deps */
@@ -576,10 +583,11 @@ export function realDeps(env = process.env) {
     // `mc deps <repo>`'s reading, saved where `mc deps` and the page read it.
     // A dependency so a test drives the chore without npm or a remote.
     readDeps: (options) => readDeps({ env, refresh: true, ...options }),
-    // `mc tidy --apply` (tidy.js): its list written, then removed from. A
-    // dependency so a fixture without it removes nothing on the machine
-    // running the suite.
-    tidy: () => runTidy({ apply: true, env }),
+    // `mc tidy --apply` (tidy.js): its list written, then removed from, and
+    // Docker's images and build cache unused for three days on a runtime that
+    // is already up (`tidyDocker`). A dependency so a fixture without it
+    // removes nothing on the machine running the suite.
+    tidy: async () => ({ ...runTidy({ apply: true, env }), docker: await tidyDocker({ apply: true, env }) }),
     // runner.log to runner.log.1 past the limit (logger.js).
     rotate: (path, maxBytes) => rotateIfLarge(path, maxBytes),
     // The one door work lands through: the merger's queue (ruling 30), the
@@ -1966,8 +1974,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (forDisk) { lastDiskTidyAt = now; diskSkippedAt = null; }
     const took = () => Math.round((deps.now().getTime() - now) / 1000);
     let outcome = null;
+    let docker = null;
     let failure = null;
-    try { outcome = (await deps.tidy())?.outcome || null; } catch (error) { failure = error?.message || String(error); }
+    try {
+      const ran = await deps.tidy();
+      outcome = ran?.outcome || null;
+      docker = ran?.docker || null;
+    } catch (error) { failure = error?.message || String(error); }
     const freed = outcome?.freed || 0;
     const items = outcome?.removed || 0;
     const kept = outcome?.kept || 0;
@@ -1979,7 +1992,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const why = forDisk ? 'a lane skipped for disk' : 'daily';
     say(failure
       ? `tidy (${why}): failed — ${failure}`
-      : `tidy (${why}): freed ${(freed / 1e9).toFixed(2)} GB in ${items} items, kept ${kept} on re-check`);
+      : `tidy (${why}): freed ${(freed / 1e9).toFixed(2)} GB in ${items} items, kept ${kept} on re-check${dockerNote(docker)}`);
     return failure ? 'failed' : 'ran';
   }
 

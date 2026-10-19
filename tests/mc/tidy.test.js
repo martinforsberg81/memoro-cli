@@ -521,9 +521,11 @@ describe('the printout', () => {
   };
   const capture = () => { const out = []; return { out, stdout: { write: (text) => out.push(text) } }; };
 
-  it('a dry run gives counts and bytes per rule, the first ten targets, the keeps worth reading, and the list', () => {
+  const noDocker = async () => null;
+
+  it('a dry run gives counts and bytes per rule, the first ten targets, the keeps worth reading, and the list', async () => {
     const { out, stdout } = capture();
-    const code = tidyCommand({ apply: false, days: 14 }, { stdout, tidy: () => ({ list, listPath: '/w/runner/tidy/l.json', outcome: null }) });
+    const code = await tidyCommand({ apply: false, days: 14 }, { stdout, tidy: () => ({ list, listPath: '/w/runner/tidy/l.json', outcome: null }), docker: noDocker });
     const text = out.join('');
     assert.equal(code, 0);
     assert.match(text, /T3 +12 /u);
@@ -534,13 +536,55 @@ describe('the printout', () => {
     assert.match(text, /list: \/w\/runner\/tidy\/l\.json/u);
   });
 
-  it('--apply says what it freed and what the re-check kept; --json is the list', () => {
+  it('--apply says what it freed and what the re-check kept; --json is the list', async () => {
     const outcome = { applied: [{ path: '/w/plan/mc/wt-a', ok: false, why: 're-check: 1 uncommitted' }], freed: 1.2e9, removed: 12, kept: 1 };
     const { out, stdout } = capture();
-    assert.equal(tidyCommand({ apply: true, days: 14 }, { stdout, tidy: () => ({ list, listPath: '/l.json', outcome }) }), 1);
+    assert.equal(await tidyCommand({ apply: true, days: 14 }, { stdout, tidy: () => ({ list, listPath: '/l.json', outcome }), docker: noDocker }), 1);
     assert.match(out.join(''), /freed 1\.20 GB in 12 items, kept 1 on re-check/u);
     const json = capture();
-    tidyCommand({ json: true, days: 14 }, { stdout: json.stdout, tidy: () => ({ list, listPath: '/l.json', outcome: null }) });
+    await tidyCommand({ json: true, days: 14 }, { stdout: json.stdout, tidy: () => ({ list, listPath: '/l.json', outcome: null }), docker: noDocker });
     assert.deepEqual(JSON.parse(json.out.join('')), list);
+  });
+
+  const pruned = (ok = true) => ({
+    up: true, apply: true, reclaimable: null, reason: null,
+    pruned: [{ what: 'images', ok, reclaimed: ok ? '12.4GB' : null, detail: ok ? null : 'daemon gone' }, { what: 'build cache', ok: true, reclaimed: '2.1GB', detail: null }],
+  });
+
+  it('mc tidy asks Docker too, without starting it, and a failed prune exits 1', async () => {
+    const asked = [];
+    const docker = async (options) => { asked.push(options); return pruned(false); };
+    const { out, stdout } = capture();
+    const outcome = { applied: [], freed: 0, removed: 0, kept: 0 };
+    assert.equal(await tidyCommand({ apply: true, days: 14 }, { stdout, tidy: () => ({ list, listPath: '/l.json', outcome }), docker }), 1);
+    assert.deepEqual(asked, [{ apply: true }], 'no start: only --docker may start the runtime');
+    assert.match(out.join(''), /docker: the images prune failed — daemon gone/u);
+    assert.match(out.join(''), /docker: build cache unused for 3 days pruned — 2\.1GB reclaimed/u);
+  });
+
+  it('--docker runs Docker alone; with --apply it may start the runtime', async () => {
+    let files = 0;
+    const asked = [];
+    const docker = async (options) => { asked.push(options); return pruned(); };
+    const { out, stdout } = capture();
+    const code = await tidyCommand({ apply: true, docker: true, days: 14 }, { stdout, tidy: () => { files += 1; }, docker });
+    assert.equal(code, 0);
+    assert.equal(files, 0, 'no list is written and no file removed');
+    assert.equal(asked[0].apply, true);
+    assert.equal(asked[0].start.run, 'mc tidy --docker');
+    assert.match(out.join(''), /images unused for 3 days pruned — 12\.4GB reclaimed/u);
+
+    const dry = capture();
+    const stopped = { up: false, apply: false, reclaimable: null, pruned: [], reason: 'orbstack is not running' };
+    assert.equal(await tidyCommand({ docker: true, days: 14 }, { stdout: dry.stdout, docker: async (options) => { asked.push(options); return stopped; } }), 0);
+    assert.equal(asked[1].start, null, 'a dry run never starts it');
+    assert.match(dry.out.join(''), /nothing pruned — orbstack is not running \(mc tidy --docker --apply starts it\)/u);
+  });
+
+  it('--docker takes --apply and --json, not --days', () => {
+    assert.equal(parseTidyArgs(['--docker']).docker, true);
+    assert.equal(parseTidyArgs(['--docker', '--apply']).apply, true);
+    assert.ok(parseTidyArgs(['--docker', '--days', '3']).error);
+    assert.equal(parseTidyArgs([]).docker, false);
   });
 });

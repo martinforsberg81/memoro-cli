@@ -37,7 +37,8 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
-| `mc tidy [--apply] [--json] [--days <n>]` | What mc may remove, per root of ruling 39, written to `~/mc/runner/tidy/<stamp>.json` first — every target and keep with its rule; `--apply` removes only that file's targets, each re-checked. `--days` (default 14, at least 1) is how old a loose transcript must be. Rule C removes `mc shot --compare` trees under `~/.memoro/mc/compare/` unused for a day with no dev server, by `git worktree remove` in their repository. |
+| `mc tidy [--apply] [--json] [--days <n>]` | What mc may remove, per root of ruling 39, written to `~/mc/runner/tidy/<stamp>.json` first — every target and keep with its rule; `--apply` removes only that file's targets, each re-checked. `--days` (default 14, at least 1) is how old a loose transcript must be. Rule C removes `mc shot --compare` trees under `~/.memoro/mc/compare/` unused for a day with no dev server, by `git worktree remove` in their repository. With the runtime up, it also prunes Docker images and build cache unused for three days, and never starts the runtime to do so. |
+| `mc tidy --docker [--apply] [--json]` | Docker only: the dry run shows what `docker system df` calls reclaimable, and `--apply` prunes images and build cache unused for three days. `--apply` starts OrbStack or Docker Desktop if it is down, through `mc docker ensure`'s lease, and releases the lease afterwards. |
 | `mc work tidy [--apply] [--days <n>] [--json]` | The same as `mc tidy`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so a reader can tell a stopped session from a dead one; `mc work <name>` removes it. |
 | `mc work list` | The page, as bare `mc work` is. |
@@ -107,6 +108,9 @@ and never removed — are in
 a planning area's `memoro/` and `memoro-cli/`, and every `memory/` under
 `~/.claude/projects` are never removed. The runner runs it once a day and
 after a lane skipped for disk. The apply logs `tidy` with counts only.
+Its Docker half (`tidyDocker`, `docker.js`) runs `docker image prune --all`
+and `docker builder prune --all` with `--filter until=72h`. It runs only
+when the runtime is already up, except under `mc tidy --docker --apply`.
 
 `mc repo status` reads. It writes nothing but the remote-tracking refs a
 `git fetch` updates, and `--offline` skips even that and says so on the page.

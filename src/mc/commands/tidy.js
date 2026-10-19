@@ -7,18 +7,23 @@
  *                            each target asked again first
  *   mc tidy --json           the list object
  *   mc tidy --days <n>       how old a loose transcript must be (default 14)
+ *   mc tidy --docker         Docker only: images and build cache unused for
+ *                            three days; with --apply it starts the runtime
+ *                            if it is down, which nothing else here does
  *
- * `mc work tidy` is this command. The runner runs it once a day and after a
- * lane skipped for disk.
+ * Without `--docker` the Docker half runs too, but only on a runtime that is
+ * already up. `mc work tidy` is this command. The runner runs it once a day
+ * and after a lane skipped for disk.
  */
 import { describeSize } from '../conversations.js';
+import { tidyDocker } from '../docker.js';
 import { DEFAULT_DAYS, ROUTINE, runTidy, shortPath } from '../tidy.js';
 import { scanArgs } from './flags.js';
 
 const SHOWN = 10;
 
 export function usage() {
-  return 'usage — mc tidy [--apply] [--json] [--days <n>]\n';
+  return 'usage — mc tidy [--apply] [--json] [--days <n>] [--docker]\n';
 }
 
 export async function run(argv, deps = {}) {
@@ -30,14 +35,17 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
-  return tidyCommand(opts, { stdout, tidy: deps.tidy });
+  return tidyCommand(opts, { stdout, tidy: deps.tidy, docker: deps.docker });
 }
 
 export function parseArgs(argv) {
-  const scanned = scanArgs(argv, { booleans: ['--json', '--apply'], values: ['--days'] });
-  const opts = { apply: Boolean(scanned.flags.apply), json: Boolean(scanned.flags.json), days: DEFAULT_DAYS };
+  const scanned = scanArgs(argv, { booleans: ['--json', '--apply', '--docker'], values: ['--days'] });
+  const opts = {
+    apply: Boolean(scanned.flags.apply), json: Boolean(scanned.flags.json), docker: Boolean(scanned.flags.docker), days: DEFAULT_DAYS,
+  };
   if (scanned.error) return { ...opts, error: scanned.error };
   if (scanned.positional.length) return { ...opts, error: 'mc tidy takes no name — it looks at every root' };
+  if (opts.docker && scanned.flags.days != null) return { ...opts, error: '--days is about transcripts, and --docker tidies only Docker' };
   return withDays(opts, scanned.flags.days);
 }
 
@@ -50,13 +58,26 @@ export function withDays(opts, days) {
 
 /**
  * The one entry `mc tidy` and `mc work tidy` share: run, then print. Exit 1
- * when an apply kept something on re-check.
+ * when an apply kept something on re-check or a Docker prune failed.
+ * `docker` is `tidyDocker`; `--docker` runs nothing else.
  */
-export function tidyCommand(opts, { stdout, tidy = runTidy } = {}) {
+export async function tidyCommand(opts, { stdout, tidy = runTidy, docker = tidyDocker } = {}) {
+  const prune = docker || tidyDocker;
+  if (opts.docker) {
+    const answer = await prune({ apply: opts.apply, start: opts.apply ? { pid: process.pid, run: 'mc tidy --docker' } : null });
+    if (opts.json) stdout.write(`${JSON.stringify(answer, null, 2)}\n`);
+    else {
+      stdout.write(`mc tidy --docker${opts.apply ? '' : ' — dry run'}\n`);
+      writeDocker(stdout, answer);
+    }
+    return dockerFailed(answer) ? 1 : 0;
+  }
   const { list, listPath, outcome } = (tidy || runTidy)({ apply: opts.apply, days: opts.days });
+  const answer = await prune({ apply: opts.apply });
+  const code = outcome?.kept || dockerFailed(answer) ? 1 : 0;
   if (opts.json) {
-    stdout.write(`${JSON.stringify(list, null, 2)}\n`);
-    return outcome?.kept ? 1 : 0;
+    stdout.write(`${JSON.stringify(answer ? { ...list, docker: answer } : list, null, 2)}\n`);
+    return code;
   }
   stdout.write(`mc tidy${opts.apply ? '' : ' — dry run'}\n`);
   const byRule = new Map();
@@ -80,10 +101,38 @@ export function tidyCommand(opts, { stdout, tidy = runTidy } = {}) {
     for (const item of told) stdout.write(`  ${item.rule}  ${shortPath(item.path)} — ${item.why}\n`);
   }
   stdout.write(`\nlist: ${shortPath(listPath)}\n`);
-  if (!outcome) return 0;
-  for (const item of outcome.applied.filter((entry) => !entry.ok)) {
-    stdout.write(`  not removed  ${shortPath(String(item.path))} — ${item.why}\n`);
+  if (outcome) {
+    for (const item of outcome.applied.filter((entry) => !entry.ok)) {
+      stdout.write(`  not removed  ${shortPath(String(item.path))} — ${item.why}\n`);
+    }
+    stdout.write(`freed ${(outcome.freed / 1e9).toFixed(2)} GB in ${outcome.removed} items, kept ${outcome.kept} on re-check\n`);
   }
-  stdout.write(`freed ${(outcome.freed / 1e9).toFixed(2)} GB in ${outcome.removed} items, kept ${outcome.kept} on re-check\n`);
-  return outcome.kept ? 1 : 0;
+  if (answer) {
+    stdout.write('\n');
+    writeDocker(stdout, answer);
+  }
+  return code;
+}
+
+/** Whether Docker was asked and a prune failed. A runtime that is down is not a failure. */
+function dockerFailed(answer) {
+  return Boolean(answer?.pruned?.some((item) => !item.ok));
+}
+
+/** `tidyDocker`'s answer, in lines. */
+function writeDocker(stdout, answer) {
+  if (!answer.up || (answer.reason && !answer.pruned.length)) {
+    const hint = !answer.apply && !answer.up ? ' (mc tidy --docker --apply starts it)' : '';
+    stdout.write(`docker: nothing pruned — ${answer.reason}${hint}\n`);
+    return;
+  }
+  if (answer.reclaimable) {
+    stdout.write(`docker: would prune images and build cache unused for 3 days — at most ${answer.reclaimable.images} of images and ${answer.reclaimable.build_cache} of build cache\n`);
+    return;
+  }
+  for (const item of answer.pruned) {
+    stdout.write(item.ok
+      ? `docker: ${item.what} unused for 3 days pruned — ${item.reclaimed || '0B'} reclaimed\n`
+      : `docker: the ${item.what} prune failed — ${item.detail}\n`);
+  }
 }
