@@ -482,3 +482,182 @@ test('criterion add given a flag it does not take, or without its text, is usage
     assert.deepEqual(JSON.parse(readFileSync(f.draft('alpha'), 'utf8')).success_criteria, []);
   } finally { f.cleanup(); }
 });
+
+/** A draft with one criterion, so the next verb a step add names is `mc project send`. */
+async function draftWithCriterion(f) {
+  assert.equal(await run(NEW, f.deps), 0);
+  assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+  f.out.length = 0;
+}
+
+/** A markdown instruction file in the temp home, written with the text given. */
+function instructionFile(f, text = 'Do the thing.\n\nThen test it.\n') {
+  const path = join(f.home, 'instruction.md');
+  writeFileSync(path, text);
+  return path;
+}
+
+const STEP = ['step', 'add', 'alpha', 'One', '--model', 'haiku', '--done-when', 'It runs.'];
+
+test('step add appends a ready step to a draft, its paragraphs from the file, and names the send next', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithCriterion(f);
+    assert.equal(await run([...STEP, '--instruction-file', instructionFile(f)], f.deps), 0);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.deepEqual(plan.steps, [{
+      title: 'One', status: 'ready', done_when: 'It runs.', instruction: ['Do the thing.', 'Then test it.'], runner: { model: 'haiku' },
+    }]);
+    assert.deepEqual(draftProblems(plan), []);
+    assert.deepEqual(f.out, ['mc: alpha step 1 — One (haiku)\n', 'next: mc project send alpha\n']);
+    assert.equal(f.err.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('step add to a draft with no criterion yet prints no send line', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    f.out.length = 0;
+    assert.equal(await run([...STEP, '--instruction-file', instructionFile(f)], f.deps), 0);
+    assert.deepEqual(f.out, ['mc: alpha step 1 — One (haiku)\n']);
+  } finally { f.cleanup(); }
+});
+
+test('step add --effort lands in the step\'s runner, beside its model', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    f.out.length = 0;
+    assert.equal(await run([...STEP, '--effort', 'high', '--instruction-file', instructionFile(f)], f.deps), 0);
+    assert.deepEqual(JSON.parse(readFileSync(f.draft('alpha'), 'utf8')).steps[0].runner, { model: 'haiku', effort: 'high' });
+    assert.deepEqual(f.out, ['mc: alpha step 1 — One (haiku, high)\n']);
+  } finally { f.cleanup(); }
+});
+
+test('step add without --model, with a model that is not haiku or opus, or missing a flag, is refused, exit 2, and the draft is untouched', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const md = instructionFile(f);
+    const cases = [
+      [['step', 'add', 'alpha', 'One', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model haiku or opus \(ruling 42\) — no default/u],
+      [['step', 'add', 'alpha', 'One', '--model', 'sonnet', '--done-when', 'It runs.', '--instruction-file', md], /a step names --model haiku or opus/u],
+      [['step', 'add', 'alpha', 'One', '--model', 'haiku', '--instruction-file', md], /a step needs --done-when/u],
+      [['step', 'add', 'alpha', 'One', '--model', 'haiku', '--done-when', 'It runs.'], /a step needs --instruction-file/u],
+      [[...STEP, '--instruction-file', join(f.home, 'missing.md')], /cannot read /u],
+      [[...STEP, '--effort', 'extreme', '--instruction-file', md], /--effort extreme is not one of low, medium, high, xhigh, max/u],
+      [[...STEP, '--after', 'other', '--instruction-file', md], /--after is <repo>:<project> — other is not/u],
+      [[...STEP, '--after', 'memoro:other', '--instruction-file', md], /memoro is not a repository mc knows/u],
+      [[...STEP, '--after', 'memoro-cli:Bad_Name', '--instruction-file', md], /Bad_Name is not a project name/u],
+      [[...STEP, '--check', 'npm test', '--instruction-file', md], /step add takes no --check/u],
+    ];
+    for (const [argv, message] of cases) {
+      assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+      assert.match(f.err.at(-1), message);
+    }
+    assert.deepEqual(JSON.parse(readFileSync(f.draft('alpha'), 'utf8')).steps, []);
+  } finally { f.cleanup(); }
+});
+
+test('step add whose done-when names a person, or whose instruction or done-when names a dependency, is refused, exit 1', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const md = instructionFile(f);
+    assert.equal(await run(['step', 'add', 'alpha', 'One', '--model', 'haiku', '--done-when', 'Martin approves', '--instruction-file', md], f.deps), 1);
+    assert.equal(await run(['step', 'add', 'alpha', 'One', '--model', 'haiku', '--done-when', 'mc step blocked --on-project x', '--instruction-file', md], f.deps), 1);
+    assert.equal(await run([...STEP, '--instruction-file', instructionFile(f, 'Do it.\n\nmc step blocked --on-project x\n')], f.deps), 1);
+    assert.deepEqual(f.err, [
+      'mc: --done-when names Martin — a step ends on a check, never on a person\n',
+      'mc: a dependency goes in --after <repo>:<project>\n',
+      'mc: a dependency goes in --after <repo>:<project>\n',
+    ]);
+    assert.deepEqual(JSON.parse(readFileSync(f.draft('alpha'), 'utf8')).steps, []);
+  } finally { f.cleanup(); }
+});
+
+test('step add from an instruction file with no paragraph is refused, exit 1', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const path = instructionFile(f, '\n\n   \n');
+    assert.equal(await run([...STEP, '--instruction-file', path], f.deps), 1);
+    assert.equal(f.err.join(''), `mc: ${path} has no paragraph\n`);
+  } finally { f.cleanup(); }
+});
+
+test('step add --after a project deps.programs holds blocks the step on it, as a project blocker', async () => {
+  const f = draftFixture();
+  try {
+    f.deps.programs = () => [{ project: 'other', repo: 'memoro-cli' }];
+    await draftWithCriterion(f);
+    assert.equal(await run([...STEP, '--after', 'memoro-cli:other', '--instruction-file', instructionFile(f)], f.deps), 0);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.equal(plan.steps[0].status, 'blocked');
+    assert.deepEqual(plan.steps[0].blocked_by, { kind: 'project', name: 'other' });
+    assert.deepEqual(draftProblems(plan), []);
+    assert.deepEqual(f.out, ['mc: alpha step 1 — One (haiku)\n', '  waits for memoro-cli:other\n', 'next: mc project send alpha\n']);
+  } finally { f.cleanup(); }
+});
+
+test('step add --after a project only deps.listArchived holds blocks the step on it', async () => {
+  const f = draftFixture({ listArchived: () => ['other'] });
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run([...STEP, '--after', 'memoro-cli:other', '--instruction-file', instructionFile(f)], f.deps), 0);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.equal(plan.steps[0].status, 'blocked');
+    assert.deepEqual(plan.steps[0].blocked_by, { kind: 'project', name: 'other' });
+  } finally { f.cleanup(); }
+});
+
+test('step add --after a project mc does not know is refused, exit 1, and the draft is untouched', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run([...STEP, '--after', 'memoro-cli:other', '--instruction-file', instructionFile(f)], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: memoro-cli:other is not a project mc knows — not under ~/mc/programs/, not on memoro-cli\'s origin/main, not archived\n');
+    assert.deepEqual(JSON.parse(readFileSync(f.draft('alpha'), 'utf8')).steps, []);
+  } finally { f.cleanup(); }
+});
+
+test('step add --after this project is refused, exit 1', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run([...STEP, '--after', 'memoro-cli:alpha', '--instruction-file', instructionFile(f)], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha cannot wait on itself\n');
+  } finally { f.cleanup(); }
+});
+
+test('step add with a title whose key another step has is refused, exit 1, and names that step', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithCriterion(f);
+    const md = instructionFile(f);
+    assert.equal(await run([...STEP, '--instruction-file', md], f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run([...STEP, '--instruction-file', md], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: step 1 is called that already\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('step add to a sent plan appends after the others, and the plan still reads', async () => {
+  const f = draftFixture();
+  try {
+    const dir = join(f.home, 'mc', 'sent');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'PLAN.json'), `${JSON.stringify({ ...JSON.parse(repoPlan('sent')), repo: 'memoro-cli' }, null, 2)}\n`);
+    assert.equal(await run(['step', 'add', 'sent', 'Two', '--model', 'opus', '--done-when', 'It runs.', '--instruction-file', instructionFile(f)], f.deps), 0);
+    const text = readFileSync(join(dir, 'PLAN.json'), 'utf8');
+    assert.deepEqual(readPlanText(text).problems, []);
+    const written = JSON.parse(text);
+    assert.deepEqual(written.steps.map((step) => step.title), ['One', 'Two']);
+    assert.deepEqual(written.steps[1], {
+      title: 'Two', status: 'ready', done_when: 'It runs.', instruction: ['Do the thing.', 'Then test it.'], runner: { model: 'opus' },
+    });
+    assert.deepEqual(f.out, ['mc: sent step 2 — Two (opus)\n']);
+  } finally { f.cleanup(); }
+});
