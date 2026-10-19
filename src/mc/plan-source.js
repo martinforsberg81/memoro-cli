@@ -62,8 +62,31 @@ export function projectNames(tree) {
   return plansInTree(tree).filter((entry) => entry.file === PLAN_FILE).map((entry) => entry.project);
 }
 
-/** The plan on origin/main, if the project has one there: the first repository that has it. */
-export function findPlan(repos, name, { ref = 'origin/main', git } = {}) {
+/** The project names the `~/mc/programs/` plans of one repository give it. */
+const programNames = (programs, repo) => programs.filter((e) => e.repo === repo).map((e) => e.project);
+
+/**
+ * The plan of a project: the one under `~/mc/programs/` first (ruling 48), read
+ * from its own repository, with the repository's copy of it left unread; else
+ * the first repository that has one on origin/main.
+ */
+export function findPlan(repos, name, { ref = 'origin/main', git, programs = programsPlans } = {}) {
+  const all = programs();
+  const held = all.find((e) => e.project === name);
+  if (held) {
+    // The plan is its repository's, so a repository not here has nothing to find.
+    const repo = repos.find((r) => r.name === held.repo);
+    if (!repo || !existsSync(join(repo.path, '.git'))) return null;
+    const tree = git(repo.path, lsTreeArgs(ref));
+    return {
+      repo: repo.name,
+      path: repo.path,
+      programme: held.programme,
+      plan: held.path,
+      text: held.text,
+      names: [...new Set([...projectNames(tree), ...programNames(all, repo.name)])],
+    };
+  }
   for (const repo of repos) {
     if (!existsSync(join(repo.path, '.git'))) continue;
     const tree = git(repo.path, lsTreeArgs(ref));
@@ -78,8 +101,9 @@ export function findPlan(repos, name, { ref = 'origin/main', git } = {}) {
         text: git(repo.path, ['show', `${ref}:${entry.path}`]) || '',
         // Every project of this repository, because a pull request is matched
         // to a project by the longest name its branch begins with — without
-        // the siblings, `mc-cut-2` would read as `mc`'s (project-prs.js).
-        names: projectNames(tree),
+        // the siblings, `mc-cut-2` would read as `mc`'s (project-prs.js). The
+        // projects under `~/mc/programs/` count too: their plans are not on main yet.
+        names: [...new Set([...projectNames(tree), ...programNames(all, repo.name)])],
       };
     }
   }
@@ -87,11 +111,17 @@ export function findPlan(repos, name, { ref = 'origin/main', git } = {}) {
 }
 
 /**
- * The plan a worktree holds for a project: each programme's directory for the
- * project is looked in for the plan file. A project still on the old file comes
- * back as `legacy`, with no plan to read.
+ * The plan a project has: the one under `~/mc/programs/` first, else the plan
+ * its worktree holds — each programme's directory for the project is looked in
+ * for the plan file. A project still on the old file comes back as `legacy`,
+ * with no plan to read.
  */
-export function planIn(tree, name, { list, exists, read }) {
+export function planIn(tree, name, { list, exists, read, programs = programsPlans }) {
+  const held = programs().find((e) => e.project === name);
+  if (held) {
+    const { plan, problems } = readPlanText(held.text);
+    return { path: held.path, programme: held.programme, text: held.text, plan, problems, legacy: false };
+  }
   const base = join(tree, PROJECT_DIR);
   for (const programme of list(base)) {
     const dir = join(base, programme, name);

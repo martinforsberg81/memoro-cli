@@ -181,6 +181,23 @@ describe('which reds are mended', () => {
   });
 });
 
+describe('the step of a plan under ~/mc/programs/ (plans-in-mc step 5)', () => {
+  it('an absolute register plan is read from disk, and origin/main is not asked for it', async () => {
+    const plan = join(root, 'programs', 'mc', 'mq', 'PLAN.json');
+    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
+    writeFileSync(registerPath(root, 'mq'), JSON.stringify({
+      project: 'mq', repo: 'memoro-cli', programme: 'mc', plan, steps: [{ status: 'landing', pr: 671, branch: 'mq', comments: [], attempts: 0 }],
+    }));
+    const text = JSON.stringify({ steps: [{ title: '1. From disk', done_when: 'DONE-FROM-DISK', instruction: 'Read it here.' }] });
+    const mm = mendMachine({ pushed: true });
+    const read = (path) => (path === plan ? text : existsSync(path) ? readFileSync(path, 'utf8') : null);
+    const result = await runMend({ root, job: JOB, report: conflict, deps: { ...mm.deps, read } });
+    assert.equal(result.outcome, 'pushed');
+    assert.match(mm.sessions[0].args.join('\n'), /DONE-FROM-DISK/u);
+    assert.ok(mm.git.every((call) => call.args[0] !== 'show'), 'origin/main is not asked for the plan');
+  });
+});
+
 describe('the queue: mending and mended', () => {
   it('a mending entry is in line but not taken; mended, it is queued at its old place with its mend spent', () => {
     const entries = parseQueue(JSON.stringify([{ ...JOB, state: 'queued' }]));

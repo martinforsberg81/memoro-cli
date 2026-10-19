@@ -19,7 +19,7 @@ import { parseArgs } from '../../src/mc/commands/work.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import { registerPath } from '../../src/mc/register.js';
 import {
-  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, runTidy, sessionLogRe, tidyPlan,
+  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, runTidy, sessionLogRe, tidyPlan,
 } from '../../src/mc/tidy.js';
 import * as workTidy from '../../src/mc/work-tidy.js';
 
@@ -245,6 +245,23 @@ describe('(P) a project archived with its closeout on main', () => {
       const { list } = runTidy(m.doors());
       assert.deepEqual(ruled(list, 'P'), []);
       assert.match(keptOf(list, mine.register).why, /^git could not answer/u);
+    } finally { m.cleanup(); }
+  });
+});
+
+describe('(P) a plan under ~/mc/programs/ is there while its file is', () => {
+  it('plan_on_main is the file\'s existence, and origin/main\'s tree is not asked for it', () => {
+    const m = machine();
+    try {
+      const here = join(m.home, 'programs', 'mc', 'here', 'PLAN.json');
+      const gone = join(m.home, 'programs', 'mc', 'gone', 'PLAN.json');
+      m.write(here);
+      m.register({ project: 'here', repo: 'memoro-cli', programme: 'mc', plan: here, steps: [] });
+      m.register({ project: 'gone', repo: 'memoro-cli', programme: 'mc', plan: gone, steps: [] });
+      m.main['memoro-cli'].tree.push('docs/project/mc/gone/PLAN.json');
+      const items = Object.fromEntries(gatherTidyFacts(m.doors()).projects.map((item) => [item.project, item]));
+      assert.equal(items.here.plan_on_main, true);
+      assert.equal(items.gone.plan_on_main, false, 'the repository has it, but the file under programs does not');
     } finally { m.cleanup(); }
   });
 });
