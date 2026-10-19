@@ -8,6 +8,8 @@
  *   mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json
  *   mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft's goal, contract or out of scope
  *   mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan
+ *   mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]
+ *                                                                 add a step, after the others, to a draft or a sent plan
  *   mc project criterion met [<project>] <n>     record that success criterion <n> holds
  *   mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold
  *   mc project import [--apply]                  copy every plan on origin/main that is not under ~/mc/programs/ there
@@ -16,20 +18,21 @@
  * names only the criterion number.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { defaultRepos, listArchived, listPlans, listRepoPlans } from '../brief-collect.js';
-import { NAME_RE, PLAN_SCHEMA, PLAN_VERSION, readPlanText, validatePlan } from '../plan-schema.js';
+import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
-import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, readDraftOrPlan, withPlanLock, writePlanFile } from '../plan-write.js';
-import { parseStepEnv, readEntry, updateCriterion } from '../register.js';
+import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, withPlanLock, writePlanFile } from '../plan-write.js';
+import { parseStepEnv, readEntry, stepKey, updateCriterion } from '../register.js';
 import { programsHome, workRoot } from '../paths.js';
 import { scanArgs } from './flags.js';
 
 /** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
 const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope'];
 const EDIT_FLAGS = ['--goal', '--contract', '--out-of-scope'];
+const STEP_ADD_FLAGS = ['--model', '--effort', '--done-when', '--instruction-file', '--after'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -68,6 +71,11 @@ export async function run(argv, deps = {}) {
     const extra = onlyFlags(scanned, ['--check']);
     if (extra) { stderr.write(`mc: criterion add takes no ${extra}\n`); return 2; }
     return addCriterion(scanned, { ...deps, env, stdout, stderr });
+  }
+  if (noun === 'step' && verb === 'add') {
+    const extra = onlyFlags(scanned, STEP_ADD_FLAGS);
+    if (extra) { stderr.write(`mc: step add takes no ${extra}\n`); return 2; }
+    return addStep(scanned, { ...deps, env, stdout, stderr });
   }
   if (noun !== 'criterion' || (verb !== 'met' && verb !== 'unmet') || rest.length < 1 || rest.length > 2) {
     stderr.write(usage());
@@ -273,6 +281,138 @@ function addCriterion(scanned, deps) {
 }
 
 /**
+ * `mc project step add <project> <title> --model haiku|opus --done-when <text>
+ * --instruction-file <md> [--effort <level>] [--after <repo>:<project>]` —
+ * appends a step, after the others, to a draft or a sent plan. The model is the
+ * step's own (ruling 42), and `done_when` ends on a check, never on a person.
+ * The instruction is the markdown file's paragraphs. `--after` makes the step
+ * wait, `blocked` on that project, which `blockerDue` releases once it is done
+ * or archived; the project is looked up over every project mc knows.
+ */
+function addStep(scanned, deps) {
+  const { env, stdout, stderr } = deps;
+  const home = deps.home || programsHome(env);
+  const repos = deps.repos || defaultRepos(env);
+  const programs = deps.programs || (() => programsPlans({ home }));
+  const records = deps.listPlans || listPlans;
+  const archived = deps.listArchived || listArchived;
+  const { flags } = scanned;
+
+  const target = scanned.positional.slice(2);
+  if (target.length !== 2) { stderr.write(usage()); return 2; }
+  const [project, title] = target;
+  const { model, effort, after } = flags;
+  if (!MODELS.includes(model)) { stderr.write('mc: a step names --model haiku or opus (ruling 42) — no default\n'); return 2; }
+  if (effort !== null && !EFFORT_LEVELS.includes(effort)) {
+    stderr.write(`mc: --effort ${effort} is not one of ${EFFORT_LEVELS.join(', ')}\n`);
+    return 2;
+  }
+  const doneWhen = flags['done-when'];
+  if (doneWhen === null || doneWhen.trim() === '') { stderr.write('mc: a step needs --done-when "<check>" — when it is finished\n'); return 2; }
+  const path = flags['instruction-file'];
+  if (path === null) { stderr.write('mc: a step needs --instruction-file <md> — its instruction\n'); return 2; }
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    stderr.write(`mc: cannot read ${path}\n`);
+    return 2;
+  }
+
+  let waits = null;
+  if (after !== null) {
+    const [, repoName, name] = after.match(/^([^:]+):([^:]+)$/u) ?? [];
+    if (!repoName) { stderr.write(`mc: --after is <repo>:<project> — ${after} is not\n`); return 2; }
+    if (!repos.some((repo) => repo.name === repoName)) {
+      stderr.write(`mc: ${repoName} is not a repository mc knows — ${repos.map((repo) => repo.name).join(', ')}\n`);
+      return 2;
+    }
+    if (!NAME_RE.test(name)) { stderr.write(`mc: ${name} is not a project name — lower-case letters, digits and hyphens\n`); return 2; }
+    waits = { repo: repos.find((repo) => repo.name === repoName), name };
+  }
+
+  const paragraphs = instructionParagraphs(text);
+  const names = bannedWords(doneWhen);
+  if (names.length) { stderr.write(`mc: --done-when names ${names.join(', ')} — a step ends on a check, never on a person\n`); return 1; }
+  if (dependencyWords(doneWhen).length || paragraphs.some((paragraph) => dependencyWords(paragraph).length)) {
+    stderr.write('mc: a dependency goes in --after <repo>:<project>\n');
+    return 1;
+  }
+  if (paragraphs.length === 0) { stderr.write(`mc: ${path} has no paragraph\n`); return 1; }
+
+  const found = findProjectDir(home, project);
+  if (!found) { stderr.write(`mc: no project ${project} under ${home}\n`); return 1; }
+  if (waits) {
+    if (waits.name === project) { stderr.write(`mc: ${project} cannot wait on itself\n`); return 1; }
+    if (!knownProject(waits.repo, waits.name, { home, programs, records, archived })) {
+      stderr.write(`mc: ${after} is not a project mc knows — not under ~/mc/programs/, not on ${waits.repo.name}'s origin/main, not archived\n`);
+      return 1;
+    }
+  }
+
+  let outcome;
+  try {
+    outcome = withPlanLock(found.dir, () => {
+      const plan = readDraftOrPlan(found.file);
+      const steps = plan.steps;
+      if (!Array.isArray(steps)) return { problems: ['steps: a list of steps'] };
+      const key = stepKey({ title });
+      const same = steps.findIndex((step) => stepKey(step) === key);
+      if (same !== -1) return { refused: `step ${same + 1} is called that already` };
+      const step = {
+        title,
+        status: waits ? 'blocked' : 'ready',
+        done_when: doneWhen,
+        instruction: paragraphs,
+        runner: { model, ...(effort ? { effort } : {}) },
+      };
+      if (waits) step.blocked_by = { kind: 'project', name: waits.name };
+      plan.steps = [...steps, step];
+      const problems = found.sent ? validatePlan(plan).problems : draftProblems(plan);
+      if (problems.length) return { problems };
+      writePlanFile(found.file, plan);
+      const criteria = Array.isArray(plan.success_criteria) ? plan.success_criteria.length : 0;
+      return { number: plan.steps.length, sendable: !found.sent && criteria > 0 };
+    });
+  } catch (error) {
+    stderr.write(`mc: ${error?.message || error}\n`);
+    return 1;
+  }
+  if (outcome.refused) { stderr.write(`mc: ${outcome.refused}\n`); return 1; }
+  if (outcome.problems) {
+    for (const problem of outcome.problems) stderr.write(`mc: ${problem}\n`);
+    return 1;
+  }
+  stdout.write(`mc: ${project} step ${outcome.number} — ${title} (${model}${effort ? `, ${effort}` : ''})\n`);
+  if (waits) stdout.write(`  waits for ${after}\n`);
+  if (outcome.sendable) stdout.write(`next: mc project send ${project}\n`);
+  return 0;
+}
+
+/**
+ * Whether mc knows `name` as a project of `repo`, in any place a project is: a
+ * plan under `~/mc/programs/` that names `repo`, a draft that names it, a plan
+ * on the repository's origin/main, or its closeout there. Archived projects
+ * count — a step may wait on one that has already landed.
+ */
+function knownProject(repo, name, { home, programs, records, archived }) {
+  if (programs().some((plan) => plan.project === name && plan.repo === repo.name)) return true;
+  const draft = findProjectDir(home, name);
+  if (draft && !draft.sent && draftRepo(draft.file) === repo.name) return true;
+  if (records(repo).some((record) => record.project === name)) return true;
+  return archived(repo).includes(name);
+}
+
+/** The repository a draft names, or null when it names none or is not JSON. */
+function draftRepo(file) {
+  try {
+    return readDraftOrPlan(file).repo ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The first flag `scanned` was given that `allowed` does not name, with its
  * dashes, or null when every flag given is allowed. A repeatable flag counts as
  * given when its array is not empty.
@@ -369,6 +509,7 @@ export function usage() {
     'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json\n',
     '        mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft\'s goal, contract or out of scope\n',
     '        mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan\n',
+    '        mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
     '        mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
     '        mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold\n',
     '        the project defaults to MC_STEP\'s in a runner session\n',
