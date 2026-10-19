@@ -157,7 +157,7 @@ describe('mc merge --docs, the verb', () => {
       const asked = [];
       const criteriaDoor = async (options) => {
         asked.push(options);
-        return { checked: true, ok: false, unmet: [1], problems: ['step 2 is the plan\'s last, and success criterion 1 is not met on main'] };
+        return { checked: true, ok: false, unmet: [1], problems: ['step 2 is the plan\'s last, and success criterion 1 is not met — run its check and record it with mc project criterion met <project> 1, or add a step that does'] };
       };
       const { code, out, step, calls } = await landing({ branch: 'measure-3', criteriaDoor });
       assert.equal(code, 1);

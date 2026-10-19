@@ -37,6 +37,9 @@ import { readPlanText, unauthorisedChanges, unmetCriteria, unmetWords } from './
 import { stepForMerge } from './merge-step.js';
 import { projectForBranch } from './project-prs.js';
 import { stepOfPr } from './run-plan.js';
+import { applyEntry, readEntry } from './register.js';
+import { workRoot } from './paths.js';
+import { programsPlans } from './plan-source.js';
 
 function run(tool) {
   return (args, options = {}) => spawnSync(tool, args, { cwd: options.cwd, encoding: 'utf8' });
@@ -145,9 +148,15 @@ export async function planBoundary({ repoPath, pr, git, gh, from = null, index =
  * one the pull request is (`stepForMerge`); nobody's step is not checked.
  * Fails open like `planBoundary` on anything it cannot read.
  *
+ * `met` is the register's, not the file's (ruling 48): `mc project criterion
+ * met` writes it, and a pull request carries none to read. So the plan is
+ * judged as the base has it — a `~/mc/programs/` plan of the project first,
+ * else the repository's copy on `origin/<base>` — with the register's criteria
+ * laid over it. The pull request's own copy is never read.
+ *
  * `{ checked, ok, problems }`, and `unmet` (1-based) on a refusal.
  */
-export async function criteriaDoor({ repoPath, pr, git, gh, step = undefined, env = process.env, entries = [] } = {}) {
+export async function criteriaDoor({ repoPath, pr, git, gh, step = undefined, env = process.env, entries = [], root = workRoot(env), read, programs = programsPlans } = {}) {
   const askGit = git || run('git');
   const askGh = gh || run('gh');
 
@@ -168,23 +177,29 @@ export async function criteriaDoor({ repoPath, pr, git, gh, step = undefined, en
   if (tree?.status !== 0) return notChecked;
   const project = target.project || projectForBranch(head, names(tree.stdout));
   if (!project) return notChecked;
-  const path = String(tree.stdout || '').split('\n').find((p) => {
-    const parts = p.split('/');
-    return parts.length === 5 && parts[3] === project && parts[4] === 'PLAN.json';
-  });
-  if (!path) return notChecked;
-
-  const headShow = askGit(['show', `origin/${head}:${path}`], { cwd: repoPath });
-  if (headShow?.status !== 0) return notChecked;
-  const { plan } = readPlanText(headShow.stdout);
+  const shadow = programs().find((one) => one.project === project);
+  let text = shadow ? shadow.text : null;
+  if (text === null) {
+    const path = String(tree.stdout || '').split('\n').find((p) => {
+      const parts = p.split('/');
+      return parts.length === 5 && parts[3] === project && parts[4] === 'PLAN.json';
+    });
+    if (!path) return notChecked;
+    const onMain = askGit(['show', `origin/${base}:${path}`], { cwd: repoPath });
+    if (onMain?.status !== 0) return notChecked;
+    text = onMain.stdout;
+  }
+  const { plan } = readPlanText(text);
   if (!plan || !Array.isArray(plan.steps)) return notChecked;
   if (target.index !== plan.steps.length - 1) return { checked: true, ok: true, problems: [] };
-  const unmet = unmetCriteria(plan);
+  const entry = readEntry(root, project, read ? { read } : {});
+  const judged = entry ? applyEntry({ plan }, entry).plan : plan;
+  const unmet = unmetCriteria(judged);
   if (!unmet.length) return { checked: true, ok: true, problems: [] };
   return {
     checked: true,
     ok: false,
     unmet,
-    problems: [`step ${target.index + 1} is the plan's last, and ${unmetWords(unmet)} in this pull request — or mc step failed --reason "…" naming what could not be measured`],
+    problems: [`step ${target.index + 1} is the plan's last, and ${unmetWords(unmet)} — or mc step failed --reason "…" naming what could not be measured`],
   };
 }

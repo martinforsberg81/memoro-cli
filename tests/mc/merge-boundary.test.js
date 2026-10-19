@@ -228,19 +228,40 @@ it('the register\'s step index is the one judged, not the plan\'s first unfinish
   assert.equal(guessed.ok, false, 'without the index the plan names step 2 (index 1), and step 3\'s edit is a trespass');
 });
 
+/** No register and no programmes: the repository's copy on main is the plan the door reads. */
+const none = { root: '/r', programs: () => [], read: () => null };
+
 it('criteriaDoor refuses the last step while a criterion is unmet', async () => {
   const last = { project: 'step-lands-itself', index: 1 };
   const { git, gh } = tools({});
-  const refused = await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: last });
+  const refused = await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: last, ...none });
   assert.equal(refused.checked, true);
   assert.equal(refused.ok, false);
   assert.deepEqual(refused.unmet, [1]);
-  assert.ok(refused.problems[0].startsWith('step 2 is the plan\'s last, and success criterion 1 is not met on main'), refused.problems[0]);
+  assert.ok(refused.problems[0].startsWith('step 2 is the plan\'s last, and success criterion 1 is not met — run its check and record it with mc project criterion met'), refused.problems[0]);
 
-  const measured = tools({ head: plan({ success_criteria: [{ met: true, criterion: 'x', check: 'y' }] }) });
-  assert.deepEqual(await criteriaDoor({ repoPath: '/x', pr: 671, ...measured, step: last }), { checked: true, ok: true, problems: [] });
-  assert.deepEqual(await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: { ...last, index: 0 } }), { checked: true, ok: true, problems: [] }, 'not the last step');
-  assert.equal((await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: null })).checked, false, 'nobody\'s step');
+  const registered = JSON.stringify({ project: 'step-lands-itself', steps: [], criteria: [{ criterion: 'x', met: true, at: null }] });
+  const measured = { root: '/r', programs: () => [], read: () => registered };
+  assert.deepEqual(await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: last, ...measured }), { checked: true, ok: true, problems: [] }, 'the register holds it met');
+  assert.deepEqual(await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: { ...last, index: 0 }, ...none }), { checked: true, ok: true, problems: [] }, 'not the last step');
+  assert.equal((await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: null, ...none })).checked, false, 'nobody\'s step');
   const ghDown = () => ({ status: 1, stdout: '' });
-  assert.equal((await criteriaDoor({ repoPath: '/x', pr: 671, git, gh: ghDown, step: last })).checked, false, 'fails open');
+  assert.equal((await criteriaDoor({ repoPath: '/x', pr: 671, git, gh: ghDown, step: last, ...none })).checked, false, 'fails open');
+});
+
+it('criteriaDoor does not read the pull request\'s copy of met', async () => {
+  const last = { project: 'step-lands-itself', index: 1 };
+  const { git, gh } = tools({ head: plan({ success_criteria: [{ met: true, criterion: 'x', check: 'y' }] }) });
+  const refused = await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: last, ...none });
+  assert.equal(refused.ok, false, 'met true on the branch, no register entry: still refused');
+  assert.deepEqual(refused.unmet, [1]);
+});
+
+it('criteriaDoor judges the programmes copy over the repository\'s', async () => {
+  const last = { project: 'step-lands-itself', index: 1 };
+  const { git, gh } = tools({ tree: [], main: plan({ success_criteria: [{ met: true, criterion: 'x', check: 'y' }] }) });
+  const programmed = JSON.stringify(plan());
+  const judged = await criteriaDoor({ repoPath: '/x', pr: 671, git, gh, step: last, root: '/r', read: () => null, programs: () => [{ project: 'step-lands-itself', text: programmed }] });
+  assert.equal(judged.ok, false, 'the programmes copy, met false, is the one judged');
+  assert.deepEqual(judged.unmet, [1]);
 });

@@ -131,7 +131,7 @@ only for a genuine trespass or a head plan that no longer parses.
 every step is done and every success criterion is `met: true` (Martin,
 2026-10-18), and the last step is where it becomes done. So after the plan
 boundary, `criteriaDoor({ repoPath, pr, git, gh, step })` in the same file
-reads the head's `PLAN.json` and refuses the pull request of the plan's last
+reads the plan as the base has it (a `~/mc/programs/` plan first, else the repository's on `origin/<base>`) with the register's criteria laid over it, and refuses the pull request of the plan's last
 step while a criterion there is not `met: true`: `mc: unmet-criteria —
 <problem>` on stderr, exit 1, nothing queued. `mc merge` records it in
 `gate-rounds.jsonl` with `stopped_at: 'unmet-criteria'`. It is its own check,
@@ -144,7 +144,7 @@ of a session's open pull request (`landForSession`) asks it too, and a refusal
 there is the step's red, `ready` again with reason `unmet-criteria — …`. A
 pull request that is nobody's step, or any step but the last, passes; like the
 plan boundary it fails open on anything it cannot read. The session measures
-each criterion's `check` and sets `met: true`, or ends with `mc step failed`
+each criterion's `check` and records it with `mc project criterion met`, or ends with `mc step failed`
 naming what it could not measure.
 
 **Known gap:** the door checks one pull request. `mc merge <repo> <pr1>
