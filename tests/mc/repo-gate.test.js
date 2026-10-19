@@ -27,8 +27,9 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate, selectionState, suiteEnv, suiteTimeoutMs, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { gateRoot, runGate, selectionState, realTests, suiteEnv, suiteTimeoutMs, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
+import { tapTotals } from '../../src/mc/tap-red.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
 import { GATE_MEASUREMENT_VERSION, findGreen, findGreenForHead, greensPath, recordGreen, selectionHash } from '../../src/mc/gate-greens.js';
@@ -2769,4 +2770,33 @@ describe('the suite\'s environment and its time', () => {
   assert.equal(suiteTimeoutMs({ MC_GATE_SUITE_MINUTES: '0' }), 60 * 60_000);
   assert.equal(suiteTimeoutMs({ MC_GATE_SUITE_MINUTES: 'soon' }), 60 * 60_000);
 });
+});
+
+describe('the selected files run in their resource classes', () => {
+  it('realTests runs a classed file in its own process after the standard batch, as one result', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-batches-'));
+    try {
+      writeFileSync(join(dir, 'a.test.js'), "import { test } from 'node:test'; test('a', () => {});\n");
+      writeFileSync(join(dir, 'db.test.js'), "import { test } from 'node:test'; test('db', () => { throw new Error('no'); });\n");
+      const run = await realTests({ cwd: dir, files: ['a.test.js', 'db.test.js'], flags: ['--no-warnings'], env: { PATH: process.env.PATH }, classes: { 'db.test.js': 'sqlite' }, lanes: 2 });
+      const totals = tapTotals(run.tap);
+      assert.equal(totals.runs, 2, 'two processes, two summaries');
+      assert.equal(totals.tests, 2);
+      assert.equal(totals.fail, 1);
+      assert.notEqual(run.code, 0, 'the red batch\'s exit is the result\'s');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('testBatches: standard first at the lanes, then sqlite and heavy one file at a time', () => {
+    const files = ['a.test.js', 'db.test.js', 'b.test.js', 'build.test.js', 'odd.test.js'];
+    const classes = { 'db.test.js': 'sqlite', 'build.test.js': 'heavy', 'odd.test.js': 'mystery' };
+    assert.deepEqual(testBatches(files, classes, 4), [
+      { files: ['a.test.js', 'b.test.js', 'odd.test.js'], lanes: 4 },
+      { files: ['db.test.js'], lanes: 1 },
+      { files: ['build.test.js'], lanes: 1 },
+    ]);
+    assert.deepEqual(testBatches(['a.test.js'], {}, 3), [{ files: ['a.test.js'], lanes: 3 }]);
+    assert.deepEqual(testBatches(['db.test.js'], { 'db.test.js': 'sqlite' }, 3), [{ files: ['db.test.js'], lanes: 1 }]);
+    assert.deepEqual(testBatches([], {}, 3), []);
+  });
 });

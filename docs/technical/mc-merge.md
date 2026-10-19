@@ -398,7 +398,10 @@ exactly as it always did.
 `--test-concurrency=<testLanes()>`: `cores - 1 - round(loadavg()[0])`, between 2
 and `cores - 1`, or `MC_TEST_LANES` — unless the repository's own flags already
 name a concurrency. On 2026-10-19 rounds ran 7 lanes at load averages of 40–97
-on eight cores, and the whole-tree readers went red only under load. A session's
+on eight cores, and the whole-tree readers went red only under load. And the
+selector's `resourceClasses` are honoured (`testBatches`): a file classed `sqlite`
+or `heavy` runs after the standard batch, one at a time, in its own `node --test`
+— as memoro's own runner runs it — and the batches' TAP is read as one run. A session's
 `mc gate` also waits while a merge round holds the heavy lane (`MERGE_MODE` in
 `HEAVY_HOLD_MODES`, `await-deploy.js`), as it waits for a deploy: a verdict is
 expensive to repeat, a session's gate is cheap to delay. A gate already running

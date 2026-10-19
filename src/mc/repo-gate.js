@@ -200,7 +200,11 @@ export async function runGate({
   const askGit = git || run('git');
   const askGh = gh || run('gh');
   const runSuite = suite || ((options) => realSuite({ ...options, env }));
-  const runTests = tests || ((options) => realTests({ ...options, env }));
+  // The selector's resource classes, once the round has read them: a file
+  // classed `sqlite` or `heavy` runs alone after the standard batch, as
+  // memoro's own runner runs it (gate-round-under-load, item 6).
+  let fileClasses = {};
+  const runTests = tests || ((options) => realTests({ ...options, env, classes: fileClasses }));
   const runShell = gateShell || commandShell;
 
   const numbers = (Array.isArray(prs) && prs.length ? prs : [pr]).filter((n) => n !== null && n !== undefined).map(Number);
@@ -833,6 +837,7 @@ export async function runGate({
         command: declared.declaration.select, cwd: headDir, env, say,
       }));
       if (!selection.ok) return finish('selection', selection.reason);
+      fileClasses = selection.classes || {};
       report.selection = {
         command: declared.declaration.select,
         files: selection.files.length,
@@ -1333,7 +1338,12 @@ async function selectFiles({ command, cwd, env, say }) {
 
   say(`selection read from ${command}${full ? ' — it fell back to the whole suite' : ''}`
     + (commands.length ? `, with ${commands.length} command gate${commands.length === 1 ? '' : 's'}: ${commands.map((entry) => entry.packageScript).join(', ')}` : ''));
-  return { ok: true, files: clean, commands, full, why: parsed?.why ?? null, hash: selectionHash(parsed) };
+  // The lane each file runs in, as the selector classifies it (memoro's
+  // `resourceClasses`: standard, sqlite, heavy). Absent, every file is standard.
+  const classes = plainObject(parsed?.resourceClasses)
+    ? Object.fromEntries(Object.entries(parsed.resourceClasses).filter(([, value]) => typeof value === 'string'))
+    : {};
+  return { ok: true, files: clean, commands, full, why: parsed?.why ?? null, hash: selectionHash(parsed), classes };
 }
 
 /** More delta paths than this and the selector is not asked: the command line would be the risk. */
@@ -2060,7 +2070,54 @@ function stopAfter(child, ms, onStop) {
   return () => clearTimeout(timer);
 }
 
-function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }) } = {}) {
+const plainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+/** The resource classes that run one file at a time, after the standard batch, in this order. */
+export const EXCLUSIVE_CLASSES = Object.freeze(['sqlite', 'heavy']);
+
+/**
+ * The selected files split by resource class: `[{ files, lanes }]`, the
+ * standard batch first at `lanes`, then each of `EXCLUSIVE_CLASSES` at one
+ * file at a time. A file with no class, or one mc does not know, is standard.
+ * Before 2026-10-19 the round ran every selected file in one `node --test` at
+ * the core count, so memoro's `sqlite` and `heavy` files — exclusive for
+ * correctness in its own runner — ran beside six others.
+ */
+export function testBatches(files, classes = {}, lanes = 1) {
+  const exclusive = new Set(EXCLUSIVE_CLASSES);
+  const standard = files.filter((file) => !exclusive.has(classes[file]));
+  return [
+    ...(standard.length ? [{ files: standard, lanes }] : []),
+    ...EXCLUSIVE_CLASSES
+      .map((name) => files.filter((file) => classes[file] === name))
+      .filter((batch) => batch.length)
+      .map((batch) => ({ files: batch, lanes: 1 })),
+  ];
+}
+
+/**
+ * The selected files, run in their batches one after another (`testBatches`),
+ * as one result: the TAP of each batch in order (`tapTotals` adds up one
+ * summary per process), the first non-zero exit, and the time budget shared.
+ */
+export async function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {} } = {}) {
+  const batches = testBatches(files, classes, lanes);
+  if (batches.length <= 1) return runTestBatch({ cwd, files, flags, onLine, env, timeoutMs, lanes: batches[0]?.lanes ?? lanes });
+  const started = Date.now();
+  let tap = '';
+  let code = 0;
+  for (const batch of batches) {
+    const left = timeoutMs - (Date.now() - started);
+    const ran = await runTestBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes });
+    tap += ran.tap;
+    if (ran.error) return { code: -1, tap, error: ran.error };
+    if (!code && ran.code) code = ran.code;
+    if (ran.timedOut) return { code, tap, timedOut: true, timeoutMs };
+  }
+  return { code, tap, timedOut: false, timeoutMs, lanes };
+}
+
+function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }) } = {}) {
   return new Promise((resolve) => {
     const clean = suiteEnv(env);
     const inherited = String(clean.NODE_OPTIONS || '')
