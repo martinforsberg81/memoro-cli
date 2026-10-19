@@ -37,8 +37,9 @@ import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { defaultRepos, listProposals, planFields, proposalSystem } from './brief-collect.js';
+import { defaultRepos, listProposals, planRecords, proposalSystem } from './brief-collect.js';
 import { intakeArchiveDir, intakeDir, proposalsDir } from './helper-collect.js';
+import { lsTreeArgs, plansInTree } from './plan-source.js';
 import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
@@ -180,9 +181,20 @@ export async function helperGround({ env = process.env, repos = defaultRepos(env
   const plans = [];
   const notes = [];
   for (const repo of present) {
-    const listed = await listPlansOnMain(repo, git);
-    if (listed === null) notes.push(`${repo.name}: could not list plans on origin/main`);
-    else plans.push(...listed);
+    const tree = await git(repo.path, lsTreeArgs());
+    if (tree == null) {
+      notes.push(`${repo.name}: could not list plans on origin/main`);
+      continue;
+    }
+    // `listPlans` reads the same trees with a synchronous git; the helper's git
+    // is async, so the plans of each checkout are read side by side here.
+    const entries = plansInTree(tree);
+    const bodies = await Promise.all(entries.map((entry) => git(repo.path, ['show', `origin/main:${entry.path}`])));
+    const texts = new Map(entries.map((entry, i) => [entry.path, bodies[i] || '']));
+    const records = planRecords(repo.name, entries, (path) => texts.get(path) || '');
+    plans.push(...records.map((r) => ({
+      repo: r.repo, programme: r.programme, project: r.project, path: r.path, status: r.status ?? null, next: r.next ?? null,
+    })));
   }
   let projectLog = null;
   for (const repo of present) {
@@ -191,29 +203,6 @@ export async function helperGround({ env = process.env, repos = defaultRepos(env
   }
   if (!projectLog) notes.push(`no ${PROJECT_LOG} on origin/main in ${present.map((r) => r.name).join(', ') || 'any checkout'}`);
   return { plans, projectLog, notes };
-}
-
-/**
- * `listPlans` in brief-collect.js reads the same trees with a synchronous
- * git; the helper's git is async so the two checkouts are read side by side,
- * which is the whole reason this walks the tree itself.
- */
-async function listPlansOnMain(repo, git) {
-  const tree = await git(repo.path, ['ls-tree', '-r', '--name-only', 'origin/main', '--', 'docs/project']);
-  if (tree == null) return null;
-  const paths = tree.split('\n').filter((path) => {
-    const parts = path.split('/');
-    return parts.length === 5 && parts[4] === 'PLAN.md';
-  });
-  const texts = await Promise.all(paths.map((path) => git(repo.path, ['show', `origin/main:${path}`])));
-  return paths.map((path, i) => {
-    const parts = path.split('/');
-    const fields = planFields(texts[i] || '');
-    return {
-      repo: repo.name, programme: parts[2], project: parts[3], path,
-      status: fields.status ?? null, next: fields.next ?? null,
-    };
-  });
 }
 
 /**

@@ -20,6 +20,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { planSummary, readPlanText } from './plan-schema.js';
+import { PLAN_FILE, PROJECT_DIR, lsTreeArgs, plansInTree } from './plan-source.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -117,7 +118,7 @@ export function parsePlanFrontmatter(text) {
  * place the next piece of that work belongs (`mc plan`).
  */
 export function listProgrammes(repo, { ref = 'origin/main', git = runGit } = {}) {
-  const tree = git(repo.path, ['ls-tree', '-d', '--name-only', ref, 'docs/project/']);
+  const tree = git(repo.path, ['ls-tree', '-d', '--name-only', ref, `${PROJECT_DIR}/`]);
   if (tree == null) return [];
   return tree.split('\n')
     .map((path) => path.split('/')[2])
@@ -126,42 +127,46 @@ export function listProgrammes(repo, { ref = 'origin/main', git = runGit } = {})
 }
 
 /**
- * `docs/project/<programme>/<project>/PLAN.md` on a ref of one repository,
- * read without a checkout: one `ls-tree` for the names and one
- * `cat-file --batch` for every plan's text. `git` and `batch` are both
- * injectable so a caller with its own git — the runner — and the tests can
- * stay off the real one; `showBatch` turns such a git into a batch reader.
+ * The plans of one repository on a ref, read without a checkout: one
+ * `ls-tree` for the names and one `cat-file --batch` for every plan's text.
+ * The layout is plan-source's; the records are `planRecords`'s. `git` and
+ * `batch` are both injectable so a caller with its own git — the runner — and
+ * the tests can stay off the real one; `showBatch` turns such a git into a
+ * batch reader.
  */
 export function listPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch } = {}) {
-  const tree = git(repo.path, ['ls-tree', '-r', '--name-only', ref, '--', 'docs/project']);
+  const tree = git(repo.path, lsTreeArgs(ref));
   if (tree == null) return [];
-  const paths = tree.split('\n').filter((path) => {
-    const parts = path.split('/');
-    return parts.length === 5 && (parts[4] === 'PLAN.json' || parts[4] === 'PLAN.md');
-  });
-  const texts = batch(repo.path, paths.map((path) => `${ref}:${path}`));
+  const entries = plansInTree(tree);
+  const texts = batch(repo.path, entries.map((e) => `${ref}:${e.path}`));
+  return planRecords(repo.name, entries, (path) => texts.get(`${ref}:${path}`) || '');
+}
 
-  // One project, one plan. Both files can exist while a project is being
-  // migrated; the JSON is the plan and the markdown is what it was.
+/**
+ * The records `listPlans` returns, built from plan-source's entries and a
+ * reader of their text: one record a project, `{ repo, programme, project,
+ * path, legacy, plan, problems, …planSummary(plan) }`. One project, one plan.
+ * Both files can exist while a project is being migrated; the JSON is the plan
+ * and the markdown is what it was.
+ */
+export function planRecords(repoName, entries, textOf) {
   const byProject = new Map();
-  for (const path of paths) {
-    const parts = path.split('/');
-    const project = parts[3];
-    const json = parts[4] === 'PLAN.json';
-    const held = byProject.get(project);
+  for (const entry of entries) {
+    const json = entry.file === PLAN_FILE;
+    const held = byProject.get(entry.project);
     if (held && !json) continue;
-    const text = texts.get(`${ref}:${path}`) || '';
-    const base = { repo: repo.name, programme: parts[2], project, path };
+    const text = textOf(entry.path);
+    const base = { repo: repoName, programme: entry.programme, project: entry.project, path: entry.path };
     if (!json) {
       // A PLAN.md is not a plan the runner can read. It keeps its frontmatter
       // status so `mc status` can still show what the project was, and carries
       // `legacy` so the queue leaves it alone rather than skipping it, loudly,
       // once per project per round.
-      byProject.set(project, { ...base, legacy: true, plan: null, problems: [], ...parsePlanFrontmatter(text) });
+      byProject.set(entry.project, { ...base, legacy: true, plan: null, problems: [], ...parsePlanFrontmatter(text) });
       continue;
     }
     const { plan, problems } = readPlanText(text);
-    byProject.set(project, {
+    byProject.set(entry.project, {
       ...base,
       legacy: false,
       plan,
