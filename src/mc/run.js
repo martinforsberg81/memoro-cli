@@ -119,7 +119,8 @@ import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collec
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker } from './docker.js';
-import { deliverableStep, readPlanText, unauthorisedChanges } from './plan-schema.js';
+import { deliverableStep, unauthorisedChanges } from './plan-schema.js';
+import { planIn } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
 import { releaseDue } from './step-release.js';
@@ -1047,23 +1048,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * 2026-09-08.
    */
   function planOf(worktree, name) {
-    const base = join(worktree, 'docs', 'project');
-    for (const programme of deps.list(base)) {
-      const dir = join(base, programme, name);
-      const path = join(dir, 'PLAN.json');
-      if (deps.exists(path)) {
-        const text = deps.read(path) || '';
-        const { plan, problems } = readPlanText(text);
-        return { path, programme, text, plan, problems, legacy: false };
-      }
-      // A project still on the old file is reported as what it is. The runner
-      // reads PLAN.json and nothing else; guessing at markdown is what let a
-      // plan missing the sections the role names be handed out anyway.
-      if (deps.exists(join(dir, 'PLAN.md'))) {
-        return { path: join(dir, 'PLAN.md'), programme, text: '', plan: null, problems: [], legacy: true };
-      }
-    }
-    return null;
+    return planIn(worktree, name, { list: deps.list, exists: deps.exists, read: deps.read });
   }
 
   /** memoro | memoro-cli | null — an existing workarea first, then the main trees. */

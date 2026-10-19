@@ -38,6 +38,7 @@ import { closeoutPath } from './closeout.js';
 import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js';
 import { log } from './logger.js';
 import { PLAN_HOME, STEP_HOME, WORK_HOME, mcHome, runnerDir, workRoot } from './paths.js';
+import { lsTreeArgs, planPath } from './plan-source.js';
 import { listEntries, registerPath } from './register.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { serversFor } from './test-environment.js';
@@ -162,7 +163,7 @@ export function gatherTidyFacts({
   // that cannot answer stops every purge this run.
   const main = new Map();
   for (const repo of repos) {
-    const tree = git(repo.path, ['ls-tree', '-r', '--name-only', 'origin/main', '--', 'docs/project']);
+    const tree = git(repo.path, lsTreeArgs());
     const text = git(repo.path, ['show', 'origin/main:docs/project/project_log.md']);
     if (tree == null || text == null) { facts.git_error = `${repo.name} could not say what origin/main holds`; continue; }
     main.set(repo.name, { tree: new Set(tree.split('\n').filter(Boolean)), rows: logRows(text) });
@@ -185,7 +186,7 @@ export function gatherTidyFacts({
       if (repo) {
         item.in_log = repo.rows.some((row) => row.project === entry.project
           && (!row.programme || !entry.programme || row.programme === entry.programme));
-        const planDir = entry.plan ? dirname(entry.plan) : `docs/project/${entry.programme}/${entry.project}`;
+        const planDir = entry.plan ? dirname(entry.plan) : dirname(planPath(entry.programme, entry.project));
         item.plan_on_main = [...repo.tree].some((path) => path.startsWith(`${planDir}/`));
         item.closeout_on_main = Boolean(entry.programme) && repo.tree.has(closeoutPath(entry.programme, entry.project));
       } else if (!facts.git_error) {

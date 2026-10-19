@@ -27,6 +27,7 @@ import { mergesPath, parseQueue, queueOrder } from './merge-queue.js';
 import { runningMerges } from './merges-collect.js';
 import { ageWords } from './page-cache.js';
 import { planSummary, readPlanText } from './plan-schema.js';
+import { findPlan } from './plan-source.js';
 import { stepAreaName, workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
 import { overlayPlans } from './register.js';
@@ -205,39 +206,9 @@ function execAsync(cmd, args, opts = {}) {
   });
 }
 
-/** Every project with a plan in an `ls-tree` of `docs/project` on origin/main. */
-function names(tree) {
-  return (tree || '').split('\n')
-    .map((p) => p.split('/'))
-    .filter((parts) => parts.length === 5 && parts[4] === 'PLAN.json')
-    .map((parts) => parts[3]);
-}
-
-/** The plan on origin/main, if the project has one there. */
+/** The plan on origin/main, if the project has one there: `findPlan` with this file's git. */
 export function findMainPlan(repos, name, { git = runGit } = {}) {
-  for (const repo of repos) {
-    if (!existsSync(join(repo.path, '.git'))) continue;
-    const tree = git(repo.path, ['ls-tree', '-r', '--name-only', 'origin/main', '--', 'docs/project']);
-    if (tree == null) continue;
-    const path = tree.split('\n').find((p) => {
-      const parts = p.split('/');
-      return parts.length === 5 && parts[3] === name && parts[4] === 'PLAN.json';
-    });
-    if (path) {
-      return {
-        repo: repo.name,
-        path: repo.path,
-        programme: path.split('/')[2],
-        plan: path,
-        text: git(repo.path, ['show', `origin/main:${path}`]) || '',
-        // Every project of this repository, because a pull request is matched
-        // to a project by the longest name its branch begins with — without
-        // the siblings, `mc-cut-2` would read as `mc`'s (project-prs.js).
-        names: names(tree),
-      };
-    }
-  }
-  return null;
+  return findPlan(repos, name, { git });
 }
 
 /**
