@@ -10,6 +10,8 @@
  *   mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan
  *   mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]
  *                                                                 add a step, after the others, to a draft or a sent plan
+ *   mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
+ *                                                                 change the named fields of a step, of a draft or of a sent plan that has not started
  *   mc project criterion met [<project>] <n>     record that success criterion <n> holds
  *   mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold
  *   mc project import [--apply]                  copy every plan on origin/main that is not under ~/mc/programs/ there
@@ -33,6 +35,7 @@ import { scanArgs } from './flags.js';
 const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope'];
 const EDIT_FLAGS = ['--goal', '--contract', '--out-of-scope'];
 const STEP_ADD_FLAGS = ['--model', '--effort', '--done-when', '--instruction-file', '--after'];
+const STEP_EDIT_FLAGS = ['--title', '--model', '--effort', '--done-when', '--instruction-file'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -76,6 +79,11 @@ export async function run(argv, deps = {}) {
     const extra = onlyFlags(scanned, STEP_ADD_FLAGS);
     if (extra) { stderr.write(`mc: step add takes no ${extra}\n`); return 2; }
     return addStep(scanned, { ...deps, env, stdout, stderr });
+  }
+  if (noun === 'step' && verb === 'edit') {
+    const extra = onlyFlags(scanned, STEP_EDIT_FLAGS);
+    if (extra) { stderr.write(`mc: step edit takes no ${extra}\n`); return 2; }
+    return editStep(scanned, { ...deps, env, stdout, stderr, root, io });
   }
   if (noun !== 'criterion' || (verb !== 'met' && verb !== 'unmet') || rest.length < 1 || rest.length > 2) {
     stderr.write(usage());
@@ -302,22 +310,15 @@ function addStep(scanned, deps) {
   if (target.length !== 2) { stderr.write(usage()); return 2; }
   const [project, title] = target;
   const { model, effort, after } = flags;
-  if (!MODELS.includes(model)) { stderr.write('mc: a step names --model haiku or opus (ruling 42) — no default\n'); return 2; }
-  if (effort !== null && !EFFORT_LEVELS.includes(effort)) {
-    stderr.write(`mc: --effort ${effort} is not one of ${EFFORT_LEVELS.join(', ')}\n`);
-    return 2;
-  }
+  const modelIssue = modelProblem(model) ?? effortProblem(effort);
+  if (modelIssue) { stderr.write(`mc: ${modelIssue}\n`); return 2; }
   const doneWhen = flags['done-when'];
-  if (doneWhen === null || doneWhen.trim() === '') { stderr.write('mc: a step needs --done-when "<check>" — when it is finished\n'); return 2; }
+  const doneWhenIssue = doneWhenProblem(doneWhen);
+  if (doneWhenIssue) { stderr.write(`mc: ${doneWhenIssue.message}\n`); return doneWhenIssue.code; }
   const path = flags['instruction-file'];
   if (path === null) { stderr.write('mc: a step needs --instruction-file <md> — its instruction\n'); return 2; }
-  let text;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch {
-    stderr.write(`mc: cannot read ${path}\n`);
-    return 2;
-  }
+  const paragraphs = instructionOfFile(path);
+  if (paragraphs === null) { stderr.write(`mc: cannot read ${path}\n`); return 2; }
 
   let waits = null;
   if (after !== null) {
@@ -331,14 +332,8 @@ function addStep(scanned, deps) {
     waits = { repo: repos.find((repo) => repo.name === repoName), name };
   }
 
-  const paragraphs = instructionParagraphs(text);
-  const names = bannedWords(doneWhen);
-  if (names.length) { stderr.write(`mc: --done-when names ${names.join(', ')} — a step ends on a check, never on a person\n`); return 1; }
-  if (dependencyWords(doneWhen).length || paragraphs.some((paragraph) => dependencyWords(paragraph).length)) {
-    stderr.write('mc: a dependency goes in --after <repo>:<project>\n');
-    return 1;
-  }
-  if (paragraphs.length === 0) { stderr.write(`mc: ${path} has no paragraph\n`); return 1; }
+  const paragraphsIssue = paragraphsProblem(paragraphs, path);
+  if (paragraphsIssue) { stderr.write(`mc: ${paragraphsIssue}\n`); return 1; }
 
   const found = findProjectDir(home, project);
   if (!found) { stderr.write(`mc: no project ${project} under ${home}\n`); return 1; }
@@ -387,6 +382,143 @@ function addStep(scanned, deps) {
   if (waits) stdout.write(`  waits for ${after}\n`);
   if (outcome.sendable) stdout.write(`next: mc project send ${project}\n`);
   return 0;
+}
+
+/**
+ * `mc project step edit <project> <n> [--title …] [--model …] [--effort …]
+ * [--done-when …] [--instruction-file <md>]` — changes the fields given, and only
+ * those, of step `n` (1-based). Each is checked as `step add` checks it. A draft's
+ * steps are all editable. A sent plan's step is frozen once it has started (the
+ * register holds it at a status other than `ready`, or with a pull request), and
+ * a project mc does not hold is exit 1. Changing a ready step's title is a rename
+ * the register already follows: `reconcileEntry` carries its state by position.
+ */
+function editStep(scanned, deps) {
+  const { env, stdout, stderr, root, io } = deps;
+  const home = deps.home || programsHome(env);
+  const { flags } = scanned;
+
+  const target = scanned.positional.slice(2);
+  if (target.length !== 2) { stderr.write(usage()); return 2; }
+  const [project, number] = target;
+  const { title, model, effort } = flags;
+  const doneWhen = flags['done-when'];
+  const path = flags['instruction-file'];
+  const given = { title: title !== null, model: model !== null, effort: effort !== null, done_when: doneWhen !== null, instruction: path !== null };
+  const changed = Object.keys(given).filter((field) => given[field]);
+  if (changed.length === 0) { stderr.write('mc: step edit needs --title, --model, --effort, --done-when or --instruction-file\n'); return 2; }
+  if (!/^\d+$/u.test(number) || Number(number) < 1) { stderr.write(`mc: ${number} is not a step number — 1 is the plan's first\n`); return 2; }
+  const n = Number(number);
+
+  const issue = (model !== null ? modelProblem(model) : null) ?? effortProblem(effort);
+  if (issue) { stderr.write(`mc: ${issue}\n`); return 2; }
+  const doneWhenIssue = doneWhen !== null ? doneWhenProblem(doneWhen) : null;
+  if (doneWhenIssue) { stderr.write(`mc: ${doneWhenIssue.message}\n`); return doneWhenIssue.code; }
+  let paragraphs = null;
+  if (path !== null) {
+    paragraphs = instructionOfFile(path);
+    if (paragraphs === null) { stderr.write(`mc: cannot read ${path}\n`); return 2; }
+    const paragraphsIssue = paragraphsProblem(paragraphs, path);
+    if (paragraphsIssue) { stderr.write(`mc: ${paragraphsIssue}\n`); return 1; }
+  }
+
+  const found = findProjectDir(home, project);
+  if (!found) { stderr.write(`mc: no project ${project} under ${home}\n`); return 1; }
+
+  let outcome;
+  try {
+    outcome = withPlanLock(found.dir, () => {
+      const plan = readDraftOrPlan(found.file);
+      const steps = plan.steps;
+      if (!Array.isArray(steps)) return { problems: ['steps: a list of steps'] };
+      if (n > steps.length) return { outOfRange: `${project} has ${steps.length} step${steps.length === 1 ? '' : 's'} — step ${n} is not one` };
+      if (found.sent) {
+        const started = startedAs(readEntry(root, project, io), n);
+        if (started) return { frozen: `step ${n} of ${project} is ${started} — a step that has started is frozen` };
+      }
+      const index = n - 1;
+      if (title !== null) {
+        const key = stepKey({ title });
+        const same = steps.findIndex((other, i) => i !== index && stepKey(other) === key);
+        if (same !== -1) return { refused: `step ${same + 1} is called that already` };
+      }
+      const step = steps[index];
+      const edited = { ...step };
+      if (title !== null) edited.title = title;
+      if (doneWhen !== null) edited.done_when = doneWhen;
+      if (paragraphs !== null) edited.instruction = paragraphs;
+      if (model !== null || effort !== null) {
+        edited.runner = { ...step.runner, ...(model !== null ? { model } : {}), ...(effort !== null ? { effort } : {}) };
+      }
+      plan.steps = steps.map((other, i) => (i === index ? edited : other));
+      const problems = found.sent ? validatePlan(plan).problems : draftProblems(plan);
+      if (problems.length) return { problems };
+      writePlanFile(found.file, plan);
+      return {};
+    });
+  } catch (error) {
+    stderr.write(`mc: ${error?.message || error}\n`);
+    return 1;
+  }
+  if (outcome.outOfRange) { stderr.write(`mc: ${outcome.outOfRange}\n`); return 2; }
+  const refusal = outcome.frozen ?? outcome.refused;
+  if (refusal) { stderr.write(`mc: ${refusal}\n`); return 1; }
+  if (outcome.problems) {
+    for (const problem of outcome.problems) stderr.write(`mc: ${problem}\n`);
+    return 1;
+  }
+  stdout.write(`mc: ${project} step ${n} — ${changed.join(', ')}\n`);
+  return 0;
+}
+
+/** What is wrong with a step's model, or null: a step names haiku or opus (ruling 42), so `step add` and `step edit` refuse any other. */
+function modelProblem(model) {
+  return MODELS.includes(model) ? null : 'a step names --model haiku or opus (ruling 42) — no default';
+}
+
+/** What is wrong with a step's effort, or null: none is fine, and otherwise it is one of `EFFORT_LEVELS`. */
+function effortProblem(effort) {
+  return effort === null || EFFORT_LEVELS.includes(effort) ? null : `--effort ${effort} is not one of ${EFFORT_LEVELS.join(', ')}`;
+}
+
+/**
+ * What is wrong with a step's `done-when`, as `{ code, message }`, or null. Blank
+ * is missing (exit 2); a person named, or a dependency written in it, is exit 1,
+ * since a step ends on a check and waits on `--after`.
+ */
+function doneWhenProblem(doneWhen) {
+  if (doneWhen === null || doneWhen.trim() === '') return { code: 2, message: 'a step needs --done-when "<check>" — when it is finished' };
+  const names = bannedWords(doneWhen);
+  if (names.length) return { code: 1, message: `--done-when names ${names.join(', ')} — a step ends on a check, never on a person` };
+  if (dependencyWords(doneWhen).length) return { code: 1, message: 'a dependency goes in --after <repo>:<project>' };
+  return null;
+}
+
+/** What is wrong with a step's instruction paragraphs, or null: a dependency in prose, or none at all. */
+function paragraphsProblem(paragraphs, path) {
+  if (paragraphs.some((paragraph) => dependencyWords(paragraph).length)) return 'a dependency goes in --after <repo>:<project>';
+  if (paragraphs.length === 0) return `${path} has no paragraph`;
+  return null;
+}
+
+/** The paragraphs of the markdown instruction file at `path`, or null when it cannot be read. */
+function instructionOfFile(path) {
+  try {
+    return instructionParagraphs(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How step `n` has started, as the register holds it, or null while it has not:
+ * a step has started once its status is anything but `ready`, or it has a pull
+ * request. No entry in the register is no step started.
+ */
+function startedAs(entry, n) {
+  const state = entry?.steps?.[n - 1];
+  if (!state || (state.status === 'ready' && !state.pr)) return null;
+  return state.pr ? `${state.status} (PR #${state.pr})` : state.status;
 }
 
 /**
@@ -510,6 +642,7 @@ export function usage() {
     '        mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft\'s goal, contract or out of scope\n',
     '        mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan\n',
     '        mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
+    '        mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
     '        mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
     '        mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold\n',
     '        the project defaults to MC_STEP\'s in a runner session\n',
