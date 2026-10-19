@@ -2416,7 +2416,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // where it *stands* laid over it for the choice — and only for the
     // choice: the prompt quotes the file, and the boundary check after the
     // session compares the file the session was handed with the one it left,
-    // so a register state on some other step must not read as an edit.
+    // so a register state on some other step must not read as an edit. The
+    // criteria's `met` is the exception: the prompt quotes the register's, since
+    // that is where it is written.
     const standing = (found) => {
       const entry = found?.plan ? readEntry(root, name, { read: deps.read }) : null;
       return entry ? applyEntry({ ...found, project: name }, entry) : found;
@@ -2478,9 +2480,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // A fresh session on an interrupted step is told what the one before it
     // left, and only when it is that step it is handed.
     const interrupted = fresh && fresh.index === choice.index ? handoverOf(worktree, name, fresh, wip) : null;
+    const handed = { ...plan.plan, success_criteria: standing(plan).plan?.success_criteria ?? plan.plan.success_criteria };
     const prompt = resuming
       ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
-      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: plan.plan, step: choice.step, index: choice.index, conflicts, retry, interrupted, stacked, now });
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, interrupted, stacked, now });
     // Haiku workers (`runner.subagents: on`): the role is told how to use
     // them through the same include the role files use for a shared passage.
     const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));

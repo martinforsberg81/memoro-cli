@@ -735,7 +735,7 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.equal(call.timeoutMs, undefined);
   assert.equal(call.checkInMs, 60 * 60_000);
   assert.equal(call.stallMs, 20 * 60_000);
-  assert.match(call.checkIn(60, 1), /running for 60 minutes \(this is check-in number 1\)[\s\S]*"name": "alpha-check-in"/u);
+  assert.match(call.checkIn(60, 1), /running for 60 minutes \(this is check-in number 1\)[\s\S]*mc step blocked --on alpha-check-in --reason/u);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: check-in 1 at 60 min/u);
   call.onSleep(26);
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: machine slept 26 min — stall guard re-armed/u);
