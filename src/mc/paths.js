@@ -187,6 +187,17 @@ export function workHome(env = process.env) {
 }
 
 /**
+ * `~/mc/programs/` — mc's programmes, projects and plans:
+ * `programs/<programme>/<project>/PLAN.json` (ruling 48). A plan here shadows a
+ * plan of the same name in a repository, and names its repository in `repo`.
+ */
+export const PROGRAMS_HOME = 'programs';
+
+export function programsHome(env = process.env) {
+  return join(workRoot(env), PROGRAMS_HOME);
+}
+
+/**
  * The area name — its path relative to the work root — of a project's runner
  * area: `<project>` when `<root>/<project>` already holds a checkout (an area
  * from before `step/`, stepped and closed where it stands), else
@@ -243,7 +254,7 @@ export function sessionName(areaName) {
  * work-area.js). Dot-directories are left out by the caller.
  */
 export const STATE_HOMES = new Set([
-  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, 'gate', 'gate-cache', 'brief', 'proposals', 'intake',
+  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, 'gate', 'gate-cache', 'brief', 'proposals', 'intake',
   'node_modules', 'bin', 'npm', 'status', 'helper', 'pm',
 ]);
 

@@ -63,6 +63,16 @@ describe('the plan schema', () => {
     assert.deepEqual(validatePlan(plan()), { ok: true, problems: [] });
   });
 
+  it('takes a repo naming the repository a programs plan runs in, and refuses one that is not a name', () => {
+    assert.deepEqual(validatePlan(plan({ repo: 'memoro-cli' })), { ok: true, problems: [] });
+    assert.deepEqual(validatePlan(plan({ repo: 'Not a name' })).problems, [
+      'repo: the repository the steps run in, by name — memoro or memoro-cli',
+    ]);
+    assert.deepEqual(validatePlan(plan({ repo: 3 })).problems, [
+      'repo: the repository the steps run in, by name — memoro or memoro-cli',
+    ]);
+  });
+
   it('reports every fault at once, because the caller is deciding whether to spend a session', () => {
     const { ok, problems } = validatePlan(plan({ goal: [], contract: [], out_of_scope: [] }));
     assert.equal(ok, false);
