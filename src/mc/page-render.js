@@ -1454,6 +1454,28 @@ function mcLine(lines, c, wide, mc, caches, version) {
   ]), room), null);
 }
 
+/**
+ * The container runtime, one line above the MC line, from the state file alone
+ * (`dockerSection`): up or stopped, the live leases, the images, and when the
+ * idle stop comes. A file more than an hour old says how old it is, since
+ * nothing has written it since. Nothing is drawn when there is no file.
+ */
+function dockerLine(lines, c, wide, docker) {
+  if (!docker) return;
+  const leases = docker.leases || [];
+  const n = leases.length;
+  const kind = docker.kind === 'desktop' ? 'docker desktop' : docker.kind === 'none' ? 'not installed' : docker.kind;
+  const parts = ['docker', `${kind} ${docker.up ? 'up' : 'stopped'}`];
+  if (docker.up) {
+    parts.push(`${n} lease${n === 1 ? '' : 's'}${n ? ` (${leases[0].run || `pid ${leases[0].pid}`}${n > 1 ? ', …' : ''})` : ''}`);
+  }
+  if (docker.images != null) parts.push(`${docker.images} images`);
+  if (docker.idle_stop_seconds > 0) parts.push(`idle stop in ${Math.ceil(docker.idle_stop_seconds / 60)} min`);
+  else if (docker.idle_stop_seconds === 0) parts.push('idle stop due');
+  if (docker.as_of_seconds > 3600) parts.push(`as of ${ageWords(docker.as_of_seconds)}`);
+  say(lines, c, wide, 2, parts.join(' · '));
+}
+
 /* ------------------------------------------------------------------- page */
 
 /**
@@ -1525,6 +1547,7 @@ export function renderPageLines(data, {
   if (languageLines(lines, c, wide, data.language, at)) lines.push('');
   checksLines(lines, c, wide, data.checks);
   lines.push('');
+  dockerLine(lines, c, wide, data.docker);
   mcLine(lines, c, wide, data.mc, data.caches, version);
   for (const note of data.notes || []) {
     // How old the PR cache is was the page's last line, every time, and it was

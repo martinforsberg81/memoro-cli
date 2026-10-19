@@ -134,6 +134,24 @@ nightly behind it. The runner says one `docker: …` line when the sweep did
 something, and a sweep that throws is one `docker: sweep failed — <reason>`
 line; the pass goes on.
 
+## On the page
+
+The page's docker line (`dockerLine`, `page-render.js`) is drawn from
+`~/.memoro/mc/docker/state.json` alone, never from a command: a `docker` call
+would start OrbStack. It sits directly above the MC line, and it is absent when
+the file is. Its parts, in order:
+
+    docker · orbstack up · 1 lease (merge #13803) · 10 images · idle stop in 8 min
+
+- `docker · <kind> up|stopped` — `orbstack`, `docker desktop` or `not installed`.
+  A stopped runtime is that one short line, and the leases are left out.
+- `N lease(s) (<run, or pid N>, …)` — live leases only: a lease whose pid is gone
+  is not counted, whatever the file says (`dockerSection` filters by `pidAlive`).
+- `N images` — the count from `docker system df`, as of the last write.
+- `idle stop in N min`, or `idle stop due` once the grace has passed — only while
+  mc started the runtime and nothing holds it.
+- `as of 2 h` — once the file is more than an hour old.
+
 ## Why
 
 On 2026-10-18 memoro's gate `sql:reference:postgres` exited 69 ('no Docker

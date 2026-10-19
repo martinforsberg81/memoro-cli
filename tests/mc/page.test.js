@@ -13,7 +13,7 @@ import { parseRuns } from '../../src/mc/brief-collect.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { mcHome } from '../../src/mc/paths.js';
 import {
-  attachPrs, checksSection, collectPage, countNewErrors, intakeSection, mergesSection, newErrorLines, nextSection,
+  attachPrs, checksSection, collectPage, countNewErrors, dockerSection, intakeSection, mergesSection, newErrorLines, nextSection,
   prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
 } from '../../src/mc/page-collect.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
@@ -608,6 +608,72 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
       { manifest: 'sv-forms-cutover', act: 'purge-wiktionary-forms', says: 'sv has no forms', started: undefined },
     );
     assert.match(renderPage(data, { columns: 120, now: NOW }), /^ {2}language: sv-forms-cutover stopped after purge-wiktionary-forms — sv has no forms · mc language resume$/mu);
+  });
+});
+
+describe('DOCKER — one line from the state file', () => {
+  const STATE = {
+    at: NOW.toISOString(),
+    runtime: { kind: 'orbstack', up: true },
+    leases: [{ pid: 95259, run: 'merge #13803', repo: 'memoro' }, { pid: 41100, run: 'gate x', repo: 'x' }],
+    inventory: { df: { images: { count: 10 } } },
+    idle_stop: null,
+  };
+  const dockerRows = (lines) => lines.filter((line) => /^\s+docker ·/u.test(line)).map((line) => line.trimEnd());
+
+  it('is not drawn when there is no state file', () => {
+    const lines = renderPageLines(pageData(), { columns: 120, now: NOW });
+    assert.deepEqual(dockerRows(lines), []);
+    assert.deepEqual(renderPageLines(pageData({ docker: null }), { columns: 120, now: NOW }), lines,
+      'a page with no docker reading draws the same lines as one without the key');
+  });
+
+  it('draws the runtime, the live lease, the images and the idle stop', () => {
+    const docker = dockerSection({ state: STATE, now: NOW, alive: (pid) => pid === 95259 });
+    assert.equal(docker.leases.length, 1, 'the lease whose pid is gone is not held');
+    const lines = renderPageLines(pageData({ docker }), { columns: 120, now: NOW });
+    assert.deepEqual(dockerRows(lines), ['  docker · orbstack up · 1 lease (merge #13803) · 10 images']);
+  });
+
+  it('an idle runtime mc started says when it stops', () => {
+    const idle = { ...STATE, leases: [], idle_stop: new Date(NOW.getTime() + 8 * 60_000).toISOString() };
+    const docker = dockerSection({ state: idle, now: NOW, alive: () => false });
+    assert.equal(docker.idle_stop_seconds, 480);
+    const lines = renderPageLines(pageData({ docker }), { columns: 120, now: NOW });
+    assert.deepEqual(dockerRows(lines), ['  docker · orbstack up · 0 leases · 10 images · idle stop in 8 min']);
+  });
+
+  it('a stopped runtime is one short line', () => {
+    const stopped = { at: NOW.toISOString(), runtime: { kind: 'orbstack', up: false }, leases: [] };
+    const docker = dockerSection({ state: stopped, now: NOW, alive: () => false });
+    const lines = renderPageLines(pageData({ docker }), { columns: 120, now: NOW });
+    assert.deepEqual(dockerRows(lines), ['  docker · orbstack stopped']);
+  });
+
+  it('is gathered from the state file, offline, and runs no docker call', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-docker-'));
+    const env = { MC_WORK_ROOT: root, MC_HOME: root };
+    mkdirSync(join(root, 'docker'), { recursive: true });
+    writeFileSync(join(root, 'docker', 'state.json'), JSON.stringify(STATE));
+    const calls = [];
+
+    const data = await collectPage({
+      env,
+      now: NOW,
+      repos: [],
+      offline: true,
+      exec: async () => ({ ok: false, stdout: '' }),
+      run: (cmd) => { calls.push(cmd); return { status: 1, stdout: '' }; },
+      git: () => null,
+      checkout: null,
+      cache: {
+        loadPlans: () => ({ plans: [], sources: [] }),
+        loadPrs: () => ({ prs: [], fetched: null, age_seconds: null }),
+        savePrs: () => { throw new Error('savePrs on the offline page'); },
+      },
+    });
+    assert.equal(data.docker.kind, 'orbstack');
+    assert.deepEqual(calls.filter((cmd) => cmd === 'docker' || cmd === 'orbctl'), []);
   });
 });
 

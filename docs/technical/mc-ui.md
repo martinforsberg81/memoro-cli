@@ -53,7 +53,7 @@ MERGES, DEPLOY, LANGUAGE and the MC line are the short end of the page, a few
 rows that are always within reach of the prompt. One line can come above all
 of them: while a language run has stopped inside an `opens_gap` window it
 reads, in red, `language: <manifest> stopped after <act> — <says> · mc language
-resume`. It goes there because while it shows, production is missing data.
+resume`. It goes there because while it shows, production is missing data. One more line sits directly above the MC line, `docker · …`, drawn only while `~/.memoro/mc/docker/state.json` exists and from that file alone (`dockerLine`, page-render.js).
 The live loop rewrites rows where they stand (`page-frame.js`), and a row that
 has scrolled off the top cannot be written to — which is what
 [*a status that changed out of reach*](#a-status-that-changed-out-of-reach)
@@ -305,6 +305,7 @@ the helper and the sessions already write.
 | the round landing right now | `~/.memoro/mc/gate-running.json` (pid, repo slug, pr, mode, since, phase, phase_at), joined to a name through `repos` and to a holder through the repository's lease | `mc merge`/`mc test`, for the length of the round (`runningMerge`, `merges-collect.js`) |
 | the head of the order | `~/mc/queue.md` — the rest of NEXT is the plans themselves | Martin, at the brief |
 | what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
+| the container runtime | `~/.memoro/mc/docker/state.json` (runtime, leases, started_by_mc, last_release_at, inventory, idle_stop) | `mc docker`, `ensure`/`release`, the runner's Docker sweep |
 | what mc deployed | `~/mc/runner/log/deploys.tsv` (sha, build, holder, outcome, the live version verified) | `mc deploy`, before and after |
 | what production answers it is | `~/mc/runner/version.json` (`GET /api/version`, with the moment it was asked) | `mc helper --collect` |
 | someone is sitting here | `tmux ls`, `~/mc/runner/foreground/<pid>.json` | tmux, `foreground.js` |
