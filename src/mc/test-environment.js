@@ -32,7 +32,7 @@ import { join, resolve } from 'node:path';
 import { getSecret, setSecret, deleteSecret } from '../lib/keychain.js';
 import { defaultRepos } from './brief-collect.js';
 import {
-  admit, holdersText, listServers, processCwd, refusalText, stopServer, strayCwd,
+  admit, holdersText, listServers, processCwd, refusalText, stopServer, strayCwd, touchServer,
 } from './dev-servers.js';
 import { log } from './logger.js';
 
@@ -354,7 +354,10 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     replacedHung = running.instance_id;
   } else if (running) {
     const stale = builtFromMoved(running, worktree, deps) || editedSince(running, worktree, deps);
-    if (!stale) return { ok: true, server: running, started: false };
+    if (!stale) {
+      (deps.touchServer || touchServer)(running.instance_id, root ? { root } : {});
+      return { ok: true, server: running, started: false };
+    }
     // The server is alive and it is this worktree's, and it is serving a tree
     // that is no longer here. Stopped through its own stop command, like
     // `--stop` would, and started again below.
@@ -383,6 +386,9 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       service: start.service,
       worktree,
       waitSeconds: deps.admitWaitSeconds ?? 900,
+      // mc's own shot or suite may stop a holder mc has not used for half an
+      // hour (`admit`); a server started by hand asks through `mc dev admit`, which never does.
+      evict: true,
       root,
       sleep,
       now,
@@ -420,6 +426,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
   const readyBy = now() + readyMs;
   while (now() < readyBy) {
     if (await answers(server, { fetch: fetchImpl, attempts: 1 })) {
+      (deps.touchServer || touchServer)(server.instance_id, root ? { root } : {});
       return {
         ok: true, server, started: true, service: start.service, profile: start.profile, restartedFrom, replacedHung,
       };

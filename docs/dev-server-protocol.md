@@ -232,7 +232,7 @@ cap is `MC_DEV_MAX_SERVERS`, default 2. Memory is asked first:
 the sysctl is missing the memory check is skipped (`free_percent: null`).
 
 `--wait` polls every ten seconds and says who holds the slots once a minute
-(on stderr with `--json`). Nothing already running is stopped to make room. A
+(on stderr with `--json`). `mc dev admit` stops nothing to make room. A
 refusal that ends a wait is logged as `dev-server-refused`, an admission that
 had to wait as `dev-server-admitted` with `waited_s`.
 
@@ -241,6 +241,17 @@ the waiting line — and starts the project's command with `MC_DEV_ADMITTED=1`
 in its environment, so a wrapper that asks for itself when started by hand
 knows it has already been admitted. A profile whose `resource_class` is `light`
 does not ask, since it would not count once running.
+
+`mc test dev` and `mc shot dev` (through `ensureAppServer`) also make room: a
+holder mc has not used for `MC_DEV_HOLDER_STALE_MINUTES` (default 30) is
+stopped through its own `control.stop` command, oldest use first, each tried
+once, and logged as `dev-server-stopped` with `reason: 'stale-holder'` (or
+`dev-server-evict-failed`). Use is mc's, not the server's traffic: every reuse
+and every fresh start writes `last_used_at` on mc's copy of the manifest
+(`touchServer`), and a re-registration keeps it. A browser tab left open on a
+measure server kept it busy for two hours on 2026-10-19, so its own idle clock
+never ran out while three shots waited fifteen minutes each behind it.
+`mc dev admit` never stops anything.
 
 ## When mc stops a server
 

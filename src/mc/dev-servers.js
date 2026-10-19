@@ -177,10 +177,28 @@ export function registerManifest(sourcePath, { root = devServersRoot(), now = ()
     source_manifest_path: path,
     registered_at: text(existing?.registered_at) || stamp,
     updated_at: stamp,
+    // mc's own last use survives a re-registration: a restart is not a use.
+    ...(text(existing?.last_used_at) ? { last_used_at: existing.last_used_at } : {}),
   };
   mkdirSync(root, { recursive: true, mode: 0o700 });
   writeJsonAtomic(target, record);
   return { ok: true, instance_id: manifest.instance_id, path: target, replaced: Boolean(existing) };
+}
+
+/**
+ * Record that mc used a server just now: `last_used_at` on mc's copy. What
+ * makes a holder stale is mc's use, not the server's traffic — a browser tab
+ * left open on a measure server touched it every minute for two hours on
+ * 2026-10-19, its own idle clock never ran out, and two step sessions were
+ * refused a slot behind it. Quiet when the record is gone: a server that left
+ * has nothing to record.
+ */
+export function touchServer(instanceId, { root = devServersRoot(), now = () => new Date() } = {}) {
+  const target = registeredPath(instanceId, root);
+  const record = readJson(target);
+  if (!record) return false;
+  writeJsonAtomic(target, { ...record, last_used_at: now().toISOString() });
+  return true;
 }
 
 /**
@@ -271,6 +289,21 @@ export function listServers({ root = devServersRoot(), reap = true, now = () => 
 export const DEFAULT_MAX_SERVERS = 2;
 export const DEFAULT_MIN_FREE_PERCENT = 15;
 
+/**
+ * How long a holder may go unused by mc before an admission that needs its
+ * slot stops it (`MC_DEV_HOLDER_STALE_MINUTES`).
+ */
+export const DEFAULT_HOLDER_STALE_MINUTES = 30;
+
+/** When mc last used a server: `last_used_at`, else when it was registered or started. */
+export function lastUsedAt(server) {
+  for (const key of ['last_used_at', 'registered_at', 'started_at']) {
+    const at = Date.parse(server?.[key] ?? '');
+    if (Number.isFinite(at)) return at;
+  }
+  return null;
+}
+
 /** How often a waiting admission looks again, and how often it says so. */
 const ADMIT_POLL_MS = 10_000;
 const ADMIT_SAY_MS = 60_000;
@@ -287,8 +320,12 @@ const ADMIT_SAY_MS = 60_000;
  * *and* service does not count, because a restart replaces itself. Memory is
  * asked first — a machine already short is refused whatever the count — and a
  * `freePercent` of null (no sysctl) skips it rather than guessing.
+ *
+ * A refusal on the cap names the holders mc may stop to make room, oldest use
+ * first, in `evictable`: those mc last used before `staleBefore` (an epoch ms;
+ * null names none) and that declare a stop command. Never the asker's own.
  */
-export function admission({ servers, service, worktree, cap, minFreePercent, freePercent }) {
+export function admission({ servers, service, worktree, cap, minFreePercent, freePercent, staleBefore = null }) {
   const self = worktree ? resolve(worktree) : null;
   const holders = (servers || [])
     .filter((server) => server.live !== false
@@ -305,7 +342,17 @@ export function admission({ servers, service, worktree, cap, minFreePercent, fre
   if (free !== null && free < minFreePercent) {
     return { ok: false, reason: 'memory', holders, free_percent: free, cap };
   }
-  if (holders.length >= cap) return { ok: false, reason: 'cap', holders, free_percent: free, cap };
+  if (holders.length >= cap) {
+    const evictable = Number.isFinite(staleBefore)
+      ? (servers || [])
+        .filter((server) => holders.some((holder) => holder.instance_id === server.instance_id))
+        .filter((server) => Array.isArray(server.control?.stop?.argv) && server.control.stop.argv.length)
+        .filter((server) => { const at = lastUsedAt(server); return at !== null && at < staleBefore; })
+        .sort((a, b) => lastUsedAt(a) - lastUsedAt(b))
+        .map((server) => server.instance_id)
+      : [];
+    return { ok: false, reason: 'cap', holders, free_percent: free, cap, ...(evictable.length ? { evictable } : {}) };
+  }
   return { ok: true };
 }
 
@@ -324,13 +371,18 @@ export function freeMemoryPercent(run = spawnSync) {
 /**
  * Ask, and wait up to `waitSeconds` for a yes.
  *
- * Nothing already running is stopped to make room: the wait is for a holder to
- * leave by itself. The registry is read afresh on every turn, through
- * `listServers`, so a holder that died is swept rather than waited for.
+ * The registry is read afresh on every turn, through `listServers`, so a
+ * holder that died is swept rather than waited for. With `evict`, a holder mc
+ * has not used for `MC_DEV_HOLDER_STALE_MINUTES` (30) is stopped through its
+ * own stop command to make room, one at a time, each tried once; without it
+ * nothing running is stopped and the wait is for a holder to leave by itself.
+ * Before 2026-10-19 nothing was ever stopped, and a measure server kept alive
+ * by a forgotten browser tab held a slot for two hours while `mc shot dev`
+ * waited out its fifteen minutes three times.
  */
 export async function admit({
   service, worktree, waitSeconds = 0, env = process.env, root, sleep, now, onWaiting,
-  freeMemory = freeMemoryPercent, logEvent = log,
+  freeMemory = freeMemoryPercent, logEvent = log, evict = false, stop = stopServer,
 } = {}) {
   const clock = now || (() => Date.now());
   const pause = sleep || ((ms) => new Promise((done) => { setTimeout(done, ms); }));
@@ -338,12 +390,32 @@ export async function admit({
   const minFreePercent = minFreePercentOf(env);
   const startedAt = clock();
   const deadline = startedAt + Math.max(0, Number(waitSeconds) || 0) * 1000;
+  const staleMs = (Number(env.MC_DEV_HOLDER_STALE_MINUTES) || DEFAULT_HOLDER_STALE_MINUTES) * 60_000;
+  const tried = new Set();
   let said = null;
   for (;;) {
     const { servers } = listServers(root ? { root } : {});
     const verdict = admission({
-      servers, service, worktree, cap, minFreePercent, freePercent: freeMemory(),
+      servers, service, worktree, cap, minFreePercent, freePercent: freeMemory(), staleBefore: evict ? clock() - staleMs : null,
     });
+    const victim = (verdict.evictable || []).find((id) => !tried.has(id));
+    if (victim) {
+      tried.add(victim);
+      const server = servers.find((item) => item.instance_id === victim);
+      const stopped = stop(server);
+      logEvent(stopped.ok ? 'dev-server-stopped' : 'dev-server-evict-failed', {
+        instance_id: victim,
+        reason: 'stale-holder',
+        service: server.service ?? null,
+        worktree_path: server.worktree_path ?? null,
+        unused_s: Math.round((clock() - lastUsedAt(server)) / 1000),
+        for_worktree: worktree,
+        ...(stopped.ok ? {} : { error: stopped.error }),
+      });
+      // Its wrapper unregisters on the way out; the next turn reads that.
+      if (stopped.ok) await pause(ADMIT_POLL_MS);
+      continue;
+    }
     if (verdict.ok) {
       if (said !== null) {
         logEvent('dev-server-admitted', {

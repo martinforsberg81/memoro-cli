@@ -19,7 +19,7 @@ import { describe, it } from 'node:test';
 
 import {
   admission, admit, checkManifest, freeMemoryPercent, listServers, processCwd, registerManifest, serversUnder,
-  stopServersUnder, strayCwd, unregisterManifest,
+  stopServersUnder, strayCwd, touchServer, unregisterManifest,
 } from '../../src/mc/dev-servers.js';
 import { run } from '../../src/mc/commands/dev.js';
 import { setLogPath } from '../../src/mc/logger.js';
@@ -333,6 +333,17 @@ describe('admission — may one more server start', () => {
     assert.deepEqual(Object.keys(verdict.holders[0]).sort(), ['instance_id', 'service', 'started_at', 'url', 'worktree_path']);
   });
 
+  it('names the holders mc may stop, oldest use first, only past staleBefore and only with a stop command', () => {
+    const stop = { control: { stop: { argv: ['node', 'dev.mjs', '--stop'] } } };
+    const verdict = ask([
+      live('measure-a', '/w/a', { ...stop, last_used_at: '2026-10-19T19:30:00.000Z' }),
+      live('measure-b', '/w/b', { ...stop, last_used_at: '2026-10-19T19:00:00.000Z' }),
+      live('measure-c', '/w/c', { last_used_at: '2026-10-19T18:00:00.000Z' }),
+    ], { cap: 3, staleBefore: Date.parse('2026-10-19T19:45:00Z') });
+    assert.deepEqual(verdict.evictable, ['measure-b', 'measure-a'], 'c declares no stop command');
+    assert.equal(ask([live('measure-a', '/w/a', stop), live('measure-b', '/w/b', stop)]).evictable, undefined, 'no staleBefore names none');
+  });
+
   it('a light server does not count', () => {
     assert.deepEqual(ask([live('static-a', '/w/a', { resource_class: 'light' }), live('measure-b', '/w/b')]), { ok: true });
   });
@@ -427,6 +438,81 @@ describe('admit — waiting for a slot', () => {
         service: 'memoro-measure', worktree_path: '/w/third', reason: 'cap', holders: ['measure-a', 'measure-b'], free_percent: null,
       },
     }]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('with evict, stops the holder mc has used least, past the stale age, and is admitted', async () => {
+    const root = scratch();
+    register(root, '/w/a', 'measure-a');
+    register(root, '/w/b', 'measure-b');
+    touchServer('measure-a', { root, now: () => new Date('2026-10-19T19:00:00Z') });
+    touchServer('measure-b', { root, now: () => new Date('2026-10-19T19:50:00Z') });
+    const stopped = [];
+    const events = [];
+    let t = Date.parse('2026-10-19T20:00:00Z');
+    const verdict = await admit({
+      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 900, env: {}, root, evict: true,
+      now: () => t,
+      sleep: async (ms) => { t += ms; },
+      freeMemory: () => 50,
+      stop: (server) => { stopped.push(server.instance_id); rmSync(join(root, `${server.instance_id}.json`)); return { ok: true }; },
+      logEvent: (event, fields) => events.push({ event, fields }),
+    });
+    assert.deepEqual(verdict, { ok: true });
+    assert.deepEqual(stopped, ['measure-a'], 'only the one unused for an hour; b was used ten minutes ago');
+    assert.equal(events[0].event, 'dev-server-stopped');
+    assert.equal(events[0].fields.reason, 'stale-holder');
+    assert.equal(events[0].fields.unused_s, 3600);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('with evict, a holder that fails to stop is tried once and the wait goes on to its refusal', async () => {
+    const root = scratch();
+    register(root, '/w/a', 'measure-a');
+    register(root, '/w/b', 'measure-b');
+    let t = Date.parse('2026-10-19T20:00:00Z');
+    const stopped = [];
+    const events = [];
+    const verdict = await admit({
+      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 60, env: {}, root, evict: true,
+      now: () => t,
+      sleep: async (ms) => { t += ms; },
+      freeMemory: () => 50,
+      stop: (server) => { stopped.push(server.instance_id); return { ok: false, error: 'exited 1' }; },
+      logEvent: (event, fields) => events.push({ event, fields }),
+    });
+    assert.equal(verdict.reason, 'cap');
+    assert.deepEqual(stopped.sort(), ['measure-a', 'measure-b'], 'each holder once, never again');
+    assert.deepEqual(events.map((e) => e.event), ['dev-server-evict-failed', 'dev-server-evict-failed', 'dev-server-refused']);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('without evict, nothing is stopped however stale the holders are', async () => {
+    const root = scratch();
+    register(root, '/w/a', 'measure-a');
+    register(root, '/w/b', 'measure-b');
+    let t = Date.parse('2026-10-19T20:00:00Z');
+    const verdict = await admit({
+      service: 'memoro-measure', worktree: '/w/third', waitSeconds: 0, env: {}, root,
+      now: () => t, sleep: async (ms) => { t += ms; }, freeMemory: () => 50,
+      stop: () => { throw new Error('must not stop'); }, logEvent: () => {},
+    });
+    assert.equal(verdict.reason, 'cap');
+    assert.equal(verdict.evictable, undefined);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('touchServer records mc\'s use, and a re-registration keeps it', () => {
+    const root = scratch();
+    const worktree = join(root, 'wt');
+    const source = join(worktree, 'manifest.json');
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(source, JSON.stringify(manifest(worktree, { instance_id: 'measure-a' })));
+    assert.equal(registerManifest(source, { root }).ok, true);
+    assert.equal(touchServer('measure-a', { root, now: () => new Date('2026-10-19T19:00:00Z') }), true);
+    assert.equal(registerManifest(source, { root }).ok, true);
+    assert.equal(JSON.parse(readFileSync(join(root, 'measure-a.json'), 'utf8')).last_used_at, '2026-10-19T19:00:00.000Z');
+    assert.equal(touchServer('gone', { root }), false);
     rmSync(root, { recursive: true, force: true });
   });
 
