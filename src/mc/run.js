@@ -104,7 +104,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, statfsSync, writeFileSync, writeSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
@@ -1411,7 +1411,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    */
   async function archiveDone(repo, plans) {
     const none = { archived: [], landed: [] };
-    const done = donePlans(plans, repo.name);
+    // A plan under `~/mc/programs/` is archived by `mc project archive` (ruling 48,
+    // a later project), not here: its repository copy, if any, stays with it
+    // until then. Without this the archive would remove that copy, write a
+    // closeout from it, and find nothing to remove every round.
+    const done = donePlans(plans, repo.name).filter((plan) => !isAbsolute(plan.path || ''));
     const backfill = closeoutBackfill(repo, done);
     if (!done.length && !backfill.length) return none;
     const open = openArchivePr(repo);

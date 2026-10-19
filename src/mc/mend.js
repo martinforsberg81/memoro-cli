@@ -17,7 +17,7 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { runTool } from './child-async.js';
@@ -202,15 +202,23 @@ const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { 
 /** What a session's environment must not hand the mend: it is nobody's step session. */
 const SESSION_ENV = ['MC_STEP', 'MC_PROJECT', 'MC_REPO', 'MC_WORKAREA'];
 
-/** The step's own words from the plan on `origin/main`, or null. */
+/**
+ * The step's own words from the plan, or null: from disk when the register's
+ * plan is an absolute path (under `~/mc/programs/`), else from origin/main.
+ */
 async function stepOnMain(root, job, git, read) {
   if (!job.step) return null;
   const plan = readEntry(root, job.step.project, { read })?.plan;
   if (!plan) return null;
-  const shown = await git(job.repo_path, ['show', `origin/main:${plan}`]);
-  if (!shown.ok) return null;
+  let text = null;
+  if (isAbsolute(plan)) text = read(plan);
+  else {
+    const shown = await git(job.repo_path, ['show', `origin/main:${plan}`]);
+    if (shown.ok) text = shown.stdout;
+  }
+  if (text == null) return null;
   try {
-    const step = JSON.parse(shown.stdout)?.steps?.[job.step.index];
+    const step = JSON.parse(text)?.steps?.[job.step.index];
     return step ? { title: step.title ?? null, done_when: step.done_when ?? null, instruction: step.instruction ?? null } : null;
   } catch { return null; }
 }

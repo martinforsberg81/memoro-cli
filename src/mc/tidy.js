@@ -28,7 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import { logRows } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
@@ -186,8 +186,12 @@ export function gatherTidyFacts({
       if (repo) {
         item.in_log = repo.rows.some((row) => row.project === entry.project
           && (!row.programme || !entry.programme || row.programme === entry.programme));
-        const planDir = entry.plan ? dirname(entry.plan) : dirname(planPath(entry.programme, entry.project));
-        item.plan_on_main = [...repo.tree].some((path) => path.startsWith(`${planDir}/`));
+        // A plan under `~/mc/programs/` is a file on this machine, not a path in origin/main's tree.
+        if (isAbsolute(entry.plan || '')) item.plan_on_main = present(entry.plan);
+        else {
+          const planDir = entry.plan ? dirname(entry.plan) : dirname(planPath(entry.programme, entry.project));
+          item.plan_on_main = [...repo.tree].some((path) => path.startsWith(`${planDir}/`));
+        }
         item.closeout_on_main = Boolean(entry.programme) && repo.tree.has(closeoutPath(entry.programme, entry.project));
       } else if (!facts.git_error) {
         item.error = `its repository ${entry.repo || '(none)'} is not one tidy asks`;
