@@ -2181,7 +2181,9 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     const child = spawn(command, {
       cwd,
       shell: true,
-      env: { ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
+      // The lane count for a suite that runs its own runner (memoro's
+      // `runner.mjs` reads it); a caller that set one keeps it.
+      env: { MC_TEST_LANES: String(testLanes({ env })), ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
