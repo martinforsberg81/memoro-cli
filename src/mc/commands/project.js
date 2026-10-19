@@ -7,6 +7,7 @@
  *
  *   mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json
  *   mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft's goal, contract or out of scope
+ *   mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan
  *   mc project criterion met [<project>] <n>     record that success criterion <n> holds
  *   mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold
  *   mc project import [--apply]                  copy every plan on origin/main that is not under ~/mc/programs/ there
@@ -19,9 +20,9 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { defaultRepos, listArchived, listPlans, listRepoPlans } from '../brief-collect.js';
-import { NAME_RE, PLAN_SCHEMA, PLAN_VERSION, readPlanText } from '../plan-schema.js';
+import { NAME_RE, PLAN_SCHEMA, PLAN_VERSION, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
-import { DRAFT_FILE, draftProblems, findProjectDir, readDraftOrPlan, withPlanLock, writePlanFile } from '../plan-write.js';
+import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, readDraftOrPlan, withPlanLock, writePlanFile } from '../plan-write.js';
 import { parseStepEnv, readEntry, updateCriterion } from '../register.js';
 import { programsHome, workRoot } from '../paths.js';
 import { scanArgs } from './flags.js';
@@ -62,6 +63,11 @@ export async function run(argv, deps = {}) {
     const extra = onlyFlags(scanned, EDIT_FLAGS);
     if (extra) { stderr.write(`mc: edit takes no ${extra}\n`); return 2; }
     return editPlan(scanned, { ...deps, env, stdout, stderr });
+  }
+  if (noun === 'criterion' && verb === 'add') {
+    const extra = onlyFlags(scanned, ['--check']);
+    if (extra) { stderr.write(`mc: criterion add takes no ${extra}\n`); return 2; }
+    return addCriterion(scanned, { ...deps, env, stdout, stderr });
   }
   if (noun !== 'criterion' || (verb !== 'met' && verb !== 'unmet') || rest.length < 1 || rest.length > 2) {
     stderr.write(usage());
@@ -207,6 +213,66 @@ function editPlan(scanned, deps) {
 }
 
 /**
+ * `mc project criterion add <project> <text> --check <command>` — appends a
+ * success criterion, unmet, to a draft or to a sent plan. Its check is a command
+ * the last step runs, so a check that names a person is refused here, as is a
+ * dependency written in prose and a criterion whose text is already there. A
+ * draft's first criterion says which verb comes next.
+ */
+function addCriterion(scanned, deps) {
+  const { env, stdout, stderr } = deps;
+  const home = deps.home || programsHome(env);
+  const { flags } = scanned;
+
+  const target = scanned.positional.slice(2);
+  if (target.length !== 2) { stderr.write(usage()); return 2; }
+  const [project, text] = target;
+  const check = flags.check;
+  if (check === null || check.trim() === '') {
+    stderr.write('mc: a criterion needs --check "<command>" — the command that shows it holds\n');
+    return 2;
+  }
+  const names = bannedWords(check);
+  if (names.length) {
+    stderr.write(`mc: the check names ${names.join(', ')} — a check is a command the last step runs, never a person\n`);
+    return 1;
+  }
+  if (dependencyWords(text).length || dependencyWords(check).length) {
+    stderr.write('mc: a dependency goes in mc project step add … --after <repo>:<project>\n');
+    return 1;
+  }
+  const found = findProjectDir(home, project);
+  if (!found) { stderr.write(`mc: no project ${project} under ${home}\n`); return 1; }
+
+  let outcome;
+  try {
+    outcome = withPlanLock(found.dir, () => {
+      const plan = readDraftOrPlan(found.file);
+      const criteria = plan.success_criteria;
+      if (!Array.isArray(criteria)) return { problems: ['success_criteria: a list of criteria'] };
+      const same = criteria.findIndex((criterion) => criterion?.criterion === text);
+      if (same !== -1) return { refused: `${project} has that criterion already (${same + 1})` };
+      plan.success_criteria = [...criteria, { met: false, criterion: text, check }];
+      const problems = found.sent ? validatePlan(plan).problems : draftProblems(plan);
+      if (problems.length) return { problems };
+      writePlanFile(found.file, plan);
+      return { number: criteria.length + 1, first: !found.sent && criteria.length === 0 };
+    });
+  } catch (error) {
+    stderr.write(`mc: ${error?.message || error}\n`);
+    return 1;
+  }
+  if (outcome.refused) { stderr.write(`mc: ${outcome.refused}\n`); return 1; }
+  if (outcome.problems) {
+    for (const problem of outcome.problems) stderr.write(`mc: ${problem}\n`);
+    return 1;
+  }
+  stdout.write(`mc: ${project} criterion ${outcome.number} — ${text}\n`);
+  if (outcome.first) stdout.write(`next: mc project step add ${project} "<title>" --model haiku|opus --done-when "…" --instruction-file <md>\n`);
+  return 0;
+}
+
+/**
  * The first flag `scanned` was given that `allowed` does not name, with its
  * dashes, or null when every flag given is allowed. A repeatable flag counts as
  * given when its array is not empty.
@@ -302,6 +368,7 @@ export function usage() {
   return [
     'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json\n',
     '        mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft\'s goal, contract or out of scope\n',
+    '        mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan\n',
     '        mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
     '        mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold\n',
     '        the project defaults to MC_STEP\'s in a runner session\n',

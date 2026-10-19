@@ -371,3 +371,114 @@ test('import given a flag it does not take is refused, exit 2', async () => {
     assert.equal(f.err.join(''), 'mc: import takes no --goal\n');
   } finally { f.cleanup(); }
 });
+
+test('criterion add appends to a draft, in order, unmet, and names the next verb after the first', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    f.out.length = 0;
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It is tested.', '--check', 'node --test'], f.deps), 0);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.deepEqual(plan.success_criteria, [
+      { met: false, criterion: 'It runs.', check: 'npm test' },
+      { met: false, criterion: 'It is tested.', check: 'node --test' },
+    ]);
+    assert.deepEqual(draftProblems(plan), []);
+    assert.deepEqual(f.out, [
+      'mc: alpha criterion 1 — It runs.\n',
+      'next: mc project step add alpha "<title>" --model haiku|opus --done-when "…" --instruction-file <md>\n',
+      'mc: alpha criterion 2 — It is tested.\n',
+    ]);
+    assert.equal(f.err.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('criterion add to a sent plan keeps it valid, and prints no next line', async () => {
+  const f = draftFixture();
+  try {
+    const dir = join(f.home, 'mc', 'sent');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'PLAN.json'), `${JSON.stringify({ ...JSON.parse(repoPlan('sent')), repo: 'memoro-cli' }, null, 2)}\n`);
+    assert.equal(await run(['criterion', 'add', 'sent', 'Another one.', '--check', 'npm test'], f.deps), 0);
+    const text = readFileSync(join(dir, 'PLAN.json'), 'utf8');
+    assert.deepEqual(readPlanText(text).problems, []);
+    const written = JSON.parse(text);
+    assert.equal(written.success_criteria.length, 2);
+    assert.deepEqual(written.success_criteria[1], { met: false, criterion: 'Another one.', check: 'npm test' });
+    assert.deepEqual(f.out, ['mc: sent criterion 2 — Another one.\n']);
+  } finally { f.cleanup(); }
+});
+
+test('criterion add without --check is usage, exit 2, and the draft is untouched', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.'], f.deps), 2);
+    assert.equal(f.err.join(''), 'mc: a criterion needs --check "<command>" — the command that shows it holds\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('criterion add whose check names a person or says a check by hand is refused, exit 1, and the file is unchanged', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'Martin checks it'], f.deps), 1);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'run it by hand'], f.deps), 1);
+    assert.deepEqual(f.err, [
+      'mc: the check names Martin — a check is a command the last step runs, never a person\n',
+      'mc: the check names by hand — a check is a command the last step runs, never a person\n',
+    ]);
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('criterion add with a dependency in prose is refused, exit 1, in the text or the check', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs --on-project x', '--check', 'npm test'], f.deps), 1);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test --on-project x'], f.deps), 1);
+    assert.deepEqual(f.err, [
+      'mc: a dependency goes in mc project step add … --after <repo>:<project>\n',
+      'mc: a dependency goes in mc project step add … --after <repo>:<project>\n',
+    ]);
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('criterion add with the same text twice is refused, exit 1, and names the first', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'node --test'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha has that criterion already (1)\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('criterion add to a project mc does not hold is refused, exit 1', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(['criterion', 'add', 'nope', 'It runs.', '--check', 'npm test'], f.deps), 1);
+    assert.equal(f.err.join(''), `mc: no project nope under ${f.home}\n`);
+  } finally { f.cleanup(); }
+});
+
+test('criterion add given a flag it does not take, or without its text, is usage, exit 2', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test', '--goal', 'x'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: criterion add takes no --goal\n');
+    assert.equal(await run(['criterion', 'add', 'alpha', '--check', 'npm test'], f.deps), 2);
+    assert.match(f.err.at(-1), /^usage/u);
+    assert.deepEqual(JSON.parse(readFileSync(f.draft('alpha'), 'utf8')).success_criteria, []);
+  } finally { f.cleanup(); }
+});
