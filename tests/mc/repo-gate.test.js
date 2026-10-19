@@ -27,7 +27,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate, selectionState, suiteEnv, suiteTimeoutMs, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { gateRoot, runGate, selectionState, suiteEnv, suiteTimeoutMs, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { recordRound } from '../../src/mc/repo-round-log.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
@@ -1817,21 +1817,47 @@ describe('a repository that selects by diff', () => {
      * quiet run on the base is not enough; the files run alone on the
      * candidate too.
      */
-    it('red in the round, green alone on the base and on the candidate: red-under-load', async () => {
+    it('red in the round, green alone on the base and on the candidate: counted green, and the round goes on', async () => {
       const { gitAlso, tests } = onMain({ redAt: {}, round: [own] });
       const fx = selecting({ files: [own, scanner], gitAlso });
       const said = [];
       try {
         const report = await fx.report({ tests, onProgress: (line) => said.push(line) });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.deepEqual(report.green_alone, { files: [own], names: [`a test in ${own}`] });
+        assert.deepEqual(report.under_load_files, [own]);
+        assert.deepEqual(report.head_alone, { red: [] });
+        assert.deepEqual(report.candidate.red, [], 'not counted as the candidate\'s red');
+        assert.ok(said.some((line) => /the red files pass on the base — running them alone on the candidate/u.test(line)));
+        assert.ok(said.includes(`counted green — ${own} passed alone on the base and the candidate`));
+        assert.ok(!said.some((line) => /this change broke them/u.test(line)));
+
+        recordRound(report, { root: fx.mcHome });
+        const line = JSON.parse(readFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), 'utf8').trim().split('\n').at(-1));
+        assert.deepEqual(line.green_alone, { files: [own], names: [`a test in ${own}`] });
+      } finally { fx.cleanup(); }
+    });
+
+    it('more than GREEN_ALONE_MAX files red only under load: the round stops red-under-load, as before', async () => {
+      const many = ['tests/m1.test.js', 'tests/m2.test.js', 'tests/m3.test.js', 'tests/m4.test.js'];
+      const { gitAlso, tests } = onMain({ redAt: {}, round: many });
+      const fx = selecting({ files: [...many, scanner], gitAlso });
+      try {
+        const report = await fx.report({ tests });
         assert.equal(report.ok, false);
         assert.equal(report.stopped_at, 'red-under-load');
-        assert.equal(report.verdict, 'stopped', 'never counted green, never the change\'s red');
-        assert.deepEqual(report.under_load_files, [own]);
-        assert.equal(report.reason, `${own} red in the round, green alone on the base and on the candidate — measured again`);
-        assert.deepEqual(report.head_alone, { red: [] });
-        assert.ok(said.some((line) => /the red files pass on the base — running them alone on the candidate/u.test(line)));
-        assert.ok(!said.some((line) => /this change broke them/u.test(line)));
+        assert.equal(report.verdict, 'stopped');
+        assert.deepEqual(report.under_load_files, many);
+        assert.equal(report.green_alone, undefined);
       } finally { fx.cleanup(); }
+    });
+
+    it('testLanes: the free cores, between 2 and cores - 1, or MC_TEST_LANES', () => {
+      assert.equal(testLanes({ cores: 8, load: 0, env: {} }), 7);
+      assert.equal(testLanes({ cores: 8, load: 3.4, env: {} }), 4);
+      assert.equal(testLanes({ cores: 8, load: 40, env: {} }), 2);
+      assert.equal(testLanes({ cores: 2, load: 9, env: {} }), 1);
+      assert.equal(testLanes({ cores: 8, load: 40, env: { MC_TEST_LANES: '5' } }), 5);
     });
 
     it('red alone on the candidate too: today\'s red, and the line says the change broke them', async () => {

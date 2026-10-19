@@ -131,6 +131,8 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     // alone on the candidate, and the files killed or wholly cancelled — so a
     // file that is red under load again and again is found from the log.
     under_load_files: report.under_load_files || gate?.under_load_files || null,
+    // Red in the round, green alone on both commits, and counted green (`GREEN_ALONE_MAX`).
+    green_alone: report.green_alone || gate?.green_alone || null,
     head_alone: report.head_alone || gate?.head_alone || null,
     killed_files: (report.killed_files || gate?.killed_files)?.length ? (report.killed_files || gate.killed_files) : null,
     cancelled_files: (report.cancelled_files || gate?.cancelled_files)?.length ? (report.cancelled_files || gate.cancelled_files) : null,

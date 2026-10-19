@@ -55,7 +55,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { deployHolding, IOS_BUILD_MODE } from '../await-deploy.js';
+import { deployHolding, IOS_BUILD_MODE, MERGE_MODE } from '../await-deploy.js';
 import { ensure, needsDocker } from '../docker.js';
 import { declaredTestFlags, planGate, recordLast, snapshotTree } from '../gate-fast.js';
 import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
@@ -164,7 +164,7 @@ export async function run(argv, deps = {}) {
 
   const deploying = io.deployHolding({ env });
   if (deploying) {
-    const what = deploying.mode === IOS_BUILD_MODE ? 'an iOS build' : 'a deploy';
+    const what = deploying.mode === IOS_BUILD_MODE ? 'an iOS build' : deploying.mode === MERGE_MODE ? 'a merge round' : 'a deploy';
     stderr.write(`mc: ${what} holds the heavy lane (pid ${deploying.pid}) — this gate starts its tests when it is done\n`);
   }
 

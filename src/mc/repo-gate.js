@@ -50,6 +50,7 @@
  * and so is any red the probe does not call main's.
  */
 import { spawn } from 'node:child_process';
+import { availableParallelism, loadavg } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
@@ -769,6 +770,18 @@ export async function runGate({
             if (ran.ok && !ran.red.length) {
               say('green alone on the candidate too — red only under load');
               report.under_load_files = [...result.red_files, ...cancelled];
+              // Green alone on both commits is the verdict the round exists
+              // for: the change did not break them (Martin, 2026-10-19). Up to
+              // GREEN_ALONE_MAX files they count green and the round goes on;
+              // more than that is a round that measured nothing, and stops.
+              if (report.under_load_files.length <= GREEN_ALONE_MAX) {
+                report.green_alone = { files: report.under_load_files, names: [...result.red] };
+                say(`counted green — ${report.under_load_files.join(', ')} passed alone on the base and the candidate`);
+                result.red = [];
+                result.red_files = [];
+                result.red_tests = [];
+                return null;
+              }
               return finish('red-under-load', underLoadReason({ alone: result.red_files, cancelled }));
             }
             say(ran.ok ? 'red alone on the candidate too — this change broke them'
@@ -1992,6 +2005,27 @@ function nodeTestFlags(cwd) {
  * stopped here never prints its summary, so the round stops on it rather than
  * counting it red (`measure`, `measureSelected`).
  */
+/**
+ * The most files a round counts green because they passed alone on the base
+ * and on the candidate after being red in it (`green_alone`). More than that,
+ * and the round stops `red-under-load` as before.
+ */
+export const GREEN_ALONE_MAX = 3;
+
+/**
+ * How many test files a selected run takes at once: the free cores, not the
+ * core count. `cores - 1 - round(load1)`, between 2 and `cores - 1`; a round
+ * started at load 40 on eight cores runs 2, not 7, and stops starving the
+ * whole-tree readers that went red only under load (gate-round-under-load).
+ * `MC_TEST_LANES` overrides it.
+ */
+export function testLanes({ cores = availableParallelism(), load = loadavg()[0], env = process.env } = {}) {
+  const set = Number(env.MC_TEST_LANES);
+  if (Number.isInteger(set) && set > 0) return set;
+  const most = Math.max(1, cores - 1);
+  return Math.max(Math.min(2, most), Math.min(most, most - Math.round(Number(load) || 0)));
+}
+
 export function suiteTimeoutMs(env = process.env) {
   const minutes = Number(env.MC_GATE_SUITE_MINUTES);
   return (Number.isFinite(minutes) && minutes > 0 ? minutes : 60) * 60_000;
@@ -2026,14 +2060,16 @@ function stopAfter(child, ms, onStop) {
   return () => clearTimeout(timer);
 }
 
-function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env) } = {}) {
+function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }) } = {}) {
   return new Promise((resolve) => {
     const clean = suiteEnv(env);
     const inherited = String(clean.NODE_OPTIONS || '')
       .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
       .trim();
     // Declared flags first; the test-script heuristic only when none are.
-    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...(flags.length ? flags : nodeTestFlags(cwd)), ...files], {
+    const declared = flags.length ? flags : nodeTestFlags(cwd);
+    const concurrency = declared.some((flag) => String(flag).startsWith('--test-concurrency')) ? [] : [`--test-concurrency=${lanes}`];
+    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...concurrency, ...declared, ...files], {
       cwd,
       env: { ...clean, NODE_OPTIONS: inherited },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -2054,7 +2090,7 @@ function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.en
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => { /* the verdict is in the TAP */ });
     child.on('error', (error) => { settle(); resolve({ code: -1, tap, error: error.message }); });
-    child.on('close', (code) => { settle(); resolve({ code, tap, timedOut, timeoutMs }); });
+    child.on('close', (code) => { settle(); resolve({ code, tap, timedOut, timeoutMs, lanes: concurrency.length ? lanes : null }); });
   });
 }
 
