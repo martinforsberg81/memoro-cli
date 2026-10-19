@@ -39,12 +39,12 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-branch.test.js tests/mc/run.test.js tests/mc/run-plan.test.js` passes, including the tests named in step 2."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc hook install` writes the SessionStart entry and the PreToolUse entry on `Bash|Write|Read` into `~/.claude/settings.json`. It leaves every other entry untouched, writes nothing on a second run and refuses a file that is not JSON. `--check` exits 1 on drift and 0 otherwise. The page's MC line names the drift and `mc hook install`.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/hooks.test.js tests/mc/commands/hook-install.test.js tests/mc/page.test.js` passes, including the tests named in step 3. `mc hook install --check` exits 0 on this machine after `mc hook install`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A running runner starts a new lane within one poll when `per_repo` is raised. When `per_repo` is lowered, a lane whose number is now above it ends after the step it is in and starts nothing more. `mc run lanes` says both numbers apply now.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/run.test.js tests/mc/commands/run-lanes.test.js` passes, including the tests named in step 4."
     }

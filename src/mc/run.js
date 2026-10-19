@@ -2138,9 +2138,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * read from `lanes.json` each time a slot is taken, so a new one applies to
    * the next start of a step without a restart.
    *
-   * `per_repo` needs nothing like this because it is structural — there are
-   * exactly that many lane loops on each repository, so no one has to count.
-   * A total cannot be: the lanes are independent loops over two repositories
+   * `per_repo` needs nothing like this because it is still structural — there
+   * are exactly that many lane loops on each repository at any moment, so no
+   * one has to count; the set of loops follows `lanes.json` (`runLoop`'s
+   * `reconcile`). A total cannot be: the lanes are independent loops over two repositories
    * and nothing about their shape says three. So it is a count, in two parts.
    * This process's own steps are claims, held in `running` beside `claims`
    * below, for the reason that one does. A count of `current-*.json` files
@@ -3391,10 +3392,11 @@ export async function runLoop({
   awake = true,
   deps = realDeps(),
 } = {}) {
-  // `per_repo` is read once, before anything is started: it is how many lane
-  // loops each repository gets, and a running runner keeps it until `mc run
-  // --update` (or stop and start). `total` is not read here: `takeSlot` reads
-  // it each time a step is about to start, so a new total applies at once.
+  // Both numbers are read live; this reading is only for the start line.
+  // `per_repo` is read by `reconcile` on every poll slice, which starts the
+  // lanes that are missing, and by each lane at the top of a pass, which ends a
+  // lane above it. `total` is read by `takeSlot` each time a step is about to
+  // start.
   const laneSetting = (deps.laneCount || readLaneCount)();
   const runner = createRunner({ merge, deps });
   // runner.json read before it is written. `markRunner()` below is a
@@ -3570,12 +3572,19 @@ export async function runLoop({
       // 06:47:23, the chore loop read it at 06:50:43 — and a lane that has
       // just gone to sleep would have read it ten minutes late, with nothing
       // anywhere saying the order had been seen.
-      const nap = async (ms) => {
+      //
+      // Each slice also reconciles the lane set with `per_repo`, so every idle
+      // lane and the idle chore loop look once per `UPDATE_POLL_MS` with no
+      // loop of their own. `until` ends the wait early for a lane that a
+      // lowered `per_repo` has retired.
+      const nap = async (ms, { until = () => false } = {}) => {
         for (let left = ms; left > 0; left -= UPDATE_POLL_MS) {
-          if (runner.stopRequested() || runner.updateRequested()) return;
+          if (runner.stopRequested() || runner.updateRequested() || until()) return;
+          reconcile();
           await deps.sleep(Math.min(left, UPDATE_POLL_MS));
         }
       };
+      const perRepoNow = () => (deps.laneCount || readLaneCount)().per_repo;
       const drainPaths = { dir: dirname(runner.paths.update), update: runner.paths.update, runner: runner.paths.runner };
       const drainTick = () => {
         if (!handedOver) return;
@@ -3588,7 +3597,11 @@ export async function runLoop({
         runner.say(`update: pid ${runner.pid} still ${drainWaiting({ ...state, inFlight: own })}`);
       };
       const lane = async (repo, index) => {
-        const tag = count > 1 ? `${repo.name}#${index + 1}` : repo.name;
+        // A lane at or above `per_repo` as `lanes.json` says it now. Read only
+        // at the top of a pass, so a lane in a step finishes it, and a pass
+        // already waiting for a total slot still runs its step. Index 0 never
+        // retires: `per_repo` is at least 1.
+        const retired = () => index >= perRepoNow();
         // The last line this lane said about having taken nothing. An idle
         // lane looks every ten minutes and would otherwise write the same
         // sentence 144 times a day; it says it once and then goes quiet until
@@ -3598,9 +3611,17 @@ export async function runLoop({
         // it found it is not started again the second it ends (`pass`).
         let last = null;
         for (;;) {
+          const tag = index > 0 || perRepoNow() > 1 ? `${repo.name}#${index + 1}` : repo.name;
           if (runner.updateRequested()) {
             if (await update()) return { update: true };
             continue;
+          }
+          // A lane above a lowered `per_repo` leaves between passes. A
+          // successor's lane waiting on its predecessor's file below is not in
+          // a step, so it leaves here too.
+          if (retired()) {
+            runner.say(`${tag}: per_repo is now ${perRepoNow()} — this lane exits`);
+            return { retired: true };
           }
           // A successor's lane whose file the runner it replaced still holds:
           // that runner is in a step here, and this lane starts when it ends.
@@ -3629,7 +3650,7 @@ export async function runLoop({
             : `${tag}: nothing to run — sleeping`;
           if (line !== quietLine) { runner.say(line); quietLine = line; }
           if (runner.updateRequested()) continue;
-          await nap(idleSleepMs);
+          await nap(idleSleepMs, { until: retired });
           if (runner.stopRequested()) { runner.say(`${tag}: STOP — this lane exits; ${runner.stillHeld()}`); return { stop: true }; }
         }
       };
@@ -3647,13 +3668,44 @@ export async function runLoop({
             return {};
           }
           await runner.chores();
+          reconcile();
           await nap(idleSleepMs);
         }
       };
+      // The live lane set, keyed `<repo>#<index>`: `reconcile` starts each
+      // lane below `per_repo` that is not running, and a lane above it leaves
+      // the set when it retires, so a later raise starts it again. After the
+      // first call nothing starts once STOP or UPDATE is read or the runner
+      // has handed over. The first call starts every lane whatever it finds,
+      // as the fixed set did: each lane answers a STOP or an UPDATE present
+      // at start itself, and a lane started later would be one the loop
+      // below has already stopped waiting for.
+      const live = new Map();
+      let starting = true;
+      function reconcile() {
+        if (!starting && (runner.stopRequested() || runner.updateRequested() || handedOver)) return;
+        const n = perRepoNow();
+        for (const repo of runner.repos) {
+          for (let index = 0; index < n; index += 1) {
+            const key = `${repo.name}#${index}`;
+            if (live.has(key)) continue;
+            live.set(key, lane(repo, index).then((result) => ({ key, result })));
+            if (!starting) runner.say(`lanes: ${n} per repository now — ${repo.name}#${index + 1} started`);
+          }
+        }
+      }
       // Until STOP, or until a handover that took and the steps this runner
       // held have all ended.
-      const lanes = runner.repos.flatMap((repo) => Array.from({ length: count }, (_, index) => lane(repo, index)));
-      const results = await Promise.all([...lanes, choreLoop()]);
+      const chores = choreLoop();
+      reconcile();
+      starting = false;
+      const results = [];
+      while (live.size) {
+        const { key, result } = await Promise.race(live.values());
+        live.delete(key);
+        results.push(result);
+      }
+      results.push(await chores);
       if (results.some((r) => r.stop)) { runner.say(`runner exit on STOP — pid ${runner.pid} has ended; mc run start starts the next`); return 0; }
       runner.say(`every step pid ${runner.pid} held has ended — exiting`);
       return 0;

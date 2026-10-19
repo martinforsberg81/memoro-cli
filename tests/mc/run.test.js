@@ -3823,6 +3823,68 @@ test('runLoop: two lanes on one repository take the next two runnable names, nev
   assert.doesNotMatch(log, /next — b /u, 'b is blocked in its own plan and is never picked');
 });
 
+/**
+ * A runner whose `per_repo` the test changes while it runs, against a session
+ * that blocks until the test lets it go. `starts` is every project a session
+ * was started for, in order.
+ */
+function liveLanes(plans, per) {
+  const f = fixture({ plans: { memoro: plans }, session: okSession() });
+  const inner = f.deps.session;
+  const starts = [];
+  let release = null;
+  const held = new Promise((resolve) => { release = resolve; });
+  f.deps.session = async (call) => {
+    starts.push(areaOf(call.cwd));
+    await held;
+    return inner(call);
+  };
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(resolve); });
+  f.deps.laneCount = () => ({ per_repo: per(), total: null });
+  return { f, starts, release };
+}
+
+test('runLoop: a per_repo raised while the runner runs starts the new lane', async () => {
+  const turns = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((resolve) => { setImmediate(resolve); }); };
+  let per = 1;
+  const { f, starts, release } = liveLanes({ a: ready, b: ready }, () => per);
+  const run = runLoop({ deps: f.deps });
+  await turns();
+  assert.deepEqual(starts, ['a'], 'one lane, one step');
+
+  per = 2;
+  await turns(80);
+  assert.deepEqual(starts, ['a', 'b'], `the new lane took the next name: ${starts.join(', ')}`);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /lanes: 2 per repository now — memoro#2 started/u);
+  assert.match(log, /memoro#2: next — b /u);
+
+  f.files['/w/runner/STOP'] = '';
+  release();
+  assert.equal(await run, 0);
+});
+
+test('runLoop: a per_repo lowered while the runner runs ends the lane above it after its step', async () => {
+  const turns = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((resolve) => { setImmediate(resolve); }); };
+  let per = 2;
+  const { f, starts, release } = liveLanes({ a: ready, b: ready, c: ready }, () => per);
+  const run = runLoop({ deps: f.deps });
+  await turns();
+  assert.deepEqual(starts, ['a', 'b'], 'two lanes, two steps');
+
+  per = 1;
+  release();
+  await turns(120);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /memoro#2: per_repo is now 1 — this lane exits/u);
+  assert.doesNotMatch(log, /memoro#2: next — c /u, 'the retired lane started nothing more');
+  assert.equal(starts.filter((n) => n === 'c').length, 1, `c ran once, on the lane that stayed: ${starts.join(', ')}`);
+  assert.equal(starts.filter((n) => n === 'b').length, 1, 'the step the retired lane was in finished, once');
+
+  f.files['/w/runner/STOP'] = '';
+  assert.equal(await run, 0);
+});
+
 /* ------------------------------------------------------ the total lane cap */
 
 /** Real turns of the event loop, so a polling lane yields to a running one. */

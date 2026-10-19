@@ -28,8 +28,8 @@
  *                          how many steps may be in flight — the positional
  *                          per repository, `--total` on this machine across
  *                          both. No argument prints both and what is running.
- *                          Read at start, so a running runner takes new
- *                          counts on `--update`
+ *                          Both read live, so a running runner takes new
+ *                          counts without `--update`
  *   mc run --billing [plan|credits|auto]
  *                          who pays for claude step sessions (billing.js);
  *                          no argument prints the mode, the plan's windows
@@ -149,9 +149,9 @@ function lanes(opts, deps) {
     ok: true,
     code: 0,
     lines: [
-      `lanes ${phrase(pair, repos)} — the total applies now, per repository from the next start`,
+      `lanes ${phrase(pair, repos)} — applies now`,
       ...neverBinds(pair, repos),
-      'a running runner takes the total at its next start of a step; a new per-repository count takes mc run --update, after the step it is in',
+      'a running runner takes both at once: a new lane starts within half a minute, a lane above the new count ends after the step it is in',
     ],
   };
 }
@@ -274,7 +274,7 @@ export function parseRunArgs(argv) {
 
   // The counts, read or set. `mc run lanes` says both; `mc run lanes 4` writes
   // the per-repository one and `--total` the machine's, and either says a
-  // running runner takes it on `--update`.
+  // running runner takes it at once.
   //
   // A second form rather than a second verb, and the bare positional still
   // means what it has always meant: nobody's muscle memory changes meaning
