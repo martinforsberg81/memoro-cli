@@ -1,18 +1,26 @@
 /**
  * `plan-source.js` — where a plan lives, and the readers that find one by its
- * place. This module alone knows the layout: `docs/project/<programme>/<project>/PLAN.json`
- * in a repository, and the legacy `PLAN.md` beside it. Every reader that finds
- * or reads a plan by its place asks here. When plans move out of the
- * repositories (ruling 48, `docs/project/mc/mc-project.md`) only this module
- * changes.
+ * place. This module alone knows the layout, and it knows two places:
+ *
+ * - `~/mc/programs/<programme>/<project>/PLAN.json` (`programsHome`, ruling 48),
+ *   read from disk. A plan here names its repository in `repo`, and shadows a
+ *   plan of the same name in a repository.
+ * - the repositories' `docs/project/<programme>/<project>/PLAN.json`, and the
+ *   legacy `PLAN.md` beside it, read from origin/main.
+ *
+ * Every reader that finds or reads a plan by its place asks here. When plans
+ * move out of the repositories (ruling 48, `docs/project/mc/mc-project.md`)
+ * only this module changes.
  *
  * Pure given what it is handed: `git` and the directory reads are arguments,
  * so the tests feed fixtures. It imports nothing from `src/mc` but the plan
- * reader, which imports nothing from here.
+ * reader, which imports nothing from here, and the path of the programs tree,
+ * which imports nothing from `src/mc` at all.
  */
-import { existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { programsHome } from './paths.js';
 import { readPlanText } from './plan-schema.js';
 
 /** The directory, in a repository, that holds the plans. */
@@ -101,4 +109,53 @@ export function planIn(tree, name, { list, exists, read }) {
     }
   }
   return null;
+}
+
+/** The names of the directories in `path`, sorted, dot-directories left out; none when it cannot be read. */
+function listDirs(path) {
+  try {
+    return readdirSync(path, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/** A file's text, or null when it cannot be read. */
+function readText(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every plan under `~/mc/programs/`, with its text: the shape `plansInTree`
+ * gives (`path`, `programme`, `project`, `file`) plus `text` and `repo`, the
+ * repository the plan names in its top-level `repo` (null when it names none,
+ * or is not JSON). `path` is absolute. The programme's own worktrees
+ * (`programs/<programme>/memoro/`) hold no `PLAN.json` directly, so they are
+ * skipped by that alone. In listing order: programmes, then projects.
+ */
+export function programsPlans({ home = programsHome(), list = listDirs, read = readText } = {}) {
+  const plans = [];
+  for (const programme of list(home)) {
+    for (const project of list(join(home, programme))) {
+      const path = join(home, programme, project, PLAN_FILE);
+      const text = read(path);
+      if (text === null) continue;
+      let repo = null;
+      try {
+        const { repo: named } = JSON.parse(text);
+        if (typeof named === 'string') repo = named;
+      } catch {
+        // Not JSON: the plan is unreadable, and names no repository.
+      }
+      plans.push({ path, programme, project, file: PLAN_FILE, text, repo });
+    }
+  }
+  return plans;
 }
