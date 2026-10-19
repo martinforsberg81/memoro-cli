@@ -1,0 +1,99 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "Every reader that finds or reads a plan by its place in a repository goes through one module, `src/mc/plan-source.js`, which alone knows the layout `docs/project/<programme>/<project>/PLAN.json`. Plans are still read from origin/main and from a step worktree exactly as today. This is the first half of moving plans out of the repositories (ruling 48, `docs/project/mc/mc-project.md`); the second half changes only this module."
+  ],
+  "contract": [
+    "No reader returns anything different from today, with one exception: the helper's ground (`helperGround`, `src/mc/helper-turn.js`) lists PLAN.json plans too. Today it lists only PLAN.md, so the intake turn sees no current plan.",
+    "Plans stay where they are: `docs/project/` on origin/main and in the step worktree.",
+    "`findMainPlan` stays exported from `src/mc/status-project.js` and `listPlans` and `listProgrammes` from `src/mc/brief-collect.js`, with the same signatures."
+  ],
+  "out_of_scope": [
+    "The readers that go when plans leave the repositories (a later project of ruling 48): `src/mc/merge-boundary.js` (`planBoundary`, `criteriaDoor`), `src/mc/plan-merge.js` and `resolvePlanConflict` in `src/mc/run.js`, `archiveIn`, `closeoutBackfill` and `planFromHistory` in `src/mc/run.js`, `src/mc/archive-plan.js`, `src/mc/archive-programme.js`.",
+    "Workarea and plan-area paths (`STEP_HOME`, `PLAN_HOME` in `src/mc/paths.js`) and the `plan/` branch rule in `src/mc/project-prs.js`.",
+    "The plan schema and the register."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`src/mc/plan-source.js` holds the plan layout, and `listPlans`, `listProgrammes`, `findMainPlan`, the runner's `planOf`, `tidy`'s facts and `helperGround` use it. `helperGround` lists PLAN.json plans.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-source.test.js tests/mc/brief-collect.test.js tests/mc/helper-turn.test.js tests/mc/status-project.test.js tests/mc/run.test.js tests/mc/tidy.test.js tests/architecture/plan-paths.test.js` passes."
+    },
+    {
+      "met": false,
+      "criterion": "No file under `src/mc/` outside `plan-source.js` gains a literal `'PLAN.json'` or `'PLAN.md'`: the count per file is a ratchet.",
+      "check": "`node --test tests/architecture/plan-paths.test.js` passes, and `grep -c \"'PLAN\\.json'\\|'PLAN\\.md'\" src/mc/brief-collect.js src/mc/status-project.js src/mc/helper-turn.js src/mc/tidy.js` prints 0 for each."
+    }
+  ],
+  "documents": [
+    { "label": "The concept", "path": "../mc-project.md" },
+    { "label": "Rulings", "path": "../rulings.md" },
+    { "label": "Plans and steps", "path": "../../README.md" }
+  ],
+  "steps": [
+    {
+      "title": "plan-source.js: the plan layout in one module",
+      "status": "ready",
+      "done_when": "`src/mc/plan-source.js` exports `PROJECT_DIR`, `PLAN_FILE`, `LEGACY_PLAN_FILE`, `planPath`, `parsePlanPath`, `lsTreeArgs`, `plansInTree`, `projectNames`, `findPlan` and `planIn`, `tests/mc/plan-source.test.js` covers each, and `mc gate tests/mc/plan-source.test.js` is green.",
+      "instruction": [
+        "Create `src/mc/plan-source.js`. Header comment, in the style of the other `src/mc/*.js` headers: this module alone knows where a plan lives — `docs/project/<programme>/<project>/PLAN.json` in a repository, or a legacy `PLAN.md` — and every reader that finds a plan by its place asks it; when plans move out of the repositories (ruling 48, `docs/project/mc/mc-project.md`) only this module changes. Import only `existsSync` from `node:fs` and `join` from `node:path`; nothing from other `src/mc` modules.",
+        "Exports, each with a one-line JSDoc: (a) `export const PROJECT_DIR = 'docs/project';`, `export const PLAN_FILE = 'PLAN.json';` and `export const LEGACY_PLAN_FILE = 'PLAN.md';` — every other module compares with these, never with the literal. (b) `planPath(programme, project, file = 'PLAN.json')` returns `` `${PROJECT_DIR}/${programme}/${project}/${file}` ``. (c) `parsePlanPath(path)`: split on `/`; when there are exactly 5 parts, `parts[0]/parts[1]` is `docs/project`, and `parts[4]` is `PLAN.json` or `PLAN.md`, return `{ path, programme: parts[2], project: parts[3], file: parts[4] }`; otherwise `null`. (d) `lsTreeArgs(ref = 'origin/main')` returns `['ls-tree', '-r', '--name-only', ref, '--', PROJECT_DIR]`. (e) `plansInTree(tree)`: `tree` is `ls-tree` output or `null`; returns `parsePlanPath` of every non-empty line that is not `null`, in order; `[]` for `null`. (f) `projectNames(tree)`: the `project` of every `plansInTree(tree)` entry whose `file` is `PLAN.json`, in order (this is `names` in `src/mc/status-project.js` today).",
+        "(g) `findPlan(repos, name, { ref = 'origin/main', git })`: the body of `findMainPlan` in `src/mc/status-project.js` (around line 217), moved: for each repo whose `join(repo.path, '.git')` exists, `const tree = git(repo.path, lsTreeArgs(ref))`, skip on `null`; the entry is the first `plansInTree(tree)` entry with `project === name` and `file === 'PLAN.json'`; when found return `{ repo: repo.name, path: repo.path, programme: entry.programme, plan: entry.path, text: git(repo.path, ['show', `${ref}:${entry.path}`]) || '', names: projectNames(tree) }`, keeping the comment about the siblings that is there today. Return `null` when no repo has it. `git` has no default here: the caller passes it.",
+        "(h) `planIn(tree, name, { list, exists, read })`: the body of `planOf` in `src/mc/run.js` (around line 1049), moved, with `deps.list/exists/read` replaced by the three arguments: `const base = join(tree, PROJECT_DIR)`; for each `programme` of `list(base)`, the directory `join(base, programme, name)`; `PLAN.json` there → `{ path, programme, text, plan, problems, legacy: false }`, where `plan` and `problems` come from `readPlanText(text)`; else a `PLAN.md` there → `{ path: join(dir, 'PLAN.md'), programme, text: '', plan: null, problems: [], legacy: true }`; else go on; `null` at the end. Keep the comment about the legacy file. `readPlanText` comes from `./plan-schema.js`: that one import from `src/mc` is allowed (plan-schema imports nothing from plan-source).",
+        "Tests: `tests/mc/plan-source.test.js` with `node:test` and `node:assert/strict`, in the style of `tests/mc/brief-collect.test.js`. Cases: `planPath('mc', 'x')` and with `'PLAN.md'`; `parsePlanPath` of `docs/project/mc/x/PLAN.json`, `docs/project/mc/x/PLAN.md`, and `null` for `docs/project/README.md`, `docs/project/mc/closeout/x.json`, `docs/project/mc/x/notes/PLAN.json`, `other/project/mc/x/PLAN.json`; `lsTreeArgs()` and `lsTreeArgs('origin/feature')`; `plansInTree(null)` is `[]` and a tree mixing the paths above gives the two plan entries; `projectNames` keeps only the PLAN.json one; `findPlan` with a temp directory holding `memoro/.git` (`mkdtempSync`), a fake `git` answering `ls-tree` and `show`, returning the record and `null` for an unknown name and for a repo without `.git`; `planIn` with in-memory `list/exists/read` returning a JSON plan (take a valid plan text from `tests/mc/step-release.test.js`'s `record`, serialised), a legacy `PLAN.md`, and `null`.",
+        "Do not change any caller in this step. Run `mc gate tests/mc/plan-source.test.js`, then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "listPlans, listProgrammes and the helper's ground read through plan-source",
+      "status": "ready",
+      "done_when": "`listPlans` and `listProgrammes` in `src/mc/brief-collect.js` use `plan-source.js`, `planRecords` is exported from `brief-collect.js`, `helperGround` lists PLAN.json plans through it, `listPlansOnMain` is gone, the tests in `tests/mc/brief-collect.test.js` and `tests/mc/helper-turn.test.js` pass, and `mc gate` is green.",
+      "instruction": [
+        "1. `src/mc/brief-collect.js`: import `PROJECT_DIR`, `lsTreeArgs` and `plansInTree` from `./plan-source.js`. In `listProgrammes` replace the literal `'docs/project/'` with `` `${PROJECT_DIR}/` ``. In `listPlans`: `const tree = git(repo.path, lsTreeArgs(ref));`, `if (tree == null) return [];`, `const entries = plansInTree(tree);`, the batch read over `entries.map((e) => `${ref}:${e.path}`)`, then `return planRecords(repo.name, entries, (path) => texts.get(`${ref}:${path}`) || '');`.",
+        "2. Move the per-project loop of `listPlans` (from `// One project, one plan.` to the `return [...byProject.values()]`) into a new exported function directly below it, `export function planRecords(repoName, entries, textOf)`, with a one-paragraph JSDoc: the records `listPlans` returns, from plan-source entries and a text reader; one project, one plan, the JSON wins over the markdown. Inside, use `entry.programme`, `entry.project`, `entry.path` and `entry.file === PLAN_FILE` (import `PLAN_FILE` from `./plan-source.js`) instead of splitting the path; no `'PLAN.json'` or `'PLAN.md'` literal may remain in `brief-collect.js` (step 4's ratchet counts them), and `textOf(entry.path)` for the text. The record shape is exactly today's: `{ repo, programme, project, path, legacy, plan, problems, …planSummary(plan) }`, or the legacy one with `parsePlanFrontmatter`. The existing tests in `tests/mc/brief-collect.test.js` must pass unchanged.",
+        "3. `src/mc/helper-turn.js`: delete `listPlansOnMain` and its JSDoc. Import `planRecords` from `./brief-collect.js` (already imported from there) and `lsTreeArgs`, `plansInTree` from `./plan-source.js`. In `helperGround`, per present repo: `const tree = await git(repo.path, lsTreeArgs());`; when `null`, push the note `${repo.name}: could not list plans on origin/main` as today; otherwise `const entries = plansInTree(tree)`, read every text with `await Promise.all(entries.map((e) => git(repo.path, ['show', `origin/main:${e.path}`])))`, build a `Map` from path to text, and push `planRecords(repo.name, entries, (path) => texts.get(path) || '').map((r) => ({ repo: r.repo, programme: r.programme, project: r.project, path: r.path, status: r.status ?? null, next: r.next ?? null }))`. The reads stay async and side by side, as the deleted comment wanted. `planFields` is no longer used in this file: remove it from the import if so.",
+        "4. `tests/mc/helper-turn.test.js`, `describe('the ground')`: the first test keeps its PLAN.md case and its expected record. Add a test `lists PLAN.json plans too`: the fake `git`'s `ls-tree` returns `docs/project/mc/mc-x/PLAN.json`, and `show` of `origin/main:docs/project/mc/mc-x/PLAN.json` returns a valid plan text (serialise the plan built in `tests/mc/step-release.test.js`'s `record`, with its second step `ready`); `ground.plans` is one record with `repo: 'memoro', programme: 'mc', project: 'mc-x', path: 'docs/project/mc/mc-x/PLAN.json', status: 'ready'` and a non-empty `next`. Assert those fields, not `next`'s exact text. The second test (`notes what it could not read`) passes unchanged.",
+        "5. `mc gate tests/mc/brief-collect.test.js tests/mc/helper-turn.test.js tests/mc/page-cache.test.js tests/mc/commands/plan.test.js`, then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "mc status, the runner's planOf and tidy read through plan-source",
+      "status": "ready",
+      "done_when": "`findMainPlan` delegates to `findPlan`, `planOf` in `src/mc/run.js` to `planIn`, `tidy.js` takes its `ls-tree` arguments and plan directory from `plan-source.js`, `tests/mc/status-project.test.js`, `tests/mc/run.test.js` and `tests/mc/tidy.test.js` pass unchanged, and `mc gate` is green.",
+      "instruction": [
+        "1. `src/mc/status-project.js`: import `findPlan` from `./plan-source.js`. Replace the body of `findMainPlan` (around line 217) with `return findPlan(repos, name, { git });`, keeping its signature `findMainPlan(repos, name, { git = runGit } = {})` and a one-line JSDoc saying it is `findPlan` on origin/main with this file's git. Delete the local `names(tree)` function (around line 209) and its JSDoc. If `existsSync` or `join` become unused, leave them: they are used elsewhere in the file — check with a grep before removing anything.",
+        "2. `src/mc/run.js`: import `planIn` from `./plan-source.js`. Replace the body of `planOf(worktree, name)` (around line 1049) with `return planIn(worktree, name, { list: deps.list, exists: deps.exists, read: deps.read });`. Keep `planOf`'s JSDoc above it as it is; delete the comment inside the old body only (it moved to plan-source in step 1). Do not touch `archiveIn`, `closeoutBackfill`, `planFromHistory` or `resolvePlanConflict`.",
+        "3. `src/mc/tidy.js`, in the facts collection (around line 165): import `lsTreeArgs` and `planPath` from `./plan-source.js`; the `ls-tree` call becomes `git(repo.path, lsTreeArgs())`; the fallback plan directory `` `docs/project/${entry.programme}/${entry.project}` `` becomes `dirname(planPath(entry.programme, entry.project))` (`dirname` is already imported). The `show` of `project_log.md` stays as it is.",
+        "4. No test changes are expected. Run `mc gate tests/mc/status-project.test.js tests/mc/run.test.js tests/mc/tidy.test.js`; when a test fails, the move changed behaviour: fix the code, not the test. Then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A ratchet: the plan file's name stays in plan-source",
+      "status": "ready",
+      "done_when": "`tests/architecture/plan-paths.test.js` passes on this tree and fails when a new `'PLAN.json'` literal is added to any other file under `src/mc/`, both success criteria are `met: true`, and `mc gate` is green.",
+      "instruction": [
+        "1. Measure: for every `.js` file under `src/mc/` (recursively, `src/mc/commands/` included), count the matches of the regular expression `/'PLAN\\.(json|md)'/g` in its text. Use `grep -rc \"'PLAN\\.json'\\|'PLAN\\.md'\" src/mc` and keep the files with a count above 0. After steps 1–3, `src/mc/brief-collect.js`, `src/mc/status-project.js`, `src/mc/helper-turn.js` and `src/mc/tidy.js` must be at 0; if one is not, that earlier step left a literal behind: move it to `plan-source.js` here.",
+        "2. Write `tests/architecture/plan-paths.test.js` in the style of `tests/architecture/layer-boundaries.test.js` (its header comment, `ROOT`, `readdirSync`/`statSync` walk). Header: the plan file's name belongs to `src/mc/plan-source.js` (ruling 48); the files below still name it because they are removed when plans leave the repositories, and their counts may only fall — lower a count, or delete its row, when a file stops naming it. `const ALLOWED = new Map([...])` holds, for every file other than `src/mc/plan-source.js` that has a count above 0, its path relative to the repository and its measured count. The test walks `src/mc/`, counts each file the same way, and fails, naming the file and both numbers, when a file not in `ALLOWED` (and not `plan-source.js`) has a count above 0, or a file in `ALLOWED` has a count above its number.",
+        "3. Check that it bites: add `const x = 'PLAN.json';` to `src/mc/tidy.js`, run `node --test tests/architecture/plan-paths.test.js`, see it fail naming `src/mc/tidy.js`, and remove the line again.",
+        "4. Run both success criteria's checks from the branch. When they pass, set both `met: true` in this plan's `success_criteria`. Then `mc gate`, `mc publish`, `mc merge memoro-cli <pr>`."
+      ],
+      "runner": { "model": "haiku", "effort": "high" },
+      "comments": [],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
