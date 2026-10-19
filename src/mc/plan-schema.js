@@ -451,8 +451,8 @@ export function unmetCriteria(plan) {
 export function unmetWords(unmet) {
   const numbers = Array.isArray(unmet) ? unmet : [];
   return numbers.length === 1
-    ? `success criterion ${numbers[0]} is not met on main — measure it and set met: true in a pull request, or add a step that does`
-    : `success criteria ${numbers.join(', ')} are not met on main — measure them and set met: true in a pull request, or add a step that does`;
+    ? `success criterion ${numbers[0]} is not met — run its check and record it with mc project criterion met <project> ${numbers[0]}, or add a step that does`
+    : `success criteria ${numbers.join(', ')} are not met — run their checks and record each with mc project criterion met <project> <n>, or add a step that does`;
 }
 
 /** "every step `done`", "all steps are done", "steps 1–3 are `done`". */

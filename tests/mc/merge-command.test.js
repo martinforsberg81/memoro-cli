@@ -185,7 +185,7 @@ describe('a plan-trespass stops mc merge at the door', () => {
     register();
     const d = deps({
       env: { MC_STEP: 'merge-queue:1' },
-      door: { checked: true, ok: false, unmet: [1], problems: ['step 2 is the plan\'s last, and success criterion 1 is not met on main'] },
+      door: { checked: true, ok: false, unmet: [1], problems: ['step 2 is the plan\'s last, and success criterion 1 is not met — run its check and record it with mc project criterion met <project> 1, or add a step that does'] },
     });
     const code = await gate({ repo: 'memoro-cli', pr: 671 }, d.io);
     assert.equal(code, 1);

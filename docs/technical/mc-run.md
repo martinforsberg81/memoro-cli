@@ -288,7 +288,7 @@ project used to.
 4. **Archive** every plan that is done — every step done and every success
    criterion `met: true`. A plan whose steps are all done with a criterion not
    met is `unmet`: the runner says so once in `runner.log`
-   (`<project>: every step is done, but success criterion N is not met on main
+   (`<project>: every step is done, but success criterion N is not met
    … — not archived`) and leaves it, its workarea and anything waiting on it
    as they are. A done plan has the directory removed, its
    README kept as `closeout/<project>.md` with the links into it rewritten to

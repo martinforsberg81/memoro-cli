@@ -3199,7 +3199,7 @@ test('a plan with every step done and a criterion unmet is not archived, and is 
   assert.deepEqual(f.calls.rm, [], 'an unmet plan is not done, so not archived');
   assert.equal(f.calls.gh.some((c) => c[2] === 'create'), false, 'no archive pull request');
   const said = f.files['/w/runner/log/runner.log'].split('\n')
-    .filter((line) => /over: every step is done, but success criterion 1 is not met on main/u.test(line));
+    .filter((line) => /over: every step is done, but success criterion 1 is not met/u.test(line));
   assert.equal(said.length, 1, said.join('\n'));
 });
 

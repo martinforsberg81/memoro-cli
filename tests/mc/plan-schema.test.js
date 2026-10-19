@@ -332,12 +332,12 @@ describe('the plan has no status of its own', () => {
     const unmet = plan({ steps, success_criteria: [criterion(true), criterion(false), criterion(false)] });
     assert.deepEqual(planState(unmet), { status: 'unmet', index: -1, step: null, unmet: [2, 3] });
     assert.equal(planSummary(unmet).status, 'unmet');
-    assert.equal(planSummary(unmet).next, 'every step is done, but success criteria 2, 3 are not met on main — measure them and set met: true in a pull request, or add a step that does');
+    assert.equal(planSummary(unmet).next, 'every step is done, but success criteria 2, 3 are not met — run their checks and record each with mc project criterion met <project> <n>, or add a step that does');
     assert.equal(deliverableStep(unmet).reason, 'unmet');
     const met = plan({ steps, success_criteria: [criterion(true), criterion(true), criterion(true)] });
     assert.equal(planState(met).status, 'done');
     const one = plan({ steps, success_criteria: [criterion(true), criterion(false)] });
-    assert.equal(planSummary(one).next, 'every step is done, but success criterion 2 is not met on main — measure it and set met: true in a pull request, or add a step that does');
+    assert.equal(planSummary(one).next, 'every step is done, but success criterion 2 is not met — run its check and record it with mc project criterion met <project> 2, or add a step that does');
   });
 });
 
