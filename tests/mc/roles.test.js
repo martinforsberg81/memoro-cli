@@ -251,7 +251,7 @@ describe('a passage two roles share', () => {
   // Sentences that define each passage, from different parts of it.
   const DEFINING = [
     /A plan is instructions for a headless session that has read nothing else/u,
-    /readPlanText/u,
+    /`mc project send` is the validation/u,
     /Proposals consumed:/u,
   ];
   const SESSION_DEFINING = [
