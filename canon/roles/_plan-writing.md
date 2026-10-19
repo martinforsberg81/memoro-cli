@@ -5,10 +5,13 @@ nobody watching. Every step must pass one test: can that session build it
 start to finish, and know when it is done? If not, it is not a step
 (ruling 19).
 
-- **Where:** `docs/project/<programme>/<project>/PLAN.json` in the repository
-  the work is in. `<project>` becomes the runner's branch and workarea; create
-  neither. A plan on `main` whose first unfinished step is `ready` is run —
-  landing it is the handover.
+- **Where:** plans live in mc, not in a repository (ruling 48):
+  `~/mc/programs/<programme>/<project>/PLAN.json`, with a top-level `"repo":
+  "memoro"` or `"memoro-cli"` naming where the steps run. `<project>` becomes
+  the runner's branch and workarea; create neither. Write it to a temporary
+  file beside it, validate, then `mv` it into place: the runner reads the
+  directory, so a plan whose first unfinished step is `ready` is run as soon
+  as it is there, and moving it in is the handover. No branch, no pull request.
 - **Shape:** `src/mc/plan-schema.js`; what each field is for:
   `docs/project/README.md` § *What a PLAN.json is*. Read them; do not guess.
 - **Before writing:** do every investigation yourself — read the code,
@@ -24,9 +27,9 @@ start to finish, and know when it is done? If not, it is not a step
     a wait for the runner's next chore pass — is commands the last step
     runs, not a hand check. Write them as commands.
   - **A check the last step's own branch cannot reach is not a criterion.**
-    The merge door refuses the last step until every criterion is `met`, so
-    a check that needs this plan landed first (the runner updated, the page
-    redrawn from main) never passes. Measure it from the branch
+    The merge door refuses the last step until every criterion is `met` in the
+    register, so a check that needs this plan landed first (the runner updated,
+    the page redrawn from main) never passes. Measure it from the branch
     (`node src/mc-cli.js …`), or leave it out.
   - **Work outside this plan comes first.** A criterion that needs another
     project's code on main is not written until that code is on main; a
@@ -60,12 +63,11 @@ start to finish, and know when it is done? If not, it is not a step
 - **Overall:** `goal`; `contract` (what may not change without Martin);
   `out_of_scope`, named; `success_criteria` with a `check` — for anything
   with a surface, measured in the running app. All frozen: a step session
-  writes only `met`.
+  records a met criterion with mc project criterion met, never in the file.
 - **Leave out:** the case for the plan, history, what the code already shows.
-- **Validate before pushing:**
+- **Validate before moving it in:**
   `node --input-type=module -e "import {readPlanText} from '$HOME/memoro-cli/src/mc/plan-schema.js'; import {readFileSync} from 'node:fs'; console.log(readPlanText(readFileSync(process.argv[1],'utf8')).problems)" <PLAN.json>`
-  must print `[]`. Land with `mc merge <repo> <pr> --docs`; `mc status
-  <project>` shows it from `main`.
+  must print `[]`. ``mc status <project>`` shows it.
 - **Proposals consumed:** move them to `~/mc/proposals/archive/` in the same
   move, name them in the PR body, and carry into the plan everything it needs
   from them — nobody reads the archive (ruling 22).

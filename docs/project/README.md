@@ -12,6 +12,11 @@ projects that do not serve that do not belong under it.
 
 ## What a PLAN.json is
 
+Since `plans-in-mc` a plan lives under `~/mc/programs/<programme>/<project>/PLAN.json`,
+with a top-level `repo` field naming the repository its steps run in. A plan of
+the same name in this directory is shadowed by it and no longer read; the copies
+here go with project 3 of ruling 48.
+
 A plan is instructions for a headless session that has read nothing else, with
 nobody watching. `mc run` hands it the step it is to do, and it opens a PR and
 lands it through `mc merge` itself (ruling 21). That
@@ -35,7 +40,9 @@ the door.
 - `success_criteria` — `{ met, criterion, check }`. The `check` is the half a
   criterion is usually missing: the assertion, the query, the measurement — and
   for anything with a surface, the measurement *in the running app*. "Done" is
-  never the session's judgement of its own work.
+  never the session's judgement of its own work. Whether a criterion is met is
+  the register's, written by `mc project criterion met <project> <n>`; the
+  file's `met` is read once, when the register first sees the criteria.
 - `documents` — `{ label, path }`.
 - `runner` — optional: `tool`, `model`, `effort`, `check_in_minutes`,
   `stall_minutes`.
