@@ -57,12 +57,12 @@
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/page.test.js` passes, including the tests named in step 6."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "On this machine, with OrbStack stopped: `mc docker ensure --pid $$` starts it and `docker info` answers. Then `mc docker release --pid $$`, plus the 10-minute grace and the next chore pass of a running `mc run`, stops it.",
       "check": "Martin, live, after step 6 has landed and the runner has been updated: `orbctl stop`; `orbctl status` prints `Stopped`; `mc docker ensure --pid $$` exits 0; `docker info --format '{{.ServerVersion}}'` prints a version; `mc docker release --pid $$`; within 20 minutes `orbctl status` prints `Stopped` and `~/mc/runner/log/runner.log` has a `docker: idle` line. A step session does not run this check."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "Once memoro's part has landed, a merge round that selects `sql:reference:postgres` on a machine where OrbStack was stopped runs it (passed or failed on its own merits), rather than reporting it `unavailable`.",
       "check": "Martin, after the memoro proposal's PR lands: the round's line in `~/.memoro/mc/gate-rounds.jsonl` has `sql:reference:postgres` in `extra_gates` without `unavailable: true`, and `docker ps -a --filter label=mc.holder` lists nothing afterwards."
     }
