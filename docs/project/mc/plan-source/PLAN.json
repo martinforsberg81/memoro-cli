@@ -16,12 +16,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "`src/mc/plan-source.js` holds the plan layout, and `listPlans`, `listProgrammes`, `findMainPlan`, the runner's `planOf`, `tidy`'s facts and `helperGround` use it. `helperGround` lists PLAN.json plans.",
       "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/plan-source.test.js tests/mc/brief-collect.test.js tests/mc/helper-turn.test.js tests/mc/status-project.test.js tests/mc/run.test.js tests/mc/tidy.test.js tests/architecture/plan-paths.test.js` passes."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No file under `src/mc/` outside `plan-source.js` gains a literal `'PLAN.json'` or `'PLAN.md'`: the count per file is a ratchet.",
       "check": "`node --test tests/architecture/plan-paths.test.js` passes, and `grep -c \"'PLAN\\.json'\\|'PLAN\\.md'\" src/mc/brief-collect.js src/mc/status-project.js src/mc/helper-turn.js src/mc/tidy.js` prints 0 for each."
     }
