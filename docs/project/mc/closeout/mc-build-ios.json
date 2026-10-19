@@ -1,0 +1,161 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-build-ios",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-build-ios/PLAN.json",
+  "archived": "2026-10-19",
+  "goal": [
+    "`mc build ios` answers, without building, whether memoro needs a new iOS binary. The answer names the native paths and native dependencies that changed between the commit of the last shipped binary and the commit production runs. When nothing native changed it says `mc deploy` is all it takes, because the app loads its web code live from production (Capacitor `server.url`).",
+    "`mc build ios --device` builds memoro headless in its own background process and installs the app on the paired iPhone. `--testflight` builds, exports, verifies and, after a yes at the terminal, uploads to TestFlight. `--testflight --no-upload` stops at a verified IPA. No Xcode, Simulator or other GUI app is ever opened.",
+    "The binary always pairs with the web it will meet. It is built from the exact commit production runs, read from `/api/version`, or from a `--sha` that production already contains. Every binary carries that commit in Info.plist (`MemoroBuildCommit`). The built app is read back, and must state the declared bundle id, the declared production URL, every app-local plugin, the commit and the build number, before anything is installed or uploaded.",
+    "A TestFlight build number comes from App Store Connect (highest uploaded + 1), never from a file. Two binaries never share a number. Every build is a row in `~/mc/runner/log/ios-builds.tsv`, and the last uploaded row is what `mc build ios` compares against.",
+    "A build holds the heavy lane like a deploy does: the merger's heavy rounds and `mc gate` wait for it."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "The question alone: `mc build ios` answers within 60 s, builds nothing and touches no worktree. It names the last shipped build (number and commit), the commit production runs, and the native paths and native packages that differ between them, or `no native change since build <n> — mc deploy is enough`.",
+      "check": "From any directory: `time mc build ios; echo exit $?` prints those lines and exit 0 in under 60 s, and `git -C ~/.memoro/mc/build/memoro rev-parse HEAD` is unchanged (or the directory does not exist)."
+    },
+    {
+      "met": true,
+      "criterion": "A device build lands on the phone, headless and paired. `mc build ios --device` builds the commit production runs and installs it on the paired iPhone, and the register row says `installed` with that sha. No GUI app starts.",
+      "check": "With the iPhone paired and unlocked, in a terminal: `mc build ios --device` ends with `mc: installed memoro me <version> (<build>) from <sha> on <device>`. In a second terminal throughout: `while sleep 5; do pgrep -x Xcode; pgrep -x Simulator; done` prints nothing. Afterwards, `xcrun devicectl device info apps --device <id> --bundle-id app.meetmemoro.memoro` shows the app, `tail -1 ~/mc/runner/log/ios-builds.tsv` has outcome `installed`, and its sha equals `curl -s https://meetmemoro.app/api/version`'s `commit_full`."
+    },
+    {
+      "met": true,
+      "criterion": "A TestFlight build is verified before any upload. `mc build ios --testflight --no-upload` produces an IPA whose own Info.plist says the build number chosen from App Store Connect, the production commit and the declared bundle id, signed by Apple Distribution.",
+      "check": "`mc build ios --testflight --no-upload` ends with `mc: built <ipa> — memoro me <version> (<n>) from <sha>; not uploaded`. Then `unzip -p <ipa> 'Payload/App.app/Info.plist' | plutil -extract CFBundleVersion raw -` prints `<n>`, and the same with `MemoroBuildCommit` prints the sha. `<n>` is one more than the highest `version` in memoro's `node scripts/asc-list-builds.mjs --json`."
+    },
+    {
+      "met": true,
+      "criterion": "The refusals that keep the pairing true. A `--sha` that production does not contain is refused before anything is built. So is a second build while one runs. A built app whose read-back disagrees with the declaration is never installed or uploaded.",
+      "check": "`mc build ios --device --sha origin/main` refuses with `production runs <live>, which does not contain <sha> — mc deploy first` whenever origin/main is ahead of production. The read-back refusal is covered by the tests named in step 3."
+    }
+  ],
+  "steps": [
+    {
+      "title": "The register, the declaration reader, and `mc build ios` the question",
+      "done_when": "`src/mc/ios-builds.js` (register) and `src/mc/ios-build.js` (declaration, native diff, the question) exist with their tests. `mc build ios` with no flag answers as in success criterion 1, `mc build ios --shipped <build> <sha>` records a seed row, the verb is registered, and the gate is green.",
+      "status": "done",
+      "pr": 977,
+      "landed": {
+        "sha": "d02e285b86a8bae4bacaee1605eb6ae07679ba31",
+        "into": "main",
+        "at": "2026-10-18T18:14:24Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Live check of criterion 1 is blocked on memoro's ios-build-declaration (no .mc/ios.json on memoro origin/main yet; mc build ios exits 1 naming that). The real register has no seed row: Martin runs mc build ios --shipped 38 862a490 once. ios-build.js has its own gitRead with a 256 MB buffer for package-lock.json; reuse it in steps 2/3."
+      ],
+      "sessions": 1,
+      "seconds": 322,
+      "cost_usd": 1.14201
+    },
+    {
+      "title": "mc build ios --device: the builder in its own process, the heavy lane, the read-back, the install",
+      "done_when": "`mc build ios --device` runs its preflights in the asking process, then starts the builder detached with its log at `~/mc/runner/log/ios-build.log`, and the terminal follows it (^C stops watching only). The builder holds the heavy lane as `mode: 'ios-build'`, builds the commit production runs in `~/.memoro/mc/build/memoro` with a real `npm ci`, reads the built app back against the declaration, and installs it with `devicectl`. `mc gate` waits for a build as it waits for a deploy. The tests below are green, and success criterion 2 is checked by hand if the phone is paired.",
+      "status": "done",
+      "pr": 978,
+      "landed": {
+        "sha": "4bde9d4a7af969619222e5dd70b9aaf2d3afde2e",
+        "into": "main",
+        "at": "2026-10-18T18:31:43Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Criterion 2 hand check not done: the iPhone is paired, but memoro's origin/main has no .mc/ios.json yet, so mc build ios --device refuses at the declaration. Martin runs it once the declaration lands."
+      ],
+      "sessions": 1,
+      "seconds": 1040,
+      "cost_usd": 2.993971
+    },
+    {
+      "title": "mc build ios --testflight: the number from App Store Connect, archive, export, the IPA read back, the question, the upload",
+      "done_when": "`--testflight` chooses the build number from App Store Connect, archives and exports with the declaration's ExportOptions.plist, reads the number, commit and Distribution signature back out of the IPA itself, asks before uploading, uploads with memoro's upload script, records the row, and prints the `asc:attach-build` command without running it. `--no-upload` stops at the verified IPA. Old archives are pruned to the last five. The tests below are green, success criteria 3 and 4 are checked as far as this machine allows, and every `success_criteria[].met` that was checked is true.",
+      "status": "done",
+      "pr": 979,
+      "landed": {
+        "sha": "9df38d028d760f33fa8bc1c50bb6ad1270f3b5e6",
+        "into": "main",
+        "at": "2026-10-18T21:07:32Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 3 built and gated green (58 tests). No success criterion could be measured on this machine: every check reads memoro's .mc/ios.json on origin/main, and memoro has none yet (memoro project ios-build-declaration). At the time of the hand checks memoro origin/main was 9ea89bfafd and production ran d5deb10d42. Both Apple Development and Apple Distribution identities are in the keychain. No upload was run.",
+        "Failed on 2026-10-18T18:48:26Z: Success criteria 1, 2, 3 and 4 cannot be measured until memoro's .mc/ios.json lands on its origin/main (memoro project ios-build-declaration). Every check stops at 'memoro has no .mc/ios.json on origin/main yet'. The code is built and gated green in PR #979."
+      ],
+      "sessions": 1,
+      "seconds": 522,
+      "cost_usd": 2.219931
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-18T18:13:55Z",
+      "kind": "step",
+      "seconds": 322,
+      "land_seconds": null,
+      "pr": 977,
+      "turns": 34,
+      "input": 36,
+      "output": 25879,
+      "cache_read": 1106930,
+      "cache_write": 80580,
+      "model": null,
+      "note": "success,queued",
+      "session": "198c5416-403f-4394-adfe-27657f5becfb",
+      "cost_usd": 1.14201
+    },
+    {
+      "ts": "2026-10-18T18:31:19Z",
+      "kind": "step",
+      "seconds": 1040,
+      "land_seconds": null,
+      "pr": 978,
+      "turns": 61,
+      "input": 96,
+      "output": 64628,
+      "cache_read": 3133201,
+      "cache_write": 170451,
+      "model": null,
+      "note": "success,queued",
+      "session": "88e69195-eb2e-422e-a90f-892eca6071c0",
+      "cost_usd": 2.9939714
+    },
+    {
+      "ts": "2026-10-18T18:48:38Z",
+      "kind": "step",
+      "seconds": 522,
+      "land_seconds": null,
+      "pr": 979,
+      "turns": 65,
+      "input": 68,
+      "output": 46640,
+      "cache_read": 2297652,
+      "cache_write": 130812,
+      "model": null,
+      "note": "success,failed",
+      "session": "60ba0f83-aed7-43b4-81cf-78846d910393",
+      "cost_usd": 2.219930600000001
+    }
+  ],
+  "totals": {
+    "sessions": 3,
+    "seconds": 1884,
+    "land_seconds": 0,
+    "cost_usd": 6.355912,
+    "cost_unknown": 0,
+    "input": 200,
+    "output": 137147,
+    "cache_read": 6537783,
+    "cache_write": 381843,
+    "first": "2026-10-18T18:13:55Z",
+    "landed": "2026-10-18T21:07:32Z"
+  }
+}

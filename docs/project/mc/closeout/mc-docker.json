@@ -1,0 +1,280 @@
+{
+  "schema": "mc-closeout",
+  "version": 1,
+  "project": "mc-docker",
+  "programme": "mc",
+  "repo": "memoro-cli",
+  "plan_path": "docs/project/mc/mc-docker/PLAN.json",
+  "archived": "2026-10-19",
+  "goal": [
+    "mc owns the container runtime the gates need: `mc docker` reports the runtime, the leases on it and what it holds on disk, and `mc docker ensure` starts a stopped OrbStack (or Docker Desktop), waits until `docker info` answers and takes a lease that names a pid.",
+    "A merge round and `mc gate` start the runtime before a command gate whose selector entry says `needs: [\"docker\"]`, so that gate actually runs instead of reporting `unavailable`. The runner's chore pass removes leases and labelled leftovers whose holder pid is gone, and stops a runtime mc started once it has been idle for 10 minutes. The page shows all of this on one line.",
+    "Until memoro's selector emits `needs` and its Postgres script labels what it starts (a memoro proposal, not this project), the merger and `mc gate` behave exactly as today. The verb, the sweep and the page row work from the day they land."
+  ],
+  "success_criteria": [
+    {
+      "met": true,
+      "criterion": "`ensure` starts a stopped OrbStack, waits for `docker info`, and writes one lease file per holder under `~/.memoro/mc/docker/leases/`. It gives up after its timeout without a lease. A lease whose pid is dead is removed by the next reader and counts as a release. Every `docker` and `orbctl` call carries a timeout.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/docker.test.js` passes, including the tests named in step 1."
+    },
+    {
+      "met": true,
+      "criterion": "`mc docker`, `mc docker ensure`, `mc docker release` and `mc docker prune` exist. They are in `mc --help` and in the command matrix. `prune` removes only objects labelled `mc.holder` whose pid is dead and reports the unlabelled ones.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/docker-command.test.js tests/mc/help.test.js` passes, including the tests named in step 2."
+    },
+    {
+      "met": true,
+      "criterion": "In a merge round, a selected command gate with `needs: [\"docker\"]` gets `ensure` before it runs, `MC_DOCKER_HOLDER`, `MC_DOCKER_RUN` and `MC_DOCKER_REPO` in its environment, and its lease released afterwards. If the runtime cannot be started, a gate that declared `allowUnavailable` is `unavailable` with the reason and is not run. A gate without `needs` never calls `ensure`.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/repo-gate.test.js` passes, including the tests named in step 3."
+    },
+    {
+      "met": true,
+      "criterion": "A whole `mc gate` whose selection names a command with `needs: [\"docker\"]` (and an INCREMENTAL one whose commands do) runs `ensure` with the detached child's pid as the holder, and the child exports `MC_DOCKER_HOLDER=$$`. A selection without one calls nothing.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/gate-command.test.js` passes, including the tests named in step 4."
+    },
+    {
+      "met": true,
+      "criterion": "Each chore pass of the runner removes dead leases and labelled leftovers whose holder is gone, and stops an OrbStack that mc started once 10 minutes have passed since the last release with no lease, no live dev server and no running unlabelled container. With the runtime down it runs no `docker` command.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/docker.test.js tests/mc/run.test.js` passes, including the tests named in step 5."
+    },
+    {
+      "met": true,
+      "criterion": "The page draws one `docker` line from `state.json` (runtime, live leases, images, idle stop), and draws nothing when the file is absent.",
+      "check": "`node --test --import ./tests/_isolate-home.mjs tests/mc/page.test.js` passes, including the tests named in step 6."
+    },
+    {
+      "met": true,
+      "criterion": "On this machine, with OrbStack stopped: `mc docker ensure --pid $$` starts it and `docker info` answers. Then `mc docker release --pid $$`, plus the 10-minute grace and the next chore pass of a running `mc run`, stops it.",
+      "check": "Martin, live, after step 6 has landed and the runner has been updated: `orbctl stop`; `orbctl status` prints `Stopped`; `mc docker ensure --pid $$` exits 0; `docker info --format '{{.ServerVersion}}'` prints a version; `mc docker release --pid $$`; within 20 minutes `orbctl status` prints `Stopped` and `~/mc/runner/log/runner.log` has a `docker: idle` line. A step session does not run this check."
+    },
+    {
+      "met": true,
+      "criterion": "Once memoro's part has landed, a merge round that selects `sql:reference:postgres` on a machine where OrbStack was stopped runs it (passed or failed on its own merits), rather than reporting it `unavailable`.",
+      "check": "Martin, after the memoro proposal's PR lands: the round's line in `~/.memoro/mc/gate-rounds.jsonl` has `sql:reference:postgres` in `extra_gates` without `unavailable: true`, and `docker ps -a --filter label=mc.holder` lists nothing afterwards."
+    }
+  ],
+  "steps": [
+    {
+      "title": "src/mc/docker.js: the runtime, one lease file per holder, ensure and release",
+      "done_when": "`src/mc/docker.js` exports `dockerRoot`, `leasesDir`, `statePath`, `needsDocker`, `currentContext`, `runtimeOf`, `takeLease`, `liveLeases`, `release`, `releasePid`, `readState`, `writeState` and `ensure`, with the constants named in the instruction; the tests named in `tests/mc/docker.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 959,
+      "landed": {
+        "sha": "7695be67874d27b95b27851bf7bc71e6286a0059",
+        "into": "main",
+        "at": "2026-10-18T14:43:28Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 442,
+      "cost_usd": 0.610552
+    },
+    {
+      "title": "The verb: mc docker, ensure, release, prune",
+      "done_when": "`src/mc/commands/docker.js` answers `mc docker`, `mc docker ensure`, `mc docker release` and `mc docker prune`, routed by `VERB_MODULES` and listed in `src/mc/help-text.js`; `src/mc/docker.js` gains `inventory` and `removeDeadHolders`; the tests named in `tests/mc/docker-command.test.js` and `tests/mc/docker.test.js` pass, `tests/mc/help.test.js` stays green; `docs/mc-command-matrix.md` has the row in a final commit touching nothing else; `mc gate` is green.",
+      "status": "done",
+      "pr": 961,
+      "landed": {
+        "sha": "0b231a4a4619903938b270558a1205e628d7143a",
+        "into": "main",
+        "at": "2026-10-18T15:12:09Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "Step 2 built on d657ab93 (verb, inventory, removeDeadHolders, shared fake machine, docs, changelog) and c33523b4 (matrix row alone). Verified: mc gate on the three named files, 29 tests green; full mc gate green (2848 tests, 0 failed, 9 skipped) before the matrix commit; mc gate after it is run below. success_criteria[1].met set true in PLAN.json."
+      ],
+      "sessions": 1,
+      "seconds": 1880,
+      "cost_usd": 0.105858
+    },
+    {
+      "title": "The merge round starts the runtime before a command gate that needs Docker",
+      "done_when": "`selectFiles` in `src/mc/repo-gate.js` carries each selector entry's `needs`, and `runSelectedCommands` calls `ensure` before an entry with `needs: ['docker']`, passes `MC_DOCKER_HOLDER`/`MC_DOCKER_RUN`/`MC_DOCKER_REPO` to it and releases the lease after it; a runtime that cannot start makes an `allowUnavailable` gate `unavailable` with the reason, unrun; the tests named in `tests/mc/repo-gate.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 964,
+      "landed": {
+        "sha": "43679e32076cf3317fef338fa5b08a88ec6af505",
+        "into": "main",
+        "at": "2026-10-18T15:34:53Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "The merge round now starts the runtime before a selected command gate whose selector entry carries needs: [\"docker\"]. selectFiles carries the entry's needs (empty when absent); runSelectedCommands calls ensure with the round's pid as holder and the label mode #pr and repo basename, gives the gate MC_DOCKER_HOLDER, MC_DOCKER_RUN and MC_DOCKER_REPO, and releases the lease in a finally. A runtime that cannot start makes an allowUnavailable gate unavailable (ok, ran false, exit 69, output naming the docker reason) and any other gate red, neither run. runGate takes docker and holderPid as injectable parameters for tests. Nothing changes until memoro's selector sends needs; the field is read from the selector, not the declaration, so repo-gates.json cannot drop it."
+      ],
+      "sessions": 1,
+      "seconds": 974,
+      "cost_usd": 0.041063
+    },
+    {
+      "title": "mc gate starts the runtime for a selection that needs Docker, leased to the detached gate",
+      "done_when": "`mc gate` (`src/mc/commands/gate.js`) runs `ensure` with the detached child's pid when the whole gate's selection (`greenToRecord`) or the INCREMENTAL plan (`incrementalPlan`, `src/mc/gate-fast.js`) names a command with `needs: ['docker']`, and the child exports `MC_DOCKER_HOLDER=$$`; the tests named in `tests/mc/gate-command.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 966,
+      "landed": {
+        "sha": "f597ce7a6231885c54e1deacb0f600ffe08a0f2a",
+        "into": "main",
+        "at": "2026-10-18T16:51:58Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "mc gate starts the runtime for a selection that needs Docker. greenToRecord reports docker on the green it returns (a clean tree against origin/main, a declared select); incrementalPlan reports docker for its commands. When either names a command with needs: ['docker'], mc gate spawns the child as sh -c 'export MC_DOCKER_HOLDER=$$; <run>; echo $? > <log>.exit', sets MC_DOCKER_RUN (gate <repo dir>) and MC_DOCKER_REPO, and after the .pid write calls dockerEnsure with the child's pid as the holder. Nothing releases the lease here: it ends with the child's pid, which liveLeases removes once the gate is gone. A dirty tree or another base does not run the selector, so such a whole gate does not ensure. A failed ensure is one stderr line and the gate runs on. Tests: tests/mc/gate-command.test.js (three new, in the ruling 44 describe) and tests/mc/gate-fast.test.js (the incremental docker flag)."
+      ],
+      "sessions": 1,
+      "seconds": 2249,
+      "cost_usd": 0.212588
+    },
+    {
+      "title": "The runner's chore pass sweeps Docker and stops an idle runtime mc started",
+      "done_when": "`src/mc/docker.js` exports `sweepDocker`; `createRunner`'s `chores()` in `src/mc/run.js` calls it after `reapOrphans()` through `deps.dockerSweep` and says one line when it did something; the tests named in `tests/mc/docker.test.js` and `tests/mc/run.test.js` pass; `mc gate` is green.",
+      "status": "done",
+      "pr": 968,
+      "landed": {
+        "sha": "e073a7f60e1c9939fa4452bdc20bb892bd582cf5",
+        "into": "main",
+        "at": "2026-10-18T17:08:52Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [],
+      "sessions": 1,
+      "seconds": 1541,
+      "cost_usd": 1.11271
+    },
+    {
+      "title": "The page draws one docker line from the state file",
+      "done_when": "`collectPage` in `src/mc/page-collect.js` returns `docker` from `~/.memoro/mc/docker/state.json` (live leases only), and `renderPageLines` in `src/mc/page-render.js` draws one `docker · …` line before the MC line, nothing when the file is absent; the tests named in `tests/mc/page.test.js` pass; every `success_criteria[].met` except the two that are Martin's is true; `mc gate` is green.",
+      "status": "done",
+      "pr": 972,
+      "landed": {
+        "sha": "cb73ea095a764bec40a9652435ac701f253e1711",
+        "into": "main",
+        "at": "2026-10-19T00:05:55Z"
+      },
+      "attempts": 0,
+      "reason": null,
+      "comments": [
+        "The page's docker line reads ~/.memoro/mc/docker/state.json through dockerSection (page-collect.js) and draws through dockerLine (page-render.js), above the MC line; nothing is drawn when the file is absent. Leases are filtered by pidAlive at read time, so a lease whose holder died since the last write is not shown. The page runs no command. front-door.test.js pins the --json key list, which now includes docker. Criteria 6 (live OrbStack check) and 7 (memoro-side round) are Martin's and stay false.",
+        "Failed on 2026-10-18T17:36:41Z: Criteria 7 and 8 of the plan, the live OrbStack check and the post-memoro merge round, are Martin's checks and cannot be measured in a step session, so the merge door refuses this last step; PR #972 is open with the gate green and is not queued."
+      ],
+      "sessions": 1,
+      "seconds": 1312,
+      "cost_usd": 0.048105
+    }
+  ],
+  "sessions": [
+    {
+      "ts": "2026-10-18T14:40:32Z",
+      "kind": "step",
+      "seconds": 442,
+      "land_seconds": null,
+      "pr": 959,
+      "turns": 16,
+      "input": 24,
+      "output": 16964,
+      "cache_read": 409578,
+      "cache_write": 37852,
+      "model": null,
+      "note": "success,queued",
+      "session": "9f00e722-16e8-45ff-8796-51f2e407d73d",
+      "cost_usd": 0.6105516
+    },
+    {
+      "ts": "2026-10-18T15:12:02Z",
+      "kind": "step",
+      "seconds": 1880,
+      "land_seconds": null,
+      "pr": 961,
+      "turns": 60,
+      "input": 48,
+      "output": 84615,
+      "cache_read": 1145407,
+      "cache_write": 358375,
+      "model": null,
+      "note": "success,queued",
+      "session": "ce1ab5b2-bd7f-4ac9-863b-30210bfd600d",
+      "cost_usd": 0.10585758
+    },
+    {
+      "ts": "2026-10-18T15:28:50Z",
+      "kind": "step",
+      "seconds": 974,
+      "land_seconds": null,
+      "pr": 964,
+      "turns": 45,
+      "input": 36,
+      "output": 29986,
+      "cache_read": 959171,
+      "cache_write": 131794,
+      "model": null,
+      "note": "success,queued",
+      "session": "ba0cf15f-9033-4c2a-9b49-edd7eb8c6a81",
+      "cost_usd": 0.041062560000000005
+    },
+    {
+      "ts": "2026-10-18T16:09:49Z",
+      "kind": "step",
+      "seconds": 2249,
+      "land_seconds": null,
+      "pr": 966,
+      "turns": 54,
+      "input": 58,
+      "output": 36251,
+      "cache_read": 2201880,
+      "cache_write": 379517,
+      "model": null,
+      "note": "success,queued",
+      "session": "43fb003e-4b3c-4186-a4e6-31c23fb67f21",
+      "cost_usd": 0.21258834499999998
+    },
+    {
+      "ts": "2026-10-18T16:35:57Z",
+      "kind": "step",
+      "seconds": 1541,
+      "land_seconds": null,
+      "pr": 968,
+      "turns": 38,
+      "input": 34,
+      "output": 14521,
+      "cache_read": 644968,
+      "cache_write": 138632,
+      "model": null,
+      "note": "success,queued",
+      "session": "b72ae6f3-3cca-4b48-a7cf-e53ffdb91d0e",
+      "cost_usd": 1.1127096
+    },
+    {
+      "ts": "2026-10-18T17:36:58Z",
+      "kind": "step",
+      "seconds": 1312,
+      "land_seconds": null,
+      "pr": 972,
+      "turns": 58,
+      "input": 40,
+      "output": 39554,
+      "cache_read": 1100774,
+      "cache_write": 138532,
+      "model": null,
+      "note": "success,failed",
+      "session": "c8483919-43ac-43ba-9df4-9601b307fb2a",
+      "cost_usd": 0.048105239999999994
+    }
+  ],
+  "totals": {
+    "sessions": 6,
+    "seconds": 8398,
+    "land_seconds": 0,
+    "cost_usd": 2.130875,
+    "cost_unknown": 0,
+    "input": 240,
+    "output": 221891,
+    "cache_read": 6461778,
+    "cache_write": 1184702,
+    "first": "2026-10-18T14:40:32Z",
+    "landed": "2026-10-19T00:05:55Z"
+  }
+}
