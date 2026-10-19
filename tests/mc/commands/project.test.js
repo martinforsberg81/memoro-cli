@@ -661,3 +661,143 @@ test('step add to a sent plan appends after the others, and the plan still reads
     assert.deepEqual(f.out, ['mc: sent step 2 — Two (opus)\n']);
   } finally { f.cleanup(); }
 });
+
+/** A draft with one criterion and one step, `One`, so a step edit has a step to change. */
+async function draftWithStep(f) {
+  await draftWithCriterion(f);
+  assert.equal(await run([...STEP, '--instruction-file', instructionFile(f)], f.deps), 0);
+  f.out.length = 0;
+}
+
+/**
+ * A sent plan, `sent`, in the temp home with one step, `One`, and the register
+ * at `f.deps.root` holding `steps` for it. `steps` null is no register entry at
+ * all, which is a plan the runner has not seen. Returns the plan file's path.
+ */
+function sentStep(f, steps) {
+  const dir = join(f.home, 'mc', 'sent');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, 'PLAN.json');
+  writeFileSync(file, `${JSON.stringify({ ...JSON.parse(repoPlan('sent')), repo: 'memoro-cli' }, null, 2)}\n`);
+  const root = join(f.home, 'work');
+  const path = registerPath(root, 'sent');
+  const text = steps === null ? null : JSON.stringify({ project: 'sent', repo: 'memoro-cli', steps, criteria: [] });
+  Object.assign(f.deps, { root, read: (p) => (p === path ? text : null) });
+  return file;
+}
+
+test('step edit changes a draft step\'s model and done-when, keeps the rest of its runner, and names the fields', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithCriterion(f);
+    assert.equal(await run([...STEP, '--effort', 'high', '--instruction-file', instructionFile(f)], f.deps), 0);
+    f.out.length = 0;
+    assert.equal(await run(['step', 'edit', 'alpha', '1', '--model', 'opus', '--done-when', 'It is tested.'], f.deps), 0);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.deepEqual(plan.steps, [{
+      title: 'One', status: 'ready', done_when: 'It is tested.', instruction: ['Do the thing.', 'Then test it.'], runner: { model: 'opus', effort: 'high' },
+    }]);
+    assert.deepEqual(draftProblems(plan), []);
+    assert.deepEqual(f.out, ['mc: alpha step 1 — model, done_when\n']);
+    assert.equal(f.err.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('step edit changes a draft step\'s title and instruction, and leaves its runner', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    const md = instructionFile(f, 'Rewrite it.\n\nThen run it.\n');
+    assert.equal(await run(['step', 'edit', 'alpha', '1', '--title', 'Renamed', '--instruction-file', md], f.deps), 0);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.equal(plan.steps[0].title, 'Renamed');
+    assert.deepEqual(plan.steps[0].instruction, ['Rewrite it.', 'Then run it.']);
+    assert.deepEqual(plan.steps[0].runner, { model: 'haiku' });
+    assert.deepEqual(f.out, ['mc: alpha step 1 — title, instruction\n']);
+  } finally { f.cleanup(); }
+});
+
+test('step edit with a title whose key another step has is refused, exit 1, and the draft is untouched', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    assert.equal(await run(['step', 'add', 'alpha', 'Two', '--model', 'opus', '--done-when', 'It runs.', '--instruction-file', instructionFile(f)], f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['step', 'edit', 'alpha', '2', '--title', 'One'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: step 1 is called that already\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('step edit on a sent plan\'s step the register holds as ready changes it, and the plan still reads', async () => {
+  const f = draftFixture();
+  try {
+    const file = sentStep(f, [{ key: 'One', status: 'ready' }]);
+    assert.equal(await run(['step', 'edit', 'sent', '1', '--done-when', 'It is tested.'], f.deps), 0);
+    const text = readFileSync(file, 'utf8');
+    assert.deepEqual(readPlanText(text).problems, []);
+    assert.equal(JSON.parse(text).steps[0].done_when, 'It is tested.');
+    assert.deepEqual(f.out, ['mc: sent step 1 — done_when\n']);
+  } finally { f.cleanup(); }
+});
+
+test('step edit on a sent plan with no register entry is a plan the runner has not seen, and is editable', async () => {
+  const f = draftFixture();
+  try {
+    const file = sentStep(f, null);
+    assert.equal(await run(['step', 'edit', 'sent', '1', '--model', 'opus'], f.deps), 0);
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).steps[0].runner.model, 'opus');
+  } finally { f.cleanup(); }
+});
+
+test('step edit on a sent plan\'s step that has started is refused, exit 1, and the plan is untouched', async () => {
+  const f = draftFixture();
+  try {
+    for (const state of [{ key: 'One', status: 'running' }, { key: 'One', status: 'done', pr: 7 }, { key: 'One', status: 'ready', pr: 12 }]) {
+      const file = sentStep(f, [state]);
+      const before = readFileSync(file, 'utf8');
+      f.err.length = 0;
+      assert.equal(await run(['step', 'edit', 'sent', '1', '--model', 'opus'], f.deps), 1);
+      assert.match(f.err.join(''), /^mc: step 1 of sent is (running|done \(PR #7\)|ready \(PR #12\)) — a step that has started is frozen\n$/u);
+      assert.equal(readFileSync(file, 'utf8'), before);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('step edit with a step number out of range, no field, or a model that is not haiku or opus is usage, exit 2', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['step', 'edit', 'alpha', '0', '--model', 'opus'], f.deps), 2);
+    assert.match(f.err.at(-1), /^mc: 0 is not a step number — 1 is the plan's first\n$/u);
+    assert.equal(await run(['step', 'edit', 'alpha', '2', '--model', 'opus'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: alpha has 1 step — step 2 is not one\n');
+    assert.equal(await run(['step', 'edit', 'alpha', '1'], f.deps), 2);
+    assert.match(f.err.at(-1), /^mc: step edit needs --title, --model, --effort, --done-when or --instruction-file\n$/u);
+    assert.equal(await run(['step', 'edit', 'alpha', '1', '--model', 'sonnet'], f.deps), 2);
+    assert.match(f.err.at(-1), /a step names --model haiku or opus \(ruling 42\) — no default/u);
+    assert.equal(await run(['step', 'edit', 'alpha', '1', '--after', 'memoro-cli:other', '--model', 'opus'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: step edit takes no --after\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('step edit whose done-when names a person or a dependency, or whose instruction file is missing, is refused and the draft is untouched', async () => {
+  const f = draftFixture();
+  try {
+    await draftWithStep(f);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['step', 'edit', 'alpha', '1', '--done-when', 'by hand'], f.deps), 1);
+    assert.equal(await run(['step', 'edit', 'alpha', '1', '--done-when', 'mc step blocked --on-project x'], f.deps), 1);
+    assert.equal(await run(['step', 'edit', 'alpha', '1', '--done-when', '   '], f.deps), 2);
+    assert.equal(await run(['step', 'edit', 'alpha', '1', '--instruction-file', join(f.home, 'missing.md')], f.deps), 2);
+    assert.deepEqual(f.err, [
+      'mc: --done-when names by hand — a step ends on a check, never on a person\n',
+      'mc: a dependency goes in --after <repo>:<project>\n',
+      'mc: a step needs --done-when "<check>" — when it is finished\n',
+      `mc: cannot read ${join(f.home, 'missing.md')}\n`,
+    ]);
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
