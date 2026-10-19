@@ -12,6 +12,8 @@
  *                                                                 add a step, after the others, to a draft or a sent plan
  *   mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
  *                                                                 change the named fields of a step, of a draft or of a sent plan that has not started
+ *   mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner
+ *   mc project <name> [--json] [--offline]       show a project: a sent plan as mc status <name> does, a draft as it stands
  *   mc project criterion met [<project>] <n>     record that success criterion <n> holds
  *   mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold
  *   mc project import [--apply]                  copy every plan on origin/main that is not under ~/mc/programs/ there
@@ -24,9 +26,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 
 import { defaultRepos, listArchived, listPlans, listRepoPlans } from '../brief-collect.js';
-import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, readPlanText, validatePlan } from '../plan-schema.js';
+import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
-import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, withPlanLock, writePlanFile } from '../plan-write.js';
+import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, withPlanLock, writePlanFile } from '../plan-write.js';
 import { parseStepEnv, readEntry, stepKey, updateCriterion } from '../register.js';
 import { programsHome, workRoot } from '../paths.js';
 import { scanArgs } from './flags.js';
@@ -36,6 +38,8 @@ const NEW_FLAGS = ['--repo', '--goal', '--contract', '--out-of-scope'];
 const EDIT_FLAGS = ['--goal', '--contract', '--out-of-scope'];
 const STEP_ADD_FLAGS = ['--model', '--effort', '--done-when', '--instruction-file', '--after'];
 const STEP_EDIT_FLAGS = ['--title', '--model', '--effort', '--done-when', '--instruction-file'];
+/** The words `mc project` takes as its verb. Any other single word is a project's name, for `mc project <name>`. */
+const VERB_WORDS = ['import', 'criterion', 'new', 'edit', 'step', 'send'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -47,7 +51,7 @@ export async function run(argv, deps = {}) {
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
 
   const scanned = scanArgs(argv, {
-    booleans: ['--apply'],
+    booleans: ['--apply', '--json', '--offline'],
     strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title'],
     repeatable: ['--contract', '--out-of-scope'],
   });
@@ -60,6 +64,17 @@ export async function run(argv, deps = {}) {
     return importPlans(scanned.flags.apply, { ...deps, env, stdout, stderr });
   }
   if (scanned.flags.apply) { stderr.write(usage()); return 2; }
+  if (noun === 'send') {
+    const extra = onlyFlags(scanned, []);
+    if (extra) { stderr.write(`mc: send takes no ${extra}\n`); return 2; }
+    return sendPlan(scanned, { ...deps, env, stdout, stderr });
+  }
+  if (noun !== undefined && !VERB_WORDS.includes(noun)) {
+    if (scanned.positional.length !== 1) { stderr.write(usage()); return 2; }
+    const extra = onlyFlags(scanned, ['--json', '--offline']);
+    if (extra) { stderr.write(`mc: ${noun} takes no ${extra}\n`); return 2; }
+    return showProject(noun, scanned.flags, { ...deps, env, stdout, stderr });
+  }
   if (noun === 'new') {
     const extra = onlyFlags(scanned, NEW_FLAGS);
     if (extra) { stderr.write(`mc: new takes no ${extra}\n`); return 2; }
@@ -105,6 +120,115 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${error?.message || error}\n`);
     return 1;
   }
+}
+
+/**
+ * `mc project send <project>` — checks a draft whole (`sendProblems`) and, when it
+ * passes, renames it to `PLAN.json`. That rename is the handover: the runner and
+ * every reader take a plan from `PLAN.json`, and none of them reads a draft. A
+ * refused draft stays where it is, and says why, one problem a line.
+ */
+function sendPlan(scanned, deps) {
+  const { env, stdout, stderr } = deps;
+  const home = deps.home || programsHome(env);
+  const rename = deps.rename || renameSync;
+
+  const target = scanned.positional.slice(1);
+  if (target.length !== 1) { stderr.write(usage()); return 2; }
+  const [project] = target;
+  const found = findProjectDir(home, project);
+  if (!found) { stderr.write(`mc: no project ${project} under ${home}\n`); return 1; }
+  if (found.sent) { stderr.write(`mc: ${project} is sent already — ${found.file}\n`); return 1; }
+  const sentFile = join(found.dir, PLAN_FILE);
+
+  let outcome;
+  try {
+    outcome = withPlanLock(found.dir, () => {
+      const plan = readDraftOrPlan(found.file);
+      const problems = sendProblems(plan);
+      if (problems.length) return { problems };
+      rename(found.file, sentFile);
+      return { plan };
+    });
+  } catch (error) {
+    stderr.write(`mc: ${error?.message || error}\n`);
+    return 1;
+  }
+  if (outcome.problems) {
+    stderr.write(`mc: ${project} is not sent:\n`);
+    for (const problem of outcome.problems) stderr.write(`  ${problem}\n`);
+    return 1;
+  }
+  stdout.write(`mc: ${project} sent — ${sentFile}\n`);
+  stdout.write(`${runnerLine(outcome.plan)}\n`);
+  return 0;
+}
+
+/** What the runner does with a sent plan's first step, read off `planState`: it takes it, or says what it waits for. */
+function runnerLine(plan) {
+  const state = planState(plan);
+  if (state.status === 'ready') return 'the runner takes step 1 on its next pass';
+  const { kind, name } = state.step?.blocked_by ?? {};
+  return `step 1 waits: ${kind} ${name}`;
+}
+
+/**
+ * `mc project <name> [--json] [--offline]` — a sent plan, or a project of a
+ * repository with no draft here, is `mc status <name>`: the same call, so the two
+ * print the same. A draft is printed as it stands, with whether `send` would take
+ * it. `--json` and `--offline` are `mc status`'s, and a draft has neither to give.
+ */
+async function showProject(name, flags, deps) {
+  const { env, stdout, stderr } = deps;
+  const home = deps.home || programsHome(env);
+  const found = findProjectDir(home, name);
+  if (!found || found.sent) {
+    const argv = [name, ...(flags.json ? ['--json'] : []), ...(flags.offline ? ['--offline'] : [])];
+    const statusProject = deps.statusProject || (async (args, opts) => (await import('./status-project.js')).run(args, opts));
+    return statusProject(argv, { stdout, stderr });
+  }
+  const given = ['--json', '--offline'].filter((flag) => flags[flag.slice(2)]);
+  if (given.length) { stderr.write(`mc: ${name} is a draft — it has no ${given[0]}\n`); return 2; }
+
+  let plan;
+  try {
+    plan = readDraftOrPlan(found.file);
+  } catch (error) {
+    stderr.write(`mc: ${error?.message || error}\n`);
+    return 1;
+  }
+  for (const line of draftLines(name, found, plan)) stdout.write(`${line}\n`);
+  return 0;
+}
+
+/** The lines `mc project <name>` prints for a draft: what it is, its criteria and steps, and whether `send` would take it. */
+function draftLines(name, found, plan) {
+  const lines = [`${name} — draft · ${plan.repo} · ${found.programme}`, `  file   ${found.file}`, ''];
+  const goal = Array.isArray(plan.goal) ? plan.goal[0] : undefined;
+  if (goal) lines.push(goal, '');
+
+  lines.push('CRITERIA');
+  const criteria = Array.isArray(plan.success_criteria) ? plan.success_criteria : [];
+  if (criteria.length === 0) lines.push('  none yet');
+  criteria.forEach((criterion, index) => lines.push(`  ${index + 1}  ${criterion?.criterion}`));
+  lines.push('', 'STEPS');
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  if (steps.length === 0) lines.push('  none yet');
+  steps.forEach((step, index) => {
+    const runner = [step?.runner?.model, step?.runner?.effort].filter(Boolean).join(' ');
+    lines.push(`  ${index + 1}  ${step?.title}  ${runner}`.trimEnd());
+    if (step?.status === 'blocked') lines.push(`  waits for ${step.blocked_by?.name}`);
+  });
+
+  lines.push('');
+  const problems = sendProblems(plan);
+  if (problems.length === 0) {
+    lines.push(`send: mc project send ${name}`);
+  } else {
+    lines.push('send would refuse:');
+    for (const problem of problems) lines.push(`  ${problem}`);
+  }
+  return lines;
 }
 
 /**
@@ -643,6 +767,8 @@ export function usage() {
     '        mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan\n',
     '        mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
     '        mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
+    '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
+    '        mc project <name> [--json] [--offline]      show a project: a sent plan as mc status <name> does, a draft as it stands\n',
     '        mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
     '        mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold\n',
     '        the project defaults to MC_STEP\'s in a runner session\n',
