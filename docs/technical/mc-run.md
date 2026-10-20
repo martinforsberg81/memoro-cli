@@ -290,12 +290,12 @@ project used to.
    met is `unmet`: the runner says so once in `runner.log`
    (`<project>: every step is done, but success criterion N is not met
    … — not archived`) and leaves it, its workarea and anything waiting on it
-   as they are. A done plan has the directory removed, its
+   as they are. A done repository plan has the directory removed, its
    README kept as `closeout/<project>.md` with the links into it rewritten to
    that, and a `project_log.md` row left behind it, one PR per repository, landed through
    `mc merge --docs` — but only while no lane is in a session, because the
    gate refuses a second landing rather than queueing it. See
-   [`mc-tidy.md`](mc-tidy.md).
+   [`mc-tidy.md`](mc-tidy.md). A done project under `~/mc/programs/` is not in this pull request: it is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan.
 5. **Close** the workareas whose project is finished — whose archive PR merged
    in 4, or whose plan an earlier archive already took off `main`, which
    `project_log.md` is what still knows.

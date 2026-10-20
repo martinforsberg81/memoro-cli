@@ -53,10 +53,12 @@ archived, so a pass cut short is finished by the next one.
 
 ## What archiving does
 
-`docs/project/<programme>/<project>/` is `git rm -r`'d and one row is
+For a plan in a repository, `docs/project/<programme>/<project>/` is `git rm -r`'d and one row is
 appended to that repository's `docs/project/project_log.md`, and the
 project's closeout is added (§ *The closeout*). Nothing else in
 the repository is touched, and `docs/plans/` is out of it entirely.
+
+A project under `~/mc/programs/` takes another route (ruling 48, `src/mc/project-archive.js`). It is archived by `mc project archive <project>`, or by the runner once it has been done for `ARCHIVE_HOLD_MS`, 24 hours. Done is the register's word: the latest of its steps' `updated` and its criteria's `at` is the moment it became done, and a project still inside the hold is said so in `runner.log` and waits. The repository gets one thing only, its row in `docs/project/project_log.md`, landed as a docs-only pull request through `runDocsMerge`; a row already on main is never rewritten or added twice. The plan stays at `~/mc/programs/<programme>/<project>/PLAN.json`, and `CLOSEOUT.json` beside it is the closeout and the mark that the project is archived. Nothing is removed from a repository by this route. No reader of plans lists an archived project, and `--after`, project blockers, the workarea closing and rule P count it as archived. Plans still in a repository are archived as above until they leave the repositories (`plans-out-of-repos`). A programme is never archived automatically.
 
 **The row is preferred, never waited for.** If the project's own close-out
 step already wrote a row naming it, the runner leaves that row alone and only
@@ -115,15 +117,17 @@ one that removed it; when that fails the file says `plan: null`. A batch of
 only those is titled `Closeout N archived project(s): …` and lands like any
 archive, one open `mc-archive-*` PR at a time.
 
+A project under `~/mc/programs/` leaves no file in git. Its closeout is `CLOSEOUT.json` beside its `PLAN.json` in mc, built the same way and written once its row is on `origin/main`, so a closeout never names a row that is not there. That file is also the mark that the project is archived: `programsPlans` stops listing the project, and `programsArchived` lists it.
+
 The closeout is what lets a project's local data go: the register file is
-removed only once the closeout is on `origin/main`.
+removed only once the closeout is on `origin/main`, or, for a project under `~/mc/programs/`, once its `CLOSEOUT.json` is beside its plan.
 
 ## What closing a workarea does
 
 A workarea is **closable** when three facts hold, and no judgement is made
 beyond them:
 
-- its project is finished — its plan on main says `status: done`, **or** the
+- its project is finished — its plan on main, or under `~/mc/programs/`, says `status: done`, **or** the
   plan is gone and `docs/project/project_log.md` carries the row the archive
   wrote for it,
 - its worktree has no uncommitted change,
@@ -246,7 +250,7 @@ stays.
 
 **P — an archived project.** A register entry under `runner/projects/` whose
 repository's origin/main has its row in `project_log.md`, no plan directory,
-and its closeout (`docs/project/<programme>/closeout/<project>.json`), and
+and its closeout (`docs/project/<programme>/closeout/<project>.json`; for a project under `~/mc/programs/`, its `CLOSEOUT.json` beside its plan, which is then no plan directory), and
 which has no area on this machine — neither `step/<project>` nor a legacy
 `~/mc/<project>`. Its session logs (`<project>-<stamp>.{jsonl,json,json.err}`,
 gzipped or not), `log/closed/<project>/`, its scratch directories, the
