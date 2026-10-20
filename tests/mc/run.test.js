@@ -3344,6 +3344,74 @@ test('--once is one step and no archiving', async () => {
   assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/step/alpha/memoro']);
 });
 
+/* ------------------------------------------------- programmes (ruling 48) */
+
+/** A plan under `~/mc/programs/`: the done plan, naming the repository it belongs to. */
+const programsPlan = (repo, text = done()) => JSON.stringify({ ...JSON.parse(text), repo }, null, 2);
+
+/** The register entry of a project whose last step and criterion were settled at `at`. */
+const registered = (project, at) => JSON.stringify({
+  project, repo: 'memoro', programme: 'prog', plan: `/w/programs/prog/${project}/PLAN.json`,
+  steps: [{ status: 'done', updated: at }],
+  criteria: [{ criterion: 'It is done.', met: true, at }],
+});
+
+test('a programme project done for 25 hours is archived in the round: closeout beside its plan, one PR, and its area closed in the same pass', async () => {
+  const f = fixture({
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    runs: RUNS_HEAD + ranRow('over'),
+    session: okSession(),
+  });
+  f.files['/w/programs/prog/over/PLAN.json'] = programsPlan('memoro');
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-28T09:00:00Z');
+  await round(createRunner({ deps: f.deps }));
+
+  const wt = '/w/runner/archive/memoro-programs';
+  assert.ok(f.files['/w/programs/prog/over/CLOSEOUT.json'], 'the closeout is written beside the plan');
+  assert.ok(f.files['/w/programs/prog/over/PLAN.json'], 'the plan stays where it is');
+  assert.deepEqual(f.calls.docsRounds.map((call) => call.repoPath), [wt], 'the archive PR lands through mc merge --docs');
+  assert.ok(f.calls.gh.some((c) => c[0] === wt && c[2] === 'create'));
+  const row = f.files[`${wt}/docs/project/project_log.md`].trim().split('\n').at(-1);
+  assert.match(row, /^\| 2026-08-29 \| prog \| over \| delivered \|/u);
+
+  assert.deepEqual(f.calls.rmdirs, ['/w/over'], 'the area goes in the pass that archived its project');
+  const runnerLog = f.files['/w/runner/log/runner.log'];
+  assert.match(runnerLog, /prog\/over archived — CLOSEOUT\.json written/u);
+  assert.match(runnerLog, /close: over removed — worktree, branch over/u);
+});
+
+test('a programme project done two hours ago is not archived, and its line is said once over two rounds', async () => {
+  const f = fixture({ projectLog: { memoro: LOG_HEAD }, session: okSession() });
+  f.files['/w/programs/prog/young/PLAN.json'] = programsPlan('memoro');
+  f.files['/w/runner/projects/young.json'] = registered('young', '2026-08-29T08:00:00Z');
+  const runner = createRunner({ deps: f.deps });
+  await round(runner);
+  await round(runner);
+
+  assert.deepEqual(f.calls.docsRounds, [], 'nothing was opened for it');
+  assert.equal(f.files['/w/programs/prog/young/CLOSEOUT.json'], undefined);
+  const said = f.files['/w/runner/log/runner.log'].split('\n').filter((line) => /young: .* — not archived yet$/u.test(line));
+  assert.equal(said.length, 1, 'said once, not once a round');
+  assert.match(said[0], /young: done 2h ago — archived after 24h — not archived yet$/u);
+});
+
+test('a repository plan done is still archived by archiveDone in the round a programme project is', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    session: okSession(),
+  });
+  f.files['/w/programs/prog/away/PLAN.json'] = programsPlan('memoro');
+  f.files['/w/runner/projects/away.json'] = registered('away', '2026-08-28T09:00:00Z');
+  await round(createRunner({ deps: f.deps }));
+
+  assert.deepEqual(f.calls.rm, ['docs/project/prog/over'], 'the repository plan goes as it did');
+  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro prog\/over removed — row added to project_log\.md/u);
+  assert.ok(f.files['/w/programs/prog/away/CLOSEOUT.json'], 'and the programme project is archived too');
+  assert.deepEqual(f.calls.docsRounds.map((call) => call.repoPath).sort(), ['/w/runner/archive/memoro', '/w/runner/archive/memoro-programs']);
+});
+
 /* ------------------------------------------------------------- closing */
 
 /**

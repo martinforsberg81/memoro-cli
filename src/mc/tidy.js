@@ -39,6 +39,7 @@ import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js'
 import { log } from './logger.js';
 import { PLAN_HOME, STEP_HOME, WORK_HOME, mcHome, runnerDir, workRoot } from './paths.js';
 import { lsTreeArgs, planPath } from './plan-source.js';
+import { closeoutFileOf } from './project-archive.js';
 import { listEntries, registerPath } from './register.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { serversFor } from './test-environment.js';
@@ -187,12 +188,15 @@ export function gatherTidyFacts({
         item.in_log = repo.rows.some((row) => row.project === entry.project
           && (!row.programme || !entry.programme || row.programme === entry.programme));
         // A plan under `~/mc/programs/` is a file on this machine, not a path in origin/main's tree.
-        if (isAbsolute(entry.plan || '')) item.plan_on_main = present(entry.plan);
-        else {
+        // Its archiving leaves a CLOSEOUT.json beside it (ruling 48): that file is the closeout.
+        if (isAbsolute(entry.plan || '')) {
+          item.plan_on_main = present(entry.plan) && !present(closeoutFileOf(entry.plan));
+          item.closeout_on_main = present(closeoutFileOf(entry.plan));
+        } else {
           const planDir = entry.plan ? dirname(entry.plan) : dirname(planPath(entry.programme, entry.project));
           item.plan_on_main = [...repo.tree].some((path) => path.startsWith(`${planDir}/`));
+          item.closeout_on_main = Boolean(entry.programme) && repo.tree.has(closeoutPath(entry.programme, entry.project));
         }
-        item.closeout_on_main = Boolean(entry.programme) && repo.tree.has(closeoutPath(entry.programme, entry.project));
       } else if (!facts.git_error) {
         item.error = `its repository ${entry.repo || '(none)'} is not one tidy asks`;
       }
@@ -352,7 +356,10 @@ function judge(rule, ...args) {
 /**
  * (P) A project's local data goes once git holds what is worth keeping: its
  * row in project_log.md, no plan directory and its closeout, all on
- * origin/main, and no area for it on this machine.
+ * origin/main, and no area for it on this machine. A project under
+ * `~/mc/programs/` is archived with its CLOSEOUT.json beside its plan
+ * (ruling 48): that file on this machine is its closeout, and a plan with
+ * one beside it counts as no plan directory.
  */
 export function projectPurge(item, facts) {
   if (facts.git_error) return { target: false, why: `git could not answer — ${facts.git_error}` };
