@@ -244,6 +244,8 @@ stays.
 | `~/mc/runner/` (state) | `projects/`, `log/`, `log/closed/`, `scratch/` | an archived project's files (P) |
 | `~/.claude/projects/` | transcripts, `<uuid>/`, `memory/` | transcripts and leftovers (P, G, L) |
 
+In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy removes only git worktrees, and the registers sit beside their plans ([mc-layout.md](mc-layout.md)).
+
 **P — an archived project.** A register entry under `runner/projects/` whose
 repository's origin/main has its row in `project_log.md`, no plan directory,
 and its closeout (`docs/project/<programme>/closeout/<project>.json`; for a project under `~/mc/programs/`, its `CLOSEOUT.json` beside its plan, which is then no plan directory), and

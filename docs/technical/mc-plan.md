@@ -12,6 +12,8 @@ for is the `plan` role's to say. Martin is at the terminal for all of it.
 `--archive` is the one other thing it does: it ends a programme
 ([below](#archiving-a-programme)).
 
+The directory is `~/mc/plan/<programme>/` in layout 1 and `~/mc/programs/<programme>/` in layout 2; [mc-layout.md](mc-layout.md) says which holds.
+
 **It predicts nothing beyond that**, and that is the point rather than an
 omission. How many projects the programme needs, what they are called, whether
 a plan comes out of this session at all, and by what route it reaches `main`
