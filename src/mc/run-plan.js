@@ -736,11 +736,12 @@ function planExcerpt(plan, index, step) {
  * `plan`); the prompt quotes the part of it this step needs and says where the
  * whole file is, rather than carrying the file — see `planExcerpt`.
  */
-export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, interrupted = null, stacked = null, now = new Date() }) {
+export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, answered = null, interrupted = null, stacked = null, now = new Date() }) {
   const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
     ...conflictPreamble(conflicts),
     ...retryPreamble(retry, repo),
+    ...answeredPreamble(retry ? null : answered, repo),
     ...interruptedPreamble(interrupted),
     ...stackedPreamble(retry ? null : stacked),
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
@@ -807,6 +808,26 @@ function retryPreamble(retry, repo) {
     'Start there — `gh pr view` and the diff — fix what the gate named (never by',
     'lowering a threshold or skipping a test), commit, run `mc publish` (it pushes to the same branch and lists your commits under the description; `--body-file` when the description itself is now wrong), and run',
     `\`mc merge ${repo} ${retry.pr}\` again. No new pull request.`,
+    '',
+  ];
+}
+
+/**
+ * What a session is told first when its step was parked on a question and a
+ * person answered it with the pull request kept (`mc step ready` on a blocked
+ * step): the pull request is open on this branch with the earlier session's
+ * work, and the answer is what to build the rest under. Empty otherwise.
+ */
+function answeredPreamble(answered, repo) {
+  if (!answered?.pr) return [];
+  return [
+    `This step was parked${answered.name ? ` on the decision \`${answered.name}\`` : ''}, and it has been answered.`,
+    `The answer: ${answered.answer || '(no words given — read the step\'s notes with `mc step`)'}`,
+    `#${answered.pr} is still open, on this branch, with the earlier session's work.`,
+    'Start there — `gh pr view` and the diff; its body says what was left — and',
+    'build the rest under the answer. Commit, run `mc publish` (it pushes to the',
+    'same branch; `--body-file` when the description is now wrong), and run',
+    `\`mc merge ${repo} ${answered.pr}\`. No new pull request.`,
     '',
   ];
 }
