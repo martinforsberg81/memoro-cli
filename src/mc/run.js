@@ -2458,6 +2458,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const retry = standingBefore?.pr && standingBefore.attempts > 0 && standingBefore.reason
       ? { pr: standingBefore.pr, reason: standingBefore.reason, attempts: standingBefore.attempts, red: standingBefore.red || null }
       : null;
+    // A step parked on a question and answered with its pull request kept
+    // (`mc step ready`): the session goes on from that pull request.
+    const answered = !retry && standingBefore?.pr && standingBefore.answered
+      ? { ...standingBefore.answered, pr: standingBefore.pr }
+      : null;
     // A resumed step keeps the stack it was started on; the branch did not move.
     const stacked = resuming ? (standingBefore?.stacked_on ?? null) : (moved.stacked || null);
     // A fresh session on an interrupted step is told what the one before it
@@ -2466,7 +2471,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const handed = { ...plan.plan, success_criteria: standing(plan).plan?.success_criteria ?? plan.plan.success_criteria };
     const prompt = resuming
       ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
-      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, interrupted, stacked, now });
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, now });
     // Haiku workers (`runner.subagents: on`): the role is told how to use
     // them through the same include the role files use for a shared passage.
     const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));

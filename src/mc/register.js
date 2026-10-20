@@ -111,7 +111,7 @@ export function registerLogPath(root) {
 export function emptyStep() {
   return {
     key: null, status: 'ready', pr: null, branch: null, blocked_by: null, reason: null, comments: [],
-    session: null, attempts: 0, landed: null, stacked_on: null, interrupted: null, red: null, updated: null,
+    session: null, attempts: 0, landed: null, stacked_on: null, interrupted: null, red: null, answered: null, updated: null,
   };
 }
 
@@ -194,6 +194,16 @@ function normaliseStep(step) {
         files: step.red.files.map(String),
         detail: typeof step.red.detail === 'string' ? step.red.detail : null,
         names: Array.isArray(step.red.names) ? step.red.names.map(String) : [],
+      }
+      : null,
+    // The answer a person gave a step parked on a question, when its pull
+    // request was kept (`mc step ready`): `{ name, answer, at }`, for the
+    // preamble of the session that goes on from that pull request.
+    answered: plain(step.answered) && typeof step.answered.at === 'string'
+      ? {
+        name: typeof step.answered.name === 'string' ? step.answered.name : null,
+        answer: typeof step.answered.answer === 'string' ? step.answered.answer : null,
+        at: step.answered.at,
       }
       : null,
     updated: typeof step.updated === 'string' ? step.updated : null,
@@ -434,6 +444,7 @@ export function patchStep(entry, index, patch = {}, now = null) {
   if (next.status !== 'blocked') next.blocked_by = null;
   if (next.status !== 'running') next.session = null;
   if (next.status !== 'ready' && next.status !== 'running') next.interrupted = null;
+  if (['blocked', 'failed', 'landing', 'done'].includes(next.status)) next.answered = null;
   if (comment) next.comments = [...(next.comments || []), String(comment)];
   next.updated = now;
   const steps = entry.steps.map((step, i) => (i === index ? next : step));

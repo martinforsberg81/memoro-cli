@@ -17,7 +17,11 @@
  *
  * `ready` is refused while the step's pull request is still open: the way
  * back from a failed step is to land or close that pull request first, and
- * a step set ready over an open one would be run again on top of it. An open
+ * a step set ready over an open one would be run again on top of it. A
+ * `blocked` step is the exception: it was parked on a question, and its one
+ * open pull request that changes files is the work to go on from. It is
+ * written on the step with the answer (`answered`), and the runner goes back
+ * to its branch as for a step the merger sent back. An open
  * pull request on the step's branch that changes no file — a blocked
  * session's placeholder for its question — is closed instead: the runner
  * starts nothing while a project has one open, so it held settings-polish
@@ -125,27 +129,49 @@ export async function run(argv, deps = {}) {
       stderr.write(`mc: ${target.project} step ${index + 1} landed as ${sha7} into ${step.landed.into || 'main'}${step.landed.at ? ` on ${step.landed.at}` : ''} — it is done, not ready: mc step done ${target.project} ${index + 1}. Work it left undone is a new step in the plan.\n`);
       return 1;
     }
-    if (step.pr &&(deps.prState || prState)(entry.repo, step.pr, env) === 'OPEN') {
+    // A step parked on a question keeps the work its session left: the one
+    // open pull request on its branch is written on the step, and the runner
+    // goes back to that branch (`placeBranch`) with the answer in the prompt.
+    // Refusing here left note-window step 5 parked behind its own #13931,
+    // which nobody was working on (2026-10-20).
+    const parked = step.status === 'blocked';
+    const pinnedOpen = step.pr ? (deps.prState || prState)(entry.repo, step.pr, env) === 'OPEN' : false;
+    if (pinnedOpen && !parked) {
       stderr.write(`mc: #${step.pr} is still open — land it or close it first; a step set ready over an open pull request is run again on top of it\n`);
       return 1;
     }
     const held = step.branch ? (deps.branchPrs || branchPrs)(entry.repo, step.branch, env) : [];
     const working = held.filter((pr) => pr.changedFiles !== 0);
-    if (working.length) {
+    const kept = parked
+      ? (pinnedOpen ? [{ number: step.pr }] : working.length === 1 ? working : [])
+      : [];
+    if (kept.length) {
+      patch.status = 'ready';
+      patch.pr = Number(kept[0].number);
+      patch.reason = null;
+      patch.answered = { name: step.blocked_by?.name || null, answer: flags.reason || null, at: now };
+      if (flags.reason) patch.comment = `Set ready on ${now}: ${flags.reason}`;
+      stdout.write(`mc: #${patch.pr} stays open on ${step.branch || 'its branch'} — the next session goes on from it\n`);
+    } else if (working.length) {
       stderr.write(`mc: ${working.map((pr) => `#${pr.number}`).join(', ')} on ${step.branch} ${working.length === 1 ? 'is' : 'are'} open and change${working.length === 1 ? 's' : ''} files — land or close ${working.length === 1 ? 'it' : 'them'} first\n`);
       return 1;
     }
-    for (const pr of held) {
-      const why = `Closed by mc step ready: ${target.project} step ${index + 1} starts again from main, and this pull request changes no file.`;
+    for (const pr of held.filter((p) => p.changedFiles === 0)) {
+      const why = kept.length
+        ? `Closed by mc step ready: ${target.project} step ${index + 1} goes on from #${patch.pr}, and this pull request changes no file.`
+        : `Closed by mc step ready: ${target.project} step ${index + 1} starts again from main, and this pull request changes no file.`;
       if (!(deps.closePr || closePr)(entry.repo, pr.number, step.branch, why, env)) {
         stderr.write(`mc: #${pr.number} on ${step.branch} changes no file but could not be closed — close it, then mc step ready again\n`);
         return 1;
       }
       stdout.write(`mc: closed #${pr.number} — it changed no file, and an open pull request keeps the runner from starting the step\n`);
     }
-    patch.reason = null;
-    patch.pr = null;
-    if (flags.reason) patch.comment = `Set ready on ${now}: ${flags.reason}`;
+    if (!kept.length) {
+      patch.reason = null;
+      patch.pr = null;
+      patch.answered = null;
+      if (flags.reason) patch.comment = `Set ready on ${now}: ${flags.reason}`;
+    }
   }
   if (status === 'done') {
     patch.pr = flags.pr ? Number(flags.pr) : step.pr;

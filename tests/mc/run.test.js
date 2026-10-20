@@ -1750,6 +1750,25 @@ test('a step the merger sent back is handed out again, its own open pull request
   assert.equal(registerOf(f, 'm').steps[0].status, 'landing');
 });
 
+test('a parked step answered with its pull request kept goes on from it, and the prompt carries the answer (note-window step 5, 2026-10-20)', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } }, gh: { m: { number: 9 } },
+    openPrs: { memoro: [{ number: 9, headRefName: 'm', baseRefName: 'main', isDraft: false, title: 'The one step' }] },
+  });
+  f.files['/w/runner/projects/m.json'] = JSON.stringify({
+    project: 'm', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/m/PLAN.json',
+    steps: [{ key: 'The one step', status: 'ready', pr: 9, branch: 'm', reason: null, attempts: 0, comments: [], answered: { name: 'm-check-in', answer: 'No to network-first.', at: '2026-10-20T08:00:00Z' } }],
+  });
+  f.deps.session = (call) => { f.calls.sessions.push(call); return queuesItself(f, 'm', 9)(call); };
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 1, 'the open #9 is the step\'s own work, not somebody\'s in flight');
+  const [call] = f.calls.sessions;
+  assert.match(call.prompt, /^This step was parked on the decision `m-check-in`, and it has been answered\.\nThe answer: No to network-first\./mu);
+  assert.match(call.prompt, /`mc merge memoro 9`\. No new pull request\./u);
+  assert.doesNotMatch(call.prompt, /came back from the merger/u);
+  assert.equal(registerOf(f, 'm').steps[0].status, 'landing');
+});
+
 /**
  * Ruling 30, A: the next step does not wait for the merger. A step after one
  * that is `landing` starts on a new branch on top of that one's, its pull

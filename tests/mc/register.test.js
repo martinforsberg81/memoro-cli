@@ -60,6 +60,19 @@ test('patchStep keeps an interrupted record while the step is ready or running, 
   }
 });
 
+test('patchStep keeps the answer to a parked step while it is ready or running, and clears it once a session has had it', () => {
+  const rec = record([step(), step()]);
+  const answered = { name: 'q-1', answer: 'No.', at: 'now' };
+  let entry = patchStep(seedEntry(rec), 0, { status: 'ready', pr: 9, answered }, 'now');
+  assert.deepEqual(parseEntry(JSON.stringify(entry)).steps[0].answered, answered, 'the register file keeps it');
+  assert.equal(parseEntry(JSON.stringify(entry)).steps[1].answered, null);
+  entry = patchStep(entry, 0, { status: 'running', session: { pid: 4 } }, 'now');
+  assert.deepEqual(entry.steps[0].answered, answered, 'kept while the session runs');
+  for (const [status, extra] of [['landing', {}], ['done', {}], ['failed', { reason: 'r' }], ['blocked', { blocked_by: { kind: 'decision', name: 'q-2' } }]]) {
+    assert.equal(patchStep(entry, 0, { status, ...extra }, 'now').steps[0].answered, null, status);
+  }
+});
+
 test('applyEntry lays the register over the file, and the summary is recomputed from it', () => {
   const rec = record([step({ status: 'done', pr: 1 }), step(), step()]);
   const entry = patchStep(seedEntry(rec), 1, { status: 'failed', reason: 'the gate was red', pr: 9 }, 'now');

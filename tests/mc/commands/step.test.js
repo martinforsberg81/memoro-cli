@@ -177,12 +177,43 @@ test('ready closes a blocked session\'s placeholder pull request — it changes 
   assert.equal(f.step(1).status, 'ready');
 });
 
-test('ready refuses over an open pull request on the step\'s branch that changes files, and closes nothing', async () => {
+test('ready keeps a parked step\'s one open pull request that changes files: the step goes on from it with the answer (note-window step 5, 2026-10-20)', async () => {
   const f = heldBy([{ number: 13599, changedFiles: 0 }, { number: 13600, changedFiles: 4 }]);
+  assert.equal(await run(['ready', 'p', '2', '--reason', 'No to network-first.'], f.deps), 0);
+  assert.deepEqual(f.closed, [['memoro', 13599, 'p-2']]);
+  assert.match(f.out.join(''), /#13600 stays open on p-2 — the next session goes on from it/u);
+  const step = f.step(1);
+  assert.equal(step.status, 'ready');
+  assert.equal(step.pr, 13600);
+  assert.equal(step.blocked_by, null);
+  assert.deepEqual(step.answered, { name: 'marks', answer: 'No to network-first.', at: '2026-09-18T10:00:00Z' });
+  assert.match(step.comments.at(-1), /Set ready on 2026-09-18T10:00:00Z: No to network-first\./u);
+});
+
+test('ready refuses a parked step with two open pull requests that change files, and closes nothing', async () => {
+  const f = heldBy([{ number: 13600, changedFiles: 4 }, { number: 13601, changedFiles: 2 }]);
   assert.equal(await run(['ready', 'p', '2'], f.deps), 1);
   assert.deepEqual(f.closed, []);
-  assert.match(f.err.join(''), /#13600 on p-2 is open and changes files/u);
+  assert.match(f.err.join(''), /#13600, #13601 on p-2 are open and change files/u);
   assert.equal(f.step(1).status, 'blocked');
+});
+
+test('ready still refuses a failed step over its open pull request', async () => {
+  const f = fixture();
+  f.deps.write(registerPath(ROOT, 'p'), { project: 'p', repo: 'memoro', steps: [{ key: 'A', status: 'done', pr: 3 }, { key: 'B', status: 'failed', pr: 13600, branch: 'p-2', reason: 'gave up' }] });
+  f.deps.prState = () => 'OPEN';
+  f.deps.branchPrs = () => [{ number: 13600, changedFiles: 4 }];
+  assert.equal(await run(['ready', 'p', '2'], f.deps), 1);
+  assert.match(f.err.join(''), /#13600 is still open — land it or close it first/u);
+  assert.equal(f.step(1).status, 'failed');
+});
+
+test('a step set ready from main clears an earlier answer, and blocking it again does too', async () => {
+  const f = heldBy([{ number: 13600, changedFiles: 4 }]);
+  assert.equal(await run(['ready', 'p', '2', '--reason', 'yes'], f.deps), 0);
+  assert.ok(f.step(1).answered);
+  assert.equal(await run(['blocked', 'p', '2', '--on', 'again'], f.deps), 0);
+  assert.equal(f.step(1).answered, null);
 });
 
 test('ready stays blocked when the placeholder could not be closed', async () => {
