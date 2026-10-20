@@ -29,11 +29,11 @@
  * project's fault — STOP, the quota, GitHub not answering, a failed fetch — and
  * there the lane waits and asks the same question again (ruling 17).
  *
- * The chores take away what is finished: every plan on main that
- * says `status: done` is archived — its `docs/project/<programme>/<project>/`
- * removed and a `project_log.md` row left behind it — in one PR per
- * repository that the runner merges like any other. `done` is the whole
- * trigger; there is nothing to type. The rules are in archive-plan.js.
+ * The chores take away what is finished: a programme project that has been
+ * done for the hold is archived by `archivePrograms` (project-archive.js), in
+ * one docs-only PR per repository that the runner lands through
+ * `mc merge --docs`. `done` and the hold are the whole trigger; there is
+ * nothing to type.
  *
  * The chore loop also takes away the folder that plan explains: a workarea
  * whose project is finished — its plan has left main, or `project_log.md`
@@ -109,10 +109,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import { resolveLaunch } from '../adapters/index.js';
 import { cacheTtlMs as claudeCacheTtlMs } from '../adapters/claude-code.js';
 import { cacheTtlMs as codexCacheTtlMs } from '../adapters/codex.js';
-import {
-  ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, keptFiles,
-  keptParagraph, logRows, mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rewriteArchivedLinks, rowFor, undocumentedRow,
-} from './archive-plan.js';
+import { logRows } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded, landedThroughRemote, mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collect.js';
@@ -124,7 +121,6 @@ import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
 import { releaseDue } from './step-release.js';
-import { buildCloseout, closeoutPath, closeoutReadmePath, closeoutText, readSessionResults } from './closeout.js';
 import { closable, closeArea, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -162,20 +158,12 @@ import { checkpoint } from './checkpoint.js';
 import {
   DEFAULT_TOOL, DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, INTERRUPT_LIMIT, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, REFUSAL, RESULT_GRACE_MS, RESUME_LIMIT, SERVER_RETRY_MS, TIMEOUT_EXIT,
   WORKAREA_BLOCKS, assembleQueue, checkInPrompt, chooseKind, collectNote, headlessArgs, quietPrompt,
-  helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, landingNote, nextBranch, nextFor,
+  helperDue, holdingPrs, inFlight, intakeNote, nightlyDue, nextBranch, nextFor,
   apiInterruption, initSource, queueFileText, readSessionOutput, recoveryFor, restartPrompt, resumePrompt, sessionResult, sessionSettings, sessionSpoke, sessionStanding, streamSummary, describeSettings, describeWatch,
   stepPrompt, strictQueue, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
-
-/**
- * Archived projects given their missing closeout in one archive PR, at most.
- * The first archive after the closeout landed finds every project archived
- * before it; forty files is still one pull request a person can read through,
- * and the rest follow in the next ones.
- */
-export const CLOSEOUT_BACKFILL_MAX = 40;
 
 /**
  * A session's scratch directory is kept this long after it was last touched.
@@ -1252,38 +1240,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /* --------------------------------------------------------------- landing */
 
-  /**
-   * The archive pull request, landed through `mc merge --docs`.
-   *
-   * It removes `docs/project/<programme>/<project>/` and adds a row to
-   * `project_log.md`, so it is documentation by construction and there is no
-   * test for the gate to run on it — `docs-merge.js` checks that against
-   * GitHub's own file list rather than a local diff, and refuses anything
-   * that touches a line of code. Still through mc's own door, and its
-   * `merged_into` is read like any other.
-   */
-  async function landDocsPr(worktree, name, pr) {
-    const report = await deps.docsMerge({
-      repoPath: worktree,
-      pr: Number(pr),
-      gh: (args) => deps.gh(worktree, args),
-      onProgress: (message) => say(`${name}: ${message}`),
-    });
-    const note = landingNote(report);
-    if (note === 'merged') {
-      // The worktree shares its refs with the repository it was added from, so
-      // this is also how everything downstream of the round learns that main
-      // has moved.
-      deps.git(worktree, ['fetch', '-q', 'origin']);
-      say(`${name}: merged #${pr} into ${report.merged_into} (docs only)`);
-      return true;
-    }
-    if (note.startsWith('off-')) say(`${name}: #${pr} was merged into ${report.merged_into}, NOT main`);
-    else say(`${name}: #${pr} left open — ${report?.reason || 'the docs merge said nothing'}`);
-    return false;
-  }
-
-
   const lastLine = (r) => String(r.stderr || '').trim().split('\n').at(-1) || String(r.stdout || '').trim() || 'no reason given';
 
   /** One row in runs.tsv, header written the first time. Steps and the helper. */
@@ -1338,66 +1294,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /* ------------------------------------------------------------- archiving */
 
   /**
-   * An archive PR of an earlier round that never merged, or null. One is
-   * enough to hold this round off: a second PR would remove the same
-   * directories again and land two rows for the same project.
-   */
-  function openArchivePr(repo) {
-    const r = deps.gh(repo.path, ['pr', 'list', '--state', 'open', '--json', 'number,headRefName',
-      '-q', `.[] | select(.headRefName | startswith("${ARCHIVE_BRANCH_PREFIX}")) | .number`]);
-    if (!r.ok) return null;
-    return r.stdout.trim().split('\n').filter(Boolean)[0] || null;
-  }
-
-  /**
-   * Every plan of one repository that says `done` on main, archived in this
-   * round: the directory removed, a `project_log.md` row written for the
-   * projects that have none, one PR the runner merges like any other.
-   *
-   * Returns `{ archived, landed }` — the projects this round took out of
-   * `docs/project/`, and the ones whose PR actually merged. Only the second
-   * set may have its workarea closed later in the round: the plan goes first,
-   * then the workarea.
-   *
-   * The work happens in a worktree of its own under `~/mc/runner/archive/`,
-   * made from origin/main and taken down again however this ends. Not the
-   * project's own workarea: a done project need not have one, several are
-   * archived in the one PR, and the workarea is removed later in the same
-   * round — the plan goes first, then the workarea, so a workarea is never
-   * removed while the plan that explains it is still on main.
-   *
-   * Each archived project's closeout goes into the same commit, and archived
-   * projects that never had one get theirs in the same PR
-   * (`closeoutBackfill`) — a PR of only those when nothing is done.
-   */
-  async function archiveDone(repo, plans) {
-    const none = { archived: [], landed: [] };
-    // A plan under `~/mc/programs/` is archived by `archiveProgramsDue` (ruling 48)
-    // or `mc project archive`, not here: its repository copy, if any, stays with it
-    // until then. Without this the archive would remove that copy, write a
-    // closeout from it, and find nothing to remove every round.
-    const done = donePlans(plans, repo.name).filter((plan) => !isAbsolute(plan.path || ''));
-    const backfill = closeoutBackfill(repo, done);
-    if (!done.length && !backfill.length) return none;
-    const open = openArchivePr(repo);
-    if (open) { say(`archive: ${repo.name} #${open} is still open from an earlier round — not opening another`); return none; }
-
-    const branch = `${ARCHIVE_BRANCH_PREFIX}${stamp().replace(/[-:]/gu, '')}`;
-    const worktree = join(root, 'runner', 'archive', repo.name);
-    if (deps.exists(worktree)) deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
-    if (!deps.git(repo.path, ['worktree', 'add', '-b', branch, worktree, 'origin/main']).ok) {
-      say(`archive: ${repo.name} — could not open the archive worktree, nothing archived this round`);
-      return none;
-    }
-    try {
-      return await archiveIn({ repo, worktree, branch, done, backfill });
-    } finally {
-      deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
-      deps.git(repo.path, ['branch', '-D', branch]);
-    }
-  }
-
-  /**
    * The done projects under `~/mc/programs/` of one repository that have been
    * done for `ARCHIVE_HOLD_MS` (`archiveDue`), archived by `archivePrograms` in
    * one docs-only pull request (ruling 48). A done project still inside the hold
@@ -1422,226 +1318,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       deps, docsMerge: deps.docsMerge, now: deps.now, say,
     });
     return { archived };
-  }
-
-  /**
-   * Archived projects of this repository that have no closeout yet: a row in
-   * its `project_log.md` on origin/main, a register file naming this
-   * repository, no closeout and no plan directory on origin/main. At most
-   * `CLOSEOUT_BACKFILL_MAX`, in the log's order. A project archived in this
-   * same round is the archive's own and not one of these.
-   *
-   * Until the closeout exists `mc tidy` keeps the register file, and the
-   * register file is what this is written from — so it has to come first.
-   */
-  function closeoutBackfill(repo, done) {
-    if (!deps.exists(join(repo.path, '.git'))) return [];
-    const text = gitOut(repo.path, ['show', 'origin/main:docs/project/project_log.md']);
-    // One listing for every question below. A git that cannot answer is a
-    // backfill that waits, never one that writes over a closeout.
-    const listing = gitOut(repo.path, ['ls-tree', '-r', '--name-only', 'origin/main', '--', 'docs/project']);
-    if (!text || listing == null) return [];
-    const tree = listing.split('\n').filter(Boolean);
-    const files = new Set(tree);
-    const dirs = new Set(tree.flatMap((path) => path.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('/'))));
-    const doneNow = new Set(done.map((plan) => plan.project));
-    const seen = new Set();
-    const out = [];
-    for (const row of logRows(text)) {
-      if (out.length >= CLOSEOUT_BACKFILL_MAX) break;
-      const project = row.project;
-      if (!project || seen.has(project) || doneNow.has(project)) continue;
-      seen.add(project);
-      const entry = readEntry(root, project, { read: deps.read });
-      if (!entry || entry.repo !== repo.name || !entry.plan) continue;
-      const programme = entry.programme || row.programme;
-      if (!programme) continue;
-      if (files.has(closeoutPath(programme, project))) continue;
-      if (dirs.has(dirname(entry.plan))) continue;
-      out.push({ project, programme, entry, date: row.date });
-    }
-    return out;
-  }
-
-  /**
-   * The plan as it stood before the commit that removed it from main, parsed,
-   * or null — a plan file that was markdown, or a history that does not have
-   * it, gives a closeout that says `plan: null`.
-   */
-  function planFromHistory(cwd, path) {
-    const sha = gitOut(cwd, ['log', '-1', '--format=%H', '--diff-filter=D', 'origin/main', '--', path]);
-    if (!sha) return null;
-    return parsedPlan(gitOut(cwd, ['show', `${sha.trim()}^:${path}`]));
-  }
-
-  /** A plan's text as an object, or null. Not validated: the closeout records, it does not judge. */
-  function parsedPlan(text) {
-    try {
-      const value = JSON.parse(String(text ?? ''));
-      return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-    } catch { return null; }
-  }
-
-  /**
-   * One closeout written into the archive worktree and added, or a say line
-   * naming the project and why not. A closeout that fails does not stop the
-   * archive; `mc tidy` keeps that project's data, because the file is missing.
-   */
-  function writeCloseout(worktree, { project, programme, plan, planPath, archivedAt, tsv }) {
-    try {
-      const entry = readEntry(root, project, { read: deps.read });
-      const closeout = buildCloseout({
-        plan, entry, runs: tsv, archivedAt,
-        sessions: readSessionResults({ dir: paths.log, project, list: deps.list, read: deps.read, readBytes: deps.readBytes }),
-        project, programme, repo: entry?.repo ?? null, planPath: planPath ?? entry?.plan ?? null,
-      });
-      const path = closeoutPath(programme, project);
-      deps.write(join(worktree, path), closeoutText(closeout));
-      if (!deps.git(worktree, ['add', '--', path]).ok) throw new Error('git add failed');
-      return true;
-    } catch (error) {
-      say(`archive: ${project} — no closeout written: ${error?.message || error}`);
-      return false;
-    }
-  }
-
-  /** The archive itself, inside the worktree that was made for it. */
-  async function archiveIn({ repo, worktree, branch, done, backfill = [] }) {
-    const logPath = join(worktree, 'docs', 'project', 'project_log.md');
-    const slug = remoteSlug(gitOut(repo.path, ['remote', 'get-url', 'origin']));
-    const date = stamp().slice(0, 10);
-    const tsv = deps.read(paths.runs) || '';
-    let logText = deps.read(logPath) ?? '';
-    const archived = [];
-    const closedOut = [];
-    const undocumented = [];
-    const keptAll = [];
-    const moved = [];
-
-    for (const plan of done) {
-      const dir = join('docs', 'project', plan.programme, plan.project);
-      // The plan as it stands at close-out. PLAN.json is the plan; a project
-      // still on the old file is read there until the last one is migrated.
-      const planText = deps.read(join(worktree, dir, 'PLAN.json'))
-        || deps.read(join(worktree, dir, 'PLAN.md'))
-        || '';
-      // A file under the plan that code or a test reads stays where it is;
-      // the rest goes. Nothing left to remove is nothing archived.
-      const { kept, remove } = keptFiles(worktree, dir, { git: deps.git, read: (path) => deps.read(join(worktree, path)) });
-      for (const { file, by } of kept) say(`archive: ${repo.name} ${file} kept — named by ${by}`);
-      if (remove && !remove.length) {
-        say(`archive: ${repo.name} ${plan.programme}/${plan.project} — every file is read by code outside docs/, nothing archived`);
-        continue;
-      }
-      // The README is read before `git rm` takes it away; a README a kept file names stays.
-      const readmePath = join(dir, 'README.md');
-      const md = closeoutReadmePath(plan.programme, plan.project);
-      const readmeText = kept.some((k) => k.file === readmePath) ? null : deps.read(join(worktree, readmePath));
-      const rm = remove ? ['rm', '-q', '--', ...remove] : ['rm', '-r', '-q', '--', dir];
-      if (!deps.git(worktree, rm).ok) {
-        say(`archive: ${repo.name} ${plan.programme}/${plan.project} — git rm failed, left alone`);
-        continue;
-      }
-      if (readmeText != null) deps.write(join(worktree, md), readmeText);
-      moved.push({ dir, programme: plan.programme, project: plan.project, readme: readmeText != null, kept: kept.map((k) => k.file), from: readmePath, to: md });
-      keptAll.push(...kept);
-      // The row is preferred, never waited for: a close-out step that already
-      // wrote one knows more about the project than this does.
-      const existing = rowFor(logText, plan.project);
-      const row = existing || {
-        date,
-        programme: plan.programme,
-        project: plan.project,
-        outcome: 'delivered',
-        summary: planSummary(planText),
-        doc: planDoc(planText),
-        pointer: pointerCell(mergedPrs(deps.read(paths.runs) || '', plan.project), {
-          slug,
-          fallback: gitOut(worktree, ['log', '-1', '--format=%h', 'origin/main', '--', dir]),
-        }),
-      };
-      if (!existing) logText = appendRow(logText, row);
-      archived.push(plan.project);
-      say(`archive: ${repo.name} ${plan.programme}/${plan.project} removed — ${existing ? 'row already written' : 'row added to project_log.md'}`);
-      if (readmeText != null) say(`archive: ${repo.name} ${plan.programme}/${plan.project} README kept as ${md}`);
-      if (isUndocumented(row)) {
-        undocumented.push(undocumentedRow({ date, repo: repo.name, programme: plan.programme, project: plan.project, pointer: row.pointer }));
-        say(`archive: ${plan.project} names no docs/technical/ note — recorded for mc brief`);
-      }
-      writeCloseout(worktree, {
-        project: plan.project, programme: plan.programme, plan: parsedPlan(planText),
-        planPath: plan.path ?? null, archivedAt: date, tsv,
-      });
-    }
-    // The links into the removed directories follow them (ruling 46): each
-    // README is staged at its closeout, then every document under docs/ that
-    // links into an archived directory is relinked in this same commit.
-    if (moved.length) {
-      const readmes = moved.filter((m) => m.readme).map((m) => m.to);
-      if (readmes.length) deps.git(worktree, ['add', '--', ...readmes]);
-      const listed = deps.git(worktree, ['ls-files', '--', 'docs/project', 'docs/technical']);
-      if (!listed.ok) say(`archive: ${repo.name} — could not list docs/, no link rewritten`);
-      const relinked = [];
-      for (const p of listed.ok ? String(listed.stdout ?? '').split('\n').filter((line) => line.endsWith('.md')) : []) {
-        const text = deps.read(join(worktree, p));
-        if (text == null) continue;
-        const own = moved.find((m) => m.readme && m.to === p);
-        const next = rewriteArchivedLinks(text, { from: own ? own.from : p, to: p, archived: moved });
-        if (next === text) continue;
-        deps.write(join(worktree, p), next);
-        relinked.push(p);
-      }
-      if (relinked.length) deps.git(worktree, ['add', '--', ...relinked]);
-      const n = relinked.length;
-      if (n > 0) say(`archive: ${repo.name} ${n} document${n === 1 ? '' : 's'} relinked to the closeout`);
-    }
-    // Projects archived before the closeout existed, given theirs now — from
-    // the register and the plan as git history last had it.
-    for (const item of backfill) {
-      const plan = planFromHistory(worktree, item.entry.plan);
-      if (writeCloseout(worktree, { project: item.project, programme: item.programme, plan, planPath: item.entry.plan, archivedAt: item.date, tsv })) {
-        closedOut.push(item.project);
-        say(`archive: ${repo.name} ${item.programme}/${item.project} — closeout written for an archived project${plan ? '' : ' (no plan in history)'}`);
-      }
-    }
-    if (!archived.length && !closedOut.length) return { archived: [], landed: [] };
-
-    deps.write(logPath, logText);
-    const title = archived.length
-      ? `Archive ${archived.length} done project${archived.length === 1 ? '' : 's'}: ${archived.join(', ')}`
-      : `Closeout ${closedOut.length} archived project${closedOut.length === 1 ? '' : 's'}: ${closedOut.join(', ')}`;
-    const body = [
-      'A plan that reaches `done` is archived in the round the runner reads it:',
-      'the project directory is removed, its README is kept as `docs/project/<programme>/closeout/<project>.md`,',
-      'every relative link under `docs/project/` and `docs/technical/` that pointed into it points at the closeout,',
-      'and `docs/project/project_log.md` carries a row for it. The history is the record — `git log --all -- <path>` still',
-      'answers every question the removed directory could.',
-      '',
-      ...archived.map((project) => `- ${project}`),
-      ...(closedOut.length ? ['', 'Archived earlier, given their closeout now:', '', ...closedOut.map((project) => `- ${project}`)] : []),
-      ...keptParagraph(keptAll),
-      '',
-      'Each project\'s closeout is in docs/project/<programme>/closeout/.',
-    ].join('\n');
-    deps.git(worktree, ['add', '-A']);
-    if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok
-      || !deps.git(worktree, ['push', '-q', '-u', 'origin', 'HEAD']).ok) {
-      say(`archive: ${repo.name} — commit or push failed, nothing archived this round`);
-      return { archived: [], landed: [] };
-    }
-    const created = deps.gh(worktree, ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body]);
-    const listed = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number']);
-    const pr = (/(\d+)\s*$/u.exec(created.stdout.trim())?.[1]) || (listed.ok && listed.stdout.trim()) || null;
-    if (!pr) { say(`archive: ${repo.name} — the PR could not be opened (${created.stderr.trim().split('\n').at(-1) || 'no number'})`); return { archived: [], landed: [] }; }
-
-    if (undocumented.length) {
-      if (!deps.exists(paths.undocumented)) deps.write(paths.undocumented, UNDOCUMENTED_HEADER);
-      deps.append(paths.undocumented, `${undocumented.join('\n')}\n`);
-    }
-    // Only a merged archive PR lets the workareas go: until the plan is off
-    // main, the folder it explains stays where it is.
-    const landed = (merge && await landDocsPr(worktree, `archive/${repo.name}`, pr)) ? archived : [];
-    return { archived, landed };
   }
 
   /* ------------------------------------------------------------- blocking */
@@ -3175,7 +2851,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // `queue()` has just fetched every repository, mc's own checkout among
     // them, so origin/main is as fresh as it gets without another fetch.
     noticeNewCode();
-    // An unmet plan is not archived (`donePlans` asks for done): said once,
+    // An unmet plan is not archived (`archiveDue` asks for done): said once,
     // because nothing else would tell anyone it is waiting for a measurement.
     for (const record of plans) {
       if (record?.status !== 'unmet' || saidUnmet.has(record.project)) continue;
@@ -3185,10 +2861,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     tidyQueue(plans);
     writeUnreadable(plans);
     const quiet = paths.currents().length === 0;
-    const archives = quiet ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
     // A programme project done for 24 hours is archived by the runner as well (ruling 48).
     const programmes = quiet ? await Promise.all(repos.map((repo) => archiveProgramsDue(repo, plans))) : [];
-    closeWorkareas(plans, [...archives.flatMap((a) => a.landed), ...programmes.flatMap((a) => a.archived)], archivedProjects());
+    closeWorkareas(plans, programmes.flatMap((a) => a.archived), archivedProjects());
     await reapOrphans();
     await sweepDockerChore();
     sweepScratch();
@@ -3316,10 +2991,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, archiveDone, queue, stopRequested,
+    paths, repos, say, pass, nextStep, claims, chores, runStep, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, queue, stopRequested,
     writeUnreadable,
     blockStep,
-    updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, syncMain, freshBranch, landDocsPr, planOf, repoOf, markRunner, dropPredecessor, clearRunner, closeWorkareas,
+    updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, syncMain, freshBranch, planOf, repoOf, markRunner, dropPredecessor, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
   };
 }

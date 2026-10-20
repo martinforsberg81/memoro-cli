@@ -1,28 +1,15 @@
 /**
- * `mc run` — what happens to a plan that says `done`.
+ * The rows of `docs/project/project_log.md` and the cells a row needs that
+ * have to be derived from a plan's own text: the summary from its `next:`, the
+ * doc from the `docs/technical/` path it names. Also the files under a
+ * programme's directory that code outside `docs/` reads (`keptFiles`), which a
+ * programme archive leaves where they are.
  *
- * A plan that reaches `done` is archived (Martin, 2026-08-29: "När en plan
- * är DONE ska den arkiveras. Punkt."). Nothing else is the trigger and
- * nothing has to be typed: the runner reads the plan on main, removes
- * `docs/project/<programme>/<project>/` and leaves one row in that
- * repository's `docs/project/project_log.md` behind it.
- *
- * Everything here is a function of text: the rows of a project log, the row
- * a plan deserves, and the two cells that have to be derived (the summary
- * from the plan's `next:`, the doc from the `docs/technical/` path the plan
- * names). The git and gh half is run.js, so these rules can be covered with
- * no repository behind them.
- *
- * The measured reason: on 2026-08-29 `docs/project/` held ten directories
- * whose plan said `done` — four of them with their `project_log.md` row
- * already written by their close-out step, which is why a row is preferred
- * and never rewritten. `docs/plans/`, the directory `docs/project/`
- * replaced, had reached 656 files the same way.
+ * Everything here is a function of text, so these rules can be covered with
+ * no repository behind them. The git and gh half is run.js and
+ * archive-programme.js, and the archive itself is project-archive.js.
  */
-import { posix } from 'node:path';
-
 import { planFields } from './brief-collect.js';
-import { closeoutPath, closeoutReadmePath } from './closeout.js';
 import { readPlanText } from './plan-schema.js';
 
 /** Every archive branch the runner has ever pushed starts with this. */
@@ -33,11 +20,6 @@ export const LOG_COLUMNS = ['date', 'programme', 'project', 'outcome', 'summary'
 
 /** A row whose `doc` cell is this names no lasting documentation. */
 export const NO_DOC = 'none';
-
-/** Every plan of one repository that says `done`. The whole trigger. */
-export function donePlans(plans = [], repoName = null) {
-  return plans.filter((plan) => plan.status === 'done' && (!repoName || plan.repo === repoName));
-}
 
 /* ------------------------------------------------------------ the log file */
 
@@ -296,75 +278,4 @@ export function keptParagraph(kept) {
     '',
     ...kept.map(({ file, by }) => `- kept: ${file} — named by ${by}`),
   ];
-}
-
-/* ------------------------------------------------- the links an archive rewrites */
-
-/** Inline `[label](target)`, `[label](target "title")` and `![…](…)`: the target is the second group. */
-const INLINE_LINK = /(!?\[[^\]\n]*\]\()([^\s)]*)([^)\n]*\))/gu;
-
-/** A reference definition on its own line, `[label]: target`: the target is the second group. */
-const REFERENCE_LINK = /^(\s{0,3}\[[^\]\n]+\]:[ \t]*)(\S+)(.*)$/u;
-
-/** A target that is not a relative path: empty, an anchor, absolute, `<…>`, or with a scheme. */
-const NOT_A_PATH = /^(?:$|[#/<]|[a-z][a-z0-9+.-]*:)/iu;
-
-/** A line that opens or closes a fenced code block. */
-const FENCE = /^(?:```|~~~)/u;
-
-/**
- * The text with every relative link into an archived directory rewritten to
- * its closeout (ruling 46), in the same commit that removes the directory.
- * `from` is the path the text's links were written against; `to` is where the
- * text lives after the archive, which differs from `from` only for a README
- * the archive moved. `archived` is `[{ dir, programme, project, readme, kept }]`:
- * `readme` is true when the README was copied to `closeoutReadmePath`, `kept`
- * the files under `dir` that stay.
- *
- * Four destinations: a README or the directory → the README's closeout, anchor
- * kept (or the closeout record when no README was copied, anchor dropped);
- * `PLAN.json` → the closeout record; any other removed file → the README's
- * closeout, anchor dropped. A link to a kept file, or to a directory that holds
- * one, is left alone, and so is fenced code. The text comes back as it was
- * when nothing changes.
- */
-export function rewriteArchivedLinks(text, { from, to = from, archived }) {
-  let fenced = false;
-  return text.split('\n').map((line) => {
-    if (FENCE.test(line.trimStart())) {
-      fenced = !fenced;
-      return line;
-    }
-    if (fenced) return line;
-    const reference = REFERENCE_LINK.exec(line);
-    if (reference) return reference[1] + rewriteTarget(reference[2], { from, to, archived }) + reference[3];
-    return line.replace(INLINE_LINK, (match, open, target, close) => open + rewriteTarget(target, { from, to, archived }) + close);
-  }).join('\n');
-}
-
-/** One link target, rewritten or returned as it was. See `rewriteArchivedLinks`. */
-function rewriteTarget(target, { from, to, archived }) {
-  if (NOT_A_PATH.test(target)) return target;
-  const hash = target.indexOf('#');
-  const path = hash < 0 ? target : target.slice(0, hash);
-  const anchor = hash < 0 ? '' : target.slice(hash);
-  let decoded;
-  try { decoded = decodeURI(path); } catch { return target; }
-  const resolved = posix.normalize(posix.join(posix.dirname(from), decoded)).replace(/\/+$/u, '');
-  const entry = archived.find((a) => resolved === a.dir || resolved.startsWith(`${a.dir}/`));
-  if (!entry) return target;
-  // A directory that holds a kept file is still there after the archive.
-  const holdsKept = resolved !== entry.dir && entry.kept.some((file) => file.startsWith(`${resolved}/`));
-  if (entry.kept.includes(resolved) || holdsKept) return target;
-
-  const md = closeoutReadmePath(entry.programme, entry.project);
-  const json = closeoutPath(entry.programme, entry.project);
-  let destination = entry.readme ? md : json;
-  let kept = '';
-  if (resolved === entry.dir || resolved === `${entry.dir}/README.md`) {
-    kept = entry.readme ? anchor : '';
-  } else if (resolved === `${entry.dir}/PLAN.json`) {
-    destination = json;
-  }
-  return posix.relative(posix.dirname(to), destination) + kept;
 }

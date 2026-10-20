@@ -10,7 +10,7 @@ import { after, describe, it } from 'node:test';
 import { gzipSync } from 'node:zlib';
 
 import {
-  buildCloseout, closeoutPath, closeoutReadmePath, closeoutText, readSessionResults, sessionFileRe,
+  buildCloseout, closeoutPath, closeoutText, readSessionResults, sessionFileRe,
 } from '../../src/mc/closeout.js';
 import { RUNS_HEADER } from '../../src/mc/run-plan.js';
 
@@ -87,10 +87,6 @@ describe('the session results of one project', () => {
 describe('the file', () => {
   it('lives beside its programme', () => {
     assert.equal(closeoutPath('mc', 'retention'), 'docs/project/mc/closeout/retention.json');
-  });
-
-  it('keeps the README beside it, as markdown (ruling 46)', () => {
-    assert.equal(closeoutReadmePath('mc', 'x'), 'docs/project/mc/closeout/x.md');
   });
 
   it('is exactly this text for a small case', () => {

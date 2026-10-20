@@ -17,7 +17,6 @@ const PLAN_NAME = /'PLAN\.(json|md)'/g;
 
 const ALLOWED = new Map([
   ['src/mc/page-render.js', 1],
-  ['src/mc/run.js', 2],
 ]);
 
 function collectSourceFiles(dir, out = []) {

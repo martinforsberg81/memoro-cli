@@ -54,13 +54,13 @@ export function doneAt(entry) {
 /**
  * Whether the runner archives this project now, and why in one line. `record`
  * is a plan as `listPlans` returns it; `entry` its register entry. A plan in a
- * repository (a path that is not absolute) is `archiveDone`'s, not this one's.
+ * repository (a path that is not absolute) is not this one's.
  * A project is due once it has been done for `holdMs` — exactly that long is
  * due. `why` is what the runner's log says about it either way.
  */
 export function archiveDue({ record, entry, nowMs, holdMs = ARCHIVE_HOLD_MS }) {
   if (!isAbsolute(record?.path || '')) {
-    return { due: false, why: 'the plan is in a repository — archiveDone archives it' };
+    return { due: false, why: 'the plan is in a repository, not under ~/mc/programs/' };
   }
   if (record.status !== 'done') return { due: false, why: `the plan is ${record.status}` };
   const at = doneAt(entry);

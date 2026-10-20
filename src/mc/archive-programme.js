@@ -2,8 +2,8 @@
  * `mc plan <programme> --archive` — a programme that is over, taken off main
  * and off this machine.
  *
- * A project is archived by `mc run` the round its plan says done
- * (archive-plan.js), and that is where the machinery stopped: the programme
+ * A project's plan used to be archived by `mc run` the round it said done,
+ * and that is where the machinery stopped: the programme
  * above it kept `docs/project/<programme>/` — its own document and its
  * rulings — and `~/mc/plan/<programme>/` kept two worktrees on
  * `plan/<programme>`, for ever. Nothing can decide that a programme is over;
