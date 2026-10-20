@@ -25,6 +25,7 @@ import {
   MC_HOOKS, claudeSettingsPath, hookDrift, hookRegistration, inMcTerritory, installHooks, pathInKnownRepo, preToolDecision,
   repoHookDecision, sessionStartContext, worktreeState, worktreesAt,
 } from '../hooks.js';
+import { programsHome } from '../paths.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -59,7 +60,10 @@ export async function run(argv, deps = {}) {
     if (!(deps.inMcTerritory || inMcTerritory)(cwd, deps)) return 0;
     // The repository's denial comes first: a safety block outranks a turn to an mc verb.
     const borrowed = (deps.repoHookDecision || repoHookDecision)(input, { cwd, projectDir: (deps.env || process.env).CLAUDE_PROJECT_DIR || null });
-    const decision = borrowed || preToolDecision(input, { inRepo: (path) => (deps.pathInKnownRepo || pathInKnownRepo)(path, deps) });
+    const decision = borrowed || preToolDecision(input, {
+      inRepo: (path) => (deps.pathInKnownRepo || pathInKnownRepo)(path, deps),
+      programs: programsHome(deps.env || process.env),
+    });
     if (decision) {
       stdout.write(`${JSON.stringify({
         hookSpecificOutput: {
@@ -129,7 +133,7 @@ export function usage() {
   return [
     'usage — mc hook session-start   for a SessionStart hook: the worktrees\' branch, how far behind\n',
     '                                origin/main, changed files, dev server, the warnings, the mc toolbox\n',
-    '        mc hook pre-tool        for a PreToolUse hook (Bash|Write|Read): first the PreToolUse hooks of\n',
+    '        mc hook pre-tool        for a PreToolUse hook (Bash|Write|Read|Edit|MultiEdit): first the PreToolUse hooks of\n',
     '                                every worktree the session did not start in (their deny wins), then\n',
     '                                gh pr create, gh pr edit / git push →\n',
     '                                mc publish, gh pr merge → mc merge, npm run ci → mc gate,\n',
