@@ -71,6 +71,7 @@ THE PAGE
   mc project archive <p>           Archive a done project now: its row to project_log.md, CLOSEOUT.json, its step area closed
   mc project discard <p> [--apply] Take a project out whole: its directory, step area, register file, open pull requests; without --apply it shows what would go
   mc work <name>                  Open that workarea, ~/mc/work/<name>
+  mc layout [migrate]              Which layout ~/mc has; migrate shows the move to layout 2
 
 IN FULL
   mc status <name>                 One project: its PLAN.md frontmatter and
@@ -124,6 +125,14 @@ IN FULL
   mc tidy --docker [--apply] [--json]
                                     Docker only; with --apply it starts the
                                     runtime when it is down
+  mc layout [--json]               layout 1 or 2, and where the planning
+                                    sessions, step areas, deps areas and
+                                    registers are
+  mc layout migrate [--json]       The move to layout 2 as a dry run: every
+                                    move in order, and what refuses it — a
+                                    runner, a session, the merger, a process
+                                    standing in an old area. Writes nothing;
+                                    exit 1 when something refuses
   mc repo status [repo]            One repository seen whole: main, what the
                                     last full run found on it and since when,
                                     the open pull requests and how far behind

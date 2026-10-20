@@ -192,7 +192,7 @@ function claudeConversations(areaRoot, env) {
   return found;
 }
 
-function encodePath(path) {
+export function encodePath(path) {
   return path.replace(/[/.]/gu, '-');
 }
 
