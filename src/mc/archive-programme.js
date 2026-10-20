@@ -5,7 +5,7 @@
  * A project's plan used to be archived by `mc run` the round it said done,
  * and that is where the machinery stopped: the programme
  * above it kept `docs/project/<programme>/` — its own document and its
- * rulings — and `~/mc/plan/<programme>/` kept two worktrees on
+ * rulings — and the programme's planning directory kept two worktrees on
  * `plan/<programme>`, for ever. Nothing can decide that a programme is over;
  * a programme whose projects are all done is also exactly the place the next
  * piece of that work belongs. So this is typed, never triggered (Martin,
@@ -18,7 +18,7 @@
  *    for the programme itself (project `-`, outcome `closed`), in a
  *    docs-only PR landed through `mc merge --docs`, as the runner's archive
  *    PR is.
- * 2. **the planning session** — `~/mc/plan/<programme>/` released the way
+ * 2. **the planning session** — the planning directory released the way
  *    `mc work release` releases any area: each worktree handed back, its
  *    branch deleted, the conversations and the directory gone with them.
  *
@@ -32,14 +32,15 @@
  * attempt is landed rather than opened twice.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { appendRow, keptFiles, keptParagraph, remoteSlug } from './archive-plan.js';
 import { listPlans, listProgrammes } from './brief-collect.js';
-import { programsHome } from './paths.js';
+import { planAreaName, programsHome } from './paths.js';
 import { programsPlans } from './plan-source.js';
 import { landingNote } from './run-plan.js';
+import { tilde } from './status-project.js';
 
 /** Every programme-archive branch starts with this — never `mc-archive-`, which the runner waits on. */
 export const PROGRAMME_ARCHIVE_PREFIX = 'mc-programme-archive-';
@@ -64,14 +65,17 @@ export function programmeRow({ programme, date, pointer }) {
  * Whether the programme may be archived, from facts gathered elsewhere:
  * `{ ok: true }` or `{ ok: false, lines }`, each line one reason.
  */
-export function archiveVerdict({ programme, plans = [], homes = [], areaExists = false, forecast = null }) {
+export function archiveVerdict({
+  programme, plans = [], homes = [], areaExists = false, forecast = null,
+  area = tilde(join(homedir(), 'mc', planAreaName(programme, { root: join(homedir(), 'mc') }))),
+}) {
   const lines = [];
   for (const plan of plans) {
     lines.push(`${plan.repo} ${programme}/${plan.project} is still on main (${plan.status || 'no status'})`
       + (plan.status === 'done' ? ' — mc run archives it first' : ''));
   }
   for (const item of forecast?.kept || []) lines.push(`${item.path} would be kept: ${item.why}`);
-  for (const entry of forecast?.held_by || []) lines.push(`~/mc/plan/${programme}/${entry} is not mc's to remove`);
+  for (const entry of forecast?.held_by || []) lines.push(`${area}/${entry} is not mc's to remove`);
   if (!lines.length && !homes.length && !areaExists) lines.push(`no programme named ${programme} — not on main, not being planned`);
   return lines.length ? { ok: false, lines } : { ok: true };
 }
@@ -103,7 +107,7 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
   const areaExists = existsSync(areaPath);
   const forecast = areaExists ? deps.release(areaName, { env, dryRun: true }) : null;
 
-  const verdict = archiveVerdict({ programme, plans, homes, areaExists, forecast });
+  const verdict = archiveVerdict({ programme, plans, homes, areaExists, forecast, area: tilde(areaPath) });
   if (!verdict.ok) {
     stderr.write(`mc: ${programme} is not archived — nothing was touched:\n`);
     for (const line of verdict.lines) stderr.write(`  ${line}\n`);
@@ -130,10 +134,10 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     const released = deps.release(areaName, { env, dryRun: false });
     for (const item of released.removed) say(`${item.path} — ${item.what} removed${item.branch ? ` (${item.branch})` : ''}`);
     if (released.kept.length || released.held_by.length || existsSync(areaPath)) {
-      stderr.write(`mc: ~/mc/plan/${programme}/ is still there — mc work release ${areaName} says why\n`);
+      stderr.write(`mc: ${tilde(areaPath)}/ is still there — mc work release ${areaName} says why\n`);
       return 1;
     }
-    say(`~/mc/plan/${programme}/ removed${released.conversations.length ? `, with ${released.conversations.length} conversation(s)` : ''}`);
+    say(`${tilde(areaPath)}/ removed${released.conversations.length ? `, with ${released.conversations.length} conversation(s)` : ''}`);
   }
   say(`${programme} archived`);
   return 0;

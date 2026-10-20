@@ -77,6 +77,13 @@ describe('freePlanBranch', () => {
     assert.equal(raw(p.holder, ['branch', '--show-current']), 'proj');
   });
 
+  it('frees a branch held under programs/ in layout 2, where the planning root is', () => {
+    const p = planned({ under: 'programs/prog' });
+    const r = freePlanBranch({ repo: p.repo, branch: 'proj', planRoot: join(p.root, 'programs'), git, gh: noGh });
+    assert.deepEqual(r, { freed: true, holder: p.holder, why: null });
+    assert.equal(git(p.repo, ['rev-parse', '--verify', 'refs/heads/proj']).ok, false, 'the branch is gone');
+  });
+
   it('leaves a worktree that is not under the plan home', () => {
     const p = planned({ under: 'elsewhere/prog' });
     const r = freePlanBranch({ repo: p.repo, branch: 'proj', planRoot: p.planRoot, git, gh: noGh });

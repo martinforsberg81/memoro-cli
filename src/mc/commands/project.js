@@ -34,7 +34,7 @@ import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanT
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
 import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, withPlanLock, writePlanFile } from '../plan-write.js';
 import { applyEntry, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
-import { programsHome, runnerDir, runnerTablePath, stepAreaName, stepHome, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
+import { programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
 import { discardWorkArea } from '../work-area.js';
 import { scanArgs } from './flags.js';
@@ -751,7 +751,7 @@ async function archiveProject(scanned, deps) {
   });
   if (result.held.length) { stderr.write(`mc: ${project} held — ${result.held[0].why}\n`); return 1; }
 
-  const area = join(stepHome(env), project);
+  const area = join(workRoot(env), stepAreaName(project, { root: workRoot(env) }));
   if (!existsSync(area)) { stdout.write(`mc: ${project} archived\n`); return 0; }
   const checkouts = repos.filter((candidate) => existsSync(join(area, candidate.name, '.git')));
   const verdict = closable({

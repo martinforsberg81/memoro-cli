@@ -19,7 +19,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { compareVersions, defaultGit, defaultNpm, directDependencies, majorLine, readDeps } from './deps.js';
-import { STEP_HOME, workAreaPath } from './paths.js';
+import { depsAreaName, workAreaPath, workRoot } from './paths.js';
 import { addWorktree as defaultAddWorktree } from './work-area.js';
 
 const SECTIONS = ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies'];
@@ -206,9 +206,10 @@ export async function bump({
   }
 
   const name = workareaName(repo, what, now());
-  // The runner's own kind of area (ruling 39): under `step/`, while the
-  // branch — and the holder name its leases carry — stays `name`.
-  const areaName = `${STEP_HOME}/${name}`;
+  // The runner's own kind of area (ruling 39): under `step/` in layout 1 and
+  // `runner/deps/` in layout 2, while the branch — and the holder name its
+  // leases carry — stays `name`.
+  const areaName = depsAreaName(name, { root: workRoot(env) });
   const area = workAreaPath(areaName, env);
   const checkout = join(area, repo);
   const result = { repo, what, changes, workarea: area, branch: name, pr: null, merged: null };

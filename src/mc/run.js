@@ -131,7 +131,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import {
-  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planHome, programsHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
+  RUNNER_DISK, RUNNER_MEMORY, UNDOCUMENTED_CLOSURES, UNPLANNED_WORKAREAS, UNREADABLE_PLANS, planAreaRoot, programsHome, runnerScratchDir, runnerTablePath, stepAreaName, workRoot,
 } from './paths.js';
 import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
@@ -1949,7 +1949,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       deps.git(repo.path, ['fetch', '-q', 'origin']);
       // The plan directory that wrote this project's plan may still stand on
       // the project's branch after its pull request landed (plan-branch.js).
-      const plan = freePlanBranch({ repo: repo.path, branch: name, planRoot: planHome(deps.env), git: deps.git, gh: deps.gh });
+      const plan = freePlanBranch({ repo: repo.path, branch: name, planRoot: planAreaRoot({ root: workRoot(deps.env) }), git: deps.git, gh: deps.gh });
       if (plan.freed) say(`${name}: ${plan.holder} still held ${name}, which has landed — detached there and the branch deleted`);
       // A project's branch is the runner's name, and one it did not make is never checked out (2026-10-14, `morning-calls`).
       const registered = (readEntry(root, name, { read: deps.read })?.steps || []).some((step) => step?.branch === name);

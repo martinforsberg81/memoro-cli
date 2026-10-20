@@ -83,7 +83,7 @@ IN FULL
   mc work <name>                   Open ~/mc/work/<name> — the name is enough,
                                     new or not. A name that is only the
                                     runner's area for a project opens
-                                    ~/mc/step/<name>, and says so
+                                    that area, and says so
   mc work <name> --tmux [task]     Start it in the background, for another
                                     session to talk to; mc work <name> joins
                                     it, and ctrl-b d leaves it running
@@ -527,7 +527,7 @@ IN FULL
                                     model other than the role's
   mc plan <programme>              A session in a directory, told which
                                     programme it is for. A fresh foreground
-                                    session in ~/mc/plan/<programme>/, both
+                                    session in the programme's directory, both
                                     repositories checked out on
                                     plan/<programme>. What comes out of it is
                                     yours and its to work out — the prompt
@@ -541,7 +541,7 @@ IN FULL
                                     under it is on main or its session holds
                                     work; else docs/project/<programme>/ off
                                     main (docs PR, one 'closed' log row) and
-                                    ~/mc/plan/<programme>/ released
+                                    the programme's directory released
   mc run                           The runner: one fresh headless session per
                                     step of the next project, merged direct;
                                     queue = ~/mc/queue.md then every ready
