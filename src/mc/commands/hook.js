@@ -95,38 +95,35 @@ function install(extra, { stdout, stderr, deps }) {
     stderr.write(`mc: mc hook install takes only --check\n${usage()}`);
     return 2;
   }
-  const check = extra.length === 1;
   const path = (deps.claudeSettingsPath || claudeSettingsPath)(deps.home);
+  const { code, line, failed } = installSettings(path, { check: extra.length === 1, readFile: deps.readFile, writeJson: deps.writeJson });
+  (failed ? stderr : stdout).write(`mc: ${line}\n`);
+  return code;
+}
+
+/**
+ * `mc hook install` on one settings file, as a function (`mc layout migrate
+ * --apply` runs it too): `{ code, line, failed }`, `failed` when the file
+ * could not be read as JSON and nothing was written.
+ */
+export function installSettings(path, { check = false, readFile = (file) => readFileSync(file, 'utf8'), writeJson = writeJsonAtomic } = {}) {
+  const unreadable = { code: 1, line: `${path} could not be read as JSON — nothing written`, failed: true };
   let settings;
   try {
-    settings = JSON.parse(deps.readFile ? deps.readFile(path) : readFileSync(path, 'utf8'));
+    settings = JSON.parse(readFile(path));
   } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      stderr.write(`mc: ${path} could not be read as JSON — nothing written\n`);
-      return 1;
-    }
+    if (error?.code !== 'ENOENT') return unreadable;
     settings = {};
   }
-  if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) {
-    stderr.write(`mc: ${path} could not be read as JSON — nothing written\n`);
-    return 1;
-  }
+  if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) return unreadable;
   const before = hookRegistration(settings);
   if (check) {
-    if (before.ok) {
-      stdout.write(`mc: hooks registered in ${path}\n`);
-      return 0;
-    }
-    stdout.write(`mc: ${hookDrift(before)} — mc hook install writes them\n`);
-    return 1;
+    if (before.ok) return { code: 0, line: `hooks registered in ${path}`, failed: false };
+    return { code: 1, line: `${hookDrift(before)} — mc hook install writes them`, failed: false };
   }
-  if (before.ok) {
-    stdout.write(`mc: hooks already registered in ${path}\n`);
-    return 0;
-  }
-  (deps.writeJson || writeJsonAtomic)(path, installHooks(settings));
-  stdout.write(`mc: hooks registered in ${path} (${hookDrift(before)} before)\n`);
-  return 0;
+  if (before.ok) return { code: 0, line: `hooks already registered in ${path}`, failed: false };
+  writeJson(path, installHooks(settings));
+  return { code: 0, line: `hooks registered in ${path} (${hookDrift(before)} before)`, failed: false };
 }
 
 export function usage() {

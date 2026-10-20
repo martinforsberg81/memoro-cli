@@ -133,6 +133,9 @@ IN FULL
                                     runner, a session, the merger, a process
                                     standing in an old area. Writes nothing;
                                     exit 1 when something refuses
+  mc layout migrate --apply        The move: the plan made again, each move
+                                    done in order and logged; the first that
+                                    fails stops it, a second run continues
   mc repo status [repo]            One repository seen whole: main, what the
                                     last full run found on it and since when,
                                     the open pull requests and how far behind
