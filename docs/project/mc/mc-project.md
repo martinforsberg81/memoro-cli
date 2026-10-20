@@ -142,7 +142,7 @@ After the verbs exist, not before; the verbs shrink the text.
 | 0 | An archived project releases its blockers | small, now |
 | 1 | `~/mc/programs/` structure, `PLAN.json` + `steps/` there, the runner and register reading it, `import` | medium |
 | 2 | `mc project new/criterion/step/send/show` with the refusals above | medium |
-| 3 | `archive`/`discard`, results to the repository, `plan-merge.js`/`merge-boundary.js`/docs path removed | medium |
+| 3 | `archive`/`discard`, results to the repository, `plan-merge.js`/`merge-boundary.js` removed; the docs route stays (ruling 49) — as `project-archive`, then `plans-out-of-repos` | medium |
 | 4 | Roles rewritten against the verbs, generated verb reference, repository guidance | medium |
 | 5 | Docs consolidation | last |
 
