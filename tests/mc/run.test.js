@@ -774,7 +774,7 @@ test('skips: dirty worktree, a blocked step', async () => {
   const waiting = plan({ status: 'blocked' });
   const f = fixture({
     plans: { memoro: { dirty: ready, wait: waiting } },
-    dirty: ['dirty'], session: okSession(),
+    dirty: ['dirty'], heads: { dirty: 'somebody-else' }, session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
   const r = await round(runner);
@@ -785,6 +785,36 @@ test('skips: dirty worktree, a blocked step', async () => {
   assert.match(log, /dirty: step 1 blocked on workarea dirty-worktree/u, 'and it is written down in the register, once, rather than met again in ten minutes');
   assert.equal(registerOf(f, 'dirty').steps[0].status, 'blocked');
   assert.doesNotMatch(log, /wait: /u, 'a blocked plan is never picked, and the page is where it shows');
+});
+
+/** The workarea's git calls, for a project whose workarea is `/w/<name>/memoro`. */
+const areaCallsOf = (f, name) => f.calls.git.filter(([cwd]) => cwd === `/w/${name}/memoro`).map(([, ...args]) => args);
+
+test('a step area dirty on its own branch is committed as WIP and the step runs', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], session: okSession() });
+  await round(createRunner({ deps: f.deps }));
+  const git = areaCallsOf(f, 'm');
+  const commits = git.filter((a) => a[0] === 'commit');
+  assert.equal(commits.length, 1, 'exactly one WIP commit');
+  assert.ok(commits[0].includes('--no-verify'));
+  assert.ok(commits[0].join(' ').includes('m: WIP left by an earlier session of step 1'));
+  assert.ok(git.findIndex((a) => a[0] === 'add' && a[1] === '-A') < git.findIndex((a) => a[0] === 'commit'), 'the files are added first');
+  assert.ok(git.findIndex((a) => a[0] === 'commit') < git.findIndex((a) => a[0] === 'merge' && a.includes('origin/main')), 'committed before main is merged in');
+  assert.equal(f.calls.sessions.length, 1, 'and the step runs');
+  assert.notEqual(registerOf(f, 'm').steps[0].status, 'blocked');
+  assert.match(f.files['/w/runner/log/runner.log'], /m: the files an earlier session left are committed as WIP/u);
+});
+
+test('a WIP commit that fails blocks on dirty-worktree with the reason', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], commitFails: ['m'], session: okSession() });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(await runner.runStep('m', runner.queue()), 'skipped:dirty');
+  assert.equal(f.calls.sessions.length, 0);
+  const after = registerOf(f, 'm').steps[0];
+  assert.equal(after.status, 'blocked');
+  assert.deepEqual(after.blocked_by, { kind: 'workarea', name: 'dirty-worktree' });
+  assert.match(after.comments.at(-1), /the files an earlier session left could not be committed/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: step 1 blocked on workarea dirty-worktree/u);
 });
 
 /**
@@ -1284,7 +1314,7 @@ test('a workarea still dirty after that abort is refused, with the files', async
   const f = fixture({
     areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
     plans: { memoro: { c: ready } },
-    mergeLeft: ['c'], dirty: ['c'],
+    mergeLeft: ['c'], dirty: ['c'], heads: { c: 'somebody-else' },
     session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
@@ -2425,7 +2455,7 @@ test('a skip that is about the machine keeps its own line: dirty, in flight, unp
         dirt: ready, flight: ready, stuck: ready, wait: plan({ status: 'blocked' }),
       },
     },
-    dirty: ['dirt'],
+    dirty: ['dirt'], heads: { dirt: 'somebody-else' },
     openPrs: { memoro: [{ number: 11246, headRefName: 'flight-2', baseRefName: 'main', isDraft: false, title: 'Step 2' }] },
     landed: ['stuck'], refs: { stuck: ['stuck'] },
     session: okSession(),
@@ -4022,7 +4052,7 @@ const BLOCKS = [
     block: 'dirty-worktree',
     reason: 'dirty',
     what: 'a workarea with uncommitted work in it',
-    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], session: okSession() }),
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], heads: { m: 'somebody-else' }, session: okSession() }),
     detail: /uncommitted changes that are not a merge in progress \(x\)/u,
   },
   {
@@ -4156,7 +4186,7 @@ test('the block writes exactly the status, the blocker and one comment on the fi
   const f = fixture({
     plans: { memoro: { m: plan({ steps: two }) } },
     areas: { m: { repo: 'memoro', programme: 'prog', plan: plan({ steps: two }) } },
-    dirty: ['m'], session: okSession(),
+    dirty: ['m'], heads: { m: 'somebody-else' }, session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
   await runner.runStep('m', runner.queue());
@@ -4182,7 +4212,7 @@ test('the block writes exactly the status, the blocker and one comment on the fi
  */
 test('once the block is on main the project is never picked again, and the lane takes the next name', async () => {
   const plans = { memoro: { m: ready, n: ready } };
-  const f = fixture({ plans, areas: area(), dirty: ['m'], session: okSession() });
+  const f = fixture({ plans, areas: area(), dirty: ['m'], heads: { m: 'somebody-else' }, session: okSession() });
   const runner = createRunner({ deps: f.deps });
   assert.equal(runner.nextStep({ repo: 'memoro', world: runner.queue() })?.name, 'm', 'm is first while its plan says ready');
 
@@ -4290,19 +4320,19 @@ const CASES = [
   {
     reason: 'dirty',
     what: 'a dirty worktree',
-    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], session: okSession() }),
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), dirty: ['m'], heads: { m: 'somebody-else' }, session: okSession() }),
     detail: /uncommitted work in \/w\/m\/memoro: x/u,
   },
   {
     reason: 'dirty',
     what: 'a merge left in the workarea',
-    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), unmerged: ['m'], session: okSession() }),
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), unmerged: ['m'], heads: { m: 'somebody-else' }, session: okSession() }),
     detail: /a merge stopped in \/w\/m\/memoro: canon\/roles\/step\.md, scratch\.md/u,
   },
   {
     reason: 'dirty',
     what: 'work left beside a merge in the workarea',
-    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), mergeRows: { m: ['UU a.js', 'M  b.js', ' M c.js'] }, session: okSession() }),
+    make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), mergeRows: { m: ['UU a.js', 'M  b.js', ' M c.js'] }, heads: { m: 'somebody-else' }, session: okSession() }),
     detail: /a merge stopped in \/w\/m\/memoro: a\.js, b\.js, c\.js/u,
   },
   {
@@ -4829,7 +4859,7 @@ test('recovery: dirt that is not the interrupted session\'s, or in a workarea wi
   assert.deepEqual(registerOf(foreign, 'alpha').steps[0].blocked_by, { kind: 'workarea', name: 'dirty-worktree' });
 
   const text = plan();
-  const none = fixture({ plans: { memoro: { alpha: text } }, areas: { alpha: { repo: 'memoro', programme: 'prog', plan: text } }, dirty: ['alpha'], session: okSession() });
+  const none = fixture({ plans: { memoro: { alpha: text } }, areas: { alpha: { repo: 'memoro', programme: 'prog', plan: text } }, dirty: ['alpha'], heads: { alpha: 'somebody-else' }, session: okSession() });
   await createRunner({ deps: none.deps }).pass();
   assert.equal(wipCommits(none).length, 0);
   assert.equal(none.calls.sessions.length, 0);
