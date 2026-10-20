@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { closable, lastRunFor, unplannedFile, unplannedRow } from '../../src/mc/close-workarea.js';
+import { join } from 'node:path';
+
+import { closable, closeArea, lastRunFor, unplannedFile, unplannedRow } from '../../src/mc/close-workarea.js';
 
 /**
  * The closable rule: three facts and no judgement. Measured on 2026-08-29,
@@ -144,4 +146,73 @@ test('a legacy area keeps the last-run rule, whatever the register says', () => 
   assert.equal(closable({ plan: null, archived: true, lastRun: { note: 'success,blocked' }, legacy: true, stepsDone: true }).why,
     'the last run says success,blocked');
   assert.equal(closable({ plan: null, archived: true, lastRun: merged, legacy: true, stepsDone: false }).close, true);
+});
+
+/**
+ * closeArea takes an area down through doors the runner hands it. These fakes
+ * record what was asked of each door, so the cases need no git and no disk.
+ */
+const AREA = join('/w', 'step', 'x');
+const REPOS = [{ name: 'memoro', path: '/r/memoro' }, { name: 'memoro-cli', path: '/r/memoro-cli' }];
+const CLOSED = join('/w', 'runner', 'log', 'closed');
+
+function fakeDoors({ checkouts = ['memoro', 'memoro-cli'], leftovers = [], worktreeOk = true, moveOk = true, stopFailed = [] } = {}) {
+  const seen = { git: [], moved: [], rmdir: [], said: [], stopped: [] };
+  const doors = {
+    git: (cwd, args) => {
+      seen.git.push([cwd, args]);
+      return { ok: !(args[0] === 'worktree' && !worktreeOk) };
+    },
+    list: () => leftovers,
+    move: (from, to) => { seen.moved.push([from, to]); return moveOk; },
+    rmdir: (path) => { seen.rmdir.push(path); return true; },
+    exists: (path) => checkouts.some((repo) => path === join(AREA, repo, '.git')),
+    stopServers: (path, opts) => { seen.stopped.push([path, opts]); return { failed: stopFailed }; },
+    say: (text) => { seen.said.push(text); },
+  };
+  return { doors, seen };
+}
+
+test('closeArea takes a workarea down: both worktrees and branches, the leftover file moved, the folder removed', () => {
+  const { doors, seen } = fakeDoors({ leftovers: ['notes.md'] });
+  assert.equal(closeArea({ name: 'x', area: AREA, repos: REPOS, closedDir: CLOSED, ...doors }), true);
+  assert.deepEqual(seen.stopped, [[AREA, { reason: 'workarea-closed' }]]);
+  assert.deepEqual(seen.git, [
+    ['/r/memoro', ['worktree', 'remove', join(AREA, 'memoro')]],
+    ['/r/memoro', ['branch', '-D', 'x']],
+    ['/r/memoro-cli', ['worktree', 'remove', join(AREA, 'memoro-cli')]],
+    ['/r/memoro-cli', ['branch', '-D', 'x']],
+  ]);
+  assert.deepEqual(seen.moved, [[join(AREA, 'notes.md'), join(CLOSED, 'x', 'notes.md')]]);
+  assert.deepEqual(seen.rmdir, [AREA]);
+  assert.deepEqual(seen.said, ['close: x removed — worktree, branch x, 1 file(s) moved to runner/log/closed/x/']);
+});
+
+test('closeArea acts only on the repositories that hold a checkout in the area', () => {
+  const { doors, seen } = fakeDoors({ checkouts: ['memoro-cli'] });
+  assert.equal(closeArea({ name: 'x', area: AREA, repos: REPOS, closedDir: CLOSED, ...doors }), true);
+  assert.deepEqual(seen.git.map(([cwd]) => cwd), ['/r/memoro-cli', '/r/memoro-cli']);
+});
+
+test('a failed git worktree remove returns false, moves nothing and removes nothing', () => {
+  const { doors, seen } = fakeDoors({ leftovers: ['notes.md'], worktreeOk: false });
+  assert.equal(closeArea({ name: 'x', area: AREA, repos: REPOS, closedDir: CLOSED, ...doors }), false);
+  assert.deepEqual(seen.git, [['/r/memoro', ['worktree', 'remove', join(AREA, 'memoro')]]]);
+  assert.deepEqual(seen.moved, []);
+  assert.deepEqual(seen.rmdir, []);
+  assert.deepEqual(seen.said, ['close: x — git worktree remove failed for memoro, left alone']);
+});
+
+test('a failed move returns false and leaves the folder alone', () => {
+  const { doors, seen } = fakeDoors({ leftovers: ['notes.md'], moveOk: false });
+  assert.equal(closeArea({ name: 'x', area: AREA, repos: REPOS, closedDir: CLOSED, ...doors }), false);
+  assert.deepEqual(seen.rmdir, []);
+  assert.deepEqual(seen.said, [`close: x — could not move notes.md to ${join(CLOSED, 'x')}, folder left alone`]);
+});
+
+test('a dev server that will not stop is said, and does not stop the close', () => {
+  const { doors, seen } = fakeDoors({ stopFailed: [{ instance_id: 'dev-1', error: 'boom' }] });
+  assert.equal(closeArea({ name: 'x', area: AREA, repos: REPOS, closedDir: CLOSED, ...doors }), true);
+  assert.equal(seen.said[0], 'close: x — could not stop dev-1: boom');
+  assert.equal(seen.rmdir.length, 1);
 });
