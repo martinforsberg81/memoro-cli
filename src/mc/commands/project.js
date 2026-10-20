@@ -277,6 +277,12 @@ function newPlan(scanned, deps) {
     stderr.write(`mc: ${flags.repo} is not a repository mc knows — ${repoNames.join(', ')}\n`);
     return 2;
   }
+  // A project named like a repository would take that repository's worktree
+  // name in the programme's directory (ruling 51), so it is refused here.
+  if (repoNames.includes(project)) {
+    stderr.write(`mc: ${project} is the name of a repository — the programme's worktree of it stands at ~/mc/programs/${programme}/${project}; choose another name\n`);
+    return 2;
+  }
 
   const found = findProjectDir(home, project);
   if (found) { stderr.write(`mc: ${project} exists — ${found.file}\n`); return 1; }

@@ -26,7 +26,7 @@ import { homedir } from 'node:os';
 
 import { deleteConversations, listConversations } from './conversations.js';
 import {
-  PLAN_HOME, STATE_HOMES, STEP_HOME, WORK_HOME, layoutVersion, stepAreaRoot, workAreaPath, workAreaStatePath, workRoot,
+  PLAN_HOME, STATE_HOMES, STEP_HOME, WORK_HOME, areaKindOf, layoutVersion, programsHome, stepAreaRoot, workAreaPath, workAreaStatePath, workRoot,
 } from './paths.js';
 import { registerPath } from './register.js';
 import { installPushGuard } from './push-guard.js';
@@ -129,6 +129,16 @@ export function listStepAreas({
 export const OWN_MARKS = new Set(['.mc-role', STOP_MARK]);
 
 /**
+ * A planning session whose directory is a programme's: `programs/<programme>`
+ * in layout 2 (ruling 51). That directory holds the programme's projects and
+ * documents beside its worktrees, so it is never mc's to remove, and neither
+ * are its conversations. Only the git worktrees in it are released or discarded.
+ */
+export function isProgrammeArea(name, env = process.env) {
+  return areaKindOf(name)?.kind === 'plan' && workAreaPath(name, env).startsWith(`${programsHome(env)}/`);
+}
+
+/**
  * `conversations: false` and `git: false` leave those lookups out. Both cost
  * real time — a sqlite query and a directory walk for the first, four git
  * commands per checkout for the second — and a caller that is about to ask
@@ -144,9 +154,13 @@ export function inspectWorkArea(name, env = process.env, { conversations = true,
   // Gated on the mark, not the name alone: a pre-reservation ordinary area
   // that happens to wear the name keeps its worktrees visible.
   const roleHome = reservedRoleName(name) && Boolean(areaRoleName(path));
+  // A planning session's area holds checkouts, and in layout 2 the programme's
+  // own directories beside them: only a directory that holds a `.git` is a worktree.
+  const planArea = areaKindOf(name)?.kind === 'plan';
   try {
     entries = roleHome ? [] : readdirSync(path, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .filter((entry) => !planArea || existsSync(join(path, entry.name, '.git')))
       .map((entry) => entry.name)
       .sort();
   } catch { /* the work area may not exist yet */ }
@@ -499,13 +513,19 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = 
   // be left once the removable worktrees are gone, own marks aside — and
   // whatever holds the area is named instead of implied.
   const goneDirs = new Set(removed.map((item) => basename(item.path)));
+  // A programme's directory is never this area's to remove: what lies beside
+  // the worktrees is the programme's, so nothing holds the area and nothing is
+  // emptied by releasing its worktrees.
+  const beside = isProgrammeArea(name, env);
   let heldBy = [];
-  try {
-    heldBy = readdirSync(area.path)
-      .filter((entry) => !OWN_MARKS.has(entry) && !goneDirs.has(entry))
-      .sort();
-  } catch { /* the area may not exist */ }
-  const wouldBeEmpty = kept.length === 0 && heldBy.length === 0;
+  if (!beside) {
+    try {
+      heldBy = readdirSync(area.path)
+        .filter((entry) => !OWN_MARKS.has(entry) && !goneDirs.has(entry))
+        .sort();
+    } catch { /* the area may not exist */ }
+  }
+  const wouldBeEmpty = !beside && kept.length === 0 && heldBy.length === 0;
   const conversations = wouldBeEmpty ? area.conversations : [];
   let removedConversations = conversations;
   let failedConversations = [];
@@ -585,7 +605,8 @@ export function discardWorkArea(name, { repo = null, env = process.env, dryRun =
     discarded.push(worktree);
   }
   if (!dryRun) pruneWorktrees(knownRepositories(env));
-  const wholeArea = !repo && kept.length === 0;
+  // A programme's directory stays, whatever is left in it (isProgrammeArea).
+  const wholeArea = !repo && kept.length === 0 && !isProgrammeArea(name, env);
 
   // The conversations go with the work. Leaving them would mean the user has to
   // find and delete them by hand in two different tools, which is the chore mc

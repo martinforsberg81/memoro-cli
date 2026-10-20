@@ -8,6 +8,7 @@
  * with its project.
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,7 +24,9 @@ mkdirSync(join(mc, 'step', 'retention', 'memoro-cli', '.git'), { recursive: true
 
 const { openArea, runVerb } = await import('../../src/mc/commands/work.js');
 const { workAreaName } = await import('../../src/mc/paths.js');
-const { listStepAreas, listStrays, listWorkAreas } = await import('../../src/mc/work-area.js');
+const {
+  discardWorkArea, inspectWorkArea, listStepAreas, listStrays, listWorkAreas, releaseWorkArea,
+} = await import('../../src/mc/work-area.js');
 const { registerPath } = await import('../../src/mc/register.js');
 
 function sink() {
@@ -88,6 +91,64 @@ describe('listStepAreas in layout 2', () => {
       mkdirSync(join(two, 'step', 'z', 'memoro', '.git'), { recursive: true });
       assert.deepEqual(listStepAreas({ root: two }), [{ name: 'x', path: join(two, 'runner', 'step', 'x'), repos: ['memoro'] }]);
     } finally { rmSync(two, { recursive: true, force: true }); }
+  });
+});
+
+describe('a programme directory in layout 2 keeps everything but its worktrees', () => {
+  /** A programme's directory: one worktree of a real repository, and a project and a document beside it. */
+  function programmeFixture() {
+    const home = mkdtempSync(join(tmpdir(), 'mc-programme-dir-'));
+    const env = { MC_WORK_ROOT: home };
+    const repo = join(home, 'repo');
+    const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' });
+    mkdirSync(repo);
+    git(repo, ['init', '-q', '-b', 'main']);
+    writeFileSync(join(repo, 'README.md'), '# repo\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'init']);
+    const area = join(home, 'programs', 'p');
+    mkdirSync(area, { recursive: true });
+    git(repo, ['worktree', 'add', '-q', '-b', 'p-memoro', join(area, 'memoro')]);
+    mkdirSync(join(area, 'x'));
+    writeFileSync(join(area, 'x', 'PLAN.json'), '{}\n');
+    writeFileSync(join(area, 'rulings.md'), '# rulings\n');
+    mkdirSync(join(home, 'runner'), { recursive: true });
+    writeFileSync(join(home, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }));
+    return { env, area, cleanup: () => rmSync(home, { recursive: true, force: true }) };
+  }
+
+  it('lists only the worktree: a directory without a .git is the programme\'s, not the area\'s', () => {
+    const fx = programmeFixture();
+    try {
+      assert.deepEqual(inspectWorkArea('programs/p', fx.env).worktrees.map((item) => item.repo), ['memoro']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('release removes the worktree and leaves the directory, its project and its documents', () => {
+    const fx = programmeFixture();
+    try {
+      const result = releaseWorkArea('programs/p', { env: fx.env, dryRun: false });
+      assert.deepEqual(result.removed.map((item) => [item.repo, item.what]), [['memoro', 'worktree and branch']]);
+      assert.deepEqual(result.kept, []);
+      assert.deepEqual(result.held_by, []);
+      assert.deepEqual(result.conversations, []);
+      assert.equal(existsSync(join(fx.area, 'memoro')), false);
+      assert.equal(existsSync(join(fx.area, 'x', 'PLAN.json')), true);
+      assert.equal(existsSync(join(fx.area, 'rulings.md')), true);
+      assert.equal(existsSync(fx.area), true);
+    } finally { fx.cleanup(); }
+  });
+
+  it('discard removes the worktree, keeps the area, and leaves the programme\'s files', () => {
+    const fx = programmeFixture();
+    try {
+      const result = discardWorkArea('programs/p', { env: fx.env, dryRun: false });
+      assert.equal(result.removes_area, false);
+      assert.deepEqual(result.discarded.map((item) => item.repo), ['memoro']);
+      assert.equal(existsSync(join(fx.area, 'memoro')), false);
+      assert.equal(existsSync(join(fx.area, 'x', 'PLAN.json')), true);
+      assert.equal(existsSync(join(fx.area, 'rulings.md')), true);
+    } finally { fx.cleanup(); }
   });
 });
 

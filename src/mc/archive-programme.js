@@ -41,6 +41,7 @@ import { planAreaName, programsHome } from './paths.js';
 import { programsPlans } from './plan-source.js';
 import { landingNote } from './run-plan.js';
 import { tilde } from './status-project.js';
+import { isProgrammeArea } from './work-area.js';
 
 /** Every programme-archive branch starts with this — never `mc-archive-`, which the runner waits on. */
 export const PROGRAMME_ARCHIVE_PREFIX = 'mc-programme-archive-';
@@ -133,11 +134,16 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
   if (areaExists) {
     const released = deps.release(areaName, { env, dryRun: false });
     for (const item of released.removed) say(`${item.path} — ${item.what} removed${item.branch ? ` (${item.branch})` : ''}`);
-    if (released.kept.length || released.held_by.length || existsSync(areaPath)) {
+    // In layout 2 the directory is the programme's and stays by design: what
+    // release keeps is the only thing left to refuse.
+    const beside = isProgrammeArea(areaName, env);
+    if (released.kept.length || (!beside && (released.held_by.length || existsSync(areaPath)))) {
       stderr.write(`mc: ${tilde(areaPath)}/ is still there — mc work release ${areaName} says why\n`);
       return 1;
     }
-    say(`${tilde(areaPath)}/ removed${released.conversations.length ? `, with ${released.conversations.length} conversation(s)` : ''}`);
+    say(beside
+      ? `${tilde(areaPath)} — the planning session's worktrees released; the programme's directory stays`
+      : `${tilde(areaPath)}/ removed${released.conversations.length ? `, with ${released.conversations.length} conversation(s)` : ''}`);
   }
   say(`${programme} archived`);
   return 0;

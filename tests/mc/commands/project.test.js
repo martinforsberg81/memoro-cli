@@ -179,6 +179,17 @@ test('new refuses a bad name, a missing flag and an unknown repo, exit 2', async
   } finally { f.cleanup(); }
 });
 
+test('new refuses a project named like a repository, exit 2, and writes nothing', async () => {
+  const f = draftFixture();
+  try {
+    f.deps.repos = [{ name: 'memoro', path: join(f.home, 'memoro') }, { name: 'memoro-cli', path: join(f.home, 'memoro-cli') }];
+    assert.equal(await run(['new', 'p/memoro', '--repo', 'memoro', '--goal', 'x', '--contract', 'x', '--out-of-scope', 'x'], f.deps), 2);
+    assert.equal(f.err.join(''), 'mc: memoro is the name of a repository — the programme\'s worktree of it stands at ~/mc/programs/p/memoro; choose another name\n');
+    assert.equal(existsSync(join(f.home, 'p')), false);
+    assert.equal(f.out.length, 0);
+  } finally { f.cleanup(); }
+});
+
 test('edit changes the goal of a draft and keeps the rest', async () => {
   const f = draftFixture();
   try {
