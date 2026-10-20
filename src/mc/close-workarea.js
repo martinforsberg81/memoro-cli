@@ -21,8 +21,11 @@
  * which is the one thing that says whether anything would be lost.
  *
  * Everything here is a function of text and small objects; the git half is
- * run.js, so these rules can be covered with no repository behind them.
+ * run.js, and `closeArea` takes its git and disk as doors, so these rules and
+ * the taking-down can be covered with no repository behind them.
  */
+import { join } from 'node:path';
+
 import { parseRuns } from './brief-collect.js';
 
 /** A step's note column ends this way when the runner merged its PR. */
@@ -123,4 +126,55 @@ export function unplannedRow({ name, repo, uncommitted, lastCommit, branch }) {
  */
 export function unplannedFile(rows) {
   return rows.length ? `${UNPLANNED_HEADER}${rows.join('\n')}\n` : UNPLANNED_HEADER;
+}
+
+/* ---------------------------------------------------- taking one area down */
+
+/**
+ * One closable workarea, taken down: the worktree removed through the
+ * repository that owns it, the local branch deleted, and everything the
+ * folder kept beside its checkout moved to `runner/log/closed/<name>/`
+ * before the folder itself goes.
+ *
+ * What mc deletes is nothing: every file the folder holds outside the
+ * checkout is moved, and the checkout is git's to hand back — its content
+ * is on origin, and the remote branch and the PRs stay. `git worktree
+ * remove` does take the ignored files with it, which on the workareas
+ * measured 2026-08-29 was `node_modules/`, `__pycache__/`, `.wrangler/`,
+ * `public/dist/` and one generated `.sql` — build output a fresh checkout
+ * rebuilds, and nothing a person wrote.
+ *
+ * A step that fails stops the rest and says so: the folder keeps whatever
+ * has not been moved yet, and the next round tries again.
+ *
+ * `area` is the folder, `repos` the runner's `[{ name, path }]`: the ones
+ * with a checkout in `area` are the ones acted on. The doors are the
+ * runner's own — `closedDir` is `runner/log/closed`, `stopServers` stops the
+ * dev servers under a folder.
+ */
+export function closeArea({ name, area, repos, closedDir, git, list, move, rmdir, exists, stopServers, say }) {
+  // Its dev servers first: a server outlives the worktree otherwise, and
+  // nothing else will ever stop it. A failed stop does not stop the close —
+  // `git worktree remove` decides, as it always has.
+  const servers = stopServers(area, { reason: 'workarea-closed' });
+  for (const { instance_id: id, error } of servers?.failed || []) say(`close: ${name} — could not stop ${id}: ${error}`);
+  for (const repo of repos.filter((candidate) => exists(join(area, candidate.name, '.git')))) {
+    const worktree = join(area, repo.name);
+    if (!git(repo.path, ['worktree', 'remove', worktree]).ok) {
+      say(`close: ${name} — git worktree remove failed for ${repo.name}, left alone`);
+      return false;
+    }
+    git(repo.path, ['branch', '-D', name]);
+  }
+  const kept = list(area).filter(Boolean);
+  for (const entry of kept) {
+    if (!move(join(area, entry), join(closedDir, name, entry))) {
+      say(`close: ${name} — could not move ${entry} to ${join(closedDir, name)}, folder left alone`);
+      return false;
+    }
+  }
+  rmdir(area);
+  const moved = kept.length ? `, ${kept.length} file(s) moved to runner/log/closed/${name}/` : '';
+  say(`close: ${name} removed — worktree, branch ${name}${moved}`);
+  return true;
 }
