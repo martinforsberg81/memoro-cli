@@ -1,8 +1,10 @@
 /**
  * `mc merge <repo> <pr> --docs` — landing a documentation-only pull request
  * on a stubbed gh: docs-only merges; one file outside docs/ refuses with its
- * name; a script under docs/ refuses with its name; a draft refuses; a batch or --check with --docs is refused before
- * gh is asked; the old spelling points at the new verb.
+ * name; a script under docs/ refuses with its name; a repository plan that
+ * adds lines refuses with its name, and one that only removes them lands; a
+ * draft refuses; a batch or --check with --docs is refused before gh is asked;
+ * the old spelling points at the new verb.
  */
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -27,7 +29,7 @@ function stubGh({ files, state = 'OPEN', isDraft = false, mergeable = 'MERGEABLE
       if (fields === 'mergeable') { asked += 1; return json({ mergeable: asked <= unknownFirst ? 'UNKNOWN' : mergeable }); }
       if (fields === 'headRefOid') return json({ headRefOid: headAfter });
       if (fields === 'state,mergeCommit') return json({ state: merged ? 'MERGED' : 'OPEN', mergeCommit: merged ? { oid: 'abc1234def' } : null });
-      return json({ number: 12, title: 'Plan: gate-word', state, isDraft, baseRefName: 'main', headRefName: branch, body, headRefOid: head, files: files.map((path) => ({ path })) });
+      return json({ number: 12, title: 'Plan: gate-word', state, isDraft, baseRefName: 'main', headRefName: branch, body, headRefOid: head, files: files.map((f) => (typeof f === 'string' ? { path: f } : f)) });
     }
     if (args[0] === 'pr' && args[1] === 'merge') { merged = true; return { ok: true, stdout: '', stderr: '' }; }
     return { ok: false, stdout: '', stderr: 'unexpected' };
@@ -94,6 +96,32 @@ describe('runDocsMerge', () => {
     assert.equal(report.stopped_at, null);
     assert.ok(calls.some((c) => c[1] === 'merge'));
     assert.equal(firstScript(['docs/a.md', 'docs/b.json']), null);
+  });
+
+  it('refuses a pull request that adds lines to a repository plan, by name, before touching merge', async () => {
+    const { gh, calls } = stubGh({ files: [{ path: 'docs/project/a/b/PLAN.json', additions: 40, deletions: 0 }] });
+    const report = await runDocsMerge(opts(gh));
+    assert.equal(report.ok, false);
+    assert.equal(report.merged, false);
+    assert.equal(report.stopped_at, 'plan');
+    assert.match(report.reason, /^#12 writes docs\/project\/a\/b\/PLAN\.json — a plan is written with mc project new … and lives under ~\/mc\/programs\/, never in a repository$/u);
+    assert.deepEqual(docsMergeLines(report), [`mc: NOT merged — ${report.reason}`]);
+    assert.ok(!calls.some((c) => c[1] === 'merge'));
+  });
+
+  it('lands a pull request that only removes a repository plan', async () => {
+    const { gh, calls } = stubGh({ files: [{ path: 'docs/project/a/b/PLAN.json', additions: 0, deletions: 40 }] });
+    const report = await runDocsMerge(opts(gh));
+    assert.equal(report.ok, true);
+    assert.equal(report.stopped_at, null);
+    assert.ok(calls.some((c) => c[1] === 'merge'));
+  });
+
+  it('lands a pull request that touches a project README beside its plan', async () => {
+    const { gh, calls } = stubGh({ files: [{ path: 'docs/project/a/README.md', additions: 3, deletions: 1 }] });
+    const report = await runDocsMerge(opts(gh));
+    assert.equal(report.ok, true);
+    assert.ok(calls.some((c) => c[1] === 'merge'));
   });
 
   it('refuses a draft, a closed one, and a conflicting one', async () => {

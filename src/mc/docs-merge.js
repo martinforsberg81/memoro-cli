@@ -2,13 +2,16 @@
  * `mc merge <repo> <pr> --docs` — land a pull request that touches nothing
  * outside `docs/`, without the suite.
  *
- * A plan is a file under `docs/project/`; its PR is docs-only by
- * construction, and there is no test to run on it. Waiting for a click
+ * A plan is no longer a file in a repository (ruling 48): the route refuses a
+ * pull request that adds lines to one, and a pull request that only removes
+ * one lands. There is no test to run on a document. Waiting for a click
  * before the runner could see it was the friction this removes. The check
  * is GitHub's own file list for the PR, never a local diff, so a stale
  * checkout cannot make a code PR look like documentation.
  */
 import { spawnSync } from 'node:child_process';
+
+import { isRepoPlanPath } from './plan-source.js';
 
 export const DOCS_PREFIX = 'docs/';
 /**
@@ -87,6 +90,10 @@ export async function runDocsMerge({
   if (outside) return finish('not-docs', `#${pr} touches ${outside} — outside ${DOCS_PREFIX}, so this is the gate's, not --docs'`);
   const script = firstScript(report.files);
   if (script) return finish('script', `#${pr} carries ${script} — a script is not a document; land it through the gate: mc merge <repo> ${pr}`);
+  // The same objects as report.files, with their line counts: a file that only
+  // removes lines (a plan taken out) lands; one that adds them does not.
+  const plan = (info.files || []).find((f) => isRepoPlanPath(f.path) && f.additions > 0);
+  if (plan) return finish('plan', `#${pr} writes ${plan.path} — a plan is written with mc project new … and lives under ~/mc/programs/, never in a repository`);
   if (!report.files.length) return finish('empty', `#${pr} changes no files`);
 
   // GitHub reports UNKNOWN for a few seconds after a push; merging then
