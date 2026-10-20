@@ -794,35 +794,50 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * What an interrupted session left uncommitted, committed as one WIP commit
-   * before a fresh session takes its step (ruling 33) — the one case the
-   * runner commits a worktree. The dirt is the session's only when the
-   * worktree stands on the branch it ran on or on one named after the project:
-   * a session may make its own branch (2026-10-10, video-window's moved from
-   * `video-window-3` to `video-window-step-2` on the same commit), and then
-   * the recorded branch is moved up to it first when it is an ancestor, so
-   * the step's branch carries the work. `--no-verify`: nothing in it has been
-   * checked, and a hook that refuses it would leave the step parked on dirt.
+   * What an earlier session left uncommitted in the step area, committed as one
+   * WIP commit before the step's next session takes it — the one case the
+   * runner commits a worktree. A step area is the runner's own: nobody works
+   * there but its sessions, whichever way the last one ended (2026-10-20,
+   * `home-route-cue` step 2 was blocked on its own session's files). The dirt
+   * is the session's only when the worktree stands on the branch the step
+   * records, or on one named after the project: a session may make its own
+   * branch (2026-10-10, video-window's moved from `video-window-3` to
+   * `video-window-step-2` on the same commit), and then the recorded branch is
+   * moved up to it first when it is an ancestor, so the step's branch carries
+   * the work. `--no-verify`: nothing in it has been checked, and a hook that
+   * refuses it would leave the step parked on dirt.
    *
-   * Returns `{ own: false }` for dirt that is not the session's, else
-   * `{ own: true, ok, sha, why }`.
+   * `interrupted` is the record of a session that died under the step, or null
+   * when the step's last session ended some other way. Returns `{ own: false }`
+   * for dirt that is not the session's, else `{ own: true, ok, sha, why }`.
    */
-  function commitLeftovers(worktree, name, interrupted) {
+  function commitLeftovers(worktree, name, { branch, interrupted = null, step }) {
     const current = gitOut(worktree, ['branch', '--show-current']);
-    const recorded = interrupted.branch || null;
+    const recorded = branch || null;
     if (!current || !(current === recorded || current === name || current.startsWith(`${name}-`))) return { own: false };
     if (recorded && current !== recorded
       && deps.git(worktree, ['rev-parse', '-q', '--verify', `refs/heads/${recorded}`]).ok
       && deps.git(worktree, ['merge-base', '--is-ancestor', recorded, 'HEAD']).ok) {
-      if (deps.git(worktree, ['checkout', '-q', '-B', recorded]).ok) say(`${name}: the interrupted session was on ${current} — ${recorded} moved up to it`);
+      if (deps.git(worktree, ['checkout', '-q', '-B', recorded]).ok) say(`${name}: the ${interrupted ? 'interrupted session' : 'earlier session'} was on ${current} — ${recorded} moved up to it`);
     }
-    const title = `${name}: WIP left by an interrupted session`;
-    const body = `Session ${interrupted.session_id || 'unknown'} was interrupted at ${interrupted.at || 'an unknown time'}; these are the files it had not committed, unchecked.`;
+    const title = interrupted
+      ? `${name}: WIP left by an interrupted session`
+      : `${name}: WIP left by an earlier session of step ${step}`;
+    const body = interrupted
+      ? `Session ${interrupted.session_id || 'unknown'} was interrupted at ${interrupted.at || 'an unknown time'}; these are the files it had not committed, unchecked.`
+      : `The runner found these files uncommitted in its own step area at ${stamp()}; committed unchecked, so the next session starts from them.`;
     if (!deps.git(worktree, ['add', '-A']).ok || !deps.git(worktree, ['commit', '-q', '--no-verify', '-m', title, '-m', body]).ok) {
-      return { own: true, ok: false, why: 'the files an interrupted session left could not be committed' };
+      return {
+        own: true,
+        ok: false,
+        why: interrupted ? 'the files an interrupted session left could not be committed' : 'the files an earlier session left could not be committed',
+      };
     }
     const sha = gitOut(worktree, ['rev-parse', 'HEAD']);
-    say(`${name}: the files the interrupted session left are committed as WIP${sha ? ` (${sha.slice(0, 7)})` : ''}`);
+    const short = sha ? ` (${sha.slice(0, 7)})` : '';
+    say(interrupted
+      ? `${name}: the files the interrupted session left are committed as WIP${short}`
+      : `${name}: the files an earlier session left are committed as WIP${short}`);
     return { own: true, ok: true, sha: sha || null };
   }
 
@@ -1964,16 +1979,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const recovery = recoveryOf(worktree, name);
     const resuming = recovery?.mode === 'resume' ? recovery : null;
     const fresh = recovery?.mode === 'fresh' ? recovery : null;
-    // A dirty worktree is nobody's but a person's — the runner never stashes
-    // or restores one, and commits one only when it is what an interrupted
-    // session left on its own branch and a fresh session takes the step
-    // (`commitLeftovers`) — so the step is blocked and the files are named:
-    // `email-window-layout` stood third in queue.md and was skipped 134 rounds
-    // on three modified files before anyone read the reason.
+    // A step area is the runner's own: nobody works in it but its sessions, so
+    // dirt on the project's branch is an earlier session's and is committed as
+    // WIP before the step starts, whichever way that session ended
+    // (`commitLeftovers`). Dirt on any other branch is a person's and blocks
+    // the step, named, so it is not stepped on: `email-window-layout` stood
+    // third in queue.md and was skipped 134 rounds on three modified files
+    // before anyone read the reason.
     let dirty = resuming ? '' : (gitOut(worktree, ['status', '--porcelain']) || '').trim();
     let wip = null;
-    if (dirty && fresh) {
-      const left = commitLeftovers(worktree, name, fresh.interrupted);
+    if (dirty) {
+      const record = plans.find((p) => p.project === name);
+      const index = deliverableStep(record.plan).index;
+      const branch = fresh ? fresh.interrupted.branch : readEntry(root, name, { read: deps.read })?.steps?.[index]?.branch ?? null;
+      const left = commitLeftovers(worktree, name, { branch, interrupted: fresh?.interrupted ?? null, step: index + 1 });
       if (left.own && !left.ok) return block(REFUSAL.dirty, left.why);
       if (left.own) { wip = left; dirty = ''; }
     }
