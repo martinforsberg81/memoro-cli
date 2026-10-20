@@ -422,14 +422,17 @@ this GitHub at this moment, in this order (`runStepClaimed`):
    deliberately left alone — the runner starts neither, so one of them is a
    person's work.
 4. **The worktree is dirty** — uncommitted changes that are not a merge in
-   progress, usually somebody's unfinished work about to be stepped on. The
-   runner never stashes or discards it, and commits it in one case only: the
-   step it is about to run carries an `interrupted` record (*The register*).
-   A resume does not look at the tree at all — its conversation knows those
-   files. A fresh session gets them committed first as one WIP commit
-   (`commitLeftovers`), when the tree stands on the branch the session ran on
-   or on one named after the project. Dirt in any other workarea, or on any
-   other branch, is blocked as before.
+   progress. A step area is the runner's own, so dirt an earlier session left
+   there does not block a step. Uncommitted files on the project's own branch
+   (the register step's branch, the project's name, or `<project>-<n>`) are
+   committed first as one WIP commit with `--no-verify` (`commitLeftovers`),
+   before the step starts: `WIP left by an interrupted session` when the step's
+   last session was cut off (*The register*), `WIP left by an earlier session
+   of step <n>` otherwise. The runner never stashes or discards files. A resume
+   does not look at the tree at all — its conversation knows those files — so
+   it is left exactly as it is. Dirt on any other branch is a person's and
+   blocks the step on `workarea dirty-worktree`, as does a WIP commit git
+   refuses.
 5. **What is open on GitHub could not be read** for this repository.
 6. *(Until 2026-09-12 a held pull request was here: a `repair` session, then
    the brief's. Ruling 21 removed it; a step that did not land is `failed` in
@@ -468,7 +471,7 @@ fault that is a moment's, and not the project's, is waited out.
 
 | blocked, as `blocked_by: { kind: "workarea", name }` | the refusal word | when |
 |---|---|---|
-| `dirty-worktree` | `dirty` | 4 — the comment names up to five of the files |
+| `dirty-worktree` | `dirty` | 4 — dirt on a branch that is not the project's, or a WIP commit that failed; the comment names up to five of the files |
 | `worktree-missing` | `worktree` | 2 — `git worktree add` failed; git's reason |
 | `branch-foreign` | `branch-foreign` | 2 — the project's local branch is held by a worktree the runner did not free, or has commits not on origin/main and no register step names it; the holder is named |
 | `branch-unmovable` | `branch` | 8 — `<name>-<n>` could not be made |
@@ -1439,6 +1442,8 @@ one of three outcomes:
 - **Failed** — the `INTERRUPT_LIMIT`th (3) interruption in a row:
   `interrupted 3 times in a row — last session <id>`. A step that keeps
   dying is a person's.
+
+A session on a branch that carries an earlier session's commits is handed them (`earlierPreamble`: the branch's commits past origin/main, at most 20), and a step answered without a pull request is handed the answer (`answeredPreamble`).
 
 **What a person writes there** is `mc step`: `failed --reason`, `blocked --on`
 (or `--on-project`, `--until`, `--after-deploy`), `ready`, `done`. `ready` is refused while the step's pull request is open — a
