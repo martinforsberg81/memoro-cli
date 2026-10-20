@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { planSummary, readPlanText } from './plan-schema.js';
-import { PLAN_FILE, PROJECT_DIR, lsTreeArgs, plansInTree, programsPlans } from './plan-source.js';
+import { PLAN_FILE, PROJECT_DIR, lsTreeArgs, plansInTree, programsArchived, programsPlans } from './plan-source.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -147,11 +147,13 @@ export function listRepoPlans(repo, { ref = 'origin/main', git = runGit, batch =
  * under the programs tree is the plan, and its repository copy is not read
  * (ruling 48); a programs plan whose `repo` is not this repository is another
  * repository's, so it is left out here, and it still takes its project's
- * repository record out of this list. `records` is `listRepoPlans`'s.
+ * repository record out of this list. An archived project (`programsArchived`)
+ * is moved as well, so its repository copy stays hidden, and it is not returned:
+ * an archived project is not a plan any reader lists. `records` is `listRepoPlans`'s.
  */
-export function withProgrammePlans(repoName, records, { programs = programsPlans } = {}) {
+export function withProgrammePlans(repoName, records, { programs = programsPlans, archived = programsArchived } = {}) {
   const all = programs();
-  const moved = new Set(all.map((e) => e.project));
+  const moved = new Set([...all, ...archived()].map((e) => e.project));
   const own = all.filter((e) => e.repo === repoName);
   const texts = new Map(own.map((e) => [e.path, e.text]));
   return [
@@ -164,8 +166,10 @@ export function withProgrammePlans(repoName, records, { programs = programsPlans
  * The plans of one repository as the readers see them: `~/mc/programs/` first,
  * then the repository's own on the ref (`listRepoPlans`, `withProgrammePlans`).
  */
-export function listPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch, programs = programsPlans } = {}) {
-  return withProgrammePlans(repo.name, listRepoPlans(repo, { ref, git, batch }), { programs });
+export function listPlans(repo, {
+  ref = 'origin/main', git = runGit, batch = catFileBatch, programs = programsPlans, archived = programsArchived,
+} = {}) {
+  return withProgrammePlans(repo.name, listRepoPlans(repo, { ref, git, batch }), { programs, archived });
 }
 
 /**
@@ -204,21 +208,26 @@ export function planRecords(repoName, entries, textOf) {
 }
 
 /**
- * The archived projects of one repository on a ref: the names of its
- * `docs/project/<programme>/closeout/<project>.json` files. That record is
- * what `mc run` writes when it archives a plan (`closeoutPath` in `closeout.js`),
- * and the archive takes only a done plan, so a project with one was delivered.
+ * The archived projects of one repository, closeout names first, each name once:
+ * the names of its `docs/project/<programme>/closeout/<project>.json` files on a
+ * ref, then the `project` of every archived project under `~/mc/programs/` whose
+ * `repo` is this repository (`programsArchived`: a `CLOSEOUT.json` beside its
+ * plan). The ref's names are what `mc run` writes when it archives a plan
+ * (`closeoutPath` in `closeout.js`), and the archive takes only a done plan, so
+ * a project with one was delivered. When the ref cannot be read, the programs
+ * names are still returned.
  * `listPlans` never returns these paths: it takes `PLAN.json` and `PLAN.md` in
  * `parts[4]` and nothing else. A `closeout/<project>.md` is not a name, and a
  * file nested deeper under `closeout/` is not one either.
  */
-export function listArchived(repo, { ref = 'origin/main', git = runGit } = {}) {
+export function listArchived(repo, { ref = 'origin/main', git = runGit, archived = programsArchived } = {}) {
   const tree = git(repo.path, ['ls-tree', '-r', '--name-only', ref, '--', 'docs/project']);
-  if (tree == null) return [];
-  return tree.split('\n')
+  const closeouts = tree == null ? [] : tree.split('\n')
     .map((path) => path.split('/'))
     .filter((parts) => parts.length === 5 && parts[3] === 'closeout' && parts[4].endsWith('.json'))
     .map((parts) => parts[4].slice(0, -'.json'.length));
+  const programs = archived().filter((e) => e.repo === repo.name).map((e) => e.project);
+  return [...new Set([...closeouts, ...programs])];
 }
 
 /**
