@@ -30,7 +30,7 @@ lands it. All of that is gone.
 
 A programme is the initiative the work serves — `msr-core`, `sql-readiness`,
 `mc` — and it outlives every project under it. A project is what `mc run` runs:
-one `PLAN.json`, one branch, one workarea, archived off main by the runner's
+one `PLAN.json` under `~/mc/programs/`, one branch, one workarea, archived by the runner's
 next chore pass once its plan says done.
 
 `mc plan <name>` used to make `~/mc/<name>` on branch `<name>` — then exactly the
@@ -83,7 +83,7 @@ separate:
 | reading | question it answers |
 |---|---|
 | `listProgrammes` — `git ls-tree -d origin/main docs/project/` | which programmes **exist** |
-| `listPlans` — the `PLAN.json` files on `origin/main` | what is **in** them |
+| `listPlans` — the `PLAN.json` files under `~/mc/programs/` | what is **in** them |
 | `openPlanAreas` — the directories under `~/mc/plan/` | which are **being planned** |
 
 Asking only the second would drop a programme whose projects the runner has
@@ -208,8 +208,8 @@ never triggered.
 [`src/mc/archive-programme.js`](../../src/mc/archive-programme.js):
 
 1. **Everything is checked before anything is touched.** It fetches, then
-   refuses — listing every reason — while any plan under the programme is on
-   `origin/main` in either repository (a `done` one is `mc run`'s to archive
+   refuses — listing every reason — while any plan under the programme is under
+   `~/mc/programs/` (a `done` one is `mc run`'s to archive
    first), or while `releaseWorkArea`'s dry run would keep anything in
    `~/mc/plan/<programme>/`: uncommitted work, commits main lacks, a process
    standing in it (the session itself, if run from inside), a file somebody

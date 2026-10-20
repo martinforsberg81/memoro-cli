@@ -207,13 +207,13 @@ repository. What it does, for as long as the runner runs:
 1. **STOP and UPDATE first.** A `STOP` file ends the lane; a pending `UPDATE`
    makes it take no new step and wait for the drain (*The switch*).
 2. **Read the world for its repository** — `queue({ only: repo })`:
-   `~/mc/queue.md`, every `PLAN.json` on that repository's `origin/main`, and
+   `~/mc/queue.md`, every `PLAN.json` under `~/mc/programs/`, and
    `gh pr list --state open`, on the same trip to the network. The open list
    also reconciles the register: a `running` step whose session is gone is failed
    leaves it.
 3. **Pick** — `nextFor` ([`run-plan.js`](../../src/mc/run-plan.js)): the first
    name in `assembleQueue`'s order (*The queue*) that is in this repository and
-   - whose plan on `origin/main` says its first unfinished step is `ready`
+   - whose plan under `~/mc/programs/` says its first unfinished step is `ready`
      (`kindFor`, the same call the page makes),
    - whose repository GitHub answered for (`prs-unknown` otherwise — a lane
      that cannot see what is open starts nothing). A failed `gh pr list` is
@@ -239,7 +239,7 @@ repository. What it does, for as long as the runner runs:
    - **a step ran** (`ran`, or `merged` when it landed): the pass ends, and the
      lane picks again **at once** against a freshly read world, because the
      one it picked from now has a pull request in it and a plan that moved on;
-   - **a fault a person has to fix**: the step is written `blocked` on `main`
+   - **a fault a person has to fix**: the step is written `blocked`
      (*Blocked by the runner*), the name joins `passed`, and the lane takes the
      next name in the same pass;
    - **a moment's fault** — `WAIT_REFUSALS` in `run.js`: a fetch that failed,
@@ -257,9 +257,9 @@ repository. What it does, for as long as the runner runs:
 
 **A step that moved nothing is not picked again at once.** *Pick again at once*
 is a spin if the step changed nothing: a session that opens no pull request and
-leaves its plan on `main` exactly as it found it would be restarted the second
+leaves its plan exactly as it found it would be restarted the second
 it ended. So a lane carries the `{ name, step }` it just ran, and `pass` skips
-that one name while the plan on `main` still shows the same step
+that one name while the plan still shows the same step
 (`<tag>: <name> is on the same step its last session ended on — leaving it for
 the next pass`). A merged step *does* move the plan, so a project whose next step
 is ready is picked again at once — the order does what a lane's stay on a
@@ -283,22 +283,17 @@ project used to.
    column). The question here is *is there a file?*, not *has today's collect
    run?*, and the two were one gate until 2026-09-05 — which is how thirteen
    digests came to be waiting in a directory that is supposed to drain.
-3. **Tidy `queue.md`** against the plans on both `origin/main`s, and write
+3. **Tidy `queue.md`** against the plans under `~/mc/programs/`, and write
    `~/mc/runner/unreadable-plans.md` from the same reading.
 4. **Archive** every plan that is done — every step done and every success
    criterion `met: true`. A plan whose steps are all done with a criterion not
    met is `unmet`: the runner says so once in `runner.log`
    (`<project>: every step is done, but success criterion N is not met
    … — not archived`) and leaves it, its workarea and anything waiting on it
-   as they are. A done repository plan has the directory removed, its
-   README kept as `closeout/<project>.md` with the links into it rewritten to
-   that, and a `project_log.md` row left behind it, one PR per repository, landed through
-   `mc merge --docs` — but only while no lane is in a session, because the
-   gate refuses a second landing rather than queueing it. See
-   [`mc-tidy.md`](mc-tidy.md). A done project under `~/mc/programs/` is not in this pull request: it is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan.
-5. **Close** the workareas whose project is finished — whose archive PR merged
-   in 4, or whose plan an earlier archive already took off `main`, which
-   `project_log.md` is what still knows.
+   as they are. A done project under `~/mc/programs/` is archived once it has been done for 24 hours (`archiveProgramsDue`, `ARCHIVE_HOLD_MS`), its row landed through `runDocsMerge` and its `CLOSEOUT.json` written beside its plan.
+5. **Close** the workareas whose project is finished — whose archive landed
+   in 4, or whose plan an earlier archive already took away, which
+   `CLOSEOUT.json` or `project_log.md` is what still knows.
 6. **Docker, swept** (`sweepDocker`, `docker.js`), every pass: leases whose pid
    is gone are removed, containers and volumes labelled `mc.holder` with a dead
    pid are removed, and an OrbStack that `mc docker ensure` started is stopped
@@ -347,9 +342,8 @@ so the new process reads no holder.
 ## The queue
 
 What a lane takes from is `assembleQueue`: the names in `~/mc/queue.md` first,
-in the file's order, then every project with a `PLAN.json` on either
-`origin/main` that the file did not name, **alphabetically**. That is the whole
-of the order, within each repository. A name with no plan on main is not in it
+in the file's order, then every project with a `PLAN.json` under `~/mc/programs/` that the file did not name,
+**alphabetically**. That is the whole of the order. A name with no plan is not in it
 at all — it used to be, and the skip line it produced was read by nobody. Such a
 workarea is surfaced where somebody looks instead: the page's list of
 workareas without a project.
@@ -362,14 +356,14 @@ per pass over the queue; with the order as the only thing a lane goes by, a
 prioritised five-step project would have dropped to alphabetical after its
 first step (2026-09-08). `strictQueue` is the rule and `tidyQueue` in the chore
 loop rewrites the file to that shape, one runner.log line per dropped entry: a
-line that is not a name, a name given twice, a name with no plan on main, a
+line that is not a name, a name given twice, a name with no plan, a
 plan still written as `PLAN.md`, and a plan that is `done`. A `blocked` project
 keeps its place — it is first again the moment its step is `ready`.
 
 ## One step
 
 A project is asked in two places, and the order is the whole of what a pick
-costs: **the plan on `origin/main` decides before anything is touched, and the
+costs: **the plan under `~/mc/programs/` decides before anything is touched, and the
 worktree decides after.**
 
 What a step session has not committed is snapshotted to
@@ -383,13 +377,13 @@ applies it. A fresh session's handover names the ref when it exists, and a
 person restores from it with `git checkout refs/mc/checkpoint/<project> -- .`
 in the workarea (or looks first with `git show --stat refs/mc/checkpoint/<project>`).
 
-### What the plan on main decides
+### What the plan decides
 
 The pick answers it (step 3 above), from the plans the lane has just read.
 `kindFor` is the reading — the same one the page's NEXT draws from — and a name
 it refuses is never picked and costs no git at all:
 
-| the plan on main says | the lane |
+| the plan says | the lane |
 |---|---|
 | the first unfinished step is `ready` | may pick it |
 | every step is `done`, or the first unfinished one is `blocked` | does not |
@@ -401,7 +395,7 @@ order, and skipping a stopped one to reach a later `ready` step is how a plan
 gets half-built in an order nobody chose.
 
 What this answer is worth was measured while the runner still walked every
-name: 38 projects in 51 s of git, 36 of which the plan on main had already
+name: 38 projects in 51 s of git, 36 of which the plan had already
 refused, against 1.2 ms for the same answers read from the plans in hand
 (the history section at the end). The picker is that economy made the only
 path.
@@ -469,10 +463,10 @@ this GitHub at this moment, in this order (`runStepClaimed`):
 
 **The answers split in two, and the split is the whole of ruling 17.** A fault
 that nothing the runner does next will change, and that a person has to act on,
-ends with the step `blocked` on `main` — *Blocked by the runner* has how. A
+ends with the step `blocked` — *Blocked by the runner* has how. A
 fault that is a moment's, and not the project's, is waited out.
 
-| blocked on `main`, as `blocked_by: { kind: "workarea", name }` | the refusal word | when |
+| blocked, as `blocked_by: { kind: "workarea", name }` | the refusal word | when |
 |---|---|---|
 | `dirty-worktree` | `dirty` | 4 — the comment names up to five of the files |
 | `worktree-missing` | `worktree` | 2 — `git worktree add` failed; git's reason |
@@ -507,30 +501,11 @@ second, undeclared way to stop work — whether a step ran depended on which
 terminals happened to be open (Martin, 2026-09-02). A project the runner
 should leave alone says so by being `blocked` in its own plan.
 
-**`syncMain`.** Two conflicts are resolved without a session. One is an
-identical `.gitignore` hunk. The other is a **`PLAN.json`**, always the same
-shape: main carries the plan a planning session or another step wrote to, the
-branch carries the same plan with its own step edited (29 of the 166
-conflicting files measured in `runner.log`). `plan-merge.js` merges it from the
-three sides git holds in the index while the merge is in progress (`:1:` the
-base, `:2:` ours, `:3:` origin/main), by the rule the plan already has about
-who may write what: each step goes to whichever side changed it, a criterion is
-met if either side met it, and `goal`, `contract`, `out_of_scope` and the
-criteria themselves are main's, because a step session may not change them.
-**Where the rule refuses** — both sides on the same step, a side that is not
-JSON, a step added or removed, a result `validatePlan` would reject — **`main`'s
-copy is taken** (`git checkout --theirs`, then `git add`), with a line saying
-what the rule refused and that main's copy was taken, and the merge commits.
-
-Taking main's copy loses nothing a pull request carries. By the time `syncMain`
-runs, an open pull request of the project's has already ended the pick
-(`inFlight`), and a branch whose content is in `origin/main` has already been
-moved (`freshBranch`). What the branch has in its plan that main does not is
-either work that landed in another shape — a `Record PR N on step` commit whose
-squash main then re-planned over — or work no pull request carries; and the plan
-the runner obeys is the one on `main` ([`docs/project/README.md`](../project/README.md),
-§ *Who writes what*). The rule is still tried first: it costs nothing, and its
-line tells the next reader of the log what each side had changed.
+**`syncMain`.** One conflict is resolved without a session: an identical
+`.gitignore` hunk. A plan is in no repository (ruling 48), so no `PLAN.json`
+conflicts with `main` and no rule merges one: `plan-merge.js` went with the
+plans, and the plan the runner obeys is the one under `~/mc/programs/`
+([`docs/project/README.md`](../project/README.md), § *Who writes what*).
 
 Every other conflict is handed to the step session: `stepPrompt` puts a
 preamble above the body naming the conflicting files, saying the merge stopped
@@ -551,22 +526,15 @@ pull request relies on it too (*Blocked by the runner*).
 
 ### Which copy of the plan the runner reads
 
-**Two readings of one copy.** The pick reads the plan on `origin/main`, off the
-lane's world, to decide *whether to start*. `runStep` then reads the plan out
-of the worktree, after `syncMain`, to decide *what to hand the session* — and
-after `syncMain` the file on disk **is** main's copy: the workarea stands on
-`origin/main` merged in; a merge that stopped on some other file has already
-written main's plan into the worktree, because git merges the files it can; and
-a conflicted `PLAN.json` has been resolved by the plan's rule or by taking
-main's side. It is also the file the step session will edit, so it is the one
-that must be obeyed. `planOf` (`run.js`) reads it off disk and from nowhere
-else — there is no branch-copy read left anywhere in the runner. **What a
-planning session and the runner share is a `PLAN.json` on `main`, and nothing
-else.**
+**One copy.** The pick and `runStep` read the same file, the `PLAN.json` under
+`~/mc/programs/<programme>/<project>/`: the pick to decide *whether to start*,
+`runStep` to decide *what to hand the session*. `planOf` (`run.js`) reads it off
+disk and from nowhere else. No repository holds a plan (ruling 48), so no
+worktree has a copy to disagree with. **What a planning session and the runner
+share is a `PLAN.json` under `~/mc/programs/`, and nothing else.**
 
-A step session's own edits to its plan in its worktree are untouched by all of
-this. This is about which copy the runner reads to decide what to hand out —
-not about what the session then edits, or what its pull request carries.
+A step session does not edit its plan: it is written only through `mc project`
+and `mc step`, and the runner reads what they wrote.
 
 `chooseKind` is the whole of what a project gets from that copy:
 
@@ -575,7 +543,7 @@ not about what the session then edits, or what its pull request carries.
 | plan says `status: ready` | `step` — with the conflicting files in its prompt if a merge is in progress |
 | plan says anything else | nothing, one skip line |
 | the plan does not parse | nothing — and a row in `~/mc/runner/unreadable-plans.md` |
-| no plan in the worktree | nothing, silently |
+| no plan under `~/mc/programs/` | nothing, silently |
 
 An open pull request is not in the table: the pick answered it.
 
@@ -598,7 +566,7 @@ neither can answer the other's:**
 | | `planState` / `kindFor` | `machineState` |
 |---|---|---|
 | the question | is this plan ready to be worked on? | would the runner start it now? |
-| what it is a fact about | a file on `origin/main` — the state of the first step that is not `done` | this machine, at this moment |
+| what it is a fact about | a file under `~/mc/programs/` — the state of the first step that is not `done` | this machine, at this moment |
 | what it sees | `ready`, `blocked` and what on, `done`, a file that does not parse | the STOP file, a dirty worktree, a merge stopped in one, a held pull request, work in flight, a branch the workarea does not have |
 | what it costs | nothing — the lane has already read the plans | one `git status --porcelain` in the workarea, and only where the plan does not already refuse |
 | where it lives | `plan-schema.js`, flattened by `kindFor` (`run-plan.js`, re-exported by `status-collect.js`) | `machineState` (`status-collect.js`) |
@@ -608,7 +576,7 @@ of memoro-cli's unfinished plans read `ready` in every surface a person uses
 while #612 and #614 were held before merge and the whole queue was stopped; the one
 place that knew was `runner.log`, which carried 9 827 `, skip` lines. That is
 what the second reading is for. Since 2026-09-08 the runner closes most of that
-gap itself: a fault a person has to act on becomes `blocked` on `main`, so the
+gap itself: a fault a person has to act on becomes `blocked` in its plan, so the
 *first* reading says it, and `machineState` answers `blocked` from the plan
 before it asks this machine anything. What `machineState` still sees that the
 plan does not is the window between a pick and a landed block, and the faults
@@ -946,18 +914,16 @@ The gate costs a gate round — 20–35 minutes on memoro — where the old merg
 cost seconds. That is the price of the contract; `land_seconds` in runs.tsv is
 where it shows, kept apart from the session's own `seconds`.
 
-The **archive** pull request and the **block** pull request are the two
-exceptions in kind, not in door: an archive removes a plan directory and adds a
-`project_log.md` row, a block edits one step of one plan, so both are
-documentation by construction and land through `mc merge --docs`
-(`landDocsPr`), which checks that against GitHub's own file list and refuses
+The **archive** pull request is the exception in kind, not in door: an archive
+adds a `project_log.md` row and, for a programme, removes its documents from
+`docs/project/`, so it is documentation by construction and lands through
+`mc merge --docs`, which checks that against GitHub's own file list and refuses
 anything touching a line of code.
 
 **An archive keeps what the code reads.** memoro #13310 (2026-10-10) archived
 four skill texts that `tests/assistant/skills/delivery.test.js` reads verbatim;
 it landed as docs-only, so no test ran, and main stayed red until #13323 put
-them back. Both archives — `archiveIn` in `run.js` for a project,
-`archiveOnMain` in `archive-programme.js` for a programme — now ask the
+them back. The programme archive, `archiveOnMain` in `archive-programme.js`, now asks the
 worktree first (`keptFiles`, `archive-plan.js`): `git grep -l -F` for the
 directory's path over `src`, `tests`, `scripts`, `config` and `package.json`,
 then, in each file that matched, which files under the directory a literal path
@@ -966,10 +932,7 @@ every other file is `git rm`'d, and with nothing named the directory goes whole
 as before. The PR body ends with one `- kept: <file> — named by <path>:<line>`
 per kept file, and `runner.log` says the same. One kept file never refuses the
 archive; only a directory whose every file is named archives nothing, and says
-so. A README that is not kept is copied to `closeout/<project>.md` in the same
-commit, and every document under `docs/project/` and `docs/technical/` that linked
-into the directory is relinked to it.
-
+so.
 A **stack** needs an order rather than a call — `mc merge` refuses a batch
 aimed at several bases. `stackOrder` in run-plan.js is the whole decision, over
 the list of open pull requests the lane already fetched: exactly one aimed at
@@ -1022,7 +985,7 @@ does not wait for one that is busy.
 **A lane owns one repository, and everything that repository's steps touch.**
 
 - **Its slice of the order.** `nextFor` takes only names whose plan is in the
-  lane's repository — an existing workarea decides it, and a plan on main
+  lane's repository — an existing workarea decides it, and the plan
   decides it when there is no workarea yet. Martin's order holds *within* the
   repository.
 - **Its own steps, one at a time.** A lane runs one step and picks again.
@@ -1361,9 +1324,9 @@ project) the runner releases them by itself:
 |---|---|---|---|
 | `time` | `at`, an ISO instant | the clock has passed `at` | `mc step blocked --until <iso>` — a time already past is refused |
 | `deploy` | `step` (1-based, an earlier step of the same plan), `hours` (0 or more, default 0) | that step is `done` with a `landed.sha` in the register, a `deployed` row in `~/mc/runner/log/deploys.tsv` has a `sha` that contains it (`git merge-base --is-ancestor` in memoro's checkout), and `hours` have passed since the earliest such row's `ended` | `mc step blocked --after-deploy [<n>] [--hours <h>]` — `<n>` defaults to the step before; the step itself or a later one is refused, and so is any step outside memoro, because `mc deploy` deploys memoro's main and nothing else |
-| `project` | `name`, the project | that project's plan on `origin/main` is `done` | `mc step blocked --on-project <project>` |
+| `project` | `name`, the project | that project's plan under `~/mc/programs/` is `done` | `mc step blocked --on-project <project>` |
 
-A `project` that is not on main is never due by itself: it may have been
+A `project` with no plan is never due by itself: it may have been
 abandoned rather than delivered, and only a person can tell which
 (`stale-blockers.js`, which no longer reports a `project` blocker that is
 done — the runner has released it). A step waits on a whole project, never on
@@ -1381,7 +1344,7 @@ step that is `blocked` in the register. One that is due becomes `ready`, its
 `blocked_by` and `reason` are cleared, a comment `Released <now>: <why>` is
 appended, and `runner.log` says `<project> step <n>: released — <why>`. The
 step comes out of the same `queue()` as `ready`, so the pick may start it in
-that pass. Nothing is written to the plan on main and no pull request is
+that pass. Nothing is written to the plan and no pull request is
 made. A record that cannot be read or written is said (`not released — …`)
 and left as it was; a git that cannot answer the ancestor question releases
 no `deploy` blocker.
@@ -1393,7 +1356,7 @@ deployed yet`.
 
 ### The register
 
-A plan on `main` is a document — goal, contract, scope, criteria, the steps'
+A plan is a document — goal, contract, scope, criteria, the steps'
 instructions — written by a person and changed rarely. Where the work
 *stands* is process: it changes at every step boundary and has to be visible
 the second it does. Until 2026-09-12 it lived inside the plan file, so every
@@ -1412,7 +1375,7 @@ So the state lives in **the register**: one file per project under
 (`register.js`), one entry per step, matched to the plan by the step's key (`stepKey`: the label before ` — `, a leading ordinal such as `5.` dropped; a re-plan that puts a new step in a slot whose old key is gone keeps the slot's status and clears the replaced step's pull request, branch, stack and red, with a comment) —
 `status` (`ready` · `running` · `done` · `failed` · `blocked`), `pr`, `branch`,
 `blocked_by`, `reason`, `comments`, `session` (pid, start, model, lane while
-running), `attempts`, `landed` (sha and time). The plan on main still says what
+running), `attempts`, `landed` (sha and time). The plan still says what
 a step is; every reader lays the register over it (`overlayPlans`) and sees the
 plan record it always saw, with the register's word for the state — the
 picker, the page, the brief and `mc status` changed their source, not their

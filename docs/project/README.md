@@ -1,7 +1,7 @@
 # docs/project — active plan work in memoro-cli
 
-Plan work here is handled exactly as it is in memoro: `docs/project/<programme>/<project>/`,
-where each project directory holds a `PLAN.json` the runner can act on. The
+Plans are not kept here: they live under `~/mc/programs/<programme>/<project>/`, as in memoro (ruling 48),
+and each project's `PLAN.json` there is what the runner acts on. Programme documents and rulings stay in `docs/project/`. The
 `<project>` name is what `mc run` will call that project's branch and its
 workarea; the planning session chooses it and creates neither. The section
 below describes the same shape as memoro's `docs/project/README.md`; this
@@ -14,8 +14,8 @@ projects that do not serve that do not belong under it.
 
 Since `plans-in-mc` a plan lives under `~/mc/programs/<programme>/<project>/PLAN.json`,
 with a top-level `repo` field naming the repository its steps run in. A plan of
-the same name in this directory is shadowed by it and no longer read; the copies
-here go with project 3 of ruling 48.
+the same name that was once here is history: ruling 48 took every repository plan
+out, and they stay in git history.
 
 Since `project-verbs` a plan is written only through `mc project new`, `edit`,
 `criterion add`, `step add`, `step edit` and `send`. Until it is sent it is
@@ -181,7 +181,7 @@ premise.
 
 A plan is written by a planning session: `mc plan <programme>`, Martin at the
 terminal. It opens on a **programme**, not on one project — how many projects
-come out of it, under what names, and by what route they reach `main` is worked
+come out of it, under what names is worked
 out in the session, not decided by the command that opens it.
 
 **The brief writes plans too**, under exactly these rules, for the proposals
@@ -206,7 +206,7 @@ left there after its project exists is a decision that gets taken twice.
 **That session has no workarea and makes none.** It lives at
 `~/mc/plan/<programme>/`, with a checkout of each repository on branch
 `plan/<programme>` — mc's own directory, which `mc run` cannot see. What a
-planning session and the runner share is a `PLAN.json` on `main`, and nothing
+planning session and the runner share is a `PLAN.json` under `~/mc/programs/`, and nothing
 else; the `<project>` directory name is what the runner will call that
 project's branch and its workarea when it first steps it.
 
@@ -237,7 +237,7 @@ be about, the question goes in the pull request with one recommendation, and
 the session stops. A plan comes back to the runner by its first unfinished step
 being `ready`, and by nothing else.
 
-**`closeout/` under a programme is the archive's.** It holds one JSON file per
+**`closeout/` under a programme is the archive's, for projects archived from a repository before ruling 48.** It holds one JSON file per
 archived project, `docs/project/<programme>/closeout/<project>.json`, written by
 the runner in the same pull request that removes the plan: the goal, the steps
 with the pull request, sha and date each landed with, and time, tokens and cost
@@ -284,7 +284,7 @@ plan, `mc run` closes every workarea whose plan said `done`, whose worktree
 has no uncommitted change and whose last row in `runs.tsv` ends `merged`:
 the worktree is handed back, the local branch deleted, and whatever the
 folder kept beside its checkout moved to `~/mc/runner/log/closed/<name>/`
-(`src/mc/close-workarea.js`). A workarea with no plan on main is never
+(`src/mc/close-workarea.js`). A workarea with no plan is never
 removed by a machine — it is listed in `~/mc/runner/unplanned-workareas.md`
 and on the page, for Martin.
 
@@ -297,7 +297,7 @@ a planning session, and none lists it as a workarea without a plan.
 Nothing can tell that a programme is over — one whose projects are all done is
 also where the next piece of that work belongs — so this is typed, never
 triggered. It refuses, touching nothing, while any plan under the programme is
-still on main in either repository, or while releasing `~/mc/plan/<programme>/`
+still under `~/mc/programs/`, or while releasing `~/mc/plan/<programme>/`
 would keep something (uncommitted work, commits main lacks, a shell standing
 in it, a file somebody put there). Otherwise, in every repository whose
 `docs/project/` holds the programme, it removes `docs/project/<programme>/` and

@@ -29,11 +29,12 @@ mc merge* and exits 2, and it is in neither `mc repo`'s usage nor `mc --help`
 
 ## Why the second form exists
 
-A plan PR is the deliverable of `mc plan` and of the runner's triage. It touches
+A docs pull request is the deliverable of `mc plan` for a programme's documents,
+and of the programme archive. It touches
 only `docs/project/`, so the gate would build a worktree and run a suite to
 learn nothing. Before `--docs` it did not even do that — it waited for Martin
 to click Merge, and until it merged the runner could not see the plan at all,
-because the runner reads plans from `origin/main`. Martin, 2026-08-26: *"inte
+because the runner then read plans from `origin/main`. Martin, 2026-08-26: *"inte
 tillräckligt smidigt"*.
 
 So `--docs` lets the session that opened the plan PR land it, seconds later,
@@ -183,7 +184,9 @@ whole of it. It takes a repository path and a number and:
    land it through the gate (`mc merge <repo> <pr>`): a script under `docs/` is
    not a document, because a tree-wide check in the repository's gate reads it
    and this form runs no gate (memoro #12534 landed an instrument `.mjs` this
-   way on 2026-10-04 and turned `main` red);
+   way on 2026-10-04 and turned `main` red); and one that adds a line to a repository plan file
+   (`isRepoPlanPath`), stopped as `plan`: plans live under `~/mc/programs/` and no
+   repository holds one any more (ruling 48);
 3. waits for GitHub's mergeability, up to twelve five-second turns, because
    `UNKNOWN` for a few seconds after a push is normal and merging then fails for
    no real reason; `CONFLICTING` is a refusal that says which base to merge in;
