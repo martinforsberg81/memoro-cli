@@ -1088,3 +1088,172 @@ test('archive of a done project with a dirty step area archives it, keeps the ar
     assert.equal(f.calls.some((c) => c[1] === 'worktree' && c[2] === 'remove' && c.at(-1) === join(f.work, 'step', 'alpha', 'memoro-cli')), false);
   } finally { f.cleanup(); }
 });
+
+/**
+ * A scratch work root for `discard`: `alpha` under `programs/mc/` as DRAFT.json or
+ * PLAN.json, its register when `steps` is given, its step area when `area` is set.
+ * gh, the area's discard and tmux are fakes that record their calls; the file
+ * system is real.
+ */
+function discardFixture({ file = 'PLAN.json', steps = null, closeout = false, area = false, pulls = [], closeFails = null, live = false, inUse = false, waiting = [] } = {}) {
+  const work = mkdtempSync(join(tmpdir(), 'mc-discard-'));
+  const home = join(work, 'programs');
+  const dir = join(home, 'mc', 'alpha');
+  const repo = join(work, 'memoro-cli');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, file), `${JSON.stringify({ ...JSON.parse(repoPlan('alpha')), repo: 'memoro-cli' }, null, 2)}\n`);
+  if (closeout) writeFileSync(join(dir, 'CLOSEOUT.json'), '{}\n');
+  if (steps) {
+    mkdirSync(join(registerPath(work, 'alpha'), '..'), { recursive: true });
+    writeFileSync(registerPath(work, 'alpha'), JSON.stringify({ project: 'alpha', repo: 'memoro-cli', steps, criteria: [] }));
+  }
+  const worktree = join(work, 'step', 'alpha', 'memoro-cli');
+  if (area) mkdirSync(worktree, { recursive: true });
+  const calls = []; const out = []; const err = [];
+  const gh = (cwd, args) => {
+    calls.push(['gh', cwd, ...args]);
+    if (args[1] === 'list') return { ok: true, stdout: JSON.stringify(pulls), stderr: '' };
+    const failed = args[2] === closeFails;
+    return { ok: !failed, stdout: '', stderr: failed ? 'no such pull request\n' : '' };
+  };
+  const discardArea = (name, { dryRun }) => {
+    calls.push(['area', name, dryRun]);
+    if (!dryRun) rmSync(join(work, name), { recursive: true, force: true });
+    const kept = inUse ? [{ path: worktree, branch: 'alpha', why: 'in use by node' }] : [];
+    return { discarded: inUse ? [] : [{ path: worktree, branch: 'alpha' }], kept, removes_area: kept.length === 0, dry_run: dryRun };
+  };
+  const deps = {
+    env: { MC_WORK_ROOT: work }, root: work, home, repos: [{ name: 'memoro-cli', path: repo }],
+    gh, discardArea, tmuxHas: () => live, programs: () => waiting,
+    stdout: { write: (t) => out.push(t) }, stderr: { write: (t) => err.push(t) },
+  };
+  return {
+    deps, out, err, calls, work, dir, repo,
+    register: registerPath(work, 'alpha'), area: join(work, 'step', 'alpha'),
+    cleanup: () => rmSync(work, { recursive: true, force: true }),
+  };
+}
+
+test('discard of a draft lists its directory and writes nothing without --apply', async () => {
+  const f = discardFixture({ file: 'DRAFT.json' });
+  try {
+    assert.equal(await run(['discard', 'alpha'], f.deps), 0);
+    assert.equal(f.out.join(''), `  would remove ${f.dir}\nmc project discard alpha --apply to remove them\n`);
+    assert.equal(existsSync(join(f.dir, 'DRAFT.json')), true);
+    assert.deepEqual(f.calls, []);
+  } finally { f.cleanup(); }
+});
+
+test('discard --apply of a draft removes its directory, and runs no gh', async () => {
+  const f = discardFixture({ file: 'DRAFT.json' });
+  try {
+    assert.equal(await run(['discard', 'alpha', '--apply'], f.deps), 0);
+    assert.equal(existsSync(f.dir), false);
+    assert.deepEqual(f.calls, []);
+    assert.equal(f.out.join(''), `  removed ${f.dir}\nmc: alpha discarded\n`);
+  } finally { f.cleanup(); }
+});
+
+test('discard --apply of a sent plan closes its pull request named <project>-2, then discards its area, register file and directory', async () => {
+  const f = discardFixture({
+    steps: [{ key: 'One', status: 'done', pr: 2 }],
+    area: true,
+    pulls: [{ number: 2, headRefName: 'alpha-2' }, { number: 5, headRefName: 'alpha-extra' }, { number: 9, headRefName: 'other' }],
+  });
+  try {
+    assert.equal(await run(['discard', 'alpha', '--apply'], f.deps), 0);
+    assert.deepEqual(f.calls, [
+      ['gh', f.repo, 'pr', 'list', '--state', 'open', '--json', 'number,headRefName'],
+      ['area', 'step/alpha', true],
+      ['gh', f.repo, 'pr', 'close', '2', '--delete-branch', '--comment', 'Discarded with mc project discard.'],
+      ['area', 'step/alpha', false],
+    ]);
+    assert.equal(existsSync(f.register), false);
+    assert.equal(existsSync(f.area), false);
+    assert.equal(existsSync(f.dir), false);
+    assert.deepEqual(f.out, [
+      '  removed pull request #2 (branch alpha-2)\n',
+      `  removed ${join(f.work, 'step', 'alpha', 'memoro-cli')} (branch alpha)\n`,
+      `  removed ${f.area}\n`,
+      `  removed ${f.register}\n`,
+      `  removed ${f.dir}\n`,
+      'mc: alpha discarded\n',
+    ]);
+    assert.equal(f.err.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('a pull request that will not close is printed to stderr, and the rest is still discarded', async () => {
+  const f = discardFixture({ steps: [{ key: 'One', status: 'done', pr: 2 }], pulls: [{ number: 2, headRefName: 'alpha-2' }], closeFails: '2' });
+  try {
+    assert.equal(await run(['discard', 'alpha', '--apply'], f.deps), 0);
+    assert.equal(f.err.join(''), 'mc: could not close pull request #2 — no such pull request\n');
+    assert.equal(existsSync(f.register), false);
+    assert.equal(existsSync(f.dir), false);
+  } finally { f.cleanup(); }
+});
+
+test('discard --apply of a sent plan whose step is running is refused, exit 1, and removes nothing', async () => {
+  const f = discardFixture({ steps: [{ key: 'One', status: 'running' }], area: true, pulls: [{ number: 2, headRefName: 'alpha-2' }] });
+  try {
+    assert.equal(await run(['discard', 'alpha', '--apply'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha step 1 is running — wait for it, or mc step failed it first\n');
+    assert.equal(f.out.length, 0);
+    assert.equal(existsSync(f.dir), true);
+    assert.equal(existsSync(f.register), true);
+    assert.equal(existsSync(f.area), true);
+    assert.equal(f.calls.some((c) => c[0] === 'gh' && c[3] === 'close'), false);
+    assert.equal(f.calls.some((c) => c[0] === 'area' && c[2] === false), false);
+  } finally { f.cleanup(); }
+});
+
+test('discard --apply with a live session, or a worktree in use, is refused, exit 1, and removes nothing', async () => {
+  const live = discardFixture({ steps: [{ key: 'One', status: 'done', pr: 2 }], area: true, live: true });
+  const inUse = discardFixture({ steps: [{ key: 'One', status: 'done', pr: 2 }], area: true, inUse: true });
+  try {
+    assert.equal(await run(['discard', 'alpha', '--apply'], live.deps), 1);
+    assert.equal(live.err.join(''), 'mc: alpha has a live session mc-alpha — stop it first\n');
+    assert.equal(await run(['discard', 'alpha', '--apply'], inUse.deps), 1);
+    assert.equal(inUse.err.join(''), `mc: alpha has a worktree in use — ${join(inUse.work, 'step', 'alpha', 'memoro-cli')} (in use by node)\n`);
+    for (const f of [live, inUse]) {
+      assert.equal(existsSync(f.dir), true);
+      assert.equal(existsSync(f.register), true);
+      assert.equal(existsSync(f.area), true);
+      assert.equal(f.calls.some((c) => c[0] === 'gh' && c[3] === 'close'), false);
+    }
+  } finally { live.cleanup(); inUse.cleanup(); }
+});
+
+test('discard of an archived project is refused, exit 1, and removes nothing', async () => {
+  const f = discardFixture({ steps: [{ key: 'One', status: 'done', pr: 7 }], closeout: true });
+  try {
+    assert.equal(await run(['discard', 'alpha', '--apply'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha is archived — archive is the way out it took\n');
+    assert.equal(existsSync(f.dir), true);
+    assert.deepEqual(f.calls, []);
+  } finally { f.cleanup(); }
+});
+
+test('discard names a step of another plan that waits on the project, and does not refuse it', async () => {
+  const waiting = [{ project: 'beta', text: JSON.stringify({ steps: [{ title: 'One', blocked_by: { kind: 'project', name: 'alpha' } }, { title: 'Two', blocked_by: { kind: 'project', name: 'gamma' } }] }) }];
+  const f = discardFixture({ waiting });
+  try {
+    assert.equal(await run(['discard', 'alpha'], f.deps), 0);
+    assert.ok(f.out.includes('  note: beta step 1 waits on alpha and will wait for ever\n'));
+    assert.equal(f.out.some((line) => line.includes('gamma')), false);
+    assert.equal(f.err.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('discard with no project, or a flag other than --apply, is usage, exit 2; a name mc does not hold is exit 1', async () => {
+  const f = discardFixture();
+  try {
+    assert.equal(await run(['discard'], f.deps), 2);
+    assert.match(f.err.at(-1), /^usage/u);
+    assert.equal(await run(['discard', 'alpha', '--json'], f.deps), 2);
+    assert.match(f.err.at(-1), /^usage/u);
+    assert.equal(await run(['discard', 'nope'], f.deps), 1);
+    assert.equal(f.err.at(-1), 'mc: nope is not a project under ~/mc/programs/\n');
+    assert.equal(existsSync(f.dir), true);
+  } finally { f.cleanup(); }
+});
