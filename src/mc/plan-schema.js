@@ -106,9 +106,8 @@ const SESSION_STEP_FIELDS = Object.freeze(['status', 'pr', 'comments', 'blocked_
 
 /**
  * The fields a step session never writes: the project's own terms, and what
- * the file is. Named here because two things now read the same rule —
- * `unauthorisedChanges` below, which checks a session's edit on the way back
- * in, and `plan-merge.js`, which resolves a conflicted plan by it.
+ * the file is. Named here because `unauthorisedChanges` below checks a session's
+ * edit against them on the way back in.
  */
 export const PLAN_FROZEN_FIELDS = Object.freeze(['goal', 'contract', 'out_of_scope', 'schema', 'version']);
 

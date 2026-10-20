@@ -124,7 +124,6 @@ import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
 import { releaseDue } from './step-release.js';
-import { isPlanPath, mergePlanText } from './plan-merge.js';
 import { buildCloseout, closeoutPath, closeoutReadmePath, closeoutText, readSessionResults } from './closeout.js';
 import { closable, closeArea, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { unreadableFile, unreadablePlans } from './plan-intake.js';
@@ -1051,9 +1050,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * (`docs/project/README.md`, § Who writes what) — and after `syncMain` the
    * file on disk is that copy: git merges the files it can, so a merge that
    * stopped on `src/a.js` has already written main's plan into the worktree,
-   * and a `PLAN.json` that conflicted is resolved by the plan's own rule or,
-   * where the rule refuses, by taking main's side outright
-   * (`resolvePlanConflict`). Neither leaves conflict markers behind.
+   * and a conflicted `PLAN.json` is not a copy the runner hands out: the round
+   * refuses it before any session is started (below).
    *
    * It used to take a `fromHead` option that read the branch's own last commit
    * (`git show HEAD:<path>`) for exactly the case that is now resolved: a plan
@@ -1076,61 +1074,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * A conflicted `PLAN.json`, merged by the plan's own rule about who may
-   * write what (`plan-merge.js`) rather than by a session.
-   *
-   * The three sides come out of the index, which is where git keeps them
-   * while a merge is in progress: `:1:` the merge base, `:2:` ours — this
-   * project's branch — and `:3:` theirs, origin/main. Resolved means written
-   * and staged; the commit is `syncMain`'s, once every conflict is gone.
-   *
-   * Where the rule refuses — both sides edited one step, or the step counts
-   * differ — main's copy is taken. It is the copy the runner obeys everywhere
-   * else (`docs/project/README.md`, § Who writes what), and by the time this
-   * runs there is nothing of the branch's left to lose: an open pull request of
-   * this project's has already ended the pick (`inFlight`), and a branch whose
-   * content is in origin/main has already been moved (`freshBranch`). What is
-   * left on the branch and not on main is either work that landed in another
-   * shape or work no pull request carries.
-   *
-   * The rule is still tried first, and its refusal is still a line in
-   * runner.log: the next reader of that file is deciding whether what the
-   * branch had was worth anything. What the line is not any more is the end of
-   * the project — `sql-w3-email-closure` merged, refused and aborted every ten
-   * minutes from 2026-09-06T18:34Z to 2026-09-08 on this one predicate.
-   *
-   * Returns true when the file is resolved, either way.
-   */
-  function resolvePlanConflict(worktree, name, path) {
-    const stage = (n) => {
-      const shown = deps.git(worktree, ['show', `:${n}:${path}`]);
-      return shown.ok ? String(shown.stdout ?? '') : null;
-    };
-    const merged = mergePlanText({ base: stage(1), branch: stage(2), main: stage(3) });
-    if (!merged.ok) {
-      if (!deps.git(worktree, ['checkout', '--theirs', '--', path]).ok
-        || !deps.git(worktree, ['add', '--', path]).ok) {
-        say(`${name}: ${path} — the plan's rule refused (${merged.why}) and main's copy could not be taken either`);
-        return false;
-      }
-      say(`${name}: ${path} — the plan's rule refused (${merged.why}); main's copy taken`);
-      return true;
-    }
-    deps.write(join(worktree, path), merged.text);
-    if (!deps.git(worktree, ['add', '--', path]).ok) {
-      say(`${name}: ${path} was merged by the plan's rule but could not be staged`);
-      return false;
-    }
-    const took = merged.took.length ? merged.took.join(', ') : 'nothing either side had changed';
-    say(`${name}: ${path} resolved by the plan's own rule — ${took}`);
-    return true;
-  }
-
-  /**
-   * Merge origin/main into the area branch — never rebase. Two conflicts are
-   * resolved here without a session: an identical .gitignore hunk, and a
-   * PLAN.json whose two sides wrote to different steps. Anything else — and
-   * any plan the rule refuses — is left in progress for the step session.
+   * Merge origin/main into the area branch — never rebase. One conflict is
+   * resolved here without a session: an identical .gitignore hunk. Anything
+   * else is left in progress for the step session.
    *
    * `why` tells the two failures apart for the caller, because their answers
    * are opposite: `fetch` is the network and the lane waits it out, `commit` is
@@ -1147,7 +1093,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (conflicts.length === 1 && conflicts[0] === '.gitignore') {
       if (deps.git(worktree, ['checkout', '--theirs', '.gitignore']).ok && deps.git(worktree, ['add', '.gitignore']).ok && deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
     }
-    const left = conflicts.filter((path) => !(isPlanPath(path) && resolvePlanConflict(worktree, name, path)));
+    const left = conflicts;
     if (!left.length) {
       const commit = deps.git(worktree, ['commit', '-q', '--no-edit']);
       if (commit.ok) return { ok: true, conflicts: [] };
@@ -2395,14 +2341,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
       return refuse(REFUSAL.sync, 'fetch/merge failed, skip');
     }
-    // What git and the plan's own rule could not resolve. It no longer makes
+    // What git could not resolve. It no longer makes
     // the project unreadable to the runner: the conflict goes to the step
     // session as something to do first.
     const conflicts = sync.conflicts;
-    // Off disk, always: a conflicting `PLAN.json` has been resolved by the
-    // plan's rule or by taking main's copy before this line (`syncMain`), and
-    // every other conflict left main's plan on disk already merged. That is the
-    // copy the runner hands out.
+    // Off disk, always: git has merged main's side into every conflict it could,
+    // and a conflicted `PLAN.json` is refused below before any session is handed
+    // it. What is on disk otherwise is the copy the runner hands out.
     const plan = planOf(worktree, name);
     // A merge nobody is handed is a merge nobody finishes, and an unmerged
     // path is a dirty worktree — which skips the project every round until a
@@ -2415,15 +2360,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       deps.git(worktree, ['merge', '--abort']);
       say(`${name}: ${why} — the merge of origin/main is aborted, still conflicting in: ${conflicts.join(' ')}`);
     };
-    // The one plan conflict that still stops a step: git could give neither the
-    // plan's rule its three sides nor main's copy (`resolvePlanConflict`), so
-    // the plan on disk is a half-merged file no session can be handed a step
-    // from. Nothing the runner does next changes that, so it is blocked like
-    // any merge that would not commit.
+    // A conflicted plan stops a step: the plan on disk is a half-merged file no
+    // session can be handed a step from. Nothing the runner does next changes
+    // that, so it is blocked like any merge that would not commit.
     const planAt = plan?.path?.startsWith(`${worktree}/`) ? plan.path.slice(worktree.length + 1) : null;
     if (planAt && conflicts.includes(planAt)) {
       abandonMerge(`${planAt} could not be resolved`);
-      return block(REFUSAL.sync, `origin/main was merged in and ${planAt} could be resolved neither by the plan's rule nor by taking main's copy`);
+      return block(REFUSAL.sync, `origin/main could not be merged in: ${planAt} is still conflicting`);
     }
     // What the worktree's file says a step *is*, with the register's word on
     // where it *stands* laid over it for the choice — and only for the
