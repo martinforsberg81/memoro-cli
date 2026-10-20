@@ -1689,3 +1689,26 @@ project 3 of ruling 48
    plans-in-git machinery removed).
 
 Carried by `project-archive` and `plans-out-of-repos`.
+
+## 50 · A repository holds only descriptions of what exists; everything under `docs/project/` moves to mc
+
+`ruling · 2026-10-20` · raised in the `mc` programme session while planning
+what is left of ruling 48
+
+1. **Everything under `docs/project/` in memoro and memoro-cli moves to
+   `~/mc/programs/<programme>/`** — programme documents, `rulings.md`,
+   `closeout/`, READMEs, reviews and handoffs, and `project_log.md`. "Allt som
+   nu ligger under progammes/ ska in i dess motsvarande mc-mapp. På repot har
+   beskrivning av befintlig funktionalitet." (Martin, 2026-10-20)
+2. **A repository keeps descriptions of existing functionality**:
+   `docs/technical/` and the like. This replaces ruling 48's table, which kept
+   product rulings and one `project_log` line per project in the repository,
+   and `mc-project.md`'s out-of-scope line that left `closeout/` files there
+   as history.
+3. **`archive` writes nothing in a repository** once the move has landed: the
+   `project_log` row is written under `~/mc/programs/`.
+4. **A runner step area is never blocked on its own sessions' files** —
+   Martin, on `home-route-cue` blocked on `dirty-worktree` the same day:
+   "detta ska inte ens vara möjligt".
+
+Carried by `step-area-never-dirty` (4) and the docs project of ruling 48 (1–3).

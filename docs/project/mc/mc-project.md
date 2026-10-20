@@ -99,7 +99,6 @@ mc project [<project>]                  the project as a person reads it; `mc st
 mc project send <project>               the whole check, then `ready` for the runner. No branch, no PR
 mc project archive <project>            done: worktrees and branches go, plan and steps kept, results to the repo
 mc project discard <project> [--apply]  gone: the whole directory. Without --apply it shows what would go
-mc project import                       once: the active PLAN.json files from the repositories
 ```
 
 `mc step …` (register transitions) stays as it is.
@@ -144,8 +143,13 @@ After the verbs exist, not before; the verbs shrink the text.
 | 1 | `~/mc/programs/` structure, `PLAN.json` + `steps/` there, the runner and register reading it, `import` | medium |
 | 2 | `mc project new/criterion/step/send/show` with the refusals above | medium |
 | 3 | `archive`/`discard`, results to the repository, `plan-merge.js`/`merge-boundary.js` removed; the docs route stays (ruling 49) — as `project-archive`, then `plans-out-of-repos` | medium |
+| A | `step-area-never-dirty`: a step area is never blocked on its own sessions' files (ruling 50) | small, sent 2026-10-20 |
+| B | Worktrees under `~/mc/programs/` (`~/mc/plan/<programme>/`, `~/mc/step/<project>/`), and the `steps/` files | medium, before 4: the roles name where a session stands |
 | 4 | Roles rewritten against the verbs, generated verb reference, repository guidance | medium |
-| 5 | Docs consolidation | last |
+| 5 | Docs: everything under `docs/project/` moves to `~/mc/programs/` (ruling 50); technical docs that still describe plans in git are rewritten; `archive` writes nothing in a repository | last |
+
+The one-time move of repository plans to `~/mc/programs/` was done by `plans-in-mc` and `plans-out-of-repos`; no verb
+imports plans now.
 
 ## Out of scope
 
