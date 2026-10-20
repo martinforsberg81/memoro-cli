@@ -129,7 +129,7 @@ export function renderProject({
   const label = 11;
   const indent = 2 + label + 1;
   const row = (key, value) => out.push(`  ${key.padEnd(label)} ${wrap(value, 92 - indent, indent)}`);
-  if (path) row('plan', `${path} (origin/main)`);
+  if (path) row('plan', path);
   row('workarea', tilde(workarea) || 'none');
   for (const [key, value] of fieldRows(plan, problems, machine)) row(key, value);
   if (!path) out.push('  no plan — this is a workarea without a project');
@@ -252,7 +252,6 @@ export async function collectProject(name, {
   const problems = mainPlan?.problems ?? [];
   const repo = main?.repo || null;
   const programme = main?.programme || null;
-  if (offline) notes.push('plan is origin/main as last fetched');
 
   let tsv = '';
   try { tsv = read(join(root, 'runner', 'log', 'runs.tsv')); } catch { notes.push('no runner/log/runs.tsv'); }

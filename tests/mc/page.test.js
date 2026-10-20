@@ -2215,7 +2215,7 @@ describe('collectPage', () => {
     assert.equal(data.caches.fetched, true);
   });
 
-  it('--offline skips the fetch entirely and reads the plans as last fetched', async () => {
+  it('--offline skips the fetch entirely', async () => {
     const root = workRootFixture();
     const calls = [];
     const repos = [{ name: 'memoro-cli', path: join(root, 'mc-ui', 'memoro-cli') }];

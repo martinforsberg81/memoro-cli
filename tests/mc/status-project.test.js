@@ -188,11 +188,11 @@ describe('collectProject', () => {
     assert.deepEqual(data.problems, []);
     assert.equal(data.plan.steps[1].title, 'The page', 'the workarea copy (title "One project") is never read');
     assert.equal(data.path, PROGRAMS_PLAN);
-    assert.match(renderProject(data), /plan +\/w\/programs\/mc\/mc-status\/PLAN\.json/u);
+    assert.match(renderProject(data), /plan +\/w\/programs\/mc\/mc-status\/PLAN\.json$/mu);
     assert.match(data.workarea, /mc-status$/u);
     assert.deepEqual(data.runs.map((r) => [r.ts.slice(0, 10), r.pr]), [['2026-08-26', '401'], ['2026-08-27', '402'], ['2026-08-28', '-']]);
     assert.deepEqual(data.prs, []);
-    assert.deepEqual(data.notes, ['plan is origin/main as last fetched']);
+    assert.deepEqual(data.notes, []);
   });
 
   it('answers about a workarea with no plan, and about nothing at all', async () => {
@@ -353,7 +353,7 @@ describe('the project page', () => {
     const at = ['NEXT', 'STEPS', 'LAST RUNS', 'OPEN PR'].map((h) => text.indexOf(`${h}\n`));
     assert.ok(at.every((i, n) => i >= 0 && (n === 0 || i > at[n - 1])), text);
     assert.match(text, /^mc-status — memoro-cli · mc\n/u);
-    assert.match(text, /plan +docs\/project\/mc\/mc-status\/PLAN\.json \(origin\/main\)/u);
+    assert.match(text, /plan +docs\/project\/mc\/mc-status\/PLAN\.json$/mu);
     assert.match(text, /status +ready/u);
     assert.doesNotMatch(text, /^ +next /mu, 'next is a block, not a label row');
     assert.match(text, /NEXT\n {2}Step 2, One project — done when one project is on one page/u);
