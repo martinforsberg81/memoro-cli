@@ -37,7 +37,10 @@ import { defaultRepos } from './brief-collect.js';
 import { closeoutPath } from './closeout.js';
 import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js';
 import { log } from './logger.js';
-import { PLAN_HOME, STEP_HOME, WORK_HOME, mcHome, runnerDir, workRoot } from './paths.js';
+import {
+  PLAN_HOME, PROGRAMS_HOME, RUNNER_DEPS, RUNNER_STEP, STEP_HOME, WORK_HOME, areaKindOf, areaOfPath, mcHome,
+  planAreaRoot, runnerDir, stepAreaName, stepAreaRoot, workRoot,
+} from './paths.js';
 import { lsTreeArgs, planPath } from './plan-source.js';
 import { closeoutFileOf } from './project-archive.js';
 import { listEntries, registerPath } from './register.js';
@@ -75,8 +78,8 @@ export function tidyRoots(env = process.env) {
   const runner = runnerDir(env);
   return {
     root,
-    plan: join(root, PLAN_HOME),
-    step: join(root, STEP_HOME),
+    plan: planAreaRoot({ root }),
+    step: stepAreaRoot({ root }),
     work: join(root, WORK_HOME),
     register: dirname(registerPath(root, 'x')),
     log: join(runner, 'log'),
@@ -117,17 +120,24 @@ export function scratchRe(project) {
   return new RegExp(`^${escape(project)}-\\d{8}T\\d{6}Z$`, 'u');
 }
 
+/** The directories every area of a kind sits under, in both layouts: never an area themselves. */
+const KIND_ROOTS = new Set([PLAN_HOME, PROGRAMS_HOME, STEP_HOME, WORK_HOME, RUNNER_STEP, RUNNER_DEPS]);
+
 /**
- * The area a transcript's cwd belongs to: `step/<project>`, `work/<name>` or
- * `plan/<programme>` under those roots, else the first segment below the work
- * root (a legacy area). Null outside the work root, and for the root and the
- * kinds' own roots themselves.
+ * The area a transcript's cwd belongs to, by `areaOfPath` (paths.js), in both
+ * layouts: `plan/<p>`, `programs/<p>`, `step/<x>`, `runner/step/<x>`,
+ * `runner/deps/<n>`, `work/<n>`, or a legacy area's own name. A directory
+ * that is no area — `brief/`, `runner/log/` — keeps the first segment below
+ * the work root, as before. Null outside the work root, and for the root and
+ * the kinds' own roots themselves.
  */
 export function areaOf(cwd, root) {
   if (typeof cwd !== 'string' || !cwd.startsWith(`${root}/`)) return null;
-  const [first, second] = cwd.slice(root.length + 1).split('/');
-  if (!first) return null;
-  if (first === PLAN_HOME || first === STEP_HOME || first === WORK_HOME) return second ? `${first}/${second}` : null;
+  const area = areaOfPath(cwd, root);
+  if (area) return area.area;
+  const rest = cwd.slice(root.length + 1).replace(/\/+$/u, '');
+  const [first] = rest.split('/');
+  if (!first || KIND_ROOTS.has(first) || KIND_ROOTS.has(rest)) return null;
   return first;
 }
 
@@ -200,7 +210,7 @@ export function gatherTidyFacts({
       } else if (!facts.git_error) {
         item.error = `its repository ${entry.repo || '(none)'} is not one tidy asks`;
       }
-      item.area_exists = directoryExists(join(roots.step, entry.project)) || directoryExists(join(root, entry.project));
+      item.area_exists = directoryExists(join(root, stepAreaName(entry.project, { root }))) || directoryExists(join(root, entry.project));
       // Only a project the rule would take has its files listed and weighed.
       if (!projectPurge(item, facts).target) continue;
       item.files.push({ path: item.register_path, kind: 'register', bytes: treeBytes(item.register_path) });
@@ -452,10 +462,12 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS } = {}) {
   const claimed = new Set();
   const transcripts = facts.transcripts || [];
   for (const item of transcripts) {
-    const area = item.error ? null : areaOf(item.cwd, root);
-    if (!area) continue;
-    const project = area.startsWith(`${STEP_HOME}/`) ? area.slice(STEP_HOME.length + 1) : area;
-    if (!purged.has(project) || area.startsWith(`${PLAN_HOME}/`) || area.startsWith(`${WORK_HOME}/`)) continue;
+    // A project's areas are its step area and a legacy one; a planning, work
+    // or deps area is never a project's.
+    const area = item.error ? null : areaKindOf(areaOf(item.cwd, root) || '');
+    if (area?.kind !== 'step' && area?.kind !== 'legacy') continue;
+    const project = area.name;
+    if (!purged.has(project)) continue;
     claimed.add(item);
     targets.push({ path: item.path, kind: 'transcript', rule: 'P', why: `a session of ${project}, which is archived`, bytes: item.bytes || 0 });
   }
@@ -465,7 +477,7 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS } = {}) {
   for (const item of transcripts) {
     if (claimed.has(item) || item.error) continue;
     const area = areaOf(item.cwd, root);
-    if (!area?.startsWith(`${PLAN_HOME}/`)) continue;
+    if (areaKindOf(area || '')?.kind !== 'plan') continue;
     const dir = dirname(item.path);
     if (!groups.has(dir)) groups.set(dir, { area, items: [], newest: null, error: null });
     groups.get(dir).items.push(item);
@@ -565,6 +577,7 @@ export function outsideRoots(target, roots) {
     scratch: parent === base,
     transcript: dirname(parent) === base && SESSION_ID.test(TRANSCRIPT.exec(name)?.[1] || ''),
     leftover: dirname(parent) === base && SESSION_ID.test(name) && lstatSync(real).isDirectory(),
+    // `<planAreaRoot>/<programme>/<worktree>`: `roots.plan` is `plan/` or `programs/` by the layout.
     'plan-worktree': dirname(parent) === base && !PLAN_CHECKOUTS.has(name),
     'compare-worktree': parent === base,
   }[target.kind];

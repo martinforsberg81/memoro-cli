@@ -5,7 +5,7 @@
  * the root.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -32,9 +32,39 @@ describe('currentHolder', () => {
     assert.deepEqual(currentHolder({ cwd: at('legacy', 'memoro-cli'), env }), { name: 'legacy', kind: 'work-area' });
   });
 
+  it('a planning session holds as its programme, not as plan, so two never share a holder', () => {
+    assert.deepEqual(currentHolder({ cwd: at('plan', 'mc', 'memoro'), env }), { name: 'mc', kind: 'work-area' });
+    assert.deepEqual(currentHolder({ cwd: at('plan', 'staff'), env }), { name: 'staff', kind: 'work-area' });
+  });
+
   it('standing in step/ or work/ itself is a shell, not an area', () => {
     assert.equal(currentHolder({ cwd: at('step'), env }).kind, 'shell');
     assert.equal(currentHolder({ cwd: at('work'), env }).kind, 'shell');
+  });
+
+  it('a directory under the root that is no area keeps its first segment, as before', () => {
+    assert.deepEqual(currentHolder({ cwd: at('brief'), env }), { name: 'brief', kind: 'work-area' });
+    assert.deepEqual(currentHolder({ cwd: at('plan'), env }), { name: 'plan', kind: 'work-area' });
+  });
+});
+
+describe('currentHolder in layout 2', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-identity-2-'));
+  const env = { MC_WORK_ROOT: root };
+  after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'runner'), { recursive: true });
+  writeFileSync(join(root, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }));
+  const at = (...parts) => { const dir = join(root, ...parts); mkdirSync(dir, { recursive: true }); return dir; };
+
+  it('programs/<programme>, runner/step/<project> and runner/deps/<name> hold by their name', () => {
+    assert.deepEqual(currentHolder({ cwd: at('programs', 'mc', 'memoro'), env }), { name: 'mc', kind: 'work-area' });
+    assert.deepEqual(currentHolder({ cwd: at('runner', 'step', 'x', 'memoro'), env }), { name: 'x', kind: 'work-area' });
+    assert.deepEqual(currentHolder({ cwd: at('runner', 'deps', 'deps-a', 'memoro'), env }), { name: 'deps-a', kind: 'work-area' });
+  });
+
+  it('the runner\'s own directories hold as runner, as before', () => {
+    assert.deepEqual(currentHolder({ cwd: at('runner', 'step'), env }), { name: 'runner', kind: 'work-area' });
+    assert.deepEqual(currentHolder({ cwd: at('runner', 'log'), env }), { name: 'runner', kind: 'work-area' });
   });
 });
 

@@ -20,6 +20,7 @@
  * and a second rule for a case nobody has seen would be a guess with a
  * session's cost behind it.
  */
+import { areaOfPath } from './paths.js';
 
 /** The `--json` fields every caller of `gh pr list` here asks for. */
 export const PR_FIELDS = 'number,headRefName,baseRefName,isDraft,title,updatedAt';
@@ -100,9 +101,11 @@ export function parseWorktrees(text) {
  *
  *   - `project`   its branch is a project's, by `projectForBranch`'s rule
  *   - `plan`      a plan session's: its branch is checked out under
- *                 `<root>/plan/<programme>/`, or it is called `plan/…`
- *   - `workarea`  checked out in a workarea, `<root>/<name>/`
- *   - `worktree`  checked out somewhere else, and `path` says where
+ *                 `<root>/plan/<programme>/` or `<root>/programs/<programme>/`,
+ *                 or it is called `plan/…`
+ *   - `workarea`  checked out in a step, deps, work or legacy area, and
+ *                 `name` is the area's without its kind (`areaOfPath`)
+ *   - `worktree`  checked out somewhere that is no area, and `path` says where
  *   - `none`      nothing here has it checked out and no project explains it:
  *                 the one that waits on a person and nobody knows it
  *
@@ -116,10 +119,9 @@ export function prOwner(pr, { names = [], worktrees = [], root = '' } = {}) {
   if (project) return { kind: 'project', name: project, path: null };
   const held = branch ? worktrees.find((tree) => tree.branch === branch) : null;
   if (held) {
-    const base = root ? `${root.replace(/\/+$/u, '')}/` : null;
-    const inside = base && held.path.startsWith(base) ? held.path.slice(base.length).split('/') : null;
-    if (inside && inside[0] === 'plan' && inside[1]) return { kind: 'plan', name: inside[1], path: held.path };
-    if (inside && inside[0]) return { kind: 'workarea', name: inside[0], path: held.path };
+    const area = root ? areaOfPath(held.path, root.replace(/\/+$/u, '')) : null;
+    if (area?.kind === 'plan') return { kind: 'plan', name: area.name, path: held.path };
+    if (area) return { kind: 'workarea', name: area.name, path: held.path };
     return { kind: 'worktree', name: null, path: held.path };
   }
   if (branch && /^plan[/-]/u.test(branch)) return { kind: 'plan', name: null, path: null };

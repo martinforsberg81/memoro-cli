@@ -26,7 +26,7 @@ import { homedir } from 'node:os';
 
 import { deleteConversations, listConversations } from './conversations.js';
 import {
-  PLAN_HOME, STATE_HOMES, STEP_HOME, WORK_HOME, workAreaPath, workAreaStatePath, workRoot,
+  PLAN_HOME, STATE_HOMES, STEP_HOME, WORK_HOME, layoutVersion, stepAreaRoot, workAreaPath, workAreaStatePath, workRoot,
 } from './paths.js';
 import { registerPath } from './register.js';
 import { installPushGuard } from './push-guard.js';
@@ -83,17 +83,18 @@ export function listStrays({
  * name. `name` is the project, `path` where its checkouts are, `repos` which of
  * `repoNames` it holds a checkout of.
  *
- * The union of the directories under `~/mc/step/` that hold a checkout and the
- * ones directly under `~/mc` that do — areas from before `step/`, draining in
- * place (`stepAreaName`, paths.js). A project with both is read where
- * `stepAreaName` puts it: the legacy one. `step/`, `work/`, `plan/` and the
- * dot-directories are never an area themselves.
+ * The union of the directories under `stepAreaRoot` (paths.js) that hold a
+ * checkout and, in layout 1 only, the ones directly under `~/mc` that do —
+ * areas from before `step/`, draining in place (`stepAreaName`). A project
+ * with both is read where `stepAreaName` puts it: the legacy one. `step/`,
+ * `work/`, `plan/` and the dot-directories are never an area themselves.
  */
 export function listStepAreas({
   root = workRoot(),
   repoNames = ['memoro', 'memoro-cli'],
   list = (path) => { try { return readdirSync(path); } catch { return []; } },
   exists = existsSync,
+  read,
 } = {}) {
   const homes = new Set([STEP_HOME, WORK_HOME, PLAN_HOME]);
   const under = (dir, skip = () => false) => list(dir)
@@ -101,8 +102,10 @@ export function listStepAreas({
     .map((name) => ({ name, path: join(dir, name), repos: repoNames.filter((repo) => exists(join(dir, name, repo, '.git'))) }))
     .filter((area) => area.repos.length);
   const byName = new Map();
-  for (const area of under(join(root, STEP_HOME))) byName.set(area.name, area);
-  for (const area of under(root, (name) => homes.has(name))) byName.set(area.name, area);
+  for (const area of under(stepAreaRoot({ root, read }))) byName.set(area.name, area);
+  if (layoutVersion({ root, read }) === 1) {
+    for (const area of under(root, (name) => homes.has(name))) byName.set(area.name, area);
+  }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 

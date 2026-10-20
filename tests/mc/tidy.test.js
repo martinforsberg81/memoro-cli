@@ -371,6 +371,98 @@ describe('(X), (W), (S) and (R): areas and worktrees', () => {
   });
 });
 
+/** `~/mc/runner/layout.json` saying layout 2 (ruling 51). */
+function layout2(m) {
+  m.write(join(m.work, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }), NOW);
+}
+
+describe('layout 2: programs/, runner/step/ and runner/deps/', () => {
+  it('every spelling is its own area, never one bucket for programs/ or runner/', () => {
+    assert.equal(areaOf(`${ROOT}/programs/p`, ROOT), 'programs/p');
+    assert.equal(areaOf(`${ROOT}/programs/p/project`, ROOT), 'programs/p');
+    assert.equal(areaOf(`${ROOT}/runner/step/x/memoro`, ROOT), 'runner/step/x');
+    assert.equal(areaOf(`${ROOT}/runner/deps/deps-a/memoro`, ROOT), 'runner/deps/deps-a');
+    assert.equal(areaOf(`${ROOT}/programs`, ROOT), null);
+    assert.equal(areaOf(`${ROOT}/runner/step`, ROOT), null);
+    assert.equal(areaOf(`${ROOT}/runner/deps`, ROOT), null);
+    assert.equal(areaOf(`${ROOT}/runner/log`, ROOT), 'runner', 'no area: the first segment, as before');
+    assert.equal(areaOf(`${ROOT}/brief`, ROOT), 'brief');
+  });
+
+  it('a transcript standing in programs/<p> falls under G, and the newest of each programme stays', () => {
+    const plan = tidyPlan(facts({
+      transcripts: [
+        transcript(1, { path: `/c/projects/-w-programs-a/${ID(1)}.jsonl`, cwd: `${ROOT}/programs/a`, mtime_ms: OLD }),
+        transcript(2, { path: `/c/projects/-w-programs-a/${ID(2)}.jsonl`, cwd: `${ROOT}/programs/a`, mtime_ms: OLD - DAY }),
+        transcript(3, { path: `/c/projects/-w-programs-b/${ID(3)}.jsonl`, cwd: `${ROOT}/programs/b/memoro`, mtime_ms: OLD - 2 * DAY }),
+      ],
+    }));
+    assert.deepEqual(plan.targets.map((item) => [item.path, item.rule]), [[`/c/projects/-w-programs-a/${ID(2)}.jsonl`, 'G']]);
+    assert.match(plan.targets[0].why, /\(programs\/a\)$/u);
+    assert.equal(keptOf(plan, `/c/projects/-w-programs-a/${ID(1)}.jsonl`).why, 'the newest of its directory');
+    assert.equal(keptOf(plan, `/c/projects/-w-programs-b/${ID(3)}.jsonl`).why, 'the newest of its directory');
+  });
+
+  it('T4 keeps the newest of each runner/step and runner/deps area, not one for all of runner/', () => {
+    const plan = tidyPlan(facts({
+      transcripts: [
+        transcript(1, { cwd: `${ROOT}/runner/step/a/memoro`, mtime_ms: OLD }),
+        transcript(2, { cwd: `${ROOT}/runner/step/a`, mtime_ms: OLD - DAY }),
+        transcript(3, { cwd: `${ROOT}/runner/step/b/memoro`, mtime_ms: OLD - 2 * DAY }),
+        transcript(4, { cwd: `${ROOT}/runner/deps/deps-a/memoro`, mtime_ms: OLD - 3 * DAY }),
+      ],
+    }));
+    assert.deepEqual(paths(plan.targets), [transcript(2).path]);
+    assert.equal(plan.targets[0].why, 'older than 14 days and not runner/step/a\'s latest');
+    for (const n of [1, 3, 4]) assert.equal(keptOf(plan, transcript(n).path).rule, 'T4');
+  });
+
+  it('a transcript under runner/step/<x> falls under P once x is purged; a deps area\'s never does', () => {
+    const m = machine();
+    try {
+      layout2(m);
+      const mine = project(m, 'x');
+      project(m, 'deps-a');
+      const session = join(m.projects, '-mc-runner-step-x-memoro-cli', `${ID(1)}.jsonl`);
+      const bump = join(m.projects, '-mc-runner-deps-deps-a-memoro', `${ID(2)}.jsonl`);
+      m.write(session, m.head(join(m.work, 'runner', 'step', 'x', 'memoro-cli')), NOW - HOUR);
+      m.write(bump, m.head(join(m.work, 'runner', 'deps', 'deps-a', 'memoro')), NOW - HOUR);
+      const { list } = runTidy(m.doors());
+      const p = paths(ruled(list, 'P'));
+      assert.ok(p.includes(session));
+      assert.ok(p.includes(mine.register));
+      assert.ok(!p.includes(bump), 'a deps area is no project\'s');
+    } finally { m.cleanup(); }
+  });
+
+  it('a project whose runner/step area is still there is kept', () => {
+    const m = machine();
+    try {
+      layout2(m);
+      const mine = project(m, 'x');
+      mkdirSync(join(m.work, 'runner', 'step', 'x', 'memoro-cli'), { recursive: true });
+      const { list } = runTidy(m.doors());
+      assert.equal(keptOf(list, mine.register).why, 'an area for it still exists');
+    } finally { m.cleanup(); }
+  });
+
+  it('X walks programs/: a project\'s directory is skipped, a merged worktree goes through the root check', () => {
+    const m = machine();
+    try {
+      layout2(m);
+      const area = join(m.work, 'programs', 'mc');
+      for (const name of ['memoro', 'memoro-cli', 'wt-a']) m.write(join(area, name, '.git'), 'gitdir: /fake');
+      m.write(join(area, 'layout', 'PLAN.json'), '{}');
+      const { list, outcome } = runTidy({ ...m.doors(), apply: true });
+      assert.deepEqual(list.targets.map((item) => [item.path, item.kind, item.rule]), [[join(area, 'wt-a'), 'plan-worktree', 'X']]);
+      assert.equal(keptOf(list, join(area, 'memoro')).rule, 'plan-checkout');
+      assert.ok(![...list.targets, ...list.kept].some((item) => item.path.startsWith(join(area, 'layout'))), 'a project directory is not a worktree');
+      assert.deepEqual(outcome.applied.map((item) => [item.path, item.ok]), [[join(area, 'wt-a'), true]]);
+      assert.ok(existsSync(join(area, 'layout', 'PLAN.json')));
+    } finally { m.cleanup(); }
+  });
+});
+
 describe('(C) mc shot --compare trees under ~/.memoro/mc/compare/', () => {
   /** Three compare trees of memoro: one stale, one used today, one stale with a dev server in it. */
   function compares(m) {

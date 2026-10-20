@@ -75,7 +75,7 @@ import { controlPaths, drainState, laneSlots, mcCheckout } from './run-control.j
 import {
   PRS_STALE_SECONDS, ageWords, loadPlans, loadPrs, mergePrs, savePrs,
 } from './page-cache.js';
-import { PLAN_HOME, RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, mcHome, workRoot } from './paths.js';
+import { RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, areaKindOf, mcHome, workRoot } from './paths.js';
 import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
 import { overlayPlans, readEntry } from './register.js';
@@ -363,7 +363,7 @@ export function sessionsSection({
 
   // A planning session belongs to its programme, and PROGRAMMES draws it on
   // that programme's own row rather than among the loose sessions — which is
-  // the whole reason `mc plan` puts one at `plan/<programme>` (paths.js).
+  // the whole reason `mc plan` puts one at `planAreaName` (paths.js).
   // Keyed by programme here, so the section that owns programmes never has to
   // know how a session's area is spelled.
   //
@@ -373,8 +373,8 @@ export function sessionsSection({
   const planning = {};
   for (const item of open) {
     if (item.verb !== 'plan') continue;
-    const [home, programme] = String(item.area || '').split('/');
-    if (home === PLAN_HOME && programme) planning[programme] = item;
+    const area = areaKindOf(item.area || '');
+    if (area?.kind === 'plan') planning[area.name] = item;
   }
   const claimed = new Set(Object.values(planning));
 
