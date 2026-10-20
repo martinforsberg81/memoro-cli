@@ -1663,3 +1663,29 @@ carried by the proposal `2026-10-19-mc-project`
 The concept in full: [`mc-project.md`](mc-project.md). Carried by
 `archived-releases` (a blocker fix needed under the current layout) and the
 `mc project` projects that follow it.
+
+## 49 · A done project is archived after 24 hours, never a programme; the docs route stays
+
+`ruling · 2026-10-20` · raised in the `mc` programme session while planning
+project 3 of ruling 48
+
+1. **The runner archives a done project under `~/mc/programs/` by itself,
+   24 hours after it is done; `mc project archive` does it at once.**
+   "Ja, ett färdigt projekt kan arkiveras automatiskt (vi kan låta det stå
+   done i 24h dock i mc listan."
+2. **A programme is never archived automatically.** "MEN observera att vi
+   inte har någon automatisk arkivering av PROGRAM (mc plan) och det vill jag
+   inte heller ha." `mc plan <programme> --archive` stays the only way.
+3. **The docs route stays whole** — `runDocsMerge`, `mc merge --docs`, the
+   docs-only routing and the gate's docs fast path. "Docs path ska inte gå.
+   Den är utmärkt att ha kvar." Only the machinery that exists for plans in
+   git goes. (`mc-project.md` § Order, project 3, said "docs path removed";
+   that is withdrawn.)
+4. **Archive writes only the `project_log.md` row**; the paragraph on goal and
+   decisions in a technical document is written by the steps' own pull
+   requests, as today.
+5. **Project 3 is two projects**: `project-archive` (archive, discard, the
+   24-hour hold), then `plans-out-of-repos` (the repository copies and the
+   plans-in-git machinery removed).
+
+Carried by `project-archive` and `plans-out-of-repos`.
