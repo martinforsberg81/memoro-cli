@@ -3,16 +3,14 @@
  * now, the last
  * three runner steps, and the open PR on its branch.
  *
- * The plan is read from `origin/main` after a `git fetch` and from nowhere
- * else — a workarea's copy is whatever branch the folder happens to stand
- * on, and the runner reads main, so a page that preferred the workarea could
- * show a plan the runner would not act on (ruling 20). `--offline` skips the
- * fetch and says the plan is main as it was last fetched.
+ * The plan is read from `~/mc/programs/` (ruling 48) and from nowhere else,
+ * the copy the runner reads. `--offline` skips the `git fetch` of the
+ * repositories, and with it GitHub.
  *
  * The status row says the pair: what the plan is in, and — when this machine
  * has something to say about it — whether the runner could start it at all
  * (`machineState`, status-collect.js). The machine half is asked of the same
- * plan on `origin/main`.
+ * plan.
  *
  * Like the page (status-collect.js): no model, nothing written, nothing
  * started. The builders are pure so the test can feed them fixtures.
@@ -27,10 +25,10 @@ import { mergesPath, parseQueue, queueOrder } from './merge-queue.js';
 import { runningMerges } from './merges-collect.js';
 import { ageWords } from './page-cache.js';
 import { planSummary, readPlanText } from './plan-schema.js';
-import { findPlan } from './plan-source.js';
+import { findPlan, programsPlans } from './plan-source.js';
 import { stepAreaName, workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
-import { overlayPlans } from './register.js';
+import { listEntries, overlayPlans } from './register.js';
 import { machineDetail, machineState } from './status-collect.js';
 
 /* ---------------------------------------------------------------- builders */
@@ -206,9 +204,9 @@ function execAsync(cmd, args, opts = {}) {
   });
 }
 
-/** The plan on origin/main, if the project has one there: `findPlan` with this file's git. */
-export function findMainPlan(repos, name, { git = runGit } = {}) {
-  return findPlan(repos, name, { git });
+/** The project's plan under `~/mc/programs/`, if it has one: `findPlan`. `git` is accepted and not used. */
+export function findMainPlan(repos, name, { programs = programsPlans } = {}) {
+  return findPlan(repos, name, { programs });
 }
 
 /**
@@ -223,6 +221,7 @@ export async function collectProject(name, {
   exec = execAsync,
   read = (path) => readFileSync(path, 'utf8'),
   merges = runningMerges,
+  programs = programsPlans,
 } = {}) {
   const root = workRoot(env);
   const notes = [];
@@ -234,8 +233,14 @@ export async function collectProject(name, {
 
   // A folder directly under the root with no checkout yet is still the area asked about.
   const workarea = [join(root, stepAreaName(name, { root })), join(root, name)].find((dir) => existsSync(dir)) || null;
-  const main = findMainPlan(present, name, { git });
+  const main = findMainPlan(present, name, { programs });
   if (!main && !workarea) return null;
+  // The names a pull request is matched against: the repository's projects
+  // under `~/mc/programs/` (`findPlan`), and the register's, which still holds
+  // a project whose plan has been archived.
+  const names = main
+    ? [...new Set([...main.names, ...listEntries(root).filter((e) => e.repo === main.repo).map((e) => e.project)])]
+    : [name];
 
   // The file's word on each step, then the register's over it (register.js).
   const filed = main ? readPlanText(main.text) : null;
@@ -268,7 +273,7 @@ export async function collectProject(name, {
       if (r.ok) {
         asked = JSON.parse(r.stdout || '[]');
         prsFailed = [];
-        prs.push(...openPrsFor({ prs: asked, name, names: main?.names || [name] }));
+        prs.push(...openPrsFor({ prs: asked, name, names }));
       } else notes.push('gh pr list failed');
     } catch { notes.push('gh pr list unreadable'); }
   }
@@ -310,7 +315,7 @@ export async function collectProject(name, {
     // The `mc merge` calls waiting for the gate whose branch is this
     // project's — the same longest-name rule the pull requests above are
     // matched by (project-prs.js), so it holds with GitHub unreachable too.
-    queued: queuedFor(root, read, { name, repo, names: main?.names || [name], rounds }),
+    queued: queuedFor(root, read, { name, repo, names, rounds }),
     notes,
   };
 }

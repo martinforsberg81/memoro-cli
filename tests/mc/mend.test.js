@@ -37,10 +37,14 @@ const conflict = {
   reason: '#671 conflicts with main — Auto-merging src/card-views.js\nCONFLICT (content): Merge conflict in src/card-views.js',
 };
 
+/** The register entry of `mq`, and its plan under the work root's `programs/`, where the mend reads its step. */
 function register(stepOver = {}) {
+  const plan = join(root, 'programs', 'mc', 'mq', 'PLAN.json');
+  mkdirSync(join(root, 'programs', 'mc', 'mq'), { recursive: true });
+  writeFileSync(plan, JSON.stringify({ steps: [{ title: '1. The thing', done_when: 'DONE-WHEN-THE-THING', instruction: 'Build the thing.' }] }));
   mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
   writeFileSync(registerPath(root, 'mq'), JSON.stringify({
-    project: 'mq', repo: 'memoro-cli', programme: 'mc', plan: 'docs/project/mc/mq/PLAN.json',
+    project: 'mq', repo: 'memoro-cli', programme: 'mc', plan,
     steps: [{ status: 'landing', pr: 671, branch: 'mq', comments: [], attempts: 0, ...stepOver }],
   }));
 }
@@ -60,9 +64,6 @@ function mendMachine({ pushed = true, result = 'merged origin/main in, kept both
     launch: () => ({ ok: true, id: 'claude', adapter: null, spec: { bin: 'claude' } }),
     git: async (cwd, args) => {
       git.push({ cwd, args });
-      if (args[0] === 'show') {
-        return { ok: true, stdout: JSON.stringify({ steps: [{ title: '1. The thing', done_when: 'DONE-WHEN-THE-THING', instruction: 'Build the thing.' }] }) };
-      }
       if (args[0] === 'ls-remote') return { ok: true, stdout: `${head}\trefs/heads/mq` };
       return { ok: true, stdout: '' };
     },
@@ -194,6 +195,21 @@ describe('the step of a plan under ~/mc/programs/ (plans-in-mc step 5)', () => {
     const result = await runMend({ root, job: JOB, report: conflict, deps: { ...mm.deps, read } });
     assert.equal(result.outcome, 'pushed');
     assert.match(mm.sessions[0].args.join('\n'), /DONE-FROM-DISK/u);
+    assert.ok(mm.git.every((call) => call.args[0] !== 'show'), 'origin/main is not asked for the plan');
+  });
+
+  it('a relative register plan is no step: neither origin/main nor the disk is asked for it', async () => {
+    mkdirSync(join(root, 'runner', 'projects'), { recursive: true });
+    writeFileSync(registerPath(root, 'mq'), JSON.stringify({
+      project: 'mq', repo: 'memoro-cli', programme: 'mc', plan: 'docs/project/mc/mq/PLAN.json', steps: [{ status: 'landing', pr: 671, branch: 'mq', comments: [], attempts: 0 }],
+    }));
+    const mm = mendMachine({ pushed: true });
+    const asked = [];
+    const read = (path) => { asked.push(path); return existsSync(path) ? readFileSync(path, 'utf8') : null; };
+    const result = await runMend({ root, job: JOB, report: conflict, deps: { ...mm.deps, read } });
+    assert.equal(result.outcome, 'pushed');
+    assert.doesNotMatch(mm.sessions[0].args.join('\n'), /DONE-WHEN|done_when:/u);
+    assert.equal(asked.some((path) => path.endsWith('PLAN.json')), false);
     assert.ok(mm.git.every((call) => call.args[0] !== 'show'), 'origin/main is not asked for the plan');
   });
 });

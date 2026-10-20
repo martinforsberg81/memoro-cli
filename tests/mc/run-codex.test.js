@@ -113,10 +113,12 @@ function codexWorld(t) {
   // into `${repo}/.git/worktrees/cx`, exactly as a workarea does.
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
   execFileSync('git', ['init', '-q', '-b', 'main', repo]);
-  mkdirSync(join(repo, 'docs', 'project', 'mc', 'cx'), { recursive: true });
-  writeFileSync(join(repo, 'docs', 'project', 'mc', 'cx', 'PLAN.json'), JSON.stringify(PLAN, null, 2));
+  writeFileSync(join(repo, 'README.md'), '# memoro-cli\n');
   git(repo, 'add', '-A');
-  git(repo, 'commit', '-qm', 'plan');
+  git(repo, 'commit', '-qm', 'readme');
+  // The plan is under the work root's programs/, naming its repository.
+  mkdirSync(join(work, 'programs', 'mc', 'cx'), { recursive: true });
+  writeFileSync(join(work, 'programs', 'mc', 'cx', 'PLAN.json'), JSON.stringify({ ...PLAN, repo: 'memoro-cli' }, null, 2));
   git(repo, 'remote', 'add', 'origin', origin);
   git(repo, 'push', '-q', 'origin', 'main');
   git(repo, 'fetch', '-q', 'origin');
@@ -188,13 +190,13 @@ test('an interrupted codex step is resumed through `codex exec resume`, its work
   git(repo, 'commit', '-qm', 'later on main');
   git(repo, 'push', '-q', 'origin', 'main');
   // What the dead session left: a modified file and an untracked one.
-  writeFileSync(join(worktree, 'docs', 'project', 'mc', 'cx', 'notes.md'), 'half done\n');
+  writeFileSync(join(worktree, 'notes.md'), 'half done\n');
   writeFileSync(join(worktree, 'README.md'), 'edited\n');
   const head = git(worktree, 'rev-parse', 'HEAD').trim();
   const status = git(worktree, 'status', '--porcelain');
   mkdirSync(join(work, 'runner', 'projects'), { recursive: true });
   writeFileSync(join(work, 'runner', 'projects', 'cx.json'), JSON.stringify({
-    project: 'cx', repo: 'memoro-cli', programme: 'mc', plan: 'docs/project/mc/cx/PLAN.json',
+    project: 'cx', repo: 'memoro-cli', programme: 'mc', plan: join(work, 'programs', 'mc', 'cx', 'PLAN.json'),
     steps: [{
       status: 'ready', branch: 'cx',
       interrupted: {

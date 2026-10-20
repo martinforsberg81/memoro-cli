@@ -259,88 +259,45 @@ describe('the ground', () => {
     return { root, repos: [{ name: 'memoro', path: join(root, 'memoro') }, { name: 'gone', path: join(root, 'gone') }] };
   }
 
-  it('reads every PLAN.md frontmatter on origin/main, and skips a repository that is not here', async () => {
+  const PROGRAM_TEXT = JSON.stringify({
+    schema: 'mc-plan', version: 1, repo: 'memoro', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
+    success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
+    steps: [
+      { title: 'S1 — one', status: 'done', done_when: 'one', instruction: [], pr: null, blocked_by: null },
+      { title: 'S2 — two', status: 'ready', done_when: 'two', instruction: ['Do it.'], pr: null, blocked_by: null },
+    ],
+  });
+  const program = (project, repo) => ({
+    path: `/w/programs/mc/${project}/PLAN.json`, programme: 'mc', project, file: 'PLAN.json', text: PROGRAM_TEXT, repo,
+  });
+
+  it('lists the plans under ~/mc/programs/ of each repository here, and reads the project log on origin/main', async () => {
     const { repos: list } = repos();
+    const asked = [];
     const git = async (cwd, args) => {
+      asked.push(args[0]);
       if (args[0] === 'fetch') return '';
-      if (args[0] === 'ls-tree') return 'docs/project/mc/mc-helper/PLAN.md\ndocs/project/mc/mc-run/README.md';
-      if (args[1] === 'origin/main:docs/project/mc/mc-helper/PLAN.md') return '---\nstatus: ready\nnext: "Step 2"\n---\n# x';
       if (args[1] === 'origin/main:docs/project/project_log.md') return '| 2026-08-26 | msr-core |';
       return null;
     };
-    const ground = await helperGround({ env: {}, repos: list, git });
-    assert.deepEqual(ground.plans, [{
-      repo: 'memoro', programme: 'mc', project: 'mc-helper', path: 'docs/project/mc/mc-helper/PLAN.md',
-      status: 'ready', next: 'Step 2',
-    }]);
+    const programs = () => [program('mc-x', 'memoro'), program('mc-gone', 'gone')];
+    const ground = await helperGround({ env: {}, repos: list, git, programs });
+    assert.equal(ground.plans.length, 1, 'the plan of a repository that is not here is not listed');
+    const [record] = ground.plans;
+    assert.deepEqual([record.repo, record.programme, record.project, record.path, record.status],
+      ['memoro', 'mc', 'mc-x', '/w/programs/mc/mc-x/PLAN.json', 'ready']);
+    assert.ok(record.next, 'the next step is named');
     assert.match(ground.projectLog, /msr-core/u);
     assert.deepEqual(ground.notes, []);
+    assert.equal(asked.includes('ls-tree'), false, 'no repository is listed for plans');
   });
 
-  it('lists PLAN.json plans too', async () => {
+  it('notes the project log it could not read instead of pretending it is empty', async () => {
     const { repos: list } = repos();
-    const path = 'docs/project/mc/mc-x/PLAN.json';
-    const plan = JSON.stringify({
-      schema: 'mc-plan',
-      version: 1,
-      goal: ['g'],
-      contract: ['c'],
-      out_of_scope: ['o'],
-      success_criteria: [{ met: false, criterion: 'x', check: 'y' }],
-      documents: [],
-      steps: [
-        { title: 'S1 — one', status: 'done', done_when: 'one', instruction: [], pr: null, blocked_by: null },
-        { title: 'S2 — two', status: 'ready', done_when: 'two', instruction: ['Do it.'], pr: null, blocked_by: null },
-      ],
-    });
-    const git = async (cwd, args) => {
-      if (args[0] === 'fetch') return '';
-      if (args[0] === 'ls-tree') return path;
-      if (args[1] === `origin/main:${path}`) return plan;
-      return null;
-    };
-    const ground = await helperGround({ env: {}, repos: list, git });
-    assert.equal(ground.plans.length, 1);
-    const [record] = ground.plans;
-    assert.equal(record.repo, 'memoro');
-    assert.equal(record.programme, 'mc');
-    assert.equal(record.project, 'mc-x');
-    assert.equal(record.path, path);
-    assert.equal(record.status, 'ready');
-    assert.ok(record.next, 'the next step is named');
-  });
-
-  it('lays ~/mc/programs/ over the repository, and the plan there keeps its absolute path', async () => {
-    const { repos: list } = repos();
-    const programPath = '/w/programs/mc/mc-x/PLAN.json';
-    const programText = JSON.stringify({
-      schema: 'mc-plan', version: 1, repo: 'memoro', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
-      success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
-      steps: [{ title: 'S1 — one', status: 'ready', done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
-    });
-    const git = async (cwd, args) => {
-      if (args[0] === 'fetch') return '';
-      if (args[0] === 'ls-tree') return 'docs/project/mc/mc-x/PLAN.md\ndocs/project/mc/mc-y/PLAN.md';
-      if (args[1] === 'origin/main:docs/project/mc/mc-y/PLAN.md') return '---\nstatus: ready\nnext: "Step 2"\n---\n# y';
-      return null;
-    };
-    const programs = () => [{ path: programPath, programme: 'mc', project: 'mc-x', file: 'PLAN.json', text: programText, repo: 'memoro' }];
-    const ground = await helperGround({ env: {}, repos: list, git, programs });
-    assert.deepEqual(ground.plans.map((p) => [p.project, p.path, p.status]), [
-      ['mc-x', programPath, 'ready'],
-      ['mc-y', 'docs/project/mc/mc-y/PLAN.md', 'ready'],
-    ]);
-  });
-
-  it('notes what it could not read instead of pretending the list is complete', async () => {
-    const { repos: list } = repos();
-    const ground = await helperGround({ env: {}, repos: list, git: async () => null });
+    const ground = await helperGround({ env: {}, repos: list, git: async () => null, programs: () => [] });
     assert.deepEqual(ground.plans, []);
     assert.equal(ground.projectLog, null);
-    assert.deepEqual(ground.notes, [
-      'memoro: could not list plans on origin/main',
-      'no docs/project/project_log.md on origin/main in memoro',
-    ]);
+    assert.deepEqual(ground.notes, ['no docs/project/project_log.md on origin/main in memoro']);
   });
 });
 

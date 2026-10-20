@@ -1456,13 +1456,12 @@ export function readStrays(root, { git = runGit } = {}) {
  * Everything the page shows, in one object: one key per section, plus what the
  * caches did and whatever could not be read.
  *
- * Plans come from `origin/main` after a `git fetch`, cached in `plans.json`
- * keyed by its sha (page-cache.js); open PRs come from `prs.json` with their
- * age said out loud. `fresh: true` (`--fresh`, `mc prs`) asks GitHub for all
+ * Plans come from `~/mc/programs/` (page-cache.js `loadPlans`); open PRs
+ * come from `prs.json` with their age said out loud. `fresh: true` (`--fresh`, `mc prs`) asks GitHub for all
  * of them; `fresh: 'stale'` — the page at a terminal — asks only when the
  * cache is older than `PRS_STALE_SECONDS`, and only the repositories the
  * runner's backoff (`github.json`) does not hold. `--offline` skips the fetch
- * and reads the plans as they were last fetched (ruling 20).
+ * of `origin/main` (ruling 20).
  */
 export async function collectPage({
   env = process.env,

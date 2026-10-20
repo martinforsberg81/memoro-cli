@@ -48,9 +48,15 @@ function fixture({ programme = 'gone', plan = null, extra = {} } = {}) {
   mkdirSync(join(repo, 'docs', 'project', programme), { recursive: true });
   writeFileSync(join(repo, 'docs', 'project', programme, 'README.md'), '# programme\n');
   writeFileSync(join(repo, 'docs', 'project', 'project_log.md'), LOG);
+  // The plan lives under the work root's programs/, never in the repository.
+  const env = { MC_WORK_ROOT: join(root, 'work') };
   if (plan) {
-    mkdirSync(join(repo, 'docs', 'project', programme, 'proj'), { recursive: true });
-    writeFileSync(join(repo, 'docs', 'project', programme, 'proj', 'PLAN.md'), `---\nstatus: ${plan}\n---\n`);
+    mkdirSync(join(root, 'work', 'programs', programme, 'proj'), { recursive: true });
+    writeFileSync(join(root, 'work', 'programs', programme, 'proj', 'PLAN.json'), JSON.stringify({
+      schema: 'mc-plan', version: 1, repo: 'memoro-cli', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
+      success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
+      steps: [{ title: 'S1 — one', status: plan, done_when: 'one', instruction: ['Do it.'], pr: null, blocked_by: null }],
+    }));
   }
   for (const [path, text] of Object.entries(extra)) {
     mkdirSync(join(repo, path, '..'), { recursive: true });
@@ -59,7 +65,7 @@ function fixture({ programme = 'gone', plan = null, extra = {} } = {}) {
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-q', '-m', 'init']);
   git(repo, ['push', '-q', 'origin', 'HEAD:main']);
-  return { root, origin, repo, repos: [{ name: 'memoro-cli', path: repo }] };
+  return { root, origin, repo, env, repos: [{ name: 'memoro-cli', path: repo }] };
 }
 
 function stubs({ merged = true, area = null } = {}) {
@@ -89,6 +95,7 @@ function stubs({ merged = true, area = null } = {}) {
 function args(fx, deps, extra = {}) {
   return {
     repos: fx.repos,
+    env: fx.env,
     areaName: 'plan/gone',
     areaPath: join(fx.root, 'no-area'),
     stdout: sink(),
@@ -165,11 +172,11 @@ describe('archiveProgramme', () => {
   });
 
   it('touches nothing while a plan is still on main', async () => {
-    const fx = fixture({ plan: 'active' });
+    const fx = fixture({ plan: 'ready' });
     const { deps, calls } = stubs();
     const a = args(fx, deps);
     assert.equal(await archiveProgramme('gone', a), 1);
-    assert.match(a.stderr.out.text, /memoro-cli gone\/proj is still on main \(active\)/u);
+    assert.match(a.stderr.out.text, /memoro-cli gone\/proj is still on main \(ready\)/u);
     assert.deepEqual(calls.prs, []);
   });
 
