@@ -199,7 +199,7 @@ an intro nobody asked for.
 ## Archiving a programme
 
 `mc plan <programme> --archive` is how a programme ends, and the only way:
-`mc run` archives a project the round its plan says done, but nothing removes
+`mc run` archives a project once its plan says done (a repository plan the round it is read, a plan under `~/mc/programs/` 24 hours after it is done), but nothing removes
 the programme above it — `docs/project/<programme>/` keeps its own document and
 rulings, and `~/mc/plan/<programme>/` keeps two worktrees on `plan/<programme>`.
 No machine can tell that a programme is over, since one whose projects are all

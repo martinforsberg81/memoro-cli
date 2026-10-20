@@ -1,0 +1,3 @@
+section: Added
+
+- **A done project under `~/mc/programs/` is archived, not left listed.** `mc project archive <project>` does it at once, and the runner does it by itself 24 hours after the project is done. The repository gets one row in `project_log.md`, through a docs-only pull request; the plan stays in mc beside a `CLOSEOUT.json`, which is its closeout and the mark that it is archived. No reader of plans lists it, and `--after`, project blockers, the workarea closing and `mc tidy` count it as archived. Before, a finished project under `~/mc/programs/` stayed listed as active. `mc project discard <project> [--apply]` removes a project that is not archived — its directory, step area, register file and open pull requests — and without `--apply` says only what would go.

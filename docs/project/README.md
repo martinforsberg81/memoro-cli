@@ -248,6 +248,8 @@ project had a README, it stays beside the record as `<project>.md`, and the link
 into the removed directory are rewritten to these in the same pull request
 (ruling 46).
 
+**A project under `~/mc/programs/` is not written into `closeout/`.** Its closeout is `CLOSEOUT.json` beside its `PLAN.json` in mc, and its repository gets only its `project_log.md` row ([`docs/technical/mc-tidy.md`](../technical/mc-tidy.md) § *What archiving does*).
+
 ## Citing a decision
 
 Decisions are raised as files under a `decisions/` directory at the root of the
@@ -275,7 +277,7 @@ Close-out: add a row to `project_log.md` and update the technical
 documentation to describe what now exists. Removing the directory is not
 yours to do — a plan that says `status: done` is archived by `mc run`'s chore
 loop the next time it reads it: the directory goes, and the row is written for
-it if the close-out step did not write one (`src/mc/archive-plan.js`).
+it if the close-out step did not write one (`src/mc/archive-plan.js`). A plan under `~/mc/programs/` is archived 24 hours after it is done, or at once by `mc project archive`, and its directory stays: its `CLOSEOUT.json` is the mark (`src/mc/project-archive.js`).
 
 Nor is removing the workarea. At the end of the chore pass that archived the
 plan, `mc run` closes every workarea whose plan said `done`, whose worktree

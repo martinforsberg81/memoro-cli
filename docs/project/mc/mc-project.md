@@ -85,8 +85,7 @@ Prose keeps only what needs judgement.
 | One `project_log` line per delivered project | How a plan changed over time |
 
 Results reach a repository only through the steps' own pull requests (a step updates its technical doc as part of
-its `done_when`) and through `archive`, which writes the `project_log` line and a short paragraph on goal and
-decisions in the technical doc the project changed. A plan never lands in a repository.
+its `done_when`) and through `archive`, which writes only the `project_log` line. A plan never lands in a repository.
 
 ## Verbs
 
@@ -104,6 +103,8 @@ mc project import                       once: the active PLAN.json files from th
 ```
 
 `mc step …` (register transitions) stays as it is.
+
+`mc project archive` and `mc project discard` are the two ways a project under `~/mc/programs/` leaves. `archive` takes a sent project its register says is done and not yet archived: its row goes to the repository's `project_log.md` through a docs-only pull request, `CLOSEOUT.json` is written beside its `PLAN.json`, and its step area is closed unless a worktree in it has an uncommitted change or its session is live (the archive stands either way). The runner does the same by itself for a project done for 24 hours. `discard` removes a project that is not archived (its directory, step area, register file and open pull requests); without `--apply` it says only what would go, and with `--apply` it refuses a step that is running or landing, a live session or a worktree in use. Neither reaches a plan in a repository, and neither archives a programme.
 
 What the verbs refuse, at the write, so that an invalid plan never exists:
 - a step without `--model haiku|opus`;
