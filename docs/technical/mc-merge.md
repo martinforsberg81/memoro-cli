@@ -787,6 +787,8 @@ merged main in. A batch that stops this way falls back to single rounds
 red. The archive's `appendRow` is the other half: given a log that already has
 a row for that programme and project, it returns the text unchanged.
 
+**A plan file in the tree is red.** Once the candidate is built, the round lists the candidate's `docs/project` (`lsTreeArgs('HEAD')`, `plansInTree`, `plan-source.js`) and, when one holds a `PLAN.json` or a legacy `PLAN.md`, stops with `stopped_at: 'plan-in-repo'` — a red, the change's to fix — and the reason `<path> is a plan file — plans live under ~/mc/programs/ (mc project new); delete it from the branch and push`. Since ruling 48 no repository holds a plan, so this refuses the branch that brings one back. It sits in `FALLBACK_STOPS` and `MEND_STOPS` beside `project-log`.
+
 `gateLines` in [`src/mc/commands/repo.js`](../../src/mc/commands/repo.js) builds
 them; [`tests/mc/commands/gate-verdict.test.js`](../../tests/mc/commands/gate-verdict.test.js)
 asserts the length as a number, so the prose cannot grow back quietly.
@@ -1099,7 +1101,7 @@ measuring the selection` and goes on as before (`previousRedFiles` in
 The three numbers are constants with their reasons beside them, not settings:
 
 - **`MEND_STOPS`** — `merge`, `restack`, `red`, `selected-gate`, `pr-tests`,
-  `extra-gate`, `derived-outside`, `project-log`: where the fault is in the
+  `extra-gate`, `derived-outside`, `project-log`, `plan-in-repo`: where the fault is in the
   change. `fetch`, `pr`, `killed`, `threw`, `busy`, `drift` and the deploy
   wait are the machine's, and a session on the branch cannot fix them.
 - **`MEND_AT_ONCE`** = 1 — an 8 GB M1 already runs a memoro suite of seven

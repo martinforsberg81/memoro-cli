@@ -2661,6 +2661,36 @@ describe('a project log that carries a row twice', () => {
   });
 });
 
+describe('a candidate that holds a plan file', () => {
+  /** The fixture's git, with the candidate's tree listing these paths under docs/project. */
+  const withTree = (fx, files) => (args, opts = {}) => {
+    if (args[0] === 'ls-tree') {
+      fx.calls.push({ tool: 'git', args, cwd: opts.cwd });
+      return { status: 0, stdout: files.map((file) => `${file}\n`).join(''), stderr: '' };
+    }
+    return fx.git(args, opts);
+  };
+
+  it('is red, naming the file and where plans live, and measures nothing', async () => {
+    const fx = fixture();
+    try {
+      const result = await fx.run({ git: withTree(fx, ['docs/project/a/b/PLAN.json']) });
+      assert.equal(result.stopped_at, 'plan-in-repo');
+      assert.equal(result.verdict, 'red');
+      assert.equal(result.reason, 'docs/project/a/b/PLAN.json is a plan file — plans live under ~/mc/programs/ (mc project new); delete it from the branch and push');
+      assert.deepEqual(fx.ran('suite'), [], 'nothing is measured on a tree that carries a plan');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a README and a closeout beside it are not plans', async () => {
+    const fx = fixture();
+    try {
+      const result = await fx.run({ git: withTree(fx, ['docs/project/a/README.md', 'docs/project/a/closeout/b.json']) });
+      assert.equal(result.stopped_at, null, JSON.stringify(result));
+    } finally { fx.cleanup(); }
+  });
+});
+
 describe('derived artifacts are regenerated after the base is merged in', () => {
   const declared = (fx, derived) => writeJson(join(fx.mcHome, 'repo-gates.json'), {
     repo: { prepare: null, prepare_why: 'a test', extra_gates: [], merge_log: null, derived },
