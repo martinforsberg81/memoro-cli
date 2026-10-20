@@ -125,6 +125,19 @@ describe('the plans under ~/mc/programs/', () => {
       ['mc-x', '/w/programs/mc/mc-x/PLAN.json'], ['mc-y', 'docs/project/mc/mc-y/PLAN.md'],
     ]);
   });
+
+  it('drops the repository copy of a project archived under ~/mc/programs/, and returns no record for it', () => {
+    const archived = () => [{ path: '/w/programs/mc/mc-x/PLAN.json', programme: 'mc', project: 'mc-x', repo: 'memoro-cli', closeoutPath: '/w/programs/mc/mc-x/CLOSEOUT.json' }];
+    const out = withProgrammePlans('memoro-cli', [fromRepo('mc-x'), fromRepo('mc-y')], { programs: () => [], archived });
+    assert.deepEqual(out.map((r) => r.project), ['mc-y']);
+  });
+
+  it('lists a repository\'s plans without the archived projects under ~/mc/programs/', () => {
+    const git = (cwd, args) => (args[0] === 'ls-tree' ? 'docs/project/mc/mc-x/PLAN.md\ndocs/project/mc/mc-y/PLAN.md' : null);
+    const archived = () => [{ path: '/w/programs/mc/mc-x/PLAN.json', programme: 'mc', project: 'mc-x', repo: 'memoro-cli', closeoutPath: '/w/programs/mc/mc-x/CLOSEOUT.json' }];
+    const plans = listPlans({ name: 'memoro-cli', path: '/nowhere' }, { git, batch: () => new Map(), programs: () => [], archived });
+    assert.deepEqual(plans.map((p) => p.project), ['mc-y']);
+  });
 });
 
 describe('archived projects', () => {
@@ -139,11 +152,28 @@ describe('archived projects', () => {
       ].join('\n');
       return null;
     };
-    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git }), ['a']);
+    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git, archived: () => [] }), ['a']);
   });
 
-  it('is empty when the ref cannot be read', () => {
-    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git: () => null }), []);
+  it('is empty when the ref cannot be read and nothing is archived under ~/mc/programs/', () => {
+    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git: () => null, archived: () => [] }), []);
+  });
+
+  it('adds the programs-archived projects of this repository, closeout names first, each name once', () => {
+    const git = (cwd, args) => (args[0] === 'ls-tree' ? 'docs/project/mc/closeout/a.json' : null);
+    const archived = () => [
+      { path: '/w/programs/mc/a/PLAN.json', programme: 'mc', project: 'a', repo: 'memoro-cli', closeoutPath: '/w/programs/mc/a/CLOSEOUT.json' },
+      { path: '/w/programs/mc/b/PLAN.json', programme: 'mc', project: 'b', repo: 'memoro-cli', closeoutPath: '/w/programs/mc/b/CLOSEOUT.json' },
+      { path: '/w/programs/ops/c/PLAN.json', programme: 'ops', project: 'c', repo: 'memoro', closeoutPath: '/w/programs/ops/c/CLOSEOUT.json' },
+    ];
+    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git, archived }), ['a', 'b']);
+  });
+
+  it('returns the programs-archived names when the ref cannot be read', () => {
+    const archived = () => [
+      { path: '/w/programs/mc/b/PLAN.json', programme: 'mc', project: 'b', repo: 'memoro-cli', closeoutPath: '/w/programs/mc/b/CLOSEOUT.json' },
+    ];
+    assert.deepEqual(listArchived({ name: 'memoro-cli', path: '/nowhere' }, { git: () => null, archived }), ['b']);
   });
 });
 

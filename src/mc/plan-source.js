@@ -27,6 +27,8 @@ import { readPlanText } from './plan-schema.js';
 export const PROJECT_DIR = 'docs/project';
 /** The plan file the runner reads. */
 export const PLAN_FILE = 'PLAN.json';
+/** The file an archived project holds beside its plan (ruling 48): its closeout. */
+export const CLOSEOUT_FILE = 'CLOSEOUT.json';
 /** The old plan file: reported as what it is, never read as a plan. */
 export const LEGACY_PLAN_FILE = 'PLAN.md';
 
@@ -162,30 +164,60 @@ function readText(path) {
   }
 }
 
+/** The repository a plan names in its top-level `repo`, or null when it names none or is not JSON. */
+function namedRepo(text) {
+  try {
+    const { repo } = JSON.parse(text);
+    return typeof repo === 'string' ? repo : null;
+  } catch {
+    // Not JSON: the plan is unreadable, and names no repository.
+    return null;
+  }
+}
+
 /**
  * Every plan under `~/mc/programs/`, with its text: the shape `plansInTree`
  * gives (`path`, `programme`, `project`, `file`) plus `text` and `repo`, the
  * repository the plan names in its top-level `repo` (null when it names none,
  * or is not JSON). `path` is absolute. The programme's own worktrees
  * (`programs/<programme>/memoro/`) hold no `PLAN.json` directly, so they are
- * skipped by that alone. In listing order: programmes, then projects.
+ * skipped by that alone. A project with a `CLOSEOUT.json` beside its plan is
+ * archived, and is skipped too: an archived project is not a plan any reader
+ * lists (`programsArchived` lists it). In listing order: programmes, then projects.
  */
 export function programsPlans({ home = programsHome(), list = listDirs, read = readText } = {}) {
   const plans = [];
   for (const programme of list(home)) {
     for (const project of list(join(home, programme))) {
-      const path = join(home, programme, project, PLAN_FILE);
+      const dir = join(home, programme, project);
+      if (read(join(dir, CLOSEOUT_FILE)) !== null) continue;
+      const path = join(dir, PLAN_FILE);
       const text = read(path);
       if (text === null) continue;
-      let repo = null;
-      try {
-        const { repo: named } = JSON.parse(text);
-        if (typeof named === 'string') repo = named;
-      } catch {
-        // Not JSON: the plan is unreadable, and names no repository.
-      }
-      plans.push({ path, programme, project, file: PLAN_FILE, text, repo });
+      plans.push({ path, programme, project, file: PLAN_FILE, text, repo: namedRepo(text) });
     }
   }
   return plans;
+}
+
+/**
+ * The archived projects under `~/mc/programs/`: one record a project directory
+ * that holds both its `PLAN.json` and its `CLOSEOUT.json` beside it. `path` is
+ * the plan and `closeoutPath` the closeout, both absolute; `repo` is read the
+ * way `programsPlans` reads it. A directory with only a closeout is not one.
+ * In listing order, as `programsPlans`.
+ */
+export function programsArchived({ home = programsHome(), list = listDirs, read = readText } = {}) {
+  const archived = [];
+  for (const programme of list(home)) {
+    for (const project of list(join(home, programme))) {
+      const dir = join(home, programme, project);
+      const path = join(dir, PLAN_FILE);
+      const closeoutPath = join(dir, CLOSEOUT_FILE);
+      const text = read(path);
+      if (text === null || read(closeoutPath) === null) continue;
+      archived.push({ path, programme, project, repo: namedRepo(text), closeoutPath });
+    }
+  }
+  return archived;
 }

@@ -9,7 +9,8 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  LEGACY_PLAN_FILE, PLAN_FILE, PROJECT_DIR, findPlan, lsTreeArgs, parsePlanPath, planIn, planPath, plansInTree, programsPlans, projectNames,
+  CLOSEOUT_FILE, LEGACY_PLAN_FILE, PLAN_FILE, PROJECT_DIR, findPlan, lsTreeArgs, parsePlanPath, planIn, planPath, plansInTree, programsArchived,
+  programsPlans, projectNames,
 } from '../../src/mc/plan-source.js';
 
 /** A listing as `git ls-tree` prints it: one path a line, a newline at the end. */
@@ -324,5 +325,64 @@ describe('programsPlans', () => {
       { path: '/p/mc/x/PLAN.json', programme: 'mc', project: 'x', file: 'PLAN.json', text: '{"repo":"memoro"}', repo: 'memoro' },
       { path: '/p/mc/y/PLAN.json', programme: 'mc', project: 'y', file: 'PLAN.json', text: '{"repo":3}', repo: null },
     ]);
+  });
+
+  it('skips a project with a CLOSEOUT.json beside its plan: an archived project is not a plan any reader lists', () => {
+    const files = {
+      '/p/mc/x/PLAN.json': '{"repo":"memoro"}', '/p/mc/x/CLOSEOUT.json': '{}',
+      '/p/mc/y/PLAN.json': '{"repo":"memoro-cli"}',
+    };
+    const dirs = { '/p': ['mc'], '/p/mc': ['x', 'y'] };
+    assert.deepEqual(programsPlans({
+      home: '/p',
+      list: (path) => dirs[path] ?? [],
+      read: (path) => files[path] ?? null,
+    }).map((p) => p.project), ['y']);
+  });
+
+  it('skips an archived project on the real directories too', () => {
+    scratch((root) => {
+      const home = join(root, 'programs');
+      mkdirSync(join(home, 'mc', 'x'), { recursive: true });
+      writeFileSync(join(home, 'mc', 'x', PLAN_FILE), '{"repo":"memoro-cli"}');
+      writeFileSync(join(home, 'mc', 'x', CLOSEOUT_FILE), '{}');
+      assert.deepEqual(programsPlans({ home }), []);
+    });
+  });
+});
+
+describe('programsArchived', () => {
+  it('lists the projects that hold a PLAN.json and a CLOSEOUT.json, with the repository each names', () => {
+    const files = {
+      '/p/mc/x/PLAN.json': '{"repo":"memoro-cli"}', '/p/mc/x/CLOSEOUT.json': '{}',
+      '/p/mc/y/PLAN.json': '{}', '/p/mc/y/CLOSEOUT.json': '{}',
+      '/p/mc/z/PLAN.json': '{"repo":"memoro"}',
+      '/p/ops/w/CLOSEOUT.json': '{}',
+    };
+    const dirs = { '/p': ['mc', 'ops'], '/p/mc': ['x', 'y', 'z'], '/p/ops': ['w'] };
+    assert.deepEqual(programsArchived({
+      home: '/p',
+      list: (path) => dirs[path] ?? [],
+      read: (path) => files[path] ?? null,
+    }), [
+      { path: '/p/mc/x/PLAN.json', programme: 'mc', project: 'x', repo: 'memoro-cli', closeoutPath: '/p/mc/x/CLOSEOUT.json' },
+      { path: '/p/mc/y/PLAN.json', programme: 'mc', project: 'y', repo: null, closeoutPath: '/p/mc/y/CLOSEOUT.json' },
+    ]);
+  });
+
+  it('reads the real directories: a CLOSEOUT.json with no PLAN.json beside it is not an archived project', () => {
+    scratch((root) => {
+      const home = join(root, 'programs');
+      const put = (rel, body) => {
+        mkdirSync(join(home, dirname(rel)), { recursive: true });
+        writeFileSync(join(home, rel), body);
+      };
+      put('mc/x/PLAN.json', '{"repo":"memoro-cli"}');
+      put('mc/x/CLOSEOUT.json', '{}');
+      put('mc/y/CLOSEOUT.json', '{}');
+      assert.deepEqual(programsArchived({ home }), [
+        { path: join(home, 'mc', 'x', PLAN_FILE), programme: 'mc', project: 'x', repo: 'memoro-cli', closeoutPath: join(home, 'mc', 'x', CLOSEOUT_FILE) },
+      ]);
+    });
   });
 });
