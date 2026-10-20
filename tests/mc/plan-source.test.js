@@ -9,8 +9,8 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  CLOSEOUT_FILE, LEGACY_PLAN_FILE, PLAN_FILE, PROJECT_DIR, findPlan, lsTreeArgs, parsePlanPath, planIn, planPath, plansInTree, programsArchived,
-  programsPlans, projectNames,
+  CLOSEOUT_FILE, LEGACY_PLAN_FILE, PLAN_FILE, PROJECT_DIR, findPlan, isRepoPlanPath, lsTreeArgs, parsePlanPath, planIn, planPath, plansInTree,
+  programsArchived, programsPlans, projectNames,
 } from '../../src/mc/plan-source.js';
 
 /** A listing as `git ls-tree` prints it: one path a line, a newline at the end. */
@@ -75,6 +75,14 @@ describe('the layout', () => {
     assert.equal(parsePlanPath('docs/project/mc/closeout/x.json'), null);
     assert.equal(parsePlanPath('docs/project/mc/x/notes/PLAN.json'), null);
     assert.equal(parsePlanPath('other/project/mc/x/PLAN.json'), null);
+  });
+
+  it('isRepoPlanPath is true for a plan file in a repository and nothing else under docs/project', () => {
+    assert.equal(isRepoPlanPath('docs/project/mc/x/PLAN.json'), true);
+    assert.equal(isRepoPlanPath('docs/project/mc/x/PLAN.md'), true);
+    assert.equal(isRepoPlanPath('docs/project/mc/closeout/x.json'), false);
+    assert.equal(isRepoPlanPath('docs/project/mc/x/notes/PLAN.json'), false);
+    assert.equal(isRepoPlanPath('docs/project/project_log.md'), false);
   });
 
   it('lsTreeArgs lists the plans directory on origin/main unless told another ref', () => {

@@ -45,6 +45,15 @@ export function parsePlanPath(path) {
   return { path, programme: parts[2], project: parts[3], file: parts[4] };
 }
 
+/**
+ * True when `path` is a plan file in a repository: `docs/project/<programme>/<project>/PLAN.json`,
+ * or the legacy `PLAN.md` beside it. Since ruling 48 a plan is never written there,
+ * so the docs route refuses a pull request that adds lines to one.
+ */
+export function isRepoPlanPath(path) {
+  return parsePlanPath(path) !== null;
+}
+
 /** The `git ls-tree` arguments that list every file under the plans directory. */
 export function lsTreeArgs(ref = 'origin/main') {
   return ['ls-tree', '-r', '--name-only', ref, '--', PROJECT_DIR];
