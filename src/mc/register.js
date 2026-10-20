@@ -21,8 +21,9 @@
  * med rätt design."* and, on the principle — instructions in git, state in a
  * register mc owns, one writer, never a merge — *"Ok på registret."*
  *
- * So: one file per project, `~/mc/runner/projects/<project>.json`, written
- * whole and atomically, holding one entry per step, in the plan's order and
+ * So: one file per project, `~/mc/runner/projects/<project>.json` — in layout
+ * 2 (ruling 51, 3) `~/mc/programs/<programme>/<project>/STATE.json`, beside
+ * its plan, the same JSON (`registerPath`) — written whole and atomically, holding one entry per step, in the plan's order and
  * matched to it by the step's key (`stepKey`). The plan on `main` is still
  * what says what a step *is*; the register says where it *stands*. Readers join the two (`overlayPlans`) and
  * see the same plan record they always saw, with the register's word for
@@ -60,11 +61,15 @@ import { dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { invocationShape, rotateIfLarge, runId } from './logger.js';
+import { PROGRAMS_HOME, RUNNER_HOME, layoutVersion } from './paths.js';
+import { findProjectDir } from './plan-write.js';
 import { BLOCKER_KINDS, NAME_RE, blockerFieldProblems, planSummary } from './plan-schema.js';
 
 export const REGISTER_SCHEMA = 'mc-register';
 export const REGISTER_VERSION = 1;
 export const REGISTER_DIR = 'projects';
+/** Layout 2's register of a project, beside its plan (ruling 51, 3). */
+export const STATE_FILE = 'STATE.json';
 export const REGISTER_LOG_MAX_BYTES = 4 * 1024 * 1024;
 
 /**
@@ -92,12 +97,33 @@ export const REGISTER_LOG_MAX_BYTES = 4 * 1024 * 1024;
  */
 export const STEP_STATES = Object.freeze(['ready', 'running', 'landing', 'done', 'failed', 'blocked']);
 
-export function registerDir(root) {
-  return join(root, 'runner', REGISTER_DIR);
+/**
+ * Layout 1's register directory, `runner/projects/`. Null in layout 2, where
+ * there is none: each project's register is its own directory's `STATE.json`,
+ * and nothing may list or create a register directory.
+ */
+export function registerDir(root, { read } = {}) {
+  return layoutVersion({ root, read }) === 2 ? null : join(root, RUNNER_HOME, REGISTER_DIR);
 }
 
-export function registerPath(root, project) {
-  return join(registerDir(root), `${project}.json`);
+/**
+ * Where a project's register is: `runner/projects/<project>.json` in layout 1;
+ * in layout 2 `programs/<programme>/<project>/STATE.json`, beside its plan or
+ * draft (`findProjectDir`), and null when there is no such project. `read` is
+ * the one the layout file is read with; `exists` and `list` the ones the
+ * project's directory is found with.
+ */
+export function registerPath(root, project, { read, exists, list } = {}) {
+  if (layoutVersion({ root, read }) !== 2) return join(root, RUNNER_HOME, REGISTER_DIR, `${project}.json`);
+  const found = findProjectDir(join(root, PROGRAMS_HOME), project, { list, exists });
+  return found ? join(found.dir, STATE_FILE) : null;
+}
+
+/** `registerPath`, for a write: a project with nowhere to keep a register is refused. */
+function writablePath(root, project, options = {}) {
+  const path = registerPath(root, project, options);
+  if (!path) throw new Error(`no project ${project} under ~/mc/programs — its register has nowhere to be`);
+  return path;
 }
 
 /** The register's own log, one JSON line per write (see the header). */
@@ -536,20 +562,34 @@ function logWrite(root, append, by, fields) {
   } catch { /* the log never fails the write */ }
 }
 
-export function readEntry(root, project, { read = realRead } = {}) {
-  return parseEntry(read(registerPath(root, project)));
+/** A project's entry; null when it has none, or nowhere to keep one. */
+export function readEntry(root, project, { read = realRead, exists, list } = {}) {
+  const path = registerPath(root, project, { read, exists, list });
+  return path ? parseEntry(read(path)) : null;
 }
 
-export function writeEntry(root, entry, { write = realWrite } = {}) {
-  write(registerPath(root, entry.project), entry);
+export function writeEntry(root, entry, { write = realWrite, read, exists, list } = {}) {
+  write(writablePath(root, entry.project, { read, exists, list }), entry);
   return entry;
 }
 
-/** Every entry in the register, by project name. */
+/**
+ * Every entry in the register, by project name: layout 1's `runner/projects/*.json`,
+ * or every `programs/<programme>/<project>/STATE.json` that parses in layout 2 —
+ * archived projects included in both.
+ */
 export function listEntries(root, { list = realList, read = realRead } = {}) {
-  return list(registerDir(root))
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => parseEntry(read(join(registerDir(root), name))))
+  const dir = registerDir(root, { read });
+  if (dir) {
+    return list(dir)
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => parseEntry(read(join(dir, name))))
+      .filter(Boolean);
+  }
+  const home = join(root, PROGRAMS_HOME);
+  return [...list(home)].sort()
+    .flatMap((programme) => [...list(join(home, programme))].sort().map((project) => join(home, programme, project, STATE_FILE)))
+    .map((path) => parseEntry(read(path)))
     .filter(Boolean);
 }
 
@@ -560,25 +600,43 @@ export function listEntries(root, { list = realList, read = realRead } = {}) {
  * parsed plan (legacy, unreadable) passes through untouched.
  *
  * `root` null means no register — the fixtures that hand a reader plans
- * without a work root get the file's own state, as they always did. A seed,
+ * without a work root get the file's own state, as they always did. So does a
+ * plan with no project directory under `~/mc/programs/` in layout 2, which has
+ * nowhere to keep a register (`registerPath`). A seed,
  * and a re-plan that moved something, is appended to `register.log` (`logWrite`).
+ *
+ * A seed and a reconcile are written under `lock`, with the entry read again
+ * inside it, so a concurrent `updateStep` is not overwritten by an entry read
+ * before it; a plan the register already agrees with takes no lock.
  */
-export function overlayPlans(plans, { root = null, read = realRead, write = realWrite, now = null, append = realAppend, by = whoAmI } = {}) {
+export function overlayPlans(plans, {
+  root = null, read = realRead, write = realWrite, now = null, append = realAppend, by = whoAmI, lock = (_root, fn) => fn(), exists, list,
+} = {}) {
   if (!root) return plans;
   return plans.map((record) => {
     if (!record?.plan || record.legacy) return record;
-    let entry = readEntry(root, record.project, { read });
-    if (!entry) {
-      entry = seedEntry(record, now);
-      write(registerPath(root, record.project), entry);
-      logWrite(root, append, by, { event: 'seed', project: record.project, steps: entry.steps.length, statuses: entry.steps.map((s) => s.status) });
-    } else {
-      const brought = reconcileEntry(entry, record, now);
-      if (brought.changed) {
-        entry = brought.entry;
-        write(registerPath(root, record.project), entry);
-        logWrite(root, append, by, { event: 'reconcile', project: record.project, carried: brought.carried || [] });
+    const path = registerPath(root, record.project, { read, exists, list });
+    if (!path) return record;
+    const settle = (entry) => {
+      if (!entry) {
+        const seeded = seedEntry(record, now);
+        return { entry: seeded, event: { event: 'seed', project: record.project, steps: seeded.steps.length, statuses: seeded.steps.map((s) => s.status) } };
       }
+      const brought = reconcileEntry(entry, record, now);
+      return brought.changed
+        ? { entry: brought.entry, event: { event: 'reconcile', project: record.project, carried: brought.carried || [] } }
+        : { entry, event: null };
+    };
+    let { entry, event } = settle(parseEntry(read(path)));
+    if (event) {
+      entry = lock(root, () => {
+        const again = settle(parseEntry(read(path)));
+        if (again.event) {
+          write(path, again.entry);
+          logWrite(root, append, by, again.event);
+        }
+        return again.entry;
+      });
     }
     return applyEntry(record, entry);
   });
@@ -592,11 +650,12 @@ export function overlayPlans(plans, { root = null, read = realRead, write = real
  * to `register.log` naming this process (`logWrite`).
  */
 export function updateStep({ root, project, index, patch, read = realRead, write = realWrite, lock = realLock, now = null, append = realAppend, by = whoAmI }) {
+  const path = writablePath(root, project, { read });
   return lock(root, () => {
-    const entry = readEntry(root, project, { read });
-    if (!entry) throw new Error(`${project}: not in the register at ${registerPath(root, project)}`);
+    const entry = parseEntry(read(path));
+    if (!entry) throw new Error(`${project}: not in the register at ${path}`);
     const next = patchStep(entry, index, patch, now);
-    write(registerPath(root, project), next);
+    write(path, next);
     const was = entry.steps[index];
     const made = next.steps[index];
     logWrite(root, append, by, { event: 'step', project, index, key: made.key, from: was.status, to: made.status, pr: made.pr ?? null, fields: Object.keys(patch) });
@@ -610,11 +669,12 @@ export function updateStep({ root, project, index, patch, read = realRead, write
  * write appends a `criterion` line to `register.log` (`logWrite`).
  */
 export function updateCriterion({ root, project, number, met, read = realRead, write = realWrite, lock = realLock, now = null, append = realAppend, by = whoAmI }) {
+  const path = writablePath(root, project, { read });
   return lock(root, () => {
-    const entry = readEntry(root, project, { read });
-    if (!entry) throw new Error(`${project}: not in the register at ${registerPath(root, project)}`);
+    const entry = parseEntry(read(path));
+    if (!entry) throw new Error(`${project}: not in the register at ${path}`);
     const next = markCriterion(entry, number, met, now);
-    write(registerPath(root, project), next);
+    write(path, next);
     logWrite(root, append, by, { event: 'criterion', project, number, from: entry.criteria[number - 1].met, to: next.criteria[number - 1].met });
     return next;
   });
@@ -627,12 +687,21 @@ export function updateCriterion({ root, project, number, met, read = realRead, w
  * taken over; a live one is waited on, briefly, and then the write goes
  * ahead anyway — a register that cannot be written is worse than one written
  * a moment early, and every write is whole (`writeJsonAtomic`).
+ *
+ * The file stays under `runner/`, whatever the layout, because it also guards
+ * `merges.json`, deploys, language runs and iOS builds: `runner/projects/.lock`
+ * in layout 1 (so a process on older code and one on newer still exclude each
+ * other), `runner/register.lock` in layout 2 (`lockPath`).
  */
 export const LOCK_WAIT_MS = 5000;
 const LOCK_POLL_MS = 25;
 
+export function lockPath(root) {
+  return layoutVersion({ root }) === 2 ? join(root, RUNNER_HOME, 'register.lock') : join(root, RUNNER_HOME, REGISTER_DIR, '.lock');
+}
+
 export function realLock(root, fn, { alive = pidAlive, waitMs = LOCK_WAIT_MS } = {}) {
-  const path = join(registerDir(root), '.lock');
+  const path = lockPath(root);
   const deadline = Date.now() + waitMs;
   for (;;) {
     let fd = null;
@@ -643,8 +712,8 @@ export function realLock(root, fn, { alive = pidAlive, waitMs = LOCK_WAIT_MS } =
       break;
     } catch (error) {
       if (error?.code === 'ENOENT') {
-        // The directory is not there yet: the first write makes it.
-        writeJsonAtomic(join(registerDir(root), '.keep'), {});
+        // The directory is not there yet: the first lock makes it.
+        try { mkdirSync(dirname(path), { recursive: true }); } catch { break; }
         continue;
       }
       if (error?.code !== 'EEXIST') break;

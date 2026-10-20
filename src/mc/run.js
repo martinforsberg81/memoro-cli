@@ -118,7 +118,7 @@ import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { deliverableStep } from './plan-schema.js';
 import { planIn, programsPlans } from './plan-source.js';
-import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
+import { applyEntry, currentIndex, overlayPlans, readEntry, realLock, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
 import { releaseDue } from './step-release.js';
 import { closable, closeArea, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
@@ -481,6 +481,8 @@ export function realDeps(env = process.env) {
     diagnoseGithub: () => diagnoseGithub({ run: (cmd, args) => sh(cmd, args, { timeout: DIAGNOSE_TIMEOUT_MS }) }),
     tmuxHas: (name) => sh('tmux', ['has-session', '-t', name]).ok,
     exists: existsSync,
+    // The register's lock (register.js): every register write the runner makes takes it.
+    lock: (root, fn) => realLock(root, fn),
     // The one liveness test the page, `mc run start` and the loop's own
     // refusal all use, so a runner.json that names a pid means the same thing
     // to every reader of it.

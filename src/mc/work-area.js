@@ -69,11 +69,13 @@ export function listStrays({
   list = (path) => { try { return readdirSync(path, { withFileTypes: true }); } catch { return []; } },
   exists = existsSync,
 } = {}) {
+  const legacy = layoutVersion({ root }) === 1;
   return list(root)
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !STATE_HOMES.has(entry.name))
     .map((entry) => ({ name: entry.name, path: join(root, entry.name) }))
     .filter((dir) => !areaRoleName(dir.path))
-    .filter((dir) => !(exists(registerPath(root, dir.name))
+    // Layout 2 has no legacy areas: every runner area is under `runner/step/`.
+    .filter((dir) => !(legacy && exists(registerPath(root, dir.name))
       && repoNames.some((repo) => exists(join(dir.path, repo, '.git')))))
     .sort((a, b) => a.name.localeCompare(b.name));
 }

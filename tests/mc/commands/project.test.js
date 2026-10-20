@@ -958,12 +958,16 @@ test('archive of a done project with a dirty step area archives it, keeps the ar
  * gh, the area's discard and tmux are fakes that record their calls; the file
  * system is real.
  */
-function discardFixture({ file = 'PLAN.json', steps = null, closeout = false, area = false, pulls = [], closeFails = null, live = false, inUse = false, waiting = [] } = {}) {
+function discardFixture({ file = 'PLAN.json', steps = null, closeout = false, area = false, pulls = [], closeFails = null, live = false, inUse = false, waiting = [], layout2 = false } = {}) {
   const work = mkdtempSync(join(tmpdir(), 'mc-discard-'));
   const home = join(work, 'programs');
   const dir = join(home, 'mc', 'alpha');
   const repo = join(work, 'memoro-cli');
   mkdirSync(dir, { recursive: true });
+  if (layout2) {
+    mkdirSync(join(work, 'runner'), { recursive: true });
+    writeFileSync(join(work, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }));
+  }
   writeFileSync(join(dir, file), `${JSON.stringify({ ...JSON.parse(repoPlan('alpha')), repo: 'memoro-cli' }, null, 2)}\n`);
   if (closeout) writeFileSync(join(dir, 'CLOSEOUT.json'), '{}\n');
   if (steps) {
@@ -1043,6 +1047,18 @@ test('discard --apply of a sent plan closes its pull request named <project>-2, 
       'mc: alpha discarded\n',
     ]);
     assert.equal(f.err.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('discard --apply in layout 2 removes the project directory with its STATE.json in it, and no register file of its own', async () => {
+  const f = discardFixture({ steps: [{ key: 'One', status: 'done', pr: 2 }], layout2: true });
+  try {
+    assert.equal(f.register, join(f.dir, 'STATE.json'));
+    assert.equal(existsSync(f.register), true);
+    assert.equal(await run(['discard', 'alpha', '--apply'], f.deps), 0);
+    assert.equal(existsSync(f.dir), false);
+    assert.deepEqual(f.out, [`  removed ${f.dir}\n`, 'mc: alpha discarded\n']);
+    assert.equal(existsSync(join(f.work, 'runner', 'projects')), false);
   } finally { f.cleanup(); }
 });
 

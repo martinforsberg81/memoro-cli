@@ -156,8 +156,9 @@ function machine() {
   };
   m.head = (cwd) => `${JSON.stringify({ type: 'user', cwd, message: { content: 'hi' } })}\n`;
   m.register = (entry) => {
-    mkdirSync(join(work, 'runner', 'projects'), { recursive: true });
-    writeFileSync(registerPath(work, entry.project), JSON.stringify(entry));
+    const path = registerPath(work, entry.project);
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, JSON.stringify(entry));
   };
   m.git = (cwd, args) => {
     if (m.gitFails) return null;
@@ -184,7 +185,11 @@ function machine() {
 
 /** A finished project, archived or not, with every file the runner leaves of it. */
 function project(m, name, { programme = 'mc', archived = true, closeout = true, planOnMain = false, legacyArea = false, steps = [] } = {}) {
-  m.register({ project: name, repo: 'memoro-cli', programme, steps });
+  // Layout 2: the project's directory under programs/, its CLOSEOUT.json beside its plan, its register STATE.json.
+  const plan = existsSync(join(m.work, 'runner', 'layout.json')) ? join(m.work, 'programs', programme, name, 'PLAN.json') : null;
+  if (plan) m.write(plan, '{}');
+  if (plan && closeout) m.write(join(m.work, 'programs', programme, name, 'CLOSEOUT.json'), '{}');
+  m.register({ project: name, repo: 'memoro-cli', programme, steps, ...(plan ? { plan } : {}) });
   const repo = m.main['memoro-cli'];
   if (archived) repo.log += logRow(name);
   if (closeout) repo.tree.push(`docs/project/${programme}/closeout/${name}.json`);
@@ -417,7 +422,7 @@ describe('layout 2: programs/, runner/step/ and runner/deps/', () => {
     for (const n of [1, 3, 4]) assert.equal(keptOf(plan, transcript(n).path).rule, 'T4');
   });
 
-  it('a transcript under runner/step/<x> falls under P once x is purged; a deps area\'s never does', () => {
+  it('a transcript under runner/step/<x> falls under P once x is purged, its STATE.json never; a deps area\'s never does', () => {
     const m = machine();
     try {
       layout2(m);
@@ -430,7 +435,11 @@ describe('layout 2: programs/, runner/step/ and runner/deps/', () => {
       const { list } = runTidy(m.doors());
       const p = paths(ruled(list, 'P'));
       assert.ok(p.includes(session));
-      assert.ok(p.includes(mine.register));
+      assert.equal(mine.register, join(m.work, 'programs', 'mc', 'x', 'STATE.json'));
+      assert.ok(!p.includes(mine.register), 'a project\'s state is its knowledge (ruling 51)');
+      for (const file of [mine.log, mine.err, join(m.work, 'runner', 'log', 'closed', 'x'), join(m.work, 'runner', 'scratch', 'x-20261001T100000Z')]) {
+        assert.ok(p.includes(file), `${file} is still purged`);
+      }
       assert.ok(!p.includes(bump), 'a deps area is no project\'s');
     } finally { m.cleanup(); }
   });
