@@ -16,7 +16,7 @@
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 export function mcHome(env = process.env) {
   return env.MC_HOME || join(homedir(), '.memoro', 'mc');
@@ -198,10 +198,91 @@ export function programsHome(env = process.env) {
 }
 
 /**
+ * `~/mc/runner/layout.json` says which structure the work root has (ruling 51).
+ * Absent, unreadable, or anything but `{"schema":"mc-layout","version":2}` is
+ * layout 1, today's. `mc layout migrate` writes the file last, so its presence
+ * means the move is done. Read on every call, with no cache: a long-lived
+ * runner must see the file the moment it appears.
+ */
+export const LAYOUT_FILE = 'layout.json';
+
+export function layoutVersion({
+  root = workRoot(),
+  read = (path) => readFileSync(path, 'utf8'),
+} = {}) {
+  try {
+    const layout = JSON.parse(read(join(root, RUNNER_HOME, LAYOUT_FILE)));
+    return layout?.schema === 'mc-layout' && layout.version === 2 ? 2 : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/** Layout 2's runner areas: `runner/step/<project>` and `runner/deps/<name>` (ruling 51). */
+export const RUNNER_STEP = 'runner/step';
+export const RUNNER_DEPS = 'runner/deps';
+
+/**
+ * The area name of a programme's planning session: `programs/<programme>` in
+ * layout 2, `plan/<programme>` (`PLAN_HOME`) in layout 1.
+ */
+export function planAreaName(programme, { root = workRoot(), read } = {}) {
+  return layoutVersion({ root, read }) === 2 ? `${PROGRAMS_HOME}/${programme}` : `${PLAN_HOME}/${programme}`;
+}
+
+/** The area name of a `mc deps bump`: `runner/deps/<name>` in layout 2, `step/<name>` in layout 1. */
+export function depsAreaName(name, { root = workRoot(), read } = {}) {
+  return layoutVersion({ root, read }) === 2 ? `${RUNNER_DEPS}/${name}` : `${STEP_HOME}/${name}`;
+}
+
+/** The directory every planning session sits under: `programs/` in layout 2, `plan/` in layout 1. */
+export function planAreaRoot({ root = workRoot(), read } = {}) {
+  return layoutVersion({ root, read }) === 2 ? join(root, PROGRAMS_HOME) : join(root, PLAN_HOME);
+}
+
+/** The directory every runner area sits under: `runner/step/` in layout 2, `step/` in layout 1. */
+export function stepAreaRoot({ root = workRoot(), read } = {}) {
+  return layoutVersion({ root, read }) === 2 ? join(root, RUNNER_STEP) : join(root, STEP_HOME);
+}
+
+/**
+ * What kind of area a name below the work root is: `{ kind, name, area }`, or
+ * `null` when it is not an area. Pure, and it knows both layouts whatever the
+ * file says — a transcript or a lease written before the move still names its
+ * area the old way. Segments after the area are ignored, so a path below an
+ * area classifies as that area.
+ */
+export function areaKindOf(areaName) {
+  const [first, second, third] = String(areaName).split('/');
+  if (!first) return null;
+  if (first === PLAN_HOME || first === PROGRAMS_HOME) {
+    return second ? { kind: 'plan', name: second, area: `${first}/${second}` } : null;
+  }
+  if (first === RUNNER_HOME) {
+    if (second === 'step' && third) return { kind: 'step', name: third, area: `${RUNNER_STEP}/${third}` };
+    if (second === 'deps' && third) return { kind: 'deps', name: third, area: `${RUNNER_DEPS}/${third}` };
+    return null;
+  }
+  if (first === STEP_HOME) {
+    return second ? { kind: second.startsWith('deps-') ? 'deps' : 'step', name: second, area: `${first}/${second}` } : null;
+  }
+  if (first === WORK_HOME) {
+    return second ? { kind: 'work', name: second, area: `${first}/${second}` } : null;
+  }
+  if (STATE_HOMES.has(first) || first.startsWith('.')) return null;
+  return { kind: 'legacy', name: first, area: first };
+}
+
+/** The area a path under `root` is in, by `areaKindOf`; `null` when the path is not below `root`. */
+export function areaOfPath(path, root = workRoot()) {
+  return path.startsWith(`${root}/`) ? areaKindOf(path.slice(root.length + 1)) : null;
+}
+
+/**
  * The area name — its path relative to the work root — of a project's runner
  * area: `<project>` when `<root>/<project>` already holds a checkout (an area
  * from before `step/`, stepped and closed where it stands), else
- * `step/<project>`.
+ * `step/<project>`. In layout 2 it is always `runner/step/<project>`.
  *
  * The one place the legacy fallback lives. It goes when no area is left
  * directly under `~/mc`.
@@ -210,7 +291,9 @@ export function stepAreaName(project, {
   root = workRoot(),
   exists = existsSync,
   list = (path) => { try { return readdirSync(path); } catch { return []; } },
+  read,
 } = {}) {
+  if (layoutVersion({ root, read }) === 2) return `${RUNNER_STEP}/${project}`;
   const legacy = join(root, project);
   const holdsCheckout = list(legacy).some((child) => exists(join(legacy, child, '.git')));
   return holdsCheckout ? project : `${STEP_HOME}/${project}`;
@@ -238,13 +321,17 @@ export function workAreaName(name, {
 }
 
 /**
- * An area's name without its kind: `work/foo` and `step/foo` are `foo`. What
- * a person types, what a lease's holder says, and what a tmux session is
- * called (`mc-<name>`) — the path below the work root is only the address.
+ * An area's name without its kind: `work/foo`, `step/foo`, `runner/step/foo`
+ * and `runner/deps/foo` are `foo`. What a person types, what a lease's holder
+ * says, and what a tmux session is called (`mc-<name>`) — the path below the
+ * work root is only the address. A planning area keeps its whole name
+ * (`plan/mc`, `programs/mc`): its lease holder is its programme.
  */
 export function sessionName(areaName) {
   const [home, ...rest] = String(areaName).split('/');
-  return (home === WORK_HOME || home === STEP_HOME) && rest.length ? rest.join('/') : String(areaName);
+  if ((home === WORK_HOME || home === STEP_HOME) && rest.length) return rest.join('/');
+  if (home === RUNNER_HOME && (rest[0] === 'step' || rest[0] === 'deps') && rest.length > 1) return rest.slice(1).join('/');
+  return String(areaName);
 }
 
 /**
