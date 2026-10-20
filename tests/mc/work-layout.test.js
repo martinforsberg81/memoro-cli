@@ -23,7 +23,7 @@ mkdirSync(join(mc, 'step', 'retention', 'memoro-cli', '.git'), { recursive: true
 
 const { openArea, runVerb } = await import('../../src/mc/commands/work.js');
 const { workAreaName } = await import('../../src/mc/paths.js');
-const { listStrays, listWorkAreas } = await import('../../src/mc/work-area.js');
+const { listStepAreas, listStrays, listWorkAreas } = await import('../../src/mc/work-area.js');
 const { registerPath } = await import('../../src/mc/register.js');
 
 function sink() {
@@ -73,6 +73,21 @@ describe('mc work resolves a name to work/ first, then the runner', () => {
       rmSync(join(mc, 'work', 'alpha'), { recursive: true, force: true });
       rmSync(join(mc, 'legacy-area'), { recursive: true, force: true });
     }
+  });
+});
+
+describe('listStepAreas in layout 2', () => {
+  it('lists runner/step/<project> by project, and no area directly under the root', () => {
+    const two = mkdtempSync(join(tmpdir(), 'mc-step-areas-2-'));
+    try {
+      mkdirSync(join(two, 'runner'), { recursive: true });
+      writeFileSync(join(two, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }));
+      mkdirSync(join(two, 'runner', 'step', 'x', 'memoro', '.git'), { recursive: true });
+      mkdirSync(join(two, 'x', 'memoro', '.git'), { recursive: true });
+      mkdirSync(join(two, 'y', 'memoro-cli', '.git'), { recursive: true });
+      mkdirSync(join(two, 'step', 'z', 'memoro', '.git'), { recursive: true });
+      assert.deepEqual(listStepAreas({ root: two }), [{ name: 'x', path: join(two, 'runner', 'step', 'x'), repos: ['memoro'] }]);
+    } finally { rmSync(two, { recursive: true, force: true }); }
   });
 });
 

@@ -110,3 +110,30 @@ test('prOwner: a project, a plan session, a workarea, a folder elsewhere, or nob
   assert.deepEqual(owner('plan/email'), { kind: 'plan', name: null, path: null });
   assert.deepEqual(owner('remove-bookshop-recipes'), { kind: 'none', name: null, path: null });
 });
+
+/**
+ * Both layouts' areas, by `areaOfPath`: a step or deps area is the workarea
+ * of its project or bump, not of `step`, and a directory that is no area is
+ * a worktree somewhere.
+ */
+test('prOwner: every area of both layouts by its own name', () => {
+  const root = '/Users/m/mc/';
+  const worktrees = [
+    { path: '/Users/m/mc/programs/mc/memoro-cli', branch: 'plan/mc' },
+    { path: '/Users/m/mc/step/retention/memoro', branch: 'retention-wip' },
+    { path: '/Users/m/mc/runner/step/layout/memoro-cli', branch: 'layout-wip' },
+    { path: '/Users/m/mc/step/deps-minor/memoro', branch: 'bump-old' },
+    { path: '/Users/m/mc/runner/deps/deps-minor/memoro', branch: 'bump-new' },
+    { path: '/Users/m/mc/work/spike/memoro', branch: 'spike' },
+    { path: '/Users/m/mc/gate/memoro/candidate', branch: 'candidate' },
+  ];
+  const owner = (headRefName) => prOwner({ headRefName }, { names: [], worktrees, root });
+  assert.deepEqual(owner('plan/mc'), { kind: 'plan', name: 'mc', path: '/Users/m/mc/programs/mc/memoro-cli' });
+  assert.deepEqual(owner('retention-wip'), { kind: 'workarea', name: 'retention', path: '/Users/m/mc/step/retention/memoro' });
+  assert.deepEqual(owner('layout-wip'), { kind: 'workarea', name: 'layout', path: '/Users/m/mc/runner/step/layout/memoro-cli' });
+  assert.equal(owner('bump-old').name, 'deps-minor');
+  assert.equal(owner('bump-new').name, 'deps-minor');
+  assert.deepEqual(owner('spike'), { kind: 'workarea', name: 'spike', path: '/Users/m/mc/work/spike/memoro' });
+  assert.deepEqual(owner('candidate'), { kind: 'worktree', name: null, path: '/Users/m/mc/gate/memoro/candidate' });
+  assert.equal(prOwner({ headRefName: 'spike' }, { worktrees }).kind, 'worktree', 'no root, no area');
+});

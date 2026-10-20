@@ -2724,6 +2724,16 @@ describe('PULL REQUESTS', () => {
     assert.equal(by[12900].owner.kind, 'none');
   });
 
+  it('a plan session in layout 2, under programs/, is its programme\'s too', () => {
+    const path = '/Users/m/mc/programs/entity-detail/memoro';
+    const pulls = prsSection({
+      prs: PRS, plans: PLANS, worktrees: { memoro: [{ path, branch: 'plan/trip-project-detail' }] },
+      root: '/Users/m/mc', fetched: AT.toISOString(), ageSeconds: 60, now: AT,
+    });
+    const item = pulls.items.find((pr) => pr.number === 13167);
+    assert.deepEqual(item.owner, { kind: 'plan', name: 'entity-detail', path });
+  });
+
   it('marks the one the merger is landing and the ones it has queued', () => {
     const pulls = prsSection({
       prs: PRS,
