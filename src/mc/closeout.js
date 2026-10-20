@@ -10,7 +10,7 @@
  * written by the archive in the same commit that removes the plan.
  *
  * Nothing reads the file but people. `buildCloseout` is pure: the caller
- * (`archiveIn`, run.js) reads the plan, the register entry, runs.tsv and the
+ * (`archivePrograms`, project-archive.js) reads the plan, the register entry, runs.tsv and the
  * session results (`readSessionResults`, its IO injectable), and writes what
  * `closeoutText` returns.
  */
@@ -29,14 +29,6 @@ const NOT_SESSIONS = new Set(['merge', 'mend']);
 /** Where a project's closeout lives, relative to the repository. */
 export function closeoutPath(programme, project) {
   return `docs/project/${programme}/closeout/${project}.json`;
-}
-
-/**
- * Where the archive puts a project's README (ruling 46): beside its closeout
- * record, so the links that pointed into the removed directory can follow it.
- */
-export function closeoutReadmePath(programme, project) {
-  return `docs/project/${programme}/closeout/${project}.md`;
 }
 
 /**

@@ -3304,13 +3304,14 @@ test('a folder sharing an archived name, with no runner step, is kept and filed 
 
 test('an archive PR that did not merge keeps the workarea: the plan is still on main', async () => {
   const f = fixture({
-    plans: { memoro: { over: done() } },
     areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
     projectLog: { memoro: LOG_HEAD },
-    archive: { memoro: { mergeFails: true } },
+    archive: { 'memoro-programs': { mergeFails: true } },
     runs: RUNS_HEAD + ranRow('over'),
     session: okSession(),
   });
+  f.files['/w/programs/prog/over/PLAN.json'] = programsPlan('memoro');
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-28T09:00:00Z');
   await round(createRunner({ deps: f.deps }));
   assert.deepEqual(f.calls.rmdirs, []);
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — its plan is still on main/u);

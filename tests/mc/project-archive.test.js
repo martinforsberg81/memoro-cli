@@ -87,10 +87,10 @@ const DONE = {
 };
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 
-test('archiveDue is not due for a plan in a repository — archiveDone has it', () => {
+test('archiveDue is not due for a plan in a repository, only for one under ~/mc/programs/', () => {
   const record = { project: 'project-archive', path: 'docs/project/mc/project-archive/PLAN.json', status: 'done' };
   assert.deepEqual(archiveDue({ record, entry: DONE, nowMs: NOW }), {
-    due: false, why: 'the plan is in a repository — archiveDone archives it',
+    due: false, why: 'the plan is in a repository, not under ~/mc/programs/',
   });
 });
 
