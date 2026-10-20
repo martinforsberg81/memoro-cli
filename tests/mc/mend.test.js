@@ -114,7 +114,7 @@ async function serveWith({ reports, mm, over = {} }) {
 
 describe('which reds are mended', () => {
   it('the stops where the fault is in the change, and only those', () => {
-    assert.deepEqual([...MEND_STOPS], ['merge', 'restack', 'red', 'selected-gate', 'pr-tests', 'extra-gate', 'derived-outside', 'project-log']);
+    assert.deepEqual([...MEND_STOPS], ['merge', 'restack', 'red', 'selected-gate', 'pr-tests', 'extra-gate', 'derived-outside', 'project-log', 'plan-in-repo']);
     assert.equal(MEND_AT_ONCE, 1);
     assert.equal(mayMend(JOB, conflict), true);
     for (const stopped_at of ['fetch', 'pr', 'killed', 'threw', 'busy', 'drift', 'closed']) {

@@ -30,12 +30,13 @@ import { headlessArgs, readSessionOutput, sessionResult, TIMEOUT_EXIT } from './
 /**
  * The stops where the fault is in the change: it conflicts with main, its
  * tests or the gates it reaches are red, it changes what is derived outside
- * its own files, or its project-log row is wrong. Everything else — `fetch`,
+ * its own files, or its project-log row is wrong, or it brings a plan file.
+ * Everything else — `fetch`,
  * `pr`, `killed`, `threw`, `busy`, `drift`, the deploy wait — is the machine's,
  * and a session on the branch cannot fix it.
  */
 export const MEND_STOPS = Object.freeze([
-  'merge', 'restack', 'red', 'selected-gate', 'pr-tests', 'extra-gate', 'derived-outside', 'project-log',
+  'merge', 'restack', 'red', 'selected-gate', 'pr-tests', 'extra-gate', 'derived-outside', 'project-log', 'plan-in-repo',
 ]);
 
 /**
