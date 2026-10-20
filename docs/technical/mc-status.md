@@ -8,7 +8,7 @@ off the network, both skipped by `--offline`.
 
 Everything the verb prints is read from files the runner and the sessions
 already write. This note says which file every fact comes from, why the plan
-is read from `origin/main` and never from the workarea, and what the status
+is read from `~/mc/programs/` and never from the workarea, and what the status
 board that `mc status` used to print was before it went.
 
 Bare `mc status` prints no list. **The page is `mc`** (decision mc-3,
@@ -31,7 +31,7 @@ project built: `nowBlock`, `kindFor`, `pidAlive`, `decisionsBlock` and
 
 ```
 mc-status — memoro-cli · mc
-  plan        docs/project/mc/mc-status/PLAN.json (origin/main)
+  plan        ~/mc/programs/mc/mc-status/PLAN.json
   workarea    ~/mc/mc-status
   status      ready
   budget      150k
@@ -84,7 +84,7 @@ From the page's menu, `s <name>` runs this same verb and redraws
 
 | fact | file | written by |
 |---|---|---|
-| the plan, its state and its steps | `docs/project/<programme>/<name>/PLAN.json` on `origin/main`, after a `git fetch` | the step sessions, through `mc run` |
+| the plan, its state and its steps | `~/mc/programs/<programme>/<name>/PLAN.json`, read as it stands (no `git fetch`) | the step sessions, through `mc run` |
 | the workarea exists | `~/mc/step/<name>/` (or, from before `step/`, `~/mc/<name>/`) holding a checkout with a `.git` | `mc run` — never `mc plan`, whose session lives under `~/mc/plan/`, nor `mc work`, whose areas are under `~/mc/work/` |
 | the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
@@ -99,17 +99,17 @@ answered.
 
 Nothing is asked of tmux and nothing of `ps`. A project is not a session.
 
-## The plan is read from origin/main, never the workarea (ruling 20)
+## The plan is read from `~/mc/programs/`, never the workarea (ruling 20, ruling 48)
 
 A workarea's checkout is whatever branch that folder happens to stand on —
 mid-step, that can be a plan the runner would never act on, because the
-runner steps from `origin/main`. Before ruling 20 (2026-09-12) the row
+runner steps from the plan under `~/mc/programs/`. Before ruling 20 (2026-09-12) the row
 preferred the workarea's copy when there was one, which meant `mc status`
 and the runner could disagree about what a project's plan said. Now there is
 only one reading:
 
-- the plan is fetched and read from `origin/main`, always,
-- the row says so — `(origin/main)` — and says nothing else,
+- the plan is read from `~/mc/programs/`, always,
+- the row names the file it was read from, and says nothing else,
 - and a name that has a workarea but no plan there is still reported.
 
 A name that has a workarea but no plan anywhere is answered too — with
@@ -149,7 +149,7 @@ and no others:
 The workarea's absolute path is folded to `~`; it is otherwise most of a
 terminal row.
 
-**The machine half is asked of the same plan on `origin/main`** that the rows
+**The machine half is asked of the same plan under `~/mc/programs/`** that the rows
 above it are read from (ruling 20) — there is one copy in play, not two, so
 this row and the plan row can no longer disagree about which plan they mean.
 

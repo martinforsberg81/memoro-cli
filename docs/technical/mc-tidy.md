@@ -1,6 +1,6 @@
 # mc tidy — what a finished project costs
 
-A project ends in three places: a plan under `docs/project/`, a workarea
+A project ends in three places: a plan under `~/mc/programs/`, a workarea
 under `~/mc/`, and a name in `~/mc/queue.md`. Until 2026-08-29 none of them
 ended by itself. `mc run` answered a plan that said `done` with a `break` —
 it stopped working on the project and did nothing else — so the plan stayed,
@@ -16,7 +16,7 @@ This note is what that costs — what is removed, what is kept, and what is
 handed to Martin instead of being decided by a machine. The rules are
 [`src/mc/archive-plan.js`](../../src/mc/archive-plan.js) and
 [`src/mc/close-workarea.js`](../../src/mc/close-workarea.js), both pure
-functions of text; the git and `gh` half is `archiveDone`, `closeWorkareas`
+functions of text; the git and `gh` half is `closeWorkareas`
 and `tidyQueue` in [`src/mc/run.js`](../../src/mc/run.js).
 
 ## The order: the plan first, then the workarea
@@ -24,26 +24,24 @@ and `tidyQueue` in [`src/mc/run.js`](../../src/mc/run.js).
 None of this is a step. It is the runner's **chore loop**, which runs beside
 the lanes that take steps ([`mc-run.md`](mc-run.md) § *The pick, in order*)
 and sleeps `--idle-sleep` between two passes. One chore pass reads every
-`PLAN.json` on both `origin/main`s, and then:
+`PLAN.json` under `~/mc/programs/`, and then:
 
 1. **tidies `queue.md`** against that reading,
-2. **archives** every plan that says `done`, one PR per repository, and
-   merges it like any other — but only while no lane is in a session, because
-   the gate refuses a second landing rather than queueing it and a lane landing
-   its step at that moment would lose the landing,
-3. **closes** the workareas whose archive PR merged in step 2.
+2. **archives** every plan that has been `done` for 24 hours, under
+   `~/mc/programs/` (*What archiving does*), its row landing as a docs-only pull
+   request,
+3. **closes** the workareas whose archive has landed in step 2.
 
-The order is not cosmetic. A workarea is closed only after the plan that
-explains it is off main, so there is never a moment where a folder exists
-that nothing on main accounts for. It also means "its plan on main says
-`done`" can no longer be asked of main by the time the close runs — so the
-close is given the pass's own reading, taken before the archive, and the
-list of projects whose archive PR actually merged. A done project whose
-archive PR failed to merge keeps its workarea, and runner.log says so.
+The order is not cosmetic. A workarea is closed only after the project that
+explains it is archived, so there is never a moment where a folder exists that
+no plan or closeout accounts for. The close is given the pass's own reading,
+taken before the archive, and the list of projects whose archive actually
+landed. A done project whose
+archive has not landed keeps its workarea, and runner.log says so.
 
 **But the two halves need not be the same pass.** They had to be, once: the
 close tested `status: done`, so a plan an *earlier* pass had already
-archived read as "no plan on main" and its folder joined the pile no machine
+archived read as "no plan" and its folder joined the pile no machine
 will touch. Measured 2026-08-30, the close had never once run — the only pass
 that reached the archive, taking three projects off main, was cut short by STOP
 before the close — and the next one found three folders it could no longer
@@ -53,12 +51,13 @@ archived, so a pass cut short is finished by the next one.
 
 ## What archiving does
 
-For a plan in a repository, `docs/project/<programme>/<project>/` is `git rm -r`'d and one row is
+Until ruling 48 a plan in a repository was archived the same way:
+`docs/project/<programme>/<project>/` was `git rm -r`'d and one row was
 appended to that repository's `docs/project/project_log.md`, and the
 project's closeout is added (§ *The closeout*). Nothing else in
 the repository is touched, and `docs/plans/` is out of it entirely.
 
-A project under `~/mc/programs/` takes another route (ruling 48, `src/mc/project-archive.js`). It is archived by `mc project archive <project>`, or by the runner once it has been done for `ARCHIVE_HOLD_MS`, 24 hours. Done is the register's word: the latest of its steps' `updated` and its criteria's `at` is the moment it became done, and a project still inside the hold is said so in `runner.log` and waits. The repository gets one thing only, its row in `docs/project/project_log.md`, landed as a docs-only pull request through `runDocsMerge`; a row already on main is never rewritten or added twice. The plan stays at `~/mc/programs/<programme>/<project>/PLAN.json`, and `CLOSEOUT.json` beside it is the closeout and the mark that the project is archived. Nothing is removed from a repository by this route. No reader of plans lists an archived project, and `--after`, project blockers, the workarea closing and rule P count it as archived. Plans still in a repository are archived as above until they leave the repositories (`plans-out-of-repos`). A programme is never archived automatically.
+A project under `~/mc/programs/` takes another route (ruling 48, `src/mc/project-archive.js`). It is archived by `mc project archive <project>`, or by the runner once it has been done for `ARCHIVE_HOLD_MS`, 24 hours. Done is the register's word: the latest of its steps' `updated` and its criteria's `at` is the moment it became done, and a project still inside the hold is said so in `runner.log` and waits. The repository gets one thing only, its row in `docs/project/project_log.md`, landed as a docs-only pull request through `runDocsMerge`; a row already on main is never rewritten or added twice. The plan stays at `~/mc/programs/<programme>/<project>/PLAN.json`, and `CLOSEOUT.json` beside it is the closeout and the mark that the project is archived. Nothing is removed from a repository by this route. No reader of plans lists an archived project, and `--after`, project blockers, the workarea closing and rule P count it as archived. Plans that were in a repository were archived as above until ruling 48 took them out of the repositories (`plans-out-of-repos`). A programme is never archived automatically.
 
 **The row is preferred, never waited for.** If the project's own close-out
 step already wrote a row naming it, the runner leaves that row alone and only
@@ -74,7 +73,8 @@ The history is the record. `git log --all -- docs/project/<programme>/<project>`
 still answers every question the removed directory could; the row is a
 one-line index into it, not a replacement for it.
 
-Two things about the mechanics are worth knowing:
+Two things about the repository archive's mechanics, which ruling 48 removed,
+are worth knowing:
 
 - **The archive gets a worktree of its own**, `~/mc/runner/archive/<repo>`,
   made from origin/main and taken down however the pass ends. Not the
@@ -89,10 +89,10 @@ Two things about the mechanics are worth knowing:
 
 ## The closeout
 
-A finished project leaves one file in git:
+A project archived from a repository left one file in git:
 `docs/project/<programme>/closeout/<project>.json` (`src/mc/closeout.js`).
-The archive writes it into the same commit and pull request that removes the
-plan, so the plan never leaves main without it. The project's README, when it had
+The archive wrote it into the same commit and pull request that removed the
+plan, so the plan never left main without it. The project's README, when it had
 one, stays beside it as `closeout/<project>.md`. It holds:
 
 - `goal` and `success_criteria`, from the plan as it stood at the archive;
@@ -109,13 +109,9 @@ one, stays beside it as `closeout/<project>.md`. It holds:
   last landing.
 
 A closeout that fails to build is skipped and named in `runner.log`; the
-archive goes on. Projects archived before the closeout existed get theirs in a
-later archive PR, at most 40 a PR (`CLOSEOUT_BACKFILL_MAX`), when their
-register file is still there and neither the closeout nor the plan directory
-is on main. The plan is then read from git history, from the commit before the
-one that removed it; when that fails the file says `plan: null`. A batch of
-only those is titled `Closeout N archived project(s): …` and lands like any
-archive, one open `mc-archive-*` PR at a time.
+archive goes on. The backfill that wrote closeouts for projects archived before the closeout
+existed (`CLOSEOUT_BACKFILL_MAX`, read from git history) went with the
+repository archive (ruling 48); the closeouts it wrote stay where they are.
 
 A project under `~/mc/programs/` leaves no file in git. Its closeout is `CLOSEOUT.json` beside its `PLAN.json` in mc, built the same way and written once its row is on `origin/main`, so a closeout never names a row that is not there. That file is also the mark that the project is archived: `programsPlans` stops listing the project, and `programsArchived` lists it.
 
@@ -127,7 +123,7 @@ removed only once the closeout is on `origin/main`, or, for a project under `~/m
 A workarea is **closable** when three facts hold, and no judgement is made
 beyond them:
 
-- its project is finished — its plan on main, or under `~/mc/programs/`, says `status: done`, **or** the
+- its project is finished — its plan under `~/mc/programs/` says `status: done`, **or** the
   plan is gone and `docs/project/project_log.md` carries the row the archive
   wrote for it,
 - its worktree has no uncommitted change,
@@ -181,7 +177,7 @@ and out of reach of the close.
 `~/mc/queue.md` is a list of project names and nothing else — no comments, no
 headings, no sections. Every chore pass rewrites it to that shape (`tidyQueue`,
 by `strictQueue`'s rule): a line that is not a project name is dropped, so is a
-name given twice, a name with no plan on main, a plan still written as
+name given twice, a name with no plan, a plan still written as
 `PLAN.md` and a name whose plan is `done`, one runner.log line each. **That is
 the whole rule: a name leaves when its plan is `done` or off `main`.**
 
@@ -205,7 +201,7 @@ Two things a machine must not decide, so it writes them down and moves on:
   documentation is thin is how `docs/plans/` reached 656 files.
 - **`~/mc/runner/unplanned-workareas.md`** — rewritten every chore pass with every
   runner area — under `~/mc/step/`, or left directly under `~/mc` — that
-  **no project** explains — no plan on main and no
+  **no project** explains — no plan and no
   row in `project_log.md` (sixteen of them on 2026-08-29, from before the plan
   world; fifty-seven on 2026-08-30). Such a folder is work somebody started and
   only Martin can say is finished, so no machine removes one. Each row carries whether the branch's content is already on main —
