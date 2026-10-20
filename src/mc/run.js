@@ -140,6 +140,7 @@ import {
 } from './paths.js';
 import { claimProjectBranch, freePlanBranch } from './plan-branch.js';
 import { runDocsMerge } from './docs-merge.js';
+import { archiveDue, archivePrograms } from './project-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
@@ -969,6 +970,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // The projects whose plan `chores` has said is `unmet` — every step done, a
   // criterion not met — so it is said once, not every pass.
   const saidUnmet = new Set();
+  // The programme projects `chores` has said are not due yet, said once as saidUnmet is.
+  const saidHeld = new Set();
   // Held from the moment a handover begins: `handOver` removes UPDATE as its
   // first act, and a runner that has handed over takes nothing new for the
   // rest of its life (`runLoop`, ruling 28). Let go only when the handover
@@ -1425,8 +1428,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    */
   async function archiveDone(repo, plans) {
     const none = { archived: [], landed: [] };
-    // A plan under `~/mc/programs/` is archived by `mc project archive` (ruling 48,
-    // a later project), not here: its repository copy, if any, stays with it
+    // A plan under `~/mc/programs/` is archived by `archiveProgramsDue` (ruling 48)
+    // or `mc project archive`, not here: its repository copy, if any, stays with it
     // until then. Without this the archive would remove that copy, write a
     // closeout from it, and find nothing to remove every round.
     const done = donePlans(plans, repo.name).filter((plan) => !isAbsolute(plan.path || ''));
@@ -1448,6 +1451,33 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
       deps.git(repo.path, ['branch', '-D', branch]);
     }
+  }
+
+  /**
+   * The done projects under `~/mc/programs/` of one repository that have been
+   * done for `ARCHIVE_HOLD_MS` (`archiveDue`), archived by `archivePrograms` in
+   * one docs-only pull request (ruling 48). A done project still inside the hold
+   * is said once, with why, and waits. Returns `{ archived }`: the projects whose
+   * CLOSEOUT.json was written in this pass. Nothing lands when `merge` is off.
+   */
+  async function archiveProgramsDue(repo, plans) {
+    const items = [];
+    for (const record of plans) {
+      if (record.repo !== repo.name || !isAbsolute(record.path || '')) continue;
+      const entry = readEntry(root, record.project, { read: deps.read });
+      const verdict = archiveDue({ record, entry, nowMs: deps.now().getTime() });
+      if (verdict.due) { items.push({ record, entry }); continue; }
+      if (record.status === 'done' && !saidHeld.has(record.project)) {
+        saidHeld.add(record.project);
+        say(`${record.project}: ${verdict.why} — not archived yet`);
+      }
+    }
+    if (!items.length || !merge) return { archived: [] };
+    const { archived } = await archivePrograms({
+      repo, items, root, paths: { runs: paths.runs, log: paths.log, undocumented: paths.undocumented },
+      deps, docsMerge: deps.docsMerge, now: deps.now, say,
+    });
+    return { archived };
   }
 
   /**
@@ -3223,7 +3253,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     writeUnreadable(plans);
     const quiet = paths.currents().length === 0;
     const archives = quiet ? await Promise.all(repos.map((repo) => archiveDone(repo, plans))) : [];
-    closeWorkareas(plans, archives.flatMap((a) => a.landed), archivedProjects());
+    // A programme project done for 24 hours is archived by the runner as well (ruling 48).
+    const programmes = quiet ? await Promise.all(repos.map((repo) => archiveProgramsDue(repo, plans))) : [];
+    closeWorkareas(plans, [...archives.flatMap((a) => a.landed), ...programmes.flatMap((a) => a.archived)], archivedProjects());
     await reapOrphans();
     await sweepDockerChore();
     sweepScratch();

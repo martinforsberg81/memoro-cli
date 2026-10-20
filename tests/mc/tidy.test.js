@@ -266,6 +266,34 @@ describe('(P) a plan under ~/mc/programs/ is there while its file is', () => {
   });
 });
 
+describe('(P) a plan under ~/mc/programs/ with its closeout beside it', () => {
+  it('is a purge target once its row is on main and no area is left', () => {
+    const m = machine();
+    try {
+      const plan = join(m.work, 'programs', 'mc', 'closed', 'PLAN.json');
+      m.write(plan);
+      m.write(join(m.work, 'programs', 'mc', 'closed', 'CLOSEOUT.json'));
+      m.main['memoro-cli'].log += logRow('closed');
+      m.register({ project: 'closed', repo: 'memoro-cli', programme: 'mc', plan, steps: [] });
+      const { list } = runTidy(m.doors());
+      assert.ok(ruled(list, 'P').some((item) => item.path === registerPath(m.work, 'closed')));
+    } finally { m.cleanup(); }
+  });
+
+  it('without its CLOSEOUT.json the plan is still there, and the project is kept', () => {
+    const m = machine();
+    try {
+      const plan = join(m.work, 'programs', 'mc', 'open', 'PLAN.json');
+      m.write(plan);
+      m.main['memoro-cli'].log += logRow('open');
+      m.register({ project: 'open', repo: 'memoro-cli', programme: 'mc', plan, steps: [] });
+      const { list } = runTidy(m.doors());
+      assert.deepEqual(ruled(list, 'P'), []);
+      assert.equal(keptOf(list, registerPath(m.work, 'open')).why, 'its plan directory is still on origin/main');
+    } finally { m.cleanup(); }
+  });
+});
+
 describe('(G) planning transcripts', () => {
   it('the newest of a directory stays at any age, and so does anything within 72 hours; memory/ is never listed', () => {
     const m = machine();
