@@ -411,7 +411,7 @@ this GitHub at this moment, in this order (`runStepClaimed`):
    `~/mc/step/<project>/<repo>` with `git worktree add` from `origin/main` on
    branch `<project>` (ruling 39: the path says what an area is). An area left
    at `~/mc/<project>/` from before `step/` is stepped and closed where it
-   stands and drains away; it is never moved (`stepAreaName`, `paths.js`).
+   stands and drains away; it is never moved (`stepAreaName`, `paths.js`). In layout 2 the area is `~/mc/runner/step/<project>/<repo>` ([mc-layout.md](mc-layout.md) says which layout holds).
 3. **A merge of `origin/main` left in progress** — `MERGE_HEAD` present — is
    aborted: `git merge --abort`, and `<name>: a merge of origin/main was left in
    progress — aborted`. That is what a session killed mid-merge leaves (rc 143,
