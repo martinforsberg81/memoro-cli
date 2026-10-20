@@ -962,3 +962,129 @@ test('mc project <name> for a sent plan, or a name with no plan here, is mc stat
     assert.equal(f.out.length, 0);
   } finally { f.cleanup(); }
 });
+
+/** The project log as origin/main holds it: its header, and no row for any project. */
+const ARCHIVE_LOG = '# Project log\n\n| date | programme | project | outcome | summary | doc | pointer |\n|---|---|---|---|---|---|---|\n';
+const ARCHIVE_DONE = [{ key: 'One', status: 'done' }];
+const ARCHIVE_MET = [{ criterion: 'It runs.', met: true, at: '2026-10-19T10:00:00Z' }];
+
+/**
+ * A temp home for `archive`: `alpha` under `mc/` as `file` (PLAN.json unless a
+ * case says DRAFT.json), its register at `work/` when `steps` is given, and a
+ * step area under `work/step/alpha/` when `area` is set. git, gh and the docs
+ * merge are fakes that record their calls; the file system is real.
+ */
+function archiveFixture({ file = 'PLAN.json', steps = null, criteria = [], closeout = false, area = false, dirty = '' } = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'mc-archive-'));
+  const work = join(home, 'work');
+  const dir = join(home, 'mc', 'alpha');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, file), `${JSON.stringify({ ...JSON.parse(repoPlan('alpha')), repo: 'memoro-cli' }, null, 2)}\n`);
+  if (closeout) writeFileSync(join(dir, 'CLOSEOUT.json'), '{}\n');
+  if (steps) {
+    mkdirSync(join(registerPath(work, 'alpha'), '..'), { recursive: true });
+    writeFileSync(registerPath(work, 'alpha'), JSON.stringify({ project: 'alpha', repo: 'memoro-cli', steps, criteria }));
+  }
+  if (area) {
+    mkdirSync(join(work, 'step', 'alpha', 'memoro-cli', '.git'), { recursive: true });
+    writeFileSync(join(work, 'step', 'alpha', 'notes.txt'), 'kept\n');
+  }
+  const calls = []; const landed = []; const out = []; const err = [];
+  const git = (cwd, args) => {
+    calls.push([cwd, ...args]);
+    if (args[0] === 'show') return { ok: true, stdout: ARCHIVE_LOG, stderr: '' };
+    if (args[0] === 'status') return { ok: true, stdout: dirty, stderr: '' };
+    if (args[0] === 'remote') return { ok: false, stdout: '', stderr: '' };
+    if (args[0] === 'worktree' && args[1] === 'add') {
+      mkdirSync(join(args[4], 'docs', 'project'), { recursive: true });
+      writeFileSync(join(args[4], 'docs', 'project', 'project_log.md'), ARCHIVE_LOG);
+    }
+    if (args[0] === 'worktree' && args[1] === 'remove') rmSync(args.at(-1), { recursive: true, force: true });
+    return { ok: true, stdout: '', stderr: '' };
+  };
+  const gh = (_cwd, args) => ({
+    ok: true, stderr: '', stdout: args[1] === 'create' ? 'https://github.com/memoro/memoro-cli/pull/7\n' : '',
+  });
+  const docsMerge = async ({ repoPath, pr }) => {
+    landed.push({ pr, text: readFileSync(join(repoPath, 'docs', 'project', 'project_log.md'), 'utf8') });
+    return { ok: true, merged: true, merged_into: 'main', stopped_at: null, reason: null };
+  };
+  const deps = {
+    env: { MC_WORK_ROOT: work }, root: work, home, repos: [{ name: 'memoro-cli', path: join(home, 'memoro-cli') }],
+    now: () => new Date('2026-10-20T10:00:00Z'), git, gh, docsMerge, tmuxHas: () => false,
+    stopServers: () => ({ stopped: [], failed: [] }),
+    stdout: { write: (t) => out.push(t) }, stderr: { write: (t) => err.push(t) },
+  };
+  return {
+    deps, out, err, calls, landed, work, dir,
+    cleanup: () => rmSync(home, { recursive: true, force: true }),
+  };
+}
+
+test('archive refuses a draft, saying discard removes it, and writes nothing', async () => {
+  const f = archiveFixture({ file: 'DRAFT.json' });
+  try {
+    assert.equal(await run(['archive', 'alpha'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha is a draft — mc project discard alpha removes it\n');
+    assert.equal(f.calls.length, 0);
+    assert.equal(existsSync(join(f.dir, 'CLOSEOUT.json')), false);
+  } finally { f.cleanup(); }
+});
+
+test('archive refuses a project mc does not hold, and writes nothing', async () => {
+  const f = archiveFixture();
+  try {
+    assert.equal(await run(['archive', 'nope'], f.deps), 1);
+    assert.match(f.err.join(''), /^mc: nope is not a project under ~\/mc\/programs\/\n$/u);
+    assert.equal(f.calls.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('archive refuses a project already archived, and leaves its closeout as it was', async () => {
+  const f = archiveFixture({ steps: ARCHIVE_DONE, criteria: ARCHIVE_MET, closeout: true });
+  try {
+    assert.equal(await run(['archive', 'alpha'], f.deps), 1);
+    assert.equal(f.err.join(''), 'mc: alpha is already archived\n');
+    assert.equal(readFileSync(join(f.dir, 'CLOSEOUT.json'), 'utf8'), '{}\n');
+    assert.equal(f.calls.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('archive refuses a project whose register is not done, and writes nothing', async () => {
+  const f = archiveFixture({ steps: [{ key: 'One', status: 'running' }], criteria: [{ criterion: 'It runs.', met: false, at: null }] });
+  try {
+    assert.equal(await run(['archive', 'alpha'], f.deps), 1);
+    assert.match(f.err.join(''), /^mc: alpha is \w+ — only a done project is archived; mc project discard alpha removes it\n$/u);
+    assert.equal(existsSync(join(f.dir, 'CLOSEOUT.json')), false);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.landed.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('archive of a done project writes its row through a docs-only pull request, its CLOSEOUT.json, and closes its step area', async () => {
+  const f = archiveFixture({ steps: ARCHIVE_DONE, criteria: ARCHIVE_MET, area: true });
+  try {
+    assert.equal(await run(['archive', 'alpha'], f.deps), 0);
+    assert.equal(f.landed.length, 1);
+    assert.equal(f.landed[0].pr, 7);
+    assert.match(f.landed[0].text, /^\|\s*2026-10-20\s*\|\s*mc\s*\|\s*alpha\s*\|\s*delivered\s*\|/mu);
+    assert.ok(existsSync(join(f.dir, 'CLOSEOUT.json')));
+    assert.match(f.out.join(''), /^mc: alpha archived\n/mu);
+    assert.equal(existsSync(join(f.work, 'step', 'alpha')), false);
+    assert.equal(readFileSync(join(f.work, 'runner', 'log', 'closed', 'alpha', 'notes.txt'), 'utf8'), 'kept\n');
+    assert.ok(f.calls.some((c) => c[1] === 'worktree' && c[2] === 'remove' && c.at(-1) === join(f.work, 'step', 'alpha', 'memoro-cli')));
+    assert.ok(f.calls.some((c) => c[1] === 'branch' && c.at(-1) === 'alpha'));
+  } finally { f.cleanup(); }
+});
+
+test('archive of a done project with a dirty step area archives it, keeps the area, and says why', async () => {
+  const f = archiveFixture({ steps: ARCHIVE_DONE, criteria: ARCHIVE_MET, area: true, dirty: ' M notes.txt\n' });
+  try {
+    assert.equal(await run(['archive', 'alpha'], f.deps), 0);
+    assert.ok(existsSync(join(f.dir, 'CLOSEOUT.json')));
+    assert.match(f.out.join(''), /mc: alpha archived; its step area stays — an uncommitted change\n$/u);
+    assert.ok(existsSync(join(f.work, 'step', 'alpha', 'memoro-cli', '.git')));
+    assert.ok(existsSync(join(f.work, 'step', 'alpha', 'notes.txt')));
+    assert.equal(f.calls.some((c) => c[1] === 'worktree' && c[2] === 'remove' && c.at(-1) === join(f.work, 'step', 'alpha', 'memoro-cli')), false);
+  } finally { f.cleanup(); }
+});

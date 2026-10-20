@@ -13,6 +13,7 @@
  *   mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
  *                                                                 change the named fields of a step, of a draft or of a sent plan that has not started
  *   mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner
+ *   mc project archive <project>                 done: its row to the repository's project_log.md, CLOSEOUT.json beside the plan, its step area closed
  *   mc project <name> [--json] [--offline]       show a project: a sent plan as mc status <name> does, a draft as it stands
  *   mc project criterion met [<project>] <n>     record that success criterion <n> holds
  *   mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold
@@ -22,15 +23,19 @@
  * names only the criterion number.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { defaultRepos, listArchived, listPlans, listRepoPlans } from '../brief-collect.js';
+import { closable, closeArea } from '../close-workarea.js';
+import { stopServersUnder } from '../dev-servers.js';
+import { runDocsMerge } from '../docs-merge.js';
 import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
 import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, withPlanLock, writePlanFile } from '../plan-write.js';
-import { parseStepEnv, readEntry, stepKey, updateCriterion } from '../register.js';
-import { programsHome, workRoot } from '../paths.js';
+import { applyEntry, parseStepEnv, readEntry, stepKey, updateCriterion } from '../register.js';
+import { programsHome, runnerDir, runnerTablePath, stepHome, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
+import { archivePrograms, closeoutFileOf } from '../project-archive.js';
 import { scanArgs } from './flags.js';
 
 /** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
@@ -39,7 +44,7 @@ const EDIT_FLAGS = ['--goal', '--contract', '--out-of-scope'];
 const STEP_ADD_FLAGS = ['--model', '--effort', '--done-when', '--instruction-file', '--after'];
 const STEP_EDIT_FLAGS = ['--title', '--model', '--effort', '--done-when', '--instruction-file'];
 /** The words `mc project` takes as its verb. Any other single word is a project's name, for `mc project <name>`. */
-const VERB_WORDS = ['import', 'criterion', 'new', 'edit', 'step', 'send'];
+const VERB_WORDS = ['import', 'criterion', 'new', 'edit', 'step', 'send', 'archive'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -68,6 +73,11 @@ export async function run(argv, deps = {}) {
     const extra = onlyFlags(scanned, []);
     if (extra) { stderr.write(`mc: send takes no ${extra}\n`); return 2; }
     return sendPlan(scanned, { ...deps, env, stdout, stderr });
+  }
+  if (noun === 'archive') {
+    const extra = onlyFlags(scanned, []);
+    if (extra) { stderr.write(`mc: archive takes no ${extra}\n`); return 2; }
+    return archiveProject(scanned, { ...deps, env, stdout, stderr, root });
   }
   if (noun !== undefined && !VERB_WORDS.includes(noun)) {
     if (scanned.positional.length !== 1) { stderr.write(usage()); return 2; }
@@ -760,6 +770,127 @@ function writeTextFile(path, text) {
   renameSync(tmp, path);
 }
 
+/**
+ * `mc project archive <project>` — archives one done project now, without the
+ * runner's day of waiting (ruling 48). It takes a sent plan the register says is
+ * done and that is not archived yet; the row and the closeout are the ones the
+ * runner writes, through `archivePrograms`. Then the project's step area is
+ * closed, unless a checkout in it has an uncommitted change or its tmux session
+ * is live: the area stays, and the line says why. The archive stands either way.
+ */
+async function archiveProject(scanned, deps) {
+  const { env, stdout, stderr, root } = deps;
+  const home = deps.home || programsHome(env);
+  const repos = deps.repos || defaultRepos(env);
+  const git = deps.git || gitIn;
+  const tmuxHas = deps.tmuxHas || hasTmuxSession;
+  const target = scanned.positional.slice(1);
+  if (target.length !== 1) { stderr.write(usage()); return 2; }
+  const [project] = target;
+
+  const found = findProjectDir(home, project);
+  if (!found) { stderr.write(`mc: ${project} is not a project under ~/mc/programs/\n`); return 1; }
+  if (!found.sent) { stderr.write(`mc: ${project} is a draft — mc project discard ${project} removes it\n`); return 1; }
+  if (existsSync(closeoutFileOf(found.file))) { stderr.write(`mc: ${project} is already archived\n`); return 1; }
+
+  const { plan, problems } = readPlanText(readFileOrNull(found.file) ?? '');
+  if (!plan) { stderr.write(`mc: ${project} does not read: ${problems[0]}\n`); return 1; }
+  const entry = readEntry(root, project, { read: deps.read });
+  const status = entry ? applyEntry({ plan, path: found.file }, entry).status : null;
+  if (status !== 'done') {
+    stderr.write(`mc: ${project} is ${status || 'not in the register'} — only a done project is archived; mc project discard ${project} removes it\n`);
+    return 1;
+  }
+  const repo = repos.find((candidate) => candidate.name === plan.repo);
+  if (!repo) { stderr.write(`mc: ${project} names ${plan.repo || 'no repository'}, which is not one of the repositories mc knows\n`); return 1; }
+
+  const log = join(runnerDir(env), 'log');
+  const say = (line) => stdout.write(`${line}\n`);
+  const result = await archivePrograms({
+    repo,
+    items: [{ record: { path: found.file, programme: found.programme, project, repo: repo.name, status: 'done' }, entry }],
+    root,
+    paths: { runs: join(log, 'runs.tsv'), log, undocumented: runnerTablePath(UNDOCUMENTED_CLOSURES, env) },
+    deps: {
+      git, gh: deps.gh || ghIn, read: deps.read || readFileOrNull, write: deps.write || writeTextFile,
+      exists: deps.exists || existsSync, append: deps.append || appendText, list: deps.list || listEntries,
+      readBytes: deps.readBytes || readBytesOrNull,
+    },
+    docsMerge: deps.docsMerge || runDocsMerge,
+    now: () => (deps.now ? deps.now() : new Date()),
+    say,
+  });
+  if (result.held.length) { stderr.write(`mc: ${project} held — ${result.held[0].why}\n`); return 1; }
+
+  const area = join(stepHome(env), project);
+  if (!existsSync(area)) { stdout.write(`mc: ${project} archived\n`); return 0; }
+  const checkouts = repos.filter((candidate) => existsSync(join(area, candidate.name, '.git')));
+  const verdict = closable({
+    plan: { status: 'done' }, archived: true, legacy: false,
+    dirty: checkouts.some((candidate) => {
+      const status = git(join(area, candidate.name), ['status', '--porcelain']);
+      return !status.ok || status.stdout.trim() !== '';
+    }),
+    live: tmuxHas(`mc-${project}`),
+    stepsDone: Array.isArray(entry.steps) && entry.steps.every((step) => step.status === 'done'),
+  });
+  if (!verdict.close) { stdout.write(`mc: ${project} archived; its step area stays — ${verdict.why}\n`); return 0; }
+  stdout.write(`mc: ${project} archived\n`);
+  closeArea({
+    name: project, area, repos, closedDir: join(log, 'closed'), git, list: listEntries, move: moveEntry,
+    rmdir: removeEmptyDir, exists: existsSync, stopServers: deps.stopServers || stopServersUnder, say,
+  });
+  return 0;
+}
+
+/** A file's text, or null when it cannot be read. */
+function readFileOrNull(path) {
+  try { return readFileSync(path, 'utf8'); } catch { return null; }
+}
+
+/** A file's bytes, or null when it cannot be read: a gzipped session result. */
+function readBytesOrNull(path) {
+  try { return readFileSync(path); } catch { return null; }
+}
+
+/** `git -C <cwd> <args>`, as `{ ok, stdout, stderr }`. */
+function gitIn(cwd, args) {
+  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/** `gh <args>` in `cwd`, as `{ ok, stdout, stderr }`. */
+function ghIn(cwd, args) {
+  const r = spawnSync('gh', args, { cwd, encoding: 'utf8', timeout: 60_000 });
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/** Whether a tmux session of this name is running. */
+function hasTmuxSession(name) {
+  return spawnSync('tmux', ['has-session', '-t', name]).status === 0;
+}
+
+/** The names in a directory; none when it cannot be read. */
+function listEntries(path) {
+  try { return readdirSync(path); } catch { return []; }
+}
+
+/** Appends to a file, its directory made first. */
+function appendText(path, text) {
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, text);
+}
+
+/** Moves a file or folder; false when it cannot, so the caller keeps its folder. */
+function moveEntry(from, to) {
+  try { mkdirSync(dirname(to), { recursive: true }); renameSync(from, to); return true; } catch { return false; }
+}
+
+/** Removes a folder only when it is empty; false when it is not, or cannot be. */
+function removeEmptyDir(path) {
+  try { rmdirSync(path); return true; } catch { return false; }
+}
+
 export function usage() {
   return [
     'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json\n',
@@ -768,6 +899,7 @@ export function usage() {
     '        mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]   add a step, after the others\n',
     '        mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
     '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
+    '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',
     '        mc project <name> [--json] [--offline]      show a project: a sent plan as mc status <name> does, a draft as it stands\n',
     '        mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
     '        mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold\n',
