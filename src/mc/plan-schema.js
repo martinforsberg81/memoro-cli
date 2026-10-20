@@ -97,20 +97,6 @@ const STEP_KEYS = Object.freeze([
   'runner',
 ]);
 
-/**
- * The fields of its own step a step session writes. Everything else on that
- * step — `title`, `done_when`, `instruction`, `runner` — is the plan author's,
- * and `unauthorisedChanges` compares it like any other step.
- */
-const SESSION_STEP_FIELDS = Object.freeze(['status', 'pr', 'comments', 'blocked_by']);
-
-/**
- * The fields a step session never writes: the project's own terms, and what
- * the file is. Named here because `unauthorisedChanges` below checks a session's
- * edit against them on the way back in.
- */
-export const PLAN_FROZEN_FIELDS = Object.freeze(['goal', 'contract', 'out_of_scope', 'schema', 'version']);
-
 const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
 const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
 const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'subagents', 'check_in_minutes', 'stall_minutes']);
@@ -305,7 +291,7 @@ function validateSteps(steps, problems) {
     }
     // `pr` is the number. Three sessions on 2026-09-03 wrote the pull
     // request's URL there (#11275, #11300, #11301); each parsed as a broken
-    // plan, each was logged plan-trespass, and each parked its project until
+    // plan, and each parked its project until
     // a person retyped a number. A URL or `#N` reads as N here — the plan a
     // session leaves is read, not graded — and anything else is still refused.
     if (typeof step.pr === 'string') {
@@ -490,67 +476,4 @@ export function deliverableStep(plan) {
     return { step: null, index: state.index, reason: state.status, why, problems: [] };
   }
   return { step: state.step, index: state.index, reason: null, why: null, problems: [] };
-}
-
-/**
- * What a step session is allowed to have changed, checked on the way back in.
- *
- * The instruction said it and could be read past; this is the same rule as a
- * comparison. A session edits the step it ran — its `status`, its `pr`, what
- * it `comments` — and `met` on the criteria it met. Never a step that has not
- * run, and never the goal, the contract or the scope.
- *
- * Everything a session writes about its own work now sits inside
- * `steps[index]`. It used to be two rules: the step, and a shared
- * `what_the_code_taught_us` at the top of the plan that every session appended
- * to. And the session's own step used to be skipped whole, which left its
- * `instruction` and `done_when` — and, since step-cost, its `runner`, the
- * model it runs on — to the session's discretion. Only `SESSION_STEP_FIELDS`
- * are its to write; the rest of its step is compared like any other.
- */
-export function unauthorisedChanges(before, after, index) {
-  const problems = [];
-  for (const key of PLAN_FROZEN_FIELDS) {
-    if (JSON.stringify(before?.[key]) !== JSON.stringify(after?.[key])) {
-      problems.push(`${key}: a step session does not change it`);
-    }
-  }
-
-  const from = Array.isArray(before?.steps) ? before.steps : [];
-  const to = Array.isArray(after?.steps) ? after.steps : [];
-  if (from.length !== to.length) {
-    problems.push(`steps: ${from.length} before, ${to.length} after — a step session never adds or removes one`);
-  }
-  const shared = Math.min(from.length, to.length);
-  for (let i = 0; i < shared; i += 1) {
-    if (i === index) {
-      const keys = new Set([...Object.keys(from[i] || {}), ...Object.keys(to[i] || {})]);
-      for (const key of keys) {
-        if (SESSION_STEP_FIELDS.includes(key)) continue;
-        if (JSON.stringify(from[i]?.[key]) !== JSON.stringify(to[i]?.[key])) {
-          problems.push(`steps[${i}].${key}: a step session does not change it`);
-        }
-      }
-      continue;
-    }
-    if (JSON.stringify(from[i]) !== JSON.stringify(to[i])) {
-      problems.push(`steps[${i}]: changed by the session that ran step ${index + 1}`);
-    }
-  }
-
-  // The criteria may be ticked, never rewritten.
-  const criteriaBefore = Array.isArray(before?.success_criteria) ? before.success_criteria : [];
-  const criteriaAfter = Array.isArray(after?.success_criteria) ? after.success_criteria : [];
-  if (criteriaBefore.length !== criteriaAfter.length) {
-    problems.push('success_criteria: a step session does not add or remove one');
-  } else {
-    criteriaBefore.forEach((criterion, i) => {
-      const next = criteriaAfter[i] || {};
-      if (criterion.criterion !== next.criterion || criterion.check !== next.check) {
-        problems.push(`success_criteria[${i}]: the criterion itself is Martin's, only \`met\` is the session's`);
-      }
-    });
-  }
-
-  return { ok: problems.length === 0, problems };
 }

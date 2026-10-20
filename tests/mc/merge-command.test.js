@@ -3,10 +3,10 @@
  *
  * The round itself is `tests/mc/repo-merge.test.js` and the merger that runs
  * it is `tests/mc/merger.test.js`; this drives the verb, whose whole job for
- * one pull request is now three things: refuse a plan trespass at the door,
+ * one pull request is now three things: refuse an unmet criterion at the door,
  * make the step `landing` and queue the job, and see that a merger is
  * running. It returns at once — nothing here waits, so nothing here needs a
- * clock. `planBoundary`'s own rules are `tests/mc/merge-boundary.test.js`'s.
+ * clock. `criteriaDoor`'s own rules are `tests/mc/merge-boundary.test.js`'s.
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -49,7 +49,7 @@ const entryNow = () => JSON.parse(readFileSync(registerPath(root, 'merge-queue')
  * the pull request's branch, the door is open unless told otherwise, and the
  * merger is started by a fake that counts.
  */
-function deps({ env = {}, head = null, boundary = null, door = null, merger = { pid: 777, started: true }, mergeable = undefined, git = undefined, cwd = undefined } = {}) {
+function deps({ env = {}, head = null, door = null, merger = { pid: 777, started: true }, mergeable = undefined, git = undefined, cwd = undefined } = {}) {
   const out = { out: '', err: '' };
   const starts = [];
   let ranRound = false;
@@ -66,7 +66,6 @@ function deps({ env = {}, head = null, boundary = null, door = null, merger = { 
       now: () => new Date('2026-09-06T18:00:00Z'),
       env: { MC_WORK_ROOT: root, ...env },
       gh: (args) => (args[1] === 'view' && head ? { status: 0, stdout: JSON.stringify({ headRefName: head, mergeable }) } : { status: 1, stdout: '' }),
-      planBoundary: async () => boundary || { checked: false },
       criteriaDoor: async () => door || { checked: false },
       lock: (_root, fn) => fn(),
       git,
@@ -163,23 +162,8 @@ describe('mc merge queues the pull request for the merger and returns (ruling 30
   });
 });
 
-describe('a plan-trespass stops mc merge at the door', () => {
+describe('an unmet criterion stops mc merge at the door', () => {
   fresh('mc-merge-door');
-
-  it('every problem the door found is printed, exit 1, nothing queued, no merger started', async () => {
-    register();
-    const d = deps({
-      env: { MC_STEP: 'merge-queue:1' },
-      boundary: { checked: true, ok: false, problems: ['steps[1].instruction: a step session does not change it', 'goal: a step session does not change it'] },
-    });
-    const code = await gate({ repo: 'memoro-cli', pr: 671 }, d.io);
-    assert.equal(code, 1);
-    assert.match(d.out.err, /^mc: plan-trespass — steps\[1\]\.instruction: a step session does not change it$/mu);
-    assert.match(d.out.err, /^mc: plan-trespass — goal: a step session does not change it$/mu);
-    assert.deepEqual(queue(), []);
-    assert.equal(d.starts.length, 0);
-    assert.equal(entryNow().steps[1].status, 'running', 'the session that called fixes it, still on the step');
-  });
 
   it('the last step with an unmet criterion is refused at the door and nothing is queued', async () => {
     register();
@@ -237,24 +221,18 @@ describe('mc merge makes the step landing', () => {
     assert.match(d.out.out, /merge-queue-direct-fix is named after a project but is none of its steps' branches — landing it marks no step done/u);
   });
 
-  it('a step stacked on one still landing: the job names that one, and the door reads the plan from its tip', async () => {
+  it('a step stacked on one still landing: the job names that one', async () => {
     register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } }, { status: 'landing' });
     const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
-    let asked = null;
-    d.io.planBoundary = async (options) => { asked = options; return { checked: false }; };
     assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
-    assert.equal(asked.from, 'deadbeef');
     assert.deepEqual(queue()[0].parent, { project: 'merge-queue', index: 0, pr: 600, sha: 'deadbeef' });
     assert.match(d.out.out, /^mc: it lands after #600 \(step 1\), which it is built on$/mu);
   });
 
-  it('a step stacked on one that has since landed: the door reads main, and no parent is named', async () => {
+  it('a step stacked on one that has since landed: no parent is named', async () => {
     register({ stacked_on: { index: 0, pr: 600, sha: 'deadbeef' } });
     const d = deps({ env: { MC_STEP: 'merge-queue:1' }, head: 'merge-queue-2' });
-    let asked = null;
-    d.io.planBoundary = async (options) => { asked = options; return { checked: false }; };
     assert.equal(await gate({ repo: 'memoro-cli', pr: 671 }, d.io), 0);
-    assert.equal(asked.from, null);
     assert.equal(queue()[0].parent, null);
   });
 

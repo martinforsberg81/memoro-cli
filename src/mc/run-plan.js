@@ -242,7 +242,8 @@ export const WORKAREA_BLOCK_NAMES = Object.freeze([...new Set(Object.values(WORK
  *
  * This is the one rule that also covers the two cases nothing else did: a
  * session that timed out with commits pushed and no pull request (`no-json`,
- * rc 143), and a step that ended `plan-trespass`. Both leave a branch
+ * rc 143), and a step whose pull request the door refused (`unmet-criteria`).
+ * Both leave a branch
  * carrying unlanded work, and the old runner came back the next round, read
  * the worktree's plan, found the next step ready and built on top of it —
  * which is how #11250 came to exist. A draft counts as open: it is work in
@@ -773,10 +774,9 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
     'landing. `mc gate` runs this tree\'s gate and prints the verdict, not the',
     'suite; `mc publish` pushes this branch and opens the pull request, and',
     `prints its number. Then run \`mc merge ${repo} <pr>\` yourself: it checks`,
-    'the plan boundary, puts the pull request in the merge queue and returns at',
+    'the plan\'s criteria, puts the pull request in the merge queue and returns at',
     'once. When it says queued, your work is over — stop. The merger lands it',
     'and writes `done`; a red goes to this step\'s next session with the reason.',
-    'A `plan-trespass` from `mc merge` is yours now: fix it and run it again.',
     'Never `gh pr merge`. Giving up is `mc step failed --reason "…"`. Do not ask',
     'questions.',
     '',

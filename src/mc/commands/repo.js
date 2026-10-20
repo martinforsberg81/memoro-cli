@@ -20,7 +20,7 @@
 import { spawnSync } from 'node:child_process';
 import { basename } from 'node:path';
 
-import { criteriaDoor, planBoundary } from '../merge-boundary.js';
+import { criteriaDoor } from '../merge-boundary.js';
 import { followMerge } from '../merge-watch.js';
 import { stepForMerge } from '../merge-step.js';
 import { projectForBranch } from '../project-prs.js';
@@ -408,29 +408,12 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   }
   const step = stepForMerge({ env, head, entries: listEntries(root, io) });
   // A step that started on top of one still landing (ruling 30, A): the
-  // merger lands it after that one, and the door compares the plan with that
-  // one's tip rather than main, which does not have its edits yet. Once that
-  // one is done, its edits are on main and the pull request is main's alone.
+  // merger lands it after that one, which the job names as its parent. Once
+  // that one is done, the pull request stands on main alone.
   const recorded = step ? step.entry.steps[step.index]?.stacked_on || null : null;
   const stacked = recorded && step.entry.steps[recorded.index]?.status !== 'done' ? recorded : null;
   const parent = stacked ? { project: step.project, index: stacked.index, pr: stacked.pr, sha: stacked.sha } : null;
 
-  const boundary = await (deps.planBoundary || planBoundary)({ repoPath, pr: opts.pr, git: deps.git, gh: deps.gh, from: stacked?.sha || null, index: step ? step.index : null });
-  if (boundary.checked && !boundary.ok) {
-    const now = deps.now ? deps.now() : new Date();
-    recordRoundStart({ repo: repoPath, mode, holder: holder?.name || null, prs: [opts.pr] });
-    recordRound({
-      ok: false,
-      stopped_at: 'plan-trespass',
-      reason: boundary.problems.join('; '),
-      repo: repoPath,
-      pr: { number: opts.pr },
-      started_at: now.toISOString(),
-      finished_at: now.toISOString(),
-    }, { mode });
-    for (const problem of boundary.problems) stderr.write(`mc: plan-trespass — ${problem}\n`);
-    return 1;
-  }
   // The plan's last step lands only with every success criterion met
   // (Martin, 2026-10-18) — `criteriaDoor`.
   if (step) {

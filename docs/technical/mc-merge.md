@@ -89,63 +89,30 @@ and the page name the lane they wait on.
 
 ## The door
 
-Before the wait and before the gate, a pull request from a project branch is
-checked against the plan it claims to be landing. `gh pr view --json
-headRefName,baseRefName` names the branch; if `projectForBranch(headRefName,
-<names>)` finds no project, the branch is not one — a planning session's
-`plan/<programme>` branch rewrites plans on purpose — and nothing is checked at
-all. Otherwise the project's `PLAN.json` is read twice after a fetch — the
-`before` copy is the plan the branch started from, `git show <sha>:<path>` at
-`git merge-base origin/<base> origin/<headRefName>`, and the `after` copy is
-`git show origin/<headRefName>:<path>` — and compared with
-`unauthorisedChanges(beforePlan, headPlan, stepOfPr(headPlan, pr))` — the same comparison a step session's own
-post-session check makes on itself, now made from the far side of the door,
-before the gate rather than after the fact. A head plan that does not parse is
-a trespass in its own right (`the plan no longer parses: <first problem>`),
-never a silent pass. A head byte-identical to `before` passes without running
-the comparison at all — the ordinary case for a docs-only or code-only pull
-request.
-
-`before` is the merge base and not `origin/<base>` as it stands, because a
-planning commit that lands on main while the step runs would otherwise read as
-the session's own edit (memoro #11603, 2026-09-08). A branch that merged
-origin/main into itself has that merge as its base, so main's edits up to it
-are in `before` and are not the session's. Only when the merge base cannot be
-read, or the plan did not exist there, is `before` `origin/<base>:<path>`.
-
-Before that, the door refuses a pull request GitHub reports CONFLICTING, and one whose branch the caller's worktree holds at a head origin does not have (ruling 43).
-
-Not ok stops at `plan-trespass`, one line per problem on stderr as `mc:
-plan-trespass — <problem>`, recorded in `gate-rounds.jsonl` like any stop,
-never queued, exit 1: a plan trespass is not a busy gate someone else will
-clear. `planBoundary({ repoPath, pr, git, gh })` in
-[`src/mc/merge-boundary.js`](../../src/mc/merge-boundary.js) is where this
-lives, pure over the two texts and the index where it can be, because the
-runner relies on the same function rather than keeping its own copy.
-
-`gh` or `git` failing to answer fails the check open, not closed — a network
-hiccup must not turn every merge into a trespass stop — and it fails closed
-only for a genuine trespass or a head plan that no longer parses.
+Before the wait and before the gate, the door refuses a pull request GitHub
+reports CONFLICTING, and one whose branch the caller's worktree holds at a head
+origin does not have (ruling 43).
 
 **The plan's last step lands only with its criteria met.** A plan is done when
 every step is done and every success criterion is `met: true` (Martin,
-2026-10-18), and the last step is where it becomes done. So after the plan
-boundary, `criteriaDoor({ repoPath, pr, git, gh, step })` in the same file
-reads the plan as the base has it (a `~/mc/programs/` plan first, else the repository's on `origin/<base>`) with the register's criteria laid over it, and refuses the pull request of the plan's last
-step while a criterion there is not `met: true`: `mc: unmet-criteria —
-<problem>` on stderr, exit 1, nothing queued. `mc merge` records it in
-`gate-rounds.jsonl` with `stopped_at: 'unmet-criteria'`. It is its own check,
-not part of `planBoundary`, because that one passes a byte-identical plan —
-exactly a last step that never touched `met` — and because a docs-only pull
-request, the usual close-out, never reaches the plan boundary: `mc merge
---docs` (and a docs-only pull request routed there) asks `criteriaDoor` before
-it merges, finding the step as `stepForMerge` does. The runner's own queueing
-of a session's open pull request (`landForSession`) asks it too, and a refusal
-there is the step's red, `ready` again with reason `unmet-criteria — …`. A
-pull request that is nobody's step, or any step but the last, passes; like the
-plan boundary it fails open on anything it cannot read. The session measures
-each criterion's `check` and records it with `mc project criterion met`, or ends with `mc step failed`
-naming what it could not measure.
+2026-10-18), and the last step is where it becomes done. So
+`criteriaDoor({ repoPath, pr, gh, step })` in
+[`src/mc/merge-boundary.js`](../../src/mc/merge-boundary.js) reads the project's
+plan under `~/mc/programs/` with the register's criteria laid over it, and
+refuses the pull request of the plan's last step while a criterion there is not
+`met: true`: `mc: unmet-criteria — <problem>` on stderr, exit 1, nothing queued.
+`mc merge` records it in `gate-rounds.jsonl` with `stopped_at:
+'unmet-criteria'`. It covers a docs-only pull request too, the usual close-out:
+`mc merge --docs` (and a docs-only pull request routed there) asks
+`criteriaDoor` before it merges, finding the step as `stepForMerge` does. The
+runner's own queueing of a session's open pull request (`landForSession`) asks
+it too, and a refusal there is the step's red, `ready` again with reason
+`unmet-criteria — …`. A pull request that is nobody's step, or any step but the
+last, passes; so does a project with no plan under `~/mc/programs/`. The door
+fails open on anything it cannot read — `gh` or the plan failing to answer is
+not a refusal. The session measures each criterion's `check` and records it
+with `mc project criterion met`, or ends with `mc step failed` naming what it
+could not measure.
 
 **Known gap:** the door checks one pull request. `mc merge <repo> <pr1>
 <pr2>` — a batch — does not run it; a batch is out of this step's scope, not a
@@ -189,8 +156,8 @@ stacks on top. The watch never writes `merges.json`, the register or
 `merger.json`, never starts a merger and never cancels or re-queues a job — a
 3 or a 4 leaves everything where it was. `--watch` is refused with `--docs`
 (it lands in the call; there is nothing to watch), with `--check`, with several
-numbers (one call per pull request), and by `mc test`. A queueing that fails —
-a plan-trespass, say — is returned as it is, with no watch.
+numbers (one call per pull request), and by `mc test`. A queueing that is refused at
+the door — an unmet criterion, say — is returned as it is, with no watch.
 
 **GitHub is asked once.** The queue is a local file, read every
 `WATCH_POLL_MS` (10 s) for nothing. A job that leaves the queue has either
@@ -877,7 +844,7 @@ is reaped by the next claim instead of blocking forever. Neither blocks git:
 they refuse `mc`, and nothing else.
 
 **`mc merge` waits for neither — the merger does** (ruling 30, 2026-10-09).
-`mc merge <repo> <pr>` checks the plan boundary (*The door*), writes the job
+`mc merge <repo> <pr>` checks the plan's criteria (*The door*), writes the job
 into `~/mc/runner/merges.json` (`repo`, `repo_path`, `pr`, `branch`,
 `holder`, `step`, `since`, `state`) and returns at once, saying its place in
 line. One process lands the jobs, oldest first, one at a time: the merger
@@ -958,9 +925,9 @@ project's next session's first, on its own branch.
 2026-10-07). When a step session's process is gone, the register still says
 `running`, the session ended `success`, and a pull request is open on the
 step's branch, the runner asks for that merge itself (`landForSession` in
-[`src/mc/run.js`](../../src/mc/run.js)) through the same door: the plan
-boundary, then `queueMerge` as the step's workarea. The row's note is
-`success,queued-by-runner`; a trespass at the door is a red like any other,
+[`src/mc/run.js`](../../src/mc/run.js)) through the same door: the plan's
+criteria, then `queueMerge` as the step's workarea. The row's note is
+`success,queued-by-runner`; a refusal at the door is a red like any other,
 note `success,red`.
 
 **The merger is the installed mc** (ruling 37, 2026-10-10). `startMerger`

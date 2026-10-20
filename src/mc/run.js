@@ -119,7 +119,7 @@ import { defaultRepos, listArchived, listPlans, showBatch } from './brief-collec
 import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent, stopServersUnder } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
-import { deliverableStep, unauthorisedChanges } from './plan-schema.js';
+import { deliverableStep } from './plan-schema.js';
 import { planIn, programsPlans } from './plan-source.js';
 import { applyEntry, currentIndex, overlayPlans, readEntry, updateStep } from './register.js';
 import { deploysPath, parseDeploys } from './deploys.js';
@@ -143,7 +143,7 @@ import { archiveDue, archivePrograms } from './project-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
-import { criteriaDoor, planBoundary } from './merge-boundary.js';
+import { criteriaDoor } from './merge-boundary.js';
 import { redPatch } from './merge-step.js';
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
 import { parentLanded, queueMerge, readMerger, startMerger, stepsBeforeDone } from './merger.js';
@@ -592,13 +592,11 @@ export function realDeps(env = process.env) {
     rotate: (path, maxBytes) => rotateIfLarge(path, maxBytes),
     // The one door work lands through: the merger's queue (ruling 30), the
     // same call `mc merge` makes, in process because the runner is mc — and
-    // `mc merge --docs`' round for the archive pull request. The plan
-    // boundary is the check `mc merge` makes before it queues. Dependencies
-    // so a test drives them without a real merger, suite or remote.
+    // `mc merge --docs`' round for the archive pull request. Dependencies so
+    // a test drives them without a real merger, suite or remote.
     queueMerge: (options) => queueMerge({ env, ...options }),
     startMerger: (options) => startMerger({ env, ...options }),
     pendingMerges: (root) => { try { return parseQueue(readFileSync(mergesPath(root), 'utf8')); } catch { return []; } },
-    planBoundary: (options) => planBoundary(options),
     criteriaDoor: (options) => criteriaDoor(options),
     docsMerge: (options) => runDocsMerge(options),
     // The session — `streamSession` below. The session's Bash tool gets a
@@ -2812,22 +2810,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * The merge a step session would have asked for, asked for it: the session
    * ended `success` with `#pr` open on the step's branch and the register
    * still `running`, so its own `mc merge` never ran (ruling 25). The door is
-   * `mc merge`'s — the plan boundary — and then the merger's queue, as `mc
-   * merge` does it (ruling 30): the step is `landing` and the merger writes
-   * what comes of it. A trespass is a red at the door and goes back to the
-   * step like any red. Returns the row's note.
+   * `mc merge`'s — the plan's last-step criteria — and then the merger's
+   * queue, as `mc merge` does it (ruling 30): the step is `landing` and the
+   * merger writes what comes of it. A refusal at the door is a red and goes
+   * back to the step like any red. Returns the row's note.
    */
   async function landForSession({ worktree, repo, name, index, pr, branch, rc }) {
     say(`${name}: #${pr} is open and the session ended success (rc ${rc}) without queueing it — the runner queues it`);
     const number = Number(pr);
-    const boundary = deps.planBoundary ? await deps.planBoundary({ repoPath: worktree, pr: number }) : { checked: false };
-    if (boundary.checked && !boundary.ok) {
-      const standing = readEntry(root, name, { read: deps.read })?.steps?.[index];
-      const patch = redPatch({ step: standing, report: { stopped_at: 'plan-trespass', reason: `plan-trespass — ${boundary.problems.join('; ')}` } });
-      recordStep(name, index, { ...patch, pr: number, branch });
-      say(`${name}: step ${index + 1} is ${patch.status} — ${patch.reason}`);
-      return 'success,red';
-    }
     // The plan's last step lands only with every criterion met (`criteriaDoor`).
     const door = deps.criteriaDoor ? await deps.criteriaDoor({ repoPath: worktree, pr: number, step: { project: name, index } }) : { checked: false };
     if (door.checked && !door.ok) {
