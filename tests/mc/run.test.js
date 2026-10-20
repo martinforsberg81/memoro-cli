@@ -1626,6 +1626,25 @@ test('a parked step answered with its pull request kept goes on from it, and the
   assert.equal(registerOf(f, 'm').steps[0].status, 'landing');
 });
 
+test('a parked step answered without a pull request is told the answer, and what its branch already carries', async () => {
+  const f = fixture({ plans: { memoro: { m: ready } }, session: okSession() });
+  f.deps.git = ((inner) => (cwd, args, options) => (args[0] === 'log' && args.includes('origin/main..HEAD')
+    ? { ok: true, stdout: 'abc1234 m: WIP left by an earlier session of step 1' }
+    : inner(cwd, args, options)))(f.deps.git);
+  f.files['/w/runner/projects/m.json'] = JSON.stringify({
+    project: 'm', repo: 'memoro', programme: 'prog', plan: 'docs/project/prog/m/PLAN.json',
+    steps: [{ key: 'The one step', status: 'ready', pr: null, branch: 'm', reason: null, attempts: 0, comments: [], answered: { name: 'm-check-in', answer: 'No to network-first.', at: '2026-10-20T08:00:00Z' } }],
+  });
+  const r = await createRunner({ deps: f.deps }).pass();
+  assert.equal(r.ran, 1, 'a step answered without a pull request is started');
+  const [call] = f.calls.sessions;
+  assert.match(call.prompt, /^This step was parked on the decision `m-check-in`, and it has been answered\.\nThe answer: No to network-first\./mu);
+  assert.match(call.prompt, /Nothing of the earlier session's work is in a pull request/u);
+  assert.match(call.prompt, /^- abc1234 m: WIP left by an earlier session of step 1$/mu);
+  assert.match(call.prompt, /do not start over/u);
+  assert.doesNotMatch(call.prompt, /No new pull request|came back from the merger/u);
+});
+
 /**
  * Ruling 30, A: the next step does not wait for the merger. A step after one
  * that is `landing` starts on a new branch on top of that one's, its pull

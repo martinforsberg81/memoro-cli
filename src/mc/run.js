@@ -841,6 +841,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return { own: true, ok: true, sha: sha || null };
   }
 
+  /** The branch's commits past origin/main, one line each, at most 20 (`git log --oneline origin/main..HEAD`). */
+  function commitsPastMain(worktree) {
+    return (gitOut(worktree, ['log', '--oneline', '-n', '20', 'origin/main..HEAD']) || '')
+      .split('\n').map((line) => line.trim()).filter(Boolean);
+  }
+
   /**
    * What a fresh session on an interrupted step is handed about the one
    * before it (`interruptedPreamble`, run-plan.js): the branch's commits past
@@ -849,8 +855,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    */
   function handoverOf(worktree, name, recovery, wip) {
     const { interrupted } = recovery;
-    const commits = (gitOut(worktree, ['log', '--oneline', '-n', '20', 'origin/main..HEAD']) || '')
-      .split('\n').map((line) => line.trim()).filter(Boolean);
+    const commits = commitsPastMain(worktree);
     const stdout = interrupted.log ? deps.read(`${interrupted.log}.jsonl`) : null;
     const lastText = stdout ? sessionStanding({ toolId: interrupted.tool === 'codex' ? 'codex' : 'claude', stdout }).last_text : null;
     const checkpointRef = `refs/mc/checkpoint/${name}`;
@@ -2124,20 +2129,26 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const retry = standingBefore?.pr && standingBefore.attempts > 0 && standingBefore.reason
       ? { pr: standingBefore.pr, reason: standingBefore.reason, attempts: standingBefore.attempts, red: standingBefore.red || null }
       : null;
-    // A step parked on a question and answered with its pull request kept
-    // (`mc step ready`): the session goes on from that pull request.
-    const answered = !retry && standingBefore?.pr && standingBefore.answered
-      ? { ...standingBefore.answered, pr: standingBefore.pr }
+    // A step parked on a question and answered (`mc step ready`): with its pull
+    // request kept the session goes on from that pull request; without one it
+    // is told the answer and what its branch already carries.
+    const answered = !retry && standingBefore?.answered
+      ? { ...standingBefore.answered, pr: standingBefore.pr ?? null }
       : null;
     // A resumed step keeps the stack it was started on; the branch did not move.
     const stacked = resuming ? (standingBefore?.stacked_on ?? null) : (moved.stacked || null);
     // A fresh session on an interrupted step is told what the one before it
     // left, and only when it is that step it is handed.
     const interrupted = fresh && fresh.index === choice.index ? handoverOf(worktree, name, fresh, wip) : null;
+    // A fresh session on a step with no pull request is told what the branch
+    // already carries: commits an earlier session made (or the WIP commit of
+    // its files) that no pull request holds yet. Nothing else is handed it.
+    const earlierCommits = !resuming && !interrupted && !retry && !stacked && !standingBefore?.pr ? commitsPastMain(worktree) : [];
+    const earlier = earlierCommits.length ? { commits: earlierCommits } : null;
     const handed = { ...plan.plan, success_criteria: standing(plan).plan?.success_criteria ?? plan.plan.success_criteria };
     const prompt = resuming
       ? restartPrompt({ at: resuming.interrupted.last_activity || resuming.interrupted.at, why: resuming.why })
-      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, now });
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, plan: handed, step: choice.step, index: choice.index, conflicts, retry, answered, interrupted, stacked, earlier, now });
     // Haiku workers (`runner.subagents: on`): the role is told how to use
     // them through the same include the role files use for a shared passage.
     const instructions = instructionsFor(launch.id, withWorkers(role.overlay, settings.subagents));

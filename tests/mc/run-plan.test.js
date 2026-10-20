@@ -461,6 +461,34 @@ test('stepPrompt: an interrupted step gets a handover after the retry preamble, 
   assert.doesNotMatch(stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1 }), /An earlier session/u);
 });
 
+test('stepPrompt: a branch that carries an earlier session\'s commits says so, and the step is still the job', () => {
+  const { plan } = threeSteps();
+  const step = plan.steps[1];
+  const p = stepPrompt({
+    name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1,
+    earlier: { commits: ['abc1234 m: WIP left by an earlier session of step 2'] },
+  });
+  assert.match(p, /This branch already carries work from an earlier session of this step that is in no pull request:\n- abc1234 m: WIP left by an earlier session of step 2\n/u);
+  assert.match(p, /Read it \(`git diff origin\/main\.\.\.HEAD`\) and build on it — do not start over\./u);
+  assert.match(p, /Your step is `steps\[1\]` — 2/u);
+  const bare = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1 });
+  assert.doesNotMatch(bare, /do not start over|already carries work/u);
+  assert.doesNotMatch(stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, earlier: { commits: [] } }), /already carries work/u);
+});
+
+test('stepPrompt: an answer without a pull request says so; with one, the answer goes on from it', () => {
+  const { plan } = threeSteps();
+  const step = plan.steps[1];
+  const none = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, answered: { name: 'x', answer: 'Yes.', pr: null } });
+  assert.match(none, /The answer: Yes\./u);
+  assert.match(none, /Nothing of the earlier session's work is in a pull request/u);
+  assert.doesNotMatch(none, /still open|No new pull request/u);
+  const kept = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'p', plan, step, index: 1, answered: { name: 'x', answer: 'Yes.', pr: 9 } });
+  assert.match(kept, /The answer: Yes\.\n#9 is still open, on this branch, with the earlier session's work\./u);
+  assert.match(kept, /`mc merge memoro 9`\. No new pull request\./u);
+  assert.doesNotMatch(kept, /Nothing of the earlier session/u);
+});
+
 test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex is exec --json', () => {
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs });
   assert.deepEqual(claude, ['-p', '--model', 'opus', '--permission-mode', 'acceptEdits', '--autocompact', String(AUTOCOMPACT_TOKENS), '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'INSTRUCTIONS', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']);
