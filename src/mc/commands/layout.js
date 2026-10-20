@@ -8,6 +8,12 @@
  *                                refusal, a count; writes nothing at all.
  *                                Exit 0 with no refusal, 1 otherwise
  *   mc layout migrate --json     `{ layout, moves, refusals }`
+ *   mc layout migrate --apply    the move: the plan made again, every move
+ *                                carried out in order and logged to
+ *                                ~/mc/runner/log/layout-migrate.log, the
+ *                                layout file last. A refusal moves nothing;
+ *                                the first move that fails stops it (exit 1),
+ *                                and a second run continues from there
  *
  * A person runs the move, from a terminal outside every area, with the runner
  * stopped. Nothing in mc calls it.
@@ -15,7 +21,9 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { dryRunLines, gatherLayoutFacts, planLayoutMove, tildePath } from '../layout-migrate.js';
+import {
+  applyLayoutMove, dryRunLines, gatherLayoutFacts, planLayoutMove, refusedLines, tildePath,
+} from '../layout-migrate.js';
 import {
   PROGRAMS_HOME, RUNNER_DEPS, RUNNER_HOME, STEP_HOME, layoutVersion, planAreaRoot, stepAreaRoot, workRoot,
 } from '../paths.js';
@@ -23,7 +31,7 @@ import { REGISTER_DIR, STATE_FILE } from '../register.js';
 import { scanArgs } from './flags.js';
 
 export function usage() {
-  return 'usage — mc layout [--json] · mc layout migrate [--json]\n';
+  return 'usage — mc layout [--json] · mc layout migrate [--json] · mc layout migrate --apply\n';
 }
 
 export async function run(argv, deps = {}) {
@@ -38,6 +46,7 @@ export async function run(argv, deps = {}) {
   if (!error && sub !== undefined && sub !== 'migrate') error = `mc layout knows migrate, not ${sub}`;
   if (!error && rest.length) error = `mc layout ${sub} takes no name`;
   if (!error && scanned.flags.apply && sub !== 'migrate') error = '--apply belongs to mc layout migrate';
+  if (!error && scanned.flags.apply && scanned.flags.json) error = '--json belongs to the dry run, not --apply';
   if (error) {
     stderr.write(`mc: ${error}\n`);
     stderr.write(usage());
@@ -45,10 +54,7 @@ export async function run(argv, deps = {}) {
   }
   const json = Boolean(scanned.flags.json);
   if (sub === undefined) return showLayout({ root, home, json, stdout });
-  if (scanned.flags.apply) {
-    stderr.write('mc: mc layout migrate --apply is not built yet — the dry run is all there is\n');
-    return 2;
-  }
+  if (scanned.flags.apply) return apply({ root, env, home, stdout, stderr, facts: deps.facts, moves: deps.moves });
   return migrate({ root, env, home, json, stdout, facts: deps.facts });
 }
 
@@ -87,4 +93,23 @@ function migrate({ root, env, home, json, stdout, facts: factDeps }) {
   if (json) stdout.write(`${JSON.stringify({ layout: facts.layout, ...plan }, null, 2)}\n`);
   else stdout.write(`${dryRunLines(plan, home).join('\n')}\n`);
   return plan.refusals.length ? 1 : 0;
+}
+
+/**
+ * The move: the facts read and the plan made again, never an earlier dry
+ * run's. A refusal moves nothing (exit 1); otherwise every move in order, and
+ * exit 1 at the first that fails.
+ */
+function apply({ root, env, home, stdout, stderr, facts: factDeps, moves: moveDeps }) {
+  const facts = gatherLayoutFacts({ root, env, deps: factDeps });
+  if (facts.layout === 2) {
+    stdout.write('layout 2 — nothing to move\n');
+    return 0;
+  }
+  const plan = planLayoutMove(facts);
+  if (plan.refusals.length) {
+    stdout.write(`${refusedLines(plan.refusals, home).join('\n')}\n`);
+    return 1;
+  }
+  return applyLayoutMove(plan, { root, home, stdout, stderr, deps: moveDeps });
 }

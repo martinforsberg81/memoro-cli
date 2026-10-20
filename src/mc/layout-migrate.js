@@ -5,8 +5,9 @@
  * disk and what is running, every read through `deps` so a test can hand it a
  * temporary root; `planLayoutMove` is pure and turns the facts into an ordered
  * list of moves and the refusals that keep any of them from happening; the
- * verb (`commands/layout.js`) prints them. The move itself — `--apply` — is
- * the next step's; nothing here writes.
+ * verb (`commands/layout.js`) prints them. `applyLayoutMove` carries a plan
+ * with no refusal out, one move at a time, and stops at the first that fails:
+ * the facts a second run gathers are what is left, so it continues there.
  *
  * A person runs it, from a terminal standing outside every area it moves, with
  * the runner stopped. Nothing in mc calls it. Everything that would make a
@@ -15,10 +16,15 @@
  * serving one — is a refusal naming what to do about it, never a wait.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import {
+  appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync,
+  utimesSync, writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { writeJsonAtomic } from './atomic-write.js';
+import { installSettings } from './commands/hook.js';
 import { claudeHome, encodePath, readHead } from './conversations.js';
 import { listServers } from './dev-servers.js';
 import { mergesPath, parseQueue } from './merge-queue.js';
@@ -378,4 +384,205 @@ export function dryRunLines({ moves, refusals }, home = homedir()) {
     ? `${moves.length} moves, ${refusals.length} refused — nothing moves until every refusal is resolved`
     : `${moves.length} moves, none refused`);
   return lines;
+}
+
+/** What `--apply` says when the plan it made again is refused. */
+export function refusedLines(refusals, home = homedir()) {
+  return [
+    'layout 1 → 2 — refused, nothing moved',
+    '', 'REFUSED', ...refusals.map((line) => `  ${tildePath(line, home)}`),
+    '', `${refusals.length} refused — mc layout migrate shows the whole plan`,
+  ];
+}
+
+/** One move as `--apply` says it once it is done. */
+export function movedLine(move, home = homedir()) {
+  const at = (path) => tildePath(path, home);
+  if (move.how === 'rmdir') return `removed ${at(move.from)} (rmdir)`;
+  if (move.how === 'hooks') return `ran mc hook install into ${at(move.to)} (hooks)`;
+  if (move.how === 'layout') return `wrote ${at(move.to)} (layout)`;
+  return `moved ${at(move.from)} → ${at(move.to)} (${move.how})`;
+}
+
+/* ------------------------------------------------------------------- apply */
+
+/** Where `--apply` writes one JSON line per move: `{ at, how, from, to, ok, error }`. */
+export const MIGRATE_LOG = join(RUNNER_HOME, 'log', 'layout-migrate.log');
+
+/** The one file a planned `rmdir` removes first wherever it is: Finder's. */
+const FINDER_MARK = '.DS_Store';
+
+/** git and the clock, as the moves use them. */
+export function realApplyDeps() {
+  return {
+    git: (args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+    installSettings: (path) => installSettings(path),
+    now: () => new Date(),
+  };
+}
+
+/**
+ * Carry out a plan with no refusal: each move in order, logged and said as it
+ * is done. Stops at the first that fails, says so, and returns 1; 0 when every
+ * move is done. Never forces, never overwrites, never removes what it has not
+ * moved: a destination that exists is a failure, not a target.
+ */
+export function applyLayoutMove({ moves }, { root, home = homedir(), stdout, stderr, deps = {} }) {
+  const io = { ...realApplyDeps(), ...deps };
+  const log = join(root, MIGRATE_LOG);
+  for (const [index, move] of moves.entries()) {
+    let error = null;
+    try {
+      carryOut(move, { root, io });
+    } catch (caught) {
+      error = String(caught?.stderr || '').trim() || caught?.message || String(caught);
+    }
+    mkdirSync(dirname(log), { recursive: true });
+    appendFileSync(log, `${JSON.stringify({ at: io.now().toISOString(), how: move.how, from: move.from, to: move.to, ok: !error, error })}\n`);
+    if (error) {
+      stderr.write(`mc: move ${index + 1} of ${moves.length} failed — ${moveLine(move, home).replace(/^would /u, '')}: ${error}\n`);
+      stderr.write(`mc: stopped there; the ${index} before it are done — mc layout migrate --apply again continues from there\n`);
+      return 1;
+    }
+    stdout.write(`${movedLine(move, home)}\n`);
+  }
+  stdout.write(`layout 2 — ${moves.length} moves\n`);
+  stdout.write('next: mc layout to see the roots, then mc run start\n');
+  return 0;
+}
+
+const pathExists = (path) => { try { lstatSync(path); return true; } catch { return false; } };
+
+function refuseTaken(to) {
+  if (pathExists(to)) throw new Error(`${to} already exists`);
+}
+
+/** One move, or a throw saying why not. */
+function carryOut(move, { root, io }) {
+  if (move.how === 'worktree') {
+    refuseTaken(move.to);
+    // git rewrites both its pointers: the worktree's `.git` and the owner's `worktrees/<id>/gitdir`.
+    const common = io.git(['-C', move.from, 'rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
+    const owner = common.endsWith('/.git') ? common.slice(0, -'/.git'.length) : common;
+    mkdirSync(dirname(move.to), { recursive: true });
+    io.git(['-C', owner, 'worktree', 'move', move.from, move.to]);
+    return;
+  }
+  if (move.how === 'rename') {
+    refuseTaken(move.to);
+    mkdirSync(dirname(move.to), { recursive: true });
+    renameSync(move.from, move.to);
+    return;
+  }
+  if (move.how === 'rmdir') {
+    // The plan empties `runner/projects/` of its registers and lets its marks
+    // stay (REGISTER_DIR_MARKS); layout 2 keeps its lock as `runner/register.lock`.
+    const marks = move.from === join(root, RUNNER_HOME, REGISTER_DIR) ? [FINDER_MARK, ...REGISTER_DIR_MARKS] : [FINDER_MARK];
+    for (const mark of marks) if (pathExists(join(move.from, mark))) unlinkSync(join(move.from, mark));
+    rmdirSync(move.from);
+    return;
+  }
+  if (move.how === 'transcripts') {
+    moveTranscripts(move);
+    return;
+  }
+  if (move.how === 'hooks') {
+    const outcome = io.installSettings(move.to);
+    if (outcome.code !== 0) throw new Error(outcome.line);
+    return;
+  }
+  if (move.how === 'layout') {
+    writeJsonAtomic(move.to, { schema: 'mc-layout', version: 2, migrated: io.now().toISOString() });
+    return;
+  }
+  throw new Error(`no way to carry out a move by ${move.how}`);
+}
+
+/**
+ * A Claude project directory to its new name, every transcript in it — the
+ * sub-agents' under `<id>/` too — rewritten first, so the conversation is
+ * found where it is now launched from. `memory/` moves along unchanged.
+ */
+function moveTranscripts({ from, to, rewrite }) {
+  for (const file of transcriptFiles(from)) rewriteTranscript(file, rewrite);
+  if (!pathExists(to)) {
+    renameSync(from, to);
+    return;
+  }
+  mergeInto(from, to);
+}
+
+/** `from`'s entries into the existing `to`, directory into directory; a file both hold is a failure. */
+function mergeInto(from, to) {
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const source = join(from, entry.name);
+    const target = join(to, entry.name);
+    if (!pathExists(target)) renameSync(source, target);
+    else if (entry.isDirectory() && statSync(target).isDirectory()) mergeInto(source, target);
+    else throw new Error(`${target} already exists — ${source} cannot move there`);
+  }
+  rmdirSync(from);
+}
+
+function transcriptFiles(dir) {
+  const found = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...transcriptFiles(path));
+    else if (entry.isFile() && entry.name.endsWith('.jsonl')) found.push(path);
+  }
+  return found;
+}
+
+const NEWLINE = Buffer.from('\n');
+
+/**
+ * One transcript with its `cwd`s moved, byte for byte otherwise: a line that
+ * does not change is written back as it was read. Through `<file>.migrating`,
+ * and with the file's times kept — the newest conversation is the one resumed.
+ * Untouched when no line changes.
+ */
+function rewriteTranscript(file, rewrite) {
+  const bytes = readFileSync(file);
+  const parts = [];
+  let changed = false;
+  for (let start = 0; start <= bytes.length;) {
+    let end = bytes.indexOf(0x0a, start);
+    if (end === -1) end = bytes.length;
+    const line = bytes.subarray(start, end);
+    const next = rewriteTranscriptLine(line.toString('utf8'), rewrite);
+    if (next === null) parts.push(line);
+    else { parts.push(Buffer.from(next, 'utf8')); changed = true; }
+    if (end < bytes.length) parts.push(NEWLINE);
+    start = end + 1;
+  }
+  if (!changed) return;
+  const { atime, mtime, mode } = statSync(file);
+  const temporary = `${file}.migrating`;
+  writeFileSync(temporary, Buffer.concat(parts), { mode: mode & 0o777 });
+  renameSync(temporary, file);
+  utimesSync(file, atime, mtime);
+}
+
+/**
+ * One transcript line with its `cwd` (top-level or `payload.cwd`) and its
+ * `relocatedCwd` moved from `rewrite.old` to `rewrite.new` — Claude Code
+ * prefers the last `relocated` entry over the head's `cwd` — or null when
+ * nothing in it moves (or it does not parse).
+ */
+export function rewriteTranscriptLine(text, { old, new: fresh }) {
+  let entry;
+  try { entry = JSON.parse(text); } catch { return null; }
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  let changed = false;
+  const mend = (holder, key) => {
+    const value = holder[key];
+    if (typeof value !== 'string' || !(value === old || value.startsWith(`${old}/`))) return;
+    holder[key] = fresh + value.slice(old.length);
+    changed = true;
+  };
+  mend(entry, 'cwd');
+  mend(entry, 'relocatedCwd');
+  if (entry.payload !== null && typeof entry.payload === 'object') mend(entry.payload, 'cwd');
+  return changed ? `${JSON.stringify(entry)}${text.endsWith('\r') ? '\r' : ''}` : null;
 }

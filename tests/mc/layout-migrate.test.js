@@ -1,18 +1,24 @@
 /**
- * `mc layout migrate` without `--apply`: the facts, the plan, the refusals and
- * the dry run (layout-migrate.js, ruling 51). Every case builds layout 1 on a
- * temporary work root and a temporary claude home — never `~/mc` or
- * `~/.claude`.
+ * `mc layout migrate`: the facts, the plan, the refusals, the dry run, and
+ * `--apply` carrying it out (layout-migrate.js, ruling 51). Every case builds
+ * layout 1 on a temporary work root with real git worktrees and a temporary
+ * claude home — never `~/mc` or `~/.claude`.
  */
 import { strict as assert } from 'node:assert';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, statSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 
 import { run } from '../../src/mc/commands/layout.js';
-import { encodePath } from '../../src/mc/conversations.js';
-import { gatherLayoutFacts, planLayoutMove } from '../../src/mc/layout-migrate.js';
+import { encodePath, listConversations } from '../../src/mc/conversations.js';
+import { hookRegistration } from '../../src/mc/hooks.js';
+import { applyLayoutMove, gatherLayoutFacts, planLayoutMove, rewriteTranscriptLine } from '../../src/mc/layout-migrate.js';
+import { layoutVersion, stepAreaName } from '../../src/mc/paths.js';
+import { parseEntry, readEntry, registerPath } from '../../src/mc/register.js';
+import { releaseWorkArea } from '../../src/mc/work-area.js';
 import { git, makeTempRepo } from './_helpers/git-fixture.js';
 
 let repo;
@@ -232,7 +238,179 @@ test('in layout 2 there is nothing to move', async () => {
   assert.match(shown.out, /step areas {9}~\/runner\/step\n/u);
 });
 
-test('--apply is not built yet, and a stray word is refused', async () => {
-  assert.equal((await verb(['migrate', '--apply'])).code, 2);
+test('a stray word is refused, and --json is the dry run\'s', async () => {
   assert.equal((await verb(['move'])).code, 2);
+  assert.equal((await verb(['migrate', '--apply', '--json'])).code, 2);
+  assert.equal((await verb(['--apply'])).code, 2);
+});
+
+/* ------------------------------------------------------------------- apply */
+
+/**
+ * The planning session's conversation as Claude Code keeps it: a relocation,
+ * a line that does not parse, a cwd that only shares a prefix, a sub-agent's
+ * transcript under `<id>/`, and a memory. Returns the main transcript's lines.
+ */
+function richTranscript() {
+  const old = join(root, 'plan', 'p');
+  const dir = join(claudeDir, 'projects', encodePath(old));
+  const lines = [
+    JSON.stringify({ type: 'user', cwd: old, message: { content: `look in ${old}/notes` } }),
+    'not json {',
+    JSON.stringify({ type: 'relocated', relocatedCwd: join(old, 'memoro'), sessionId: 'a' }),
+    JSON.stringify({ type: 'assistant', cwd: `${old}-other`, message: { content: 'grön' } }),
+  ];
+  writeFileSync(join(dir, 'a.jsonl'), `${lines.join('\n')}\n`);
+  write(join(dir, 'a', 'subagents', 'agent-1.jsonl'), `${JSON.stringify({ isSidechain: true, cwd: join(old, 'memoro') })}\n`);
+  write(join(dir, 'memory', 'MEMORY.md'), '# memory\n');
+  return lines;
+}
+
+const sink = () => {
+  const seen = { text: '' };
+  return { seen, write: (text) => { seen.text += text; } };
+};
+const logLines = () => readFileSync(join(root, 'runner', 'log', 'layout-migrate.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+const realOr = (path) => { try { return realpathSync(path); } catch { return path; } };
+const worktreesOf = (dir) => git(dir, 'worktree list --porcelain').split('\n')
+  .filter((line) => line.startsWith('worktree ')).map((line) => realOr(line.slice('worktree '.length)));
+
+test('--apply moves everything in the plan, and layout 2 reads it', async () => {
+  const register = readFileSync(join(root, 'runner', 'projects', 'x.json'));
+  const { code, out, err } = await verb(['migrate', '--apply']);
+  assert.equal(code, 0, err);
+  assert.equal(err, '');
+  assert.match(out, /^moved ~\/plan\/p\/\.claude → ~\/programs\/p\/\.claude \(rename\)\n/u);
+  assert.match(out, /\nmoved ~\/plan\/p\/memoro → ~\/programs\/p\/memoro \(worktree\)\n/u);
+  assert.match(out, /\nremoved ~\/runner\/projects \(rmdir\)\n/u);
+  assert.match(out, /\nlayout 2 — 16 moves\nnext: mc layout to see the roots, then mc run start\n$/u);
+
+  const listed = worktreesOf(repo.dir);
+  for (const area of ['programs/p/memoro', 'runner/step/x/memoro', 'runner/deps/deps-memoro-a-20261020/memoro']) {
+    assert.ok(listed.includes(realOr(join(root, area))), `${area} in ${listed.join(', ')}`);
+    assert.equal(git(join(root, area), 'status --porcelain'), '');
+  }
+  assert.ok(existsSync(join(root, 'programs', 'p', '.claude', 'settings.json')));
+  assert.deepEqual(readFileSync(join(root, 'programs', 'p', 'x', 'STATE.json')), register);
+  assert.ok(existsSync(join(root, 'runner', 'log', 'closed', 'registers', 'old.json')));
+  for (const gone of ['plan', 'step', 'runner/projects/x.json', 'runner/projects/old.json']) {
+    assert.ok(!existsSync(join(root, gone)), `${gone} is gone`);
+  }
+  const layout = JSON.parse(readFileSync(join(root, 'runner', 'layout.json'), 'utf8'));
+  assert.equal(layout.schema, 'mc-layout');
+  assert.equal(layout.version, 2);
+  assert.equal(layoutVersion({ root }), 2);
+  assert.equal(hookRegistration(JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf8'))).ok, true);
+
+  const log = logLines();
+  assert.equal(log.length, 16);
+  assert.ok(log.every((line) => line.ok === true && line.error === null && typeof line.at === 'string'));
+  assert.deepEqual(log[1], { at: log[1].at, how: 'worktree', from: join(root, 'plan/p/memoro'), to: join(root, 'programs/p/memoro'), ok: true, error: null });
+});
+
+test('--apply renames the transcripts and moves every cwd in them, and nothing else', async () => {
+  const lines = richTranscript();
+  const old = join(root, 'plan', 'p');
+  const fresh = join(root, 'programs', 'p');
+  const { code, err } = await verb(['migrate', '--apply']);
+  assert.equal(code, 0, err);
+
+  const projects = join(claudeDir, 'projects');
+  const planDir = join(projects, encodePath(fresh));
+  const stepDir = join(projects, encodePath(join(root, 'runner', 'step', 'x', 'memoro')));
+  assert.ok(!existsSync(join(projects, encodePath(old))));
+  assert.ok(!existsSync(join(projects, encodePath(join(root, 'step', 'x', 'memoro')))));
+  assert.ok(existsSync(join(projects, encodePath(join(root, 'work', 'w')))), 'a session elsewhere stays');
+
+  assert.equal(readFileSync(join(planDir, 'a.jsonl'), 'utf8'), [
+    JSON.stringify({ type: 'user', cwd: fresh, message: { content: `look in ${old}/notes` } }),
+    lines[1],
+    JSON.stringify({ type: 'relocated', relocatedCwd: join(fresh, 'memoro'), sessionId: 'a' }),
+    lines[3],
+    '',
+  ].join('\n'));
+  assert.equal(
+    readFileSync(join(planDir, 'a', 'subagents', 'agent-1.jsonl'), 'utf8'),
+    `${JSON.stringify({ isSidechain: true, cwd: join(fresh, 'memoro') })}\n`,
+  );
+  assert.equal(readFileSync(join(planDir, 'memory', 'MEMORY.md'), 'utf8'), '# memory\n');
+  assert.equal(
+    JSON.parse(readFileSync(join(stepDir, 'a.jsonl'), 'utf8')).cwd,
+    join(root, 'runner', 'step', 'x', 'memoro'),
+  );
+
+  // `mc plan` resumes the conversation it finds in the programme's directory.
+  const found = listConversations(fresh, env).filter((conversation) => conversation.tool === 'claude-code');
+  assert.deepEqual(found.map((conversation) => [conversation.id, conversation.cwd]), [['a', fresh]]);
+});
+
+test('a transcript line changes only where a cwd moves', () => {
+  const rewrite = { old: '/r/plan/p', new: '/r/programs/p' };
+  assert.equal(rewriteTranscriptLine('{"payload":{"cwd":"/r/plan/p/m"},"n":1}', rewrite), '{"payload":{"cwd":"/r/programs/p/m"},"n":1}');
+  assert.equal(rewriteTranscriptLine('{"cwd":"/r/plan/p"}\r', rewrite), '{"cwd":"/r/programs/p"}\r');
+  assert.equal(rewriteTranscriptLine('{"cwd":"/r/plan/pq"}', rewrite), null);
+  assert.equal(rewriteTranscriptLine('{"cwd": "/r/elsewhere"}', rewrite), null);
+  assert.equal(rewriteTranscriptLine('[1]', rewrite), null);
+  assert.equal(rewriteTranscriptLine('', rewrite), null);
+});
+
+test('after --apply the areas and the register are where layout 2 looks', async () => {
+  const text = `${JSON.stringify({ schema: 'mc-register', version: 1, project: 'x', programme: 'p', steps: [] })}\n`;
+  write(join(root, 'runner', 'projects', 'x.json'), text);
+  const before = parseEntry(text);
+  assert.equal((await verb(['migrate', '--apply'])).code, 0);
+  assert.equal(registerPath(root, 'x'), join(root, 'programs', 'p', 'x', 'STATE.json'));
+  assert.notEqual(before, null);
+  assert.deepEqual(readEntry(root, 'x'), before);
+  assert.equal(stepAreaName('x', { root }), 'runner/step/x');
+  const release = releaseWorkArea('programs/p', { env, dryRun: true });
+  assert.deepEqual(release.removed.map((worktree) => worktree.repo), ['memoro']);
+  assert.deepEqual(release.kept, []);
+  assert.deepEqual(release.held_by, []);
+});
+
+test('a refused --apply moves nothing and exits 1', async () => {
+  write(join(root, 'runner', 'runner.json'), JSON.stringify({ pid: 4242 }));
+  const before = { root: snapshot(root), claude: snapshot(claudeDir) };
+  const { code, out } = await verb(['migrate', '--apply'], quiet({ alive: (pid) => pid === 4242 }));
+  assert.equal(code, 1);
+  assert.match(out, /^layout 1 → 2 — refused, nothing moved\n\nREFUSED\n {2}the runner is running \(pid 4242\)/u);
+  assert.deepEqual({ root: snapshot(root), claude: snapshot(claudeDir) }, before);
+});
+
+test('a move that fails stops there, logged, and a second run continues from it', async () => {
+  const planned = plan();
+  // Made between the plan and the move: the second move's destination.
+  const obstacle = join(root, 'programs', 'p', 'memoro');
+  mkdirSync(obstacle);
+  const stdout = sink();
+  const stderr = sink();
+  assert.equal(applyLayoutMove(planned, { root, home: root, stdout, stderr }), 1);
+  assert.equal(stdout.seen.text, 'moved ~/plan/p/.claude → ~/programs/p/.claude (rename)\n');
+  assert.match(stderr.seen.text, /^mc: move 2 of 16 failed — move ~\/plan\/p\/memoro → ~\/programs\/p\/memoro \(worktree\): .*already exists\n/u);
+  assert.match(stderr.seen.text, /the 1 before it are done — mc layout migrate --apply again continues from there\n$/u);
+  assert.ok(existsSync(join(root, 'programs', 'p', '.claude', 'settings.json')));
+  assert.ok(existsSync(join(root, 'plan', 'p', 'memoro', '.git')), 'the worktree is where it was');
+  assert.deepEqual(readdirSync(obstacle), []);
+  const log = logLines();
+  assert.deepEqual(log.map((line) => [line.how, line.ok]), [['rename', true], ['worktree', false]]);
+  assert.match(log[1].error, /already exists/u);
+  assert.ok(!existsSync(join(root, 'runner', 'layout.json')));
+
+  rmdirSync(obstacle);
+  const again = await verb(['migrate', '--apply']);
+  assert.equal(again.code, 0, again.err);
+  assert.match(again.out, /^moved ~\/plan\/p\/memoro → ~\/programs\/p\/memoro \(worktree\)\n/u);
+  assert.match(again.out, /\nlayout 2 — 15 moves\n/u);
+  assert.ok(worktreesOf(repo.dir).includes(realOr(obstacle)));
+  assert.equal(git(obstacle, 'status --porcelain'), '');
+  assert.equal(layoutVersion({ root }), 2);
+  assert.equal(logLines().length, 2 + 15);
+});
+
+test('a second --apply after the move has nothing to move', async () => {
+  assert.equal((await verb(['migrate', '--apply'])).code, 0);
+  const again = await verb(['migrate', '--apply']);
+  assert.equal(again.code, 0);
+  assert.equal(again.out, 'layout 2 — nothing to move\n');
 });
