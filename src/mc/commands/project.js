@@ -34,7 +34,7 @@ import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanT
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
 import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, withPlanLock, writePlanFile } from '../plan-write.js';
 import { applyEntry, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
-import { programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
+import { layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
 import { discardWorkArea } from '../work-area.js';
 import { scanArgs } from './flags.js';
@@ -864,8 +864,9 @@ function discardProject(scanned, deps) {
   }
   const areaName = found.sent ? stepAreaName(project, { root }) : null;
   const area = areaName && existsSync(join(root, areaName)) ? discardArea(areaName, { env, dryRun: true }) : null;
-  const register = registerPath(root, project);
-  const hasRegister = found.sent && existsSync(register);
+  // In layout 2 the register is the project directory's STATE.json, removed with it.
+  const register = layoutVersion({ root }) === 2 ? null : registerPath(root, project);
+  const hasRegister = Boolean(register) && found.sent && existsSync(register);
   const waiting = waitingOn(project, programs());
 
   if (apply && found.sent) {

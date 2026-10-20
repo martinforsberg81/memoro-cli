@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
-  STEP_STATES, applyEntry, criteriaFromPlan, currentIndex, keyOf, markCriterion, normaliseEntry, overlayPlans, parseEntry, parseStepEnv,
-  patchStep, reconcileEntry, registerLogPath, registerPath, seedEntry, stepKey, updateCriterion, updateStep, whoAmI,
+  STEP_STATES, applyEntry, criteriaFromPlan, currentIndex, keyOf, listEntries, markCriterion, normaliseEntry, overlayPlans, parseEntry, parseStepEnv,
+  patchStep, readEntry, realLock, reconcileEntry, registerDir, registerLogPath, registerPath, seedEntry, stepKey, updateCriterion, updateStep, whoAmI,
 } from '../../src/mc/register.js';
 import { PLAN_SCHEMA, PLAN_VERSION, deliverableStep, validatePlan } from '../../src/mc/plan-schema.js';
 
@@ -433,4 +436,96 @@ test('updateCriterion writes the criterion and appends one criterion line naming
   assert.equal(lines[0].from, false);
   assert.equal(lines[0].to, true);
   assert.throws(() => updateCriterion({ root: '/w', project: 'ghost', number: 1, met: true, ...io }), /ghost: not in the register/u);
+});
+
+/**
+ * A temporary work root in layout 2 (ruling 51): `programs/a/x/PLAN.json`, and
+ * `programs/a/y/` archived with its `CLOSEOUT.json` beside its plan.
+ */
+function layout2Root() {
+  const root = mkdtempSync(join(tmpdir(), 'mc-register-'));
+  const put = (path, text) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, text); };
+  put(join(root, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }));
+  put(join(root, 'programs', 'a', 'x', 'PLAN.json'), JSON.stringify(plan([step(), step()])));
+  put(join(root, 'programs', 'a', 'y', 'PLAN.json'), JSON.stringify(plan([step({ status: 'done', pr: 4 })])));
+  put(join(root, 'programs', 'a', 'y', 'CLOSEOUT.json'), '{}');
+  return { root, put, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+const quiet = { append: () => {}, by: () => ({}) };
+const at = (root, project) => record([step(), step()], { repo: 'memoro-cli', programme: 'a', project, path: join(root, 'programs', 'a', project, 'PLAN.json') });
+
+test('layout 2: a project\'s register is STATE.json beside its plan, and a project with none has nowhere to be', () => {
+  const { root, cleanup } = layout2Root();
+  try {
+    assert.equal(registerPath(root, 'x'), join(root, 'programs', 'a', 'x', 'STATE.json'));
+    assert.equal(registerPath(root, 'y'), join(root, 'programs', 'a', 'y', 'STATE.json'), 'archived: still beside its plan');
+    assert.equal(registerPath(root, 'nope'), null);
+    assert.equal(registerDir(root), null, 'no register directory in layout 2');
+    assert.equal(readEntry(root, 'nope'), null);
+    assert.throws(() => updateStep({ root, project: 'nope', index: 0, patch: { status: 'done' }, ...quiet }),
+      { message: 'no project nope under ~/mc/programs — its register has nowhere to be' });
+    assert.throws(() => updateCriterion({ root, project: 'nope', number: 1, met: true, ...quiet }), /no project nope under ~\/mc\/programs/u);
+  } finally { cleanup(); }
+});
+
+test('layout 2: updateStep writes STATE.json and nothing under runner/projects/, and listEntries reads every programme\'s, archived included', () => {
+  const { root, cleanup } = layout2Root();
+  try {
+    overlayPlans([at(root, 'x'), at(root, 'y')], { root, ...quiet, now: 't0' });
+    updateStep({ root, project: 'x', index: 0, patch: { status: 'done', pr: 9 }, ...quiet, now: 't1' });
+    const state = parseEntry(readFileSync(join(root, 'programs', 'a', 'x', 'STATE.json'), 'utf8'));
+    assert.equal(state.steps[0].status, 'done');
+    assert.equal(state.steps[0].pr, 9);
+    assert.equal(readEntry(root, 'x').steps[0].pr, 9);
+    assert.equal(existsSync(join(root, 'runner', 'projects')), false, 'nothing under runner/projects/');
+    assert.deepEqual(listEntries(root).map((entry) => entry.project), ['x', 'y']);
+  } finally { cleanup(); }
+});
+
+test('realLock holds runner/register.lock in layout 2 and runner/projects/.lock in layout 1, and removes it after', () => {
+  const { root, cleanup } = layout2Root();
+  try {
+    const two = join(root, 'runner', 'register.lock');
+    assert.equal(realLock(root, () => existsSync(two)), true, 'held while fn runs');
+    assert.equal(existsSync(two), false, 'removed after');
+    assert.equal(existsSync(join(root, 'runner', 'projects')), false, 'layout 2 makes no register directory');
+    rmSync(join(root, 'runner'), { recursive: true });
+    const one = join(root, 'runner', 'projects', '.lock');
+    assert.equal(realLock(root, () => existsSync(one)), true, 'layout 1: today\'s file');
+    assert.equal(existsSync(one), false);
+  } finally { cleanup(); }
+});
+
+test('overlayPlans seeds STATE.json for a plan with no entry under the lock it is given, and takes none when nothing moves', () => {
+  const { root, cleanup } = layout2Root();
+  try {
+    const held = [];
+    const lock = (lockRoot, fn) => { held.push(lockRoot); return fn(); };
+    const [seeded] = overlayPlans([at(root, 'x')], { root, ...quiet, lock, now: 't0' });
+    assert.deepEqual(held, [root], 'the seed is written under the lock');
+    assert.equal(seeded.plan.steps[0].status, 'ready');
+    assert.equal(parseEntry(readFileSync(join(root, 'programs', 'a', 'x', 'STATE.json'), 'utf8')).steps.length, 2);
+    overlayPlans([at(root, 'x')], { root, ...quiet, lock, now: 't1' });
+    assert.deepEqual(held, [root], 'a plan the register agrees with takes no lock');
+    // A plan with no project directory has nowhere to keep a register: the file's own state, nothing written.
+    const [elsewhere] = overlayPlans([record([step()], { project: 'nope' })], { root, ...quiet, lock });
+    assert.equal(elsewhere.project, 'nope');
+    assert.deepEqual(held, [root]);
+  } finally { cleanup(); }
+});
+
+test('overlayPlans reads the entry again inside the lock, so a step written meanwhile is not overwritten', () => {
+  const { files, io } = disk();
+  overlayPlans([record([step(), step()])], { root: '/w', ...io, now: 't0' });
+  const grown = record([step(), step(), step({ title: 'u' })]);
+  const lock = (_root, fn) => {
+    // Another writer gets in between this reader's first read and its write.
+    updateStep({ root: '/w', project: 'p', index: 0, patch: { status: 'done', pr: 8 }, ...io, now: 't1' });
+    return fn();
+  };
+  const [out] = overlayPlans([grown], { root: '/w', ...io, lock, now: 't2' });
+  const written = parseEntry(files[registerPath('/w', 'p')]);
+  assert.equal(written.steps.length, 3, 'the reconcile is written');
+  assert.equal(written.steps[0].status, 'done', 'over the entry as it stood inside the lock');
+  assert.equal(out.plan.steps[0].pr, 8);
 });

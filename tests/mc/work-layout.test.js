@@ -173,6 +173,20 @@ describe('listStrays', () => {
       assert.deepEqual(listStrays({ root: strayRoot }).map((dir) => dir.name), ['jobbet']);
     } finally { rmSync(strayRoot, { recursive: true, force: true }); }
   });
+
+  it('layout 2 has no legacy areas: a checkout directly under the root is a stray, even named like a project', () => {
+    const strayRoot = mkdtempSync(join(tmpdir(), 'mc-strays-'));
+    try {
+      mkdirSync(join(strayRoot, 'runner'), { recursive: true });
+      writeFileSync(join(strayRoot, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }));
+      mkdirSync(join(strayRoot, 'programs', 'mc', 'oldproj'), { recursive: true });
+      writeFileSync(join(strayRoot, 'programs', 'mc', 'oldproj', 'PLAN.json'), '{}\n');
+      writeFileSync(registerPath(strayRoot, 'oldproj'), '{}\n');
+      mkdirSync(join(strayRoot, 'oldproj', 'memoro-cli', '.git'), { recursive: true });
+
+      assert.deepEqual(listStrays({ root: strayRoot }).map((dir) => dir.name), ['oldproj']);
+    } finally { rmSync(strayRoot, { recursive: true, force: true }); }
+  });
 });
 
 process.on('exit', () => { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } });

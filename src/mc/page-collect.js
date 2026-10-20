@@ -78,7 +78,7 @@ import {
 import { RUNNER_DISK, RUNNER_MEMORY, WORK_HOME, areaKindOf, mcHome, workRoot } from './paths.js';
 import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
-import { overlayPlans, readEntry } from './register.js';
+import { overlayPlans, readEntry, realLock } from './register.js';
 import { readTailEntries } from './conversations.js';
 import { claudeTail, codexTail } from './work-status.js';
 import { planState } from './plan-schema.js';
@@ -1552,7 +1552,7 @@ export async function collectPage({
   // The file's word on each step, then the register's over it: the plan on
   // main says what a step is, the register where it stands (register.js).
   const { plans: filed, sources } = cache.loadPlans({ root, repos: present, now, git });
-  const plans = overlayPlans(filed, { root, now: now.toISOString().replace(/\.\d{3}Z$/u, 'Z') });
+  const plans = overlayPlans(filed, { root, lock: realLock, now: now.toISOString().replace(/\.\d{3}Z$/u, 'Z') });
   let tsv = '';
   try { tsv = readFileSync(join(root, 'runner', 'log', 'runs.tsv'), 'utf8'); } catch { notes.push('no runner/log/runs.tsv'); }
   const rows = runsSince(tsv, new Date(now.getTime() - DAY_MS));

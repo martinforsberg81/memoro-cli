@@ -28,7 +28,7 @@ import { planSummary, readPlanText } from './plan-schema.js';
 import { findPlan, programsPlans } from './plan-source.js';
 import { stepAreaName, workRoot } from './paths.js';
 import { PR_LIST_ARGS, openPrsFor, projectForBranch } from './project-prs.js';
-import { listEntries, overlayPlans } from './register.js';
+import { listEntries, overlayPlans, realLock } from './register.js';
 import { machineDetail, machineState } from './status-collect.js';
 
 /* ---------------------------------------------------------------- builders */
@@ -245,7 +245,7 @@ export async function collectProject(name, {
   // The file's word on each step, then the register's over it (register.js).
   const filed = main ? readPlanText(main.text) : null;
   const [overlaid] = main && filed?.plan
-    ? overlayPlans([{ repo: main.repo, programme: main.programme, project: name, path: main.plan, legacy: false, plan: filed.plan, problems: [] }], { root })
+    ? overlayPlans([{ repo: main.repo, programme: main.programme, project: name, path: main.plan, legacy: false, plan: filed.plan, problems: [] }], { root, lock: realLock })
     : [null];
   const mainPlan = filed ? { ...filed, plan: overlaid?.plan ?? filed.plan } : null;
   const plan = mainPlan?.plan ?? null;

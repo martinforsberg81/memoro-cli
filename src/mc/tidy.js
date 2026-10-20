@@ -43,7 +43,7 @@ import {
 } from './paths.js';
 import { lsTreeArgs, planPath } from './plan-source.js';
 import { closeoutFileOf } from './project-archive.js';
-import { listEntries, registerPath } from './register.js';
+import { listEntries, registerDir, registerPath } from './register.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { serversFor } from './test-environment.js';
 import {
@@ -81,7 +81,8 @@ export function tidyRoots(env = process.env) {
     plan: planAreaRoot({ root }),
     step: stepAreaRoot({ root }),
     work: join(root, WORK_HOME),
-    register: dirname(registerPath(root, 'x')),
+    // Null in layout 2: a project's STATE.json is its knowledge (ruling 51), never a target.
+    register: registerDir(root),
     log: join(runner, 'log'),
     closed: join(runner, 'log', 'closed'),
     scratch: join(runner, 'scratch'),
@@ -213,7 +214,7 @@ export function gatherTidyFacts({
       item.area_exists = directoryExists(join(root, stepAreaName(entry.project, { root }))) || directoryExists(join(root, entry.project));
       // Only a project the rule would take has its files listed and weighed.
       if (!projectPurge(item, facts).target) continue;
-      item.files.push({ path: item.register_path, kind: 'register', bytes: treeBytes(item.register_path) });
+      if (roots.register) item.files.push({ path: item.register_path, kind: 'register', bytes: treeBytes(item.register_path) });
       const logRe = sessionLogRe(entry.project);
       for (const name of logFiles) {
         if (logRe.test(name)) item.files.push({ path: join(roots.log, name), kind: 'session-log', bytes: treeBytes(join(roots.log, name)) });
@@ -565,6 +566,7 @@ function listStamp(now) {
 export function outsideRoots(target, roots) {
   const key = KIND_ROOT[target?.kind];
   if (!key || typeof target.path !== 'string') return `not a kind tidy removes: ${target?.kind}`;
+  if (!roots[key]) return `no ${key} root in this layout`;
   const base = realpathSync(roots[key]);
   const real = realpathSync(target.path);
   if (!real.startsWith(`${base}/`)) return `not under ${roots[key]}`;
