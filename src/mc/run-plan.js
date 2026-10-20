@@ -730,12 +730,13 @@ function planExcerpt(plan, index, step) {
  * `plan`); the prompt quotes the part of it this step needs and says where the
  * whole file is, rather than carrying the file — see `planExcerpt`.
  */
-export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, answered = null, interrupted = null, stacked = null, now = new Date() }) {
+export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts = [], retry = null, answered = null, interrupted = null, stacked = null, earlier = null, now = new Date() }) {
   const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
     ...conflictPreamble(conflicts),
     ...retryPreamble(retry, repo),
     ...answeredPreamble(retry ? null : answered, repo),
+    ...earlierPreamble(earlier),
     ...interruptedPreamble(interrupted),
     ...stackedPreamble(retry ? null : stacked),
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
@@ -808,20 +809,49 @@ function retryPreamble(retry, repo) {
 
 /**
  * What a session is told first when its step was parked on a question and a
- * person answered it with the pull request kept (`mc step ready` on a blocked
- * step): the pull request is open on this branch with the earlier session's
- * work, and the answer is what to build the rest under. Empty otherwise.
+ * person answered it (`mc step ready` on a blocked step). With the pull request
+ * kept, it is open on this branch with the earlier session's work and the
+ * answer is what to build the rest under. Without one, nothing is in a pull
+ * request: the work is on this branch (`earlierPreamble`) and in the notes.
+ * Empty when the step was not answered.
  */
 function answeredPreamble(answered, repo) {
-  if (!answered?.pr) return [];
-  return [
+  if (!answered) return [];
+  const parked = [
     `This step was parked${answered.name ? ` on the decision \`${answered.name}\`` : ''}, and it has been answered.`,
     `The answer: ${answered.answer || '(no words given — read the step\'s notes with `mc step`)'}`,
+  ];
+  if (!answered.pr) {
+    return [
+      ...parked,
+      'Nothing of the earlier session\'s work is in a pull request; what it built is on this branch, below, and in its notes (`mc step`).',
+      '',
+    ];
+  }
+  return [
+    ...parked,
     `#${answered.pr} is still open, on this branch, with the earlier session's work.`,
     'Start there — `gh pr view` and the diff; its body says what was left — and',
     'build the rest under the answer. Commit, run `mc publish` (it pushes to the',
     'same branch; `--body-file` when the description is now wrong), and run',
     `\`mc merge ${repo} ${answered.pr}\`. No new pull request.`,
+    '',
+  ];
+}
+
+/**
+ * What a session is told when its branch already carries commits from an
+ * earlier session of this step that no pull request holds yet (run.js hands
+ * the commits past origin/main, at most 20, for a step with no pull request).
+ * Empty when there are none.
+ */
+function earlierPreamble(earlier) {
+  const commits = (earlier?.commits || []).slice(0, 20);
+  if (!commits.length) return [];
+  return [
+    'This branch already carries work from an earlier session of this step that is in no pull request:',
+    ...commits.map((line) => `- ${line}`),
+    'Read it (`git diff origin/main...HEAD`) and build on it — do not start over. Then commit, `mc publish` and `mc merge` as for any step.',
     '',
   ];
 }
