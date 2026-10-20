@@ -14,6 +14,7 @@
  *                                                                 change the named fields of a step, of a draft or of a sent plan that has not started
  *   mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner
  *   mc project archive <project>                 done: its row to the repository's project_log.md, CLOSEOUT.json beside the plan, its step area closed
+ *   mc project discard <project> [--apply]       gone: its directory, step area, register file and open pull requests; without --apply it shows what would go
  *   mc project <name> [--json] [--offline]       show a project: a sent plan as mc status <name> does, a draft as it stands
  *   mc project criterion met [<project>] <n>     record that success criterion <n> holds
  *   mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold
@@ -23,7 +24,7 @@
  * names only the criterion number.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { defaultRepos, listArchived, listPlans, listRepoPlans } from '../brief-collect.js';
@@ -33,9 +34,10 @@ import { runDocsMerge } from '../docs-merge.js';
 import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
 import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, withPlanLock, writePlanFile } from '../plan-write.js';
-import { applyEntry, parseStepEnv, readEntry, stepKey, updateCriterion } from '../register.js';
-import { programsHome, runnerDir, runnerTablePath, stepHome, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
+import { applyEntry, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
+import { programsHome, runnerDir, runnerTablePath, stepAreaName, stepHome, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
+import { discardWorkArea } from '../work-area.js';
 import { scanArgs } from './flags.js';
 
 /** The flags each verb takes; any other flag given to a verb is refused with exit 2. */
@@ -44,7 +46,7 @@ const EDIT_FLAGS = ['--goal', '--contract', '--out-of-scope'];
 const STEP_ADD_FLAGS = ['--model', '--effort', '--done-when', '--instruction-file', '--after'];
 const STEP_EDIT_FLAGS = ['--title', '--model', '--effort', '--done-when', '--instruction-file'];
 /** The words `mc project` takes as its verb. Any other single word is a project's name, for `mc project <name>`. */
-const VERB_WORDS = ['import', 'criterion', 'new', 'edit', 'step', 'send', 'archive'];
+const VERB_WORDS = ['import', 'criterion', 'new', 'edit', 'step', 'send', 'archive', 'discard'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -68,7 +70,7 @@ export async function run(argv, deps = {}) {
     if (extra) { stderr.write(`mc: import takes no ${extra}\n`); return 2; }
     return importPlans(scanned.flags.apply, { ...deps, env, stdout, stderr });
   }
-  if (scanned.flags.apply) { stderr.write(usage()); return 2; }
+  if (scanned.flags.apply && noun !== 'discard') { stderr.write(usage()); return 2; }
   if (noun === 'send') {
     const extra = onlyFlags(scanned, []);
     if (extra) { stderr.write(`mc: send takes no ${extra}\n`); return 2; }
@@ -78,6 +80,11 @@ export async function run(argv, deps = {}) {
     const extra = onlyFlags(scanned, []);
     if (extra) { stderr.write(`mc: archive takes no ${extra}\n`); return 2; }
     return archiveProject(scanned, { ...deps, env, stdout, stderr, root });
+  }
+  if (noun === 'discard') {
+    const extra = onlyFlags(scanned, ['--apply']);
+    if (extra) { stderr.write(usage()); return 2; }
+    return discardProject(scanned, { ...deps, env, stdout, stderr, root });
   }
   if (noun !== undefined && !VERB_WORDS.includes(noun)) {
     if (scanned.positional.length !== 1) { stderr.write(usage()); return 2; }
@@ -891,6 +898,122 @@ function removeEmptyDir(path) {
   try { rmdirSync(path); return true; } catch { return false; }
 }
 
+/**
+ * `mc project discard <project> [--apply]` — takes a project out whole (ruling 48:
+ * "Om man tar bort ett projekt så är väl hela tanken att hela projektet ska bort"):
+ * its open pull requests are closed with their branches, its step area is
+ * discarded, its register file goes, and last its directory. A draft never ran
+ * a step, so only its directory goes. An archived project is not discarded:
+ * archive is the way out it took. Without `apply` it says what would go and
+ * removes nothing. With it, every refusal is checked before anything is removed:
+ * a step running or landing, a live session, a worktree in use, pull requests
+ * that cannot be listed. A plan whose step waits on this project is noted, not refused.
+ */
+function discardProject(scanned, deps) {
+  const { env, stdout, stderr, root } = deps;
+  const home = deps.home || programsHome(env);
+  const repos = deps.repos || defaultRepos(env);
+  const programs = deps.programs || (() => programsPlans({ home }));
+  const gh = deps.gh || ghIn;
+  const discardArea = deps.discardArea || discardWorkArea;
+  const rm = deps.rm || rmSync;
+  const tmuxHas = deps.tmuxHas || hasTmuxSession;
+  const apply = Boolean(scanned.flags.apply);
+
+  const target = scanned.positional.slice(1);
+  if (target.length !== 1) { stderr.write(usage()); return 2; }
+  const [project] = target;
+  const found = findProjectDir(home, project);
+  if (!found) { stderr.write(`mc: ${project} is not a project under ~/mc/programs/\n`); return 1; }
+  if (existsSync(closeoutFileOf(found.file))) { stderr.write(`mc: ${project} is archived — archive is the way out it took\n`); return 1; }
+
+  // A draft never ran a step, so its directory is all there is to it.
+  const repo = found.sent ? repos.find((candidate) => candidate.name === draftRepo(found.file)) : undefined;
+  const pulls = repo ? projectPulls(repo, project, gh) : { list: [] };
+  if (pulls.error) {
+    stderr.write(`mc: could not list ${repo.name}'s open pull requests — ${pulls.error}\n`);
+    if (apply) return 1;
+  }
+  const areaName = found.sent ? stepAreaName(project, { root }) : null;
+  const area = areaName && existsSync(join(root, areaName)) ? discardArea(areaName, { env, dryRun: true }) : null;
+  const register = registerPath(root, project);
+  const hasRegister = found.sent && existsSync(register);
+  const waiting = waitingOn(project, programs());
+
+  if (apply && found.sent) {
+    const busy = readEntry(root, project, { read: deps.read })?.steps?.map((step, index) => ({ step, n: index + 1 }))
+      .find(({ step }) => step.status === 'running' || step.status === 'landing');
+    if (busy) { stderr.write(`mc: ${project} step ${busy.n} is ${busy.step.status} — wait for it, or mc step failed it first\n`); return 1; }
+    if (tmuxHas(`mc-${project}`)) { stderr.write(`mc: ${project} has a live session mc-${project} — stop it first\n`); return 1; }
+    if (area?.kept.length) {
+      stderr.write(`mc: ${project} has a worktree in use — ${area.kept.map((item) => `${item.path} (${item.why})`).join(', ')}\n`);
+      return 1;
+    }
+  }
+
+  const removing = apply ? 'removed' : 'would remove';
+  const say = (line) => stdout.write(`  ${line}\n`);
+  for (const pull of pulls.list) {
+    const label = `pull request #${pull.number} (branch ${pull.headRefName})`;
+    if (!apply) { say(`would remove ${label}`); continue; }
+    const closed = gh(repo.path, ['pr', 'close', String(pull.number), '--delete-branch', '--comment', 'Discarded with mc project discard.']);
+    if (closed.ok) say(`removed ${label}`);
+    else stderr.write(`mc: could not close pull request #${pull.number} — ${closed.stderr.trim()}\n`);
+  }
+  if (area) {
+    const done = apply ? discardArea(areaName, { env, dryRun: false }) : area;
+    for (const item of done.discarded) say(`${removing} ${item.path}${item.branch ? ` (branch ${item.branch})` : ''}`);
+    for (const item of done.kept) say(`kept ${item.path} — ${item.why}`);
+    if (done.removes_area) say(`${removing} ${join(root, areaName)}`);
+  }
+  if (hasRegister) {
+    if (apply) rm(register, { force: true });
+    say(`${removing} ${register}`);
+  }
+  if (apply) rm(found.dir, { recursive: true, force: true });
+  say(`${removing} ${found.dir}`);
+  for (const { other, n } of waiting) stdout.write(`  note: ${other} step ${n} waits on ${project} and will wait for ever\n`);
+  if (apply) { stdout.write(`mc: ${project} discarded\n`); return 0; }
+  stdout.write(`mc project discard ${project} --apply to remove them\n`);
+  return 0;
+}
+
+/**
+ * The open pull requests of `project` in `repo`, as `{ list }`: those whose head
+ * branch is `<project>` or `<project>-<n>`, the branches mc names for its steps.
+ * `{ error, list: [] }` when gh cannot list them.
+ */
+function projectPulls(repo, project, gh) {
+  const listed = gh(repo.path, ['pr', 'list', '--state', 'open', '--json', 'number,headRefName']);
+  if (!listed.ok) return { error: listed.stderr.trim() || 'gh pr list failed', list: [] };
+  let pulls;
+  try { pulls = JSON.parse(listed.stdout || '[]'); } catch { return { error: 'gh pr list printed no JSON', list: [] }; }
+  const list = pulls.filter((pull) => {
+    const branch = String(pull.headRefName);
+    return branch === project || (branch.startsWith(`${project}-`) && /^\d+$/u.test(branch.slice(project.length + 1)));
+  });
+  return { list };
+}
+
+/**
+ * The steps of the other plans under `~/mc/programs/` that wait on `project`, as
+ * `{ other, n }` in listing order, `n` the step's number. A step waits on a
+ * project when its `blocked_by` is that project, as `blockerDue` reads it.
+ */
+function waitingOn(project, records) {
+  const waiting = [];
+  for (const record of records) {
+    if (record.project === project) continue;
+    let steps;
+    try { steps = JSON.parse(record.text)?.steps; } catch { continue; }
+    if (!Array.isArray(steps)) continue;
+    steps.forEach((step, index) => {
+      if (step?.blocked_by?.kind === 'project' && step.blocked_by.name === project) waiting.push({ other: record.project, n: index + 1 });
+    });
+  }
+  return waiting;
+}
+
 export function usage() {
   return [
     'usage — mc project new <programme>/<project> --repo <repo> --goal <text> --contract <text>... --out-of-scope <text>...   draft a plan, as DRAFT.json\n',
@@ -900,6 +1023,7 @@ export function usage() {
     '        mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]   change the named fields of a step, of a draft or of a sent plan that has not started\n',
     '        mc project send <project>                    check a draft whole and rename it to PLAN.json: the handover to the runner\n',
     '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',
+    '        mc project discard <project> [--apply]      gone: its directory, step area, register file and open pull requests; without --apply it shows what would go\n',
     '        mc project <name> [--json] [--offline]      show a project: a sent plan as mc status <name> does, a draft as it stands\n',
     '        mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
     '        mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold\n',
