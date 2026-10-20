@@ -1712,3 +1712,38 @@ what is left of ruling 48
    "detta ska inte ens vara möjligt".
 
 Carried by `step-area-never-dirty` (4) and the docs project of ruling 48 (1–3).
+
+## 51 · Three kinds, linked by name: what a project knows beside its plan, what the runner runs under runner/
+
+`ruling · 2026-10-20` · raised in the `mc` programme session while planning
+project B of ruling 48
+
+Ruling 48's structure put a project's step worktrees inside its directory.
+Read against the code, that cannot hold: mc removes an area by removing its
+directory, and counts every process, conversation, dev server and lease under
+it as the area's — closing a step area would have moved the plan away, and
+archiving a programme would have removed every project in it.
+
+1. **A programme is one directory with everything of it**: its session's
+   worktrees, its documents and its projects. "plan = på programnivå." "mc/
+   programs/<p>/ med allting PLAN.json, worktree memoro/ och memoro-cli,
+   plan-sessioner, övriga docs. Det som då inte är där är worktree som
+   tillhör step." `~/mc/plan/` goes.
+2. **Everything the runner runs is under `~/mc/runner/`**: `step/`, `mend/`,
+   and any later kind of run beside them. "allt som har med runner borde
+   ligga i samma mapp, t ex mc/runner/step/ och mc/runner/mend/; det blir
+   också naturligt att samla andra typer av körningar." `~/mc/step/` goes.
+3. **A project's knowledge is in its directory, the running of it in
+   `runner/`**: `PLAN.json`, `STATE.json` (the register, moved from
+   `runner/projects/`) and `CLOSEOUT.json` beside each other; worktrees, raw
+   logs, the queue and caches under `runner/`. The test: wiping `runner/`
+   loses only work in flight and raw logs.
+4. **Worktrees are made where they are used**: `mc project new` writes only
+   the draft; the runner makes a step's worktree when a step in that
+   repository runs. "mc project new ska aldrig skapa repon! repot skapas av
+   runner när ett visst step körs."
+5. **In a programme's directory mc removes only git worktrees**, never the
+   directory, a project or a document.
+6. **No `steps/` files**: a step's prose stays in `PLAN.json`.
+
+Replaces § Structure of `mc-project.md`. Carried by project B.

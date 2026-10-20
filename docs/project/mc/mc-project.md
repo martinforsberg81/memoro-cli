@@ -51,41 +51,44 @@ Prose keeps only what needs judgement.
 
 ## Structure
 
+Revised by ruling 51 (2026-10-20). The first version put the steps' worktrees inside the project's directory; mc
+removes an area by removing its directory, and counts every process, conversation and dev server under it as the
+area's, so a closed step area would have taken the plan with it and an archived programme every project. The rule
+now: **a directory mc removes as an area holds only worktrees; a directory that holds a project's knowledge is
+never an area.**
+
 ```
-~/mc/programs/<programme>/
-  memoro/              the programme session's worktrees (today ~/mc/plan/<programme>/)
-  memoro-cli/
+~/mc/programs/<programme>/            everything of the programme; the programme session starts here
+  memoro/  memoro-cli/                the programme session's worktrees (branch plan/<programme>), made by mc plan
+  rulings.md, project_log.md, …       the programme's documents (ruling 50)
   <project>/
-    PLAN.json          the structure; written only by mc
-    steps/
-      01-<slug>.md     the prose; read by people and by the step, never parsed by mc
-      02-<slug>.md
-    memoro/            the steps' worktree, only when the project touches memoro (today ~/mc/step/<project>/)
-    memoro-cli/        the steps' worktree, only when the project touches memoro-cli
+    DRAFT.json → PLAN.json            what is to be done; written only by the mc project verbs
+    STATE.json                        where it stands: the register (ruling 21), moved from runner/projects/
+    CLOSEOUT.json                     what it came to, written by archive
+
+~/mc/runner/                          everything the runner runs
+  step/<project>/<repo>/              a step's worktree, made by the runner when a step in <repo> runs
+  mend/<repo>-<pr>/                   as today
+  deps/<name>/<repo>/                 mc deps bump (today step/deps-…)
+  log/  merges.json  held.json  unmergeable.json  foreground/  runner.json  billing  caches
+                                      what is running now, raw logs, caches; may be pruned or rebuilt
+
+~/mc/work/<name>/<repo>/              a person's workareas, unchanged
 ```
 
-- Replaces `docs/project/<programme>/<project>/PLAN.json` in a repository, `~/mc/plan/<programme>/` and
-  `~/mc/step/<project>/` with one tree.
-- The programme session starts in `~/mc/programs/<programme>/` and sees every project of its programme beside its
-  own worktrees.
-- A worktree belongs to a project and goes when the project goes. Stale plan branches (today:
-  `plan/ios-build-declaration`, 48 behind) and `branch-foreign` get much harder to reach.
-- A step's worktree has `../PLAN.json` and the step files beside it; nothing is searched for.
-- `PLAN.json` is structure only: goal, contract, out_of_scope, success criteria with their checks, and per step
-  title, model, effort, `done_when`, dependencies and the step file's name. The register stays where a step's state
-  lives (ruling 21).
-
-## What goes in the repositories
-
-| In the repository (true about the code) | In mc (the work of changing it) |
-|---|---|
-| Code and tests | Programmes, projects, plans, step prose |
-| `docs/technical/*`: how the system works now | The register |
-| Product rulings that constrain future code | Proposals and follow-ups |
-| One `project_log` line per delivered project | How a plan changed over time |
-
-Results reach a repository only through the steps' own pull requests (a step updates its technical doc as part of
-its `done_when`) and through `archive`, which writes only the `project_log` line. A plan never lands in a repository.
+- **The test:** if `~/mc/runner/` were wiped, only work in flight and raw logs are lost; nothing a person or a
+  session needs to know about a project. `~/mc/programs/` is what a backup of mc covers.
+- A project is one directory: `discard` removes it, an archived project keeps its whole state beside its plan.
+- Linked by name, never by nesting: a project's name is unique over every programme and is its step area, its
+  branch prefix and its register; a step is told its plan's path. `mc project new` writes only `DRAFT.json` and
+  refuses a repository's name as a project name (it would be the programme session's worktree).
+- In `~/mc/programs/<programme>/` mc removes only git worktrees, never another file or directory and never the
+  programme's directory: archiving a programme releases `memoro/` and `memoro-cli/` and keeps the rest.
+- `PLAN.json`, `DRAFT.json`, `STATE.json` and `CLOSEOUT.json` are written by verbs only; `mc hook pre-tool`
+  refuses an edit of them.
+- A step's prose stays in `PLAN.json`'s `instruction`: one file per plan keeps every verb's write one write under
+  one lock. `mc project <name>` is how a person reads it. No `steps/` files.
+- `~/mc/plan/` and `~/mc/step/` go.
 
 ## Verbs
 
@@ -144,7 +147,7 @@ After the verbs exist, not before; the verbs shrink the text.
 | 2 | `mc project new/criterion/step/send/show` with the refusals above | medium |
 | 3 | `archive`/`discard`, results to the repository, `plan-merge.js`/`merge-boundary.js` removed; the docs route stays (ruling 49) — as `project-archive`, then `plans-out-of-repos` | medium |
 | A | `step-area-never-dirty`: a step area is never blocked on its own sessions' files (ruling 50) | small, sent 2026-10-20 |
-| B | Worktrees under `~/mc/programs/` (`~/mc/plan/<programme>/`, `~/mc/step/<project>/`), and the `steps/` files | medium, before 4: the roles name where a session stands |
+| B | The structure of ruling 51: programme worktrees under `~/mc/programs/<programme>/`, step areas under `~/mc/runner/step/`, the register as `STATE.json` beside the plan, the edit guard, and the one-time move of what exists | large, before 4: the roles name where a session stands |
 | 4 | Roles rewritten against the verbs, generated verb reference, repository guidance | medium |
 | 5 | Docs: everything under `docs/project/` moves to `~/mc/programs/` (ruling 50); technical docs that still describe plans in git are rewritten; `archive` writes nothing in a repository | last |
 
