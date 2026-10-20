@@ -151,6 +151,19 @@ describe('archiveProgramme', () => {
     assert.equal(git(fx.repo, ['worktree', 'list']).stdout.trim().split('\n').length, 1);
   });
 
+  it('in layout 2 the planning session\'s worktrees go, the programme\'s directory stays, and the archive exits 0', async () => {
+    const fx = fixture();
+    const area = join(fx.root, 'work', 'programs', 'gone');
+    mkdirSync(area, { recursive: true });
+    writeFileSync(join(area, 'rulings.md'), '# rulings\n');
+    const { deps, calls } = stubs();
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area });
+    assert.equal(await archiveProgramme('gone', a), 0);
+    assert.deepEqual(calls.release, [true, false]);
+    assert.ok(a.stdout.out.text.endsWith(`mc: ${area} — the planning session's worktrees released; the programme's directory stays\nmc: gone archived\n`), a.stdout.out.text);
+    assert.ok(existsSync(join(area, 'rulings.md')));
+  });
+
   it('keeps a file a test reads, removes the rest, and names it in the PR body', async () => {
     const fx = fixture({
       extra: {
