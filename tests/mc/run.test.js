@@ -10,7 +10,6 @@ import { checkpoint } from '../../src/mc/checkpoint.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
 import { RUN_REFUSALS, TIDY_KIND, WORKAREA_BLOCKS, initSource } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
-import { unauthorisedChanges } from '../../src/mc/plan-schema.js';
 import { sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { machineState } from '../../src/mc/status-collect.js';
 
@@ -1547,22 +1546,8 @@ test('a session that ended success with its pull request open is queued by the r
   assert.equal(registerOf(f, 'm').steps[0].status, 'landing');
 });
 
-test('a plan trespass found at the runner\'s door is the step\'s red: ready again, nothing queued', async () => {
-  const f = fixture({ plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession() });
-  f.deps.planBoundary = async () => ({ checked: true, ok: false, problems: ['steps[1] changed'] });
-  await createRunner({ deps: f.deps }).pass();
-  assert.equal(f.calls.rounds.length, 0);
-  const step = registerOf(f, 'm').steps[0];
-  assert.equal(step.status, 'ready');
-  assert.equal(step.attempts, 1);
-  assert.equal(step.pr, 9);
-  assert.equal(step.reason, 'plan-trespass — steps[1] changed');
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,red\t-\t\w+\n/u);
-});
-
 test('the last step with an unmet criterion, found at the runner\'s door, is the step\'s red: ready again, nothing queued', async () => {
   const f = fixture({ plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession() });
-  f.deps.planBoundary = async () => ({ checked: true, ok: true, problems: [] });
   f.deps.criteriaDoor = async () => ({ checked: true, ok: false, unmet: [1], problems: ['step 1 is the plan\'s last'] });
   await createRunner({ deps: f.deps }).pass();
   assert.equal(f.calls.rounds.length, 0);
@@ -4159,10 +4144,8 @@ test('every workarea block has a case above', () => {
 });
 
 /**
- * What the plan edit is allowed to be: `unauthorisedChanges`'s own shape, which
- * is the rule a step session's edit is judged by — the runner holds itself to
- * it. The status, the blocker and one appended comment on the first not-done
- * step, and nothing else in the file.
+ * What the plan edit is allowed to be: the status, the blocker and one appended
+ * comment on the first not-done step, and nothing else in the file.
  */
 test('the block writes exactly the status, the blocker and one comment on the first not-done step', async () => {
   const two = [

@@ -393,7 +393,7 @@ test('stepPrompt carries its own step in full and every other step as one line',
 /**
  * What `reconcile` used to be told, told to the session that is going to read
  * that code anyway. The body below the preamble is untouched — the step, its
- * `done_when` and the plan boundary are all still exactly true.
+ * `done_when` and the plan's criteria are all still exactly true.
  */
 test('stepPrompt: a conflicted worktree is a preamble, and the step is still the job', () => {
   const { plan } = threeSteps();

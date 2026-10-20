@@ -17,8 +17,8 @@
  * (`<project>-<n>`) whose current step is not blocked. A pull request that is nobody's step — a planning session's
  * `plan/<programme>`, a hand-made branch — gets the round and nothing else.
  *
- * The door — the plan boundary checked before the queue — is `planBoundary`
- * in merge-boundary.js, and beside it `criteriaDoor` for the plan's last step.
+ * The door — the plan's last step's criteria, checked before the queue — is
+ * `criteriaDoor` in merge-boundary.js.
  *
  * Pure over what it is handed; the verb and the merger do the reading.
  */

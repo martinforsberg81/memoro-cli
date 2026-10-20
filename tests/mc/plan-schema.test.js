@@ -16,7 +16,6 @@ import {
   deliverableStep,
   planState,
   planSummary,
-  unauthorisedChanges,
   validatePlan,
   PLAN_SCHEMA,
   PLAN_VERSION,
@@ -197,7 +196,7 @@ describe('the plan schema', () => {
   });
 
   // The three plans the runner refused on 2026-09-02, in the shape their
-  // sessions actually wrote. Two were logged `plan-trespass` for it and one —
+  // sessions actually wrote. Two were refused by the plan's own checks and one —
   // `new-user`, whose five entries each carry a `body` string — sat unreadable
   // on origin/main for a day. None of these is a fault any more: prose on a
   // step is prose, and the only thing a wrong paragraph can spoil is itself.
@@ -338,69 +337,6 @@ describe('the plan has no status of its own', () => {
     assert.equal(planState(met).status, 'done');
     const one = plan({ steps, success_criteria: [criterion(true), criterion(false)] });
     assert.equal(planSummary(one).next, 'every step is done, but success criterion 2 is not met — run its check and record it with mc project criterion met <project> 2, or add a step that does');
-  });
-});
-
-describe('what a step session may have changed', () => {
-  const before = plan();
-
-  it('lets it finish its own step', () => {
-    const after = structuredClone(before);
-    after.steps[1].status = 'done';
-    after.steps[1].pr = 11150;
-    after.success_criteria[0].met = true;
-    after.steps[1].comments = ['The token had to be registered before the hero could name it.'];
-    assert.deepEqual(unauthorisedChanges(before, after, 1), { ok: true, problems: [] });
-  });
-
-  it('catches a rewritten step that has not run', () => {
-    const after = structuredClone(before);
-    after.steps[1].instruction = ['Something else entirely.'];
-    const { ok, problems } = unauthorisedChanges(before, after, 0);
-    assert.equal(ok, false);
-    assert.match(problems.join('\n'), /steps\[1\]: changed by the session that ran step 1/u);
-  });
-
-  it('catches an added step and a moved boundary', () => {
-    const added = structuredClone(before);
-    added.steps.push({ title: 'One more', status: 'ready', done_when: 'x', instruction: ['y'], pr: null, blocked_by: null });
-    assert.match(unauthorisedChanges(before, added, 1).problems.join('\n'), /never adds or removes one/u);
-
-    const widened = structuredClone(before);
-    widened.out_of_scope = [];
-    assert.match(unauthorisedChanges(before, widened, 1).problems.join('\n'), /out_of_scope/u);
-  });
-
-  /**
-   * A step's `runner` is its author's, like its instruction: a session that
-   * could pick its own model would pick the one it was not asked to run on.
-   * Its own step is no exception for anything but status, pr, comments and
-   * blocked_by.
-   */
-  it('catches a changed runner and a changed instruction on its own step', () => {
-    const runner = structuredClone(before);
-    runner.steps[1].runner = { model: 'opus' };
-    assert.match(unauthorisedChanges(before, runner, 1).problems.join('\n'), /steps\[1\]\.runner: a step session does not change it/u);
-
-    const instruction = structuredClone(before);
-    instruction.steps[1].instruction = ['Something easier.'];
-    assert.match(unauthorisedChanges(before, instruction, 1).problems.join('\n'), /steps\[1\]\.instruction: a step session does not change it/u);
-
-    const doneWhen = structuredClone(before);
-    doneWhen.steps[1].done_when = 'It builds.';
-    assert.match(unauthorisedChanges(before, doneWhen, 1).problems.join('\n'), /steps\[1\]\.done_when: a step session does not change it/u);
-
-    // Blocking itself is still its own to do.
-    const blocked = structuredClone(before);
-    blocked.steps[1].status = 'blocked';
-    blocked.steps[1].blocked_by = { kind: 'decision', name: 'step-cost-2' };
-    assert.deepEqual(unauthorisedChanges(before, blocked, 1), { ok: true, problems: [] });
-  });
-
-  it('lets a criterion be ticked but not rewritten', () => {
-    const after = structuredClone(before);
-    after.success_criteria[0].check = 'Looks fine.';
-    assert.match(unauthorisedChanges(before, after, 1).problems.join('\n'), /only `met` is the session's/u);
   });
 });
 

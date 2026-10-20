@@ -107,10 +107,6 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
     assert.doesNotMatch(DOC, /`UPDATE` has no other writer/u);
   });
 
-  it('warns a reader of runs.tsv about a trespass on a step that changed the rules', () => {
-    assert.match(DOC, /`plan-trespass` on a step that changed the runner's\n  own rules is worth checking before it is believed/u);
-  });
-
   it('says where a step that did not land stands — the register, not a held file — and keeps the argument list current', () => {
     const register = /### The register\n([\s\S]*?)\n## /u.exec(DOC);
     assert.ok(register, 'the section a reader looks in for where state lives is gone');

@@ -30,13 +30,11 @@ from starting the step again once it is answered.
 2. Commit, then `mc publish` (pushes, opens the PR, prints its number). A
    landed PR is a `done` step, so a part you cannot finish is
    `mc step failed`, never a partial landing.
-3. `mc merge <repo> <pr>`. It checks the plan boundary, queues the PR for the
+3. `mc merge <repo> <pr>`. It checks the plan's criteria, queues the PR for the
    merger and returns at once.
    - `queued for the merger` — your work is over; end the session. The merger
      runs the gate and lands it; a red comes back to this step's next session
      with the gate's reason, on the same branch and PR.
-   - `plan-trespass` — undo every change to the plan file, commit, push, run
-     `mc merge` again.
    - `unmet-criteria` — you are the plan's last step and a success criterion is
      not met in the register: run its `check` and `mc project criterion met <n>`
      for each you measured, then `mc merge` again; one you cannot measure is

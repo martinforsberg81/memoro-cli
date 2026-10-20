@@ -717,10 +717,8 @@ are `SESSION_DEFAULTS` in `run-plan.js`.
 
 Effort and advisor are claude's flags (`effortArgs` and `advisorArgs` in the
 claude adapter), so a codex session gets neither, named or not. A step's
-`runner` is its author's, like its `instruction`: `unauthorisedChanges`
-compares every key of the session's own step except `status`, `pr`,
-`comments` and `blocked_by`, so a session that changed the model it runs on
-is a `plan-trespass`.
+`runner` is its author's, like its `instruction`, and nothing in the runner
+checks that a session left it alone.
 
 The prompt is `stepPrompt`: you are in this workarea, your plan is on disk at
 this path, do `steps[i]`, its `done_when` is your success criterion, say in the
@@ -1240,15 +1238,7 @@ thing it writes into a repository: a blocked step (below).
   and from codex's `exec --json` event stream; a field the tool does not give
   is `-`, never a guess. `exit` and `note` are independent and are allowed to
   disagree — a process can fail after a session that reported success, and
-  both are recorded. **A `plan-trespass` on a step that changed the runner's
-  own rules is worth checking before it is believed.** The boundary is judged
-  by the process that ran the step, with the code it was started with, so a
-  step that merged a new `plan-schema.js`, prompt or `unauthorisedChanges` is
-  measured against the old one: on 2026-09-02 a step migrated every plan on
-  both mains, the runner re-read them with the schema it was holding, they did
-  not parse, and the row said `plan-trespass` against a session that did
-  nothing wrong. The handover above is what keeps the *next* step honest; it
-  cannot save the step that produced the change.
+  both are recorded.
 - **`log/runner.log`** — the line-by-line narration, also on stdout. What a
   lane picked (`memoro#2: next — <name> (step i/n)`), what it could not start
   and why, and — once, not every ten minutes — that it has nothing to run.
