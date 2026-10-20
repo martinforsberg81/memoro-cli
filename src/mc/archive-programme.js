@@ -37,6 +37,8 @@ import { join } from 'node:path';
 
 import { appendRow, keptFiles, keptParagraph, remoteSlug } from './archive-plan.js';
 import { listPlans, listProgrammes } from './brief-collect.js';
+import { programsHome } from './paths.js';
+import { programsPlans } from './plan-source.js';
 import { landingNote } from './run-plan.js';
 
 /** Every programme-archive branch starts with this — never `mc-archive-`, which the runner waits on. */
@@ -94,7 +96,8 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
       stderr.write(`mc: git fetch in ${repo.path} failed — origin/main may be stale\n`);
     }
   }
-  const plans = present.flatMap((repo) => listPlans(repo, { git: gitOut }))
+  const programs = () => programsPlans({ home: programsHome(env) });
+  const plans = present.flatMap((repo) => listPlans(repo, { programs }))
     .filter((plan) => plan.programme === programme);
   const homes = present.filter((repo) => listProgrammes(repo, { git: gitOut }).includes(programme));
   const areaExists = existsSync(areaPath);

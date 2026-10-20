@@ -1,13 +1,13 @@
 /**
- * The two files that make the page instant. Fixtures only: the git here is a
- * function, and the cache files are an object, so nothing spawns and nothing
- * is written to disk.
+ * The page's reads: the plans under `~/mc/programs/`, and the pull-request
+ * cache. Fixtures only: the plans and the cache files are functions and an
+ * object, so nothing spawns and nothing is written to disk.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  PLANS_SHAPE, ageWords, cachePath, dropPr, loadPlans, loadPrs, mergePrs, savePrs,
+  ageWords, cachePath, dropPr, loadPlans, loadPrs, mergePrs, savePrs,
 } from '../../src/mc/page-cache.js';
 
 const ROOT = '/w';
@@ -27,87 +27,12 @@ function files(initial = {}) {
   };
 }
 
-const PLAN = '---\nstatus: ready\nnext: "Step 2 — instant"\n---\n';
-
-/** ls-tree names one plan per repository; cat-file answers with PLAN. */
-function fakeGit(shas, calls) {
-  return (cwd, args) => {
-    calls.push([cwd, args[0]]);
-    if (args[0] === 'rev-parse') return shas[cwd] ?? null;
-    if (args[0] === 'ls-tree') return `docs/project/mc/${cwd.split('/').at(-1)}/PLAN.md`;
-    return null;
-  };
-}
-
-const batchOf = (calls) => (cwd, refs) => {
-  calls.push([cwd, 'cat-file']);
-  return new Map(refs.map((ref) => [ref, PLAN]));
-};
-
-describe('plans.json', () => {
-  it('reads git on a miss, writes the entry under the sha, and reads nothing but rev-parse on a hit', () => {
-    const fs = files();
-    const shas = { '/r/memoro': 'aaa', '/r/memoro-cli': 'bbb' };
-    const first = [];
-    const miss = loadPlans({ root: ROOT, repos: REPOS, now: NOW, git: fakeGit(shas, first), batch: batchOf(first), ...fs });
-    assert.deepEqual(miss.plans.map((p) => [p.repo, p.project, p.status]), [
-      ['memoro', 'memoro', 'ready'], ['memoro-cli', 'memoro-cli', 'ready'],
-    ]);
-    assert.deepEqual(miss.sources, [
-      { repo: 'memoro', sha: 'aaa', cached: false }, { repo: 'memoro-cli', sha: 'bbb', cached: false },
-    ]);
-    assert.deepEqual(first.map((c) => c[1]), ['rev-parse', 'ls-tree', 'cat-file', 'rev-parse', 'ls-tree', 'cat-file']);
-    assert.equal(JSON.parse(fs.held[cachePath(ROOT, 'plans.json')]).memoro.sha, 'aaa');
-
-    const second = [];
-    const hit = loadPlans({ root: ROOT, repos: REPOS, now: NOW, git: fakeGit(shas, second), batch: batchOf(second), ...fs });
-    assert.deepEqual(second.map((c) => c[1]), ['rev-parse', 'rev-parse'], 'a hit costs one rev-parse per repository');
-    assert.deepEqual(hit.plans, miss.plans);
-    assert.equal(hit.sources.every((s) => s.cached), true);
-  });
-
-  it('re-reads the repository whose sha moved, and leaves the other alone', () => {
-    const fs = files();
-    const shas = { '/r/memoro': 'aaa', '/r/memoro-cli': 'bbb' };
-    loadPlans({ root: ROOT, repos: REPOS, now: NOW, git: fakeGit(shas, []), batch: batchOf([]), ...fs });
-    shas['/r/memoro-cli'] = 'ccc';
-    const calls = [];
-    const after = loadPlans({ root: ROOT, repos: REPOS, now: NOW, git: fakeGit(shas, calls), batch: batchOf(calls), ...fs });
-    assert.deepEqual(after.sources, [
-      { repo: 'memoro', sha: 'aaa', cached: true }, { repo: 'memoro-cli', sha: 'ccc', cached: false },
-    ]);
-    assert.deepEqual(calls.map((c) => c[1]), ['rev-parse', 'rev-parse', 'ls-tree', 'cat-file']);
-  });
-
+describe('loadPlans', () => {
   /**
-   * The sha answers for `main`; it cannot answer for the reader. On 2026-09-06
-   * `listPlans` began carrying the step's number and title, and memoro's entry
-   * — a hit, written the day before, main unmoved — drew six NEXT rows with no
-   * `n/m` and no title on them.
+   * The plans live under `~/mc/programs/` (ruling 48), which no sha keys, so
+   * they are read on every call and nothing is cached for them.
    */
-  it('re-reads an entry written by an older shape of the record', () => {
-    const fs = files();
-    const shas = { '/r/memoro': 'aaa' };
-    loadPlans({ root: ROOT, repos: [REPOS[0]], now: NOW, git: fakeGit(shas, []), batch: batchOf([]), ...fs });
-    const path = cachePath(ROOT, 'plans.json');
-    const held = JSON.parse(fs.held[path]);
-    delete held.memoro.shape; // the file as every machine already holds it
-    fs.held[path] = JSON.stringify(held);
-
-    const calls = [];
-    const after = loadPlans({ root: ROOT, repos: [REPOS[0]], now: NOW, git: fakeGit(shas, calls), batch: batchOf(calls), ...fs });
-    assert.deepEqual(after.sources, [{ repo: 'memoro', sha: 'aaa', cached: false }]);
-    assert.deepEqual(calls.map((c) => c[1]), ['rev-parse', 'ls-tree', 'cat-file']);
-    assert.equal(JSON.parse(fs.held[path]).memoro.shape, PLANS_SHAPE, 'and it is stamped on the way back in');
-  });
-
-  /**
-   * The sha does not move when a file under `~/mc/programs/` is edited, so the
-   * programs plan is read on every call and never written into the cache.
-   */
-  it('reads ~/mc/programs/ on every call, and keeps it out of the cache', () => {
-    const fs = files();
-    const shas = { '/r/memoro': 'aaa' };
+  it('reads ~/mc/programs/ on every call, asks no git and writes nothing', () => {
     const PROGRAM = JSON.stringify({
       schema: 'mc-plan', version: 1, repo: 'memoro', goal: ['g'], contract: ['c'], out_of_scope: ['o'],
       success_criteria: [{ met: false, criterion: 'x', check: 'y' }], documents: [],
@@ -115,27 +40,18 @@ describe('plans.json', () => {
     });
     let text = PROGRAM;
     const programs = () => [{ path: '/w/programs/mc/memoro/PLAN.json', programme: 'mc', project: 'memoro', file: 'PLAN.json', text, repo: 'memoro' }];
-    const first = loadPlans({ root: ROOT, repos: [REPOS[0]], now: NOW, git: fakeGit(shas, []), batch: batchOf([]), programs, ...fs });
-    assert.deepEqual(first.plans.map((p) => [p.path, p.status]), [['/w/programs/mc/memoro/PLAN.json', 'ready']]);
-
-    text = '{'; // the same file, edited in place: the sha is unchanged
-    const calls = [];
-    const second = loadPlans({ root: ROOT, repos: [REPOS[0]], now: NOW, git: fakeGit(shas, calls), batch: batchOf(calls), programs, ...fs });
-    assert.deepEqual(second.sources, [{ repo: 'memoro', sha: 'aaa', cached: true }]);
-    assert.deepEqual(second.plans.map((p) => [p.path, p.status]), [['/w/programs/mc/memoro/PLAN.json', 'invalid']]);
-    const cached = JSON.parse(fs.held[cachePath(ROOT, 'plans.json')]).memoro.plans;
-    assert.deepEqual(cached.map((p) => p.path), ['docs/project/mc/memoro/PLAN.md'], 'the repository record only');
-  });
-
-  it('reads a repository without a sha straight through and files nothing under it', () => {
+    const git = () => { throw new Error('loadPlans asked git'); };
     const fs = files();
-    const calls = [];
-    const out = loadPlans({
-      root: ROOT, repos: [REPOS[0]], now: NOW, git: fakeGit({}, calls), batch: batchOf(calls), ...fs,
-    });
-    assert.equal(out.plans.length, 1);
-    assert.deepEqual(out.sources, [{ repo: 'memoro', sha: null, cached: false }]);
-    assert.equal(cachePath(ROOT, 'plans.json') in fs.held, false, 'nothing to key it by, so nothing written');
+    const first = loadPlans({ root: ROOT, repos: REPOS, now: NOW, git, programs, ...fs });
+    assert.deepEqual(first.plans.map((p) => [p.repo, p.path, p.status]), [['memoro', '/w/programs/mc/memoro/PLAN.json', 'ready']]);
+    assert.deepEqual(first.sources, [
+      { repo: 'memoro', sha: null, cached: false }, { repo: 'memoro-cli', sha: null, cached: false },
+    ]);
+
+    text = '{'; // the same file, edited in place
+    const second = loadPlans({ root: ROOT, repos: REPOS, now: NOW, git, programs, ...fs });
+    assert.deepEqual(second.plans.map((p) => [p.path, p.status]), [['/w/programs/mc/memoro/PLAN.json', 'invalid']]);
+    assert.deepEqual(fs.held, {});
   });
 });
 

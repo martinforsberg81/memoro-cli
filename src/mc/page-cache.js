@@ -1,54 +1,26 @@
 /**
- * The two files that make the page instant: `~/mc/runner/plans.json` and
- * `~/mc/runner/prs.json`.
+ * The file that makes the page instant: `~/mc/runner/prs.json`, the open PRs
+ * as GitHub last gave them. Plans are not cached: they are read from
+ * `~/mc/programs/` on every call (`loadPlans`), which is a directory read.
  *
- * The page reads plans from `origin/main` and open PRs from GitHub. Neither
- * changes between two prints a second apart, and one of them needs the
- * network, so the page reads them once and remembers.
- *
- * **plans.json** is keyed by the `origin/main` sha, per repository. A cache
- * hit costs one `git rev-parse` — the sha *is* the question "did anything
- * change?", so there is no staleness to reason about and no age to print: a
- * hit is exactly what a fresh read would have returned. A miss reads the
- * plans with one `cat-file --batch` and rewrites the entry. The sha answers
- * for main and `PLANS_SHAPE` answers for the reader: a record written before
- * the reader gained a field is not what a fresh read would return either.
- *
- * **prs.json** has no such key — an open PR closes without moving any sha —
- * so it is stamped instead, written by `--fresh`, by every runner round
+ * **prs.json** has no key — an open PR closes without moving any sha — so it
+ * is stamped instead, written by `--fresh`, by every runner round
  * that asked GitHub and by a page at a terminal whose copy is five minutes old
  * (`mergePrs`), and trimmed by the merger the moment a pull request lands
- * (`dropPr`). The page says how old it is. That is the
- * whole difference between the two files.
+ * (`dropPr`). The page says how old it is.
  *
  * These are the page's only writes. They are a read-through cache of things
- * the page already reads, not state anything else depends on: delete both
- * and the next `--fresh` fills them again.
+ * the page already reads, not state anything else depends on: delete the file
+ * and the next `--fresh` fills it again.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
-import { catFileBatch, listRepoPlans, withProgrammePlans } from './brief-collect.js';
+import { listPlans } from './brief-collect.js';
 import { programsPlans } from './plan-source.js';
 
-export const PLANS_FILE = 'plans.json';
 export const PRS_FILE = 'prs.json';
-
-/**
- * What shape the cached plan records are in. The sha answers *did anything
- * change on main*, and answers it perfectly — but it says nothing about a
- * change on **this** side: when `listPlans` starts carrying a field, every
- * entry already in the file is a hit that lacks it.
- *
- * Measured 2026-09-06, the day `step`, `steps` and `title` arrived on the
- * record (`planSummary`): the page's NEXT drew `step 2/4` for memoro-cli, whose
- * main had moved since, and a bare `step` with no title for all six of memoro's
- * rows, whose entry was a hit written the day before. Bump this whenever a
- * record gains, loses or renames a field, and the next page re-reads instead of
- * drawing half a row.
- */
-export const PLANS_SHAPE = 2;
 
 export function cachePath(root, file) {
   return join(root, 'runner', file);
@@ -64,46 +36,15 @@ const seconds = (iso, now) => {
 };
 
 /**
- * Every plan of every repository, from the cache where the sha still matches
- * and from git where it does not.
- *
- * The cache holds only the repository's own plans. `~/mc/programs/` changes
- * without origin/main's sha moving, so those are read from disk on every call
- * and laid over the cached records (`withProgrammePlans`).
- *
- * A repository whose `rev-parse` fails — no checkout, no origin/main — is
- * read straight through and not cached: there is no key to file it under.
+ * Every plan of every repository, as `listPlans` gives them: the plans under
+ * `~/mc/programs/` (ruling 48). Nothing is cached: `~/mc/programs/` changes
+ * without any sha moving, and reading it is a directory read. `sources` says
+ * one line a repository, never cached. `ref`, `now`, `git`, `batch`, `read`
+ * and `write` are accepted and not used.
  */
-export function loadPlans({
-  root,
-  repos,
-  ref = 'origin/main',
-  now = new Date(),
-  git,
-  batch = catFileBatch,
-  read = readFileSync,
-  write = writeJsonAtomic,
-  programs = programsPlans,
-} = {}) {
-  const path = cachePath(root, PLANS_FILE);
-  const cache = readJson(path, read) || {};
-  const plans = [];
-  const sources = [];
-  let dirty = false;
-  for (const repo of repos) {
-    const sha = git(repo.path, ['rev-parse', ref]);
-    const entry = sha ? cache[repo.name] : null;
-    if (entry && entry.sha === sha && entry.shape === PLANS_SHAPE && Array.isArray(entry.plans)) {
-      plans.push(...withProgrammePlans(repo.name, entry.plans, { programs }));
-      sources.push({ repo: repo.name, sha, cached: true });
-      continue;
-    }
-    const fresh = listRepoPlans(repo, { ref, git, batch });
-    plans.push(...withProgrammePlans(repo.name, fresh, { programs }));
-    sources.push({ repo: repo.name, sha, cached: false });
-    if (sha) { cache[repo.name] = { sha, shape: PLANS_SHAPE, read: now.toISOString(), plans: fresh }; dirty = true; }
-  }
-  if (dirty) { try { write(path, cache); } catch { /* a cache that cannot be written is still a page */ } }
+export function loadPlans({ repos, programs = programsPlans } = {}) {
+  const plans = repos.flatMap((repo) => listPlans(repo, { programs }));
+  const sources = repos.map((repo) => ({ repo: repo.name, sha: null, cached: false }));
   return { plans, sources };
 }
 
@@ -116,7 +57,7 @@ export function loadPrs({ root, now = new Date(), read = readFileSync } = {}) {
 
 export function savePrs({ root, prs, now = new Date(), write = writeJsonAtomic } = {}) {
   const fetched = now.toISOString();
-  try { write(cachePath(root, PRS_FILE), { fetched, prs }); } catch { /* see loadPlans */ }
+  try { write(cachePath(root, PRS_FILE), { fetched, prs }); } catch { /* a cache that cannot be written is still a page */ }
   return { prs, fetched, age_seconds: 0 };
 }
 

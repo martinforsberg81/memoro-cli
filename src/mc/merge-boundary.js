@@ -149,15 +149,15 @@ export async function planBoundary({ repoPath, pr, git, gh, from = null, index =
  * Fails open like `planBoundary` on anything it cannot read.
  *
  * `met` is the register's, not the file's (ruling 48): `mc project criterion
- * met` writes it, and a pull request carries none to read. So the plan is
- * judged as the base has it — a `~/mc/programs/` plan of the project first,
- * else the repository's copy on `origin/<base>` — with the register's criteria
- * laid over it. The pull request's own copy is never read.
+ * met` writes it, and a pull request carries none to read. So the plan is the
+ * project's under `~/mc/programs/`, with the register's criteria laid over it;
+ * a project with none there is not checked. The project is the step's, else
+ * the one whose name the branch begins with among the programs plans
+ * (`projectForBranch`). No repository is read: `git` is accepted and not used.
  *
  * `{ checked, ok, problems }`, and `unmet` (1-based) on a refusal.
  */
-export async function criteriaDoor({ repoPath, pr, git, gh, step = undefined, env = process.env, entries = [], root = workRoot(env), read, programs = programsPlans } = {}) {
-  const askGit = git || run('git');
+export async function criteriaDoor({ repoPath, pr, gh, step = undefined, env = process.env, entries = [], root = workRoot(env), read, programs = programsPlans } = {}) {
   const askGh = gh || run('gh');
 
   const asked = askGh(['pr', 'view', String(pr), '--json', 'headRefName,baseRefName'], { cwd: repoPath });
@@ -171,25 +171,12 @@ export async function criteriaDoor({ repoPath, pr, git, gh, step = undefined, en
   const target = step !== undefined ? step : stepForMerge({ env, head, entries });
   if (!target) return notChecked;
 
-  const fetched = askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
-  if (fetched?.status !== 0) return notChecked;
-  const tree = askGit(['ls-tree', '-r', '--name-only', `origin/${base}`, '--', 'docs/project'], { cwd: repoPath });
-  if (tree?.status !== 0) return notChecked;
-  const project = target.project || projectForBranch(head, names(tree.stdout));
+  const all = programs();
+  const project = target.project || projectForBranch(head, all.map((one) => one.project));
   if (!project) return notChecked;
-  const shadow = programs().find((one) => one.project === project);
-  let text = shadow ? shadow.text : null;
-  if (text === null) {
-    const path = String(tree.stdout || '').split('\n').find((p) => {
-      const parts = p.split('/');
-      return parts.length === 5 && parts[3] === project && parts[4] === 'PLAN.json';
-    });
-    if (!path) return notChecked;
-    const onMain = askGit(['show', `origin/${base}:${path}`], { cwd: repoPath });
-    if (onMain?.status !== 0) return notChecked;
-    text = onMain.stdout;
-  }
-  const { plan } = readPlanText(text);
+  const held = all.find((one) => one.project === project);
+  if (!held) return notChecked;
+  const { plan } = readPlanText(held.text);
   if (!plan || !Array.isArray(plan.steps)) return notChecked;
   if (target.index !== plan.steps.length - 1) return { checked: true, ok: true, problems: [] };
   const entry = readEntry(root, project, read ? { read } : {});

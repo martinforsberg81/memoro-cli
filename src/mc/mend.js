@@ -204,19 +204,15 @@ const realRead = (path) => { try { return readFileSync(path, 'utf8'); } catch { 
 const SESSION_ENV = ['MC_STEP', 'MC_PROJECT', 'MC_REPO', 'MC_WORKAREA'];
 
 /**
- * The step's own words from the plan, or null: from disk when the register's
- * plan is an absolute path (under `~/mc/programs/`), else from origin/main.
+ * The step's own words from the plan, or null: read from disk when the
+ * register's plan is an absolute path (under `~/mc/programs/`). A relative one
+ * names a repository plan, which no longer exists, and answers null.
  */
-async function stepOnMain(root, job, git, read) {
+function stepOnMain(root, job, read) {
   if (!job.step) return null;
   const plan = readEntry(root, job.step.project, { read })?.plan;
-  if (!plan) return null;
-  let text = null;
-  if (isAbsolute(plan)) text = read(plan);
-  else {
-    const shown = await git(job.repo_path, ['show', `origin/main:${plan}`]);
-    if (shown.ok) text = shown.stdout;
-  }
+  if (!plan || !isAbsolute(plan)) return null;
+  const text = read(plan);
   if (text == null) return null;
   try {
     const step = JSON.parse(text)?.steps?.[job.step.index];
@@ -267,7 +263,7 @@ export async function runMend({ root, job, report, deps = {} }) {
   mkdirSync(dirname(dir), { recursive: true });
   if (!(await git(repo, ['worktree', 'add', '-q', '--detach', dir, `origin/${branch}`])).ok) return failed('git worktree add failed');
   try {
-    const step = await stepOnMain(root, job, git, read);
+    const step = stepOnMain(root, job, read);
     const log = jobLogLines(read(deps.logPath || join(root, 'runner', 'log', 'merger.log')), job);
     const prompt = mendPrompt({ job, report, title: report?.pr?.title || null, step, log });
     const args = headlessArgs({

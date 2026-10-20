@@ -21,10 +21,17 @@ import { machineState } from '../../src/mc/status-collect.js';
 const areaOf = (path) => { const parts = String(path).split('/'); return parts[2] === 'step' ? parts[3] : parts[2]; };
 
 /**
+ * A plan of `plans` as `~/mc/programs/` holds it: naming its repository in
+ * `repo`, written first so the plan's own text stays as the test wrote it. A
+ * text that is not a JSON object names none.
+ */
+const namingRepo = (text, repo) => (/^\s*\{/u.test(text) ? text.replace(/^\s*\{/u, `{\n  "repo": ${JSON.stringify(repo)},`) : text);
+
+/**
  * A whole runner on fakes: a work root in memory, two repositories whose
- * origin/main carries PLAN.md files, git/gh/tmux answered from tables, and
- * a "session" that returns what the test says. Nothing starts, nothing is
- * written outside `files`.
+ * plans (`plans`, per repository) are under `/w/programs/prog/`, git/gh/tmux
+ * answered from tables, and a "session" that returns what the test says.
+ * Nothing starts, nothing is written outside `files`.
  */
 function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
   const root = '/w';
@@ -61,6 +68,18 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       dirs.add(`${root}/${name}/decisions`);
     }
   }
+  // `plans` as `/w/programs/prog/<project>/PLAN.json`, read at every call so a
+  // test that changes `plans` mid-run changes what the runner reads; a file the
+  // test or the runner wrote at that path wins.
+  const held = () => {
+    const out = {};
+    for (const [repoName, projects] of Object.entries(plans)) {
+      for (const [project, text] of Object.entries(projects || {})) {
+        if (text != null) out[`${root}/programs/prog/${project}/PLAN.json`] = namingRepo(text, repoName);
+      }
+    }
+    return out;
+  };
   const log = [];
   const aborted = new Set();
   const calls = { stopped: [], git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [] };
@@ -91,14 +110,14 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     // fixture pid that happened to be a real process on the machine running
     // the suite would make these tests answer to something outside them.
     alive: (pid) => livePids.includes(Number(pid)),
-    exists: (p) => p in files || dirs.has(p),
-    read: (p) => files[p] ?? null,
+    exists: (p) => p in files || dirs.has(p) || p in held(),
+    read: (p) => files[p] ?? held()[p] ?? null,
     list: (p) => {
       // `step/<p>` is listed as `step`, as a directory listing would.
       if (p === root) return [...new Set(Object.keys(areas).map((name) => name.split('/')[0]))];
       const prefix = `${p}/`;
       const seen = new Set();
-      for (const key of Object.keys(files)) if (key.startsWith(prefix)) seen.add(key.slice(prefix.length).split('/')[0]);
+      for (const key of [...Object.keys(files), ...Object.keys(held())]) if (key.startsWith(prefix)) seen.add(key.slice(prefix.length).split('/')[0]);
       return [...seen];
     },
     // Files only — what `readdirSync(dir, { withFileTypes: true })` filtered to
@@ -1281,34 +1300,6 @@ test('a conflict outside the plan hands out the step main says, not the one HEAD
   assert.match(call.prompt, /conflicts in: docs\/technical\/a\.md/u, 'and the merge is still the session\'s to finish');
   assert.ok(!f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'show' && String(c[2]).startsWith('HEAD:')), 'HEAD is not read at all here');
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /blocked on decision prog-1/u);
-});
-
-/**
- * The one way a plan conflict still stops a project: git could not give main's
- * copy either. The three sides are not in the index here — `stages` names
- * none — so the rule cannot read them and `checkout --theirs` has nothing to
- * take, and what is left is a half-merged tree with a plan on disk that parses
- * as nothing.
- *
- * A merge nobody is handed is a merge nobody finishes, and an unmerged path is
- * a dirty worktree, so the merge is aborted rather than left. This is the last
- * of that path: it was the *ordinary* case until 2026-09-08.
- */
-test('a plan conflict main\'s copy could not be taken for is aborted, and the files are named', async () => {
-  const f = fixture({
-    areas: { c: { repo: 'memoro', programme: 'prog', plan: '<<<<<<< HEAD\n{ nothing that parses\n' } },
-    plans: { memoro: { c: ready } },
-    conflicts: { c: [PLAN_AT, 'src/a.js'] },
-    session: okSession(),
-  });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
-  assert.equal(f.calls.sessions.length, 0, 'no session is launched on a half-merged tree');
-  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'));
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json — the plan's rule refused \(the merge base could not be read out of the index\) and main's copy could not be taken either/u);
-  assert.match(log, /c: merge conflict in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u);
-  assert.match(log, /the merge of origin\/main is aborted, still conflicting in: docs\/project\/prog\/c\/PLAN\.json src\/a\.js/u);
 });
 
 /**
@@ -2560,8 +2551,8 @@ test('a lane that can start nothing says so once, and names nobody', async () =>
 });
 
 /**
- * A plan on origin/main that does not parse is not counted in a log line
- * either: it goes to `~/mc/runner/unreadable-plans.md`, where somebody looks,
+ * A plan under `~/mc/programs/` that does not read as a plan is not counted in
+ * a log line either: it goes to `~/mc/runner/unreadable-plans.md`, where somebody looks,
  * and the pick simply never reaches it.
  */
 test('a plan that does not parse is filed, not counted in a line', async () => {
@@ -2569,8 +2560,8 @@ test('a plan that does not parse is filed, not counted in a line', async () => {
     plans: {
       memoro: {
         wait: plan({ status: 'blocked' }),
-        broken: '{ "schema": "mc-plan"',
-        alsobroken: 'not json at all',
+        broken: '{ "schema": "mc-plan" }',
+        alsobroken: '{ "steps": "not a list" }',
       },
     },
     session: okSession(),
@@ -3197,32 +3188,6 @@ const done = (title = 'Close-out') => plan({
 });
 const LOG_HEAD = '# Project log\n\n## Log\n\n| date | programme | project | outcome | summary | doc | pointer |\n|---|---|---|---|---|---|---|\n';
 
-test('a done plan is archived in the round it is read: directory removed, row written, one PR merged', async () => {
-  const f = fixture({
-    plans: { memoro: { over: done('The rule'), alpha: ready } },
-    projectLog: { memoro: LOG_HEAD },
-    session: okSession(),
-  });
-  await round(createRunner({ deps: f.deps }));
-
-  const wt = '/w/runner/archive/memoro';
-  assert.deepEqual(f.calls.rm, ['docs/project/prog/over'], 'the project directory, and nothing else');
-  assert.equal(`${wt}/docs/project/prog/over/PLAN.json` in f.files, false);
-  assert.equal(`${wt}/docs/project/prog/alpha/PLAN.json` in f.files, true, 'every other directory is untouched');
-
-  const row = f.files[`${wt}/docs/project/project_log.md`].trim().split('\n').at(-1);
-  assert.equal(row, '| 2026-08-29 | prog | over | delivered | The rule | [docs/technical/d.md](../technical/d.md) | abc1234 |');
-
-  assert.ok(f.calls.gh.some((c) => c[0] === wt && c[2] === 'create' && c.includes('Archive 1 done project: over')));
-  assert.deepEqual(f.calls.docsRounds.map((c) => [c.repoPath, c.pr]), [[wt, 900]], 'the archive PR lands through mc merge --docs');
-  assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'worktree' && c[2] === 'remove'), 'the archive worktree is taken down again');
-
-  const runnerLog = f.files['/w/runner/log/runner.log'];
-  assert.match(runnerLog, /archive: memoro prog\/over removed — row added to project_log\.md/u);
-  assert.doesNotMatch(runnerLog, /over: status done, skip/u, 'the plan is gone, so there is no skip line to read');
-  assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/step/alpha/memoro'], 'the ready plan still had its step');
-});
-
 test('a plan with every step done and a criterion unmet is not archived, and is said once', async () => {
   const f = fixture({
     plans: { memoro: { over: plan({ status: 'done', met: false }) } },
@@ -3237,104 +3202,6 @@ test('a plan with every step done and a criterion unmet is not archived, and is 
   const said = f.files['/w/runner/log/runner.log'].split('\n')
     .filter((line) => /over: every step is done, but success criterion 1 is not met/u.test(line));
   assert.equal(said.length, 1, said.join('\n'));
-});
-
-test('a row its close-out already wrote is kept: only the directory goes, and there is still exactly one row', async () => {
-  const already = `${LOG_HEAD}| 2026-08-01 | prog | mc-ui | delivered | Made bare mc the one page. | [docs/technical/mc-ui.md](../technical/mc-ui.md) | [#430](https://github.com/o/r/pull/430) |\n`;
-  const f = fixture({
-    plans: { 'memoro-cli': { 'mc-ui': done() } },
-    projectLog: { 'memoro-cli': already },
-    session: okSession(),
-  });
-  await round(createRunner({ deps: f.deps }));
-  const text = f.files['/w/runner/archive/memoro-cli/docs/project/project_log.md'];
-  assert.equal(text, already, 'the row is preferred, never rewritten');
-  assert.equal(text.split('\n').filter((line) => line.includes('| mc-ui |')).length, 1);
-  assert.deepEqual(f.calls.rm, ['docs/project/prog/mc-ui']);
-  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro-cli prog\/mc-ui removed — row already written/u);
-});
-
-test('a file under the plan that a test reads is kept in place, and the archive PR says which and why', async () => {
-  const f = fixture({
-    plans: { memoro: { over: done() } },
-    projectLog: { memoro: LOG_HEAD },
-    session: okSession(),
-  });
-  const wt = '/w/runner/archive/memoro';
-  const dir = 'docs/project/prog/over';
-  f.files[`${wt}/tests/x.test.js`] = `readFileSync('${dir}/skills/a.md', 'utf8');\n`;
-  const git = f.deps.git;
-  const rms = [];
-  f.deps.git = (cwd, args) => {
-    if (cwd === wt && args[0] === 'grep') return { ok: true, stdout: 'tests/x.test.js\n' };
-    if (cwd === wt && args[0] === 'ls-files') return { ok: true, stdout: `${dir}/PLAN.json\n${dir}/skills/a.md\n` };
-    if (cwd === wt && args[0] === 'rm') rms.push(args);
-    return git(cwd, args);
-  };
-  await round(createRunner({ deps: f.deps }));
-
-  assert.deepEqual(rms, [['rm', '-q', '--', `${dir}/PLAN.json`]], 'everything under the plan but the file the test reads');
-  const create = f.calls.gh.find((c) => c[0] === wt && c[2] === 'create');
-  assert.match(create[create.indexOf('--body') + 1], /- kept: docs\/project\/prog\/over\/skills\/a\.md — named by tests\/x\.test\.js:1/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro docs\/project\/prog\/over\/skills\/a\.md kept — named by tests\/x\.test\.js:1/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro prog\/over removed — row added/u, 'the row is written as for any archive');
-});
-
-test('a programme whose last project is archived keeps only its closeouts; the log and the prose beside it stay', async () => {
-  const f = fixture({
-    plans: { memoro: { one: done(), two: done() } },
-    projectLog: { memoro: LOG_HEAD },
-    session: okSession(),
-  });
-  await round(createRunner({ deps: f.deps }));
-  const wt = '/w/runner/archive/memoro';
-  assert.deepEqual(f.calls.rm.sort(), ['docs/project/prog/one', 'docs/project/prog/two']);
-  assert.deepEqual(Object.keys(f.files).filter((p) => p.startsWith(`${wt}/docs/project/prog/`)).sort(), [
-    `${wt}/docs/project/prog/closeout/one.json`,
-    `${wt}/docs/project/prog/closeout/two.json`,
-  ], 'the plans are gone and each project left its closeout in their place');
-  assert.equal(`${wt}/docs/project/project_log.md` in f.files, true);
-  assert.equal(f.files[`${wt}/docs/project/project_log.md`].split('\n').filter((l) => l.startsWith('| 2026-08-29')).length, 2);
-  assert.ok(f.calls.gh.some((c) => c[2] === 'create' && c.includes('Archive 2 done projects: one, two')), 'one PR for the repository');
-});
-
-test('a project with no docs/technical note is recorded in intake, and archived all the same', async () => {
-  const f = fixture({
-    plans: { memoro: { thin: plan({ status: 'done', title: 'Step 1' }) } },
-    projectLog: { memoro: LOG_HEAD },
-    session: okSession(),
-  });
-  await round(createRunner({ deps: f.deps }));
-  assert.deepEqual(f.calls.rm, ['docs/project/prog/thin'], 'a thin note never stops an archive');
-  const intake = f.files['/w/runner/undocumented-closures.md'];
-  assert.match(intake, /# Projects archived with no docs\/technical\/ note/u);
-  assert.match(intake, /\| 2026-08-29 \| memoro \| prog \| thin \| abc1234 \|/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /archive: thin names no docs\/technical\/ note — recorded for mc brief/u);
-});
-
-test('an archive PR still open from an earlier round holds the next one off', async () => {
-  const f = fixture({
-    plans: { memoro: { over: done() } },
-    archive: { memoro: { openFromEarlierRound: 812 } },
-    session: okSession(),
-  });
-  await round(createRunner({ deps: f.deps }));
-  assert.deepEqual(f.calls.rm, [], 'nothing is removed twice');
-  assert.ok(!f.calls.git.some((c) => c[1] === 'worktree' && c[2] === 'add'));
-  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro #812 is still open from an earlier round — not opening another/u);
-});
-
-test('both repositories archive in the same round, one PR each', async () => {
-  const f = fixture({
-    plans: { memoro: { a: done() }, 'memoro-cli': { b: done() } },
-    projectLog: { memoro: LOG_HEAD, 'memoro-cli': LOG_HEAD },
-    archive: { memoro: { number: 901 }, 'memoro-cli': { number: 902 } },
-    session: okSession(),
-  });
-  await round(createRunner({ deps: f.deps }));
-  const created = f.calls.gh.filter((c) => c[2] === 'create').map((c) => c[0]);
-  assert.deepEqual(created.sort(), ['/w/runner/archive/memoro', '/w/runner/archive/memoro-cli']);
-  assert.equal(f.calls.sessions.length, 0, 'nothing was ready, so nothing else happened');
 });
 
 test('--once is one step and no archiving', async () => {
@@ -3396,22 +3263,6 @@ test('a programme project done two hours ago is not archived, and its line is sa
   assert.match(said[0], /young: done 2h ago — archived after 24h — not archived yet$/u);
 });
 
-test('a repository plan done is still archived by archiveDone in the round a programme project is', async () => {
-  const f = fixture({
-    plans: { memoro: { over: done() } },
-    projectLog: { memoro: LOG_HEAD },
-    session: okSession(),
-  });
-  f.files['/w/programs/prog/away/PLAN.json'] = programsPlan('memoro');
-  f.files['/w/runner/projects/away.json'] = registered('away', '2026-08-28T09:00:00Z');
-  await round(createRunner({ deps: f.deps }));
-
-  assert.deepEqual(f.calls.rm, ['docs/project/prog/over'], 'the repository plan goes as it did');
-  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro prog\/over removed — row added to project_log\.md/u);
-  assert.ok(f.files['/w/programs/prog/away/CLOSEOUT.json'], 'and the programme project is archived too');
-  assert.deepEqual(f.calls.docsRounds.map((call) => call.repoPath).sort(), ['/w/runner/archive/memoro', '/w/runner/archive/memoro-programs']);
-});
-
 /* ------------------------------------------------------------- closing */
 
 /**
@@ -3428,12 +3279,13 @@ const ranRow = (name, note = 'success,merged') => `2026-08-28T10:00:00Z\t${name}
 
 test('a workarea whose plan left main this round is closed: worktree handed back, branch deleted, filing moved', async () => {
   const f = fixture({
-    plans: { memoro: { over: done() } },
     areas: { over: { repo: 'memoro', programme: 'prog', plan: done(), decisions: { 'prog-1.md': '# q\n' } } },
     projectLog: { memoro: LOG_HEAD },
     runs: RUNS_HEAD + ranRow('over'),
     session: okSession(),
   });
+  f.files['/w/programs/prog/over/PLAN.json'] = programsPlan('memoro');
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-28T09:00:00Z');
   await round(createRunner({ deps: f.deps }));
 
   assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'worktree' && c[2] === 'remove' && c[3] === '/w/over/memoro'));
@@ -3448,13 +3300,14 @@ test('a workarea whose plan left main this round is closed: worktree handed back
 
 test('closing a workarea stops its dev servers before git worktree remove, and a failed stop does not stop the close', async () => {
   const f = fixture({
-    plans: { memoro: { over: done() } },
     areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
     projectLog: { memoro: LOG_HEAD },
     runs: RUNS_HEAD + ranRow('over'),
     session: okSession(),
     stopResults: { '/w/over': { stopped: ['dev-a'], failed: [{ instance_id: 'dev-b', error: 'exited 1' }] } },
   });
+  f.files['/w/programs/prog/over/PLAN.json'] = programsPlan('memoro');
+  f.files['/w/runner/projects/over.json'] = registered('over', '2026-08-28T09:00:00Z');
   await round(createRunner({ deps: f.deps }));
 
   assert.deepEqual(f.calls.stopped.map(({ path, reason }) => [path, reason]), [['/w/over', 'workarea-closed']]);
@@ -4385,30 +4238,6 @@ const BLOCKS = [
       });
     },
     detail: /origin\/main was merged in, docs\/project\/prog\/c\/PLAN\.json resolved, and the commit was refused \(error: could not commit\)/u,
-  },
-  {
-    block: 'merge-uncommittable',
-    reason: 'sync',
-    name: 'c',
-    what: 'a PLAN.json conflict neither the plan\'s rule nor main\'s copy could settle',
-    make: () => {
-      const three = planStages();
-      const f = fixture({
-        areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
-        plans: { memoro: { c: three.main } },
-        conflicts: { c: [PLAN_AT] },
-        // Stage 3 unreadable: the rule refuses, and `checkout --theirs` is
-        // refused below, so main's copy cannot be taken either.
-        stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch } } },
-        session: okSession(),
-      });
-      const git = f.deps.git;
-      f.deps.git = (cwd, args) => (args[0] === 'checkout' && args[1] === '--theirs' && cwd === '/w/c/memoro'
-        ? { ok: false, stdout: '', stderr: 'error: path not in index' }
-        : git(cwd, args));
-      return f;
-    },
-    detail: /could be resolved neither by the plan's rule nor by taking main's copy/u,
   },
   {
     block: 'role-missing',

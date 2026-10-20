@@ -70,7 +70,6 @@ THE PAGE
   mc project criterion met <p> <n> A success criterion holds: the register, not the plan file
   mc project archive <p>           Archive a done project now: its row to project_log.md, CLOSEOUT.json, its step area closed
   mc project discard <p> [--apply] Take a project out whole: its directory, step area, register file, open pull requests; without --apply it shows what would go
-  mc project import [--apply]      Copy each plan on origin/main not under ~/mc/programs/ there
   mc work <name>                  Open that workarea, ~/mc/work/<name>
 
 IN FULL

@@ -8,8 +8,10 @@
  * repository with the directory gone and the row in place.
  *
  * So this builds a repository for the purpose — a bare origin, a checkout,
- * two plans that say `done` and one that says `ready` — and runs the
- * runner's own `archiveDone` over it with `realDeps`. Only `gh` is faked:
+ * and the project directories of an older main — and runs the runner's own
+ * `archiveDone` over it with `realDeps`. A plan in the repository is no
+ * longer read (ruling 48), so what is left here is the round that waits on an
+ * open archive PR and the closeout backfill. Only `gh` is faked:
  * the forge is the one part that cannot be real without a network, so it
  * answers `pr create` with a number and performs `pr merge --squash` as the
  * git commands GitHub would run.
@@ -128,81 +130,6 @@ function repository() {
 describe('archiving a done plan, for real', () => {
   const fx = repository();
   after(() => fx.cleanup());
-
-  it('removes the directories, writes the rows and lands them on main', async () => {
-    const runner = createRunner({ deps: fx.deps });
-    const { plans } = runner.queue();
-    assert.deepEqual(plans.map((p) => `${p.project}:${p.status}`).sort(),
-      ['alone:done', 'closed-out:done', 'documented:done', 'still-going:ready']);
-
-    // The branch the runner pushes is named in the PR it opens; the fake
-    // forge squashes exactly that branch onto main.
-    const { archived, landed } = await runner.archiveDone({ name: 'memoro-cli', path: fx.repo }, plans);
-    assert.deepEqual(archived.sort(), ['alone', 'closed-out', 'documented']);
-    assert.deepEqual(landed.sort(), ['alone', 'closed-out', 'documented'],
-      'the PR merged, so the workareas these plans explain may go later in the round');
-
-    const tree = fx.mainTree();
-    assert.deepEqual(tree.filter((path) => path.startsWith('docs/project/')).sort(), [
-      'docs/project/mc/closeout/closed-out.json',
-      'docs/project/mc/closeout/documented.json',
-      'docs/project/mc/closeout/documented.md',
-      'docs/project/mc/still-going/PLAN.md',
-      'docs/project/prog-two/closeout/alone.json',
-      'docs/project/project_log.md',
-    ], 'the three done projects are gone from main, each with its closeout; the ready one and the log are not');
-
-    // One commit holds both: the plan removed and the closeout added.
-    const create = fx.ghCalls.find((call) => call[1] === 'create');
-    const branch = create[create.indexOf('--head') + 1];
-    const changed = git(fx.repo, ['show', '--name-status', '--format=', `origin/${branch}`]).split('\n').filter(Boolean);
-    assert.ok(changed.includes('D\tdocs/project/mc/documented/PLAN.md'), changed.join('\n'));
-    assert.ok(changed.includes('A\tdocs/project/mc/closeout/documented.json'), changed.join('\n'));
-    assert.ok(changed.some((line) => line === 'A\tdocs/project/mc/closeout/documented.md'
-      || /^R\d*\tdocs\/project\/mc\/documented\/README\.md\tdocs\/project\/mc\/closeout\/documented\.md$/u.test(line)), changed.join('\n'));
-    assert.ok(changed.includes('M\tdocs/technical/documented.md'), changed.join('\n'));
-    assert.match(create[create.indexOf('--body') + 1], /Each project's closeout is in docs\/project\/<programme>\/closeout\/\./u);
-    assert.match(create[create.indexOf('--body') + 1], /its README is kept as `docs\/project\/<programme>\/closeout\/<project>\.md`/u);
-    assert.doesNotMatch(tree.join('\n'), /docs\/project\/mc\/closeout\/closed-out\.md/u, 'a project with no README keeps none');
-
-    // The README moves with its links rewritten to the closeout; the document
-    // that linked into the directory follows, and the external link stays.
-    assert.match(fx.mainFile('docs/project/mc/closeout/documented.md'), /\[plan\]\(documented\.json\)/u);
-    const technical = fx.mainFile('docs/technical/documented.md');
-    assert.match(technical, /\(\.\.\/project\/mc\/closeout\/documented\.md#close\)/u);
-    assert.match(technical, /\(\.\.\/project\/mc\/closeout\/documented\.json\)/u);
-    assert.match(technical, /\(https:\/\/example\.invalid\/mc\/documented\/README\.md\)/u);
-    const closeout = JSON.parse(fx.mainFile('docs/project/mc/closeout/documented.json'));
-    assert.equal(closeout.schema, 'mc-closeout');
-    assert.equal(closeout.project, 'documented');
-    assert.equal(closeout.programme, 'mc');
-    assert.equal(closeout.plan, null, 'a PLAN.md is not a plan the closeout can read');
-
-    const log = fx.mainFile('docs/project/project_log.md');
-    const rows = log.split('\n').filter((line) => /^\| \d{4}-/u.test(line));
-    assert.equal(rows.length, 3, 'one row per archived project — and closed-out keeps the one it had');
-    assert.equal(rows.filter((row) => row.includes('| closed-out |')).length, 1);
-    assert.match(rows.find((row) => row.includes('| closed-out |')), /Its close-out wrote this row itself/u);
-    const documented = rows.find((row) => row.includes('| documented |'));
-    assert.match(documented, /\| delivered \| Step 3 — close-out: the note and the row \|/u);
-    assert.match(documented, /\[docs\/technical\/documented\.md\]\(\.\.\/technical\/documented\.md\)/u);
-    assert.match(rows.find((row) => row.includes('| alone |')), /\| none \|/u, 'a project with no note says so');
-
-    // The history is the record: the removed directory is still there behind main.
-    assert.match(git(fx.repo, ['log', '--all', '--oneline', '--', 'docs/project/mc/documented']), /\S/u);
-
-    // And the worktree the runner archived in is taken down again.
-    assert.equal(existsSync(join(fx.work, 'runner', 'archive', 'memoro-cli')), false);
-    assert.doesNotMatch(git(fx.repo, ['branch', '--list', 'mc-archive-*']), /mc-archive-/u);
-  });
-
-  it('records the project with no docs/technical note in ~/mc/runner/', () => {
-    const table = join(fx.work, 'runner', 'undocumented-closures.md');
-    assert.equal(existsSync(table), true);
-    const text = execFileSync('cat', [table], { encoding: 'utf8' });
-    assert.match(text, /\| memoro-cli \| prog-two \| alone \|/u);
-    assert.doesNotMatch(text, /\| documented \|/u);
-  });
 
   it('leaves the next round alone while its PR is open', async () => {
     // `gh pr list` answers with a number now, as it would while the PR is open.

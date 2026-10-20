@@ -1,7 +1,7 @@
 /**
  * `mc status <name>` — one project, built from fixture files: no git, no gh,
  * no network. A work root under /tmp holds the workarea and
- * runs.tsv; origin/main is an injected `git`.
+ * runs.tsv; the plans under `~/mc/programs/` are an injected `programs`.
  */
 import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
@@ -21,6 +21,7 @@ import { runMcCli } from './_helpers/mc-cli.js';
 const PLAN = (status, title) => JSON.stringify({
   schema: 'mc-plan',
   version: 1,
+  repo: 'memoro-cli',
   goal: ['One project on one page.'],
   contract: ['Not without Martin.'],
   out_of_scope: ['Everything else.'],
@@ -50,12 +51,15 @@ const TSV = [
 ].join('\n');
 
 /**
- * A real `MC_REPOS_HOME` — one repository, `memoro-cli`, with `planText` on
- * `main` and an `origin` remote fetched, so `origin/main` resolves the way
- * it does on a real machine. The routing tests below spawn the real CLI, so
- * they need real git rather than an injected one.
+ * A real `MC_REPOS_HOME` — one repository, `memoro-cli`, with an `origin`
+ * remote fetched, so `origin/main` resolves the way it does on a real
+ * machine — and `planText` as the project's plan under the work root's
+ * `programs/`. The routing tests below spawn the real CLI, so they need real
+ * git and a plan on disk rather than injected ones.
  */
-function makeMainRepo(name, planText) {
+function makeMainRepo(root, name, planText) {
+  mkdirSync(join(root, 'programs', 'mc', 'mc-status'), { recursive: true });
+  writeFileSync(join(root, 'programs', 'mc', 'mc-status', 'PLAN.json'), planText);
   const home = mkdtempSync(join(tmpdir(), 'mc-status-main-'));
   const repo = join(home, name);
   mkdirSync(repo, { recursive: true });
@@ -63,8 +67,7 @@ function makeMainRepo(name, planText) {
   git('init -q -b main');
   git('config user.email test@example.invalid');
   git('config user.name mc-test');
-  mkdirSync(join(repo, 'docs', 'project', 'mc', 'mc-status'), { recursive: true });
-  writeFileSync(join(repo, 'docs', 'project', 'mc', 'mc-status', 'PLAN.json'), planText);
+  writeFileSync(join(repo, 'README.md'), 'memoro-cli\n');
   git('add -A');
   git('commit -q -m init');
   const bare = join(home, 'origin.git');
@@ -74,7 +77,7 @@ function makeMainRepo(name, planText) {
   return home;
 }
 
-/** A work root with one workarea that holds a checkout and a plan. */
+/** A work root with one workarea that holds a checkout, and a repository plan no reader reads. */
 function workRoot() {
   const root = mkdtempSync(join(tmpdir(), 'mc-status-'));
   const repo = join(root, 'mc-status', 'memoro-cli');
@@ -150,41 +153,42 @@ describe('the plan fields', () => {
   });
 });
 
+/** The plans under `~/mc/programs/`, one a project, as `programsPlans` gives them. */
+const PROGRAMS_PLAN = '/w/programs/mc/mc-status/PLAN.json';
+const held = (...projects) => () => projects.map((project) => ({
+  path: `/w/programs/mc/${project}/PLAN.json`, programme: 'mc', project, file: 'PLAN.json',
+  text: PLAN('ready', 'The page'), repo: 'memoro-cli',
+}));
+
 describe('finding the plan', () => {
-  it('finds it on origin/main through an injected git', () => {
+  it('finds it under ~/mc/programs/, with every project of its repository', () => {
     const root = workRoot();
-    const git = (cwd, args) => {
-      if (args[0] === 'ls-tree') return 'docs/project/mc/mc-status/PLAN.json\ndocs/project/mc/mc-run/PLAN.json';
-      if (args[0] === 'show') return PLAN('ready', 'The page');
-      return null;
-    };
+    const programs = held('mc-status', 'mc-run');
     const repos = [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }];
-    const main = findMainPlan(repos, 'mc-status', { git });
+    const main = findMainPlan(repos, 'mc-status', { programs });
     assert.equal(main.repo, 'memoro-cli');
     assert.equal(main.programme, 'mc');
+    assert.equal(main.plan, PROGRAMS_PLAN);
     assert.match(main.text, /The page/u);
-    assert.equal(findMainPlan(repos, 'nothing-here', { git }), null);
+    assert.deepEqual(main.names, ['mc-status', 'mc-run']);
+    assert.equal(findMainPlan(repos, 'nothing-here', { programs }), null);
   });
 });
 
 describe('collectProject', () => {
-  const git = (cwd, args) => {
-    if (args[0] === 'ls-tree') return 'docs/project/mc/mc-status/PLAN.json';
-    if (args[0] === 'show') return PLAN('ready', 'The page');
-    return null;
-  };
+  const programs = held('mc-status');
 
-  it('reads origin/main even when the workarea holds a different plan, and keeps the last three runs', async () => {
+  it('reads ~/mc/programs/ even when the workarea holds a different plan, and keeps the last three runs', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root };
     const repos = [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }];
-    const data = await collectProject('mc-status', { env, repos, offline: true, git });
+    const data = await collectProject('mc-status', { env, repos, offline: true, programs });
     assert.equal(data.repo, 'memoro-cli');
     assert.equal(data.programme, 'mc');
     assert.deepEqual(data.problems, []);
     assert.equal(data.plan.steps[1].title, 'The page', 'the workarea copy (title "One project") is never read');
-    assert.equal(data.path, 'docs/project/mc/mc-status/PLAN.json');
-    assert.match(renderProject(data), /plan +docs\/project\/mc\/mc-status\/PLAN\.json \(origin\/main\)/u);
+    assert.equal(data.path, PROGRAMS_PLAN);
+    assert.match(renderProject(data), /plan +\/w\/programs\/mc\/mc-status\/PLAN\.json/u);
     assert.match(data.workarea, /mc-status$/u);
     assert.deepEqual(data.runs.map((r) => [r.ts.slice(0, 10), r.pr]), [['2026-08-26', '401'], ['2026-08-27', '402'], ['2026-08-28', '-']]);
     assert.deepEqual(data.prs, []);
@@ -193,7 +197,7 @@ describe('collectProject', () => {
 
   it('answers about a workarea with no plan, and about nothing at all', async () => {
     const root = workRoot();
-    const opts = { env: { MC_WORK_ROOT: root }, repos: [], offline: true, git };
+    const opts = { env: { MC_WORK_ROOT: root }, repos: [], offline: true, programs };
     const orphan = await collectProject('jobbet', opts);
     assert.equal(orphan.path, null);
     assert.equal(orphan.repo, null);
@@ -223,7 +227,7 @@ describe('collectProject', () => {
       env: { MC_WORK_ROOT: root },
       repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
       offline: true,
-      git,
+      programs,
     });
     assert.deepEqual(data.queued.map((entry) => entry.pr), [427, 428], 'another project\'s branch is not this project\'s');
     assert.match(renderProject(data), /#427 is in the merge queue \(since 09-06 18:00Z\)$/mu);
@@ -243,7 +247,7 @@ describe('collectProject', () => {
     const opts = (mode) => ({
       env: { MC_WORK_ROOT: root },
       repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
-      git,
+      programs,
       exec,
       merges: () => ({
         repo: 'memoro-cli', pr: 427, holder: 'martin@laptop', phase: 'running 17 test files',
@@ -277,7 +281,7 @@ describe('collectProject', () => {
       env: { MC_WORK_ROOT: root },
       repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
       offline: true,
-      git,
+      programs,
       merges: () => ({ repo: 'memoro-cli', pr: 500, phase: 'node --test', mode: 'merge', age_seconds: 60 }),
     });
     assert.deepEqual(data.queued.map((entry) => entry.pr), [501, 502]);
@@ -297,7 +301,7 @@ describe('collectProject', () => {
       env: { MC_WORK_ROOT: root },
       repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }],
       offline: true,
-      git,
+      programs,
     });
     assert.equal(data.machine.reason, 'prs-unknown');
     assert.match(renderProject(data), /status +ready · GitHub could not be asked/u);
@@ -321,10 +325,8 @@ describe('collectProject', () => {
       if (cmd === 'gh') return { ok: true, stdout: JSON.stringify(open) };
       return { ok: true, stdout: '' };
     };
-    const tree = ['docs/project/mc/mc-status/PLAN.json', 'docs/project/mc/mc-run/PLAN.json'].join('\n');
-    const many = (cwd, args) => (args[0] === 'ls-tree' ? tree : git(cwd, args));
     const data = await collectProject('mc-status', {
-      env: { MC_WORK_ROOT: root }, repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }], git: many, exec,
+      env: { MC_WORK_ROOT: root }, repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }], programs: held('mc-status', 'mc-run'), exec,
     });
     assert.deepEqual(data.prs.map((pr) => pr.number), [427, 428]);
     assert.ok(calls.some((c) => c.includes('fetch')), calls.join('\n'));
@@ -403,7 +405,7 @@ describe('the project page', () => {
 describe('routing', () => {
   it('a name is the project page; no name says the page is mc', () => {
     const root = workRoot();
-    const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: makeMainRepo('memoro-cli', PLAN('ready', 'One project')) };
+    const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: makeMainRepo(root, 'memoro-cli', PLAN('ready', 'One project')) };
     const page = runMcCli(['status', 'mc-status', '--offline'], env);
     assert.equal(page.status, 0, page.stderr);
     assert.match(page.stdout, /^mc-status — memoro-cli · mc\n/u);
@@ -422,7 +424,7 @@ describe('routing', () => {
 
   it('the sentence names only surfaces that run', () => {
     const root = workRoot();
-    const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: makeMainRepo('memoro-cli', PLAN('ready', 'One project')) };
+    const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: makeMainRepo(root, 'memoro-cli', PLAN('ready', 'One project')) };
     const bare = runMcCli(['status'], env);
     // `mc --watch` was the page on a timer and was removed the day it landed;
     // pointing at it sent a person to `unknown command "--watch"`.

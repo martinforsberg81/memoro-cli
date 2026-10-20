@@ -3,10 +3,11 @@
  * the runner, `mc status`, `mc plan`, `mc step` and the helper each read, so
  * that they read the same thing.
  *
- * Plans come from `docs/project/<programme>/<project>/PLAN.json` on
- * `origin/main` (`listPlans`, `listProgrammes`); the runs are the rows of
- * `~/mc/runner/log/runs.tsv` (`parseRuns`, `runsFor`); the proposals are the
- * files in `~/mc/proposals/` (`listProposals`). The pure readers take text and
+ * Plans come from `~/mc/programs/` (`listPlans`); programmes and old
+ * closeouts from `docs/project/` on `origin/main` (`listProgrammes`,
+ * `listArchived`); the runs are the rows of `~/mc/runner/log/runs.tsv`
+ * (`parseRuns`, `runsFor`); the proposals are the files in `~/mc/proposals/`
+ * (`listProposals`). The pure readers take text and
  * return data so a test can feed them fixtures; the git calls are injected.
  *
  * It was `mc brief --collect` once, a document gathered for the brief session.
@@ -20,7 +21,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { planSummary, readPlanText } from './plan-schema.js';
-import { PLAN_FILE, PROJECT_DIR, lsTreeArgs, plansInTree, programsArchived, programsPlans } from './plan-source.js';
+import { PROJECT_DIR, programsArchived, programsPlans } from './plan-source.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -127,77 +128,33 @@ export function listProgrammes(repo, { ref = 'origin/main', git = runGit } = {})
 }
 
 /**
- * The plans of one repository on a ref, read without a checkout: one
- * `ls-tree` for the names and one `cat-file --batch` for every plan's text.
- * The layout is plan-source's; the records are `planRecords`'s. `git` and
- * `batch` are both injectable so a caller with its own git — the runner — and
- * the tests can stay off the real one; `showBatch` turns such a git into a
- * batch reader.
+ * The plans of one repository as the readers see them: the plans under
+ * `~/mc/programs/` whose `repo` is this repository (ruling 48), built by
+ * `planRecords`. An archived project is not among them (`programsPlans`).
+ * `ref`, `git`, `batch` and `archived` are accepted and not used: no
+ * repository holds a plan any more, so callers that still pass them need not
+ * change.
  */
-export function listRepoPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch } = {}) {
-  const tree = git(repo.path, lsTreeArgs(ref));
-  if (tree == null) return [];
-  const entries = plansInTree(tree);
-  const texts = batch(repo.path, entries.map((e) => `${ref}:${e.path}`));
-  return planRecords(repo.name, entries, (path) => texts.get(`${ref}:${path}`) || '');
-}
-
-/**
- * The records of one repository with `~/mc/programs/` laid over them. A project
- * under the programs tree is the plan, and its repository copy is not read
- * (ruling 48); a programs plan whose `repo` is not this repository is another
- * repository's, so it is left out here, and it still takes its project's
- * repository record out of this list. An archived project (`programsArchived`)
- * is moved as well, so its repository copy stays hidden, and it is not returned:
- * an archived project is not a plan any reader lists. `records` is `listRepoPlans`'s.
- */
-export function withProgrammePlans(repoName, records, { programs = programsPlans, archived = programsArchived } = {}) {
-  const all = programs();
-  const moved = new Set([...all, ...archived()].map((e) => e.project));
-  const own = all.filter((e) => e.repo === repoName);
+export function listPlans(repo, { programs = programsPlans } = {}) {
+  const own = programs().filter((e) => e.repo === repo.name);
   const texts = new Map(own.map((e) => [e.path, e.text]));
-  return [
-    ...planRecords(repoName, own, (path) => texts.get(path) || ''),
-    ...records.filter((r) => !moved.has(r.project)),
-  ];
-}
-
-/**
- * The plans of one repository as the readers see them: `~/mc/programs/` first,
- * then the repository's own on the ref (`listRepoPlans`, `withProgrammePlans`).
- */
-export function listPlans(repo, {
-  ref = 'origin/main', git = runGit, batch = catFileBatch, programs = programsPlans, archived = programsArchived,
-} = {}) {
-  return withProgrammePlans(repo.name, listRepoPlans(repo, { ref, git, batch }), { programs, archived });
+  return planRecords(repo.name, own, (path) => texts.get(path) || '');
 }
 
 /**
  * The records `listPlans` returns, built from plan-source's entries and a
  * reader of their text: one record a project, `{ repo, programme, project,
  * path, legacy, plan, problems, …planSummary(plan) }`. One project, one plan.
- * Both files can exist while a project is being migrated; the JSON is the plan
- * and the markdown is what it was.
  */
 export function planRecords(repoName, entries, textOf) {
   const byProject = new Map();
   for (const entry of entries) {
-    const json = entry.file === PLAN_FILE;
-    const held = byProject.get(entry.project);
-    if (held && !json) continue;
-    const text = textOf(entry.path);
-    const base = { repo: repoName, programme: entry.programme, project: entry.project, path: entry.path };
-    if (!json) {
-      // A PLAN.md is not a plan the runner can read. It keeps its frontmatter
-      // status so `mc status` can still show what the project was, and carries
-      // `legacy` so the queue leaves it alone rather than skipping it, loudly,
-      // once per project per round.
-      byProject.set(entry.project, { ...base, legacy: true, plan: null, problems: [], ...parsePlanFrontmatter(text) });
-      continue;
-    }
-    const { plan, problems } = readPlanText(text);
+    const { plan, problems } = readPlanText(textOf(entry.path));
     byProject.set(entry.project, {
-      ...base,
+      repo: repoName,
+      programme: entry.programme,
+      project: entry.project,
+      path: entry.path,
       legacy: false,
       plan,
       problems,
@@ -216,9 +173,8 @@ export function planRecords(repoName, entries, textOf) {
  * (`closeoutPath` in `closeout.js`), and the archive takes only a done plan, so
  * a project with one was delivered. When the ref cannot be read, the programs
  * names are still returned.
- * `listPlans` never returns these paths: it takes `PLAN.json` and `PLAN.md` in
- * `parts[4]` and nothing else. A `closeout/<project>.md` is not a name, and a
- * file nested deeper under `closeout/` is not one either.
+ * A `closeout/<project>.md` is not a name, and a file nested deeper under
+ * `closeout/` is not one either.
  */
 export function listArchived(repo, { ref = 'origin/main', git = runGit, archived = programsArchived } = {}) {
   const tree = git(repo.path, ['ls-tree', '-r', '--name-only', ref, '--', 'docs/project']);
@@ -231,50 +187,11 @@ export function listArchived(repo, { ref = 'origin/main', git = runGit, archived
 }
 
 /**
- * `git cat-file --batch` output, split back into one text per input line.
- *
- * The stream is `<oid> <type> <size>\n<size bytes>\n` per object, or
- * `<input> missing\n` for a path that is not on the ref — no content follows
- * a miss, so the walk simply does not advance. `size` counts bytes, not
- * characters, which is why this works on a Buffer: a plan full of em-dashes
- * would slice apart under a string index.
- */
-export function parseCatFileBatch(stdout, refs) {
-  const out = new Map();
-  const buf = Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout || ''));
-  let at = 0;
-  for (const ref of refs) {
-    const end = buf.indexOf(10, at);
-    if (end < 0) break;
-    const [, , size] = buf.toString('utf8', at, end).split(' ');
-    at = end + 1;
-    const bytes = Number(size);
-    if (!Number.isFinite(bytes)) continue; // "<ref> missing" — nothing follows it
-    out.set(ref, buf.toString('utf8', at, at + bytes));
-    at += bytes + 1;
-  }
-  return out;
-}
-
-/**
- * A batch reader made from an injected `git`: one `show` per ref, which is
- * what the caller was doing before. The runner keeps it — its `git` is a
- * dependency its own tests replace — and it is the shape a fixture passes.
+ * A batch reader made from an injected `git`: one `show` per ref. The runner
+ * still hands one to `listPlans`, which no longer reads git and ignores it.
  */
 export function showBatch(git) {
   return (cwd, refs) => new Map(refs.map((ref) => [ref, git(cwd, ['show', ref]) || '']));
-}
-
-/**
- * Every named object of one repository in one process. The loop this
- * replaced spent a `git show` per plan — 1.22 s for memoro's 38 on
- * 2026-08-29, against 54 ms for the whole listing this way.
- */
-export function catFileBatch(cwd, refs) {
-  if (!refs.length) return new Map();
-  const r = spawnSync('git', ['-C', cwd, 'cat-file', '--batch'], { input: `${refs.join('\n')}\n`, maxBuffer: 64 << 20 });
-  if (r.status !== 0) return new Map();
-  return parseCatFileBatch(r.stdout, refs);
 }
 
 /* -------------------------------------------------------------------- runner */

@@ -22,11 +22,11 @@
  *                     nothing loops — the fork is `interactive()` below and
  *                     there is no second opinion about it
  *
- * Every print fetches `origin/main` first (ruling 20), so `plans.json` stays
- * current. `prs.json` comes from cache with its age; at a terminal the page
+ * Every print fetches `origin/main` first (ruling 20); the plans are read
+ * from `~/mc/programs/`. `prs.json` comes from cache with its age; at a terminal the page
  * refills it itself when it is five minutes old (`freshFor`), `f` at the menu
  * and `--fresh` ask GitHub now, and a pipe reads the cache as it is.
- * `--offline` skips the fetch and reads the plans as they were last fetched.
+ * `--offline` skips the fetch.
  *
  * `--json` prints the same object the renderer takes, so the two surfaces
  * cannot drift.

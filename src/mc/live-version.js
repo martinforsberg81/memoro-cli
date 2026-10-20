@@ -10,7 +10,7 @@
  * reads the answer the helper's last collect left here, and says how old it is.
  *
  * That is the whole of this file: one path, one write, one read. It sits beside
- * `plans.json` and `prs.json` under `~/mc/runner/` because it is the same kind
+ * `prs.json` under `~/mc/runner/` because it is the same kind
  * of thing — a read-through cache of something the page would otherwise have to
  * go and fetch, safe to delete, refilled by the next `mc helper --collect`.
  *
