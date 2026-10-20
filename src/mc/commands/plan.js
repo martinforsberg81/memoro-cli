@@ -2,7 +2,7 @@
  * `mc plan [<programme>]` — a session in a directory, told which programme it
  * is for. That is the whole verb.
  *
- * It opens a foreground session in `~/mc/plan/<programme>/` and hands it one
+ * It opens a foreground session in the programme's planning directory and hands it one
  * prompt naming the programme. What comes out of it — one plan or four, under
  * which project names, reaching `main` by which route, or nothing this time —
  * is not this command's business and cannot be known when it starts (Martin,
@@ -20,12 +20,13 @@
  * and removed the round its plan says done (Martin, 2026-08-31: "en mc plan
  * sessions workarea ska aldrig vara hopkopplad till något som körs av mc run").
  *
- * So planning sessions live under `~/mc/plan/` — mc's own directory, beside
- * `runner/`, `intake/` and `brief/` — as `~/mc/plan/<programme>/`, holding a
+ * So planning sessions live under `plan/` — mc's own directory, beside
+ * `runner/`, `intake/` and `brief/` — as `plan/<programme>/` (`programs/` in
+ * layout 2), holding a
  * checkout of both repositories on branch `plan/<programme>`. The runner
  * cannot reach one, and not by a rule about names that could be forgotten:
  * `mc run`'s `workareas()` and `mc status`'s `areasWithCheckout()` both list
- * top-level directories that hold a checkout, and `~/mc/plan/` holds none. The
+ * top-level directories that hold a checkout, and the planning root holds none. The
  * programmes are one level below that, where neither looks.
  *
  * With no programme named the command asks rather than requiring the name to
@@ -34,13 +35,14 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
 import { archiveProgramme } from '../archive-programme.js';
 import { runDocsMerge } from '../docs-merge.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea, releaseWorkArea } from '../work-area.js';
 import { openInWorkArea } from '../work-open.js';
-import { PLAN_HOME, planHome } from '../paths.js';
+import { layoutVersion, planAreaName, planAreaRoot, workRoot } from '../paths.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
 import { scanArgs } from './flags.js';
@@ -52,11 +54,18 @@ function sh(cmd, args, { cwd } = {}) {
 
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
-/** `~/mc/plan/<programme>`, as `inspectWorkArea` and friends name a directory. */
-export const planArea = (programme) => `${PLAN_HOME}/${programme}`;
+/**
+ * A programme's planning area, as `inspectWorkArea` and friends name a
+ * directory: `plan/<programme>` in layout 1, `programs/<programme>` in layout 2.
+ */
+export const planArea = (programme, env = process.env) => planAreaName(programme, { root: workRoot(env) });
 
-/** The branch a planning session commits on, in every repository it holds. */
-export const planBranch = (programme) => `${PLAN_HOME}/${programme}`;
+/**
+ * The branch a planning session commits on, in every repository it holds.
+ * `plan/<programme>` in both layouts: the branch is the session's name, not
+ * the directory's, so it does not follow the planning root.
+ */
+export const planBranch = (programme) => `plan/${programme}`;
 
 const USAGE = 'usage — mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]\n'
   + '        mc plan <programme> --archive\n';
@@ -109,8 +118,8 @@ export async function run(argv, deps = {}) {
     return archiveProgramme(programme, {
       repos,
       env,
-      areaName: planArea(programme),
-      areaPath: `${planHome(env)}/${programme}`,
+      areaName: planArea(programme, env),
+      areaPath: join(workRoot(env), planArea(programme, env)),
       stdout,
       stderr,
       deps: {
@@ -144,14 +153,14 @@ export async function run(argv, deps = {}) {
   // conversation already in this directory is resumed, with no intro, and
   // only `--new` starts another (Martin, 2026-09-13: "Existerar det en
   // session, ska samma öppnas utan intro").
-  const launch = planLaunch({ programme, repos: ready.repos, role });
+  const launch = planLaunch({ programme, repos: ready.repos, role, env });
   const result = await (deps.open || openInWorkArea)({
     areaRoot: ready.path,
     worktree: { repo: null, path: ready.path, is_git: false },
     tool: opts.tool || role.tools?.[0] || 'claude',
     pick: opts.fresh ? 'new' : null,
     verb: 'plan',
-    areaName: planArea(programme),
+    areaName: planArea(programme, env),
     roleName: role.name || 'plan',
     roleSource: roleSourceOf(role),
     cache: role.cache,
@@ -171,7 +180,7 @@ export async function run(argv, deps = {}) {
 /* ----------------------------------------------------------------- the area */
 
 /**
- * `~/mc/plan/<programme>/` with a checkout of every repository mc knows, each
+ * The programme's planning directory with a checkout of every repository mc knows, each
  * on `plan/<programme>` from origin/main. An existing area is used as it is and
  * only what is missing is added, so re-opening a programme carries on where it
  * was left rather than starting again.
@@ -182,7 +191,7 @@ export async function run(argv, deps = {}) {
  * only failure.
  */
 export function ensurePlanArea(programme, { repos, env = process.env, stdout, stderr, git = null } = {}) {
-  const name = planArea(programme);
+  const name = planArea(programme, env);
   const branch = planBranch(programme);
   const runGit = git || ((args) => spawnSync('git', args, { stdio: 'ignore' }));
   let area = inspectWorkArea(name, env);
@@ -224,7 +233,7 @@ export function ensurePlanArea(programme, { repos, env = process.env, stdout, st
 
 /**
  * Which programme? Every one on main in either repository, every one already
- * being planned under `~/mc/plan/`, and a way to name a new one.
+ * being planned under the planning root, and a way to name a new one.
  *
  * A programme is offered whether or not it has a plan the runner can read
  * today. `listProgrammes` asks the tree, so a programme whose projects have all
@@ -283,14 +292,29 @@ export function programmeRows({ repos, env = process.env, read = null } = {}) {
   return [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** The programmes that already have a planning session directory. */
+/**
+ * The programmes that already have a planning session: a directory under the
+ * planning root that holds a checkout in at least one child directory. In
+ * layout 2 a programme's directory can hold only its projects (`PLAN.json` and
+ * `STATE.json`, no checkout), and such a programme is not being planned.
+ */
 export function openPlanAreas(env = process.env) {
+  const root = planAreaRoot({ root: workRoot(env) });
   try {
-    return readdirSync(planHome(env), { withFileTypes: true })
+    return readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .filter((entry) => holdsCheckout(join(root, entry.name)))
       .map((entry) => entry.name)
       .sort();
   } catch { return []; }
+}
+
+/** Whether a directory holds a checkout in one of its child directories. */
+function holdsCheckout(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .some((entry) => entry.isDirectory() && existsSync(join(dir, entry.name, '.git')));
+  } catch { return false; }
 }
 
 /** The one line the picker shows for a programme. */
@@ -339,14 +363,16 @@ export function programmeLabel(row) {
  * and pasting it here as well would tell a planning session the same rules
  * twice. The `shared` parameter is gone with it.
  */
-export function planLaunch({ programme, repos = [], role }) {
+export function planLaunch({ programme, repos = [], role, env = process.env }) {
   const beside = repos.map((repo) => `\`${repo}/\``).join(' and ') || 'no checkout';
+  const layoutTwo = layoutVersion({ root: workRoot(env) }) === 2;
   const lines = [
     `You are the planning session for the \`${programme}\` programme.`,
     '',
-    `You stand in \`~/mc/plan/${programme}/\`, with ${beside} beside you — each a`,
+    `You stand in \`~/mc/${planArea(programme, env)}/\`, with ${beside} beside you — each a`,
     `worktree on branch \`plan/${programme}\`. This is not a workarea: nothing`,
     '`mc run` does can reach it.',
+    ...(layoutTwo ? ['Your programme\'s projects are the directories beside them, each with its PLAN.json and STATE.json: read them, and change them only through `mc project` and `mc step`.'] : []),
     'A plan\'s pull request goes from a branch named `plan/<project>`, never `<project>`: that name is the runner\'s.',
     '',
     'Martin is at the terminal. Wait for him.',

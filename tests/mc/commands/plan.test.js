@@ -10,13 +10,13 @@
  * moved.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  ensurePlanArea, planArea, planBranch, planLaunch, programmeLabel, programmeRows, run,
+  ensurePlanArea, openPlanAreas, planArea, planBranch, planLaunch, programmeLabel, programmeRows, run,
 } from '../../../src/mc/commands/plan.js';
 import { profileArgs } from '../../../src/mc/portrait.js';
 import { instructionsFor, readCanonRole, sharedRoleText } from '../../../src/mc/roles.js';
@@ -101,6 +101,44 @@ describe('where a planning session lives', () => {
     assert.equal(planArea('msr-core'), 'plan/msr-core');
     assert.equal(planBranch('msr-core'), 'plan/msr-core');
     assert.ok(planArea('msr-core').includes('/'), 'a planning session is not a top-level directory');
+  });
+
+  /** An isolated work root that holds `runner/layout.json` saying layout 2. */
+  function layoutTwoRoot() {
+    const root = mkdtempSync(join(tmpdir(), 'mc-plan-layout2-'));
+    mkdirSync(join(root, 'runner'));
+    writeFileSync(join(root, 'runner', 'layout.json'), '{"schema":"mc-layout","version":2}\n');
+    return root;
+  }
+
+  it('in layout 2 is under programs/, on the same branch', () => {
+    const env = { MC_WORK_ROOT: layoutTwoRoot() };
+    assert.equal(planArea('msr-core', env), 'programs/msr-core');
+    assert.equal(planBranch('msr-core'), 'plan/msr-core');
+  });
+
+  it('in layout 2 is "being planned" only where a checkout stands', () => {
+    const root = layoutTwoRoot();
+    const env = { MC_WORK_ROOT: root };
+    // A programme's directory with only its projects in it has no checkout.
+    mkdirSync(join(root, 'programs', 'projects-only', 'proj'), { recursive: true });
+    writeFileSync(join(root, 'programs', 'projects-only', 'proj', 'PLAN.json'), '{}\n');
+    mkdirSync(join(root, 'programs', 'planned', 'memoro'), { recursive: true });
+    writeFileSync(join(root, 'programs', 'planned', 'memoro', '.git'), 'gitdir: elsewhere\n');
+    assert.deepEqual(openPlanAreas(env), ['planned']);
+  });
+
+  it('in layout 2 names the programs/ directory and says where the projects are', () => {
+    const env = { MC_WORK_ROOT: layoutTwoRoot() };
+    const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'), env });
+    assert.match(prompt, /~\/mc\/programs\/msr-core\//u);
+    assert.match(prompt, /Your programme's projects are the directories beside them, each with its PLAN\.json and STATE\.json/u);
+  });
+
+  it('in layout 1 says nothing about projects beside the session', () => {
+    const { prompt } = planLaunch({ programme: 'msr-core', repos: ['memoro'], role: readCanonRole('plan'), env: { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-plan-layout1-')) } });
+    assert.match(prompt, /~\/mc\/plan\/msr-core\//u);
+    assert.doesNotMatch(prompt, /projects are the directories beside them/u);
   });
 });
 

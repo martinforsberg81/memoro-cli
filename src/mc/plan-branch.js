@@ -3,7 +3,7 @@
  *
  * `mc plan` writes a project's plan on a branch named after the project and
  * lands it through a pull request; the planning session stays open in
- * `~/mc/plan/<programme>/<repo>`, on that branch, after the merge. When the
+ * `<programme>/<repo>` under the planning root, on that branch, after the merge. When the
  * runner then makes the step's workarea it asks git for a worktree on the
  * same branch name, and git refuses: a branch is checked out in one place.
  * `voice-session-resume` and `week-focus-rows` were both blocked on
