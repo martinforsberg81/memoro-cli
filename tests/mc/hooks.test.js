@@ -11,7 +11,8 @@ import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/hook.js';
 import {
-  ALLOW_MARK, hookDrift, hookRegistration, inMcTerritory, installHooks, preToolDecision, readClaudeSettings, repoHookDecision,
+  ALLOW_MARK, hookDrift, hookRegistration, inMcTerritory, installHooks, MC_HOOKS, preToolDecision, protectedPlanFile,
+  readClaudeSettings, repoHookDecision,
   repoPreToolHooks, sessionStartContext, warningsFor, worktreeState, worktreesAt,
 } from '../../src/mc/hooks.js';
 
@@ -135,6 +136,58 @@ describe('mc hook — shell commands that have an mc verb', () => {
   });
 });
 
+describe('mc hook — a plan file under ~/mc/programs is mc\'s to change', () => {
+  const programs = mkdtempSync(join(tmpdir(), 'mc-hook-programs-'));
+  const deny = (input) => preToolDecision(input, { programs });
+
+  it('names a plan, draft, state or closeout file under programs, at any depth, and no other', () => {
+    assert.equal(protectedPlanFile(join(programs, 'a', 'x', 'PLAN.json'), { programs }), true);
+    assert.equal(protectedPlanFile(join(programs, 'PLAN.json'), { programs }), true);
+    assert.equal(protectedPlanFile(join(programs, 'a', 'rulings.md'), { programs }), false);
+    assert.equal(protectedPlanFile(`${programs}-other/a/PLAN.json`, { programs }), false, 'a sibling directory is not under it');
+  });
+
+  it('refuses a Write, Edit or MultiEdit of a plan, draft, state or closeout file', () => {
+    for (const tool of ['Write', 'Edit', 'MultiEdit']) {
+      for (const name of ['PLAN.json', 'DRAFT.json', 'STATE.json', 'CLOSEOUT.json']) {
+        const decision = deny({ tool_name: tool, tool_input: { file_path: join(programs, 'a', 'x', name) } });
+        assert.equal(decision?.id, 'plan-file', `${tool} ${name}`);
+        assert.match(decision.reason, /a plan changes through `mc project`/u);
+      }
+    }
+  });
+
+  it('lets through the same name under another directory, and the other files of a programme', () => {
+    for (const name of ['PLAN.json', 'STATE.json']) {
+      assert.equal(deny({ tool_name: 'Write', tool_input: { file_path: join('/elsewhere', 'x', name) } }), null, name);
+    }
+    assert.equal(deny({ tool_name: 'Edit', tool_input: { file_path: join(programs, 'a', 'rulings.md') } }), null);
+  });
+
+  it('resolves a relative file_path against the session\'s cwd', () => {
+    const input = { tool_name: 'Edit', cwd: join(programs, 'a'), tool_input: { file_path: join('x', 'STATE.json') } };
+    assert.equal(deny(input)?.id, 'plan-file');
+    assert.equal(deny({ ...input, cwd: '/elsewhere' }), null, 'the same relative name under another cwd is another file');
+  });
+
+  it('refuses a shell command that writes one, with the escape named, and lets a read of one through', () => {
+    const file = join(programs, 'a', 'x', 'PLAN.json');
+    for (const command of [`jq . > ${file}`, "sed -i '' s/a/b/ STATE.json", 'mv DRAFT.json PLAN.json', 'echo x | tee CLOSEOUT.json']) {
+      const decision = preToolDecision(bash(command), { programs });
+      assert.equal(decision?.id, 'plan-file', command);
+      assert.match(decision.reason, /Escape, when the raw command is really meant/u, `${command}: the escape is named`);
+    }
+    for (const command of ['cat PLAN.json', 'jq . PLAN.json', 'mc project send x']) {
+      assert.equal(preToolDecision(bash(command), { programs }), null, command);
+    }
+    assert.equal(preToolDecision(bash(`${ALLOW_MARK} jq . > ${file}`), { programs }), null, 'the escape lets it through');
+  });
+
+  it('the PreToolUse matcher carries the edit tools, so the refusal sees them', () => {
+    assert.equal(MC_HOOKS.find((hook) => hook.which === 'pre-tool').matcher, 'Bash|Write|Read|Edit|MultiEdit');
+  });
+});
+
 describe('mc hook — a repository\'s own hooks, for a session that started outside it', () => {
   function repoWithHooks() {
     const area = mkdtempSync(join(tmpdir(), 'mc-hook-repo-'));
@@ -210,7 +263,7 @@ describe('mc hook install — mc\'s own registration', () => {
     const before = hookRegistration(OLD);
     assert.equal(before.problems.length, 1);
     assert.equal(before.problems[0].which, 'pre-tool');
-    assert.equal(hookDrift(before), 'pre-tool on Bash|Write, want Bash|Write|Read');
+    assert.equal(hookDrift(before), 'pre-tool on Bash|Write, want Bash|Write|Read|Edit|MultiEdit');
   });
 
   it('names both entries as missing from settings with no hooks', () => {
@@ -237,7 +290,7 @@ describe('mc hook install — mc\'s own registration', () => {
     });
     assert.equal(next.hooks.PreToolUse.length, 1);
     assert.deepEqual(next.hooks.PreToolUse[0], {
-      matcher: 'Bash|Write|Read', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }],
+      matcher: 'Bash|Write|Read|Edit|MultiEdit', hooks: [{ type: 'command', command: 'mc hook pre-tool 2>/dev/null || true' }],
     });
   });
 

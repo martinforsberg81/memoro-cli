@@ -26,7 +26,7 @@ warning most.
 ```json
 "hooks": {
   "SessionStart": [{ "hooks": [{ "type": "command", "command": "mc hook session-start 2>/dev/null || true" }] }],
-  "PreToolUse": [{ "matcher": "Bash|Write|Read", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }]
+  "PreToolUse": [{ "matcher": "Bash|Write|Read|Edit|MultiEdit", "hooks": [{ "type": "command", "command": "mc hook pre-tool 2>/dev/null || true" }] }]
 }
 ```
 
@@ -37,7 +37,8 @@ left alone. `mc hook install --check` writes nothing and exits 1 when the
 registration has drifted from the block, and the page's MC line names the drift
 as `hooks: … · mc hook install`.
 
-`Read` lets memoro's `block-sqlite-state.sh` answer the Read tool too.
+`Read` lets memoro's `block-sqlite-state.sh` answer the Read tool too. `Edit`
+and `MultiEdit` are there so the plan-file refusal below sees them.
 
 `|| true` because a hook must never stand between a session and its work: an
 mc that does not know the verb yet, or any failure, is silence. The verbs
@@ -93,6 +94,18 @@ A `Write` whose content imports Playwright, to a path outside every known
 repository, is turned to `mc shot dev … --measure`: a scratch measurement
 script is the thing `mc shot` exists to replace, and when it cannot, the reason
 is what mc should learn next. A repository's own Playwright code is left alone.
+
+A `Write`, `Edit` or `MultiEdit` of a `PLAN.json`, `DRAFT.json`, `STATE.json` or
+`CLOSEOUT.json` under `~/mc/programs/` is refused (`plan-file`): a plan changes
+through `mc project`, a step's state through `mc step`, a criterion through
+`mc project criterion met`. A relative `file_path` is resolved against the
+session's `cwd`. This refusal has no escape. A `Bash` command that writes one of
+those names — a `>` or `>>` redirect, `tee`, `sed -i`, or `mv`, `cp`, `rm`,
+`truncate`, `install` of it — is refused the same way, under the `MC_HOOK_ALLOW=1`
+escape like every Bash rule. That rule matches the name alone, so a file of that
+name anywhere is refused too; no repository holds such a file any more. Codex
+sessions are not covered: mc registers no hook for them, so this catches
+mistakes, not intent.
 
 The answer is a `deny` with the reason, which names the verb and the escape: a
 command (or a written file) that contains `MC_HOOK_ALLOW=1` passes — a

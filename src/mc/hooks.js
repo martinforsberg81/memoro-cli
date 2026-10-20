@@ -18,10 +18,10 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 
 import { defaultRepos } from './brief-collect.js';
-import { workRoot } from './paths.js';
+import { programsHome, workRoot } from './paths.js';
 
 /** A branch this far behind origin/main is old enough to be the wrong code. */
 export const BEHIND_WARNING = 50;
@@ -167,6 +167,23 @@ export function sessionStartContext({ cwd, inside, states }) {
 }
 
 /**
+ * A programme's plan, draft, state and closeout files are written by the verbs
+ * only (ruling 51): `mc project`, `mc step`, the runner and the merger. The hook
+ * catches a session's hand-edit of one — a mistake, not an intent: a codex
+ * session has no mc hook, and a Bash rule is a regular expression.
+ */
+const PROTECTED = /^(PLAN|DRAFT|STATE|CLOSEOUT)\.json$/u;
+
+/** The reason a plan-file refusal gives, whichever tool made it. */
+const PLAN_FILE_REASON = 'This file is mc\'s: a plan changes through `mc project` (new, edit, criterion add, step add, step edit, send), a step\'s state through `mc step`, a criterion through `mc project criterion met`. Run `mc project <name>` to read it.';
+
+/** Whether `path` is one of those files anywhere under `programs`. */
+export function protectedPlanFile(path, { programs = programsHome() } = {}) {
+  const file = resolve(String(path));
+  return file.startsWith(`${resolve(programs)}${sep}`) && PROTECTED.test(basename(file));
+}
+
+/**
  * The shell commands that have an mc verb, and the verb. Matched on the
  * command's words, not its whole text, so `echo "gh pr create"` is left alone
  * only as far as a regular expression can tell — the escape covers the rest.
@@ -203,6 +220,12 @@ export const BASH_RULES = [
     test: /(^|[;&|(]\s*|\s)npm\s+run\s+dev(:agent)?\b/u,
     reason: 'Use `mc test dev --here --url` for a server for this worktree (started if down, restarted when its tree moved or was edited), or `mc shot dev …` to look at the app. `npm run dev` is for a person at a terminal.',
   },
+  {
+    id: 'plan-file',
+    // A write verb naming a plan file: a redirect, tee, sed -i, or a move, copy, removal or install of it.
+    test: /(>>?|\btee\b|\bsed\s+-i|\b(mv|cp|rm|truncate|install)\b)[^;&|\n]*\b(PLAN|DRAFT|STATE|CLOSEOUT)\.json\b/u,
+    reason: PLAN_FILE_REASON,
+  },
 ];
 
 /** Playwright written into a scratch file is a shot mc already takes. */
@@ -213,7 +236,7 @@ const PLAYWRIGHT = /\bfrom\s+['"][^'"]*playwright[^'"]*['"]|require\(\s*['"][^'"
  * it is turned to an mc verb. `inRepo` says whether a written file lands inside
  * a known repository, where a Playwright script is the repository's own code.
  */
-export function preToolDecision(input, { inRepo = () => false } = {}) {
+export function preToolDecision(input, { inRepo = () => false, programs = programsHome() } = {}) {
   const tool = input?.tool_name;
   const args = input?.tool_input || {};
   if (tool === 'Bash') {
@@ -223,6 +246,12 @@ export function preToolDecision(input, { inRepo = () => false } = {}) {
       if (rule.test.test(command)) return { id: rule.id, reason: `${rule.reason} (Escape, when the raw command is really meant: put ${ALLOW_MARK} in it and say why.)` };
     }
     return null;
+  }
+  if (tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit') {
+    // A relative path lands where the session's own cwd says, so it is resolved there.
+    if (protectedPlanFile(resolve(String(input?.cwd || ''), String(args.file_path || '')), { programs })) {
+      return { id: 'plan-file', reason: PLAN_FILE_REASON };
+    }
   }
   if (tool === 'Write') {
     const content = String(args.content || '');
@@ -337,11 +366,12 @@ export function inMcTerritory(cwd, deps = {}) {
  * the ones `--check` and the page compare the file against. `|| true`: a hook
  * must never stand between a session and its work. `Read` is in the matcher so
  * the repositories' Read hooks (memoro's block-sqlite-state.sh) answer through
- * `mc hook pre-tool`.
+ * `mc hook pre-tool`. `Edit` and `MultiEdit` are in it so the plan-file refusal
+ * sees them.
  */
 export const MC_HOOKS = Object.freeze([
   Object.freeze({ event: 'SessionStart', which: 'session-start', matcher: null, command: 'mc hook session-start 2>/dev/null || true' }),
-  Object.freeze({ event: 'PreToolUse', which: 'pre-tool', matcher: 'Bash|Write|Read', command: 'mc hook pre-tool 2>/dev/null || true' }),
+  Object.freeze({ event: 'PreToolUse', which: 'pre-tool', matcher: 'Bash|Write|Read|Edit|MultiEdit', command: 'mc hook pre-tool 2>/dev/null || true' }),
 ]);
 
 /** Claude Code's user settings file. */

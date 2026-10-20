@@ -328,7 +328,7 @@ IN FULL
                                     server — the warnings (a merged branch, a
                                     stale one, main, a session started outside
                                     the repository) and the mc toolbox
-  mc hook pre-tool                 For a PreToolUse hook on Bash|Write|Read: gh pr
+  mc hook pre-tool                 For a PreToolUse hook on Bash|Write|Read|Edit|MultiEdit: gh pr
                                     create, gh pr edit and git push → mc publish, gh pr
                                     merge → mc merge, npm run ci → mc gate, npm
                                     run dev → mc test dev --here --url, a scratch
