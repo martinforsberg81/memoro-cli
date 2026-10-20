@@ -33,7 +33,7 @@ const namingRepo = (text, repo) => (/^\s*\{/u.test(text) ? text.replace(/^\s*\{/
  * answered from tables, and a "session" that returns what the test says.
  * Nothing starts, nothing is written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, stages = {}, headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }) } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -225,14 +225,6 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     git: (cwd, args) => {
       calls.git.push([cwd, ...args]);
       const repoName = Object.keys(repos).find((r) => cwd === repos[r]);
-      // The three sides git holds in the index while a merge is in progress:
-      // `:1:` the merge base, `:2:` ours, `:3:` theirs. `stages` is per
-      // workarea, per path — a file it does not name is one git cannot show.
-      if (args[0] === 'show' && /^:[123]:/u.test(args[1] || '')) {
-        const [, stage, path] = args[1].match(/^:([123]):(.*)$/u);
-        const held = (stages[areaOf(cwd)] || {})[path];
-        return held ? { ok: true, stdout: held[Number(stage)] ?? '' } : { ok: false, stdout: '' };
-      }
       // The branch's own last committed copy of a file. Nothing in the runner
       // reads this any more (`planOf` lost `fromHead` on 2026-09-08); it is
       // kept so a test can assert that HEAD is not read at all.
@@ -240,17 +232,6 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
         const at = args[1].slice('HEAD:'.length);
         const held = (headFiles[areaOf(cwd)] || {})[at];
         return { ok: true, stdout: held ?? files[`${cwd}/${at}`] ?? '' };
-      }
-      // `git checkout --theirs -- <path>`: origin/main's side of a conflicted
-      // file written over the copy on disk, which is stage `:3:` of it. The
-      // `--` form is the plan's, and the only one that writes here — the
-      // `.gitignore` resolution above it takes the plain default.
-      if (args[0] === 'checkout' && args[1] === '--theirs' && args[2] === '--') {
-        const path = args.at(-1);
-        const held = (stages[areaOf(cwd)] || {})[path];
-        if (!held) return { ok: false, stdout: '', stderr: `error: path '${path}' does not have their version` };
-        files[`${cwd}/${path}`] = held[3] ?? '';
-        return { ok: true, stdout: '' };
       }
       if (args[0] === 'ls-tree' && repoName) {
         return { ok: true, stdout: Object.keys(plans[repoName] || {}).map((n) => `docs/project/prog/${n}/PLAN.json`).join('\n') };
@@ -311,6 +292,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       if (args[0] === 'merge' && args[1] === '--abort') { aborted.add(cwd); return { ok: true, stdout: '' }; }
       if (args[0] === 'merge' && args.includes('origin/main')) {
         const name = areaOf(cwd);
+        if (mergeRefused.includes(name)) return { ok: false, stdout: '', stderr: 'fatal: refusing to merge unrelated histories' };
         return conflicts[name] ? { ok: false, stdout: '', stderr: 'CONFLICT' } : { ok: true, stdout: '' };
       }
       if (args[0] === 'diff') return { ok: true, stdout: (conflicts[areaOf(cwd)] || []).join('\n') };
@@ -1082,105 +1064,6 @@ test('the round asks GitHub once per repository, beside the fetch it already pay
 });
 
 /**
- * The plan conflict, resolved by the plan's own rule and not by a session.
- *
- * 29 of the 166 conflicting files measured in runner.log were a plan, always
- * in this shape: main carries the plan a later round wrote to, the branch
- * carries the same plan with its own step edited. The rule itself is
- * plan-merge.js and is tested there; what these two ask is what the round
- * does with it — that the merge finishes and the project gets its ordinary
- * step, and that a plan the rule refuses is still left in progress.
- */
-const PLAN_AT = 'docs/project/prog/c/PLAN.json';
-
-function planStages({ bothOnStepOne = false } = {}) {
-  const twoSteps = [
-    { title: 'One', status: 'ready', done_when: 'x', instruction: ['Do x.'], comments: [], pr: null, blocked_by: null },
-    { title: 'Two', status: 'ready', done_when: 'y', instruction: ['Do y.'], comments: [], pr: null, blocked_by: null },
-  ];
-  const base = JSON.parse(plan({ steps: twoSteps }));
-  const main = structuredClone(base);
-  main.steps[0] = { ...main.steps[0], status: 'done', pr: 601, comments: ['Step one landed.'] };
-  main.success_criteria[0] = { ...main.success_criteria[0], met: true };
-  const branch = structuredClone(base);
-  const at = bothOnStepOne ? 0 : 1;
-  branch.steps[at] = { ...branch.steps[at], comments: ['What this branch found.'] };
-  const text = (value) => `${JSON.stringify(value, null, 2)}\n`;
-  return { base: text(base), branch: text(branch), main: text(main) };
-}
-
-test('a PLAN.json whose two sides changed different steps is merged by the runner, and the project gets its step', async () => {
-  const three = planStages();
-  const f = fixture({
-    areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
-    plans: { memoro: { c: three.main } },
-    conflicts: { c: [PLAN_AT] },
-    stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch, 3: three.main } } },
-    session: okSession(), gh: { c: { number: 90, title: 'Step two' } },
-  });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
-
-  const merged = JSON.parse(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json']);
-  assert.deepEqual(merged.steps.map((s) => [s.status, s.pr]), [['done', 601], ['ready', null]], "main's step 1 survived");
-  assert.deepEqual(merged.steps.map((s) => s.comments[0]), ['Step one landed.', 'What this branch found.'], 'and so did the branch\'s step 2');
-  assert.deepEqual(merged.success_criteria.map((c) => c.met), [true]);
-  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'add' && c.at(-1) === PLAN_AT), 'the resolution is staged');
-  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'commit'), 'and the merge is committed, in the runner');
-
-  assert.equal(f.calls.sessions.length, 1, 'one session, and it is the step');
-  const [call] = f.calls.sessions;
-  assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /ROLE step$/u);
-  assert.match(call.prompt, /Your step is `steps\[1\]` — 2, "Two"/u);
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tc\tstep\t/u);
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json resolved by the plan's own rule — steps\[0\] from main, steps\[1\] from this branch/u);
-  assert.doesNotMatch(log, /c: merge conflict in:/u);
-});
-
-/**
- * And where the rule refuses, main's copy is taken and the merge commits.
- *
- * This is the case that stopped a project dead. The merge was left in
- * progress, the plan was read from the branch's `HEAD`, that copy had no step
- * to hand out, the merge was aborted and the workarea was recorded — and the
- * next lane, ten minutes on, did the same thing: `sql-w3-email-closure` from
- * 2026-09-06T18:34Z to 2026-09-08, on one predicate. Main's copy is the one
- * the runner obeys everywhere else, so it is what the workarea takes.
- */
-test("a PLAN.json whose two sides changed the same step takes main's copy, and the project gets its step", async () => {
-  const three = planStages({ bothOnStepOne: true });
-  const f = fixture({
-    areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
-    plans: { memoro: { c: three.main } },
-    conflicts: { c: [PLAN_AT] },
-    stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch, 3: three.main } } },
-    session: okSession(), gh: { c: { number: 91, title: 'Step two' } },
-  });
-  const runner = createRunner({ deps: f.deps });
-  await runner.pass();
-
-  assert.equal(f.files['/w/c/memoro/docs/project/prog/c/PLAN.json'], three.main, "main's copy, whole");
-  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'checkout' && c[2] === '--theirs' && c.at(-1) === PLAN_AT));
-  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'add' && c.at(-1) === PLAN_AT), 'the resolution is staged');
-  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'commit'), 'and the merge is committed');
-  assert.ok(!f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'merge' && c[2] === '--abort'), 'nothing is aborted');
-
-  assert.equal(f.calls.sessions.length, 1, 'and the project gets its step');
-  const [call] = f.calls.sessions;
-  assert.match(call.prompt, /Your step is `steps\[1\]` — 2, "Two"/u, "main's step 1 is done, so the step is 2");
-  // The prompt quotes the other steps one line each, so main's step 1 is its
-  // status and PR there (its comments are in the file, not the prompt).
-  assert.match(call.prompt, /steps\[0\] · done · One · done when: x · PR #601/u, "and the plan in the prompt is main's");
-  assert.match(call.prompt, /success_criteria\[0\] · met: true/u);
-  const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /c: docs\/project\/prog\/c\/PLAN\.json — the plan's rule refused \(steps\[0\]: changed on this branch and on main both\); main's copy taken/u);
-  assert.doesNotMatch(log, /c: merge conflict in:/u);
-  assert.deepEqual(Object.keys(f.files).filter((p) => /^\/w\/runner\/[^/]+\.json$/u.test(p) && p !== '/w/runner/prs.json'), [],
-    'and no record of a workarea that could not merge — there is nothing left to record');
-});
-
-/**
  * What is left after git and the plan's own rule is the step session's, in
  * the session that had to read that code anyway.
  *
@@ -1209,57 +1092,25 @@ test('a conflicting merge of origin/main goes to the step session, with the file
 });
 
 /**
- * The other side of taking main's copy: what the session is then judged
- * against.
- *
- * The plan the rule refused used to be read from `HEAD` and handed to the
- * session with the merge to finish, and its work was judged against
- * origin/main afterwards — because the merge that stopped *is* main's edits to
- * that file, so judging against the HEAD it was handed would read every one of
- * them as a step it had no business touching. The runner takes main's copy
- * itself now, so the session is handed main's plan in the first place; the
- * judgement is the same one, over the same file, and this is what holds it.
- * Here main added a comment to step 1, which the session keeps; against the
- * branch's copy that is `steps[0]: changed by the session that ran step 2`.
+ * The one conflict the runner still resolves without a session: an identical
+ * `.gitignore` hunk, taken from origin/main and committed. The merge finishes
+ * and the project gets its step.
  */
-test("a step session handed main's plan has its work judged against main", async () => {
-  const twoSteps = [
-    { title: 'One', status: 'done', done_when: 'x', instruction: ['Do x.'], comments: [], pr: 601, blocked_by: null },
-    { title: 'Two', status: 'ready', done_when: 'y', instruction: ['Do y.'], comments: [], pr: null, blocked_by: null },
-  ];
-  const base = JSON.parse(plan({ steps: twoSteps }));
-  const main = structuredClone(base);
-  main.steps[0] = { ...main.steps[0], comments: ['Step one landed.'] };
-  main.steps[1] = { ...main.steps[1], comments: ['Main touched step two.'] };
-  const branch = structuredClone(base);
-  branch.steps[1] = { ...branch.steps[1], comments: ['This branch touched step two.'] };
-  // What the session leaves behind: main's plan, and its own step delivered.
-  const resolved = structuredClone(main);
-  resolved.steps[1] = { ...resolved.steps[1], status: 'done', pr: 94, comments: ['Both sides kept.'] };
-  const text = (value) => `${JSON.stringify(value, null, 2)}\n`;
-
+test('an identical .gitignore hunk is taken from main and committed, and the project gets its step', async () => {
   const f = fixture({
-    // On the branch: this branch's own comment on step two, which is what the
-    // rule refuses on and what taking main's copy drops.
-    areas: { c: { repo: 'memoro', programme: 'prog', plan: text(branch) } },
-    plans: { memoro: { c: text(main) } },
-    conflicts: { c: [PLAN_AT] },
-    stages: { c: { [PLAN_AT]: { 1: text(base), 2: text(branch), 3: text(main) } } },
-    gh: { c: { number: 94, title: 'Step two' } },
-    // The session lands itself (ruling 21); the plan boundary is `mc merge`'s
-    // door now (merge-step.js), judged against main there.
-    session: (call) => { f.files[`/w/c/memoro/${PLAN_AT}`] = text(resolved); return landsItself(f, 'c', 94)(call); },
+    areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { c: ready } },
+    conflicts: { c: ['.gitignore'] },
+    session: okSession(), gh: { c: { number: 92, title: 'The one step' } },
   });
   const runner = createRunner({ deps: f.deps });
   await runner.pass();
 
-  const [call] = f.calls.sessions;
-  assert.match(call.prompt, /Your step is `steps\[1\]` — 2, "Two"/u);
-  assert.match(call.prompt, /Main touched step two\./u, "main's copy, not the branch's");
-  assert.doesNotMatch(call.prompt, /This branch touched step two\./u);
-  const [row] = runRows(f.files).filter((r) => r.name === 'c');
-  assert.equal(row.note, 'success,merged');
-  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /left open — the session changed more of the plan/u);
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'checkout' && c[2] === '--theirs' && c.at(-1) === '.gitignore'), "main's .gitignore is taken");
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'add' && c.at(-1) === '.gitignore'), 'and staged');
+  assert.ok(f.calls.git.some((c) => c[0] === '/w/c/memoro' && c[1] === 'commit'), 'and the merge is committed, in the runner');
+  assert.equal(f.calls.sessions.length, 1, 'one session, and it is the step');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /c: merge conflict in:/u);
 });
 
 /**
@@ -1286,7 +1137,7 @@ test('a conflict outside the plan hands out the step main says, not the one HEAD
 
   const f = fixture({
     areas: { c: { repo: 'memoro', programme: 'prog', plan: plan({ steps: twoSteps }) } },
-    headFiles: { c: { [PLAN_AT]: text(stale) } },
+    headFiles: { c: { 'docs/project/prog/c/PLAN.json': text(stale) } },
     plans: { memoro: { c: plan({ steps: twoSteps }) } },
     conflicts: { c: ['docs/technical/a.md'] },
     session: okSession(), gh: { c: { number: 95, title: 'Step two' } },
@@ -4226,18 +4077,13 @@ const BLOCKS = [
     block: 'merge-uncommittable',
     reason: 'sync',
     name: 'c',
-    what: 'a merge of origin/main that resolved and would not commit',
-    make: () => {
-      const three = planStages();
-      return fixture({
-        areas: { c: { repo: 'memoro', programme: 'prog', plan: three.branch } },
-        plans: { memoro: { c: three.main } },
-        conflicts: { c: [PLAN_AT] },
-        stages: { c: { [PLAN_AT]: { 1: three.base, 2: three.branch, 3: three.main } } },
-        commitFails: ['c'], session: okSession(),
-      });
-    },
-    detail: /origin\/main was merged in, docs\/project\/prog\/c\/PLAN\.json resolved, and the commit was refused \(error: could not commit\)/u,
+    what: 'a merge of origin/main that git refused before it began, and that would not commit',
+    make: () => fixture({
+      areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } },
+      plans: { memoro: { c: ready } },
+      mergeRefused: ['c'], commitFails: ['c'], session: okSession(),
+    }),
+    detail: /origin\/main could not be merged in, with no conflict to resolve/u,
   },
   {
     block: 'role-missing',
@@ -4504,12 +4350,6 @@ const CASES = [
     what: 'origin could not be fetched',
     make: () => fixture({ plans: { memoro: { m: ready } }, areas: area(), fetchFails: ['m'], session: okSession() }),
   },
-  // There was one more case here until 2026-09-08, and it was the only one
-  // whose reading came out of a file the runner had written rather than out of
-  // the machine as it stands: a workarea whose `PLAN.json` conflict the plan's
-  // rule refused, whose merge was therefore aborted — leaving the worktree
-  // clean, so nothing else said it had happened. Such a conflict takes main's
-  // copy now and the merge commits, so there is no refusal and no record.
   {
     reason: 'role-missing',
     what: 'the role file is not installed',

@@ -17,7 +17,6 @@ const PLAN_NAME = /'PLAN\.(json|md)'/g;
 
 const ALLOWED = new Map([
   ['src/mc/merge-boundary.js', 2],
-  ['src/mc/plan-merge.js', 1],
   ['src/mc/page-render.js', 1],
   ['src/mc/run.js', 2],
 ]);
