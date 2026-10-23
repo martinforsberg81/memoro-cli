@@ -12,9 +12,19 @@
  *
  * Loaded via --import before any test module (see the npm test script).
  */
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// Temporary directories too. Over a hundred suites mkdtemp under tmpdir() and
+// none of them removes what it made: ~95 000 mc-* directories had piled up in
+// the user's temp dir by 2026-10-23. Each process — the runner and every test
+// file it spawns, which inherit the variable — points TMPDIR at a directory
+// of its own and removes it on exit, so a suite's leftovers go with it.
+// Created first, so the two homes below land inside it as well.
+const tmpRoot = mkdtempSync(join(tmpdir(), 'mc-test-tmp-'));
+process.env.TMPDIR = tmpRoot;
+process.once('exit', () => rmSync(tmpRoot, { recursive: true, force: true }));
 
 if (!process.env.MC_HOME) {
   process.env.MC_HOME = mkdtempSync(join(tmpdir(), 'mc-test-isolated-home-'));
