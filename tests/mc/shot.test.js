@@ -15,8 +15,8 @@ import { describe, it } from 'node:test';
 
 import { run, servedTree, usage } from '../../src/mc/commands/shot.js';
 import {
-  accessLine, actionGap, buildRequest, outPath, parseActions, parseResult, parseSafeArea, parseScroll, parseViewport, resolveAccount,
-  resolveTarget, slug, targetRequires,
+  accessLine, actionGap, buildRequest, CAPTURE_TIMEOUT_MS, captureTimeoutMs, outPath, parseActions, parseResult, parseSafeArea, parseScroll,
+  parseTimeout, parseViewport, resolveAccount, resolveTarget, runCapture, slug, targetRequires,
 } from '../../src/mc/shot.js';
 
 const TOKEN = 'tok-5ecret-7e57';
@@ -198,8 +198,9 @@ describe('mc shot — the pieces', () => {
     });
     assert.deepEqual(Object.keys(request), [
       'mode', 'base_url', 'account', 'sign_in', 'target', 'element', 'shell', 'full_page', 'viewport', 'theme', 'locale', 'out',
-      'safe_area', 'wait_for', 'scroll', 'measure', 'onboarding', 'click', 'actions',
+      'safe_area', 'wait_for', 'scroll', 'measure', 'onboarding', 'click', 'actions', 'timeout_ms',
     ]);
+    assert.equal(request.timeout_ms, null);
     assert.equal(request.onboarding, false);
     assert.equal(request.full_page, false);
     assert.equal(request.click, null);
@@ -429,6 +430,183 @@ describe('mc shot — the run', () => {
     const bad = await shot(['dev', 'home', '--fill', 'input'], fx);
     assert.equal(bad.code, 2);
     assert.equal(bad.stderr, 'mc: --fill takes <css>=<text>\n');
+  });
+});
+
+describe('mc shot — eval, upload, press, timeout, and what comes back', () => {
+  const base = { baseUrl: 'http://127.0.0.1:8787', account: 'seeded', signIn: { kind: 'url', url: 'u' }, target: { name: 'home' }, viewport: 'desktop', out: '/o.png' };
+  const captured = (result) => {
+    const asked = [];
+    return {
+      asked,
+      runCapture: ({ request }) => { asked.push(request); return { ok: true, result: { ok: true, file: '/tmp/x.png', url: 'http://127.0.0.1:8787/app/', warnings: [], ...result } }; },
+    };
+  };
+
+  it('parseActions keeps argv order across the seven flags and --eval-file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-shot-acts-'));
+    writeFileSync(join(dir, 'probe.js'), 'getComputedStyle(document.body).zIndex\n');
+    writeFileSync(join(dir, 'rows.csv'), 'a,b\n');
+    assert.deepEqual(parseActions([
+      'dev', 'home', '--click', 'a', '--eval', '1 + 1', '--fill', 'b=hi', '--upload', 'input.csv=rows.csv',
+      '--context-click', 'c', '--eval-file', 'probe.js', '--press', 'Meta+K', '--long-press', 'd@800',
+    ], { cwd: dir }), {
+      ok: true,
+      actions: [
+        { kind: 'click', selector: 'a' },
+        { kind: 'eval', script: '1 + 1' },
+        { kind: 'fill', selector: 'b', text: 'hi' },
+        { kind: 'upload', selector: 'input.csv', file: join(dir, 'rows.csv') },
+        { kind: 'context-click', selector: 'c' },
+        { kind: 'eval', script: 'getComputedStyle(document.body).zIndex\n' },
+        { kind: 'press', key: 'Meta+K' },
+        { kind: 'long-press', selector: 'd', ms: 800 },
+      ],
+    });
+  });
+
+  it('the command hands the new kinds to the script in argv order', async () => {
+    const fx = fixture();
+    writeFileSync(join(fx.home, 'rows.csv'), 'a,b\n');
+    const result = await shot(['dev', 'home', '--upload', 'input.import=rows.csv', '--press', 'Enter', '--eval', 'location.href'], fx);
+    assert.equal(result.code, 0, result.stderr);
+    const { request } = sideOf(fx);
+    assert.deepEqual(request.actions, [
+      { kind: 'upload', selector: 'input.import', file: join(fx.home, 'rows.csv') },
+      { kind: 'press', key: 'Enter' },
+      { kind: 'eval', script: 'location.href' },
+    ]);
+    assert.equal(request.click, null);
+  });
+
+  it('parseActions refuses a missing upload file, a bad --upload and an unreadable --eval-file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-shot-acts-'));
+    assert.deepEqual(parseActions(['--upload', 'input=nope.csv'], { cwd: dir }), { ok: false, error: `--upload: no file at ${join(dir, 'nope.csv')}` });
+    assert.deepEqual(parseActions(['--upload', 'input'], { cwd: dir }), { ok: false, error: '--upload takes <css>=<file>' });
+    assert.deepEqual(parseActions(['--upload', '=a.csv'], { cwd: dir }), { ok: false, error: '--upload takes <css>=<file>' });
+    assert.match(parseActions(['--eval-file', 'gone.js'], { cwd: dir }).error, /^--eval-file: cannot read .*gone\.js/u);
+  });
+
+  it('--timeout is whole seconds 1 to 120, and the spawn timeout grows with it', async () => {
+    assert.deepEqual(parseTimeout(null), { ok: true, timeoutMs: null });
+    assert.deepEqual(parseTimeout('30'), { ok: true, timeoutMs: 30_000 });
+    for (const bad of ['0', '121', '2.5', 'ten']) assert.deepEqual(parseTimeout(bad), { ok: false, error: '--timeout is whole seconds, 1 to 120' }, bad);
+    const fx = fixture();
+    for (const bad of ['0', '121', '2.5']) {
+      const result = await shot(['dev', 'home', '--timeout', bad], fx);
+      assert.equal(result.code, 2, bad);
+      assert.equal(result.stderr, 'mc: --timeout is whole seconds, 1 to 120\n', bad);
+    }
+    assert.equal(existsSync(fx.side), false, 'no refusal ran the script');
+
+    assert.equal(captureTimeoutMs({ timeout_ms: null, actions: null }), CAPTURE_TIMEOUT_MS);
+    assert.equal(captureTimeoutMs({ timeout_ms: 30_000, actions: [{}, {}] }), 60_000 + 4 * 30_000 * 3);
+    const spawned = [];
+    const fake = (request) => runCapture({
+      worktree: fx.worktree,
+      declaration: { argv: ['node', 'x'] },
+      request,
+      deps: { spawnSync: (cmd, args, options) => { spawned.push(options.timeout); return { status: 0, stdout: '{"ok":true}\n' }; } },
+    });
+    fake(buildRequest(base));
+    fake(buildRequest({ ...base, timeoutMs: 60_000, actions: [{ kind: 'press', key: 'Enter' }] }));
+    assert.deepEqual(spawned, [CAPTURE_TIMEOUT_MS, 60_000 + 4 * 60_000 * 2]);
+
+    const ran = await shot(['dev', 'home', '--timeout', '45'], fx);
+    assert.equal(ran.code, 0, ran.stderr);
+    assert.equal(sideOf(fx).request.timeout_ms, 45_000);
+  });
+
+  it('buildRequest writes timeout_ms after actions, and an eval action nulls click', () => {
+    const request = buildRequest({ ...base, timeoutMs: 20_000, actions: [{ kind: 'click', selector: '.a' }, { kind: 'eval', script: '1' }] });
+    assert.deepEqual(Object.keys(request).slice(-3), ['click', 'actions', 'timeout_ms']);
+    assert.equal(request.timeout_ms, 20_000);
+    assert.equal(request.click, null);
+    for (const action of [{ kind: 'upload', selector: 'input', file: '/f' }, { kind: 'press', key: 'Enter' }]) {
+      assert.equal(buildRequest({ ...base, actions: [action] }).click, null, action.kind);
+    }
+  });
+
+  it('actionGap: a failed step is no gap, and an older script that answers no acted still is one', () => {
+    const asked = { actions: [{ kind: 'eval', script: '1' }, { kind: 'press', key: 'Enter' }] };
+    assert.match(actionGap(asked, { file: '/o.png' }), /taken without the actions/u);
+    assert.equal(actionGap(asked, { file: '/o.png', acted: [{}], failed: { step: 2, kind: 'press', key: 'Enter', error: 'x' } }), null);
+    assert.equal(actionGap({ actions: [{ kind: 'click', selector: '.a' }] }, { file: '/o.png', failed: { step: 1, kind: 'click', selector: '.a', error: 'x' } }), null);
+  });
+
+  it('prints error lines after the path with a count suffix, at most 20, and exits 0', async () => {
+    const fx = fixture();
+    const errors = [
+      { kind: 'page', text: 'TypeError: a is undefined\n    at main.js:1' },
+      { kind: 'console', text: 'x'.repeat(400), count: 3 },
+      { kind: 'request', text: 'GET /api/x 500', count: 1 },
+      ...Array.from({ length: 22 }, (_, i) => ({ kind: 'server', text: `log ${i}` })),
+    ];
+    const fake = captured({ errors });
+    const result = await shot(['dev', 'home'], fx, fake);
+    assert.equal(result.code, 0, result.stderr);
+    const lines = result.stdout.trimEnd().split('\n');
+    assert.equal(lines[0], '/tmp/x.png');
+    assert.equal(lines[1], 'http://127.0.0.1:8787/app/');
+    assert.equal(lines[2], 'error  page  TypeError: a is undefined at main.js:1');
+    assert.equal(lines[3], `error  console  ${'x'.repeat(300)}… ×3`);
+    assert.equal(lines[4], 'error  request  GET /api/x 500');
+    assert.equal(lines.filter((line) => line.startsWith('error  ')).length, 21);
+    assert.equal(lines.at(-1), 'error  … 5 more — --json has them all');
+    const json = await shot(['dev', 'home', '--json'], fx, captured({ errors }));
+    assert.equal(json.code, 0);
+    assert.equal(JSON.parse(json.stdout).errors.length, 25);
+  });
+
+  it('prints eval lines: the value, what it threw, and a long value cut at 4000', async () => {
+    const fx = fixture();
+    const long = 'y'.repeat(5000);
+    const result = await shot(['dev', 'home', '--eval', '1', '--eval', '2', '--eval', '3'], fx, captured({
+      acted: [{}, {}, {}],
+      errors: [{ kind: 'dialog', text: 'alert: hi' }],
+      evaluated: [{ value: { z: 10, chain: ['a', 'b'] } }, { error: 'ReferenceError: q is not defined' }, { value: long }],
+      warnings: ['w'],
+    }));
+    assert.equal(result.code, 0, result.stderr);
+    const lines = result.stdout.trimEnd().split('\n');
+    assert.deepEqual(lines.slice(2, 5), ['error  dialog  alert: hi', 'eval 1  {"z":10,"chain":["a","b"]}', 'eval 2  threw: ReferenceError: q is not defined']);
+    assert.equal(lines[5], `eval 3  ${JSON.stringify(long).slice(0, 4000)}… (5002 bytes; --json has it whole)`);
+    assert.equal(lines[6], 'mc: warning — w');
+  });
+
+  it('a failed step prints the path first, then the failed line and what is here, and exits 1', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', 'home', '--click', '.hero-card__actions', '--press', 'Escape'], fx, captured({
+      acted: [{}],
+      failed: { step: 1, kind: 'click', selector: '.hero-card__actions', error: 'not visible within 10 s', here: '.vault-setup__progress' },
+    }));
+    assert.equal(result.code, 1);
+    assert.deepEqual(result.stdout.trimEnd().split('\n'), [
+      '/tmp/x.png',
+      'http://127.0.0.1:8787/app/',
+      'failed  step 1 (click .hero-card__actions): not visible within 10 s',
+      '  here: .vault-setup__progress',
+    ]);
+    const key = await shot(['dev', 'home', '--press', 'Escape'], fx, captured({ acted: [], failed: { step: 1, kind: 'press', key: 'Escape', error: 'no page' } }));
+    assert.equal(key.code, 1);
+    assert.match(key.stdout, /^failed {2}step 1 \(press Escape\): no page$/mu);
+  });
+
+  it('an ok: false result with errors prints them after mc: <error>', async () => {
+    const fx = fixture();
+    const result = await shot(['dev', 'home'], fx, {
+      runCapture: () => ({ ok: true, result: { ok: false, code: 'crashed', error: 'the page crashed', errors: [{ kind: 'page', text: 'Out of memory', count: 2 }] } }),
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr.split('\n').slice(-3).join('\n'), 'mc: the page crashed\nerror  page  Out of memory ×2\n');
+  });
+
+  it('usage lists the new flags and the error paragraph', () => {
+    for (const flag of ['--eval <js>', '--eval-file <path>', '--upload <css>=<file>', '--press <key>', '--timeout <s>', 'the seven act in the order']) {
+      assert.ok(usage().includes(flag), flag);
+    }
+    assert.match(usage().replace(/\n/gu, ' '), /Every error the page, its requests, the dev server or a dialog raised during the shot prints as error lines after the path/u);
   });
 });
 

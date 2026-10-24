@@ -220,7 +220,9 @@ function sink() {
   return { write: (chunk) => { text += chunk; return true; }, get text() { return text; } };
 }
 
-async function compare(argv, { measures = {}, warnings = {}, refuse = null, running = [], clicked = {} } = {}) {
+async function compare(argv, {
+  measures = {}, warnings = {}, refuse = null, running = [], clicked = {}, extra = {},
+} = {}) {
   const waits = [];
   const home = mkdtempSync(join(tmpdir(), 'mc-shot-compare-cmd-'));
   const worktree = join(home, 'memoro');
@@ -268,6 +270,7 @@ async function compare(argv, { measures = {}, warnings = {}, refuse = null, runn
         result: {
           ok: true, file: request.out, url: `${request.base_url}/app/assistant`, measure: measures[side], warnings: warnings[side] || [],
           ...(clicked[side] && request.click ? { clicked: request.click } : {}),
+          ...(extra[side] || {}),
         },
       };
     },
@@ -419,6 +422,21 @@ describe('mc shot dev --compare', () => {
     assert.equal(refOnly.code, 1);
     assert.match(refOnly.stderr, /mc: origin\/main: the picture at /u);
     assert.equal(refOnly.stdout, '');
+  });
+
+  it('each side prints its own error, eval and failed lines, and a failed step on either side exits 1', async () => {
+    const result = await compare(['dev', 'assistant', '--eval', 'document.title', '--compare', 'origin/main'], {
+      extra: {
+        here: { acted: [{}], errors: [{ kind: 'console', text: 'boom', count: 2 }], evaluated: [{ value: 'Memoro' }] },
+        ref: { evaluated: [], failed: { step: 1, kind: 'eval', error: 'ReferenceError: x is not defined' } },
+      },
+    });
+    assert.equal(result.code, 1, result.stderr);
+    assert.deepEqual(result.stdout.trimEnd().split('\n').slice(2), [
+      'here: error  console  boom ×2',
+      'here: eval 1  "Memoro"',
+      'origin/main: failed  step 1 (eval): ReferenceError: x is not defined',
+    ]);
   });
 
   it('says the numbers are the same when a measure was asked and nothing moved, and nothing without one', async () => {

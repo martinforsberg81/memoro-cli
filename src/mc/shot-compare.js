@@ -17,7 +17,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { serversUnder, stopServer } from './dev-servers.js';
 import { log } from './logger.js';
 import { mcHome } from './paths.js';
-import { actionGap, runCapture } from './shot.js';
+import { actionGap, errorLines, reportLines, runCapture } from './shot.js';
 import { ensureAppServer, readDeclaration, serversFor } from './test-environment.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -253,7 +253,11 @@ export async function runCompare({
     const ran = capture({ worktree, declaration: declared, request: req, env, deps });
     if (!ran.ok) { stderr.write(`mc: ${label}: ${scrub(ran.error)}\n`); return 1; }
     const { result } = ran;
-    if (!result.ok) { stderr.write(`mc: ${label}: ${scrub(result.error || result.code || 'the capture failed')}\n`); return 1; }
+    if (!result.ok) {
+      stderr.write(`mc: ${label}: ${scrub(result.error || result.code || 'the capture failed')}\n`);
+      for (const line of errorLines(result)) stderr.write(`${label}: ${scrub(line)}\n`);
+      return 1;
+    }
     if (typeof result.file !== 'string' || !result.file) {
       stderr.write(`mc: ${label}: the capture script said ok and named no file\n`);
       return 1;
@@ -264,6 +268,9 @@ export async function runCompare({
   }
 
   const diff = diffMeasure(results.ref.measure, results.here.measure);
+  // Each side's errors, evals and failed step, labelled with its side.
+  const reports = { here: reportLines(results.here), ref: reportLines(results.ref) };
+  const labels = { here: 'here', ref };
   if (json) {
     stdout.write(`${scrub(JSON.stringify({
       here: { ...results.here, served },
@@ -277,9 +284,12 @@ export async function runCompare({
     }
     if (!diff.length && request.measure) stdout.write('mc: the measured numbers are the same on both trees\n');
     for (const side of ['here', 'ref']) {
+      for (const line of reports[side].lines) stdout.write(`${labels[side]}: ${scrub(line)}\n`);
+    }
+    for (const side of ['here', 'ref']) {
       for (const warning of results[side].warnings || []) stdout.write(`mc: warning — ${side}: ${scrub(warning)}\n`);
     }
   }
   if (open) { openFile(results.here.file); openFile(results.ref.file); }
-  return 0;
+  return reports.here.failed || reports.ref.failed ? 1 : 0;
 }
