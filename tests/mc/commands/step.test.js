@@ -231,3 +231,44 @@ test('ready refuses a step that has landed, names mc step done, and writes nothi
   assert.equal(f.step(0).status, 'failed');
   assert.equal(await run(['ready', 'p', '2'], f.deps), 0);
 });
+
+test('ready on a step parked on a decision with no pull request writes the answer, from --reason or --answer', async () => {
+  const a = heldBy([]);
+  assert.equal(await run(['ready', 'p', '2', '--reason', 'yes'], a.deps), 0);
+  assert.deepEqual(a.step(1).answered, { name: 'marks', answer: 'yes', at: '2026-09-18T10:00:00Z' });
+  assert.equal(a.step(1).pr, null);
+
+  const b = heldBy([]);
+  assert.equal(await run(['ready', 'p', '2', '--answer', 'yes'], b.deps), 0);
+  assert.deepEqual(b.step(1).answered, { name: 'marks', answer: 'yes', at: '2026-09-18T10:00:00Z' });
+});
+
+test('ready with no answer to a decision warns that the next session starts without it, and still sets the step ready', async () => {
+  const f = heldBy([]);
+  assert.equal(await run(['ready', 'p', '2'], f.deps), 0);
+  assert.equal(f.step(1).status, 'ready');
+  assert.equal(f.step(1).answered.answer, null);
+  assert.match(f.err.join(''), /parked on the decision marks and no --answer was given/u);
+});
+
+test('ready on a step parked on a project writes no answer and no warning', async () => {
+  const f = heldBy([]);
+  f.deps.write(registerPath(ROOT, 'p'), { project: 'p', repo: 'memoro', steps: [{ key: 'A', status: 'done', pr: 3 }, { key: 'B', status: 'blocked', branch: 'p-2', blocked_by: { kind: 'project', name: 'other' } }] });
+  assert.equal(await run(['ready', 'p', '2'], f.deps), 0);
+  assert.equal(f.step(1).answered, null);
+  assert.equal(f.err.join(''), '');
+});
+
+test('--answer goes with ready only', async () => {
+  const f = heldBy([]);
+  assert.equal(await run(['failed', 'p', '2', '--answer', 'x'], f.deps), 2);
+  assert.match(f.err.join(''), /--answer goes with mc step ready/u);
+  assert.equal(f.step(1).status, 'blocked');
+});
+
+test('mc step <project> shows the answer a ready step carries', async () => {
+  const f = heldBy([]);
+  assert.equal(await run(['ready', 'p', '2', '--reason', 'yes'], f.deps), 0);
+  assert.equal(await run(['p'], f.deps), 0);
+  assert.match(f.out.join(''), /answered marks: yes/u);
+});

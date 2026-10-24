@@ -7,7 +7,7 @@
  *   mc step blocked [<project> <n>] --on <decision> | --on-project <project> [--reason "…"]
  *   mc step blocked [<project> <n>] --until <iso> | --after-deploy [<m>] [--hours <h>] [--reason "…"]
  *   mc step note [<project> <n>] "…"                a paragraph for the next reader
- *   mc step ready <project> <n> [--reason "…"]      a person starts it again
+ *   mc step ready <project> <n> [--answer "…"]      a person starts it again (--reason is the same)
  *   mc step done <project> <n> [--pr <n>]           landed by hand
  *
  * State lives in the register (`register.js`), not in the plan on main, so
@@ -64,9 +64,12 @@ export async function run(argv, deps = {}) {
     afterDeploy = /^\d+$/u.test(args[at + 1] || '') ? Number(args[at + 1]) : 'previous';
     args.splice(at, afterDeploy === 'previous' ? 1 : 2);
   }
-  const scanned = scanArgs(args, { booleans: ['--json'], strictValues: ['--reason', '--on', '--on-project', '--pr', '--until', '--hours'] });
+  const scanned = scanArgs(args, { booleans: ['--json'], strictValues: ['--reason', '--answer', '--on', '--on-project', '--pr', '--until', '--hours'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
+  // `--answer` is `--reason` for a step set ready: the words a person gives the
+  // question the step was parked on.
+  const answer = flags.answer ?? flags.reason ?? null;
 
   // A reading, not a change.
   if (!positional.length || !STATES.has(positional[0])) {
@@ -81,6 +84,7 @@ export async function run(argv, deps = {}) {
   }
 
   const [status, ...line] = positional;
+  if (flags.answer != null && status !== 'ready') { stderr.write('mc: --answer goes with mc step ready\n'); return 2; }
   // A note's text is the last word on the line; the rest names the step.
   const note = status === 'note' ? line.pop() : null;
   if (status === 'note' && !(note && note.trim()) ) { stderr.write('mc: a note says something — mc step note [<project> <n>] "…"\n'); return 2; }
@@ -135,6 +139,8 @@ export async function run(argv, deps = {}) {
     // Refusing here left note-window step 5 parked behind its own #13931,
     // which nobody was working on (2026-10-20).
     const parked = step.status === 'blocked';
+    const blocker = step.blocked_by;
+    const onDecision = parked && blocker?.kind === 'decision';
     const pinnedOpen = step.pr ? (deps.prState || prState)(entry.repo, step.pr, env) === 'OPEN' : false;
     if (pinnedOpen && !parked) {
       stderr.write(`mc: #${step.pr} is still open — land it or close it first; a step set ready over an open pull request is run again on top of it\n`);
@@ -149,8 +155,8 @@ export async function run(argv, deps = {}) {
       patch.status = 'ready';
       patch.pr = Number(kept[0].number);
       patch.reason = null;
-      patch.answered = { name: step.blocked_by?.name || null, answer: flags.reason || null, at: now };
-      if (flags.reason) patch.comment = `Set ready on ${now}: ${flags.reason}`;
+      patch.answered = { name: step.blocked_by?.name || null, answer: answer || null, at: now };
+      if (answer) patch.comment = `Set ready on ${now}: ${answer}`;
       stdout.write(`mc: #${patch.pr} stays open on ${step.branch || 'its branch'} — the next session goes on from it\n`);
     } else if (working.length) {
       stderr.write(`mc: ${working.map((pr) => `#${pr.number}`).join(', ')} on ${step.branch} ${working.length === 1 ? 'is' : 'are'} open and change${working.length === 1 ? 's' : ''} files — land or close ${working.length === 1 ? 'it' : 'them'} first\n`);
@@ -169,9 +175,13 @@ export async function run(argv, deps = {}) {
     if (!kept.length) {
       patch.reason = null;
       patch.pr = null;
-      patch.answered = null;
-      if (flags.reason) patch.comment = `Set ready on ${now}: ${flags.reason}`;
+      // A step parked on a decision keeps the answer even with no pull request:
+      // the next session is handed it (`answeredPreamble`). `ready` does not
+      // clear it (register.js `patchStep`).
+      patch.answered = onDecision ? { name: blocker.name || null, answer: answer || null, at: now } : null;
+      if (answer) patch.comment = `Set ready on ${now}: ${answer}`;
     }
+    if (onDecision && !answer) stderr.write(`mc: ${target.project} step ${index + 1} was parked on the decision ${blocker.name} and no --answer was given — the next session starts without it\n`);
   }
   if (status === 'done') {
     patch.pr = flags.pr ? Number(flags.pr) : step.pr;
@@ -294,6 +304,13 @@ function interruptedLine(record, nowMs) {
   return `interrupted ${record.at || '?'} · ${record.tool || '?'} session ${id}${record.billing === 'credits' ? ' on credits' : ''} · last activity ${ago(record.last_activity, nowMs)} · ${tokens} tokens`;
 }
 
+/** A `ready` step's answer, as one line: its first line, cut to 80 characters. */
+function answeredLine(answered) {
+  const first = answered.answer ? String(answered.answer).split('\n')[0] : '(no answer given)';
+  const cut = first.length > 80 ? `${first.slice(0, 79)}…` : first;
+  return `answered ${answered.name || 'a decision'}: ${cut}`;
+}
+
 function entryLines(entry, only = null, nowMs = Date.now(), context = null) {
   const lines = [`${entry.project} — ${[entry.repo, entry.programme].filter(Boolean).join(' · ')}${entry.plan ? ` · ${entry.plan}` : ''}`];
   entry.steps.forEach((step, index) => {
@@ -307,6 +324,7 @@ function entryLines(entry, only = null, nowMs = Date.now(), context = null) {
     if (step.status === 'running' && step.session?.pid) bits.push(`pid ${step.session.pid} since ${step.session.started || '?'}`);
     if (step.status === 'running' && step.session?.billing === 'credits') bits.push('on credits');
     if (step.status === 'ready' && step.interrupted) bits.push(interruptedLine(step.interrupted, nowMs));
+    if (step.status === 'ready' && step.answered) bits.push(answeredLine(step.answered));
     if (step.attempts) bits.push(`${step.attempts} merge attempt${step.attempts === 1 ? '' : 's'}`);
     lines.push(`  ${MARK[step.status] || '·'} ${String(index + 1).padStart(2)}  ${step.status.padEnd(8)} ${bits.join(' · ')}`);
     if (step.reason) lines.push(`        ${step.reason}`);
@@ -326,7 +344,7 @@ export function usage() {
     '        mc step blocked [<project> <n>] --on <decision> | --on-project <project> [--reason "…"]\n',
     '        mc step blocked [<project> <n>] --until <iso> | --after-deploy [<m>] [--hours <h>] [--reason "…"]\n',
     '        mc step note [<project> <n>] "…"\n',
-    '        mc step ready <project> <n> [--reason "…"]\n',
+    '        mc step ready <project> <n> [--answer "…"]\n',
     '        mc step done <project> <n> [--pr <n>]\n',
   ].join('');
 }

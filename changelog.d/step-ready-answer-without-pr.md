@@ -1,0 +1,3 @@
+section: Fixed
+
+- **`mc step ready` keeps the answer to a decision when the parked step has no pull request.** A step parked before it built anything has no pull request, and `ready` wrote the answer only when one was kept, so the next session was never told what was decided: the answer survived only as a comment. `ready` now writes `answered` in that case too, and `mc step ready <project> <n> --answer "…"` is the name for it (`--reason` still works). A step parked on a decision that is set ready with no answer says so on stderr and is still set ready. `mc step <project>` shows the answer a ready step carries, on its line.
