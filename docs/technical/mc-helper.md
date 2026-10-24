@@ -329,8 +329,7 @@ two want opposite things: the desk asks Martin, and the turn is told there is
 nobody to ask. One file trying to be both is how a role stops being either.
 
 **The file is named; the ground is given.** The prompt carries the filename and
-then what the turn judges it against — every plan on `origin/main` in whichever
-of the two checkouts is present, with its `status` and `next:`, the project log,
+then what the turn judges it against — every plan under `~/mc/programs/`, with its `status` and `next:`, the project log,
 and the proposals already waiting. Its cwd is the intake directory and the
 repositories are elsewhere on the disk: a turn that cannot reach them cannot
 accidentally write in them either, which is cheaper than trusting it not to. The
@@ -499,7 +498,7 @@ Nobody automatic. That is the point.
 | `src/mc/commands/helper.js` | the verb: the desk, and behind `--intake` the collect and the same drain the runner uses |
 | `canon/roles/helper.md` | the desk: what it takes, what it writes, what it never touches |
 | `src/mc/helper-collect.js` | the eight sources, the delta, the state block, the rendered digest, `helperDir`, `intakeDir`, `intakeArchiveDir` |
-| `src/mc/helper-turn.js` | the prompt over one named file, `repoOfFile`, the ground read from `origin/main`, the headless session, the measured `wrote` — and `drainIntake`, the loop that archives every file the moment its turn ends |
+| `src/mc/helper-turn.js` | the prompt over one named file, `repoOfFile`, the ground: the plans under `~/mc/programs/` and each checkout's project log, the headless session, the measured `wrote` — and `drainIntake`, the loop that archives every file the moment its turn ends |
 | `canon/roles/intake.md` | what the turn is, what it may write, how it judges |
 | `src/mc/run-plan.js` | `helperDue` and `collectNote` for the day; `intakeQueue`, `intakeNote`, `INTAKE_KIND` and `INTAKE_PER_ROUND` for the drain |
 | `src/mc/run.js` | `runHelperDay` — the daily collect — and `runIntakeDrain`, the inbox every chore pass |

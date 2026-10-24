@@ -37,10 +37,11 @@ script is the one regression nobody would notice by looking.
 
 `mc list`, `mc sessions list`, bare `mc status` and `mc status
 --sessions|--watch|--wait` exit 2 and say where they went. **Ruling 20**
-(2026-09-12): a plan is read from `origin/main` and nowhere else, so every
-print of the page fetches `origin/main` for each repository first — the same
-fetch `mc status <name>` already took — and `--offline` is what skips it,
-reading the plans as they were last fetched rather than as they are now.
+(2026-09-12): every print of the page fetches `origin/main` for each repository
+first — the same fetch `mc status <name>` already took — and `--offline` is
+what skips it. The fetch is for what the page reads from the repositories; the
+plans themselves are read from `~/mc/programs/` (**ruling 48**) on every print,
+fetched or not.
 
 ## The sections
 
@@ -116,8 +117,8 @@ below is about.
   · 18 on a decision, 15 on a project · held most by plan-review 12,
   home-on-msr 7` — PROGRAMMES' own rollup, the names giving way to the width
   before the fact does. And, in yellow when it is there at all, **blocker
-  finished** — a step that is `blocked` on a project whose plan on
-  `origin/main` is `done` or gone, which is a plan waiting for nothing
+  finished** — a step that is `blocked` on a project that is not among the
+  plans under `~/mc/programs/`, which is a plan waiting for nothing
   (`stale-blockers.js`). Only a `project` blocker; a `decision` waits on
   Martin and there is no artefact to read it against. It reports and nothing
   more — flipping the step back to `ready` is a plan edit somebody makes.
@@ -125,8 +126,8 @@ below is about.
   `step n/m` in the kind's own colour, and that step's title. The heading is
   the one number anybody used — how many are runnable. The order is
   `assembleQueue`'s, the runner's own (`run-plan.js`): the names
-  `~/mc/queue.md` puts first, then every other non-legacy plan on
-  `origin/main`, alphabetically; the picks are the runner's own picker's —
+  `~/mc/queue.md` puts first, then every other plan under `~/mc/programs/`,
+  alphabetically; the picks are the runner's own picker's —
   `nextFor` asked repeatedly with each pick claimed, which is what the lanes
   do ([`mc-run.md`](mc-run.md) § *The pick, in order*) — so a name here is one
   the runner would actually start, as what it would start it as. **Four rows
@@ -312,7 +313,8 @@ the helper and the sessions already write.
 | what mc deployed | `~/mc/runner/log/deploys.tsv` (sha, build, holder, outcome, the live version verified) | `mc deploy`, before and after |
 | what production answers it is | `~/mc/runner/version.json` (`GET /api/version`, with the moment it was asked) | `mc helper --collect` |
 | someone is sitting here | `tmux ls`, `~/mc/runner/foreground/<pid>.json` | tmux, `foreground.js` |
-| plans and open PRs | `~/mc/runner/plans.json`, `~/mc/runner/prs.json` — plans read from `origin/main` after a `git fetch` (ruling 20), never the workarea | the page itself (below) |
+| open PRs | `~/mc/runner/prs.json` — as GitHub last gave them, stamped | the page itself (below) |
+| plans | not cached: read from `~/mc/programs/` on every print (ruling 48), never from a checkout | the page itself (below) |
 
 `runs.tsv` gets its row only *after* a step ends, which is why
 `runner.json` and the `current-<repo>.json` files exist at all: before them,
@@ -363,7 +365,7 @@ dead pids as it registers.
 
 ## Why it is instant
 
-`time mc` was 0.09–0.11 s with both caches hit, against 1.92 s for the board
+`time mc` was 0.09–0.11 s with both caches hit (the plans cache went with ruling 48), against 1.92 s for the board
 it replaced. (Measured over twelve runs at load average 10 on 2026-08-29; a
 busy moment on the same machine pushed single runs to 0.2–0.3 s.) **That
 number no longer holds** — see [*What a refresh
@@ -373,38 +375,32 @@ they are worth different amounts:
 
 1. **One read per repository instead of one per plan.** `listPlans` was
    spending a `git show` per plan — 37 in memoro alone, 1.45 s of the
-   1.92. It now runs one `ls-tree` and one `cat-file --batch`, walking the
+   1.92. Until ruling 48 it ran one `ls-tree` and one `cat-file --batch`, walking the
    stream by byte size so a plan full of em-dashes survives it. That alone
    took the page to 0.31 s. `mc brief --collect --offline` got the same win
    for free.
-2. **Two caches under `~/mc/runner/`** (`page-cache.js`), which buy the last
+2. **One cache under `~/mc/runner/`** (`page-cache.js`), which bought the last
    0.2 s:
-   - `plans.json` is keyed **by the `origin/main` sha**, per repository. A
-     hit costs one `git rev-parse` — the sha *is* the question "did anything
-     change?" — so there is no staleness to reason about and no age to
-     print: a hit is exactly what a fresh read would have returned.
+   - Since ruling 48 plans are not cached: they are a directory read of `~/mc/programs/`, not a file keyed by the `origin/main` sha.
    - `prs.json` has no such key, because an open PR closes without moving
      any sha. It is **stamped** instead, written by `--fresh` and by every
      runner round for the repositories it asked GitHub about (`mergePrs`),
-     and the page says how old it is out loud. The two files are not the same kind
-     of cache and the code says so.
+     and the page says how old it is out loud.
 
 These are the page's only writes, and the Contract's "reads only" is
 recorded as bending exactly here: a read-through cache of what the page
-already reads, not state anything depends on. Delete both and the next
-`--fresh` fills them again.
+already reads, not state anything depends on. Delete it and the next
+`--fresh` fills it again.
 
-The **cold** path is not instant: the first print after `origin/main` moves
-re-reads both repositories and costs 0.31 s quiet, 0.48 s under load. That
-used to happen once per merge; since ruling 20 it happens on every ordinary
-print, because the page now fetches before it reads — see *What a refresh
-costs* for the fetch's own price. The runner could warm the cache in the
-round it already fetches in; it does not yet.
+Plans have no cold path any more: since ruling 48 they are read on every
+print, so a print after `origin/main` moves costs no more than any other. The
+fetch that ruling 20 added to each print is the one thing that varies with the
+repositories — see *What a refresh costs* for its price.
 
 ### What a refresh costs
 
 A refresh is one `collectPage` — the identical read a bare `mc` does, with
-no model, no session and no write but the two read-through caches above.
+no model, no session and no write but the read-through cache above.
 So the cost of the page being live is the cost of the page, once every 30
 seconds, and the number to know is what that read actually takes now:
 
@@ -416,19 +412,21 @@ seconds, and the number to know is what that read actually takes now:
 | 2026-09-12, `--offline` | 0.40 s, 0.39 s, 0.38 s | the same machine, three runs each, the fetch skipped |
 | 2026-09-12, fetching (ordinary, ruling 20) | 1.78 s, 1.38 s, 1.39 s | the same machine, three runs each |
 
-The spread is not noise and it is not the renderer: `plans.json` is keyed
-by the `origin/main` sha, so **every merge invalidates it**, and a machine
-whose runner is landing pull requests is a machine where the page is cold
-most of the time — exactly when it is most worth watching. The 0.09 s in
+The spread is not noise and it is not the renderer. These rows were measured
+while plans came from `origin/main` and were cached in the plans cache, keyed
+by its sha, before ruling 48: then **every merge invalidated it**, and a machine
+whose runner was landing pull requests was a machine where the page was cold
+most of the time — exactly when it was most worth watching. The 0.09 s in
 the section above is the hit; the seconds above are the miss, and the miss
-is the ordinary case under a runner.
+was the ordinary case under a runner.
 
-Since ruling 20, the miss is also the *only* case: an ordinary print fetches
-`origin/main` for every present repository before it reads a plan, so the
-2026-09-12 rows above are the honest floor, not a worst case. Against the
-2026-09-03 baseline of 1.1–1.8 s the added fetch costs roughly a second —
-`--offline` lands at 0.4 s, fetching at 1.4–1.8 s — which is the price of
-never showing a plan the workarea has already outrun.
+Until ruling 48 the miss was also the *only* case: since ruling 20 an ordinary
+print fetched `origin/main` for every present repository before it read a
+plan, so the 2026-09-12 rows above are the honest floor, not a worst case.
+Against the 2026-09-03 baseline of 1.1–1.8 s the added fetch costs roughly a
+second — `--offline` lands at 0.4 s, fetching at 1.4–1.8 s. The fetch bought
+never showing a plan the workarea had already outrun; plans no longer come
+from the repositories, so that reason went with ruling 48.
 
 Making that read quick is a different problem and deliberately not this
 one. What the live page does about it is refuse to be blocked by it: the
@@ -493,7 +491,7 @@ or a workarea, which somebody has to open.
 | `failed` | red bold |
 | `invalid` | red bold |
 | `done` | grey |
-| no plan on main | grey |
+| no plan | grey |
 
 Everything else is structure, and structure is quiet. **plain** in the table
 below means no escape at all — the terminal's own foreground, whatever the
@@ -852,7 +850,7 @@ part nobody has run.
 | `src/mc/page-render.js` | how they look |
 | `src/mc/page-frame.js` | the difference between two frames, as bytes — pure, no terminal |
 | `src/mc/page-live.js` | the loop under the prompt: the 30 s interval, the raw-mode reader, the arithmetic |
-| `src/mc/page-cache.js` | `plans.json` and `prs.json` |
+| `src/mc/page-cache.js` | `prs.json` |
 | `src/mc/status-collect.js` | the readers more than one caller needs — `nowBlock`, `kindFor`, `pidAlive`, `areasWithCheckout` |
 | `src/mc/status-render.js` | the drawing primitives — `painter`, `width`, `pad`, `clip`, `elapsed` |
 | `src/mc/foreground.js` | the foreground register |

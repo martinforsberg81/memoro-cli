@@ -87,7 +87,7 @@ whichever of them had been used last.
 Into the plan, and nowhere else.
 
 The brief is where Martin and a session agree what to do. What they agree is
-written into `docs/project/<programme>/<project>/PLAN.json` — the contract, a
+written into `~/mc/programs/<programme>/<project>/PLAN.json`, with the `mc project` verbs — the contract, a
 step, or a step's instruction — and setting the stopped step back to `ready` is
 what puts the project in front of the runner again. mc records none of it:
 there is no file to write, no line to grep for, and no state to keep in step.
@@ -142,7 +142,7 @@ that walks it.
 ## What the brief does with a proposal
 
 The listing is a list and a rule, and the rule is the half that gets skipped.
-A proposal is a reading, not work: it becomes a project (`PLAN.json` on main,
+A proposal is a reading, not work: it becomes a project (a `PLAN.json` under `~/mc/programs/`,
 then its name in `~/mc/queue.md`), or the brief builds it, or it is dropped.
 
 **Whichever of the three happens, the file is archived: it moves to
