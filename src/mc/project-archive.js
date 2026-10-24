@@ -79,8 +79,10 @@ export function archiveDue({ record, entry, nowMs, holdMs = ARCHIVE_HOLD_MS }) {
  * main is never rewritten. Otherwise the row says the project was delivered,
  * with its summary and doc read from the plan, and its pointer the PRs the
  * runner merged for it (`tsv` is runs.tsv), linked when `slug` is known.
+ * `docExists(path)` says whether a `docs/technical/` path the plan names is in
+ * the repository; a path that is not gives no doc link (see `planDoc`).
  */
-export function archiveRow({ planText, programme, project, date, tsv, slug, existing }) {
+export function archiveRow({ planText, programme, project, date, tsv, slug, existing, docExists = () => true }) {
   if (existing) return existing;
   return {
     date,
@@ -88,7 +90,7 @@ export function archiveRow({ planText, programme, project, date, tsv, slug, exis
     project,
     outcome: 'delivered',
     summary: planSummary(planText),
-    doc: planDoc(planText),
+    doc: planDoc(planText, docExists),
     pointer: pointerCell(mergedPrs(tsv, project), { slug }),
   };
 }
@@ -242,6 +244,7 @@ async function commitRows({ repo, need, worktree, branch, paths, deps, docsMerge
     const row = archiveRow({
       planText: deps.read(record.path) || '', programme: record.programme, project: record.project,
       date, tsv, slug, existing: null,
+      docExists: (path) => deps.exists(join(worktree, path)),
     });
     rows.set(item, row);
     text = appendRow(text, row);

@@ -95,6 +95,15 @@ test('the summary is the plan\'s next: on one line, the doc the docs/technical p
   assert.equal(isUndocumented({ doc: '[docs/technical/x.md](../technical/x.md)' }), false);
 });
 
+test('the doc is the first docs/technical path the tree has, not the first one the plan names', () => {
+  const named = 'Defers to docs/technical/missing.md, and wrote docs/technical/there.md.';
+  assert.equal(
+    planDoc(named, (p) => p === 'docs/technical/there.md'),
+    '[docs/technical/there.md](../technical/there.md)',
+  );
+  assert.equal(planDoc('Only docs/technical/missing.md is named.', () => false), NO_DOC);
+});
+
 test('the pointer is the PRs the runner merged for the project, linked when the slug is known', () => {
   const tsv = [
     'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',

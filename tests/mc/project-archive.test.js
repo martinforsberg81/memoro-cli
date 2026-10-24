@@ -164,6 +164,14 @@ test('archiveRow points at bare PR numbers when the slug is not known, and at no
   assert.equal(none.pointer, 'none');
 });
 
+test('archiveRow gives no doc link to a document the repository does not have', () => {
+  const out = archiveRow({
+    planText: JSON.stringify(PLAN), programme: 'mc', project: 'project-archive', date: '2026-10-20',
+    tsv: RUNS, slug: 'o/r', existing: null, docExists: () => false,
+  });
+  assert.equal(out.doc, 'none');
+});
+
 test('closeoutOf is a closeout of the same shape as a repository one, with its names carried', () => {
   const planPath = '/Users/x/mc/programs/mc/project-archive/PLAN.json';
   const closeout = closeoutOf({
@@ -391,4 +399,13 @@ test('archivePrograms: a closeout that cannot be written holds its project, and 
   assert.deepEqual(out, { archived: ['project-archive'], held: [{ project: 'plans-in-mc', why: 'disk full' }] });
   assert.equal(w.store.has(closeoutFileOf(a.record.path)), false);
   assert.ok(w.store.has(closeoutFileOf(b.record.path)));
+});
+
+test('archivePrograms: a plan that names a document the worktree does not have gets the row doc none', async () => {
+  const a = plan('plans-in-mc');
+  const w = world({ files: filesOf(a) });
+  await run(w, [a]);
+  const log = w.store.get(join(WORKTREE, LOG));
+  assert.match(log, /\| delivered \| 2\. Second — the last step \| none \| none \|/u);
+  assert.match(w.store.get(PATHS.undocumented), /\| 2026-10-20 \| memoro-cli \| mc \| plans-in-mc \| none \|/u);
 });
