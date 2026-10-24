@@ -81,6 +81,7 @@ import { join } from 'node:path';
 
 import { GATE_LANES } from './gate-lock.js';
 import { mcHome, workRoot } from './paths.js';
+import { repoNameOf } from './repos.js';
 
 /** Preparation that is deliberately not known, as opposed to not needed. */
 export const UNKNOWN = 'unknown';
@@ -648,6 +649,7 @@ function describeKnown(entry) {
   return parts.join('; ');
 }
 
+/** The repository's name: a bare `memoro-cli.git` is `memoro-cli` (repos.js). */
 function basenameOf(path) {
-  return String(path).replace(/\/+$/u, '').split('/').pop();
+  return repoNameOf(path);
 }

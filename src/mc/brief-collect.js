@@ -17,7 +17,6 @@
  */
 import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { planSummary, readPlanText } from './plan-schema.js';
@@ -25,14 +24,8 @@ import { PROJECT_DIR, programsArchived, programsPlans } from './plan-source.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The two repositories that carry projects, checked out on main at home. */
-export function defaultRepos(env = process.env) {
-  const home = env.MC_REPOS_HOME || homedir();
-  return [
-    { name: 'memoro', path: join(home, 'memoro') },
-    { name: 'memoro-cli', path: join(home, 'memoro-cli') },
-  ];
-}
+/** The two repositories that carry projects, in either layout: `repos.js`. Re-exported for the modules that import it from here. */
+export { defaultRepos } from './repos.js';
 
 /* ---------------------------------------------------------------- proposals */
 

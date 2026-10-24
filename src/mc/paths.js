@@ -198,6 +198,23 @@ export function programsHome(env = process.env) {
 }
 
 /**
+ * `~/mc/repos/` — the bare repositories, `<name>.git`, every worktree mc makes
+ * hangs off; and `~/mc/self/` — a worktree of each on `main`, the one mc links
+ * to and serves from (repos.js). `MC_REPOS_HOME` moves both, with the primary
+ * checkouts it already moved, so a fixture never reaches this machine's.
+ */
+export const REPOS_HOME = 'repos';
+export const SELF_HOME = 'self';
+
+export function reposHome(env = process.env) {
+  return env.MC_REPOS_HOME || join(workRoot(env), REPOS_HOME);
+}
+
+export function selfHome(env = process.env) {
+  return join(env.MC_REPOS_HOME || workRoot(env), SELF_HOME);
+}
+
+/**
  * `~/mc/runner/layout.json` says which structure the work root has (ruling 51).
  * Absent, unreadable, or anything but `{"schema":"mc-layout","version":2}` is
  * layout 1, today's. `mc layout migrate` writes the file last, so its presence
@@ -341,7 +358,7 @@ export function sessionName(areaName) {
  * work-area.js). Dot-directories are left out by the caller.
  */
 export const STATE_HOMES = new Set([
-  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, 'gate', 'gate-cache', 'brief', 'proposals', 'intake',
+  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, REPOS_HOME, SELF_HOME, 'gate', 'gate-cache', 'brief', 'proposals', 'intake',
   'node_modules', 'bin', 'npm', 'status', 'helper', 'pm',
 ]);
 

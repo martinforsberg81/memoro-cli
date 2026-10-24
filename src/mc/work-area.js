@@ -29,6 +29,7 @@ import {
   PLAN_HOME, STATE_HOMES, STEP_HOME, WORK_HOME, areaKindOf, layoutVersion, programsHome, stepAreaRoot, workAreaPath, workAreaStatePath, workRoot,
 } from './paths.js';
 import { registerPath } from './register.js';
+import { defaultRepos, repoNameOf, repositoryDir } from './repos.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
@@ -214,16 +215,21 @@ export function inspectWorktree(path, repo) {
  * as a path found nothing and said so in git's words, which is a poor way to
  * learn that mc looked in the wrong place.
  *
- * A path that exists wins. Otherwise the name is looked for beside the home
- * directory, which is where repository roots live. With nothing given at all,
- * the repository the shell is already inside is the obvious answer.
+ * A path that exists wins. Otherwise a name mc knows is its `path` in
+ * `defaultRepos` (repos.js) — the bare repository or the primary checkout —
+ * and any other name is looked for beside the home directory, where repository
+ * roots used to live. With nothing given at all, the repository the shell is
+ * already inside is the obvious answer.
  */
 export function resolveRepository(input, { cwd = process.cwd(), env = process.env } = {}) {
   const tried = [];
   const candidates = [];
   if (input) {
     candidates.push(resolvePath(cwd, input));
-    if (!input.includes('/')) candidates.push(join(homedir(), input));
+    if (!input.includes('/')) {
+      const known = defaultRepos(env).find((repo) => repo.name === input);
+      candidates.push(known ? known.path : join(homedir(), input));
+    }
   } else {
     const root = git(cwd, ['rev-parse', '--show-toplevel']);
     if (root) candidates.push(root);
@@ -236,8 +242,9 @@ export function resolveRepository(input, { cwd = process.cwd(), env = process.en
     // A worktree is not the repository. Running this from inside one named the
     // work after the worktree — `mc-v2` instead of `memoro-cli` — so the
     // common directory decides: its parent is the repository root, whichever
-    // checkout the shell happened to be standing in.
-    return { ok: true, path: dirname(common) };
+    // checkout the shell happened to be standing in — or, for a bare
+    // repository, the common directory is the repository (`repositoryDir`).
+    return { ok: true, path: repositoryDir(common) };
   }
   return { ok: false, tried };
 }
@@ -638,20 +645,22 @@ export function discardWorkArea(name, { repo = null, env = process.env, dryRun =
 }
 
 /**
- * The repositories mc can see: the roots beside the home directory, which is
- * where `mc work add <name>` already looks. Deriving them here means prune
- * works even when the worktree directory is already gone — which is exactly
- * when a registration is left dangling.
+ * The repositories mc can see: mc's own (`defaultRepos`, in either layout) and
+ * the roots beside the home directory, which is where `mc work add <name>`
+ * already looks. Deriving them here means prune works even when the worktree
+ * directory is already gone — which is exactly when a registration is left
+ * dangling.
  */
 export function knownRepositories(env = process.env) {
   const home = homedir();
+  const own = defaultRepos(env).filter((repo) => existsSync(repo.git)).map((repo) => repo.path);
   let entries = [];
   try {
     entries = readdirSync(home, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => join(home, entry.name));
-  } catch { return []; }
-  return entries.filter((path) => existsSync(join(path, '.git')));
+  } catch { return own; }
+  return [...new Set([...entries.filter((path) => existsSync(join(path, '.git'))), ...own])];
 }
 
 /** Let git tidy its own registrations rather than mc policing them. */
@@ -659,8 +668,9 @@ export function pruneWorktrees(repos = []) {
   for (const repo of repos) run(['-C', repo, 'worktree', 'prune']);
 }
 
+/** The checkout's directory name: a bare `memoro-cli.git` makes `memoro-cli/`. */
 function repoName(repo) {
-  return repo.replace(/\/+$/u, '').split('/').pop() || 'repo';
+  return repoNameOf(repo) || 'repo';
 }
 
 function git(cwd, args) {

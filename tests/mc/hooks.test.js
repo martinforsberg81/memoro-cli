@@ -11,10 +11,12 @@ import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/hook.js';
 import {
-  ALLOW_MARK, hookDrift, hookRegistration, inMcTerritory, installHooks, MC_HOOKS, preToolDecision, protectedPlanFile,
+  ALLOW_MARK, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedPlanFile,
   readClaudeSettings, repoHookDecision,
   repoPreToolHooks, sessionStartContext, warningsFor, worktreeState, worktreesAt,
 } from '../../src/mc/hooks.js';
+import { makeRepoLayout } from './_helpers/bare-layout.js';
+import { git as gitIn } from './_helpers/git-fixture.js';
 
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
 
@@ -83,6 +85,19 @@ describe('mc hook — the worktree a session starts in', () => {
     assert.deepEqual(found.worktrees.map((entry) => entry.name).sort(), ['memoro', 'memoro-cli']);
     const inside = worktreesAt(join(area, 'memoro'), { knownRepo: known });
     assert.equal(inside.inside, true);
+  });
+
+  it('knows a worktree of a bare repository, and the self checkout, by the shared git directory', () => {
+    const fx = makeRepoLayout({ bare: ['memoro-cli'], self: ['memoro-cli'] });
+    try {
+      const worktree = join(fx.root, 'mc', 'work', 'x', 'memoro-cli');
+      gitIn(join(fx.home, 'memoro-cli.git'), `worktree add -q -b x "${worktree}" origin/main`);
+      assert.deepEqual(knownRepo(worktree, { env: fx.env }), { name: 'memoro-cli', worktree });
+      const self = join(fx.home, 'self', 'memoro-cli');
+      assert.deepEqual(knownRepo(self, { env: fx.env }), { name: 'memoro-cli', worktree: self });
+      assert.equal(knownRepo(worktree, { env: { ...fx.env, MC_REPOS_HOME: join(fx.root, 'elsewhere') } }), null,
+        'another home knows no such repository');
+    } finally { fx.cleanup(); }
   });
 });
 

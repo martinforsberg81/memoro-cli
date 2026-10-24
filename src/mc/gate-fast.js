@@ -8,7 +8,7 @@
  * whole gate, and a worktree runs no whole gate any more (2026-10-24,
  * `commands/gate.js`). The merger's round has its own versions of each.
  */
-import { dirname } from 'node:path';
+import { repositoryDir } from './repos.js';
 
 import { docsOnly } from './docs-merge.js';
 
@@ -32,7 +32,7 @@ export function changedAgainst(io, root, mergeBase) {
 export function primaryCheckoutDeclaration(io, { root, env }) {
   const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (!common) return null;
-  const primary = dirname(common);
+  const primary = repositoryDir(common);
   let declared = null;
   try { declared = io.declaration(primary, { env }); } catch { return null; }
   return declared?.ok && declared.declaration ? { primary, declaration: declared.declaration } : null;

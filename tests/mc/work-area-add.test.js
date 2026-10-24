@@ -19,8 +19,9 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { makeRepoLayout } from './_helpers/bare-layout.js';
 import { git, makeTempRepo } from './_helpers/git-fixture.js';
-import { addWorktree } from '../../src/mc/work-area.js';
+import { addWorktree, resolveRepository } from '../../src/mc/work-area.js';
 
 describe('addWorktree, when git refuses', () => {
   let fx;
@@ -78,5 +79,37 @@ describe('addWorktree, when git refuses', () => {
     });
     assert.equal(result.ok, true, result.reason);
     assert.equal(existsSync(join(result.path, '.git')), true);
+  });
+});
+
+describe('a bare repository (repos.js, the second layout)', () => {
+  let fx;
+  let env;
+
+  before(() => {
+    fx = makeRepoLayout({ bare: ['memoro-cli'] });
+    env = { ...process.env, ...fx.env };
+  });
+
+  after(() => fx.cleanup());
+
+  const bare = () => join(fx.home, 'memoro-cli.git');
+
+  it('resolves to the bare directory — from itself, from its name and from a worktree of it', () => {
+    assert.deepEqual(resolveRepository(bare(), { env }), { ok: true, path: bare() });
+    assert.deepEqual(resolveRepository('memoro-cli', { cwd: fx.root, env }), { ok: true, path: bare() });
+    const worktree = join(fx.root, 'loose', 'memoro-cli');
+    git(bare(), `worktree add -q --detach "${worktree}" origin/main`);
+    assert.deepEqual(resolveRepository(undefined, { cwd: worktree, env }), { ok: true, path: bare() },
+      'its common directory is the repository, not its parent');
+  });
+
+  it('adds a worktree named for the repository, not for its .git directory, from origin/main', () => {
+    const result = addWorktree({ name: 'work/bare', repo: bare(), branch: 'bare-one', from: 'origin/main', env });
+    assert.equal(result.ok, true, result.reason);
+    assert.equal(result.path, join(env.MC_WORK_ROOT, 'work', 'bare', 'memoro-cli'));
+    assert.equal(git(result.path, 'rev-parse --abbrev-ref HEAD'), 'bare-one');
+    assert.equal(git(result.path, 'rev-parse HEAD'), git(bare(), 'rev-parse origin/main'));
+    assert.equal(result.dependencies.state, 'no-manifest', 'main of this fixture has no package.json');
   });
 });

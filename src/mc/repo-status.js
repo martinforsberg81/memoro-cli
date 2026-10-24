@@ -16,13 +16,14 @@
  */
 import { execFile, execFileSync } from 'node:child_process';
 import { accessSync, constants, realpathSync } from 'node:fs';
-import { basename, delimiter, dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { nightlyReading } from './nightly-history.js';
 import { selectorMissReading } from './selector-miss.js';
 import { mcHome } from './paths.js';
 import { readLease } from './repo-lease.js';
+import { repoNameOf, repositoryDir } from './repos.js';
 import { livenessForLeases } from './lease-liveness.js';
 import { readCombinedSnapshot } from './repo-snapshot.js';
 import { watcherState } from './repo-watch.js';
@@ -49,7 +50,7 @@ export function reposFromBoard(board) {
   for (const area of board.areas || []) {
     for (const worktree of area.worktrees || []) {
       if (!worktree.git_common_dir) continue;
-      const root = dirname(worktree.git_common_dir);
+      const root = repositoryDir(worktree.git_common_dir);
       if (!byRoot.has(root)) byRoot.set(root, []);
       byRoot.get(root).push({
         area: area.name,
@@ -243,7 +244,7 @@ function pick(repos, names) {
  * nothing means that one.
  */
 export function matchRepo(input, roots, { cwd = process.cwd(), env = process.env } = {}) {
-  const known = roots.find((root) => basename(root) === input || root === input);
+  const known = roots.find((root) => repoNameOf(root) === input || root === input);
   if (known) return known;
   const found = resolveRepository(input, { cwd, env });
   return found.ok ? found.path : null;
@@ -261,7 +262,7 @@ async function gatherRepo({ root, worktrees, install, offline }) {
       : openPullRequests(root, base),
   ]);
   return {
-    name: basename(root),
+    name: repoNameOf(root),
     path: root,
     main: {
       ref: base,

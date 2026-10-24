@@ -231,6 +231,58 @@ only what is left; after success it says `layout 2 — nothing to move`. It ends
 naming the next things a person does: `mc layout` to see the roots, `mc run
 start`.
 
+## The repositories
+
+A second pair of layouts, independent of the work root's: where mc's two
+repositories, `memoro` and `memoro-cli`, live. `src/mc/repos.js` knows both, and
+`defaultRepos(env)` is the one answer every caller asks (`brief-collect.js`
+re-exports it).
+
+- **The primary checkouts** — `~/memoro` and `~/memoro-cli`, working trees whose
+  `.git` every worktree hangs off. `/opt/homebrew/bin/mc` resolves into
+  `~/memoro-cli`, so whatever is checked out there is the running mc.
+- **Bare repositories** — `~/mc/repos/<name>.git` (`reposHome`), which every
+  worktree hangs off, and `~/mc/self/<name>` (`selfHome`), a worktree of each on
+  `main`: the one mc is linked to (memoro-cli) and the one `mc shot` and `mc test
+  dev` serve outside a worktree (memoro).
+
+Which holds is decided per repository by what exists: `<name>.git` under
+`~/mc/repos/` is the bare layout; otherwise the primary checkout, as before. A
+machine without `~/mc/repos/` gets exactly the answer it got before the module
+existed. `MC_REPOS_HOME` moves the primary checkouts, the bare repositories and
+`self/` together, so a test's fixture never reaches this machine's.
+
+`defaultRepos` answers `{ name, git, path, bare, checkout }` per repository, and
+a caller takes the field for what it does:
+
+- `path` — where git plumbing runs: `fetch`, `show`, `rev-parse`, `log`,
+  `branch`, `merge-base`, `worktree add|list|prune|repair`, and `gh`. The bare
+  directory, or the primary checkout. Most callers take this one (`mc deploy`,
+  `mc language`, `mc build ios`, `mc plan`, `mc step`, `mc project`, `mc deps`,
+  tidy, the runner).
+- `checkout` — a working tree on `main`, for reading a file or running a
+  porcelain command: `self/<name>` when it exists, else the primary checkout,
+  else `null`. `sharedWorktree` (`mc test`, `mc shot`), the helper digest's
+  `memoroRoot` and `mc build ios`'s declared `list_builds` script take it, and
+  each says what it does without one — `no memoro checkout to serve — mc repos
+  migrate makes ~/mc/self/memoro`.
+- `git` — the git directory, which is what `--git-common-dir` of any worktree
+  names: how `knownRepo` (hooks.js) recognises a directory as one of these
+  repositories, and how the runner and the readers ask whether a repository is
+  on this machine at all (`gitDirOf` for a `{ name, path }` a test built).
+
+Two small rules come with the bare form. A worktree's repository is
+`repositoryDir(commonDir)` — the parent of a `.git`, but the common directory
+itself when it is bare — and a repository's name is `repoNameOf(path)`, which
+drops `.git`, so a worktree of `memoro-cli.git` is still `memoro-cli/` in its
+area and `memoro-cli` to the gate table and the dependency tree. A bare
+repository has no `package.json` to copy, so `ensureWorkDeps` reads main's two
+files with `git show origin/main:…` (work-deps.js).
+
+`mc repos migrate` (the plan's next step) is the move from the first to the
+second; the merger's `deployPull` is unchanged, since it follows the `mc` link
+to whatever checkout it resolves into.
+
 ## What is left for later
 
 Layout 1's branches in `paths.js`, `register.js`, `work-area.js` and the other

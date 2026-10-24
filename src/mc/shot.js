@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { mcHome } from './paths.js';
-import { callerWorktree, sharedWorktree } from './test-environment.js';
+import { callerWorktree, NO_SHARED_WORKTREE, sharedWorktree } from './test-environment.js';
 
 export const SHOT_FILE = join('.mc', 'shot.json');
 export const SESSION_SECRET = 'MEMORO_SHOT_SESSION';
@@ -65,7 +65,7 @@ export function shotWorktree({
   const worktree = here || standsInMemoro ? standing : sharedWorktree(env);
   if (worktree) return { worktree };
   return {
-    error: here ? '--here needs a git worktree, and this is not one' : 'no memoro checkout to read .mc/shot.json from',
+    error: here ? '--here needs a git worktree, and this is not one' : NO_SHARED_WORKTREE,
   };
 }
 

@@ -22,12 +22,13 @@
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { ageWords } from './page-cache.js';
 import { mcHome, runnerScratchDir } from './paths.js';
 import { declarationFor } from './repo-gate-table.js';
+import { repoNameOf } from './repos.js';
 
 /** A saved reading younger than this, for the same sha, is printed as it is. */
 export const FRESH_MS = 6 * 60 * 60 * 1000;
@@ -304,7 +305,7 @@ export async function readNotes(repoPath, {
  */
 export async function readDeps({
   repoPath,
-  repo = basename(repoPath),
+  repo = repoNameOf(repoPath),
   refresh = false,
   env = process.env,
   root = mcHome(),

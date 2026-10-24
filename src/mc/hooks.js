@@ -20,7 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 
-import { defaultRepos } from './brief-collect.js';
+import { defaultRepos, gitDirOf } from './repos.js';
 import { programsHome, workRoot } from './paths.js';
 
 /** A branch this far behind origin/main is old enough to be the wrong code. */
@@ -42,7 +42,7 @@ export function knownRepo(dir, { env = process.env, git = gitIn(dir) } = {}) {
   const common = git(['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (common.status !== 0) return null;
   const commonDir = resolve(String(common.stdout).trim());
-  const repo = defaultRepos(env).find((candidate) => resolve(candidate.path, '.git') === commonDir);
+  const repo = defaultRepos(env).find((candidate) => resolve(gitDirOf(candidate)) === commonDir);
   return repo ? { name: repo.name, worktree: resolve(String(top.stdout).trim()) } : null;
 }
 

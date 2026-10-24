@@ -41,6 +41,7 @@ import { defaultRepos, listPlans, listProposals, proposalSystem } from './brief-
 import { intakeArchiveDir, intakeDir, proposalsDir } from './helper-collect.js';
 import { programsPlans } from './plan-source.js';
 import { profileArgs } from './portrait.js';
+import { gitDirOf } from './repos.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
 
@@ -178,7 +179,7 @@ function realGit(cwd, args) {
  * complete.
  */
 export async function helperGround({ env = process.env, repos = defaultRepos(env), git = realGit, programs = programsPlans } = {}) {
-  const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
+  const present = repos.filter((repo) => existsSync(gitDirOf(repo)));
   await Promise.all(present.map((repo) => git(repo.path, ['fetch', '-q', 'origin'])));
   const plans = present.flatMap((repo) => listPlans(repo, { programs }).map((r) => ({
     repo: r.repo, programme: r.programme, project: r.project, path: r.path, status: r.status ?? null, next: r.next ?? null,

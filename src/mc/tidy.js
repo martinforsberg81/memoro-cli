@@ -34,6 +34,7 @@ import { logRows } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { mergedPullAtTip } from './branch-landed.js';
 import { defaultRepos } from './brief-collect.js';
+import { repositoryDir } from './repos.js';
 import { closeoutPath } from './closeout.js';
 import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js';
 import { log } from './logger.js';
@@ -268,7 +269,7 @@ export function gatherTidyFacts({
       item.last_used_ms = statSync(path).mtimeMs;
       const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
       if (!common?.trim()) throw new Error('git could not name the repository that owns it');
-      item.owner = dirname(common.trim());
+      item.owner = repositoryDir(common.trim());
       item.live = servers(path).length;
       if (!compareWorktree(item, now).target) continue;
       item.bytes = treeBytes(path);

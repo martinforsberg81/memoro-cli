@@ -48,7 +48,9 @@
  * whole of what `npm ci` needs to agree with the lockfile.
  *
  * The manifest copied is the repository's own — `~/memoro-cli`, on whatever
- * it has checked out, which is main — and not the new workarea's branch. One
+ * it has checked out, which is main; for a bare repository (`~/mc/repos/
+ * memoro-cli.git`, repos.js), which has no files to read, the two as
+ * `origin/main` has them, through `git show` — and not the new workarea's branch. One
  * directory holds one tree, so reading each branch's manifest would have two
  * workareas on two branches reinstalling over each other. The cost is that a
  * branch which adds a dependency does not get it until it lands; the session
@@ -97,6 +99,7 @@ import {
   workDepsPath,
   workRoot,
 } from './paths.js';
+import { repoNameOf } from './repos.js';
 
 /**
  * The repositories whose dependency tree mc keeps above the workareas.
@@ -152,7 +155,7 @@ export function workDepsManifest(text) {
  * exactly as they were.
  */
 export function ensureWorkDeps({ repo, repoName = null, env = process.env, install = npmCi, ownTree = null } = {}) {
-  const name = String(repoName || repo || '').replace(/\/+$/u, '').split('/').pop() || '';
+  const name = repoNameOf(repoName || repo);
   const path = workDepsPath(env);
   if (!SHARED_TREE_REPOS.includes(name)) {
     return { ok: true, state: 'not-shared', path, why: `${name || 'this repository'} keeps its own dependencies` };
@@ -161,10 +164,12 @@ export function ensureWorkDeps({ repo, repoName = null, env = process.env, insta
     // A checkout without either file is not a failure to report — a fixture
     // repository and a repository between clone and install both look like
     // this, and neither is asking for a tree.
-    if (!existsSync(join(repo, 'package.json'))) return { ok: true, state: 'no-manifest', path, why: `${name} has no package.json` };
-    if (!existsSync(join(repo, 'package-lock.json'))) return { ok: true, state: 'no-lockfile', path, why: `${name} has no package-lock.json` };
-    const lock = readFileSync(join(repo, 'package-lock.json'), 'utf8');
-    const wanted = workDepsManifest(readFileSync(join(repo, 'package.json'), 'utf8'));
+    const fileOf = repoFiles(repo);
+    const manifestText = fileOf('package.json');
+    if (manifestText === null) return { ok: true, state: 'no-manifest', path, why: `${name} has no package.json` };
+    const lock = fileOf('package-lock.json');
+    if (lock === null) return { ok: true, state: 'no-lockfile', path, why: `${name} has no package-lock.json` };
+    const wanted = workDepsManifest(manifestText);
     if (!Object.keys(JSON.parse(wanted).dependencies || {}).length) {
       return { ok: true, state: 'no-dependencies', path, why: `${name} declares no dependencies` };
     }
@@ -205,6 +210,25 @@ function settle(pending, done, path) {
 
 function read(path) {
   try { return readFileSync(path, 'utf8'); } catch { return null; }
+}
+
+/**
+ * A reader of the repository's files: from the directory when it has them, and
+ * for a bare repository — no `.git` inside, a `HEAD` file, and git saying so —
+ * as `origin/main` has them. Null for a file that is not there.
+ */
+function repoFiles(repo) {
+  const bare = !existsSync(join(repo, '.git')) && existsSync(join(repo, 'HEAD')) && gitText(repo, ['rev-parse', '--is-bare-repository']) === 'true\n';
+  if (!bare) return (file) => (existsSync(join(repo, file)) ? readFileSync(join(repo, file), 'utf8') : null);
+  return (file) => gitText(repo, ['show', `origin/main:${file}`]);
+}
+
+function gitText(cwd, args) {
+  try {
+    return execFileSync('git', ['-C', cwd, ...args], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch { return null; }
 }
 
 /**
