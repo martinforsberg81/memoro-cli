@@ -12,10 +12,14 @@
  *
  * Loaded via --import before any test module (see the npm test script).
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Four variables a suite inherits isolated: HOME, TMPDIR, MC_HOME and
+// MC_WORK_ROOT. A git identity comes with the home (below), so every commit a
+// test makes keeps an identity and no signing key is looked for.
+//
 // Temporary directories too. Over a hundred suites mkdtemp under tmpdir() and
 // none of them removes what it made: ~95 000 mc-* directories had piled up in
 // the user's temp dir by 2026-10-23. Each process — the runner and every test
@@ -25,6 +29,24 @@ import { join } from 'node:path';
 const tmpRoot = mkdtempSync(join(tmpdir(), 'mc-test-tmp-'));
 process.env.TMPDIR = tmpRoot;
 process.once('exit', () => rmSync(tmpRoot, { recursive: true, force: true }));
+
+// HOME too. No suite may read or write the person's real home, and
+// `homedir()` answers from HOME: `archiveVerdict` read the real ~/mc through it
+// and failed on one machine only (fixed in #1062). The home sits inside
+// tmpRoot, so it goes with the run, and carries a git identity so a commit a
+// test makes does not depend on the person's ~/.gitconfig.
+const homeRoot = mkdtempSync(join(tmpRoot, 'home-'));
+process.env.HOME = homeRoot;
+writeFileSync(join(homeRoot, '.gitconfig'), [
+  '[user]',
+  '\tname = mc tests',
+  '\temail = mc-tests@example.invalid',
+  '[init]',
+  '\tdefaultBranch = main',
+  '[commit]',
+  '\tgpgsign = false',
+  '',
+].join('\n'));
 
 if (!process.env.MC_HOME) {
   process.env.MC_HOME = mkdtempSync(join(tmpdir(), 'mc-test-isolated-home-'));
