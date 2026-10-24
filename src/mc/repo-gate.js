@@ -201,8 +201,8 @@ export async function runGate({
   const askGit = git || run('git');
   const askGh = gh || run('gh');
   // The selector's resource classes, once the round has read them: a file
-  // classed `sqlite` or `heavy` runs alone after the standard batch, as
-  // memoro's own runner runs it (gate-round-under-load, item 6).
+  // classed `sqlite` or `heavy` runs after the standard batch, `heavy` one at
+  // a time, as memoro's own runner runs it (gate-round-under-load, item 6).
   let fileClasses = {};
   const runShell = gateShell || commandShell;
 
@@ -2118,26 +2118,32 @@ function stopAfter(child, ms, onStop) {
 
 const plainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-/** The resource classes that run one file at a time, after the standard batch, in this order. */
-export const EXCLUSIVE_CLASSES = Object.freeze(['sqlite', 'heavy']);
+/** The resource classes that run after the standard batch, each in its own `node --test`, in this order. */
+export const LATER_CLASSES = Object.freeze(['sqlite', 'heavy']);
+
+/** The `LATER_CLASSES` that run one file at a time; the rest run at the round's lanes. */
+export const EXCLUSIVE_CLASSES = Object.freeze(['heavy']);
 
 /**
- * The selected files split by resource class: `[{ files, lanes }]`, the
- * standard batch first at `lanes`, then each of `EXCLUSIVE_CLASSES` at one
- * file at a time. A file with no class, or one mc does not know, is standard.
+ * The selected files split by resource class: `[{ files, lanes }]`. The
+ * standard batch first at `lanes`, then `sqlite` at `lanes` and `heavy` one
+ * file at a time, each class in its own batch. `sqlite` runs at the lanes
+ * since 2026-10-24: its files open `:memory:` databases and share nothing, and
+ * all 646 were green at four lanes twice (247 s, 300 s) against 770 s at one.
+ * A file with no class, or one mc does not know, is standard.
  * Before 2026-10-19 the round ran every selected file in one `node --test` at
  * the core count, so memoro's `sqlite` and `heavy` files — exclusive for
  * correctness in its own runner — ran beside six others.
  */
 export function testBatches(files, classes = {}, lanes = 1) {
-  const exclusive = new Set(EXCLUSIVE_CLASSES);
-  const standard = files.filter((file) => !exclusive.has(classes[file]));
+  const later = new Set(LATER_CLASSES);
+  const standard = files.filter((file) => !later.has(classes[file]));
   return [
     ...(standard.length ? [{ files: standard, lanes }] : []),
-    ...EXCLUSIVE_CLASSES
-      .map((name) => files.filter((file) => classes[file] === name))
-      .filter((batch) => batch.length)
-      .map((batch) => ({ files: batch, lanes: 1 })),
+    ...LATER_CLASSES
+      .map((name) => ({ name, files: files.filter((file) => classes[file] === name) }))
+      .filter(({ files: batch }) => batch.length)
+      .map(({ name, files: batch }) => ({ files: batch, lanes: EXCLUSIVE_CLASSES.includes(name) ? 1 : lanes })),
   ];
 }
 

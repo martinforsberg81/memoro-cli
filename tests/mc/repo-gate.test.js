@@ -2838,16 +2838,17 @@ describe('the selected files run in their resource classes', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it('testBatches: standard first at the lanes, then sqlite and heavy one file at a time', () => {
+  it('testBatches: standard first at the lanes, then sqlite at the lanes and heavy one file at a time', () => {
     const files = ['a.test.js', 'db.test.js', 'b.test.js', 'build.test.js', 'odd.test.js'];
     const classes = { 'db.test.js': 'sqlite', 'build.test.js': 'heavy', 'odd.test.js': 'mystery' };
     assert.deepEqual(testBatches(files, classes, 4), [
       { files: ['a.test.js', 'b.test.js', 'odd.test.js'], lanes: 4 },
-      { files: ['db.test.js'], lanes: 1 },
+      { files: ['db.test.js'], lanes: 4 },
       { files: ['build.test.js'], lanes: 1 },
     ]);
     assert.deepEqual(testBatches(['a.test.js'], {}, 3), [{ files: ['a.test.js'], lanes: 3 }]);
-    assert.deepEqual(testBatches(['db.test.js'], { 'db.test.js': 'sqlite' }, 3), [{ files: ['db.test.js'], lanes: 1 }]);
+    assert.deepEqual(testBatches(['db.test.js'], { 'db.test.js': 'sqlite' }, 3), [{ files: ['db.test.js'], lanes: 3 }]);
+    assert.deepEqual(testBatches(['build.test.js'], { 'build.test.js': 'heavy' }, 3), [{ files: ['build.test.js'], lanes: 1 }]);
     assert.deepEqual(testBatches([], {}, 3), []);
   });
 });
