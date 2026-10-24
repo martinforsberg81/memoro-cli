@@ -14,7 +14,7 @@ import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { mcHome } from '../../src/mc/paths.js';
 import {
   attachPrs, checksSection, collectPage, countNewErrors, dockerSection, intakeSection, mergesSection, newErrorLines, nextSection,
-  prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
+  prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection, stateOf,
 } from '../../src/mc/page-collect.js';
 import { planSummary } from '../../src/mc/plan-schema.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
@@ -1249,12 +1249,79 @@ describe('the blocked line of a time or deploy wait', () => {
       now: AT,
     });
     const byName = Object.fromEntries(programmes.programmes[0].projects.map((project) => [project.name, project.next]));
-    assert.equal(byName['on-time'], 'step 4 is blocked until 2026-10-14 08:00Z — 3d left');
-    assert.equal(byName['on-deploy'], 'step 4 is blocked on deploy of step 3 + 24h');
-    assert.equal(byName['on-decision'], 'step 4 is blocked on decision p-1');
+    assert.equal(byName['on-time'], 'Wait · until 2026-10-14 08:00Z — 3d left');
+    assert.equal(byName['on-deploy'], 'Wait · after deploy of step 3 + 24h');
+    assert.equal(byName['on-decision'], 'Wait · on decision p-1');
     const lines = renderPageLines(pageData({ programmes }), { columns: 160, expand: true });
     assert.ok(lines.some((line) => /on-time .*until 2026-10-14 08:00Z — 3d left/u.test(line)), lines.join('\n'));
-    assert.ok(lines.some((line) => /on-deploy .*on deploy of step 3 \+ 24h/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /on-deploy .*after deploy of step 3 \+ 24h/u.test(line)), lines.join('\n'));
+  });
+});
+
+describe('the state of a project row, and the next cell of every state', () => {
+  const AT = new Date('2026-10-24T18:30:00Z');
+  const row = (project, status, title, over = {}) => planRecord({ repo: 'memoro', programme: 'p', project, status, title, ...over });
+  // A fixture changed after it is built, with its summary worked out again as `listPlans` does.
+  const changed = (record, change) => {
+    change(record.plan);
+    return { ...record, ...planSummary(record.plan) };
+  };
+
+  it('is waiting for a blocked step that releases by itself, and the plan’s own word for the rest', () => {
+    for (const kind of ['time', 'deploy', 'project']) {
+      assert.equal(stateOf({ status: 'blocked', blocker: { kind, name: 'x' } }), 'waiting', kind);
+    }
+    for (const kind of ['decision', 'workarea']) {
+      assert.equal(stateOf({ status: 'blocked', blocker: { kind, name: 'x' } }), 'blocked', kind);
+    }
+    assert.equal(stateOf({ status: 'blocked', blocker: null }), 'blocked');
+    for (const status of ['ready', 'running', 'landing', 'failed', 'done']) {
+      assert.equal(stateOf({ status, blocker: null }), status);
+    }
+  });
+
+  it('counts a waiting project apart from a blocked one, and keeps its row', () => {
+    const projects = programmesSection({
+      plans: [
+        row('on-decision', 'blocked', 'Wait', { done: 3, blockedBy: { kind: 'decision', name: 'p-1' } }),
+        row('on-time', 'blocked', 'Wait', { done: 3, blockedBy: { kind: 'time', name: 'until-x', at: '2026-10-26T10:30:00Z' } }),
+      ],
+      now: AT,
+    });
+    const [group] = projects.programmes;
+    assert.deepEqual(group.statuses, { blocked: 1, waiting: 1 });
+    assert.equal(group.blocked.count, 1);
+    assert.deepEqual(group.blocked.names, ['on-decision']);
+    assert.equal(projects.waiting, 1);
+    assert.equal(projects.blocked.count, 1);
+    assert.deepEqual(projects.blocked.kinds, { decision: 1 });
+  });
+
+  it('says the next cell alike on every row: the step’s title, then the state’s detail', () => {
+    const projects = programmesSection({
+      plans: [
+        row('ready-one', 'ready', 'Ready step'),
+        changed(row('landing-one', 'landing', 'Landing step'), (plan) => { plan.steps[0].pr = 1069; }),
+        row('time-one', 'blocked', 'Time step', { blockedBy: { kind: 'time', name: 'until-x', at: '2026-10-26T10:30:00Z' } }),
+        row('deploy-one', 'blocked', 'Deploy step', { done: 3, blockedBy: { kind: 'deploy', name: 'deploy-step-3-170h', step: 3, hours: 170 } }),
+        row('project-one', 'blocked', 'Project step', { blockedBy: { kind: 'project', name: 'x' } }),
+        row('decision-one', 'blocked', 'Decision step', { blockedBy: { kind: 'decision', name: 'd' } }),
+        changed(row('failed-one', 'failed', 'Failed step'), (plan) => { plan.steps[0].reason = 'boom'; }),
+        row('done-one', 'done', 'nothing'),
+        changed(row('unmet-one', 'done', 'nothing'), (plan) => { plan.success_criteria[0].met = false; }),
+      ],
+      now: AT,
+    });
+    const next = Object.fromEntries(projects.programmes.flatMap((group) => group.projects).map((p) => [p.name, p.next]));
+    assert.equal(next['ready-one'], 'Ready step');
+    assert.equal(next['landing-one'], 'Landing step · #1069 in the merge queue');
+    assert.match(next['time-one'], /^Time step · until 2026-10-26 10:30Z — .+ left$/u);
+    assert.equal(next['deploy-one'], 'Deploy step · after deploy of step 3 + 170h');
+    assert.equal(next['project-one'], 'Project step · after project x');
+    assert.equal(next['decision-one'], 'Decision step · on decision d');
+    assert.equal(next['failed-one'], 'Failed step · failed: boom');
+    assert.equal(next['done-one'], 'every step is done');
+    assert.equal(next['unmet-one'], 'criteria 1 not met');
   });
 });
 
@@ -1488,7 +1555,7 @@ describe('PROJECTS', () => {
     const projects = projectsFixture();
     const ui = flat(projects).find((p) => p.name === 'mc-ui');
     assert.equal(ui.status, 'ready');
-    assert.equal(ui.next, 'Step 1, The page — done when the step is finished');
+    assert.equal(ui.next, 'The page');
     assert.deepEqual(ui.steps, { done: 0, total: 1 });
     assert.equal(ui.pr, 440);
     assert.equal(ui.workarea, true);
@@ -1577,8 +1644,9 @@ describe('PROJECTS', () => {
   it('counts every programme’s own projects on its own heading', () => {
     const projects = programmesSection({ plans: STOPPED, areas: [], programmes: ['empty-one'] });
     const byName = Object.fromEntries(projects.programmes.map((g) => [g.programme, g]));
-    assert.deepEqual(byName.mc.statuses, { blocked: 1 });
-    assert.deepEqual(byName['msr-core'].statuses, { blocked: 3, ready: 1 });
+    // e-five and c-three wait on a project, which the runner releases: waiting.
+    assert.deepEqual(byName.mc.statuses, { waiting: 1 });
+    assert.deepEqual(byName['msr-core'].statuses, { blocked: 2, waiting: 1, ready: 1 });
     // A programme with no project at all counts nothing, and the heading says
     // that in words rather than as `0 ready · 0 blocked`.
     assert.deepEqual(byName['empty-one'].statuses, {});
@@ -1588,12 +1656,12 @@ describe('PROJECTS', () => {
     const projects = programmesSection({ plans: STOPPED, areas: [] });
     const byName = Object.fromEntries(projects.programmes.map((g) => [g.programme, g]));
     // Numbered `mc` first, then `msr-core`: a-one is 2, b-two 3, c-three 4.
-    assert.deepEqual(byName['msr-core'].blocked.numbers, [2, 3, 4]);
-    assert.deepEqual(byName['msr-core'].blocked.names, ['a-one', 'b-two', 'c-three']);
-    assert.equal(byName['msr-core'].blocked.count, 3);
+    // c-three waits on a project the runner releases, so it keeps its row.
+    assert.deepEqual(byName['msr-core'].blocked.numbers, [2, 3]);
+    assert.deepEqual(byName['msr-core'].blocked.names, ['a-one', 'b-two']);
+    assert.equal(byName['msr-core'].blocked.count, 2);
     assert.deepEqual(byName['msr-core'].blocked.blockers, [
       { kind: 'decision', name: 'plan-review', count: 2 },
-      { kind: 'project', name: 'home-on-msr', count: 1 },
     ]);
     // Every project is still on the group, drawn or not: the row is what
     // collapses, and the number still opens the project.
@@ -1606,20 +1674,21 @@ describe('PROJECTS', () => {
   it('keeps the row of a blocked project the runner has a step in flight on', () => {
     const projects = programmesSection({ plans: STOPPED, areas: [], running: ['a-one'] });
     const group = projects.programmes.find((g) => g.programme === 'msr-core');
-    assert.deepEqual(group.blocked.names, ['b-two', 'c-three']);
+    assert.deepEqual(group.blocked.names, ['b-two']);
     // The programme's own count is the plan's, not the drawing's: it is still
-    // three projects that are stopped.
-    assert.equal(group.statuses.blocked, 3);
+    // two projects that are stopped on Martin.
+    assert.equal(group.statuses.blocked, 2);
   });
 
-  it('says how many wait on a decision, how many on a project, and what holds the most', () => {
+  it('says how many wait on a decision or a workarea, how many the runner releases, and what holds the most', () => {
     const projects = programmesSection({ plans: STOPPED, areas: [] });
-    assert.equal(projects.blocked.count, 4);
-    assert.deepEqual(projects.blocked.kinds, { decision: 2, project: 2 });
+    // a-one and b-two wait on a decision; c-three and e-five on a project.
+    assert.equal(projects.blocked.count, 2);
+    assert.deepEqual(projects.blocked.kinds, { decision: 2 });
     assert.deepEqual(projects.blocked.blockers, [
-      { kind: 'project', name: 'home-on-msr', count: 2 },
       { kind: 'decision', name: 'plan-review', count: 2 },
     ]);
+    assert.equal(projects.waiting, 2);
   });
 
   /**
@@ -1634,10 +1703,11 @@ describe('PROJECTS', () => {
       blockedBy: { kind: 'workarea', name: 'dirty-worktree' },
     })];
     const projects = programmesSection({ plans, areas: [] });
-    assert.deepEqual(projects.blocked.kinds, { decision: 2, project: 2, workarea: 1 });
+    // a-one and b-two on a decision, f-six on a workarea; c-three and e-five wait on a project.
+    assert.deepEqual(projects.blocked.kinds, { decision: 2, workarea: 1 });
     assert.ok(projects.blocked.blockers.some((b) => b.kind === 'workarea' && b.name === 'dirty-worktree'));
     const lines = renderPageLines(pageData({ programmes: projects }), { columns: 120, now: NOW });
-    assert.match(lines.join('\n'), /5 blocked · 2 on a decision, 2 on a project, 1 on a workarea/u);
+    assert.match(lines.join('\n'), /3 blocked · 2 on a decision, 1 on a workarea/u);
   });
 
   // Read off `blocked_by` on the step that stopped the project — the first that
@@ -1804,7 +1874,7 @@ describe('the page', () => {
     assert.doesNotMatch(text, /avatar-self-serve/u, 'a blocked project is collapsed, not listed');
     assert.match(text, /^ {7}1 blocked · 1 on a decision · held most by assistant-avatar-1 1$/mu);
     assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
-    assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+#440\s+Step 1, The page/u);
+    assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+#440\s+The page/u);
     assert.match(text, /3 of them have no workarea yet/u);
     // The workareas no project explains are one line: the numbers that still
     // open them, and the file that has them all.
@@ -1850,18 +1920,19 @@ describe('the page', () => {
       assert.ok(lines.some((line) => /1 blocked · 1 on a decision · held most by assistant-avatar-1 1/u.test(line)));
     }
 
-    // Four blocked projects in two programmes: four rows go and none comes —
-    // the count on each programme's heading is what is left of them, because a
-    // row under it said the same thing twice (Martin, 2026-09-19).
+    // Two blocked projects on Martin in msr-core: two rows go and none comes —
+    // the count on its heading is what is left of them, because a row under it
+    // said the same thing twice (Martin, 2026-09-19). The two that wait on a
+    // project keep theirs: the runner releases them, and their row says when.
     const many = pageData({ programmes: programmesSection({ plans: STOPPED, areas: [] }) });
     const short = renderPageLines(many, { columns: 120, now: NOW });
     const long = renderPageLines(many, { columns: 120, now: NOW, expand: true });
-    assert.equal(long.length - short.length, 4);
+    assert.equal(long.length - short.length, 2);
     assert.deepEqual(numbers(long), [1, 2, 3, 4, 5]);
-    assert.deepEqual(numbers(short), [5], 'only d-four, the one that is ready');
+    assert.deepEqual(numbers(short), [1, 4, 5], 'the two waiting on a project, and d-four, the one that is ready');
     assert.ok(!short.some((line) => /^ {8}\d+ blocked/u.test(line)), short.join('\n'));
-    assert.ok(short.some((line) => /^ {2}\S+\s+1 ready · 3 blocked/u.test(line)), short.join('\n'));
-    assert.match(short.join('\n'), /^ {7}4 blocked · 2 on a decision, 2 on a project · held most by home-on-msr 2, plan-review 2$/mu);
+    assert.ok(short.some((line) => /^ {2}\S+\s+1 ready · 2 blocked/u.test(line)), short.join('\n'));
+    assert.match(short.join('\n'), /^ {7}2 blocked · 2 on a decision · held most by plan-review 2$/mu);
   });
 
   /**
@@ -2508,7 +2579,7 @@ describe('the palette', () => {
           skipped: { count: 0, reasons: {} },
         },
         programmes: programmesSection({
-          plans: [{ repo: 'memoro-cli', programme: 'mc', project: 'thing', status: 'ready', next: 'go on' }],
+          plans: [{ repo: 'memoro-cli', programme: 'mc', project: 'thing', status: 'ready', title: 'go on' }],
           areas: [{ name: 'thing', mtime_ms: 1 }],
           rows: [{ ts: '2026-08-29T10:00:00Z', name: 'thing', kind, pr: '-', note: '' }],
         }),
@@ -2525,9 +2596,9 @@ describe('the palette', () => {
 
   it('gives a plan status one colour wherever a status is printed', () => {
     const plans = [
-      { repo: 'memoro-cli', programme: 'mc', project: 'a-ready', status: 'ready', next: 'one' },
-      { repo: 'memoro-cli', programme: 'mc', project: 'b-blocked', status: 'blocked', next: 'two' },
-      { repo: 'memoro-cli', programme: 'mc', project: 'd-done', status: 'done', next: 'four' },
+      { repo: 'memoro-cli', programme: 'mc', project: 'a-ready', status: 'ready', title: 'one' },
+      { repo: 'memoro-cli', programme: 'mc', project: 'b-blocked', status: 'blocked', title: 'two' },
+      { repo: 'memoro-cli', programme: 'mc', project: 'd-done', status: 'done', title: 'four' },
     ];
     const data = pageData({
       programmes: programmesSection({ plans, areas: plans.map((plan, n) => ({ name: plan.project, mtime_ms: 100 - n })).concat([{ name: 'e-none', mtime_ms: 0 }]) }),
@@ -2554,8 +2625,10 @@ describe('the palette', () => {
     assert.deepEqual(signature(rowWith(collapsed, 'held most by')).split(' '), ['red', 'grey', 'grey']);
     // And a programme's counts: green while something is ready, red while
     // something is stopped, grey for a count of nothing.
-    assert.deepEqual(signature(rowWith(collapsed, '1 ready · 3 blocked')).split(' '), ['bold+cyan', 'green', 'grey', 'red', 'grey']);
-    assert.deepEqual(signature(rowWith(collapsed, '0 ready · 1 blocked')).split(' '), ['bold+cyan', 'grey', 'grey', 'red', 'grey']);
+    // msr-core's waiting project is not in these counts yet: the heading draws
+    // ready and blocked only, and `waiting` is drawn by the renderer's next step.
+    assert.deepEqual(signature(rowWith(collapsed, 'msr-core')).split(' '), ['bold+cyan', 'green', 'grey', 'red', 'grey']);
+    assert.deepEqual(signature(rowWith(collapsed, '0 ready · 0 blocked')).split(' '), ['bold+cyan', 'grey', 'grey', 'grey', 'grey']);
   });
 
   it('turns the clock yellow past its first check-in, and never red', () => {
@@ -2687,7 +2760,7 @@ describe('CHECKS — the daily full test and deps, per repository', () => {
 
 describe('PULL REQUESTS', () => {
   const plan = (project, status, step, steps, programme = 'p') => ({
-    project, repo: 'memoro', programme, status, step, steps, next: `step ${step} is ${status}`,
+    project, repo: 'memoro', programme, status, step, steps, title: `S${step}`, next: `step ${step} is ${status}`,
     plan: { steps: Array.from({ length: steps }, (_, n) => ({ title: `S${n + 1}`, status: n + 1 < step ? 'done' : status, pr: null })) },
   });
   const PLANS = [plan('docx-simple-toolbar', 'blocked', 4, 4), plan('one-operation', 'ready', 7, 7)];
@@ -2757,9 +2830,9 @@ describe('PULL REQUESTS', () => {
     // after the steps, and no row under it.
     const at = lines.findIndex((line) => / docx-simple-toolbar /u.test(line));
     assert.ok(at > 0, lines.join('\n'));
-    assert.match(lines[at], /blocked +3\/4 +#12314 +step 4 is blocked$/u);
+    assert.match(lines[at], /blocked +3\/4 +#12314 +S4 · blocked$/u);
     assert.doesNotMatch(lines[at + 1], /#12314|↳/u);
-    assert.ok(lines.some((line) => /one-operation +memoro +ready +6\/7 +#13048 +step 7 is ready$/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /one-operation +memoro +ready +6\/7 +#13048 +S7$/u.test(line)), lines.join('\n'));
     // Quiet for a day it waits on a person, and says so in yellow.
     const painted = renderPageLines(pageData({ programmes, runner, prs: pulls }), { columns: 120, colour: true, now: AT });
     assert.ok(painted.some((line) => line.includes('\u001b[33m\u001b[1m#12314') || line.includes('\u001b[1m\u001b[33m#12314')), painted.join('\n'));
