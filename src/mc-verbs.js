@@ -44,8 +44,35 @@ export const VERB_MODULES = {
  */
 export const wantsHelp = (argv) => argv.includes('--help') || argv.includes('-h');
 
+/** The streams that already have their closed-reader listener. */
+const guarded = new WeakSet();
+
+/**
+ * A reader that goes away early is the caller's choice, not a fault in the
+ * verb: `mc project discard x | grep -q 'would remove'` and `mc … | head -1`
+ * both close the pipe while the verb is still writing. Node raises that as an
+ * `error` event with nothing listening, and the stack trace lands on stderr.
+ * So the first EPIPE is noted and dropped, and so are the writes that follow
+ * it on the dead pipe. Anything else is thrown again, as it was before.
+ *
+ * The verb's return value still sets the exit code; nothing here exits.
+ */
+export function quietOnClosedReader(stream = process.stdout) {
+  if (guarded.has(stream)) return;
+  guarded.add(stream);
+  let readerGone = false;
+  stream.on('error', (error) => {
+    if (error?.code === 'EPIPE') { readerGone = true; return; }
+    if (readerGone && error?.code === 'ERR_STREAM_DESTROYED') return;
+    throw error;
+  });
+}
+
 /** Import the module and run it, or print its usage on stdout and exit 0. */
 export async function runModule(path, argv, { stdout = process.stdout } = {}) {
+  // The guard is on process.stdout even when a caller passes its own stdout:
+  // the verbs write to process.stdout themselves.
+  quietOnClosedReader(process.stdout);
   const module = await import(path);
   if (wantsHelp(argv)) {
     const text = module.usage();
