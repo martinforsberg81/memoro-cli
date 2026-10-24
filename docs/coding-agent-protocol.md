@@ -286,7 +286,7 @@ one does.
 - `mc merge <repo> <pr> --check` — the same measurement, stopping at the
   verdict. Use it before you claim anything about the suite.
 - `mc merge <repo> <pr> --docs` — a pull request whose every file is under
-  `docs/`: no suite, no lease, no worktree, no model. The session that opened
+  `docs/`: the tests that read documents, on one worktree, then the squash; no lease, no model. The session that opened
   it lands it itself.
 - `npm test` locally is the fast loop and it is green: 1 534 tests, 1 525
   passing, 9 skipped, 0 failing in 64 s, measured 2026-09-03 after mc-cut took

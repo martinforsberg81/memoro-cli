@@ -37,8 +37,8 @@ out again from less than you had.
 The practical route to `main` is yours to settle: one branch, one PR,
 `mc publish` — it pushes, opens the PR and queues it for the merger
 (`mc merge <repo> <pr>` in the same call). The merger decides green and lands
-nothing red. A PR whose every file is a document under `docs/` (no script) has
-no suite: it lands in the call and says so. Never
+nothing red. A PR whose every file is a document under `docs/` (no script) runs the
+tests that read documents, and lands in the call when they are green. Never
 `gh pr merge`. Tell Martin the outcome, not the bookkeeping. His, in one line
 with your recommendation: a merge that needed your judgement to go green,
 anything the gate refused, anything that changes what is deployed.
