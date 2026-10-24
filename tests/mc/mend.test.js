@@ -160,6 +160,26 @@ describe('which reds are mended', () => {
     assert.doesNotMatch(prompt, /node --test|suite command/u);
   });
 
+  it('the prompt names each failed command gate, its last output, and the npm run that proves it', () => {
+    const report = {
+      ok: false, stopped_at: 'red', reason: '1 test red: s › a — and 1 command gate the selection chose failed: i18n:locale-contract (exit 1)',
+      red_files: ['tests/a.test.js'],
+      gate: {
+        candidate: { red_tests: [{ file: 'tests/a.test.js', name: 's › a', own: 'a' }] },
+        extra_gates: [
+          { source: 'selection', name: 'i18n:locale-contract', ok: false, exit_code: 1, output: 'public/js/x.js:17:19 dynamic-key/t: KEY\ni18n locale contract failed' },
+          { source: 'selection', name: 'css:lint', ok: true, exit_code: 0, output: null },
+          { source: 'selection', name: 'sql:reference:postgres', ok: true, unavailable: true, exit_code: 3, output: 'no docker' },
+        ],
+      },
+    };
+    const prompt = mendPrompt({ job: JOB, report });
+    assert.match(prompt, /^ {4}failed command gate: i18n:locale-contract \(exit 1\)$/mu);
+    assert.match(prompt, /^ {8}public\/js\/x\.js:17:19 dynamic-key\/t: KEY$/mu);
+    assert.match(prompt, /- Run `npm run i18n:locale-contract` until it passes/u);
+    assert.doesNotMatch(prompt, /css:lint|sql:reference:postgres/u);
+  });
+
   it('a mended job, or one without a branch, is not mended', () => {
     assert.equal(mayMend({ ...JOB, mended: { at: 'x', outcome: 'pushed' } }, conflict), false);
     assert.equal(mayMend({ ...JOB, branch: null }, conflict), false);

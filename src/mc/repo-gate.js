@@ -1042,6 +1042,8 @@ export async function runGate({
     if (!reused) say(`${after.result.red.length} red`);
     if (after.result.red.length) {
       const stop = await stopRed(after.result);
+      // The mend gets one try, so the red names every gate that failed beside the tests (memoro #14169, 2026-10-24).
+      if (stop?.stopped_at === 'red' && failedGates.length) stop.reason = `${stop.reason} — and ${failedGatesText(failedGates)}`;
       if (stop) return stop;
     }
 
@@ -1073,8 +1075,7 @@ export async function runGate({
     // change that breaks one is red whatever its tests did. They all ran; the
     // stop names every one that failed rather than the first.
     if (failedGates.length) {
-      return finish('selected-gate', `${failedGates.length} command gate${failedGates.length === 1 ? '' : 's'} the selection chose failed: `
-        + `${failedGates.map((gate) => `${gate.name} (exit ${gate.exit_code})`).join(', ')}`);
+      return finish('selected-gate', failedGatesText(failedGates));
     }
 
     // The pull request's own tests (D-0157). The suite answers "did anything
@@ -1605,6 +1606,12 @@ export function previousRedFiles({ root = mcHome(), repoPath, pr }) {
     .at(-1);
   if (!last || last.prs.length !== 1 || last.stopped_at !== 'red' || !Array.isArray(last.red_files)) return [];
   return [...new Set(last.red_files.filter((file) => typeof file === 'string' && file))];
+}
+
+/** What a round says of the command gates the selection chose that failed: each by name and exit code. */
+function failedGatesText(gates) {
+  return `${gates.length} command gate${gates.length === 1 ? '' : 's'} the selection chose failed: `
+    + `${gates.map((gate) => `${gate.name} (exit ${gate.exit_code})`).join(', ')}`;
 }
 
 /** Why a round stopped `red-under-load`: which files passed alone, and which were cancelled with none failed. */
