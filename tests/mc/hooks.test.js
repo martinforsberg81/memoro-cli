@@ -116,6 +116,9 @@ describe('mc hook — shell commands that have an mc verb', () => {
       ['node --import ./tests/_isolate-home.mjs --test tests/a.test.js', 'node-test', /gate lane/u],
       ['npm run dev:agent -- --restart', 'dev-server', /mc test dev --here --url/u],
       ['npm run dev', 'dev-server', /mc test dev/u],
+      ['xcrun simctl create "iPhone 16 (one-camera)" com.apple.CoreSimulator.SimDeviceType.iPhone-16', 'simulator', /device named `mc`/u],
+      ['cd ios && xcrun simctl clone mc mc-2', 'simulator', /erase mc/u],
+      ['simctl create mcx "iPhone 17"', 'simulator', /create exactly that one/u],
     ];
     for (const [command, id, said] of cases) {
       const decision = preToolDecision(bash(command));
@@ -131,6 +134,8 @@ describe('mc hook — shell commands that have an mc verb', () => {
       'gh pr merge 12 --squash --admin', `${ALLOW_MARK} git push --force-with-lease`, 'npm run deps:prepare',
       `${ALLOW_MARK} gh pr edit 12 --base main`, 'echo "gh pr edit 12"',
       'npm run ci -- --list --json',
+      'xcrun simctl create mc "iPhone 17"', "xcrun simctl create 'mc' 'iPhone 17'", 'xcrun simctl boot mc', 'xcrun simctl erase mc',
+      'xcrun simctl list devices',
     ]) {
       assert.equal(preToolDecision(bash(command)), null, command);
     }
