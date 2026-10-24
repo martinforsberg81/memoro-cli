@@ -1,0 +1,3 @@
+section: Fixed
+
+- **The archive row links only a document that exists.** The doc cell was the first `docs/technical/` path a plan named anywhere in its text, so a plan that named a document it deferred to before the ones it wrote linked one that was never written (memoro's `project_log.md` row for `foundation` linked `notifications.md`, and `tests/docs/doc-links.test.js` went red on main). Now the archive asks the repository whether each named path exists, and takes the first one that does; with none, the cell is `none` and the project goes to the undocumented list, as a plan with no note does.

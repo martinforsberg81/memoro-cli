@@ -128,15 +128,19 @@ export function planSummary(planText) {
 }
 
 /**
- * The doc cell: the first `docs/technical/…` path the plan names, as the
- * relative link the log's other rows use, or `none`. A thin or missing note
- * never stops an archive — it is reported (`undocumentedRow`) and Martin
- * decides whether to write it.
+ * The doc cell: the first `docs/technical/…` path the plan names that `exists`
+ * says is in the tree, as the relative link the log's other rows use, or
+ * `none`. `exists` is asked with the repository-relative path. A plan often
+ * names a document it defers to later before the ones it wrote, so a path the
+ * plan only mentions, and that is not in the tree, gives no link. A thin or
+ * missing note never stops an archive — it is reported (`undocumentedRow`) and
+ * Martin decides whether to write it.
  */
-export function planDoc(planText) {
-  const match = /docs\/technical\/[A-Za-z0-9._-]+\.md/u.exec(String(planText || ''));
-  if (!match) return NO_DOC;
-  return `[${match[0]}](../technical/${match[0].slice('docs/technical/'.length)})`;
+export function planDoc(planText, exists = () => true) {
+  for (const [path] of String(planText || '').matchAll(/docs\/technical\/[A-Za-z0-9._-]+\.md/gu)) {
+    if (exists(path)) return `[${path}](../technical/${path.slice('docs/technical/'.length)})`;
+  }
+  return NO_DOC;
 }
 
 /** Does this row's doc cell name nothing? */
