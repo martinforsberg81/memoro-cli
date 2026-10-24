@@ -93,6 +93,8 @@ export async function runMergeRound({
   mode = 'merge',
   // Whether the gate installs its own SIGINT/SIGTERM handler (`runGate`).
   signals = true,
+  // Stops the round from outside (`runGate`'s signal): the round ends `gone`.
+  signal = null,
   // The pause between reads of GitHub's head (see `headAsGitHubSeesIt`); a
   // test passes a no-op rather than waiting five seconds a read.
   sleep = defaultSleep,
@@ -176,7 +178,7 @@ export async function runMergeRound({
 
   try {
     const verdict = await gate({
-      repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false, mode, signals,
+      repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false, mode, signals, signal,
     });
     report.gate = verdict;
     report.pr = { ...report.pr, ...verdict.pr };
@@ -198,7 +200,7 @@ export async function runMergeRound({
         }
         say(`— round for #${number}`);
         const round = await runMergeRound({
-          repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals, sleep,
+          repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals, signal, sleep,
         });
         report.batch.rounds.push(round);
         report.batch.merges.push({ number, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });
@@ -220,6 +222,9 @@ export async function runMergeRound({
       report.main_red = verdict.main_red ?? null;
       return finish(verdict.stopped_at === 'red' ? 'red' : verdict.stopped_at, verdict.reason);
     }
+    // Stopped from outside while the gate ran (the merger's watch): a green
+    // verdict on a round that was told to stop lands nothing.
+    if (signal?.aborted) return finish('gone', String(signal.reason?.message || signal.reason || 'the round was stopped'));
 
     // The ground under the verdict, checked before acting on it.
     //
@@ -386,7 +391,7 @@ export async function runMergeRound({
               }
               say(`— round for #${later}`);
               const round = await runMergeRound({
-                repoPath, pr: later, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals, sleep,
+                repoPath, pr: later, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false, mode, signals, signal, sleep,
               });
               report.batch.rounds.push(round);
               report.batch.merges.push({ number: later, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });
