@@ -16,6 +16,7 @@ import {
   instructionParagraphs,
   readDraftOrPlan,
   sendProblems,
+  testDirectories,
   withPlanLock,
   writePlanFile,
 } from '../../src/mc/plan-write.js';
@@ -69,6 +70,16 @@ test('dependencyWords names a dependency written in prose', () => {
   assert.deepEqual(dependencyWords('wait with --on-project x, then blocked_by'), ['--on-project', 'blocked_by']);
   assert.deepEqual(dependencyWords('wait for --after mc:x'), []);
   assert.deepEqual(dependencyWords(null), []);
+});
+
+test('testDirectories names a directory given to node --test, and no file, glob or flag', () => {
+  assert.deepEqual(testDirectories('node --test tests/a.test.js tests/assistant/background'), ['tests/assistant/background']);
+  assert.deepEqual(testDirectories("`node --test 'tests/x/**/*.test.js'` passes"), []);
+  assert.deepEqual(testDirectories('`node --test tests/a.test.js` passes with tests/b'), []);
+  assert.deepEqual(testDirectories('node --test --test-name-pattern=x tests/a.test.js && ls docs/x'), []);
+  assert.deepEqual(testDirectories('node --test'), []);
+  assert.deepEqual(testDirectories(undefined), []);
+  assert.deepEqual(testDirectories('node --test tests/x/'), ['tests/x/']);
 });
 
 test('findProjectDir finds a draft, a sent plan, and nothing', () => {
