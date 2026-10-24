@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
-  STEP_STATES, applyEntry, criteriaFromPlan, currentIndex, keyOf, listEntries, markCriterion, normaliseEntry, overlayPlans, parseEntry, parseStepEnv,
+  STEP_STATES, applyEntry, criteriaFromPlan, currentIndex, dropCriterion, keyOf, listEntries, markCriterion, normaliseEntry, overlayPlans, parseEntry, parseStepEnv,
   patchStep, readEntry, realLock, reconcileEntry, registerDir, registerLogPath, registerPath, seedEntry, stepKey, updateCriterion, updateStep, whoAmI,
 } from '../../src/mc/register.js';
 import { PLAN_SCHEMA, PLAN_VERSION, deliverableStep, validatePlan } from '../../src/mc/plan-schema.js';
@@ -436,6 +436,28 @@ test('updateCriterion writes the criterion and appends one criterion line naming
   assert.equal(lines[0].from, false);
   assert.equal(lines[0].to, true);
   assert.throws(() => updateCriterion({ root: '/w', project: 'ghost', number: 1, met: true, ...io }), /ghost: not in the register/u);
+});
+
+test('dropCriterion removes the first held criterion of the text, logs the reason, and a text it does not hold changes nothing', () => {
+  const { files, io } = disk();
+  overlayPlans([withCriteria([criterion('x', false), criterion('y', true), criterion('x', true)])], { root: '/w', ...io, now: 't0' });
+  const lines = [];
+  const append = (path, line) => lines.push(JSON.parse(line));
+  const next = dropCriterion({ root: '/w', project: 'p', text: 'x', reason: 'Nobody can measure it.', ...io, append, now: 't1' });
+  assert.deepEqual(next.criteria, [{ criterion: 'y', met: true, at: null }, { criterion: 'x', met: true, at: null }]);
+  assert.deepEqual(parseEntry(files[registerPath('/w', 'p')]).criteria, next.criteria, 'written');
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].event, 'criterion-drop');
+  assert.equal(lines[0].project, 'p');
+  assert.equal(lines[0].criterion, 'x');
+  assert.equal(lines[0].reason, 'Nobody can measure it.');
+
+  const before = files[registerPath('/w', 'p')];
+  const same = dropCriterion({ root: '/w', project: 'p', text: 'z', reason: 'Nobody can measure it.', ...io, append, now: 't2' });
+  assert.deepEqual(same.criteria, next.criteria);
+  assert.equal(files[registerPath('/w', 'p')], before, 'a text it does not hold writes nothing');
+  assert.equal(lines.length, 1, 'and logs nothing');
+  assert.throws(() => dropCriterion({ root: '/w', project: 'ghost', text: 'x', reason: 'no', ...io }), /ghost: not in the register/u);
 });
 
 /**

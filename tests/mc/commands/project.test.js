@@ -1261,3 +1261,76 @@ test('criterion edit without --check, with a number that is not one, or with a f
     assert.equal(f.err.at(-1), 'mc: criterion edit takes no --goal\n');
   } finally { f.cleanup(); }
 });
+
+test('criterion drop removes a draft\'s criterion, and the file holds the others in order', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    for (const text of ['It runs.', 'It is tested.', 'It is fast.']) {
+      assert.equal(await run(['criterion', 'add', 'alpha', text, '--check', 'npm test'], f.deps), 0);
+    }
+    f.out.length = 0;
+    assert.equal(await run(['criterion', 'drop', 'alpha', '2', '--reason', 'Nobody can measure it.'], f.deps), 0);
+    const plan = JSON.parse(readFileSync(f.draft('alpha'), 'utf8'));
+    assert.deepEqual(plan.success_criteria.map((c) => c.criterion), ['It runs.', 'It is fast.']);
+    assert.deepEqual(draftProblems(plan), []);
+    assert.deepEqual(f.out, ['mc: alpha criterion 2 dropped — It is tested.\n', 'mc: criterion 3 is now 2\n']);
+    assert.equal(f.err.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('criterion drop on a sent plan removes its criterion and the register\'s, and logs the reason', async () => {
+  const f = draftFixture();
+  const lines = [];
+  try {
+    const dir = join(f.home, 'mc', 'sent');
+    mkdirSync(dir, { recursive: true });
+    const sent = { ...JSON.parse(repoPlan('sent')), repo: 'memoro-cli' };
+    sent.success_criteria.push({ met: false, criterion: 'Nobody can measure it.', check: 'npm test' });
+    writeFileSync(join(dir, 'PLAN.json'), `${JSON.stringify(sent, null, 2)}\n`);
+    const path = registerPath(ROOT, 'sent');
+    const files = { [path]: JSON.stringify({ project: 'sent', repo: 'memoro-cli', steps: [{ key: 'One', status: 'done', pr: 7 }], criteria: [{ criterion: 'It runs.', met: true, at: '2026-09-01T00:00:00Z' }, { criterion: 'Nobody can measure it.', met: false, at: null }] }) };
+    Object.assign(f.deps, {
+      root: ROOT, now: () => new Date('2026-09-18T10:00:00Z'), read: (p) => files[p] ?? null,
+      write: (p, value) => { files[p] = JSON.stringify(value); }, lock: (_root, fn) => fn(),
+      append: (_path, line) => lines.push(JSON.parse(line)),
+    });
+    f.out.length = 0;
+    assert.equal(await run(['criterion', 'drop', 'sent', '2', '--reason', 'Its check is a person\'s eye.'], f.deps), 0);
+    const text = readFileSync(join(dir, 'PLAN.json'), 'utf8');
+    assert.deepEqual(readPlanText(text).problems, []);
+    assert.deepEqual(JSON.parse(text).success_criteria.map((c) => c.criterion), ['It runs.']);
+    assert.deepEqual(parseEntry(files[path]).criteria, [{ criterion: 'It runs.', met: true, at: '2026-09-01T00:00:00Z' }]);
+    assert.equal(lines.at(-1).event, 'criterion-drop');
+    assert.equal(lines.at(-1).reason, 'Its check is a person\'s eye.');
+    assert.deepEqual(f.out, ['mc: sent criterion 2 dropped — Nobody can measure it.\n']);
+  } finally { f.cleanup(); }
+});
+
+test('criterion drop without --reason, or with a number that is not one, is usage, exit 2, and the draft is untouched', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'drop', 'alpha', '1'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: criterion drop needs --reason "…" — why the criterion is not a step\'s to measure\n');
+    assert.equal(await run(['criterion', 'drop', 'alpha', 'x', '--reason', 'no'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: x is not a criterion number — 1 is the plan\'s first\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('criterion drop refuses a criterion out of range, exit 2, and the last criterion, exit 1, and the draft is untouched', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'drop', 'alpha', '2', '--reason', 'no'], f.deps), 2);
+    assert.equal(f.err.at(-1), 'mc: alpha has 1 criterion — criterion 2 is not one\n');
+    assert.equal(await run(['criterion', 'drop', 'alpha', '1', '--reason', 'no'], f.deps), 1);
+    assert.equal(f.err.at(-1), 'mc: a plan keeps at least one criterion — edit it instead\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});

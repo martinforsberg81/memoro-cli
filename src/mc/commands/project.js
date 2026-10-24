@@ -9,6 +9,7 @@
  *   mc project edit <project> [--goal <text>] [--contract <text>...] [--out-of-scope <text>...]                     change a draft's goal, contract or out of scope
  *   mc project criterion add <project> <text> --check <command>   add a success criterion, to a draft or a sent plan
  *   mc project criterion edit <project> <n> --check <command>     change success criterion <n>'s check, and record it not met
+ *   mc project criterion drop <project> <n> --reason "…"          remove a criterion nobody can measure, from a draft or a sent plan; the register's log records why
  *   mc project step add <project> <title> --model haiku|opus --done-when <text> --instruction-file <md> [--effort <level>] [--after <repo>:<project>]
  *                                                                 add a step, after the others, to a draft or a sent plan
  *   mc project step edit <project> <n> [--title <text>] [--model haiku|opus] [--effort <level>] [--done-when <text>] [--instruction-file <md>]
@@ -34,7 +35,7 @@ import { runDocsMerge } from '../docs-merge.js';
 import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
 import { bannedWords, checkWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, testDirectories, withPlanLock, writePlanFile } from '../plan-write.js';
-import { applyEntry, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
+import { applyEntry, dropCriterion as dropRegisterCriterion, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
 import { layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
 import { discardWorkArea } from '../work-area.js';
@@ -54,12 +55,12 @@ export async function run(argv, deps = {}) {
   const env = deps.env || process.env;
   const root = deps.root || workRoot(env);
   const now = (deps.now ? deps.now() : new Date()).toISOString().replace(/\.\d{3}Z$/u, 'Z');
-  const io = { read: deps.read, write: deps.write, lock: deps.lock };
+  const io = { read: deps.read, write: deps.write, lock: deps.lock, append: deps.append };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
 
   const scanned = scanArgs(argv, {
     booleans: ['--apply', '--json', '--offline'],
-    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title'],
+    strictValues: ['--repo', '--goal', '--check', '--model', '--effort', '--done-when', '--after', '--instruction-file', '--title', '--reason'],
     repeatable: ['--contract', '--out-of-scope'],
   });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
@@ -105,6 +106,11 @@ export async function run(argv, deps = {}) {
     const extra = onlyFlags(scanned, ['--check']);
     if (extra) { stderr.write(`mc: criterion edit takes no ${extra}\n`); return 2; }
     return editCriterion(scanned, { ...deps, env, stdout, stderr, root, now, io });
+  }
+  if (noun === 'criterion' && verb === 'drop') {
+    const extra = onlyFlags(scanned, ['--reason']);
+    if (extra) { stderr.write(`mc: criterion drop takes no ${extra}\n`); return 2; }
+    return dropCriterion(scanned, { ...deps, env, stdout, stderr, root, now, io });
   }
   if (noun === 'step' && verb === 'add') {
     const extra = onlyFlags(scanned, STEP_ADD_FLAGS);
@@ -527,6 +533,74 @@ function editCriterion(scanned, deps) {
       stderr.write(`mc: ${error?.message || error}\n`);
       return 1;
     }
+  }
+  return 0;
+}
+
+/**
+ * `mc project criterion drop <project> <n> --reason "…"` — removes success
+ * criterion `n` (1-based) from a draft or a sent plan, and the register's held
+ * criterion of the same text when there is one, with the reason in the
+ * register's log. For a criterion nobody can measure: a check that waits for a
+ * deploy, names a person, or is not a step's to run. A plan keeps at least one
+ * criterion, so the last one is edited, not dropped.
+ */
+function dropCriterion(scanned, deps) {
+  const { env, stdout, stderr, root, now, io } = deps;
+  const home = deps.home || programsHome(env);
+  const { flags } = scanned;
+
+  const target = scanned.positional.slice(2);
+  if (target.length !== 2) { stderr.write(usage()); return 2; }
+  const [project, number] = target;
+  const reason = flags.reason;
+  if (!reason?.trim()) {
+    stderr.write('mc: criterion drop needs --reason "…" — why the criterion is not a step\'s to measure\n');
+    return 2;
+  }
+  if (!/^\d+$/u.test(number) || Number(number) < 1) { stderr.write(`mc: ${number} is not a criterion number — 1 is the plan's first\n`); return 2; }
+  const n = Number(number);
+  const found = findProjectDir(home, project);
+  if (!found) { stderr.write(`mc: no project ${project} under ${home}\n`); return 1; }
+
+  let outcome;
+  try {
+    outcome = withPlanLock(found.dir, () => {
+      const plan = readDraftOrPlan(found.file);
+      const criteria = plan.success_criteria;
+      if (!Array.isArray(criteria)) return { problems: ['success_criteria: a list of criteria'] };
+      if (n > criteria.length) return { outOfRange: `${project} has ${criteria.length} criteri${criteria.length === 1 ? 'on' : 'a'} — criterion ${n} is not one` };
+      if (criteria.length === 1) return { refused: 'a plan keeps at least one criterion — edit it instead' };
+      const text = criteria[n - 1].criterion;
+      plan.success_criteria = criteria.filter((_, i) => i !== n - 1);
+      const problems = found.sent ? validatePlan(plan).problems : draftProblems(plan);
+      if (problems.length) return { problems };
+      writePlanFile(found.file, plan);
+      return { text, count: criteria.length };
+    });
+  } catch (error) {
+    stderr.write(`mc: ${error?.message || error}\n`);
+    return 1;
+  }
+  if (outcome.outOfRange) { stderr.write(`mc: ${outcome.outOfRange}\n`); return 2; }
+  if (outcome.refused) { stderr.write(`mc: ${outcome.refused}\n`); return 1; }
+  if (outcome.problems) {
+    for (const problem of outcome.problems) stderr.write(`mc: ${problem}\n`);
+    return 1;
+  }
+  // A project the register does not hold has nothing to drop; that is not a failure.
+  if (found.sent && readEntry(root, project, io)) {
+    try {
+      dropRegisterCriterion({ root, project, text: outcome.text, reason, now, ...io });
+    } catch (error) {
+      stderr.write(`mc: ${error?.message || error}\n`);
+      return 1;
+    }
+  }
+  stdout.write(`mc: ${project} criterion ${n} dropped — ${outcome.text}\n`);
+  if (n < outcome.count) {
+    const last = outcome.count - 1;
+    stdout.write(n + 1 === outcome.count ? `mc: criterion ${outcome.count} is now ${n}\n` : `mc: criteria ${n + 1}–${outcome.count} are now ${n}–${last}\n`);
   }
   return 0;
 }
@@ -1058,6 +1132,7 @@ export function usage() {
     '        mc project archive <project>                done: its row to the repository\'s project_log.md, CLOSEOUT.json beside the plan, its step area closed\n',
     '        mc project discard <project> [--apply]      gone: its directory, step area, register file and open pull requests; without --apply it shows what would go\n',
     '        mc project <name> [--json] [--offline]      show a project: a sent plan as mc status <name> does, a draft as it stands\n',
+    '        mc project criterion drop <project> <n> --reason "…"          remove a criterion nobody can measure from a draft or a sent plan; the register and its log record why\n',
     '        mc project criterion met [<project>] <n>     record that success criterion <n> holds — it was measured by its check\n',
     '        mc project criterion unmet [<project>] <n>   record that success criterion <n> does not hold\n',
     '        the project defaults to MC_STEP\'s in a runner session\n',
