@@ -10,6 +10,7 @@ import {
   DRAFT_FILE,
   MODELS,
   bannedWords,
+  checkWords,
   dependencyWords,
   draftProblems,
   findProjectDir,
@@ -64,6 +65,14 @@ test('bannedWords names a person, or a manual step, wherever it is written', () 
   assert.deepEqual(bannedWords('a personal review'), []);
   assert.deepEqual(bannedWords(undefined), []);
   assert.deepEqual(bannedWords(42), []);
+});
+
+test('checkWords names a check that cannot run from the step\'s own branch, whatever its case', () => {
+  assert.deepEqual(checkWords('After the deploy; after deploy; once deployed; IN PRODUCTION; not a step\'s; his phone; his IPHONE; his mobile; at his terminal.'), [
+    'After the deploy', 'after deploy', 'once deployed', 'IN PRODUCTION', 'not a step\'s', 'his phone', 'his IPHONE', 'his mobile', 'at his terminal',
+  ]);
+  assert.deepEqual(checkWords('node --test tests/x.test.js'), []);
+  assert.deepEqual(checkWords(undefined), []);
 });
 
 test('dependencyWords names a dependency written in prose', () => {
@@ -134,6 +143,19 @@ test('sendProblems is empty for a complete plan, and names each thing that stops
   const onProject = complete();
   onProject.steps[1].instruction = ['Do it.', 'Wait with --on-project mc'];
   assert.deepEqual(sendProblems(onProject), ['steps[2]: a dependency goes in --after <repo>:<project>']);
+});
+
+test('sendProblems refuses a check that says it runs after the deploy, and a criterion that names a person', () => {
+  const ownCheck = complete();
+  ownCheck.success_criteria[0].check = 'Martin\'s own check after the deploy; not a step\'s.';
+  assert.deepEqual(sendProblems(ownCheck), [
+    'success_criteria[1].check: names Martin — a check is a command',
+    'success_criteria[1].check: says after the deploy, not a step\'s — a check runs from the step\'s own branch, before the merge (ruling 35 waits on a deploy with mc step blocked --after-deploy, not with a criterion)',
+  ]);
+
+  const named = complete();
+  named.success_criteria[0].criterion = 'Martin sees the card';
+  assert.deepEqual(sendProblems(named), ['success_criteria[1].criterion: names Martin — a criterion is measured by its check, never by a person']);
 });
 
 test('withPlanLock runs fn holding the lock, and removes the lock after', () => {

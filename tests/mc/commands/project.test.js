@@ -310,6 +310,28 @@ test('criterion add whose check hands node --test a directory is refused, exit 1
   } finally { f.cleanup(); }
 });
 
+test('criterion add whose check says it runs in production is refused, exit 1, and the file is unchanged', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'read it in production'], f.deps), 1);
+    assert.equal(f.err.at(-1), 'mc: the check says in production — a check runs from the step\'s own branch, before the merge; a wait for a deploy is mc step blocked --after-deploy\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('criterion add whose text names a person is refused, exit 1, and the file is unchanged', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'add', 'alpha', 'Martin sees the card', '--check', 'npm test'], f.deps), 1);
+    assert.equal(f.err.at(-1), 'mc: the criterion names Martin — a criterion is measured by its check, never by a person\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
 test('criterion add with a dependency in prose is refused, exit 1, in the text or the check', async () => {
   const f = draftFixture();
   try {
@@ -1211,6 +1233,18 @@ test('criterion edit refuses a check that hands node --test a directory, and the
     const before = readFileSync(f.draft('alpha'), 'utf8');
     assert.equal(await run(['criterion', 'edit', 'alpha', '1', '--check', 'node --test tests/assistant/background'], f.deps), 1);
     assert.match(f.err.at(-1), /node --test is given tests\/assistant\/background — node does not expand a directory/u);
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('criterion edit refuses a check that says it runs in production, and the file is unchanged', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'edit', 'alpha', '1', '--check', 'read it in production'], f.deps), 1);
+    assert.equal(f.err.at(-1), 'mc: the check says in production — a check runs from the step\'s own branch, before the merge; a wait for a deploy is mc step blocked --after-deploy\n');
     assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
   } finally { f.cleanup(); }
 });
