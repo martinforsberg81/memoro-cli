@@ -18,7 +18,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { MAX_MERGE_ATTEMPTS } from '../../src/mc/merge-step.js';
 import {
-  landerFor, landJob, MAX_REQUEUES, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, succeed, sweepMergedReds, takeMerger,
+  landerFor, landJob, MAX_REQUEUES, mergerPath, queueMerge, readMerger, releaseMerger, restack, serve, startMerger, SUBJECT_POLL_MS, succeed,
+  sweepMergedReds, takeMerger, watchSubject,
 } from '../../src/mc/merger.js';
 import { registerPath } from '../../src/mc/register.js';
 
@@ -1028,6 +1029,200 @@ describe('lanes (merge-throughput step 2)', () => {
     assert.equal(code, 0);
     assert.deepEqual(landed, [1, 2], 'the round in flight in each lane finished; nothing new started');
     assert.deepEqual(queue().map((e) => e.pr), [4]);
+  });
+});
+
+describe('a round watches its pull request (round-abort)', () => {
+  const PR = { repo: 'memoro', repo_path: '/repos/memoro', pr: 14169 };
+  const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+  const MERGED = { state: 'MERGED', mergeCommit: { oid: 'feed1234beef' }, baseRefName: 'main', headRefOid: 'aaa' };
+  const CLOSED = { state: 'CLOSED', mergeCommit: null, baseRefName: 'main', headRefOid: 'aaa' };
+  const OPEN = { state: 'OPEN', mergeCommit: null, baseRefName: 'main', headRefOid: 'aaa' };
+
+  /** A fake `gh` answering `pr view` with `facts`, or failing when `facts` is undefined; every call is recorded. */
+  function viewing(facts) {
+    const asked = [];
+    const gh = (args, options) => {
+      asked.push({ args, cwd: options?.cwd });
+      return facts === undefined ? { status: 1, stdout: '', stderr: 'gh: not found' } : { status: 0, stdout: JSON.stringify(facts) };
+    };
+    return { gh, asked };
+  }
+
+  it('SUBJECT_POLL_MS is a minute', () => {
+    assert.equal(SUBJECT_POLL_MS, 60_000);
+  });
+
+  it('MERGED: one onGone of kind merged with the commit and the base, and no check after it', async () => {
+    const { gh, asked } = viewing(MERGED);
+    const gone = [];
+    watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await wait(30);
+    assert.equal(gone.length, 1);
+    assert.equal(gone[0].kind, 'merged');
+    assert.equal(gone[0].sha, 'feed1234beef');
+    assert.equal(gone[0].base, 'main');
+    assert.equal(gone[0].reason, '#14169 was merged on GitHub as feed123 while its round ran — the round is stopped');
+    assert.equal(asked.length, 1);
+    assert.deepEqual(asked[0], { args: ['pr', 'view', '14169', '--json', 'state,headRefOid,mergeCommit,baseRefName'], cwd: '/repos/memoro' });
+  });
+
+  it('CLOSED: one onGone of kind closed', async () => {
+    const { gh } = viewing(CLOSED);
+    const gone = [];
+    watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await wait(30);
+    assert.equal(gone.length, 1);
+    assert.equal(gone[0].kind, 'closed');
+    assert.equal(gone[0].reason, '#14169 was closed on GitHub while its round ran — the round is stopped');
+  });
+
+  it('OPEN with a head other than the start one: one onGone of kind pushed, with the new head', async () => {
+    const { gh } = viewing({ ...OPEN, headRefOid: 'bbb1111222' });
+    const gone = [];
+    watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await wait(30);
+    assert.equal(gone.length, 1);
+    assert.equal(gone[0].kind, 'pushed');
+    assert.equal(gone[0].sha, 'bbb1111222');
+    assert.equal(gone[0].reason, '#14169 got a new push (bbb1111) while its round ran — stopped; back in line at its place');
+  });
+
+  it('OPEN with the start head, or no start head to compare: checked on, nothing called', async () => {
+    const same = viewing(OPEN);
+    const none = viewing({ ...OPEN, headRefOid: 'bbb' });
+    const gone = [];
+    const stops = [
+      watchSubject({ job: PR, gh: same.gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) }),
+      watchSubject({ job: PR, gh: none.gh, startHead: null, every: 5, onGone: (facts) => gone.push(facts) }),
+    ];
+    await wait(30);
+    stops.forEach((stop) => stop());
+    assert.deepEqual(gone, []);
+    assert.ok(same.asked.length > 1);
+    assert.ok(none.asked.length > 1);
+  });
+
+  it('a gh that fails or says nothing sensible: no call, and the checks go on', async () => {
+    const failing = viewing(undefined);
+    const gone = [];
+    const stop = watchSubject({ job: PR, gh: failing.gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await wait(30);
+    stop();
+    assert.deepEqual(gone, []);
+    assert.ok(failing.asked.length > 1);
+  });
+
+  it('onGone is not called twice, though the checks would say so again', async () => {
+    const { gh, asked } = viewing(MERGED);
+    const gone = [];
+    const stop = watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: (facts) => gone.push(facts) });
+    await wait(30);
+    stop();
+    assert.equal(gone.length, 1);
+    assert.equal(asked.length, 1);
+  });
+
+  it('after stop() no further gh call is made', async () => {
+    const { gh, asked } = viewing(OPEN);
+    const stop = watchSubject({ job: PR, gh, startHead: 'aaa', every: 5, onGone: () => assert.fail('not gone') });
+    await wait(12);
+    stop();
+    const count = asked.length;
+    await wait(30);
+    assert.equal(asked.length, count);
+  });
+
+  it('landJob: MERGED while the round runs stops it and answers the job landed, already merged', async () => {
+    register();
+    const rounds = [];
+    const gh = (args) => {
+      if (args.includes('state,headRefOid,mergeCommit,baseRefName')) return { status: 0, stdout: JSON.stringify(MERGED) };
+      if (args.includes('headRefOid')) return { status: 0, stdout: JSON.stringify({ headRefOid: 'aaa' }) };
+      return { status: 0, stdout: JSON.stringify(OPEN) };
+    };
+    const m = machine([], {
+      gh, watchMs: 5,
+      mergeRound: (options) => {
+        rounds.push(options);
+        return new Promise((resolve) => {
+          options.signal.addEventListener('abort', () => resolve({ ok: false, merged: false, stopped_at: 'gone', reason: options.signal.reason.message }));
+        });
+      },
+    });
+    const answers = await landJob({ ...JOB, pr: 671 }, m.deps);
+    assert.equal(rounds[0].signal.aborted, true);
+    assert.equal(answers[0].landed, true);
+    assert.equal(answers[0].report.already_merged, true);
+    assert.equal(answers[0].report.merge_commit, 'feed1234beef');
+    assert.equal(stepNow().status, 'done');
+    assert.deepEqual(queue(), [], 'nothing queued by the round');
+  });
+
+  it('landJob: CLOSED while the round runs answers the job closed, not landed', async () => {
+    register();
+    const gh = (args) => {
+      if (args.includes('state,headRefOid,mergeCommit,baseRefName')) return { status: 0, stdout: JSON.stringify(CLOSED) };
+      if (args.includes('headRefOid')) return { status: 0, stdout: JSON.stringify({ headRefOid: 'aaa' }) };
+      return { status: 0, stdout: JSON.stringify(OPEN) };
+    };
+    const m = machine([], {
+      gh, watchMs: 5,
+      mergeRound: (options) => new Promise((resolve) => {
+        options.signal.addEventListener('abort', () => resolve({ ok: false, merged: false, stopped_at: 'gone', reason: options.signal.reason.message }));
+      }),
+    });
+    const answers = await landJob({ ...JOB, pr: 671 }, m.deps);
+    assert.equal(answers[0].landed, false);
+    assert.equal(answers[0].report.stopped_at, 'closed');
+    assert.equal(answers[0].back, undefined);
+  });
+
+  it('landJob: a new push while the round runs answers the job back in line — no red, no attempt, the step still landing', async () => {
+    register();
+    const gh = (args) => {
+      if (args.includes('state,headRefOid,mergeCommit,baseRefName')) return { status: 0, stdout: JSON.stringify({ ...OPEN, headRefOid: 'bbb' }) };
+      if (args.includes('headRefOid')) return { status: 0, stdout: JSON.stringify({ headRefOid: 'aaa' }) };
+      return { status: 0, stdout: JSON.stringify(OPEN) };
+    };
+    const m = machine([], {
+      gh, watchMs: 5,
+      mergeRound: (options) => new Promise((resolve) => {
+        options.signal.addEventListener('abort', () => resolve({ ok: false, merged: false, stopped_at: 'gone', reason: options.signal.reason.message }));
+      }),
+    });
+    const answers = await landJob({ ...JOB, pr: 671 }, m.deps);
+    assert.equal(answers[0].landed, false);
+    assert.equal(answers[0].back, true);
+    assert.equal(answers[0].report.stopped_at, 'pushed');
+    assert.equal(answers[0].mending, undefined);
+    assert.equal(answers[0].requeued, undefined);
+    assert.equal(stepNow().status, 'landing');
+    assert.equal(stepNow().attempts, 0);
+    assert.ok(m.said.includes('memoro-cli #671: #671 got a new push (bbb) while its round ran — stopped; back in line at its place'));
+  });
+
+  it('serve: a pushed job is put back in line at its place — queued, since and requeues unchanged, the step still landing', async () => {
+    register();
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    const since = '2026-10-09T12:01:00Z';
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since, requeues: 1 }]));
+    const seen = [];
+    let rounds = 0;
+    await serve({
+      root, lock, take: () => true, release: () => {}, ...ONE_LANE,
+      land: async ([job], lane, { onAnswer }) => {
+        rounds += 1;
+        if (rounds > 1) return [{ job, landed: true, report: green }];
+        const answer = { job, landed: false, report: { ok: false, merged: false, stopped_at: 'pushed', reason: '#671 got a new push' }, back: true };
+        await onAnswer(answer);
+        const entry = queue().find((item) => item.pr === job.pr);
+        seen.push({ state: entry.state, since: entry.since, requeues: entry.requeues, step: stepNow().status });
+        return [answer];
+      },
+    });
+    assert.equal(rounds, 2, 'the job is taken again, at its place');
+    assert.deepEqual(seen, [{ state: 'queued', since, requeues: 1, step: 'landing' }]);
   });
 });
 

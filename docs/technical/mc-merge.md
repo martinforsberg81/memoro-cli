@@ -821,6 +821,17 @@ Both carry the holder's pid, so a round that was killed rather than finished
 is reaped by the next claim instead of blocking forever. Neither blocks git:
 they refuse `mc`, and nothing else.
 
+While a round runs, the merger asks GitHub about its pull request every minute
+(`SUBJECT_POLL_MS`, `watchSubject` in [`merger.js`](../../src/mc/merger.js)),
+and the round is stopped through its `AbortSignal` when the answer says so: a
+pull request merged on GitHub is answered landed (`already_merged`), one
+closed is answered closed, and one given a new push goes back in line at its
+own place, with no attempt counted and no mend. A command gate running at that
+moment is waited out, not killed. A batch round is not watched, since
+`MERGE_BATCH_MAX` is 1. On 2026-10-24 memoro #14169's round ran 13 minutes
+after its pull request had been merged on GitHub; the minute of asking is what
+ends such a round now.
+
 **`mc merge` waits for neither — the merger does** (ruling 30, 2026-10-09).
 `mc merge <repo> <pr>` checks the plan's criteria (*The door*), writes the job
 into `~/mc/runner/merges.json` (`repo`, `repo_path`, `pr`, `branch`,

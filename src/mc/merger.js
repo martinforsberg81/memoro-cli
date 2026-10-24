@@ -84,6 +84,9 @@ export function installedMergerRun(env = process.env) {
 /** How often the merger looks again at a gate lock or a lease somebody else holds. */
 export const MERGER_POLL_MS = 15 * 1000;
 
+/** How often a round in flight asks GitHub whether its pull request is still the one it measures (`watchSubject`). */
+export const SUBJECT_POLL_MS = 60_000;
+
 /**
  * How often an idle merger asks GitHub about its red rows: one `gh pr view`
  * per red entry, so not every poll; a hand merge seen five minutes late costs
@@ -353,6 +356,63 @@ async function prStateOf(job, gh) {
   } catch { return null; }
 }
 
+/** The head commit of a job's pull request on GitHub, or null when `gh` cannot say. */
+async function headOf(job, gh) {
+  try {
+    const seen = await gh(['pr', 'view', String(job.pr), '--json', 'headRefOid'], { cwd: job.repo_path });
+    if (!seen || seen.error || (Number.isInteger(seen.status) && seen.status !== 0)) return null;
+    return JSON.parse(seen.stdout || 'null')?.headRefOid || null;
+  } catch { return null; }
+}
+
+/**
+ * Asks GitHub every `every` ms whether the pull request a round is measuring
+ * is still the subject: `onGone(facts)` once, when it is merged (`merged`,
+ * with the commit and base), closed (`closed`), or has a new push (`pushed`,
+ * its head is not `startHead`). A check still in flight is not joined by
+ * another, and a failed or unreadable answer says nothing. Returns `stop()`.
+ */
+export function watchSubject({
+  job, gh, startHead = null, every = SUBJECT_POLL_MS, onGone,
+  setTimer = setInterval, clearTimer = clearInterval,
+}) {
+  let checking = false;
+  let done = false;
+  let timer = null;
+  const check = async () => {
+    if (checking || done) return;
+    checking = true;
+    let facts = null;
+    try {
+      const seen = await gh(['pr', 'view', String(job.pr), '--json', 'state,headRefOid,mergeCommit,baseRefName'], { cwd: job.repo_path });
+      if (seen && !seen.error && (!Number.isInteger(seen.status) || seen.status === 0)) facts = JSON.parse(seen.stdout || 'null');
+    } catch { facts = null; }
+    checking = false;
+    if (done || !facts) return;
+    const state = facts.state;
+    const fire = (answer) => {
+      done = true;
+      clearTimer(timer);
+      onGone(answer);
+    };
+    if (state === 'MERGED') {
+      const sha = facts.mergeCommit?.oid || null;
+      fire({ kind: 'merged', sha, base: facts.baseRefName || null, reason: `#${job.pr} was merged on GitHub as ${String(sha || '').slice(0, 7)} while its round ran — the round is stopped` });
+    } else if (state === 'CLOSED') {
+      fire({ kind: 'closed', reason: `#${job.pr} was closed on GitHub while its round ran — the round is stopped` });
+    } else if (state === 'OPEN' && startHead && facts.headRefOid && facts.headRefOid !== startHead) {
+      const head = String(facts.headRefOid);
+      fire({ kind: 'pushed', sha: head, reason: `#${job.pr} got a new push (${head.slice(0, 7)}) while its round ran — stopped; back in line at its place` });
+    }
+  };
+  timer = setTimer(check, every);
+  timer?.unref?.();
+  return () => {
+    done = true;
+    clearTimer(timer);
+  };
+}
+
 /** The answer for a pull request somebody merged on GitHub outside the queue. */
 const alreadyMerged = (facts) => ({
   ok: true, merged: true, merge_commit: facts.sha, merged_into: facts.base, already_merged: true, stopped_at: null, reason: null,
@@ -459,16 +519,20 @@ export async function landJob(batch, {
   // Told each answer as it is given, after the register is written: `serve`
   // writes the queue and starts a mend from it.
   onAnswer = null,
+  // How often a round in flight asks GitHub whether its pull request is gone (`watchSubject`).
+  watchMs = SUBJECT_POLL_MS,
 } = {}) {
   const t0 = now().getTime();
   const answers = [];
   const answer = async (job, landed, report) => {
-    const mending = !landed && mayMend(job, report);
-    const requeued = !landed && !mending && mayRequeue(job, report);
-    const flags = { ...(mending ? { mending: true } : {}), ...(requeued ? { requeued: true } : {}) };
+    // A round the watch stopped for a new push: back in line at its place.
+    const back = !landed && report?.stopped_at === 'pushed';
+    const mending = !landed && !back && mayMend(job, report);
+    const requeued = !landed && !back && !mending && mayRequeue(job, report);
+    const flags = { ...(mending ? { mending: true } : {}), ...(requeued ? { requeued: true } : {}), ...(back ? { back: true } : {}) };
     answers.push({ job, landed, report, ...flags });
     await tell(job, landed, report, {
-      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), mending, requeued,
+      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), mending, requeued, back,
     });
     // Outside any lock: `tell` has let go of the register's, and the queue's
     // is the same lock, which a second take by this process waits 5 s for.
@@ -503,6 +567,10 @@ export async function landJob(batch, {
     jobs.splice(jobs.indexOf(one), 1);
   }
   if (!jobs.length) return answers;
+  // The head the round starts on, read once for a single job: a push to it
+  // while the round runs stops the round (`watchSubject`). Unreadable: only
+  // merged and closed are watched.
+  const startHead = jobs.length === 1 ? await headOf(jobs[0], ask) : null;
 
   const [job] = jobs;
   const numbers = jobs.map((item) => item.pr);
@@ -540,13 +608,33 @@ export async function landJob(batch, {
     // `signals: false`: the gate installs no SIGTERM handler of its own in
     // the merger. Its exit cut the round short (2026-10-10 17:47); the
     // merger's own handler lets the round finish and leaves between jobs.
-    report = await mergeRound({
-      repoPath: job.repo_path, pr: job.pr, ...(jobs.length > 1 ? { prs: numbers } : {}), mode: 'merge', signals: false,
-      ...(job.holder ? { holder: job.holder } : {}),
-      onProgress: (message) => say(`${label}: ${message}`),
-    });
+    // Watched while it runs: a single job's pull request gone on GitHub stops
+    // the round (`watchSubject`); a batch is not watched (MERGE_BATCH_MAX is 1).
+    const controller = new AbortController();
+    let gone = null;
+    const stopWatch = jobs.length === 1 ? watchSubject({
+      job, gh: ask, startHead, every: watchMs,
+      onGone: (facts) => { gone = facts; controller.abort(new Error(facts.reason)); },
+    }) : () => {};
+    try {
+      report = await mergeRound({
+        repoPath: job.repo_path, pr: job.pr, ...(jobs.length > 1 ? { prs: numbers } : {}), mode: 'merge', signals: false,
+        ...(job.holder ? { holder: job.holder } : {}),
+        onProgress: (message) => say(`${label}: ${message}`),
+        signal: controller.signal,
+      });
+    } finally {
+      stopWatch();
+    }
     keepRed(report, { root, repo: job.repo, pr: job.pr, batch: jobs.length > 1, now });
     record(report, { mode: 'merge' });
+    // Stopped by the watch: answered as GitHub says. A 'gone' nobody asked for falls through as any other stop.
+    if (report?.stopped_at === 'gone' && gone) {
+      report = gone.kind === 'merged' ? alreadyMerged({ sha: gone.sha, base: gone.base })
+        : gone.kind === 'closed' ? closedOnGitHub(job)
+        : { ok: false, merged: false, stopped_at: 'pushed', reason: gone.reason };
+      break;
+    }
     if (report?.stopped_at === 'file-killed' && !killedOnce) {
       killedOnce = true;
       const files = (report.killed_files || []).map((one) => one.file).join(', ') || 'a test file';
@@ -618,11 +706,12 @@ export function mayRequeue(job, report) {
 }
 
 /** One job's answer, said and written: the page's cache, the register, the runs.tsv row. */
-async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, mending = false, requeued = false }) {
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, mending = false, requeued = false, back = false }) {
   const label = `${job.repo} #${job.pr}`;
   // Set aside for its one mend: the step stays `landing`, so the runner
   // leaves it alone, and the mend's outcome is what writes the register.
-  say(mending ? `${label}: ${report?.reason || report?.stopped_at || 'red'} — mending (one try)`
+  say(back ? `${label}: ${report.reason}`
+    : mending ? `${label}: ${report?.reason || report?.stopped_at || 'red'} — mending (one try)`
     : requeued
     ? `${label}: ${report?.stopped_at}: ${report?.reason || 'red only under load'} — back in line in ${Math.round(REQUEUE_DELAY_MS / 60_000)} min (requeue ${(job.requeues || 0) + 1} of ${MAX_REQUEUES}), no session started`
     : landed && report?.already_merged
@@ -637,8 +726,8 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   // Its last red is nobody's to read any more.
   if (landed) removeRedDetail({ root, repo: job.repo, pr: job.pr });
 
-  // A requeued step stays `landing`: the runner leaves it alone, and the next round answers it.
-  if (job.step && !mending && !requeued) {
+  // A requeued or pushed step stays `landing`: the runner leaves it alone, and the next round answers it.
+  if (job.step && !mending && !requeued && !back) {
     const stamp = now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
     const io = { read, lock, ...(write ? { write } : {}) };
     try {
@@ -677,7 +766,7 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
         exit: landed ? 0 : 1,
         seconds,
         pr: job.pr,
-        note: landed ? 'merged' : `red,${report?.stopped_at || 'unknown'}`,
+        note: landed ? 'merged' : back ? 'pushed' : `red,${report?.stopped_at || 'unknown'}`,
       });
     } catch { /* the row is a courtesy; the register and the round log carry the answer */ }
   }
@@ -829,13 +918,15 @@ export async function serve({
   // its mend started then (2026-10-10: #13400 closed and #13397 set aside for
   // a mend read `landing` for the 9 minutes of the others' round). Called
   // after `tell`, outside any lock, so it takes the queue's lock itself.
-  const writeAnswer = async ({ job, landed: isLanded, report, mending, requeued }) => {
+  const writeAnswer = async ({ job, landed: isLanded, report, mending, requeued, back }) => {
     const at = now().toISOString();
     const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
     lock(root, () => {
       let entries = parseQueue(read(mergesPath(root)));
       entries = isLanded && report?.ok && report.merged
         ? dequeue(entries, job)
+        : back
+        ? markQueued(entries, job)
         : requeued
         ? markRequeued(entries, job, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
         : mending && mends
@@ -939,10 +1030,12 @@ export async function serve({
       if (left.length) {
         lock(root, () => {
           let entries = parseQueue(read(mergesPath(root)));
-          for (const { job: one, report, mending, requeued } of left) {
+          for (const { job: one, report, mending, requeued, back } of left) {
             const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
             entries = report?.ok && report.merged
               ? dequeue(entries, one)
+              : back
+              ? markQueued(entries, one)
               : requeued
               ? markRequeued(entries, one, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
               : mending && mends
