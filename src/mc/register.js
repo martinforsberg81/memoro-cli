@@ -39,7 +39,8 @@
  * the plan says what a criterion *is*, the register whether it *holds*. An
  * entry's `criteria` are seeded from the file's `met` once, matched to the
  * plan's criteria by their text, and written by `mc project criterion met`
- * (`updateCriterion`); a file's `met` is not read after that.
+ * (`updateCriterion`), and dropped by `mc project criterion drop` (`dropCriterion`);
+ * a file's `met` is not read after that.
  *
  * Every write to the register also appends one line to `runner/log/register.log`
  * (`registerLogPath`): what changed and which process made it — its pid, its
@@ -676,6 +677,27 @@ export function updateCriterion({ root, project, number, met, read = realRead, w
     const next = markCriterion(entry, number, met, now);
     write(path, next);
     logWrite(root, append, by, { event: 'criterion', project, number, from: entry.criteria[number - 1].met, to: next.criteria[number - 1].met });
+    return next;
+  });
+}
+
+/**
+ * One criterion removed, on disk: the first held criterion whose text is `text`,
+ * read, removed, written, under the register's lock — `updateCriterion`'s shape.
+ * A text the register does not hold leaves the entry as it is, and writes
+ * nothing. Each drop appends a `criterion-drop` line to `register.log` naming
+ * the reason (`logWrite`).
+ */
+export function dropCriterion({ root, project, text, reason, read = realRead, write = realWrite, lock = realLock, now = null, append = realAppend, by = whoAmI }) {
+  const path = writablePath(root, project, { read });
+  return lock(root, () => {
+    const entry = parseEntry(read(path));
+    if (!entry) throw new Error(`${project}: not in the register at ${path}`);
+    const at = entry.criteria.findIndex((c) => c.criterion === text);
+    if (at === -1) return entry;
+    const next = { ...entry, criteria: entry.criteria.filter((_, i) => i !== at), updated: now };
+    write(path, next);
+    logWrite(root, append, by, { event: 'criterion-drop', project, criterion: text, reason });
     return next;
   });
 }

@@ -8,7 +8,8 @@ start to finish, and know when it is done? If not, it is not a step
 - **Where:** a plan is written with `mc project` verbs, never by editing a
   file (ruling 48): `mc project new <programme>/<project> --repo memoro|memoro-cli
   --goal … --contract … --out-of-scope …`, then `mc project criterion add` per
-  criterion, `mc project step add` per step (`--model haiku|opus`,
+  criterion (`mc project criterion drop <project> <n> --reason "…"` takes one
+  out that nobody can measure), `mc project step add` per step (`--model haiku|opus`,
   `--done-when`, `--instruction-file <md>` with the step's paragraphs,
   `--after <repo>:<project>` for a dependency), then `mc project send
   <project>`, which checks the whole plan and hands it to the runner.
