@@ -53,7 +53,7 @@ number that is not a number, and the same pull request named twice.
 mc test  <repo> <pr> [<pr>...] [--json]            measure it; merge nothing
 mc test  <repo> --full [--json]                    the whole suite, on the default branch
 mc merge <repo> <pr> [<pr>...] [--check] [--json]   the same round, then squash
-mc merge <repo> <pr> --docs [--json]                docs-only: no suite, squash (also chosen without the flag)
+mc merge <repo> <pr> --docs [--json]                docs-only: the tests that read documents, then squash (also chosen without the flag)
 mc merge <repo> <pr> --watch [--json]               queue it, then follow it to the answer
 mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a job already queued
 ```
@@ -192,13 +192,30 @@ whole of it. It takes a repository path and a number and:
    no real reason; `CONFLICTING` is a refusal that says which base to merge in;
    then it reads the head again, and a head that moved since step 1 is `drift`:
    not merged, because the files checked are not the files that would land;
-4. squash-merges with subject `<title> (#<n>)`, pinned with `--match-head-commit`
+4. measures the documents before anything is squashed. It builds a candidate of
+   the head with `origin/<base>` merged in, under `<work root>/gate/<repo>/docs-<n>`,
+   prepares it as a round does, asks the repository's selector (`selectFiles`,
+   the gate round's own) which tests read the files, runs those files and the
+   command gates it names, and refuses on any red: `red`, with the names. A
+   measurement that could not run is `measure-<stage>` — `measure-candidate`,
+   `measure-merge`, `measure-prepare`, `measure-selection` or `measure-suite` —
+   and is not merged either. The head is read again after the tests, and a head
+   that moved is `drift`, as above. The code is
+   [`src/mc/docs-measure.js`](../../src/mc/docs-measure.js);
+5. squash-merges with subject `<title> (#<n>)`, pinned with `--match-head-commit`
    to the head it checked, so the squash lands that head and no other (ruling 43);
-5. reads the state back and refuses to claim a merge it cannot see — a `gh` call
+6. reads the state back and refuses to claim a merge it cannot see — a `gh` call
    that returned an error after the merge had in fact happened is `merge-unknown`,
    not a silent success;
-6. prints one line: what merged, into what, as which commit, and how many files
-   under `docs/` it was.
+7. prints one line: what merged, into what, as which commit, how many files
+   under `docs/` it was, and how many test files were green in how many seconds.
+
+**Why it measures.** Four documents-only landings turned memoro's `main` red
+between 2026-10-20 and 2026-10-24 (#13980, #13995, #14138, #14188):
+`tests/docs/doc-links.test.js` found dead relative links that a document it had
+not read introduced, and this form ran no test at all. The selector draws eight
+files for #14188's paths, and `doc-links.test.js` is red on its commit, so the
+measurement in point 4 refuses that landing instead of letting `main` go red.
 
 **The file list comes from GitHub, never from a local diff.** A stale checkout
 must not be able to make a code pull request look like documentation, and the
@@ -206,9 +223,9 @@ one thing this form must never do is land a file the suite would have had an
 opinion about.
 
 What it does *not* do is as much of the design as what it does: no lease, no
-worktree, no suite, no model, no deploy pull, and no line in the repository's
-human merge log. A docs merge is a `gh` call with a check in
-front of it.
+suite — one worktree, the selector's files — no model, no deploy pull, and no
+line in the repository's human merge log. A docs merge is a `gh` call with the
+documents' tests in front of it.
 
 It does leave a line in the round log
 ([`src/mc/repo-round-log.js`](../../src/mc/repo-round-log.js)) with `mode: docs`,
@@ -274,7 +291,8 @@ and the merge attempt rather than held for the whole round.
 `runDocsMerge` against a stubbed `gh`: a docs-only pull request merges with the
 right squash subject and the merge commit read back; one file outside `docs/` is
 refused by name before any merge is attempted; a draft, a closed one and a
-conflicting one are each refused. Then the verb itself: `--docs` with a batch and
+conflicting one are each refused; a red measurement, one that cannot run, and a
+head that moves during the tests are refused before any merge too. Then the verb itself: `--docs` with a batch and
 with `--check` refused before `gh` is asked, the round run on the resolved
 repository, and `mc repo merge` pointing at `mc merge` while `mc --help` no
 longer mentions it. The gate form's argument errors live with the gate, in

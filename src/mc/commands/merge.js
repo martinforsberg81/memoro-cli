@@ -3,7 +3,7 @@
  *
  * Without a flag it is the gate round that `mc repo merge` used to be
  * (repo.js still owns that code path; only the name moved). `--docs` lands a
- * documentation-only pull request without the suite — see docs-merge.js — and
+ * documentation-only pull request once the tests that read documents are green — see docs-merge.js — and
  * a pull request GitHub lists as documents only is routed there without the
  * flag, landing in the call instead of queueing.
  */
@@ -43,13 +43,13 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   // A pull request whose every file GitHub lists is a document under docs/
-  // has no suite to run: it lands as --docs would, in this call. Anything
+  // has no suite to run: its tests that read documents run first, and it lands as --docs would, in this call when they are green. Anything
   // else — gh could not say, one file outside docs/, a script — goes to the
   // merger as before.
   if (!opts.docs) {
     const files = (deps.prFiles || prFiles)(opts.pr, { repoPath, gh: deps.gh });
     if (!docsOnly(files)) return (deps.gate || gate)(opts, { stdout, stderr, resolveRepo: async () => repoPath });
-    stderr.write(`mc: #${opts.pr} changes only documents under docs/ (${files.length} file${files.length === 1 ? '' : 's'}, no script) — landing it as mc merge --docs, now, with no suite\n`);
+    stderr.write(`mc: #${opts.pr} changes only documents under docs/ (${files.length} file${files.length === 1 ? '' : 's'}, no script) — landing it as mc merge --docs, now, after the tests that read documents\n`);
   }
   // The door `mc merge` has for the plan's last step (`criteriaDoor`), here
   // too: a docs-only close-out is the usual last step. A planning session's
@@ -62,7 +62,7 @@ export async function run(argv, deps = {}) {
     for (const problem of door.problems) stderr.write(`mc: unmet-criteria — ${problem}\n`);
     return 1;
   }
-  const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
+  const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh, measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
   // The body is read for the step's remainder, not kept in the round log.
   const { body = null } = report;
   delete report.body;
@@ -141,7 +141,7 @@ export function usage() {
   return [
     'usage — mc merge <repo> <pr> [<pr>...] [--check] [--json]   the gate round, then squash\n',
     '        mc merge <repo> <pr> --watch [--json]                queue it, then follow it until it lands or goes red\n',
-    '        mc merge <repo> <pr> --docs [--json]                 docs-only: no suite, squash, in this call\n',
+    '        mc merge <repo> <pr> --docs [--json]                 docs-only: the tests that read documents, then squash, in this call\n',
     '                                                             (a pull request of documents only under docs/ lands this way without --docs)\n',
     '        mc merge watch <repo> <pr> [--timeout <min>] [--json]   follow a queued pull request until it lands or goes red\n',
   ].join('');

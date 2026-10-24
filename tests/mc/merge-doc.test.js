@@ -52,7 +52,7 @@ describe('docs/technical/mc-merge.md says what the code does', () => {
       if (args[1] === 'view') return { ok: true, stdout: '{"state":"MERGED","mergeCommit":{"oid":"abc1234"}}', stderr: '' };
       return { ok: true, stdout: '', stderr: '' };
     };
-    const report = await runDocsMerge({ repoPath: '/tmp/repo', pr: 7, gh });
+    const report = await runDocsMerge({ repoPath: '/tmp/repo', pr: 7, gh, measure: async () => ({ ok: true, files: 1, red: [], seconds: 0 }) });
     assert.equal(report.ok, true);
     assert.match(DOC, new RegExp(`\`mode: ${report.mode}\``, 'u'));
   });
@@ -96,7 +96,7 @@ describe('docs/technical/mc-merge.md says what the code does', () => {
   });
 
   it('names the source files it points the reader at', () => {
-    for (const path of ['src/mc/docs-merge.js', 'src/mc/repo-merge.js', 'src/mc/repo-gate.js', 'src/mc/repo-round-log.js', 'src/mc/commands/merge.js']) {
+    for (const path of ['src/mc/docs-merge.js', 'src/mc/docs-measure.js', 'src/mc/repo-merge.js', 'src/mc/repo-gate.js', 'src/mc/repo-round-log.js', 'src/mc/commands/merge.js']) {
       assert.match(DOC, new RegExp(path.replaceAll('/', '\\/'), 'u'), `the doc no longer points at ${path}`);
     }
   });

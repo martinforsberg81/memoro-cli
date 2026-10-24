@@ -37,7 +37,8 @@ function stubGh({ files, state = 'OPEN', isDraft = false, mergeable = 'MERGEABLE
   return { gh, calls };
 }
 
-const opts = (gh) => ({ repoPath: '/repo', pr: 12, gh, sleep: async () => {}, now: () => new Date('2026-08-26T06:00:00Z') });
+const measureGreen = async () => ({ ok: true, files: 8, red: [], seconds: 3 });
+const opts = (gh) => ({ repoPath: '/repo', pr: 12, gh, sleep: async () => {}, now: () => new Date('2026-08-26T06:00:00Z'), measure: measureGreen });
 
 describe('runDocsMerge', () => {
   it('lands a docs-only pull request with the squash subject and reads the commit back', async () => {
@@ -47,7 +48,63 @@ describe('runDocsMerge', () => {
     assert.equal(report.merged, true);
     assert.equal(report.merge_commit, 'abc1234def');
     assert.deepEqual(calls.find((c) => c[1] === 'merge'), ['pr', 'merge', '12', '--squash', '--subject', 'Plan: gate-word (#12)', '--match-head-commit', 'aaaa111']);
-    assert.match(docsMergeLines(report)[0], /^mc: merged #12 into main as abc1234 \(squash, docs only: 2 files under docs\/\)$/u);
+    assert.match(docsMergeLines(report)[0], /^mc: merged #12 into main as abc1234 \(squash, docs only: 2 files under docs\/; 8 test files green in 3s\)$/u);
+  });
+
+  it('measures the documents on the head before the squash, and merges when they are green', async () => {
+    const { gh, calls } = stubGh({ files: ['docs/a.md'] });
+    const seen = [];
+    const measure = async (options) => {
+      seen.push(options);
+      calls.push(['measure']);
+      return { ok: true, files: 8, red: [], seconds: 3 };
+    };
+    const report = await runDocsMerge({ ...opts(gh), measure });
+    assert.equal(report.ok, true);
+    assert.deepEqual(seen.map(({ repoPath, pr, headSha, headRef, base }) => ({ repoPath, pr, headSha, headRef, base })), [{ repoPath: '/repo', pr: 12, headSha: 'aaaa111', headRef: 'plan/mc', base: 'main' }]);
+    assert.ok(calls.findIndex((c) => c[0] === 'measure') < calls.findIndex((c) => c[1] === 'merge'), 'the tests ran before the squash');
+    assert.deepEqual(report.measured, { files: 8, red: [], seconds: 3, reason: null });
+  });
+
+  it('refuses a red measurement, by its reason, and does not merge', async () => {
+    const { gh, calls } = stubGh({ files: ['docs/a.md'] });
+    const measure = async () => ({ ok: false, stopped_at: 'red', reason: '1 test red: every relative Markdown link …', red: ['every relative Markdown link …'] });
+    const report = await runDocsMerge({ ...opts(gh), measure });
+    assert.equal(report.ok, false);
+    assert.equal(report.stopped_at, 'red');
+    assert.match(report.reason, /^#12: 1 test red: every relative Markdown link … — not merged; fix the documents and push$/u);
+    assert.deepEqual(report.measured.red, ['every relative Markdown link …']);
+    assert.ok(!calls.some((c) => c[0] === 'pr' && c[1] === 'merge'));
+    assert.deepEqual(docsMergeLines(report), [`mc: NOT merged — ${report.reason}`]);
+  });
+
+  it('refuses a measurement that could not run, at the step that failed, and does not merge', async () => {
+    const { gh, calls } = stubGh({ files: ['docs/a.md'] });
+    const measure = async () => ({ ok: false, stopped_at: 'merge', reason: '#12 does not merge cleanly with main — merge main in and push' });
+    const report = await runDocsMerge({ ...opts(gh), measure });
+    assert.equal(report.stopped_at, 'measure-merge');
+    assert.equal(report.reason, "#12: the documents' tests could not be run (#12 does not merge cleanly with main — merge main in and push) — not merged");
+    assert.ok(!calls.some((c) => c[0] === 'pr' && c[1] === 'merge'));
+  });
+
+  it('refuses with drift, and does not merge, when the head moves during the measurement', async () => {
+    const stub = stubGh({ files: ['docs/a.md'] });
+    let heads = 0;
+    let measured = false;
+    const gh = (args) => {
+      if (args[0] === 'pr' && args[1] === 'view' && args[4] === 'headRefOid') {
+        heads += 1;
+        if (heads === 2) return { ok: true, stdout: '{"headRefOid":"bbbb222"}', stderr: '' };
+      }
+      return stub.gh(args);
+    };
+    const measure = async () => { measured = true; return { ok: true, files: 8, red: [], seconds: 3 }; };
+    const report = await runDocsMerge({ ...opts(gh), measure });
+    assert.equal(measured, true, 'the tests ran');
+    assert.equal(report.stopped_at, 'drift');
+    assert.match(report.reason, /aaaa111/u);
+    assert.match(report.reason, /bbbb222/u);
+    assert.ok(!stub.calls.some((c) => c[0] === 'pr' && c[1] === 'merge'));
   });
 
   it('refuses with drift, and does not merge, when the head moved after its files were checked', async () => {
@@ -146,7 +203,7 @@ describe('mc merge --docs, the verb', () => {
     const stdout = { write: (s) => { out += s; } };
     const { gh } = stubGh({ files: ['docs/a.md'] });
     const code = await run(['memoro', '#12', '--docs'], {
-      stdout, stderr: stdout, gh, resolveRepoPath: async (name) => (name === 'memoro' ? '/repo' : null),
+      stdout, stderr: stdout, gh, measure: measureGreen, resolveRepoPath: async (name) => (name === 'memoro' ? '/repo' : null),
     });
     assert.equal(code, 0);
     assert.match(out, /merged #12 into main/u);
@@ -171,7 +228,7 @@ describe('mc merge --docs, the verb', () => {
       const stdout = { write: (s) => { out += s; } };
       const { gh, calls } = stubGh({ files: ['docs/project/msr-core/a.md'], branch, body });
       return run(['memoro', '12', '--docs'], {
-        stdout, stderr: stdout, gh, root, env, lock: (_root, fn) => fn(),
+        stdout, stderr: stdout, gh, root, env, lock: (_root, fn) => fn(), measure: measureGreen,
         resolveRepoPath: async () => '/repo', now: () => new Date('2026-10-18T07:10:28Z'),
         ...(criteriaDoor ? { criteriaDoor } : {}),
       }).then((code) => {
@@ -236,10 +293,10 @@ describe('mc merge --docs, the verb', () => {
       const stderr = sink();
       const { gh } = stubGh({ files: ['docs/project/mc/x/PLAN.json', 'docs/technical/a.md'] });
       let queued = false;
-      const code = await run(['memoro', '12'], { stdout, stderr, gh, resolveRepoPath: async () => '/repo', gate: async () => { queued = true; return 0; } });
+      const code = await run(['memoro', '12'], { stdout, stderr, gh, measure: measureGreen, resolveRepoPath: async () => '/repo', gate: async () => { queued = true; return 0; } });
       assert.equal(code, 0);
       assert.equal(queued, false);
-      assert.equal(stderr.text, 'mc: #12 changes only documents under docs/ (2 files, no script) — landing it as mc merge --docs, now, with no suite\n');
+      assert.equal(stderr.text, 'mc: #12 changes only documents under docs/ (2 files, no script) — landing it as mc merge --docs, now, after the tests that read documents\n');
       assert.match(stdout.text, /merged #12 into main/u);
     });
 

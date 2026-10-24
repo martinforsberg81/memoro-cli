@@ -396,7 +396,7 @@ IN FULL
                                     merger in the order given, each landed by
                                     its own round
   mc merge <repo> <pr> --docs      Land a pull request that touches nothing
-                                    outside docs/ — no suite, no lease, squash.
+                                    outside docs/ — the tests that read documents, then squash.
                                     Anything else is refused with the file
                                     that is outside docs/
   mc deploy [--dry-run] [--json]   memoro's main to production: the sha it

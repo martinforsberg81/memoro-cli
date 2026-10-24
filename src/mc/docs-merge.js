@@ -1,16 +1,20 @@
 /**
  * `mc merge <repo> <pr> --docs` — land a pull request that touches nothing
- * outside `docs/`, without the suite.
+ * outside `docs/`, once the tests that read documents are green.
  *
  * A plan is no longer a file in a repository (ruling 48): the route refuses a
  * pull request that adds lines to one, and a pull request that only removes
- * one lands. There is no test to run on a document. Waiting for a click
- * before the runner could see it was the friction this removes. The check
- * is GitHub's own file list for the PR, never a local diff, so a stale
- * checkout cannot make a code PR look like documentation.
+ * one lands. A document has no suite, but the repository's selector knows
+ * which tests read documents, and four documents-only landings turned memoro's
+ * main red between 2026-10-20 and 10-24 (docs-measure.js). So the form runs
+ * those tests on a candidate of the head and squashes only on green. It never
+ * runs the suite, and a red is not merged. The check is GitHub's own file list
+ * for the PR, never a local diff, so a stale checkout cannot make a code PR
+ * look like documentation.
  */
 import { spawnSync } from 'node:child_process';
 
+import { measureDocs } from './docs-measure.js';
 import { isRepoPlanPath } from './plan-source.js';
 
 export const DOCS_PREFIX = 'docs/';
@@ -68,7 +72,7 @@ export function prFiles(pr, { repoPath, gh = ghRunner(repoPath) } = {}) {
 }
 
 export async function runDocsMerge({
-  repoPath, pr, gh = ghRunner(repoPath), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {}, now = () => new Date(),
+  repoPath, pr, gh = ghRunner(repoPath), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {}, now = () => new Date(), measure = measureDocs,
 } = {}) {
   const started = now();
   const report = { repo: repoPath, pr: { number: pr }, mode: 'docs', ok: false, merged: false, stopped_at: null, reason: null, files: [], merge_commit: null, started_at: started.toISOString() };
@@ -105,10 +109,24 @@ export async function runDocsMerge({
   }
   if (mergeable === 'CONFLICTING') return finish('conflicting', `#${pr} conflicts with ${report.pr.base} — merge ${report.pr.base} in and push`);
 
+  const drifted = (headNow) => finish('drift', `#${pr} moved on GitHub from ${String(head).slice(0, 7)} to ${String(headNow || 'nothing').slice(0, 7)} after its files were checked — not merged; run mc merge --docs again`);
   // The squash lands the head whose files were checked and no other (ruling 43),
   // as the gate form pins its squash in repo-merge.js.
   const headNow = view(gh, pr, 'headRefOid')?.headRefOid || null;
-  if (headNow !== head) return finish('drift', `#${pr} moved on GitHub from ${String(head).slice(0, 7)} to ${String(headNow || 'nothing').slice(0, 7)} after its files were checked — not merged; run mc merge --docs again`);
+  if (headNow !== head) return drifted(headNow);
+
+  // The tests that read the documents, on a candidate of this head with its base
+  // merged in. A red, or a measurement that could not run, is not merged.
+  const measured = await measure({ repoPath, pr, headSha: head, headRef: report.branch, base: report.pr.base, say: onProgress });
+  report.measured = { files: measured.files ?? 0, red: measured.red ?? [], seconds: measured.seconds ?? null, reason: measured.reason ?? null };
+  if (!measured.ok) {
+    return measured.stopped_at === 'red'
+      ? finish('red', `#${pr}: ${measured.reason} — not merged; fix the documents and push`)
+      : finish(`measure-${measured.stopped_at}`, `#${pr}: the documents' tests could not be run (${measured.reason}) — not merged`);
+  }
+  // The tests take a minute, so the head is read again, as the check above reads it.
+  const headAfterTests = view(gh, pr, 'headRefOid')?.headRefOid || null;
+  if (headAfterTests !== head) return drifted(headAfterTests);
 
   const merged = gh(['pr', 'merge', String(pr), '--squash', '--subject', `${info.title} (#${info.number})`, '--match-head-commit', head]);
   const after = view(gh, pr, 'state,mergeCommit');
@@ -125,8 +143,14 @@ export async function runDocsMerge({
 
 export function docsMergeLines(report) {
   if (report.ok) {
+    const files = `${report.files.length} file${report.files.length === 1 ? '' : 's'} under ${DOCS_PREFIX}`;
+    const measured = report.measured;
+    // A repository that declares no select measures nothing, and its line keeps the words it always had.
+    const tests = measured && !/nothing to measure/u.test(measured.reason || '')
+      ? `; ${measured.files} test file${measured.files === 1 ? '' : 's'} green${measured.seconds == null ? '' : ` in ${measured.seconds}s`}`
+      : '';
     return [
-      `mc: merged #${report.pr.number} into ${report.merged_into} as ${String(report.merge_commit || '').slice(0, 7)} (squash, docs only: ${report.files.length} file${report.files.length === 1 ? '' : 's'} under ${DOCS_PREFIX})`,
+      `mc: merged #${report.pr.number} into ${report.merged_into} as ${String(report.merge_commit || '').slice(0, 7)} (squash, docs only: ${files}${tests})`,
     ];
   }
   return [`mc: NOT merged — ${report.reason}`];

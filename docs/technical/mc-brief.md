@@ -111,7 +111,7 @@ what*). It reaches `main` by this route:
 - A worktree at **`~/mc/brief/unblock/<repo>`**, on branch
   **`brief/unblock-<date>`**, cut from `origin/main`.
 - `gh pr create`, then **`mc merge <repo> <pr> --docs`** — a plan is a file
-  under `docs/`, so the docs door lands it with no suite at all and refuses by
+  under `docs/`, so the docs door runs only the tests that read documents, then lands it, and refuses by
   GitHub's own file list if anything outside `docs/` crept in
   ([`mc-merge.md`](mc-merge.md)). Landed before the brief ends, and the
   worktree removed after: an open pull request on a project's plan keeps that

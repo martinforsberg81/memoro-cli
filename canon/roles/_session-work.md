@@ -31,7 +31,7 @@ nothing in the plan waits for that.
    with what you would do next. Build nothing past a point he has not seen.
 3. `mc gate <files…>` (the tests your change reaches), commit, `mc publish` —
    it pushes, opens the PR and queues it for the merger in one call (a
-   docs-only PR lands in the call); `mc step` and `merger.log` say what came
+   docs-only PR runs the tests that read documents and lands in the call when they are green); `mc step` and `merger.log` say what came
    of it. Once: do not poll — no loop, no `sleep`, no `mc merge watch`; the
    merger lands it without you. Fix reds yourself on the same branch, and
    `mc publish` again.
