@@ -806,7 +806,7 @@ describe('NEXT', () => {
     // `queue.md` empty it said `0 of 0 queued` while all of this was true.
     const brand = renderPageLines(pageData({ next, programmes: programmesSection({ plans: PLANS, areas: [] }) }),
       { columns: 120, version: '0.7.11' })[1];
-    assert.match(brand, /0 in flight · 2 ready · 1 blocked/u);
+    assert.match(brand, /0 in flight · 2 ready · 0 waiting · 1 blocked/u);
     assert.doesNotMatch(brand, /queued/u);
   });
 
@@ -1322,6 +1322,22 @@ describe('the state of a project row, and the next cell of every state', () => {
     assert.equal(next['failed-one'], 'Failed step · failed: boom');
     assert.equal(next['done-one'], 'every step is done');
     assert.equal(next['unmet-one'], 'criteria 1 not met');
+  });
+
+  it('draws a waiting project in full, collapses a decision-blocked one, and the brand row counts both', () => {
+    const plans = [
+      row('on-decision', 'blocked', 'Wait', { done: 3, blockedBy: { kind: 'decision', name: 'p-1' } }),
+      row('on-time', 'blocked', 'Wait', { done: 3, blockedBy: { kind: 'time', name: 'until-x', at: '2026-10-26T10:30:00Z' } }),
+      row('ready-one', 'ready', 'Ready step'),
+    ];
+    const data = pageData({ programmes: programmesSection({ plans, areas: [], now: AT }) });
+    const lines = paintedPage(data, { now: AT });
+    // The waiting project keeps its row; the decision-blocked one is the count on its heading.
+    assert.ok(rowWith(lines, 'on-time'));
+    assert.ok(lines.every((line) => !strip(line).includes('on-decision')), 'a blocked project is collapsed');
+    assert.ok(lines.some((line) => /^ {2}p +1 ready · 1 waiting · 1 blocked/u.test(strip(line))), lines.join('\n'));
+    const brand = renderPageLines(data, { columns: 120, version: '0.7.11', now: AT })[1];
+    assert.match(brand, /0 in flight · 1 ready · 1 waiting · 1 blocked/u);
   });
 });
 
@@ -1839,7 +1855,7 @@ describe('the page', () => {
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     // What is true of the work, and never `0 of 0 queued`: the step in flight,
     // and the plans PROGRAMMES counts ready and blocked, in the same numbers.
-    assert.match(text, /1 in flight · 2 ready · 1 blocked/u);
+    assert.match(text, /1 in flight · 2 ready · 0 waiting · 1 blocked/u);
     assert.doesNotMatch(text, /queued/u);
     // One row per lane, the repository first and the runner's own pid nowhere:
     // both lane files carry it, so it named neither of them.
@@ -1865,7 +1881,7 @@ describe('the page', () => {
     assert.match(text, /^ {7}memoro {6}1 new error, 1 loud · 60 min old {3}! /mu);
     assert.match(text, /^ {7}1 proposal · untagged 1$/mu);
     assert.match(text, /PROGRAMMES {2}3 programmes · 4 projects {2}ready 2 · blocked 1 · done 1\s+p {2}plan a programme/u);
-    assert.match(text, /^ {2}docx-editing-surface\s+1 ready · 0 blocked\s+·\s{2}no plan session$/mu,
+    assert.match(text, /^ {2}docx-editing-surface\s+1 ready · 0 waiting · 0 blocked\s+·\s{2}no plan session$/mu,
       'the programme is a heading of its own, and it counts its own projects');
     // The blocked project is one row for its programme — the number that still
     // opens it, and what holds it — and the line that adds them all up is under
@@ -1931,8 +1947,8 @@ describe('the page', () => {
     assert.deepEqual(numbers(long), [1, 2, 3, 4, 5]);
     assert.deepEqual(numbers(short), [1, 4, 5], 'the two waiting on a project, and d-four, the one that is ready');
     assert.ok(!short.some((line) => /^ {8}\d+ blocked/u.test(line)), short.join('\n'));
-    assert.ok(short.some((line) => /^ {2}\S+\s+1 ready · 2 blocked/u.test(line)), short.join('\n'));
-    assert.match(short.join('\n'), /^ {7}2 blocked · 2 on a decision · held most by plan-review 2$/mu);
+    assert.ok(short.some((line) => /^ {2}\S+\s+1 ready · 1 waiting · 2 blocked/u.test(line)), short.join('\n'));
+    assert.match(short.join('\n'), /^ {7}2 blocked · 2 on a decision · 2 waiting · held most by plan-review 2$/mu);
   });
 
   /**
@@ -2454,13 +2470,13 @@ describe('the palette', () => {
   // both ways in *the page* above.
   const SNAPSHOT = [
     '',
-    'bold grey grey grey grey', //                    MEMORO·CLI 0.7.11 ── 1 in flight · 2 ready · 1 blocked · ≈$7.28 today
+    'bold grey grey grey grey', //                    MEMORO·CLI 0.7.11 ── 1 in flight · 2 ready · 0 waiting · 1 blocked · ≈$7.28 today
     '',
     'bold+cyan grey green grey red grey grey grey', // PROGRAMMES  3 programmes · 4 projects  ready 2 · blocked 1 · done 1
-    'bold+cyan grey grey red grey', //                 assistant-avatar  0 ready · 1 blocked   ·  no plan session
-    'bold+cyan green grey grey grey', //               docx-editing-surface  1 ready · 0 blocked   ·  no plan session
+    'bold+cyan grey grey grey grey red grey', //       assistant-avatar  0 ready · 0 waiting · 1 blocked  ·  no plan session
+    'bold+cyan green grey grey grey grey grey', //     docx-editing-surface  1 ready · 0 waiting · 0 blocked  ·  no plan session
     'grey grey grey green grey grey green', //       2 · docx-editor  memoro  ready  1/2  Step 2, …  08-29 09:00Z step
-    'bold+cyan green grey grey grey', //               mc  1 ready · 0 blocked   ·  no plan session
+    'bold+cyan green grey grey grey grey grey', //     mc  1 ready · 0 waiting · 0 blocked  ·  no plan session
     'grey grey grey grey grey', //                   3 · mc-run  memoro-cli  done  1/1  every step is done
     'grey grey grey green grey cyan+bold grey green', // 4 · mc-ui  memoro-cli  ready  0/1  #440  Step 1, …  08-29 10:00Z step
     'grey', //                                           3 of them have no workarea yet
@@ -2622,13 +2638,38 @@ describe('the palette', () => {
     // is the same word about the same projects and had better not be a second
     // colour for them.
     const collapsed = paintedPage(pageData({ programmes: programmesSection({ plans: STOPPED, areas: [] }) }));
-    assert.deepEqual(signature(rowWith(collapsed, 'held most by')).split(' '), ['red', 'grey', 'grey']);
-    // And a programme's counts: green while something is ready, red while
-    // something is stopped, grey for a count of nothing.
-    // msr-core's waiting project is not in these counts yet: the heading draws
-    // ready and blocked only, and `waiting` is drawn by the renderer's next step.
-    assert.deepEqual(signature(rowWith(collapsed, 'msr-core')).split(' '), ['bold+cyan', 'green', 'grey', 'red', 'grey']);
-    assert.deepEqual(signature(rowWith(collapsed, '0 ready · 0 blocked')).split(' '), ['bold+cyan', 'grey', 'grey', 'grey', 'grey']);
+    // The waiting ones ride after it in grey: they are not stopped, so not red.
+    assert.deepEqual(signature(rowWith(collapsed, 'held most by')).split(' '), ['red', 'grey', 'grey', 'grey']);
+    // And a programme's counts: green while something is ready, yellow while
+    // something waits on the runner, red while something is stopped, grey for a
+    // count of nothing. msr-core's c-three and mc's e-five wait on a project.
+    assert.deepEqual(signature(rowWith(collapsed, 'msr-core')).split(' '), ['bold+cyan', 'green', 'grey', 'yellow', 'grey', 'red', 'grey']);
+    assert.deepEqual(signature(rowWith(collapsed, '0 ready · 1 waiting · 0 blocked')).split(' '), ['bold+cyan', 'grey', 'grey', 'yellow', 'grey', 'grey', 'grey']);
+  });
+
+  it('gives each of the nine states one colour in its row, and the heading says the three counts', () => {
+    const TONE = {
+      ready: 'green', running: 'green', landing: 'green', waiting: 'yellow', unmet: 'yellow+bold',
+      blocked: 'red', failed: 'red+bold', invalid: 'red+bold', done: 'grey',
+    };
+    const states = Object.keys(TONE);
+    // Rows as the collector hands them over: the state is the word, and none is running.
+    const projects = states.map((state, n) => ({
+      number: n + 1, name: `p-${state}`, repo: 'memoro', status: state === 'unmet' ? 'done' : state, state,
+      running: false, steps: { done: 1, total: 2 }, prs: [], next: 'Step', last: null,
+    }));
+    const statuses = Object.fromEntries(states.map((state) => [state, 1]));
+    const lines = paintedPage(pageData({
+      programmes: { count: states.length, statuses, programmes: [{ programme: 'states', projects, statuses, planning: null }] },
+    }), { expand: true });
+    for (const [state, tone] of Object.entries(TONE)) {
+      const row = rowWith(lines, `p-${state}`);
+      // Index 3: the number, the mark, the repository, then the state's word.
+      assert.equal(signature(row).split(' ')[3], tone, `${state} is ${tone}`);
+      assert.match(strip(row), new RegExp(` ${state} +1/2 `, 'u'), `${state} is drawn by its word`);
+    }
+    assert.deepEqual(signature(rowWith(lines, 'states')).split(' ').slice(0, 7),
+      ['bold+cyan', 'green', 'grey', 'yellow', 'grey', 'red', 'grey']);
   });
 
   it('turns the clock yellow past its first check-in, and never red', () => {
@@ -2704,7 +2745,7 @@ describe('the palette', () => {
         .matchAll(/^\| `([\w-]+)` \| (.+?) \|$/gmu)].map(([, key, tone]) => [key, tone]),
     );
     assert.deepEqual(inDoc('step kind'), inCode('KIND_TONE'), 'the doc names another colour for a step kind');
-    assert.deepEqual(inDoc('plan status'), inCode('STATUS_TONE'), 'the doc names another colour for a plan status');
+    assert.deepEqual(inDoc('project state'), inCode('STATUS_TONE'), 'the doc names another colour for a project state');
     // The two fallbacks are rows of their own in the doc, and they are the
     // colours `kindTone` and `statusTone` reach for when the table has no key.
     assert.ok(/\| anything else \| grey \|/u.test(doc));
