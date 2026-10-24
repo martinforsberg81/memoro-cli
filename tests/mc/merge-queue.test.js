@@ -27,9 +27,9 @@ test('with a lane, a batch is only that lane\'s jobs', () => {
   const entries = queueEntries([
     job({ repo: 'memoro', pr: 1, since: 'a' }), job({ pr: 2, since: 'b' }), job({ repo: 'memoro', pr: 3, since: 'c' }),
   ]);
-  assert.deepEqual(nextBatch(entries, { lane: 'heavy', laneOf }).map((e) => e.pr), [1, 3]);
-  assert.deepEqual(nextBatch(entries, { lane: 'light', laneOf }).map((e) => e.pr), [2]);
-  assert.deepEqual(nextBatch(entries).map((e) => e.pr), [1, 3], 'no lane is every job');
+  assert.deepEqual(nextBatch(entries, { lane: 'heavy', laneOf, max: 4 }).map((e) => e.pr), [1, 3]);
+  assert.deepEqual(nextBatch(entries, { lane: 'light', laneOf, max: 4 }).map((e) => e.pr), [2]);
+  assert.deepEqual(nextBatch(entries, { max: 4 }).map((e) => e.pr), [1, 3], 'no lane is every job');
 });
 
 test('the file sits beside the runner\'s other state', () => {
@@ -104,16 +104,24 @@ test('a job built on another waits until that one has landed (ruling 30, A)', ()
   assert.deepEqual(waitingOn(alone, { landed: () => true }), []);
 });
 
-test('a batch is the next job and the ones after it for the same repository, up to MERGE_BATCH_MAX', () => {
+test('one job a round: nextBatch takes the next job alone unless it is asked for more (ruling 55)', () => {
   const at = (minute) => `2026-10-10T12:${String(minute).padStart(2, '0')}:00Z`;
   let entries = [];
   for (const pr of [1, 2, 3, 4, 5, 6]) entries = enqueue(entries, job({ repo: 'memoro', pr, since: at(pr * 2) }));
   entries = enqueue(entries, job({ pr: 7, since: at(3) }));
-  assert.equal(MERGE_BATCH_MAX, 4);
-  assert.deepEqual(nextBatch(entries).map((e) => e.pr), [1, 2, 3, 4], 'memoro-cli #7 is not in memoro\'s batch');
-  assert.deepEqual(nextBatch(entries, { max: 2 }).map((e) => e.pr), [1, 2]);
+  assert.equal(MERGE_BATCH_MAX, 1);
+  assert.deepEqual(nextBatch(entries).map((e) => e.pr), [1], 'six memoro jobs in line, one round takes the oldest');
   assert.deepEqual(nextBatch(dequeue(entries, { repo: 'memoro', pr: 1 })).map((e) => e.pr), [7], 'the oldest decides the repository');
   assert.deepEqual(nextBatch([]), []);
+});
+
+test('a batch is the next job and the ones after it for the same repository, up to max', () => {
+  const at = (minute) => `2026-10-10T12:${String(minute).padStart(2, '0')}:00Z`;
+  let entries = [];
+  for (const pr of [1, 2, 3, 4, 5, 6]) entries = enqueue(entries, job({ repo: 'memoro', pr, since: at(pr * 2) }));
+  entries = enqueue(entries, job({ pr: 7, since: at(3) }));
+  assert.deepEqual(nextBatch(entries, { max: 4 }).map((e) => e.pr), [1, 2, 3, 4], 'memoro-cli #7 is not in memoro\'s batch');
+  assert.deepEqual(nextBatch(entries, { max: 2 }).map((e) => e.pr), [1, 2]);
 });
 
 test('a batch leaves out a red entry and a job whose parent has not landed', () => {
@@ -124,10 +132,10 @@ test('a batch leaves out a red entry and a job whose parent has not landed', () 
   entries = enqueue(entries, job({ repo: 'memoro', pr: 3, since: '2026-10-10T12:03:00Z', parent }));
   entries = enqueue(entries, job({ repo: 'memoro', pr: 4, since: '2026-10-10T12:04:00Z' }));
   entries = markRed(entries, { repo: 'memoro', pr: 2 }, { reason: 'red: x', answered: 'z' });
-  assert.deepEqual(nextBatch(entries, { landed: () => false }).map((e) => e.pr), [1, 4]);
-  assert.deepEqual(nextBatch(entries, { landed: () => true }).map((e) => e.pr), [1, 3, 4]);
+  assert.deepEqual(nextBatch(entries, { landed: () => false, max: 4 }).map((e) => e.pr), [1, 4]);
+  assert.deepEqual(nextBatch(entries, { landed: () => true, max: 4 }).map((e) => e.pr), [1, 3, 4]);
   const below = enqueue(entries, job({ repo: 'memoro', pr: 20, since: '2026-10-10T12:05:00Z' }));
-  assert.deepEqual(nextBatch(below).map((e) => e.pr), [1, 4, 20], 'built on one still queued, even in the same batch, it waits');
+  assert.deepEqual(nextBatch(below, { max: 4 }).map((e) => e.pr), [1, 4, 20], 'built on one still queued, even in the same batch, it waits');
 });
 
 test('a merger that died under a batch: every landing entry of that repository is taken again, and nothing more', () => {
@@ -152,15 +160,15 @@ test('a step-3 job with no parent waits until step 2 is done; a step-1 job and a
   entries = enqueue(entries, job({ pr: 9, since: '2026-10-10T12:03:00Z', step: null }));
   for (const status of ['ready', 'landing', 'failed']) {
     register.mq[1] = { status };
-    assert.deepEqual(nextBatch(entries, { ordered }).map((e) => e.pr), [1, 9], `step 2 ${status}: #3 waits`);
+    assert.deepEqual(nextBatch(entries, { ordered, max: 4 }).map((e) => e.pr), [1, 9], `step 2 ${status}: #3 waits`);
     assert.equal(nextJob(entries, { ordered }).pr, 1);
     assert.deepEqual(waitingOn(entries, { ordered }).map((w) => [w.entry.pr, w.parent, w.step]), [[3, null, { project: 'mq', number: 2 }]]);
   }
   register.mq[1] = { status: 'done' };
-  assert.deepEqual(nextBatch(entries, { ordered }).map((e) => e.pr), [3, 1, 9], 'step 2 done: #3 goes, first in line');
+  assert.deepEqual(nextBatch(entries, { ordered, max: 4 }).map((e) => e.pr), [3, 1, 9], 'step 2 done: #3 goes, first in line');
   assert.deepEqual(waitingOn(entries, { ordered }), []);
   register.mq[0] = { status: 'failed' };
-  assert.deepEqual(nextBatch(entries, { ordered }).map((e) => e.pr), [1, 9], 'every earlier step, not only the one before');
+  assert.deepEqual(nextBatch(entries, { ordered, max: 4 }).map((e) => e.pr), [1, 9], 'every earlier step, not only the one before');
   assert.equal(stepsDone(() => null)(entries[0]), true, 'a register that cannot be read is no reason to wait');
 });
 
@@ -199,7 +207,7 @@ test('a requeued job keeps its place, counts the requeue, and is not taken befor
   const at = (iso) => Date.parse(iso);
   assert.deepEqual(nextBatch(back, { now: at('2026-10-19T20:05:00Z') }).map((e) => e.pr), [2], 'the one behind it goes first');
   assert.equal(nextJob(back, { now: at('2026-10-19T20:05:00Z') }).pr, 2);
-  assert.deepEqual(nextBatch(back, { now: at('2026-10-19T20:15:00Z') }).map((e) => e.pr), [1, 2], 'due, it is first again');
-  assert.deepEqual(nextBatch(back).map((e) => e.pr), [1, 2], 'no now waits for nothing');
+  assert.deepEqual(nextBatch(back, { now: at('2026-10-19T20:15:00Z'), max: 4 }).map((e) => e.pr), [1, 2], 'due, it is first again');
+  assert.deepEqual(nextBatch(back, { max: 4 }).map((e) => e.pr), [1, 2], 'no now waits for nothing');
   assert.equal(queueEntries(markRequeued(back, { repo: 'memoro-cli', pr: 1 }))[0].requeues, 2);
 });
