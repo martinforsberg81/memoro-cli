@@ -1800,3 +1800,58 @@ the merger reused a session's green in 36 of the last 300 memoro rounds
 
 This amends ruling 44 § 6 and the session half of rulings 44 § 3 and 47.
 
+
+## 53 · A project row carries one state word with one colour: green moves by itself, yellow waits on time, red waits on a person
+
+`ruling · 2026-10-24` · raised by Martin
+
+> "Vi behöver polera lite på hur mc visar status mm. Varje projekt-rad ska
+> vara mer lika och ha fler statusar: grön: ready, running, landing; gul:
+> waiting (typ för visst steg vid viss tid); röd: blocked, failed." (Martin,
+> 2026-10-24)
+
+Until now a project row said the plan's word — `ready`, `running`, `landing`,
+`done`, `failed`, `blocked`, `unmet` — with `running` in yellow, `landing` in
+no colour at all, and a step parked on a time or a deploy (ruling 35, released
+by the runner itself) in the same red as a step waiting on Martin.
+
+1. **One word per state, one colour each**, wherever a project's state is
+   printed: `ready`, `running`, `landing` green; `waiting` yellow; `unmet`
+   yellow bold; `blocked`, `failed` red; `done` grey. `waiting` is a blocked
+   step whose blocker releases by itself — `time`, `deploy`, `project`;
+   `blocked` waits on a `decision` or a `workarea`, which is a person.
+2. **The rows read alike.** The `next` cell is the step's title, then the
+   state's detail: the pull request a landing step is in, what a waiting step
+   waits for and how long is left, the decision or workarea a blocked one
+   waits on, a failed step's reason.
+3. **The counts follow the word.** A programme heading says `N ready · N
+   waiting · N blocked`; so does the brand row. A waiting project keeps its
+   row; a blocked one still collapses under its heading (Martin, 2026-09-19).
+4. `mc --json` keeps `status` as the plan's word and adds `state`.
+
+Carried by project `page-states` (programme `mc`).
+
+## 54 · The primary checkouts go: bare repositories under `~/mc/repos/`, mc's own checkout under `~/mc/self/`
+
+`ruling · 2026-10-24` · raised by the brief session, decided by Martin
+
+The proposal `2026-10-24-mc-environment-model` measured what `~/memoro` and
+`~/memoro-cli` do: every worktree hangs off their `.git`, and `~/memoro-cli` is
+what `/opt/homebrew/bin/mc` runs from — a branch checked out there swaps the
+tool under every session. `~/memoro` stood on `camera-test`, 351 commits behind
+`origin/main`, with 19 stashes. Martin decided (2026-10-24): no primary
+checkouts.
+
+1. **The git store is a bare repository**, `~/mc/repos/<name>.git`, that every
+   worktree hangs off. Nothing can be checked out there by accident.
+2. **mc runs from its own checkout**, `~/mc/self/memoro-cli`, a worktree on
+   `main` fast-forwarded by the merger's deploy pull. `~/mc/self/memoro` is the
+   checkout `mc shot` and `mc test dev` serve outside a worktree.
+3. **mc knows both layouts** through one module, so the same code runs before
+   and after the move; the move itself is `mc repos migrate --apply`, run once
+   by a person with the runner, the merger and the dev servers stopped.
+4. Stashes and local branches move with the git directory and are kept.
+
+Carried by project `repos-layout` (programme `mc`); the dependency store,
+`prepare()`, the hook and the test pipeline of the same proposal are planned
+after it lands.
