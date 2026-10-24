@@ -1305,7 +1305,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
  *
  * Run in the candidate worktree, so the diff it computes is the pull request's.
  */
-async function selectFiles({ command, cwd, env, say }) {
+export async function selectFiles({ command, cwd, env, say }) {
   const run = await shell(command, { cwd, env });
   if (run.status !== 0) {
     return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || run.error?.code || `exit ${run.status}`}` };
