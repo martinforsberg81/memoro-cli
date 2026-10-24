@@ -97,6 +97,7 @@ const STEP_KEYS = Object.freeze([
   'runner',
 ]);
 
+/** `met` in the file is written `false` by the verbs and read by nothing; the register holds it. */
 const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
 const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
 const RUNNER_KEYS = Object.freeze(['tool', 'model', 'effort', 'advisor', 'subagents', 'check_in_minutes', 'stall_minutes']);

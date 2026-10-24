@@ -369,16 +369,30 @@ test('normaliseEntry keeps the criteria the register holds, and reads an entry w
   });
   assert.deepEqual(entry.criteria, [{ criterion: 'x', met: true, at: '2026-10-19T08:00:00Z' }, { criterion: 'y', met: false, at: null }]);
   assert.equal(normaliseEntry({ project: 'p' }).criteria, null);
-  assert.deepEqual(criteriaFromPlan(withCriteria([criterion('x', true)]).plan), [{ criterion: 'x', met: true, at: null }]);
+  assert.deepEqual(criteriaFromPlan(withCriteria([criterion('x', true)]).plan), [{ criterion: 'x', met: false, at: null }]);
   assert.deepEqual(criteriaFromPlan({}), []);
 });
 
-test('seedEntry seeds the criteria from the file\'s met, once', () => {
+test('seedEntry seeds the criteria from the plan, and reads the file\'s met as not met', () => {
   const entry = seedEntry(withCriteria([criterion('x', true), criterion('y', false)]), 't0');
-  assert.deepEqual(entry.criteria, [{ criterion: 'x', met: true, at: null }, { criterion: 'y', met: false, at: null }]);
+  assert.deepEqual(entry.criteria, [{ criterion: 'x', met: false, at: null }, { criterion: 'y', met: false, at: null }]);
 });
 
-test('reconcileEntry seeds criteria on an entry that has none, keeps a held met, takes the file\'s for a new text, drops a removed one', () => {
+test('a plan file\'s met is not read: a criterion the register has not seen is not met, and a held met survives', () => {
+  const seeded = seedEntry(withCriteria([criterion('x', true)]), 't0');
+  assert.deepEqual(seeded.criteria, [{ criterion: 'x', met: false, at: null }], 'seeded from a file that says met: true');
+
+  const added = reconcileEntry(seeded, withCriteria([criterion('x', false), criterion('y', true)]), 't1');
+  assert.equal(added.changed, true);
+  assert.deepEqual(added.entry.criteria, [{ criterion: 'x', met: false, at: null }, { criterion: 'y', met: false, at: null }], 'a new text with met: true is added not met');
+
+  const held = markCriterion(seeded, 1, true, 't2');
+  const kept = reconcileEntry(held, withCriteria([criterion('x', false)]), 't3');
+  assert.equal(kept.changed, false);
+  assert.deepEqual(kept.entry.criteria, [{ criterion: 'x', met: true, at: 't2' }], 'the held met is unchanged');
+});
+
+test('reconcileEntry seeds criteria on an entry that has none, keeps a held met, lists a new text as not met, drops a removed one', () => {
   const rec = withCriteria([criterion('x', false), criterion('y', false)]);
   const old = { ...seedEntry(rec, 't0'), criteria: null };
   const seeded = reconcileEntry(old, rec, 't1');
@@ -392,7 +406,7 @@ test('reconcileEntry seeds criteria on an entry that has none, keeps a held met,
 
   const moved = reconcileEntry(marked, withCriteria([criterion('x', false), criterion('z', true)]), 't3');
   assert.equal(moved.changed, true);
-  assert.deepEqual(moved.entry.criteria, [{ criterion: 'x', met: true, at: 't2' }, { criterion: 'z', met: true, at: null }]);
+  assert.deepEqual(moved.entry.criteria, [{ criterion: 'x', met: true, at: 't2' }, { criterion: 'z', met: false, at: null }]);
 });
 
 test('applyEntry lays the held met over the file\'s criteria by text, so a plan whose steps are done is done', () => {
@@ -444,7 +458,7 @@ test('dropCriterion removes the first held criterion of the text, logs the reaso
   const lines = [];
   const append = (path, line) => lines.push(JSON.parse(line));
   const next = dropCriterion({ root: '/w', project: 'p', text: 'x', reason: 'Nobody can measure it.', ...io, append, now: 't1' });
-  assert.deepEqual(next.criteria, [{ criterion: 'y', met: true, at: null }, { criterion: 'x', met: true, at: null }]);
+  assert.deepEqual(next.criteria, [{ criterion: 'y', met: false, at: null }, { criterion: 'x', met: false, at: null }]);
   assert.deepEqual(parseEntry(files[registerPath('/w', 'p')]).criteria, next.criteria, 'written');
   assert.equal(lines.length, 1);
   assert.equal(lines[0].event, 'criterion-drop');
