@@ -73,6 +73,22 @@ describe('diffMeasure', () => {
       [1, 'visible', true, false],
     ]);
   });
+
+  it('the same background colour on both trees is no difference', () => {
+    const navy = { ...FOOTER, background_color: 'rgb(33, 39, 49)' };
+    assert.deepEqual(diffMeasure([navy], [navy]), []);
+  });
+
+  it('a different background colour is one entry with both values', () => {
+    const diff = diffMeasure([{ ...FOOTER, background_color: 'rgb(33, 39, 49)' }], [{ ...FOOTER, background_color: 'rgb(255, 252, 247)' }]);
+    assert.deepEqual(diff, [
+      { index: 0, element: FOOTER.element, field: 'background_color', ref: 'rgb(33, 39, 49)', here: 'rgb(255, 252, 247)' },
+    ]);
+  });
+
+  it('a colour only one tree reports is not compared', () => {
+    assert.deepEqual(diffMeasure([{ ...FOOTER, background_color: 'rgb(33, 39, 49)' }], [FOOTER]), []);
+  });
 });
 
 /** A fake git answering from a table, recording every call. */

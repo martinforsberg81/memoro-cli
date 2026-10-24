@@ -393,7 +393,7 @@ export function usage() {
     '          [--scroll <css>[@end|@top|@<px>] | @end]\n',
     '                                      scroll that element first (@end by default); a bare\n',
     '                                      @end/@top scrolls the surface\'s declared scroller\n',
-    '          [--measure <css> | @<name>]  print every match\'s box, padding, position, scroll and\n',
+    '          [--measure <css> | @<name>]  print every match\'s box, padding, position, scroll, colours and\n',
     '                                      visibility as one JSON line after the path; a name is\n',
     '                                      one of the surface\'s declared measurements (mc dev surfaces)\n',
     '          [--click <selector>]        press it after the page and its window are open and before\n',
