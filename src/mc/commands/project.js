@@ -33,7 +33,7 @@ import { stopServersUnder } from '../dev-servers.js';
 import { runDocsMerge } from '../docs-merge.js';
 import { EFFORT_LEVELS, NAME_RE, PLAN_SCHEMA, PLAN_VERSION, planState, readPlanText, validatePlan } from '../plan-schema.js';
 import { PLAN_FILE, programsPlans } from '../plan-source.js';
-import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, withPlanLock, writePlanFile } from '../plan-write.js';
+import { bannedWords, dependencyWords, DRAFT_FILE, draftProblems, findProjectDir, instructionParagraphs, MODELS, readDraftOrPlan, sendProblems, testDirectories, withPlanLock, writePlanFile } from '../plan-write.js';
 import { applyEntry, parseStepEnv, readEntry, registerPath, stepKey, updateCriterion } from '../register.js';
 import { layoutVersion, programsHome, runnerDir, runnerTablePath, stepAreaName, UNDOCUMENTED_CLOSURES, workRoot } from '../paths.js';
 import { archivePrograms, closeoutFileOf } from '../project-archive.js';
@@ -399,6 +399,11 @@ function addCriterion(scanned, deps) {
     stderr.write(`mc: the check names ${names.join(', ')} — a check is a command the last step runs, never a person\n`);
     return 1;
   }
+  const dirs = testDirectories(check);
+  if (dirs.length) {
+    stderr.write(`mc: node --test is given ${dirs.join(', ')} — node does not expand a directory; name its files or a quoted glob such as '${dirs[0].replace(/\/$/u, '')}/**/*.test.js'\n`);
+    return 1;
+  }
   if (dependencyWords(text).length || dependencyWords(check).length) {
     stderr.write('mc: a dependency goes in mc project step add … --after <repo>:<project>\n');
     return 1;
@@ -459,6 +464,11 @@ function editCriterion(scanned, deps) {
   const names = bannedWords(check);
   if (names.length) {
     stderr.write(`mc: the check names ${names.join(', ')} — a check is a command the last step runs, never a person\n`);
+    return 1;
+  }
+  const dirs = testDirectories(check);
+  if (dirs.length) {
+    stderr.write(`mc: node --test is given ${dirs.join(', ')} — node does not expand a directory; name its files or a quoted glob such as '${dirs[0].replace(/\/$/u, '')}/**/*.test.js'\n`);
     return 1;
   }
   if (dependencyWords(check).length) {
