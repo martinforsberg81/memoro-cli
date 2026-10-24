@@ -299,6 +299,17 @@ test('criterion add whose check names a person or says a check by hand is refuse
   } finally { f.cleanup(); }
 });
 
+test('criterion add whose check hands node --test a directory is refused, exit 1, and the file is unchanged', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'node --test tests/assistant/background'], f.deps), 1);
+    assert.match(f.err.at(-1), /node --test is given tests\/assistant\/background — node does not expand a directory/u);
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
 test('criterion add whose check says it runs in production is refused, exit 1, and the file is unchanged', async () => {
   const f = draftFixture();
   try {
@@ -1210,6 +1221,18 @@ test('criterion edit refuses a check that names a person, the same check, and a 
     assert.equal(f.err.at(-1), 'mc: criterion 1 of alpha has that check already\n');
     assert.equal(await run(['criterion', 'edit', 'alpha', '2', '--check', 'node --test'], f.deps), 2);
     assert.equal(f.err.at(-1), 'mc: alpha has 1 criterion — criterion 2 is not one\n');
+    assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
+  } finally { f.cleanup(); }
+});
+
+test('criterion edit refuses a check that hands node --test a directory, and the file is unchanged', async () => {
+  const f = draftFixture();
+  try {
+    assert.equal(await run(NEW, f.deps), 0);
+    assert.equal(await run(['criterion', 'add', 'alpha', 'It runs.', '--check', 'npm test'], f.deps), 0);
+    const before = readFileSync(f.draft('alpha'), 'utf8');
+    assert.equal(await run(['criterion', 'edit', 'alpha', '1', '--check', 'node --test tests/assistant/background'], f.deps), 1);
+    assert.match(f.err.at(-1), /node --test is given tests\/assistant\/background — node does not expand a directory/u);
     assert.equal(readFileSync(f.draft('alpha'), 'utf8'), before);
   } finally { f.cleanup(); }
 });
