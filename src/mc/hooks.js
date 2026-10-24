@@ -239,6 +239,14 @@ export const BASH_RULES = [
     reason: 'Use `mc test dev --here --url` for a server for this worktree (started if down, restarted when its tree moved or was edited), or `mc shot dev …` to look at the app. `npm run dev` is for a person at a terminal.',
   },
   {
+    // One simulator, reused (2026-10-24): every session that made its own
+    // left a device behind, one of them 2.3 GB. Only the device named `mc`
+    // is ever created; a fresh phone is that device erased, not a new one.
+    id: 'simulator',
+    test: /(^|[;&|(]\s*|\s)(xcrun\s+)?simctl\s+(clone\b|create\b(?!\s+(['"]?)mc\4\s))/u,
+    reason: 'Use the one simulator, the device named `mc`: `xcrun simctl boot mc`, then `xcrun simctl install mc <app>` and `xcrun simctl launch mc <bundle id>`. A clean phone is `xcrun simctl shutdown mc && xcrun simctl erase mc`, not a new device. When it does not exist yet, create exactly that one: `xcrun simctl create mc "iPhone 17"`.',
+  },
+  {
     id: 'plan-file',
     // A write verb naming a plan file: a redirect, tee, sed -i, or a move, copy, removal or install of it.
     test: /(>>?|\btee\b|\bsed\s+-i|\b(mv|cp|rm|truncate|install)\b)[^;&|\n]*\b(PLAN|DRAFT|STATE|CLOSEOUT)\.json\b/u,
