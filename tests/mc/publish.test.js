@@ -61,7 +61,7 @@ describe('messageParts and publishLines', () => {
 
 describe('mc publish', () => {
   function fixture({ branch = 'step-x', status = '', remote = '', prs = [], created = 'https://x/pull/9\n', body = '', log = '' } = {}) {
-    const out = { stdout: '', stderr: '', gh: [], pushed: [], pushOpts: [] };
+    const out = { stdout: '', stderr: '', gh: [], pushed: [], pushOpts: [], merged: [] };
     const git = (args) => {
       const key = args.join(' ');
       if (key === 'rev-parse --show-toplevel') return '/w/x';
@@ -90,17 +90,54 @@ describe('mc publish', () => {
     const deps = {
       stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } },
       cwd: '/w/x', git, gh, push: (name, opts) => { out.pushed.push(name); out.pushOpts.push(opts); return { ok: true, text: '' }; },
+      merge: async (argv, { stdout }) => { out.merged.push(argv); stdout.write(`queued for the merger: ${argv.join(' ')}\n`); return 0; },
     };
     return { out, deps };
   }
 
-  it('pushes, creates the pull request from the last commit, views it once, and says what to run next', async () => {
+  it('pushes, creates the pull request from the last commit, views it once, and queues it for the merger', async () => {
     const { out, deps } = fixture();
     assert.equal(await run([], deps), 0);
     assert.deepEqual(out.pushed, ['step-x']);
     assert.deepEqual(out.gh.map((a) => a.slice(0, 2)), [['pr', 'list'], ['pr', 'create'], ['pr', 'view']]);
     assert.deepEqual(out.gh[1], ['pr', 'create', '--base', 'main', '--head', 'step-x', '--title', 'The subject', '--body', 'The body.\n\n<!-- mc:described aaaaaaa1111 -->']);
-    assert.equal(out.stdout,'#9 https://x/pull/9\nopened from step-x → main; pushed aaaaaaa\nnext: mc merge memoro 9\n');
+    assert.equal(out.stdout, '#9 https://x/pull/9\nopened from step-x → main; pushed aaaaaaa\nqueued for the merger: memoro 9\n');
+    assert.deepEqual(out.merged, [['memoro', '9']]);
+  });
+
+  it('the merge\'s answer is the publish\'s: an unmet criterion is exit 1 after the PR exists', async () => {
+    const { out, deps } = fixture();
+    deps.merge = async (argv, { stderr }) => { stderr.write('mc: unmet-criteria — criterion 2\n'); return 1; };
+    assert.equal(await run([], deps), 1);
+    assert.match(out.stdout, /^#9 /u);
+    assert.equal(out.stderr, 'mc: unmet-criteria — criterion 2\n');
+  });
+
+  it('--no-merge, --json and a detached --branch queue nothing and say what to run next', async () => {
+    const plain = fixture();
+    assert.equal(await run(['--no-merge'], plain.deps), 0);
+    assert.deepEqual(plain.out.merged, []);
+    assert.match(plain.out.stdout, /\nnext: mc merge memoro 9\n$/u);
+    const json = fixture();
+    assert.equal(await run(['--json'], json.deps), 0);
+    assert.deepEqual(json.out.merged, []);
+    const mend = fixture({ branch: 'HEAD' });
+    assert.equal(await run(['--branch', 'step-x'], mend.deps), 0);
+    assert.deepEqual(mend.out.merged, []);
+    assert.match(mend.out.stdout, /\nnext: mc merge memoro 9\n$/u);
+  });
+
+  it('a head GitHub does not hold yet is not queued', async () => {
+    const { out, deps } = fixture();
+    const gh = deps.gh;
+    deps.gh = (args) => {
+      const answer = gh(args);
+      if (args[1] === 'view' && args[4] !== 'body') return { ...answer, stdout: JSON.stringify({ ...JSON.parse(answer.stdout), headRefOid: 'ccccccc' }) };
+      return answer;
+    };
+    assert.equal(await run([], deps), 0);
+    assert.deepEqual(out.merged, []);
+    assert.match(out.stdout, /GitHub holds ccccccc[^\n]*\nnext: mc merge memoro 9\n$/u);
   });
 
   it('finds the open pull request rather than opening a second, edits it only when asked, and skips a push the remote already has', async () => {
@@ -108,7 +145,7 @@ describe('mc publish', () => {
     assert.equal(await run([], same.deps), 0);
     assert.deepEqual(same.out.pushed, []);
     assert.deepEqual(same.out.gh.map((a) => a[1]), ['list', 'view', 'view']);
-    assert.match(same.out.stdout, /^#4 .*\nalready open from step-x → main; nothing to push aaaaaaa\nnext: mc merge memoro 4\n$/u);
+    assert.match(same.out.stdout, /^#4 .*\nalready open from step-x → main; nothing to push aaaaaaa\nqueued for the merger: memoro 4\n$/u);
     const edited = fixture({ remote: 'bbbbbbb\trefs/heads/step-x', prs: [{ number: 4, url: 'https://x/pull/4' }] });
     assert.equal(await run(['--title', 'New', '--body', 'B'], edited.deps), 0);
     assert.deepEqual(edited.out.pushed, ['step-x']);

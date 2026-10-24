@@ -144,7 +144,7 @@ describe('which reds are mended', () => {
     assert.equal(mayMend(JOB, merge([])), true);
   });
 
-  it('the prompt names the red files, the kept failures and the re-run line, and runs mc gate — never a bare npm test', () => {
+  it('the prompt names the red files, the kept failures and the re-run line, and runs mc gate — never the suite', () => {
     const report = {
       ok: false, stopped_at: 'red', reason: '2 tests red: s › a.b, s › c',
       red_files: ['tests/a.test.js'], red_detail: '/home/mc/runner/merge-red/memoro-cli-671.txt',
@@ -155,10 +155,8 @@ describe('which reds are mended', () => {
     assert.match(prompt, /^ {4}Red files: tests\/a\.test\.js$/mu);
     assert.match(prompt, /^ {4}The failures, as the round saw them: \/home\/mc\/runner\/merge-red\/memoro-cli-671\.txt$/mu);
     assert.match(prompt, /^ {4}Re-run just those: mc gate tests\/a\.test\.js --test-name-pattern 'a\\\.b\|c'$/mu);
-    assert.match(prompt, /- Run `mc gate tests\/a\.test\.js` until they are green, then `mc gate` once for the whole selection — never a bare `npm test`\./u);
-    // `npm test` is named once, as what not to run: never as an instruction.
-    assert.equal(prompt.split('npm test').length - 1, 1);
-    assert.doesNotMatch(prompt.replace('never a bare `npm test`', ''), /npm test/u);
+    assert.match(prompt, /- Run `mc gate tests\/a\.test\.js` until they are green — never the whole suite: the merger measures it after you\./u);
+    assert.doesNotMatch(prompt, /npm test/u);
     assert.doesNotMatch(prompt, /node --test|suite command/u);
   });
 

@@ -460,7 +460,7 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
   stdout.write(`mc: #${opts.pr} is queued for the merger — ${where}\n`);
   if (merger?.pid) stdout.write(`mc: the merger (pid ${merger.pid}${merger.started ? ', just started' : ''}) lands it; follow it in ${mergerLogPath(root)}\n`);
   else stdout.write(`mc: no merger could be started${merger?.error ? ` (${merger.error})` : ''} — the job waits in the queue for the next mc merge or runner round\n`);
-  if (step) stdout.write(`mc: ${step.project} step ${step.index + 1} is landing — green makes it done; red sends it back to the step's next session\n`);
+  if (step) stdout.write(`mc: ${step.project} step ${step.index + 1} is landing — green makes it done; red sends it back to the step's next session. Your work is over: end the session now — no gate, no watch, no summary\n`);
   else if (head && projectForBranch(head, listEntries(root, io).map((entry) => entry.project))) {
     stdout.write(`mc: ${head} is named after a project but is none of its steps' branches — landing it marks no step done\n`);
   }

@@ -152,9 +152,9 @@ export function mendPrompt({ job, report, title = null, step = null, log = [] })
       : '- Merge `origin/main` into the branch first if it is behind and that is where the red comes from.',
     '- Where the change\'s own tests are red, fix the change; never skip, weaken or delete a test.',
     red.length
-      ? `- Run \`mc gate ${red.join(' ')}\` until they are green, then \`mc gate\` once for the whole selection — never a bare \`npm test\`.`
-      : '- Run `mc gate` until it is green — never a bare `npm test`.',
-    `- Commit, then \`mc publish --branch ${branch}\` — it pushes without force and lists the commit under the pull request's description. Never \`git push\`.`,
+      ? `- Run \`mc gate ${red.join(' ')}\` until they are green — never the whole suite: the merger measures it after you.`
+      : '- Run the tests the fix reaches with `mc gate <files…>` until they are green — never the whole suite: the merger measures it after you.',
+    `- Commit, then \`mc publish --branch ${branch}\` — it pushes without force, lists the commit under the pull request's description and queues nothing: the merger measures the moved branch. Never \`git push\`.`,
     '- Edit no `PLAN.json`.',
     '- If it cannot be fixed here, push nothing and say why in your last line.',
     '',

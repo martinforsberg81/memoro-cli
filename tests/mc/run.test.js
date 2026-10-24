@@ -1603,7 +1603,7 @@ test('a step the merger sent back is handed out again, its own open pull request
   assert.equal(r.ran, 1, 'the open #9 is the step\'s own work, not somebody\'s in flight');
   const [call] = f.calls.sessions;
   assert.match(call.prompt, /^This step came back from the merger: #9 did not land \(attempt 1\)\.\nThe gate said: 2 tests red: a › b/mu);
-  assert.match(call.prompt, /`mc merge memoro 9` again\. No new pull request\./u);
+  assert.match(call.prompt, /`mc merge memoro 9` would\)\. No new pull request\./u);
   assert.equal(registerOf(f, 'm').steps[0].status, 'landing');
 });
 
@@ -1621,7 +1621,7 @@ test('a parked step answered with its pull request kept goes on from it, and the
   assert.equal(r.ran, 1, 'the open #9 is the step\'s own work, not somebody\'s in flight');
   const [call] = f.calls.sessions;
   assert.match(call.prompt, /^This step was parked on the decision `m-check-in`, and it has been answered\.\nThe answer: No to network-first\./mu);
-  assert.match(call.prompt, /`mc merge memoro 9`\. No new pull request\./u);
+  assert.match(call.prompt, /`mc merge memoro 9` would\)\. No new pull request\./u);
   assert.doesNotMatch(call.prompt, /came back from the merger/u);
   assert.equal(registerOf(f, 'm').steps[0].status, 'landing');
 });

@@ -193,7 +193,7 @@ describe('mc merge makes the step landing', () => {
     assert.equal(after.steps[1].session, null, 'the session\'s part is over');
     assert.equal(after.steps[0].status, 'done');
     assert.deepEqual(queue()[0].step, { project: 'merge-queue', index: 1 });
-    assert.match(d.out.out, /^mc: merge-queue step 2 is landing — green makes it done; red sends it back to the step's next session$/mu);
+    assert.match(d.out.out, /^mc: merge-queue step 2 is landing — green makes it done; red sends it back to the step's next session\. Your work is over: end the session now — no gate, no watch, no summary$/mu);
   });
 
   it('the step is found from the branch when MC_STEP is not set — a person typing mc merge on a project branch', async () => {

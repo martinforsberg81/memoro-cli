@@ -773,12 +773,13 @@ export function stepPrompt({ name, repo, planPath, plan, step, index, conflicts 
     '',
     'Build all of it — a pull request that lands is a `done` step, whatever its',
     'body says is left; what you cannot finish is `mc step failed`, not a partial',
-    'landing. `mc gate` runs this tree\'s gate and prints the verdict, not the',
-    'suite; `mc publish` pushes this branch and opens the pull request, and',
-    `prints its number. Then run \`mc merge ${repo} <pr>\` yourself: it checks`,
-    'the plan\'s criteria, puts the pull request in the merge queue and returns at',
-    'once. When it says queued, your work is over — stop. The merger lands it',
-    'and writes `done`; a red goes to this step\'s next session with the reason.',
+    'landing. `mc gate <files…>` runs the test files your change reaches in the',
+    'gate lane and prints the verdict — never the whole suite, which is the',
+    'merger\'s. `mc publish` pushes this branch, opens the pull request and',
+    `queues it for the merger as \`mc merge ${repo} <pr>\` would: it checks the`,
+    'plan\'s criteria and returns at once. When it says queued, your work is',
+    'over — end the session in that turn. The merger lands it and writes',
+    '`done`; a red goes to this step\'s next session with the reason.',
     'Never `gh pr merge`. Giving up is `mc step failed --reason "…"`. Do not ask',
     'questions.',
     '',
@@ -801,8 +802,8 @@ function retryPreamble(retry, repo) {
     ...redLines(retry.red),
     `#${retry.pr} is still open, on this branch, with the earlier session's work.`,
     'Start there — `gh pr view` and the diff — fix what the gate named (never by',
-    'lowering a threshold or skipping a test), commit, run `mc publish` (it pushes to the same branch and lists your commits under the description; `--body-file` when the description itself is now wrong), and run',
-    `\`mc merge ${repo} ${retry.pr}\` again. No new pull request.`,
+    'lowering a threshold or skipping a test), run the red files again with `mc gate <files…>`, commit, and run `mc publish` (it pushes to the same branch, lists your commits under the description — `--body-file` when the description itself is now wrong — and queues',
+    `#${retry.pr} for the merger again, as \`mc merge ${repo} ${retry.pr}\` would). No new pull request.`,
     '',
   ];
 }
@@ -833,8 +834,8 @@ function answeredPreamble(answered, repo) {
     `#${answered.pr} is still open, on this branch, with the earlier session's work.`,
     'Start there — `gh pr view` and the diff; its body says what was left — and',
     'build the rest under the answer. Commit, run `mc publish` (it pushes to the',
-    'same branch; `--body-file` when the description is now wrong), and run',
-    `\`mc merge ${repo} ${answered.pr}\`. No new pull request.`,
+    'same branch — `--body-file` when the description is now wrong — and queues',
+    `#${answered.pr} for the merger, as \`mc merge ${repo} ${answered.pr}\` would). No new pull request.`,
     '',
   ];
 }
@@ -851,7 +852,7 @@ function earlierPreamble(earlier) {
   return [
     'This branch already carries work from an earlier session of this step that is in no pull request:',
     ...commits.map((line) => `- ${line}`),
-    'Read it (`git diff origin/main...HEAD`) and build on it — do not start over. Then commit, `mc publish` and `mc merge` as for any step.',
+    'Read it (`git diff origin/main...HEAD`) and build on it — do not start over. Then commit and `mc publish` as for any step.',
     '',
   ];
 }

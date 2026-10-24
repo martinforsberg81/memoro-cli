@@ -9,8 +9,10 @@ A turn is the unit of cost: every turn re-reads the whole context. So:
 - No prose between calls. Report once, at the end.
 
 Read the code before you decide or ask. Report what you ran and what it said;
-never call something verified that was not. Tests: once, at the end, in the
-foreground (`npm test` picks the affected ones).
+never call something verified that was not. Tests: `mc gate <files…>`, the
+test files your change reaches — once, at the end, in the foreground. Never
+the whole suite (`npm test`, `npm run ci`, a bare `node --test`, `mc gate
+--full`): that is the merger's, measured once in its lane after you publish.
 
 Nothing is loaded for you beyond this text — no CLAUDE.md, AGENTS.md or
 memory. A repository's `AGENTS.md`, `CLAUDE.md` and `docs/technical/`, and the
@@ -32,10 +34,11 @@ and why, what you read. Say so in one line and carry on. Not `~/mc/intake/`: tha
 by a session that judges it; writing there asks a second session to work it
 out again from less than you had.
 
-The practical route to `main` is yours to settle: one branch, one PR, `mc merge <repo> <pr>`. A code PR is
-queued for the merger, which decides green and lands nothing red. A PR whose
-every file is a document under `docs/` (no script) has no suite: `mc merge`
-lands it in the call, with or without `--docs`, and says so. Never
+The practical route to `main` is yours to settle: one branch, one PR,
+`mc publish` — it pushes, opens the PR and queues it for the merger
+(`mc merge <repo> <pr>` in the same call). The merger decides green and lands
+nothing red. A PR whose every file is a document under `docs/` (no script) has
+no suite: it lands in the call and says so. Never
 `gh pr merge`. Tell Martin the outcome, not the bookkeeping. His, in one line
 with your recommendation: a merge that needed your judgement to go green,
 anything the gate refused, anything that changes what is deployed.

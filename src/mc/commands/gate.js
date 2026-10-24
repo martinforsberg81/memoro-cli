@@ -1,79 +1,70 @@
 /**
- * `mc gate` — run this worktree's own gate, and read only the verdict.
+ * `mc gate` — run the tests a change reaches, in the gate lane, and read only
+ * the verdict.
  *
- *   mc gate                   the repository's gate on the tree you stand in
- *   mc gate --full            the whole gate, never a fast path
- *   mc gate --base <ref>      measured against another base than origin/main
- *   mc gate --json            the summary as one object
- *   mc gate --budget <s>      answer after at most s seconds (default 540); the gate keeps running
- *   mc gate --wait            wait for the gate running here and print its verdict
  *   mc gate <files…> [--test-name-pattern <p>]
  *                             the named test files, with the node --test flags the repository declares
  *                             (pr_tests_flags), else those of its test script
+ *   mc gate                   the test files this branch adds or changes against origin/main
+ *   mc gate --base <ref>      … against another base
+ *   mc gate --json            the summary as one object
+ *   mc gate --budget <s>      answer after at most s seconds (default 540); the tests keep running
+ *   mc gate --wait            wait for the gate running here and print its verdict
  *
- * What runs is the repository's, read from its `package.json` (`gate-local.js`):
- * `npm run ci -- --base-ref origin/main` where there is a `ci` script, else
- * `npm test`; named files run `node --test` with the declared `pr_tests_flags`
- * (read from the primary checkout, as the incremental gate reads it), else the
- * flags of its `test` script.
- * The gate is a detached child whose output goes to a file — under
- * `$MC_SCRATCH` in a runner session, the system temp directory otherwise — as
- * it is written, so the log is readable while the gate runs; when it ends it
- * writes its exit code beside the log. This verb answers within the budget:
- * GREEN or RED, the counts, the failing lines with their locations, and the
- * file's path, at most 2 KB. Past the budget it answers `RUNNING` and exits 3;
- * the gate runs on, and `mc gate --wait` (or a later call) prints the verdict
- * from the same log.
+ * There is no whole gate here (Martin, 2026-10-24: *"det ska i princip inte gå
+ * att köra full gate"*). The whole measurement is the merger's: `mc publish`
+ * queues the pull request, and the merge round runs the repository's selection
+ * in its lane, once. A session's whole gate measured the same thing minutes
+ * before, beside every other session's, and the round reused it in 36 of 300
+ * memoro rounds (2026-10-20..24) — the rest it measured again. So `mc gate`
+ * runs named test files, at most `MAX_FILES` of them; with none named, the
+ * test files the branch itself adds or changes. `--full` is refused.
  *
- * Before it starts one, it looks for a fast path (`gate-fast.js`): nothing
- * changed against the base, a docs-only change, a tree a whole gate already
- * measured green, or — after a red — an INCREMENTAL run of the red files and
- * what the change since selects. `--full` skips them. The whole gate's child
- * gets `MC_GATE_FAIL_FAST=1`, which a repository's runner may honour.
+ * The tests run in the repository's gate lane (`gate-lane-wait.js`): the
+ * detached shell takes the lane's lock for its own pid before it starts, and
+ * waits while a merge round, a deploy, an iOS build or another session's gate
+ * holds it. So no two test runs share the cores of one lane, and the merger
+ * waits for a session's few seconds of tests as it waits for any round.
+ *
+ * The output goes to a file — under `$MC_SCRATCH` in a runner session, the
+ * system temp directory otherwise — as it is written; when the tests end the
+ * shell writes their exit code beside the log. This verb answers within the
+ * budget: GREEN or RED, the counts, the failing lines with their locations,
+ * and the file's path, at most 2 KB. Past the budget it answers `RUNNING` and
+ * exits 3; the tests run on, and `mc gate --wait` prints the verdict from the
+ * same log. Time spent waiting for the lane is in the budget.
  *
  * One gate per worktree: a lock beside the git directory names the running
  * gate's pid and log, and a second `mc gate` there refuses while that pid lives.
- *
- * It answers "is my tree red?" before the push, and a green is remembered
- * (ruling 44, `gate-greens.js`). The whole gate against origin/main, on a
- * clean tree, in a repository that declares `select`: the tree, the hash of
- * what the declared `select` prints here and the measurement version go in
- * `gate-greens.jsonl`, and a merge round whose candidate is that tree with
- * that selection runs only the pull request's own tests. The selection is
- * asked exactly as the merger asks it — the primary checkout's declaration,
- * its selection state directory, the same `origin/main` — and the gate runs
- * with that state too. Anything else, and `mc merge` measures again.
- *
- * A selection that names a command with `needs: ['docker']` (the whole gate's,
- * or an INCREMENTAL run's) leases the container runtime for the detached gate's
- * pid (`docker.js`), and the gate exports `MC_DOCKER_HOLDER`. Nothing here
- * releases that lease: it ends with the gate's pid.
  */
-import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { deployHolding, IOS_BUILD_MODE, MERGE_MODE } from '../await-deploy.js';
-import { ensure, needsDocker } from '../docker.js';
-import { declaredTestFlags, planGate, recordLast, snapshotTree } from '../gate-fast.js';
-import { gateCommand, gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
-import { GATE_MEASUREMENT_VERSION, recordGreen, selectionHash } from '../gate-greens.js';
+import { changedAgainst, declaredTestFlags } from '../gate-fast.js';
+import { gateLines, namedCommand, rerunLine, summarizeGate } from '../gate-local.js';
 import { tryGit } from '../git.js';
 import { mcHome } from '../paths.js';
-import { declarationFor } from '../repo-gate-table.js';
-import { selectionStateDir, testLanes } from '../repo-gate.js';
-import { currentHolder } from '../work-identity.js';
+import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
+import { testLanes } from '../repo-gate.js';
 import { scanArgs } from './flags.js';
 
 /** How long the answer waits for the gate, in seconds, unless `--budget` says otherwise. */
 const DEFAULT_BUDGET = 540;
 /** How often the answer looks for the gate's exit code. */
 const POLL_MS = 2000;
+/**
+ * The most test files one `mc gate` runs. More than this is a suite, and the
+ * suite is the merger's: name the files the change reaches.
+ */
+export const MAX_FILES = 30;
+/** What a test file is called: `….test.js`, `.mjs`, `.cjs`, `.ts`. */
+const TEST_FILE = /\.test\.[cm]?[jt]s$/u;
 
-/** What a gate started while a deploy or an iOS build holds the heavy lane runs first (`await-deploy.js`). */
-const AWAIT_DEPLOY = fileURLToPath(new URL('../await-deploy.js', import.meta.url));
+/** What the gate's shell runs before and after the tests: the lane taken and given back. */
+const LANE_WAIT = fileURLToPath(new URL('../gate-lane-wait.js', import.meta.url));
 
 /** The machine the verb runs on; a test hands in its own. */
 const SYSTEM = {
@@ -81,6 +72,7 @@ const SYSTEM = {
   read: readFileSync,
   write: writeFileSync,
   exists: existsSync,
+  isFile: (path) => { try { return statSync(path).isFile(); } catch { return false; } },
   remove: (path) => rmSync(path, { force: true }),
   mkdir: (path) => mkdirSync(path, { recursive: true }),
   open: (path) => openSync(path, 'a'),
@@ -92,12 +84,7 @@ const SYSTEM = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => new Date(),
   declaration: (repoPath, { env }) => declarationFor(repoPath, { root: mcHome(env), env }),
-  select: (command, { cwd, env }) => spawnSync('sh', ['-c', command], { cwd, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
-  recordGreen: (entry, { env }) => recordGreen({ root: mcHome(env), entry }),
-  holder: ({ cwd, env }) => currentHolder({ cwd, env }).name,
-  snapshotTree,
-  dockerEnsure: (options) => ensure(options),
-  deployHolding: ({ env }) => deployHolding({ root: mcHome(env) }),
+  lane: (repoPath, { env }) => gateLaneOf(repoPath, { root: mcHome(env) }),
 };
 
 export async function run(argv, deps = {}) {
@@ -108,34 +95,53 @@ export async function run(argv, deps = {}) {
   const io = { ...SYSTEM, ...deps };
   const scanned = scanArgs(argv, { booleans: ['--json', '--wait', '--full'], strictValues: ['--base', '--budget', '--test-name-pattern'] });
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
-  const files = scanned.positional;
+  if (scanned.flags.full) {
+    stderr.write('mc: there is no whole gate in a worktree — the merger measures the pull request once, in its lane (mc publish queues it); mc gate <files…> runs the tests your change reaches\n');
+    return 2;
+  }
+  const named = scanned.positional;
   const pattern = scanned.flags['test-name-pattern'];
-  if (pattern != null && !files.length) { stderr.write(`mc: --test-name-pattern goes with test files (mc gate <files…> --test-name-pattern <p>)\n${usage()}`); return 2; }
-  if (files.length && scanned.flags.full) { stderr.write(`mc: --full is the whole gate — it takes no test files\n${usage()}`); return 2; }
-  if (files.length && scanned.flags.wait) { stderr.write(`mc: --wait takes no test files — it waits for the gate running here\n${usage()}`); return 2; }
+  if (named.length && scanned.flags.wait) { stderr.write(`mc: --wait takes no test files — it waits for the gate running here\n${usage()}`); return 2; }
+  if (named.length && scanned.flags.base) { stderr.write(`mc: --base picks the changed test files — it takes no named files\n${usage()}`); return 2; }
+  if (pattern != null && !named.length) { stderr.write(`mc: --test-name-pattern goes with named test files (mc gate <files…> --test-name-pattern <p>)\n${usage()}`); return 2; }
   const budget = scanned.flags.budget == null ? DEFAULT_BUDGET : Number(scanned.flags.budget);
   if (!(budget > 0)) { stderr.write(`mc: --budget takes seconds, a positive number (${scanned.flags.budget})\n${usage()}`); return 2; }
 
   const root = io.git(cwd, ['rev-parse', '--show-toplevel']);
-  if (!root) { stderr.write('mc: not inside a git worktree — mc gate runs the gate of the tree you stand in\n'); return 2; }
+  if (!root) { stderr.write('mc: not inside a git worktree — mc gate runs tests in the tree you stand in\n'); return 2; }
   const gitDir = io.git(root, ['rev-parse', '--absolute-git-dir']);
   if (!gitDir) { stderr.write(`mc: cannot find the git directory of ${root}\n`); return 2; }
   const lockPath = join(gitDir, 'mc-gate.json');
 
   if (scanned.flags.wait) {
     const lock = readLock(io, lockPath);
-    if (!lock) { stderr.write('mc: no gate running here — mc gate starts one\n'); return 2; }
-    return answer(io, { lock, lockPath, budget, waitedFrom: io.now(), json: scanned.flags.json, stdout, root, env });
+    if (!lock) { stderr.write('mc: no gate running here — mc gate <files…> starts one\n'); return 2; }
+    return answer(io, { lock, lockPath, budget, waitedFrom: io.now(), json: scanned.flags.json, stdout });
   }
 
+  let files = named;
+  if (!files.length) {
+    const base = scanned.flags.base || 'origin/main';
+    const changed = changedTests(io, { root, base });
+    if (changed === null) { stderr.write(`mc: git cannot say what this branch changes against ${base} — name the test files: mc gate <files…>\n`); return 2; }
+    if (!changed.length) {
+      stdout.write(`NOTHING RUN — this branch adds or changes no test file against ${base}. Name the tests your change reaches: mc gate <files…>. The rest is the merger's measurement.\n`);
+      return 0;
+    }
+    files = changed;
+  }
   const missing = files.find((file) => !io.exists(join(root, file)));
   if (missing) { stderr.write(`mc: no such test file: ${missing}\n`); return 2; }
+  const notTest = files.find((file) => !TEST_FILE.test(file) || !io.isFile(join(root, file)));
+  if (notTest) { stderr.write(`mc: ${notTest} is not a test file (….test.js) — mc gate runs named test files, not directories or the suite\n`); return 2; }
+  if (files.length > MAX_FILES) {
+    stderr.write(`mc: ${files.length} test files is a suite, and the suite is the merger's — name at most ${MAX_FILES}, the ones your change reaches\n`);
+    return 2;
+  }
 
   let manifest = null;
   try { manifest = JSON.parse(io.read(join(root, 'package.json'), 'utf8')); } catch { manifest = null; }
-  const base = scanned.flags.base || 'origin/main';
-  const command = files.length ? namedCommand(manifest, files, { pattern, flags: declaredTestFlags(io, { root, env }) }) : gateCommand(manifest, { base });
-  if (!command) { stderr.write(`mc: ${root} has no ci or test script in package.json — nothing to run\n`); return 2; }
+  const command = namedCommand(manifest, files, { pattern, flags: declaredTestFlags(io, { root, env }) });
 
   const held = readLock(io, lockPath);
   if (held && isRunning(io, held)) {
@@ -143,31 +149,12 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
-  const fast = files.length ? {} : planGate(io, { root, gitDir, base, full: scanned.flags.full, env, manifest });
-  if (fast.answer) {
-    stdout.write(scanned.flags.json ? `${JSON.stringify(fast.answer.json, null, 2)}\n` : `${fast.answer.text}\n`);
-    return 0;
-  }
-  const chosen = fast.incremental?.command || command;
-  const whole = !files.length && !fast.incremental;
-
-  // The whole gate against origin/main is the one a merge round can take.
-  const recordable = whole ? greenToRecord(io, { root, env, base }) : null;
-  // A dirty tree or another base leaves `green` null: the selector is not run
-  // there, so such a whole gate does not ensure the runtime.
-  const wantsDocker = whole ? Boolean(recordable?.green?.docker) : Boolean(fast.incremental?.docker);
+  // The lane is the primary checkout's: a worktree of memoro is memoro.
+  const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  const primary = common ? dirname(common) : root;
+  const lane = io.lane(primary, { env });
   // The free cores, not the core count, as a merge round's run has them (`testLanes`).
-  const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...(recordable?.env || env), CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', ...(whole ? { MC_GATE_FAIL_FAST: '1' } : {}) };
-  if (wantsDocker) {
-    childEnv.MC_DOCKER_RUN = `gate ${basename(root)}`;
-    childEnv.MC_DOCKER_REPO = recordable?.green?.repo || basename(root);
-  }
-
-  const deploying = io.deployHolding({ env });
-  if (deploying) {
-    const what = deploying.mode === IOS_BUILD_MODE ? 'an iOS build' : deploying.mode === MERGE_MODE ? 'a merge round' : 'a deploy';
-    stderr.write(`mc: ${what} holds the heavy lane (pid ${deploying.pid}) — this gate starts its tests when it is done\n`);
-  }
+  const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
 
   const startedAt = io.now();
   const stamp = startedAt.toISOString().replace(/[-:]/gu, '').replace(/\.\d{3}Z$/u, 'Z');
@@ -177,11 +164,11 @@ export async function run(argv, deps = {}) {
   try {
     io.mkdir(dir);
     const fd = io.open(logPath);
-    // `$$` is this shell's own pid, which is `child.pid`: the lease holder.
-    // A deploy holding the heavy lane is waited for inside the child, so the
-    // verb answers within its budget as ever and the wait is in the log.
-    const waitDeploy = deploying ? `'${process.execPath}' '${AWAIT_DEPLOY}'; ` : '';
-    const script = `${wantsDocker ? 'export MC_DOCKER_HOLDER=$$; ' : ''}${waitDeploy}${chosen.run}; echo $? > '${logPath}.exit'`;
+    // `$$` is this shell's own pid, which is `child.pid`: the lane's holder.
+    // The wait for the lane is inside the child, so the verb answers within
+    // its budget as ever and the wait is in the log.
+    const lanes = `'${process.execPath}' '${LANE_WAIT}'`;
+    const script = `${lanes} take ${lane} $$ ${shellWord(basename(primary))}; ${command.run}; rc=$?; ${lanes} release ${lane} $$; echo $rc > '${logPath}.exit'`;
     child = io.spawn('sh', ['-c', script], {
       cwd: root, env: childEnv, detached: true, stdio: ['ignore', fd, fd],
     });
@@ -192,96 +179,21 @@ export async function run(argv, deps = {}) {
   }
   child.unref();
   io.write(`${logPath}.pid`, `${child.pid}\n`);
-  // The ensure runs after the spawn: memoro's heavy command gates start only
-  // after the test batches, so a start of up to 60 s falls inside the gate's
-  // own time. Nothing is released here; the lease ends with the child's pid.
-  if (wantsDocker) {
-    let up;
-    try {
-      up = await io.dockerEnsure({ pid: child.pid, run: childEnv.MC_DOCKER_RUN, repo: childEnv.MC_DOCKER_REPO, root: mcHome(env), env });
-    } catch (error) {
-      up = { ok: false, reason: error.message };
-    }
-    if (!up.ok) stderr.write(`mc: docker could not be started — ${up.reason}; the gate runs on, and a gate that needs docker will say unavailable\n`);
-    else if (up.started) stderr.write(`docker: started for this gate (lease for pid ${child.pid})\n`);
-  }
-  const lock = {
-    pid: child.pid, log: logPath, started: startedAt.toISOString(), command: { ...chosen, base },
-    ...(whole && fast.snapshot ? { snapshot: fast.snapshot } : {}),
-    ...(recordable?.green ? { green: recordable.green } : {}),
-  };
+  const lock = { pid: child.pid, log: logPath, started: startedAt.toISOString(), lane, command };
   io.write(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
-  return answer(io, { lock, lockPath, budget, waitedFrom: startedAt, json: scanned.flags.json, stdout, root, env });
+  return answer(io, { lock, lockPath, budget, waitedFrom: startedAt, json: scanned.flags.json, stdout });
 }
 
 /**
- * What a green of this gate would record, asked before it starts: `{ env,
- * green }`, or null when the repository declares no `select` — then the gate
- * runs as it always did and nothing is recorded.
- *
- * `env` is the environment the merger's round selects with: the selection
- * state directory of the primary checkout, read-only. `green` is set only on
- * a clean tree against origin/main whose `select` answered: the repository's
- * name as the merger reads it, the tree, and the selection's hash.
+ * The test files the branch adds or changes against `base`, committed or not,
+ * untracked ones included, that still exist; null when git cannot say.
  */
-function greenToRecord(io, { root, env, base }) {
-  const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  if (!common) return null;
-  const primary = dirname(common);
-  let declared = null;
-  try { declared = io.declaration(primary, { env }); } catch { return null; }
-  const select = declared?.ok ? declared.declaration?.select : null;
-  if (!select) return null;
-  const state = selectionStateDir({ root: mcHome(env), repoPath: primary });
-  try { io.mkdir(state); } catch { /* a selector without it selects as before */ }
-  const selectEnv = { ...env, MC_SELECTION_STATE: state };
-  delete selectEnv.MC_SELECTION_STATE_WRITE;
-  if (base !== 'origin/main' || io.git(root, ['status', '--porcelain']) !== '') return { env: selectEnv, green: null };
-  const tree = io.git(root, ['rev-parse', 'HEAD^{tree}']);
-  if (!tree) return { env: selectEnv, green: null };
-  let parsed = null;
-  try {
-    const ran = io.select(select, { cwd: root, env: selectEnv });
-    parsed = ran?.status === 0 ? JSON.parse(ran.stdout) : null;
-  } catch { parsed = null; }
-  if (!Array.isArray(parsed?.files)) return { env: selectEnv, green: null };
-  // What the delta reuse (ruling 47) reads beside the hash: the commit of
-  // main this tree was measured from, and what the selection reached by name.
-  // `base` is null when git cannot say, and such a record is only ever an
-  // exact match.
-  const measuredFrom = io.git(root, ['merge-base', 'HEAD', 'origin/main']) || null;
-  return {
-    env: selectEnv,
-    green: {
-      repo: basename(primary), tree, selection: selectionHash(parsed), base: measuredFrom,
-      files: parsed.files.map(String).filter(Boolean).sort(),
-      commands: [...new Set((Array.isArray(parsed.commands) ? parsed.commands : [])
-        .map((entry) => String(entry?.packageScript ?? '')).filter(Boolean))].sort(),
-      docker: (Array.isArray(parsed.commands) ? parsed.commands : []).some(needsDocker),
-    },
-  };
-}
-
-/**
- * The green, written down once the gate is green — and only while the tree is
- * still the clean tree it measured. A record that cannot be written is said
- * nowhere and changes no verdict; the merger then measures again.
- */
-function remember(io, { lock, root, env }) {
-  const green = lock.green;
-  if (!green) return false;
-  if (io.git(root, ['status', '--porcelain']) !== '' || io.git(root, ['rev-parse', 'HEAD^{tree}']) !== green.tree) return false;
-  try {
-    io.recordGreen({
-      repo: green.repo, tree: green.tree, selection: green.selection, gate_version: GATE_MEASUREMENT_VERSION,
-      at: io.now().toISOString(), session: io.holder({ cwd: root, env }),
-      // The delta reuse's half (ruling 47, `findGreenForHead`): the same tree
-      // under the name the merger looks it up by, the base it was measured
-      // from, and the selection by name rather than by hash.
-      head_tree: green.tree, base: green.base ?? null, files: green.files ?? [], commands: green.commands ?? [],
-    }, { env });
-    return true;
-  } catch { return false; }
+function changedTests(io, { root, base }) {
+  const mergeBase = io.git(root, ['merge-base', 'HEAD', base]);
+  if (!mergeBase) return null;
+  const changed = changedAgainst(io, root, mergeBase);
+  if (!changed) return null;
+  return changed.filter((path) => TEST_FILE.test(path) && io.exists(join(root, path)));
 }
 
 /**
@@ -289,11 +201,14 @@ function remember(io, { lock, root, env }) {
  * verdict (and the lock goes), a red for a process that ended without an exit
  * code (and the lock goes), or RUNNING with exit 3 (and the lock stays).
  */
-async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout, root, env }) {
+async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) {
   const outcome = await waitForExit(io, { log: lock.log, pid: lock.pid, since: waitedFrom, budget });
   const seconds = Math.round((io.now().getTime() - Date.parse(lock.started)) / 1000);
+  const shown = lock.command.shown || lock.command.run;
   if (outcome.budget) {
-    stdout.write(`RUNNING${lock.command.label ? ' INCREMENTAL' : ''} — ${lock.command.shown || lock.command.run} — ${seconds}s so far, still running (pid ${lock.pid})\nlog: ${lock.log} — mc gate --wait waits for it and prints the verdict\n`);
+    const log = readText(io, lock.log);
+    const queued = log.includes('mc gate: waiting for ') && !log.includes('lane is free — starting');
+    stdout.write(`RUNNING — ${shown} — ${seconds}s so far, ${queued ? `still waiting for the ${lock.lane} lane` : 'still running'} (pid ${lock.pid})\nlog: ${lock.log} — mc gate --wait waits for it and prints the verdict\n`);
     return 3;
   }
   io.remove(lockPath);
@@ -303,14 +218,10 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout, ro
   }
   const output = readText(io, lock.log);
   const summary = summarizeGate(output, { exitCode: outcome.code });
-  const recorded = summary.ok ? remember(io, { lock, root, env }) : false;
-  if (lock.snapshot) recordLast(io, { lock, lockPath, root, output, code: outcome.code, gates: summary.gates });
-  const shown = lock.command.shown || lock.command.run;
   if (json) {
-    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, ...(lock.command.label ? { incremental: lock.command.label } : {}), script: lock.command.script, base: lock.command.base, seconds, log: lock.log, exit: outcome.code, recorded }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...summary, command: lock.command.run, script: lock.command.script, files: lock.command.files, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
-    stdout.write(`${gateLines(summary, { command: shown, label: lock.command.label, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}\n`);
-    if (recorded) stdout.write(`recorded: tree ${lock.green.tree.slice(0, 7)} green — mc merge does not measure it again while the tree and selection match\n`);
+    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output) })}\n`);
   }
   return summary.ok ? 0 : 1;
 }
@@ -351,20 +262,22 @@ function readText(io, path) {
   try { return io.read(path, 'utf8'); } catch { return ''; }
 }
 
+function shellWord(text) {
+  return /^[\w./:=@%+,-]+$/u.test(text) ? text : `'${String(text).replace(/'/gu, `'\\''`)}'`;
+}
+
 export function usage() {
   return [
-    'usage — mc gate                       this worktree\'s own gate: npm run ci -- --base-ref origin/main, or npm test\n',
-    '        mc gate --full                the whole gate: no docs-only, unchanged or incremental fast path\n',
-    '        mc gate --base <ref>          measured against another base\n',
+    `usage — mc gate <test files…> [--test-name-pattern <p>]   the named test files (at most ${MAX_FILES}), with the node --test flags the repository declares (pr_tests_flags), else those of its test script\n`,
+    '        mc gate                       the test files this branch adds or changes against origin/main\n',
+    '        mc gate --base <ref>          … against another base\n',
     '        mc gate --json                the summary as one object\n',
-    '        mc gate --budget <s>          answer after at most s seconds, default 540; the gate keeps running\n',
+    '        mc gate --budget <s>          answer after at most s seconds, default 540; the tests keep running\n',
     '        mc gate --wait                wait for the gate running here and print its verdict\n',
-    '        mc gate <test files…> [--test-name-pattern <p>]   the named test files, with the node --test flags the repository declares (pr_tests_flags), else those of its test script; the same log, budget and summary\n',
     '\n',
-    'Fast paths, without --full: nothing changed against the base, or only docs/ (no scripts), answers GREEN at once;\n',
-    'a tree the last whole gate here measured green answers GREEN (unchanged since …); after a red whole gate, only the\n',
-    'red files plus what the declared select picks for the paths changed since run, marked INCREMENTAL — never the whole gate.\n',
+    'No whole gate: the merger measures the pull request once, in its lane — mc publish queues it.\n',
+    'The tests run in the repository\'s gate lane, one run at a time beside merge rounds, deploys and other sessions\' gates.\n',
     'Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, and the path of the whole output.\n',
-    'Exit 0 green, 1 red, 2 nothing to run or already running, 3 still running.\n',
+    'Exit 0 green (or nothing to run), 1 red, 2 refused or already running, 3 still running.\n',
   ].join('');
 }

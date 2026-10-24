@@ -138,10 +138,9 @@ export const TOOLBOX = [
   '  see the app       mc shot dev <target|/app/path> [--viewport iphone] [--scroll <css>] [--measure <css>]',
   '                    serves the worktree you stand in, restarts it after edits, prints which tree it served',
   '  a server URL      mc test dev --here --url',
-  '  check the tree    mc gate            (npm run ci for this worktree, 2 KB verdict)',
-  '  run some tests    mc gate <files…> [--test-name-pattern …]   (whole output in a file, the failures printed)',
-  '  publish           mc publish [--title … --body-file … --base …]   (push + open/update the PR, never force)',
-  '  land              mc merge <repo> <pr>   (the gate, then the merge)',
+  '  run tests         mc gate <files…> [--test-name-pattern …]   (in the gate lane, at most 30 files, 2 KB verdict)',
+  '                    mc gate alone: the test files this branch changed; no whole suite — that is the merger\'s',
+  '  publish + land    mc publish [--title … --body-file … --base …]   (push, open/update the PR, queue it for the merger)',
   '  what runs where   mc dev list · mc prs · mc status <name>',
   'Every verb: mc <verb> --help.',
 ];
@@ -188,6 +187,12 @@ export function protectedPlanFile(path, { programs = programsHome() } = {}) {
  * command's words, not its whole text, so `echo "gh pr create"` is left alone
  * only as far as a regular expression can tell — the escape covers the rest.
  */
+/**
+ * What a session is told when it reaches for the suite: there is none to run
+ * in a worktree. The merger measures the pull request once, in its lane.
+ */
+const SUITE_REASON = 'The whole suite is the merger\'s, not this session\'s: `mc publish` queues the pull request and the merge round measures it once, in its lane. Run the tests your change reaches with `mc gate <files…>` (or bare `mc gate`: the test files this branch changed).';
+
 export const BASH_RULES = [
   {
     id: 'pr-create',
@@ -213,7 +218,20 @@ export const BASH_RULES = [
     id: 'ci',
     // `--list` asks why each file was chosen, which mc gate does not answer.
     test: /(^|[;&|(]\s*|\s)npm\s+run\s+ci\b(?![^\n]*--list)/u,
-    reason: 'Use `mc gate` — the same `npm run ci -- --base-ref origin/main`, with the whole output in a file and a 2 KB verdict printed.',
+    reason: SUITE_REASON,
+  },
+  {
+    // The suite, or a run of test files beside the gate lane: every test run
+    // a session starts goes through `mc gate`, which waits its turn in the
+    // lane (2026-10-24). `npm run test:<x>` is a script of its own and passes.
+    id: 'npm-test',
+    test: /(^|[;&|(]\s*|\s)npm\s+(run\s+)?test(?![\w:-])/u,
+    reason: SUITE_REASON,
+  },
+  {
+    id: 'node-test',
+    test: /(^|[;&|(]\s*|\s)node\s+(?:[^\n;&|]*\s)?--test(?![\w-])/u,
+    reason: 'Use `mc gate <files…> [--test-name-pattern …]` — the same node --test with the repository\'s flags, run in the gate lane (one run at a time beside merge rounds and other sessions), the whole output in a file and the failures printed.',
   },
   {
     id: 'dev-server',
