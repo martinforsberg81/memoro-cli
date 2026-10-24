@@ -364,11 +364,20 @@ printing JSON with a `files` array, run in the candidate worktree. With one, the
 round measures the test files the change reaches; without one, the whole suite,
 exactly as it always did.
 
-**A selected run takes the free cores.** `realTests` passes
-`--test-concurrency=<testLanes()>`: `cores - 1 - round(loadavg()[0])`, between 2
-and `cores - 1`, or `MC_TEST_LANES` — unless the repository's own flags already
-name a concurrency. On 2026-10-19 rounds ran 7 lanes at load averages of 40–97
-on eight cores, and the whole-tree readers went red only under load. And the
+**A merge round runs at least four lanes.** `realTests` passes
+`--test-concurrency=<testLanes()>` — unless the repository's own flags already
+name a concurrency. A session's `mc gate` takes the free cores,
+`cores - 1 - round(loadavg()[0])`, between 2 and `cores - 1`. A merge, check or
+full round takes `max(4, the free cores)`, never above `cores - 1`
+(`MERGE_LANES_MIN`), because the free cores were two all day: with four step
+sessions the load sits at 10–16 on eight cores, and at two lanes the standard
+batch took 178 s at the median (p90 377 s) over 159 suite runs from 2026-10-20 to
+24. The floor is four and not seven because seven lanes beside the sessions are
+what went red under load on 2026-10-19; the sessions' load cannot take the round's
+lanes away, and the reds-under-load requeue (`markRequeued`) stays underneath it.
+A whole-suite round hands the same count to its own runner as `MC_TEST_LANES`,
+which still overrides all of it. The round record names the `lanes` and the
+`load` it ran at, so a round's speed is read against the lanes it had. And the
 selector's `resourceClasses` are honoured (`testBatches`): a file classed `sqlite`
 or `heavy` runs after the standard batch, one at a time, in its own `node --test`
 — as memoro's own runner runs it — and the batches' TAP is read as one run. A session's

@@ -102,6 +102,10 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     reason: report.reason ? String(report.reason).slice(0, 300) : null,
     duration_ms: report.duration_ms ?? null,
     timings: gate?.timings && Object.keys(gate.timings).length ? gate.timings : null,
+    // The lanes the round's tests ran at, and the load they were answered at
+    // (`testLanes`): a suite at two lanes and one at four are told apart by it.
+    lanes: gate?.lanes ?? null,
+    load: gate?.load ?? null,
     // What the one measured tree had red, by NAME and not only by count. A
     // count is not something anybody can act on: the two names that flapped
     // 55 → 57 → 55 could not be pointed at afterwards, because the report
@@ -211,7 +215,8 @@ export function readRounds({ root = mcHome() } = {}) {
     if (!line.trim()) continue;
     try {
       const value = JSON.parse(line);
-      if (value?.schema === ROUND_LOG_SCHEMA) rounds.push(value);
+      // A line from before 2026-10-24 names neither lanes nor load: it reads null.
+      if (value?.schema === ROUND_LOG_SCHEMA) rounds.push({ lanes: null, load: null, ...value });
       else skipped += 1;
     } catch { skipped += 1; }
   }

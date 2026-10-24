@@ -153,7 +153,8 @@ export async function run(argv, deps = {}) {
   const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   const primary = common ? dirname(common) : root;
   const lane = io.lane(primary, { env });
-  // The free cores, not the core count, as a merge round's run has them (`testLanes`).
+  // The free cores, not the core count: a session's gate has no round mode, so
+  // `testLanes` answers the free cores here (a merge round takes at least four).
   const childEnv = { MC_TEST_LANES: String(testLanes({ env })), ...env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
 
   const startedAt = io.now();

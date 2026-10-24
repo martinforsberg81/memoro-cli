@@ -200,12 +200,10 @@ export async function runGate({
   const run = (tool) => (args, options = {}) => runTool(tool, args, { cwd: options.cwd, env });
   const askGit = git || run('git');
   const askGh = gh || run('gh');
-  const runSuite = suite || ((options) => realSuite({ ...options, env }));
   // The selector's resource classes, once the round has read them: a file
   // classed `sqlite` or `heavy` runs alone after the standard batch, as
   // memoro's own runner runs it (gate-round-under-load, item 6).
   let fileClasses = {};
-  const runTests = tests || ((options) => realTests({ ...options, env, classes: fileClasses }));
   const runShell = gateShell || commandShell;
 
   const numbers = (Array.isArray(prs) && prs.length ? prs : [pr]).filter((n) => n !== null && n !== undefined).map(Number);
@@ -214,6 +212,13 @@ export async function runGate({
   // in, and the one tree is the default branch as fetched.
   const wholeSuite = Boolean(full);
   const gateMode = mode || (wholeSuite ? 'full' : 'merge');
+  // The round's lanes, answered once, and the load they were answered at: a
+  // merge, check or full round runs at least `MERGE_LANES_MIN`, a session's
+  // gate the free cores (`testLanes`). The round record names both.
+  const load = Math.round(loadavg()[0] * 10) / 10;
+  const lanes = testLanes({ env, load, mode: gateMode });
+  const runSuite = suite || ((options) => realSuite({ ...options, env, lanes }));
+  const runTests = tests || ((options) => realTests({ ...options, env, lanes, classes: fileClasses }));
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
   // What a command gate that needs Docker is leased and labelled with.
   const dockerIo = docker || { ensure: ensureDocker, release: releaseDocker };
@@ -292,6 +297,10 @@ export async function runGate({
     // Wall clock per step (A5). Four decisions about cost were taken one day
     // without a single number from the tool itself; the next one is measured.
     timings: {},
+    // The lanes the round's tests ran at and the load they were answered at
+    // (`testLanes`); the round record names both.
+    lanes,
+    load,
     started_at: new Date(startedAt).toISOString(),
     finished_at: null,
     duration_ms: null,
@@ -2035,18 +2044,35 @@ function nodeTestFlags(cwd) {
  */
 export const GREEN_ALONE_MAX = 3;
 
+/** The fewest lanes a merge, check or full round runs its tests at (`testLanes`). */
+export const MERGE_LANES_MIN = 4;
+
 /**
- * How many test files a selected run takes at once: the free cores, not the
- * core count. `cores - 1 - round(load1)`, between 2 and `cores - 1`; a round
- * started at load 40 on eight cores runs 2, not 7, and stops starving the
- * whole-tree readers that went red only under load (gate-round-under-load).
- * `MC_TEST_LANES` overrides it.
+ * How many test files a selected run takes at once. A session's gate (no
+ * mode) takes the free cores: `cores - 1 - round(load1)`, between 2 and
+ * `cores - 1`, so a gate started at load 40 on eight cores runs 2, not 7, and
+ * does not starve the whole-tree readers that went red only under load
+ * (gate-round-under-load).
+ *
+ * A merge, check or full round takes at least `MERGE_LANES_MIN`, never more
+ * than `cores - 1`. Since 2026-10-19 every round had run at the free cores,
+ * which with four step sessions holding the load at 10–16 on eight cores is
+ * two lanes. Measured from the merger's log, 2026-10-20 to 24 (159 suite
+ * runs): the standard batch took 178 s at the median (p90 377 s); the nightly
+ * full suite, seven lanes and no sessions, runs five to eight times more tests
+ * a second. The round is what every step waits for, so it gets a floor the
+ * sessions' load cannot take away. The reds-under-load requeue (`markRequeued`)
+ * still answers a red that only load caused.
+ *
+ * `MC_TEST_LANES` overrides both.
  */
-export function testLanes({ cores = availableParallelism(), load = loadavg()[0], env = process.env } = {}) {
+export function testLanes({ cores = availableParallelism(), load = loadavg()[0], env = process.env, mode = null } = {}) {
   const set = Number(env.MC_TEST_LANES);
   if (Number.isInteger(set) && set > 0) return set;
   const most = Math.max(1, cores - 1);
-  return Math.max(Math.min(2, most), Math.min(most, most - Math.round(Number(load) || 0)));
+  const free = Math.max(Math.min(2, most), Math.min(most, most - Math.round(Number(load) || 0)));
+  if (!['merge', 'check', 'full'].includes(mode)) return free;
+  return Math.min(most, Math.max(MERGE_LANES_MIN, free));
 }
 
 export function suiteTimeoutMs(env = process.env) {
@@ -2229,7 +2255,7 @@ function nameSome(names) {
  * `suiteCommand` stopped making; the default keeps that behaviour for a caller
  * that names nothing.
  */
-function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env) } = {}) {
+function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }) } = {}) {
   return new Promise((resolve) => {
     // The suite is started in a clean test context, not this process's.
     //
@@ -2251,9 +2277,9 @@ function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process
     const child = spawn(command, {
       cwd,
       shell: true,
-      // The lane count for a suite that runs its own runner (memoro's
+      // The round's lane count, for a suite that runs its own runner (memoro's
       // `runner.mjs` reads it); a caller that set one keeps it.
-      env: { MC_TEST_LANES: String(testLanes({ env })), ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
+      env: { MC_TEST_LANES: String(lanes), ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });

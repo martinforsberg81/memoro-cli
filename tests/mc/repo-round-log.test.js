@@ -81,6 +81,24 @@ describe('every round leaves a line', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('a round names the lanes it ran at and the load it was answered at; a line from before names neither', () => {
+    const root = home();
+    try {
+      recordRound({
+        repo: '/x/memoro', pr: { number: 404 }, ok: true, merged: true,
+        gate: { timings: {}, candidate: { red: [] }, lanes: 4, load: 10.5 },
+      }, { root, now: NOW });
+      // A bare gate's report, as `mc test` and the nightly round record it.
+      recordRound({ repo: '/x/memoro', pr: { number: 405 }, ok: true, lanes: 2, load: 3 }, { root, now: NOW });
+      appendFileSync(roundLogPath(root), `${JSON.stringify({
+        schema: 'mc-gate-round', version: 1, at: '2026-08-24T10:00:00.000Z',
+        repo: 'memoro', mode: 'merge', prs: [400], ok: true, merged: [400], stopped_at: null,
+      })}\n`);
+      const { rounds } = readRounds({ root });
+      assert.deepEqual(rounds.map((line) => [line.lanes, line.load]), [[4, 10.5], [2, 3], [null, null]]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('lines that will not parse are skipped and counted, never guessed at', () => {
     const root = home();
     try {
