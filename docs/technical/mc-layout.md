@@ -279,9 +279,61 @@ area and `memoro-cli` to the gate table and the dependency tree. A bare
 repository has no `package.json` to copy, so `ensureWorkDeps` reads main's two
 files with `git show origin/main:…` (work-deps.js).
 
-`mc repos migrate` (the plan's next step) is the move from the first to the
-second; the merger's `deployPull` is unchanged, since it follows the `mc` link
-to whatever checkout it resolves into.
+### `mc repos migrate`
+
+`mc repos` (`src/mc/commands/repos.js`) prints which of the two each repository
+is in. `mc repos migrate` moves a machine from the first to the second
+(`src/mc/repos-migrate.js`), in the shape of `mc layout migrate`. A person runs
+it once, from a terminal outside both checkouts, with the runner, the merger
+and the dev servers stopped. Nothing in mc calls it.
+
+- `mc repos migrate` is the dry run: every move in order, the refusals, a count.
+  It writes nothing; exit 0 with no refusal, 1 otherwise. `--json` prints
+  `{ moves, refusals }`.
+- `--apply` makes the plan again from the facts, and moves nothing when anything
+  refuses (exit 1, the list printed).
+
+**What it refuses.** Each refusal names its path or its pid:
+
+- a runner or the merger alive, or a dev server serving `~/memoro`,
+  `~/memoro-cli` or `self/<name>` — stop them first;
+- a primary checkout with uncommitted changes (its stashes and its branches are
+  kept: the git directory moves whole);
+- a target that exists: `~/mc/repos/<name>.git` while the checkout still has its
+  git directory, or `~/mc/self/<name>` that is not a worktree of the repository;
+- the npm link is not a symlink, so it cannot be relinked;
+- `mc repos migrate --apply` run from inside a checkout the move removes.
+
+**The order of the moves,** per repository, `memoro` then `memoro-cli`:
+
+1. make `~/mc/repos/` — once, when it is missing;
+2. move `~/<name>/.git` to `~/mc/repos/<name>.git`;
+3. `git config core.bare true` in it;
+4. `git worktree repair` in it: every linked worktree's `.git` file is re-pointed
+   at the moved repository;
+5. `git worktree add ~/mc/self/<name> main` in it: `main` is no longer checked
+   out anywhere, so the self checkout takes it;
+6. memoro-cli only: the npm link at `/opt/homebrew/lib/node_modules/memoro-cli`
+   is replaced by a link to `~/mc/self/memoro-cli`, made beside the old one and
+   renamed over it, so `mc` runs from the self checkout and `deployPull` pulls
+   there;
+7. remove `~/<name>` — the old working files, now a directory without `.git`.
+   Last, and only once 2–6 have succeeded.
+
+The move's own log is `~/mc/runner/log/repos-migrate.log`: one JSON line per
+move, `{ at, name, how, from, to, ok, error }`. The first failure stops the run,
+names the move and exits 1. A second `--apply` plans from what is still there:
+a repository is finished when nothing of its primary checkout is left, not when
+it is bare, because `defaultRepos` reads `bare` as soon as the git directory has
+moved. So a run that stopped between two moves carries on from there.
+
+**After it.** `mc repos` shows the layout. `mc run start` turns the runner on
+again: a runner stopped for the move does not start itself. The merger starts
+with the next `mc merge`. A dev server that served `~/memoro` is refused until
+it is stopped; one still registered afterwards is swept by `mc dev reap`.
+
+The merger's `deployPull` is unchanged, since it follows the `mc` link to
+whatever checkout it resolves into.
 
 ## What is left for later
 

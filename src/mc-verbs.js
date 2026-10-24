@@ -12,6 +12,7 @@ export const VERB_MODULES = {
   work: './mc/commands/work.js',
   tidy: './mc/commands/tidy.js',
   layout: './mc/commands/layout.js',
+  repos: './mc/commands/repos.js',
   repo: './mc/commands/repo.js',
   merge: './mc/commands/merge.js',
   test: './mc/commands/test.js',
