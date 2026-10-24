@@ -44,7 +44,7 @@ import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { GATE_LANES, runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, heldLanding, inLine, markLanding, markMended, markMending, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
+  dequeue, enqueue, heldBy, heldLanding, inLine, markLanding, markMended, markMending, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor, stepsDone,
 } from './merge-queue.js';
 import { MEND_AT_ONCE, mendedReason, mendLine } from './mend.js';
@@ -690,9 +690,11 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
  * rounds never do. Returns when neither lane has anything to take, or when
  * `stopping()` says so — asked between jobs in each loop: a job in flight is
  * always finished, because a round cut in half is a lease and a lock somebody
- * else has to reap. Before each batch it also asks `head()`, and a checkout
- * that has moved past `version.commit` ends it like a stop, between rounds,
- * with the queue left as it is.
+ * else has to reap. Before each batch it also asks `head()`; a checkout that
+ * has moved past `version.commit` releases `merger.json` and calls `handover`
+ * once, at once, and this merger then takes nothing more: the rounds and mends
+ * it holds finish, and the successor takes the rest of the queue, skipping the
+ * entries this merger holds (`heldBy`).
  */
 export async function serve({
   root, read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
@@ -725,19 +727,33 @@ export async function serve({
   head = null,
   // `(from, to) => {}` — told once when the merger decides to leave for new code.
   onMoved = null,
+  // This merger's pid, and whether a pid runs: an entry `landing` or `mending`
+  // under another live merger is that merger's (`heldBy`).
+  pid = process.pid,
+  alive = pidAlive,
+  // `() => {}` — told once when the merger leaves for new code, after `release`
+  // has let go of merger.json: the successor starts then (merger-run.js).
+  handover = null,
 } = {}) {
   if (!take()) { say('another merger is running — leaving'); return 0; }
   say(version ? `merger ${process.pid} started — ${version.checkout} at ${version.commit}` : `merger ${process.pid} started`);
-  // A `mending` entry at start is a mend that died with the merger before
-  // it: it never finished, so the job goes back in line unmended, and its
-  // next red mends again.
+  // A `mending` entry whose merger is not alive is a mend that died with that
+  // merger before it finished: the job goes back in line unmended, and its
+  // next red mends again. One whose merger lives is that merger's, and is left
+  // alone. Returns the entries themselves when none went back.
+  const backInLine = (entries) => {
+    const orphans = entries.filter((entry) => entry.state === 'mending' && !(Number.isInteger(entry.merger) && alive(entry.merger)));
+    if (!orphans.length) return entries;
+    for (const entry of orphans) say(`${entry.repo} #${entry.pr}: its mend (pid ${entry.mend?.pid ?? '?'}) never finished — back in line`);
+    return entries.map((entry) => (orphans.includes(entry)
+      ? { ...entry, state: 'queued', started: null, mend: null, mended: null, merger: null } : entry));
+  };
+  // Every loop pass sweeps as well (`backInLine`): a mend whose merger has
+  // died while this one runs goes back in line when it is seen dead.
   lock(root, () => {
     const entries = parseQueue(read(mergesPath(root)));
-    const orphans = entries.filter((entry) => entry.state === 'mending');
-    if (!orphans.length) return;
-    write(mergesPath(root), entries.map((entry) => (entry.state === 'mending'
-      ? { ...entry, state: 'queued', started: null, mend: null, mended: null } : entry)));
-    for (const entry of orphans) say(`${entry.repo} #${entry.pr}: its mend (pid ${entry.mend?.pid ?? '?'}) never finished — back in line`);
+    const swept = backInLine(entries);
+    if (swept !== entries) write(mergesPath(root), swept);
   });
   const mends = mend ? mendLine({
     atOnce: mendAtOnce,
@@ -767,7 +783,9 @@ export async function serve({
     try { await sweeping; } finally { sweeping = null; }
   };
   await sweepReds();
-  const batchIn = (entries, lane) => nextBatch(entries, { landed, ordered, lane, laneOf, now: now().getTime(), max: batchMax });
+  // Entries another live merger holds are its own (`heldBy`): not taken here.
+  const held = heldBy({ pid, alive });
+  const batchIn = (entries, lane) => nextBatch(entries, { landed, ordered, lane, laneOf, now: now().getTime(), max: batchMax, held });
   // What the loops share: which of them has nothing, whether the merger is
   // leaving, and a wake-up for a loop waiting on the other.
   const idle = new Set();
@@ -789,7 +807,10 @@ export async function serve({
     was();
   };
   // Whether the checkout has moved past the commit this merger started on.
-  // Said once; a head that cannot be read is no move.
+  // Said once; a head that cannot be read is no move. The order: the first
+  // lane to see the move releases merger.json and starts the successor, and
+  // then this merger finishes only the rounds and mends it holds — the
+  // successor takes every other job.
   async function codeMoved() {
     if (movedTo) return true;
     if (!head || !version?.commit || version.commit === 'unknown') return false;
@@ -797,8 +818,10 @@ export async function serve({
     try { current = await head(); } catch { current = null; }
     if (!current || sameCommit(current, version.commit)) return false;
     movedTo = current;
-    say(`code moved ${version.commit} → ${current} — leaving after the rounds in flight; the next start serves on the new code`);
+    say(`code moved ${version.commit} → ${current} — successor started; this merger finishes the rounds in flight and leaves`);
     try { onMoved?.(version.commit, current); } catch { /* a line, not the merger */ }
+    release();
+    try { handover?.(); } catch (error) { say(`the successor could not be started (${error?.message || error}) — the runner's next pass starts one`); }
     return true;
   }
 
@@ -816,7 +839,7 @@ export async function serve({
         : requeued
         ? markRequeued(entries, job, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
         : mending && mends
-        ? markMending(entries, job, { reason, stopped_at: report?.stopped_at || null, started: at })
+        ? markMending(entries, job, { reason, stopped_at: report?.stopped_at || null, started: at, merger: pid })
         : markRed(entries, job, { reason, answered: at });
       write(mergesPath(root), entries);
     });
@@ -834,14 +857,19 @@ export async function serve({
         if (!toldStop) { toldStop = true; say(`asked to stop — waiting for ${inFlight} job(s) in flight`); }
         leaving = true; changed(); return;
       }
-      // New code in the checkout: no new batch. A round in flight in the
+      // New code in the checkout: `codeMoved` has released merger.json and
+      // started the successor, so no new batch here. A round in flight in the
       // other lane is answered and that lane leaves at the top of its loop.
       if (await codeMoved()) { leaving = true; changed(); return; }
       const batch = lock(root, () => {
         let entries = parseQueue(read(mergesPath(root)));
+        // A mend whose merger is gone goes back in line on this pass too.
+        const swept = backInLine(entries);
+        const restored = swept !== entries;
+        entries = swept;
         // A job a dead merger was landing whose earlier step is no longer
         // `done` goes back in line rather than being landed out of order.
-        const back = heldLanding(entries, { ordered }).filter((job) => (laneOf(job) || 'heavy') === lane);
+        const back = heldLanding(entries, { ordered, held }).filter((job) => (laneOf(job) || 'heavy') === lane);
         for (const job of back) {
           entries = markQueued(entries, job);
           say(`${job.repo} #${job.pr}: back in line — ${job.step.project} step ${job.step.index} is not done`);
@@ -849,9 +877,9 @@ export async function serve({
         const next = batchIn(entries, lane);
         if (next.length) {
           const started = now().toISOString();
-          entries = next.reduce((all, job) => markLanding(all, job, started), entries);
+          entries = next.reduce((all, job) => markLanding(all, job, started, pid), entries);
         }
-        if (next.length || back.length) write(mergesPath(root), entries);
+        if (next.length || back.length || restored) write(mergesPath(root), entries);
         return next;
       });
       if (!batch.length) {
@@ -918,7 +946,7 @@ export async function serve({
               : requeued
               ? markRequeued(entries, one, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
               : mending && mends
-              ? markMending(entries, one, { reason, stopped_at: report?.stopped_at || null, started: answered })
+              ? markMending(entries, one, { reason, stopped_at: report?.stopped_at || null, started: answered, merger: pid })
               : markRed(entries, one, { reason, answered });
           }
           write(mergesPath(root), entries);
